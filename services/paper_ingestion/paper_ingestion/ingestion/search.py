@@ -13,7 +13,7 @@ import asyncio
 import logging
 import math
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from qdrant_client.http.exceptions import (
     ApiException,
@@ -26,6 +26,7 @@ from paper_ingestion.ingestion.embedding_config import (
     _point_payload,
     _user_scope_filter,
 )
+from paper_ingestion.ingestion.search_scope import SearchScope
 from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 # Tuned independently of streaming._SEARCH_SCORE_THRESHOLD — same value today,
 # but the two thresholds serve different retrieval paths and may diverge.
 _HYBRID_SEARCH_SCORE_THRESHOLD = 0.05
+_SEARCH_SCOPE_KEYS = {"user_id", "library_paper_ids", "allowed_paper_ids"}
 
 
 def _build_bm25_query(query: str, candidate_limit: int, user_id: int | None) -> tuple[str, tuple]:
@@ -72,6 +74,25 @@ def _build_bm25_query(query: str, candidate_limit: int, user_id: int | None) -> 
         LIMIT $2
     """
     return bm25_sql, (query, candidate_limit)
+
+
+def _coerce_search_scope(
+    scope: SearchScope | None,
+    legacy_scope: dict[str, Any],
+) -> SearchScope:
+    """Return a search scope while preserving older keyword-call contracts."""
+    if not legacy_scope:
+        return scope or SearchScope()
+    unknown = sorted(set(legacy_scope) - _SEARCH_SCOPE_KEYS)
+    if unknown:
+        raise TypeError(f"unexpected search scope keyword(s): {', '.join(unknown)}")
+    if scope is not None:
+        raise TypeError("scope cannot be combined with legacy scope keyword arguments")
+    return SearchScope(
+        user_id=legacy_scope.get("user_id"),
+        library_paper_ids=legacy_scope.get("library_paper_ids"),
+        allowed_paper_ids=legacy_scope.get("allowed_paper_ids"),
+    )
 
 
 async def _fetch_missing_metadata(
@@ -409,8 +430,8 @@ class EmbeddingSearchMixin:
         query_text: str,
         limit: int = 30,
         score_threshold: float = 0.2,
-        user_id: int | None = None,
-        library_paper_ids: list[int] | None = None,
+        scope: SearchScope | None = None,
+        **legacy_scope: Any,
     ) -> list[dict]:
         """Search ALL chunks in Qdrant without a paper_id filter.
 
@@ -419,12 +440,11 @@ class EmbeddingSearchMixin:
         no scope filter is applied (preserves single-tenant + procrastinate
         task code paths).
 
-        ``library_paper_ids`` (PI-RAG-001): when supplied, widens the scope to
-        also include chunks for any paper in this list, regardless of which user
-        embedded them.  Callers MUST pass only the requesting user's own
-        ``user_library`` paper_ids so secondary-library owners can retrieve
-        shared-corpus papers that another user originally processed, without
-        ever exposing papers outside the caller's library.
+        ``scope`` carries both user-library visibility and optional explicit
+        paper restrictions. Existing callers may still pass ``user_id``,
+        ``library_paper_ids``, or ``allowed_paper_ids`` as keywords; new code
+        should prefer ``SearchScope``. Callers MUST pass only the requesting
+        user's own ``user_library`` ids when widening shared-corpus retrieval.
 
         Returns
         -------
@@ -438,12 +458,14 @@ class EmbeddingSearchMixin:
         # Let RuntimeError from embed_texts propagate (callers handle it)
         query_embedding = (await self.embed_texts([query_text]))[0]
 
+        query_filter = self._restricted_scope_filter(_coerce_search_scope(scope, legacy_scope))
+
         try:
             response = await self.qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_embedding,
                 limit=limit,
-                query_filter=_user_scope_filter(user_id, library_paper_ids),
+                query_filter=query_filter,
                 score_threshold=score_threshold,
                 with_payload=True,
             )
@@ -470,6 +492,20 @@ class EmbeddingSearchMixin:
                 }
             )
         return results
+
+    @staticmethod
+    def _restricted_scope_filter(scope: SearchScope):
+        """Return the user scope optionally AND-restricted to explicit papers."""
+        user_scope = _user_scope_filter(scope.user_id, scope.library_paper_ids)
+        if not scope.allowed_paper_ids:
+            return user_scope
+        from qdrant_client.models import FieldCondition, Filter, MatchAny
+
+        explicit_scope = FieldCondition(key="paper_id", match=MatchAny(any=scope.allowed_paper_ids))
+        must: list[Any] = [explicit_scope]
+        if user_scope is not None:
+            must.append(user_scope)
+        return Filter(must=must)
 
     async def hybrid_search(
         self,
@@ -549,7 +585,7 @@ class EmbeddingSearchMixin:
             query,
             limit=candidate_limit,
             score_threshold=_HYBRID_SEARCH_SCORE_THRESHOLD,
-            user_id=user_id,
+            scope=SearchScope(user_id=user_id),
         )
 
         # Aggregate: max chunk score per paper

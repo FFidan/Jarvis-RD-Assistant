@@ -485,7 +485,7 @@ describe('ModelSelector', () => {
     });
     vi.mocked(apiFetch).mockImplementation((path, init) => {
       if (path === '/api/system/models/qwen3%3A8b/pull' && init?.method === 'POST') {
-        return pullPromise as never;
+        return pullPromise;
       }
       return Promise.resolve({
         ...defaultModels,
@@ -500,7 +500,7 @@ describe('ModelSelector', () => {
             roles: ['smart'],
           },
         ],
-      }) as never;
+      });
     });
     const onChange = vi.fn();
 
@@ -850,5 +850,28 @@ describe('ModelSelector', () => {
     // The row itself is still rendered but disabled (row-disable not changed)
     const option = screen.getByTestId('select-item-qwen3:8b');
     expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
+
+
+  it('does not offer pull or delete controls for cloud catalog entries', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    const cloudEntries = defaultModels.catalog.filter((entry) =>
+      ['anthropic', 'openai'].includes(entry.provider),
+    );
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      catalog: [defaultModels.catalog[0], ...cloudEntries],
+    });
+
+    renderComponent({ value: 'qwen3:14b', configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('GPT-4o')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('button', { name: /pull model gpt-4o/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete model gpt-4o/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Manage installed models')).not.toBeInTheDocument();
   });
 });

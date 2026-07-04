@@ -393,6 +393,8 @@ def test_cross_paper_ask_request_defaults():
     req = CrossPaperAskRequest(question="What is attention?")
     assert req.max_chunks == 10
     assert req.max_papers == 5
+    assert req.paper_ids is None
+    assert CrossPaperAskRequest(question="What changed?", paper_ids=[1, 2]).paper_ids == [1, 2]
 
     # Bounds
     with pytest.raises(Exception):
@@ -403,6 +405,9 @@ def test_cross_paper_ask_request_defaults():
 
     with pytest.raises(Exception):
         CrossPaperAskRequest(question="x", max_papers=100)  # le=15
+
+    with pytest.raises(Exception):
+        CrossPaperAskRequest(question="x", paper_ids=[])  # min_length=1
 
 
 # ---------------------------------------------------------------------------

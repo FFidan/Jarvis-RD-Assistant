@@ -101,6 +101,26 @@ export function AIPanel() {
     modelsForBackend.some((c) => c.model === selectedModel)
       ? selectedModel
       : firstModelForBackend;
+  const selectedCandidate = modelsForBackend.find((c) => c.model === activeModel);
+
+  const candidateStatusLabel = (candidate: (typeof modelsForBackend)[number]) => {
+    switch (candidate.evidence) {
+      case 'bench':
+        return 'Validated';
+      case 'pending-bench':
+        return 'Needs validation';
+      case 'sim-bench':
+        return 'Reference run';
+      case 'static-benchmark':
+      case 'catalog':
+        return 'Reference';
+      default:
+        return null;
+    }
+  };
+  const candidateStatusRows = modelsForBackend
+    .map((candidate) => ({ candidate, label: candidateStatusLabel(candidate) }))
+    .filter((row): row is { candidate: (typeof modelsForBackend)[number]; label: string } => row.label !== null);
 
   const isDirty =
     activeBackend !== (data?.configured_backend ?? data?.recommended_backend) ||
@@ -350,20 +370,34 @@ export function AIPanel() {
           >
             {modelsForBackend.map((c) => (
               <option key={c.model} value={c.model}>
-                {c.rank === 1 ? `${c.model} (default)` : c.model}
-                {c.score != null ? ` — score ${c.score}` : ''}
+                {c.rank === 1 ? `${c.model} (recommended)` : c.model}
               </option>
             ))}
           </select>
         )}
 
-        {/* Reasoning for selected candidate */}
-        {(() => {
-          const selected = modelsForBackend.find((c) => c.model === activeModel);
-          return selected?.reasoning ? (
-            <p className="text-xs text-muted-foreground">{selected.reasoning}</p>
-          ) : null;
-        })()}
+        {activeBackend === 'vllm' && modelsForBackend.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            vLLM models must already be running behind the local LiteLLM route before you apply them.
+          </p>
+        )}
+
+        {candidateStatusRows.length > 0 && (
+          <div className="space-y-1" data-testid="candidate-status-list">
+            {candidateStatusRows.map(({ candidate, label }) => (
+              <div key={`${candidate.backend}-${candidate.model}`} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono text-muted-foreground">{candidate.model}</span>
+                <span className="rounded border border-input px-1.5 py-0.5 text-muted-foreground">
+                  {label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {selectedCandidate?.reasoning ? (
+          <p className="text-xs text-muted-foreground">{selectedCandidate.reasoning}</p>
+        ) : null}
       </section>
 
       {/* Apply / Reset */}

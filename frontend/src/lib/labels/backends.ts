@@ -4,4 +4,4 @@ export const BACKEND_LABELS: Record<'vllm' | 'ollama', string> = {
 };
 
 export const BACKEND_TOOLTIP =
-  'Both run locally on your hardware and use your GPU. Ollama is the default and can fall back to CPU; vLLM is an advanced, GPU-only option with higher throughput.';
+  'Ollama is the default local runtime. vLLM is optional and only applies when you already run it behind the local LiteLLM route.';

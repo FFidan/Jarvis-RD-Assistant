@@ -66,57 +66,75 @@ tiers:
   16-24:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 1
+        score: null
+        evidence: static-benchmark
+        reasoning: "Conservative local runtime pick for users who prefer the default Ollama path."
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
-        rank: 1
+        rank: 2
         score: 112
         evidence: sim-bench
         sim_vram_mb: 19320
         sim_or_native: sim
-        reasoning: "Simulated benchmark pick for 16-24 GB GPUs; strong on focused single-paper tasks."
+        reasoning: "Optional vLLM candidate for 16-24 GB GPUs; measure on the fixed pack before recommendation."
       - backend: ollama
-        model: qwen2.5:7b-instruct
-        rank: 2
+        model: gpt-oss:20b
+        rank: 3
         score: null
-        evidence: static-benchmark
-        reasoning: "Conservative Ollama fallback for users who prefer the default local runtime."
+        evidence: pending-bench
+        reasoning: "Apache-2.0 local reasoning candidate for 16 GB-plus systems; needs fixed-pack scientific RAG scores and visible-reasoning suppression before recommendation."
 
   24-48:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 1
+        score: null
+        evidence: static-benchmark
+        reasoning: "Conservative local runtime pick for 24-48 GB GPUs."
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
-        rank: 1
+        rank: 2
         score: 119
         evidence: sim-bench
         sim_vram_mb: 24576
         sim_or_native: sim
-        reasoning: "Highest-scoring simulated benchmark candidate for 24-48 GB GPUs."
-      - backend: ollama
-        model: qwen2.5:7b-instruct
-        rank: 2
-        score: null
-        evidence: static-benchmark
-        reasoning: "Conservative Ollama fallback for 24-48 GB GPUs."
+        reasoning: "Optional vLLM candidate for 24-48 GB GPUs; measure on the fixed pack before recommendation."
 
   ge-48:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
-      - backend: vllm
-        model: Qwen/Qwen3-14B-AWQ
-        rank: 1
-        score: 92
-        evidence: bench
-        reasoning: "Bench-validated default for high-VRAM GPUs; strongest option in the local evaluation set."
-      - backend: vllm
-        model: Qwen/Qwen3-8B-AWQ
-        rank: 2
-        score: 84
-        evidence: bench
-        reasoning: "Bench-validated high-VRAM alternative when the 14B model is too slow or memory-constrained."
       - backend: ollama
         model: qwen3:30b-a3b
-        rank: 3
+        rank: 1
         score: null
-        evidence: live-deployment
-        reasoning: "Catalog-verified Ollama default for high-VRAM hardware; assignable through the UI."
+        evidence: pending-bench
+        reasoning: "Ollama MoE candidate for high-VRAM hardware; keep local-first while fixed-pack scores are collected."
+      - backend: vllm
+        model: Qwen/Qwen3-14B-AWQ
+        rank: 2
+        score: 92
+        evidence: bench
+        reasoning: "Optional vLLM candidate from the prior local evaluation set; keep outside the default path until route evidence is refreshed."
+      - backend: vllm
+        model: Qwen/Qwen3-8B-AWQ
+        rank: 3
+        score: 84
+        evidence: bench
+        reasoning: "Optional vLLM alternative when the 14B route is too slow or memory-constrained."
+      - backend: vllm
+        model: Qwen/Qwen3-30B-A3B-Instruct-2507
+        rank: 4
+        score: null
+        evidence: pending-bench
+        reasoning: "Apache-2.0 non-thinking HF/vLLM refresh with long-context support; benchmark before changing defaults."
+      - backend: vllm
+        model: openai/gpt-oss-20b
+        rank: 5
+        score: null
+        evidence: pending-bench
+        reasoning: "HF/vLLM serving path for GPT-OSS 20B; requires Harmony-aware prompting and visible-reasoning suppression before user-facing use."

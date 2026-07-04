@@ -139,6 +139,11 @@ function isLocalModel(entry: ModelCatalogEntry): boolean {
   return entry.provider === 'ollama' || Boolean(entry.ollama_tag);
 }
 
+
+function isOllamaManaged(entry: ModelCatalogEntry): boolean {
+  return entry.provider === 'ollama';
+}
+
 function isEntrySelectableForRole(entry: ModelCatalogEntry, role?: ModelRole): boolean {
   if (role && !entry.roles.includes(role)) return false;
   if (typeof entry.can_assign === 'boolean') return entry.can_assign;
@@ -270,7 +275,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const detectedHardware = hardwareSummary(data?.hardware);
   const pullableModels = allModels.filter(
     (entry) =>
-      isLocalModel(entry) &&
+      isOllamaManaged(entry) &&
       entry.status === 'downloadable' &&
       effectiveFit(entry) !== 'unfit',
   );
@@ -288,13 +293,13 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const [manageOpen, setManageOpen] = useState(false);
   const canDeleteSelected =
     selectedEntry !== undefined &&
-    isLocalModel(selectedEntry) &&
+    isOllamaManaged(selectedEntry) &&
     selectedEntry.pulled &&
     !selectedEntry.active &&
     selectedEntry.status !== 'active';
   const deletableModels = (catalog ?? []).filter(
     (e) =>
-      isLocalModel(e) &&
+      isOllamaManaged(e) &&
       e.pulled &&
       !e.active &&
       e.status !== 'active' &&
@@ -327,12 +332,13 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
 
   const setupNeeded =
     selectedEntry !== undefined &&
+    isOllamaManaged(selectedEntry) &&
     (selectedEntry.status === 'downloadable' || selectedEntry.status === 'unfit');
   const recommendedEntry = setupNeeded ? (pullableModels[0] ?? null) : null;
   const hardwareLabel = detectedHardware ? detectedHardware.join(' · ') : null;
 
   // Routing divergence: what LiteLLM actually serves vs what is saved.
-  const routingMap = data?.routing as Record<string, string> | undefined;
+  const routingMap = data?.routing;
   const savedModel = currentRole ? systemDefault : undefined;
   const routedModel = currentRole ? routingMap?.[currentRole] : undefined;
   const isDiverged =

@@ -234,4 +234,6 @@ async def test_hybrid_user_scoped_threads_user_id_into_queries():
 
     assert 7 in conn.fetch.await_args_list[0].args  # BM25 leg scoped to user 7
     assert 7 in conn.fetch.await_args_list[1].args  # semantic-only metadata scoped to user 7
-    assert search_global.await_args.kwargs.get("user_id") == 7
+    semantic_scope = search_global.await_args.kwargs.get("scope")
+    assert semantic_scope is not None
+    assert semantic_scope.user_id == 7

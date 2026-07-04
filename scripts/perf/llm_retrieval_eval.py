@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import statistics
+import subprocess
 import time
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -35,7 +37,24 @@ SCORE_DIMENSIONS = (
     "visible_answer_quality",
 )
 GROUNDING_DIMENSIONS = ("evidence_grounding", "citation_label_stability")
-HIDDEN_REASONING_MARKERS = ("<think>", "</think>", "harmony analysis", "scratchpad")
+ANSWER_KEY_DEFAULT = Path("docs/perf/eval_sets/2026-07-03-scientific-rag-answer-key.jsonl")
+HIDDEN_REASONING_MARKERS = (
+    "<think>",
+    "</think>",
+    "harmony analysis",
+    "scratchpad",
+    "<|im_start|>",
+    "<|im_end|>",
+    "i need to",
+    "let me",
+    "we need to",
+)
+REQUIRED_JUDGED_BOOL_FIELDS = (
+    "structured_output_valid",
+    "wrong_paper_central_claim",
+    "unanswerable_fabricated_positive_claim",
+    "promotion_eligible",
+)
 
 
 class EvalHarnessError(RuntimeError):
@@ -193,6 +212,168 @@ class CandidateStats:
     latencies: list[float] = field(default_factory=list)
     quality_scores: list[float] = field(default_factory=list)
     grounding_scores: list[float] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ScoreSet:
+    """Validated rubric scores for one judged answer row.
+
+    Attributes
+    ----------
+    values
+        Per-dimension scores normalized to floats in the inclusive range 0..2.
+    """
+
+    values: dict[str, float]
+
+    @classmethod
+    def from_raw(cls, raw: Any, candidate: str, question_id: str) -> ScoreSet:
+        """Build a score set from a raw answer row field.
+
+        Parameters
+        ----------
+        raw
+            Value of the row's ``scores`` field.
+        candidate
+            Candidate label used in failure messages.
+        question_id
+            Question id used in failure messages.
+
+        Returns
+        -------
+        ScoreSet
+            Validated rubric scores.
+        """
+
+        if not isinstance(raw, dict):
+            raise EvalHarnessError(f"{candidate}/{question_id}: missing scores object")
+        values: dict[str, float] = {}
+        for dimension in SCORE_DIMENSIONS:
+            score = raw.get(dimension)
+            if not isinstance(score, int | float) or score < 0 or score > 2:
+                raise EvalHarnessError(
+                    f"{candidate}/{question_id}: score {dimension!r} must be 0..2"
+                )
+            values[dimension] = float(score)
+        return cls(values=values)
+
+
+@dataclass(frozen=True)
+class JudgedAnswerRow:
+    """Validated answer row ready for fixed-pack aggregation.
+
+    Attributes
+    ----------
+    raw
+        Original row dictionary. Preserved so downstream summary code keeps the
+        stable JSONL contract.
+    candidate
+        Candidate label.
+    question_id
+        Fixed manifest question id.
+    scores
+        Validated rubric score set.
+    """
+
+    raw: dict[str, Any]
+    candidate: str
+    question_id: str
+    scores: ScoreSet
+
+    @classmethod
+    def from_mapping(cls, row: dict[str, Any]) -> JudgedAnswerRow:
+        """Validate one raw answer row.
+
+        Parameters
+        ----------
+        row
+            Parsed JSONL row from a judged answer file.
+
+        Returns
+        -------
+        JudgedAnswerRow
+            Row wrapper with validated identifiers, score object, provenance,
+            and hard-fail metadata.
+        """
+
+        candidate = _required_answer_label(row, "candidate", "answer row")
+        question_id = _required_answer_label(row, "question_id", candidate)
+        scores = ScoreSet.from_raw(row.get("scores"), candidate, question_id)
+        _validate_judge_provenance(row, candidate, question_id)
+        _validate_complete_judged_row(row, candidate, question_id)
+        return cls(raw=row, candidate=candidate, question_id=question_id, scores=scores)
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    """Reproducibility metadata attached to generated summaries.
+
+    Attributes
+    ----------
+    manifest_sha256
+        SHA-256 digest of the fixed eval manifest.
+    answers_sha256
+        SHA-256 digest of the judged answer rows used for aggregation.
+    answer_key_sha256
+        SHA-256 digest of the answer key, or ``not_provided``.
+    git_commit
+        Current repository commit when the report was generated.
+    route_label
+        Optional LiteLLM route or product route label.
+    backend_label
+        Optional serving backend label.
+    runtime_inventory
+        Optional ignored runtime-inventory artifact path.
+    """
+
+    manifest_sha256: str
+    answers_sha256: str
+    answer_key_sha256: str
+    git_commit: str
+    route_label: str
+    backend_label: str
+    runtime_inventory: str
+
+    def as_summary_fields(self) -> dict[str, str]:
+        """Return CSV-safe metadata fields for a summary row."""
+
+        return {
+            "manifest_sha256": self.manifest_sha256,
+            "answers_sha256": self.answers_sha256,
+            "answer_key_sha256": self.answer_key_sha256,
+            "git_commit": self.git_commit,
+            "route_label": self.route_label,
+            "backend_label": self.backend_label,
+            "runtime_inventory": self.runtime_inventory,
+        }
+
+
+@dataclass(frozen=True)
+class RunMetadataInputs:
+    """Input paths and labels used to build reproducibility metadata.
+
+    Attributes
+    ----------
+    manifest_path
+        Fixed eval manifest used for the run.
+    answers_path
+        Judged answer JSONL path used for aggregation.
+    answer_key_path
+        Optional answer-key path used by the human/executor judge.
+    route_label
+        Optional product route label.
+    backend_label
+        Optional backend label.
+    runtime_inventory
+        Optional ignored artifact path with non-secret runtime inventory.
+    """
+
+    manifest_path: Path
+    answers_path: Path
+    answer_key_path: Path | None
+    route_label: str | None
+    backend_label: str | None
+    runtime_inventory: Path | None
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -423,32 +604,23 @@ def load_answer_rows(path: Path) -> list[dict[str, Any]]:
     """
 
     rows = _read_jsonl(path)
-    for row in rows:
-        candidate = row.get("candidate")
-        question_id = row.get("question_id")
-        if not isinstance(candidate, str) or not candidate:
+    return [JudgedAnswerRow.from_mapping(row).raw for row in rows]
+
+
+def _required_answer_label(row: dict[str, Any], key: str, owner: str) -> str:
+    value = row.get(key)
+    if not isinstance(value, str) or not value:
+        if key == "candidate":
             raise EvalHarnessError("answer row missing non-empty candidate")
-        if not isinstance(question_id, str) or not question_id:
-            raise EvalHarnessError("answer row missing non-empty question_id")
-        scores = row.get("scores")
-        if not isinstance(scores, dict):
-            raise EvalHarnessError(f"{candidate}/{question_id}: missing scores object")
-        _validate_judge_provenance(row, candidate, question_id)
-        _validate_complete_judged_row(row, candidate, question_id)
-        for dimension in SCORE_DIMENSIONS:
-            score = scores.get(dimension)
-            if not isinstance(score, int | float) or score < 0 or score > 2:
-                raise EvalHarnessError(
-                    f"{candidate}/{question_id}: score {dimension!r} must be 0..2"
-                )
-    return rows
+        raise EvalHarnessError(f"{owner}: answer row missing non-empty {key}")
+    return value
 
 
 def _validate_judge_provenance(row: dict[str, Any], candidate: str, question_id: str) -> None:
     if row.get("run_note") == "dry_run_fixture_not_model_evidence":
-        if row.get("promotion_eligible") is False:
-            return
-        raise EvalHarnessError(f"{candidate}/{question_id}: dry-run row must not be eligible")
+        raise EvalHarnessError(
+            f"{candidate}/{question_id}: dry-run rows are not benchmark evidence"
+        )
     if row.get("judge_reviewed") is not True:
         raise EvalHarnessError(f"{candidate}/{question_id}: missing judge_reviewed=true")
     judge_type = row.get("judge_type")
@@ -461,33 +633,63 @@ def _validate_judge_provenance(row: dict[str, Any], candidate: str, question_id:
 def _validate_complete_judged_row(row: dict[str, Any], candidate: str, question_id: str) -> None:
     if row.get("run_note") == "dry_run_fixture_not_model_evidence":
         return
-    if not str(row.get("answer", "")).strip():
+    _validate_visible_answer(row, candidate, question_id)
+    _validate_evidence_presence(row, candidate, question_id)
+    _validate_required_boolean_fields(row, candidate, question_id)
+    _validate_latency_value(row, candidate, question_id)
+    _validate_vram_value(row, candidate, question_id)
+
+
+def _validate_visible_answer(row: dict[str, Any], candidate: str, question_id: str) -> None:
+    answer = str(row.get("answer", ""))
+    if not answer.strip():
         raise EvalHarnessError(f"{candidate}/{question_id}: missing visible answer")
+
+
+def _validate_evidence_presence(row: dict[str, Any], candidate: str, question_id: str) -> None:
     if not _has_non_empty_evidence_list(row):
         raise EvalHarnessError(
             f"{candidate}/{question_id}: missing non-empty citations or sources list"
         )
-    required_bool_fields = (
-        "structured_output_valid",
-        "wrong_paper_central_claim",
-        "unanswerable_fabricated_positive_claim",
-        "promotion_eligible",
-    )
-    for field_name in required_bool_fields:
+
+
+def _validate_required_boolean_fields(
+    row: dict[str, Any], candidate: str, question_id: str
+) -> None:
+    for field_name in REQUIRED_JUDGED_BOOL_FIELDS:
         if not isinstance(row.get(field_name), bool):
             raise EvalHarnessError(f"{candidate}/{question_id}: {field_name} must be boolean")
+
+
+def _validate_latency_value(row: dict[str, Any], candidate: str, question_id: str) -> None:
     latency = row.get("latency_ms")
     if not isinstance(latency, int | float) or latency < 0:
         raise EvalHarnessError(
             f"{candidate}/{question_id}: latency_ms must be a non-negative number"
         )
-    _validate_vram_value(row, candidate, question_id)
 
 
 def _has_non_empty_evidence_list(row: dict[str, Any]) -> bool:
-    for field_name in ("citations", "sources"):
-        value = row.get(field_name)
-        if isinstance(value, list) and value:
+    return any(_evidence_item_has_content(item) for item in _evidence_items(row))
+
+
+def _evidence_item_has_content(item: Any) -> bool:
+    if isinstance(item, str):
+        return bool(item.strip())
+    if not isinstance(item, dict):
+        return False
+    evidence_keys = (
+        "evidence",
+        "text",
+        "snippet",
+        "quote",
+        "content",
+    )
+    for key in evidence_keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, int) and not isinstance(value, bool):
             return True
     return False
 
@@ -540,10 +742,24 @@ def _validate_fixed_pack_scope(
     manifest_questions: dict[str, EvalQuestion],
 ) -> None:
     for row in rows:
-        if row.get("run_note") == "dry_run_fixture_not_model_evidence":
-            continue
         question = manifest_questions[row["question_id"]]
+        row_scope = row.get("scope")
+        if row_scope is not None and row_scope != question.scope:
+            raise EvalHarnessError(
+                f"{candidate}/{question.question_id}: row scope {row_scope!r} "
+                "does not match manifest"
+            )
+        row_required = row.get("required_papers")
+        if row_required is not None and list(row_required) != question.required_papers:
+            raise EvalHarnessError(
+                f"{candidate}/{question.question_id}: required_papers do not match manifest"
+            )
         if question.scope == "single_paper":
+            if row.get("retrieval_scope") != "single_paper_endpoint":
+                raise EvalHarnessError(
+                    f"{candidate}/{question.question_id}: single-paper row missing endpoint scope"
+                )
+            _validate_single_paper_evidence(candidate, row, question)
             continue
         if row.get("retrieval_scope") != "fixed_pack_isolated_library":
             raise EvalHarnessError(
@@ -554,6 +770,28 @@ def _validate_fixed_pack_scope(
             raise EvalHarnessError(
                 f"{candidate}/{question.question_id}: fixed_pack_library_confirmed must be true"
             )
+
+
+def _validate_single_paper_evidence(
+    candidate: str, row: dict[str, Any], question: EvalQuestion
+) -> None:
+    expected_paper = question.required_papers[0]
+    for item in _evidence_items(row):
+        paper_key = item.get("paper_key") if isinstance(item, dict) else None
+        if paper_key is not None and paper_key != expected_paper:
+            raise EvalHarnessError(
+                f"{candidate}/{question.question_id}: evidence paper_key {paper_key!r} "
+                f"does not match {expected_paper!r}"
+            )
+
+
+def _evidence_items(row: dict[str, Any]) -> list[Any]:
+    items: list[Any] = []
+    for field_name in ("citations", "sources"):
+        value = row.get(field_name)
+        if isinstance(value, list):
+            items.extend(value)
+    return items
 
 
 def _validate_candidate_question_coverage(
@@ -653,7 +891,7 @@ def _candidate_decision(stats: CandidateStats) -> str:
     ):
         return "reject"
     if not stats.promotion_eligible:
-        return "not_runnable:dry_run_fixture"
+        return "defer:not_promotion_eligible"
     return "defer"
 
 
@@ -684,7 +922,124 @@ def _first_value(rows: Sequence[dict[str, Any]], key: str, default: Any) -> Any:
     return default
 
 
-def write_summary_csv(path: Path, summaries: Sequence[dict[str, Any]]) -> None:
+def sha256_file(path: Path) -> str:
+    """Return the SHA-256 digest of a file.
+
+    Parameters
+    ----------
+    path
+        File to hash.
+
+    Returns
+    -------
+    str
+        Lowercase hexadecimal digest.
+    """
+
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def current_git_commit(repo_root: Path | None = None) -> str:
+    """Return the current git commit hash or ``unknown``.
+
+    Parameters
+    ----------
+    repo_root
+        Repository root used for the git command. Defaults to the harness repo.
+
+    Returns
+    -------
+    str
+        Current commit hash when available.
+    """
+
+    cwd = repo_root or Path(__file__).resolve().parents[2]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def build_run_metadata(inputs: RunMetadataInputs) -> RunMetadata:
+    """Build reproducibility metadata for generated summaries.
+
+    Parameters
+    ----------
+    inputs
+        Input paths and labels for this run.
+
+    Returns
+    -------
+    RunMetadata
+        Metadata to include in CSV and Markdown summaries.
+    """
+
+    answer_key_hash = "not_provided"
+    if inputs.answer_key_path is not None and inputs.answer_key_path.exists():
+        answer_key_hash = sha256_file(inputs.answer_key_path)
+    return RunMetadata(
+        manifest_sha256=sha256_file(inputs.manifest_path),
+        answers_sha256=sha256_file(inputs.answers_path),
+        answer_key_sha256=answer_key_hash,
+        git_commit=current_git_commit(),
+        route_label=inputs.route_label or "unspecified",
+        backend_label=inputs.backend_label or "unspecified",
+        runtime_inventory=(
+            str(inputs.runtime_inventory)
+            if inputs.runtime_inventory is not None
+            else "not_provided"
+        ),
+    )
+
+
+def write_dry_run_report(
+    path: Path, manifest: EvalManifest, manifest_path: Path, answers_path: Path
+) -> None:
+    """Write a non-benchmark dry-run report.
+
+    Parameters
+    ----------
+    path
+        Destination Markdown path.
+    manifest
+        Manifest used to report fixed-pack coverage.
+    manifest_path
+        Fixed eval manifest path.
+    answers_path
+        Fixture answer-row path written by dry-run mode.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Scientific RAG Eval Dry Run",
+        "",
+        "Dry-run fixture rows validate manifest and parser plumbing only.",
+        "They are not benchmark evidence and cannot be aggregated via --answers-jsonl.",
+        "",
+        f"- Papers: {len(manifest.papers)}",
+        f"- Questions: {len(manifest.questions)}",
+        f"- Fixture rows: `{answers_path}`",
+        f"- Manifest SHA-256: `{sha256_file(manifest_path)}`",
+        f"- Fixture SHA-256: `{sha256_file(answers_path)}`",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_summary_csv(
+    path: Path, summaries: Sequence[dict[str, Any]], metadata: RunMetadata | None = None
+) -> None:
     """Write candidate summary rows as CSV.
 
     Parameters
@@ -693,6 +1048,8 @@ def write_summary_csv(path: Path, summaries: Sequence[dict[str, Any]]) -> None:
         Destination CSV path.
     summaries
         Candidate summary dictionaries from ``summarize_answers``.
+    metadata
+        Optional reproducibility metadata to append to each CSV row.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -708,11 +1065,16 @@ def write_summary_csv(path: Path, summaries: Sequence[dict[str, Any]]) -> None:
         "vram_peak_mb",
         "decision",
     ]
+    if metadata is not None:
+        fieldnames.extend(metadata.as_summary_fields())
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         for row in summaries:
-            writer.writerow(row)
+            output_row = dict(row)
+            if metadata is not None:
+                output_row.update(metadata.as_summary_fields())
+            writer.writerow(output_row)
 
 
 def write_markdown_report(
@@ -720,6 +1082,7 @@ def write_markdown_report(
     manifest: EvalManifest,
     summaries: Sequence[dict[str, Any]],
     answers_path: Path,
+    metadata: RunMetadata | None = None,
 ) -> None:
     """Write a human-readable benchmark summary report.
 
@@ -733,6 +1096,8 @@ def write_markdown_report(
         Candidate summary dictionaries from ``summarize_answers``.
     answers_path
         Source answer-row path referenced in the report.
+    metadata
+        Optional reproducibility metadata to include in the report.
     """
 
     lines = [
@@ -744,11 +1109,27 @@ def write_markdown_report(
         f"- Papers: {len(manifest.papers)}",
         f"- Questions: {len(manifest.questions)}",
         f"- Answer rows: `{answers_path}`",
-        "",
-        "| candidate | quality_score | grounding_score | wrong_paper_count | "
-        "empty_answer_count | hidden_reasoning_leak_count | p95_latency_ms | decision |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
+    if metadata is not None:
+        lines.extend(
+            [
+                f"- Manifest SHA-256: `{metadata.manifest_sha256}`",
+                f"- Answers SHA-256: `{metadata.answers_sha256}`",
+                f"- Answer key SHA-256: `{metadata.answer_key_sha256}`",
+                f"- Git commit: `{metadata.git_commit}`",
+                f"- Route label: `{metadata.route_label}`",
+                f"- Backend label: `{metadata.backend_label}`",
+                f"- Runtime inventory: `{metadata.runtime_inventory}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| candidate | quality_score | grounding_score | wrong_paper_count | "
+            "empty_answer_count | hidden_reasoning_leak_count | p95_latency_ms | decision |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
     for row in summaries:
         lines.append(
             "| {candidate} | {quality_score} | {grounding_score} | {wrong_paper_count} | "
@@ -925,8 +1306,20 @@ def _product_rag_request(
             "max_chunks": max_chunks,
             "max_papers": max_papers,
             "decompose": decompose,
+            "paper_ids": _fixed_pack_paper_ids(paper_map),
         },
     )
+
+
+def _fixed_pack_paper_ids(paper_map: dict[str, int | str]) -> list[int]:
+    """Return local fixed-pack paper ids for explicit cross-paper scoping."""
+    paper_ids: list[int] = []
+    for paper_key, raw_id in sorted(paper_map.items()):
+        try:
+            paper_ids.append(int(raw_id))
+        except (TypeError, ValueError) as exc:
+            raise EvalHarnessError(f"paper map value for {paper_key!r} must be an int") from exc
+    return paper_ids
 
 
 def _post_json(
@@ -1038,6 +1431,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl"),
     )
+    parser.add_argument("--answer-key", type=Path, default=ANSWER_KEY_DEFAULT)
     parser.add_argument("--out-dir", type=Path, default=Path("artifacts/perf/llm-retrieval-eval"))
     parser.add_argument("--candidate", action="append", default=[])
     parser.add_argument("--answers-jsonl", type=Path)
@@ -1051,6 +1445,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-papers", type=int, default=10)
     parser.add_argument("--decompose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--route-label")
+    parser.add_argument("--backend-label")
+    parser.add_argument("--runtime-inventory", type=Path)
     parser.add_argument(
         "--fixed-pack-library-confirmed",
         action="store_true",
@@ -1086,6 +1483,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.dry_run:
         answers_path = write_dry_run_answers(manifest, args.out_dir, candidates)
+        write_dry_run_report(
+            args.out_dir / "dry_run_report.md", manifest, args.manifest, answers_path
+        )
+        return 0
     elif args.capture_only:
         if not args.api_base:
             raise EvalHarnessError("--capture-only requires --api-base")
@@ -1120,8 +1521,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     answer_rows = load_answer_rows(answers_path)
     summaries = summarize_answers(manifest, answer_rows)
-    write_summary_csv(args.out_dir / "summary.csv", summaries)
-    write_markdown_report(args.out_dir / "report.md", manifest, summaries, answers_path)
+    metadata = build_run_metadata(
+        RunMetadataInputs(
+            manifest_path=args.manifest,
+            answers_path=answers_path,
+            answer_key_path=args.answer_key,
+            route_label=args.route_label,
+            backend_label=args.backend_label,
+            runtime_inventory=args.runtime_inventory,
+        )
+    )
+    write_summary_csv(args.out_dir / "summary.csv", summaries, metadata)
+    write_markdown_report(args.out_dir / "report.md", manifest, summaries, answers_path, metadata)
     return 0
 
 

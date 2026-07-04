@@ -1,6 +1,6 @@
 # Scientific RAG Model/Retrieval Eval Harness
 
-This harness is for Step 0.5 model/retrieval evidence. It is intentionally
+This harness is for model and retrieval evidence. It is intentionally
 separate from product defaults: a candidate can look promising here and still be
 kept out of the default path until hardware, latency, structured-output, and
 citation-grounding gates all pass.
@@ -15,8 +15,8 @@ citation-grounding gates all pass.
 - Judge-reviewed answer rows contain one `(candidate, question_id)` result with
   a visible answer, citations, 0-2 rubric scores, latency, VRAM metadata, and
   hard-fail flags.
-- Raw traces, model outputs, timing CSVs, screenshots, and scratch judging notes
-  stay under ignored `artifacts/perf/<run-id>/` or `docs/audit/exec/<run-id>/`.
+- Raw traces, model outputs, timing CSVs, screenshots, and reviewer notes
+  stay under ignored `artifacts/perf/<run-id>/`.
 
 ## Dry Run
 
@@ -28,6 +28,37 @@ uv run python3 scripts/perf/llm_retrieval_eval.py   --dry-run   --candidate dry-
 ```
 
 Dry-run output is not benchmark evidence and cannot promote a default.
+
+## Seed Or Check The Fixed Pack
+
+Before capture, verify that the authenticated benchmark library contains the
+fixed 10-paper pack and no unrelated papers. The seeder writes only ignored
+artifacts and accepts cookie/header files, not secret values on the command
+line.
+
+```bash
+uv run python3 scripts/perf/seed_scientific_rag_pack.py \
+  --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
+  --api-base http://127.0.0.1:8000 \
+  --auth-cookie-file artifacts/perf/<run-id>/jarvis-cookie.txt \
+  --check-only \
+  --out-dir artifacts/perf/<run-id>
+```
+
+If the readiness check reports missing paper rows, import the exact fixed-pack
+arXiv identifiers inside the paper-ingestion service first; do not use broad
+search/discovery routes for benchmark seeding. After the rows exist in the
+authenticated library, use `--seed` only to download and process PDFs through
+product-supported APIs, then repeat the check-only command:
+
+```bash
+uv run python3 scripts/perf/seed_scientific_rag_pack.py \
+  --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
+  --api-base http://127.0.0.1:8000 \
+  --auth-cookie-file artifacts/perf/<run-id>/jarvis-cookie.txt \
+  --seed \
+  --out-dir artifacts/perf/<run-id>
+```
 
 ## Capture Product RAG Answers
 
@@ -87,7 +118,12 @@ fixed-pack scope confirmation for library-wide questions are also rejected.
 
 ```bash
 uv run python3 scripts/perf/llm_retrieval_eval.py \
+  --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
+  --answer-key docs/perf/eval_sets/2026-07-03-scientific-rag-answer-key.jsonl \
   --answers-jsonl artifacts/perf/<run-id>/judged_answers.jsonl \
+  --route-label smart \
+  --backend-label ollama \
+  --runtime-inventory artifacts/perf/<run-id>/runtime_inventory.json \
   --out-dir artifacts/perf/<run-id>/summary
 ```
 
@@ -100,7 +136,8 @@ uv run python3 scripts/perf/llm_retrieval_eval.py \
    corpus before running library-wide capture.
 3. Capture answers for the current baseline before candidates.
 4. Judge captured rows against returned sources and the answer-key packet.
-5. Aggregate only complete judged rows.
+5. Aggregate only complete judged rows with manifest, answer-key, answer-row,
+   git commit, route/backend label, and runtime-inventory metadata.
 6. Roll back any temporary model, reranker, backend, or environment override
    before normal product use.
 
@@ -122,11 +159,11 @@ Do not promote a default if any of these occur:
 ## Artifact And Publication Boundary
 
 Raw capture output, cookies, local paper ids, long source excerpts, logs, and
-scratch judging notes stay under ignored `artifacts/perf/<run-id>/`. Tracked
+reviewer notes stay under ignored `artifacts/perf/<run-id>/`. Tracked
 summary files under `docs/perf/` are allowed only when they contain measured
 rows or explicit `not_runnable:<reason>` values.
 
 The checked-in manifest and operator instructions may become public if the
-resulting report is reproducible, source-backed, and free of subjective
-LLM-judge prose. Do not add a MkDocs/public link until an independent maintainer review
+resulting report is reproducible, source-backed, and free of unverifiable
+scoring prose. Do not add a MkDocs/public link until an independent maintainer review
 checks reproducibility, source-backed scoring, and artifact hygiene.

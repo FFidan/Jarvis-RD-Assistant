@@ -110,6 +110,7 @@ export interface AIBackendCandidate {
   rank: number;
   score?: number | null;
   reasoning?: string;
+  evidence?: 'bench' | 'sim-bench' | 'static-benchmark' | 'pending-bench' | 'catalog' | null;
 }
 
 export interface AISettings {

@@ -80,6 +80,47 @@ describe('AIPanel', () => {
     expect(screen.getByRole('button', { name: /Ollama \(default\)/ })).toBeInTheDocument();
   });
 
+
+  it('renders candidate evidence badges and vLLM local-route guidance', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue({
+      ...baseSettings,
+      candidates_for_tier: [
+        {
+          backend: 'vllm',
+          model: 'Qwen/Qwen3-14B-AWQ',
+          rank: 1,
+          score: 105,
+          reasoning: 'Top eval.',
+          evidence: 'bench',
+        },
+        {
+          backend: 'vllm',
+          model: 'Qwen/Qwen3-8B-AWQ',
+          rank: 2,
+          reasoning: 'Awaiting target benchmark.',
+          evidence: 'pending-bench',
+        },
+        {
+          backend: 'ollama',
+          model: 'qwen3:14b',
+          rank: 1,
+          reasoning: 'Catalog fallback.',
+          source: 'catalog',
+          evidence: 'catalog',
+        },
+      ],
+    } as any);
+
+    render(wrap(<AIPanel />));
+
+    expect(await screen.findByText('Validated')).toBeInTheDocument();
+    expect(screen.getByText('Needs validation')).toBeInTheDocument();
+    expect(screen.getByText(/vLLM models must already be running behind the local LiteLLM route/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Ollama \(default\)/ }));
+    expect(screen.getByText('Reference')).toBeInTheDocument();
+  });
+
   it('guides the user instead of dead-ending when a backend has no candidates for the tier', async () => {
     // Recommended backend is ollama; only ollama has a candidate, so selecting
     // the vllm backend yields an empty model list → guidance, not a dead-end.

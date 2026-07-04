@@ -22,6 +22,18 @@ def test_model_catalog_entries_have_unique_ids_and_review_dates() -> None:
     assert all(entry.last_reviewed for entry in catalog)
 
 
+def test_gpt_oss_is_pullable_but_not_a_default() -> None:
+    catalog = {entry.id: entry for entry in load_model_catalog()}
+    entry = catalog["gpt-oss:20b"]
+
+    assert entry.provider == "ollama"
+    assert entry.ollama_tag == "gpt-oss:20b"
+    assert entry.phase == "future"
+    assert entry.assignable is True
+    assert entry.supports_thinking is True
+    assert entry.min_vram_gb_at_default_ctx == 16.0
+
+
 def test_embedding_candidates_have_expected_assignability_defaults() -> None:
     catalog = {entry.id: entry for entry in load_model_catalog()}
 

@@ -5,7 +5,7 @@
 **Scope:** local-first model, backend, reranker, and embedding validation for
 JARVIS scientific-paper RAG.
 
-This document defines the checked-in protocol for Step 0.5. It is not a
+This document defines the checked-in protocol for the model evidence gate. It is not a
 benchmark result report and it does not promote a model, backend, reranker, or
 embedding default. The full scientific RAG benchmark still has to run over the
 fixed paper/question pack with reproducible answer rows, source-backed scoring,
@@ -13,8 +13,8 @@ and clear promote/defer/reject decisions.
 
 `docs/perf/` is excluded from the rendered MkDocs site. The protocol and fixed
 eval inputs are versioned in the repository so future benchmark results can be
-reproduced against the same questions. Raw outputs and scratch judging notes
-belong under ignored `artifacts/perf/<run-id>/` or `docs/audit/exec/<run-id>/`.
+reproduced against the same questions. Raw outputs and reviewer notes
+belong under ignored `artifacts/perf/<run-id>/`.
 
 ## Current Decision
 
@@ -92,7 +92,7 @@ The harness now separates three phases:
 
 The capture phase requires an explicit paper map from stable `paper_key` values
 to local database paper ids. That map, cookies, raw answers, local logs, and
-judge scratch notes are operator artifacts and must not be committed. Reranker,
+reviewer notes are operator artifacts and must not be committed. Reranker,
 backend, and model candidates should be measured behind existing aliases or
 explicit temporary overrides, then rolled back before normal product use.
 
@@ -141,5 +141,5 @@ citation-label stability, structured-output validity, visible hidden-reasoning
 suppression, or hardware fit.
 
 No MkDocs/public link should be added unless a maintainer review verifies that the
-result packet is reproducible, source-backed, free of subjective LLM-judge prose, and
-free of raw local traces or private deployment details.
+result packet is reproducible, source-backed, free of unverifiable scoring prose, and
+free of raw local traces or environment-specific details.

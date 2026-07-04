@@ -27,6 +27,7 @@ class CrossPaperAskRequest(BaseModel):
     max_chunks: int = Field(default=10, ge=1, le=20)
     max_papers: int = Field(default=5, ge=1, le=15)
     decompose: bool = Field(default=True)
+    paper_ids: list[int] | None = Field(default=None, min_length=1, max_length=50)
     history: list[HistoryTurn] = Field(default_factory=list, max_length=12)
 
 

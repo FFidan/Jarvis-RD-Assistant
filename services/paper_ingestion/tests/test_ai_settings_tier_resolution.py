@@ -45,6 +45,9 @@ def test_recommended_models_are_catalog_backed() -> None:
         "cpu": "qwen3:1.7b",
         "lt-8": "qwen3:1.7b",
         "8-16": "qwen2.5:7b-instruct",
+        "16-24": "qwen2.5:7b-instruct",
+        "24-48": "qwen2.5:7b-instruct",
+        "ge-48": "qwen3:30b-a3b",
     }
     config_path = find_candidate_config_path()
     for tier, model in expected.items():
@@ -58,6 +61,40 @@ def test_recommended_models_are_catalog_backed() -> None:
     # deepseek-r1:7b is the rank-2 Ollama candidate at the 8-16 tier.
     eight_to_sixteen = resolve_candidates_for_tier("8-16", config_path=config_path)
     assert any(c["model"] == "deepseek-r1:7b" for c in eight_to_sixteen.candidates)
+
+
+def test_pending_model_refresh_candidates_do_not_replace_ranked_defaults() -> None:
+    """Refresh candidates stay selectable or visible without promoting defaults."""
+    config_path = find_candidate_config_path()
+
+    mid_tier = resolve_candidates_for_tier("16-24", config_path=config_path)
+    assert mid_tier.recommended["backend"] == "ollama"
+    assert mid_tier.recommended["model"] == "qwen2.5:7b-instruct"
+    optional_mid_vllm = next(
+        c for c in mid_tier.candidates if c["model"] == "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    )
+    assert optional_mid_vllm["backend"] == "vllm"
+    assert optional_mid_vllm["evidence"] == "sim-bench"
+    gpt_oss_ollama = next(c for c in mid_tier.candidates if c["model"] == "gpt-oss:20b")
+    assert gpt_oss_ollama["backend"] == "ollama"
+    assert gpt_oss_ollama["catalog_id"] == "gpt-oss:20b"
+    assert gpt_oss_ollama["source"] == "catalog"
+    assert gpt_oss_ollama["evidence"] == "pending-bench"
+
+    high_tier = resolve_candidates_for_tier("ge-48", config_path=config_path)
+    assert high_tier.recommended["backend"] == "ollama"
+    assert high_tier.recommended["model"] == "qwen3:30b-a3b"
+    qwen_refresh = next(
+        c for c in high_tier.candidates if c["model"] == "Qwen/Qwen3-30B-A3B-Instruct-2507"
+    )
+    assert qwen_refresh["backend"] == "vllm"
+    assert qwen_refresh["catalog_id"] is None
+    assert qwen_refresh["source"] == "tier-candidates"
+    assert qwen_refresh["evidence"] == "pending-bench"
+
+    gpt_oss_vllm = next(c for c in high_tier.candidates if c["model"] == "openai/gpt-oss-20b")
+    assert gpt_oss_vllm["backend"] == "vllm"
+    assert gpt_oss_vllm["evidence"] == "pending-bench"
 
 
 @pytest.mark.parametrize("tier", _TIERS)

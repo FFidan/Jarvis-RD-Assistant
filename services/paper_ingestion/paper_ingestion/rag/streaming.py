@@ -25,6 +25,7 @@ from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_d
 from jarvis_common.settings import get_core_settings, get_reranker_settings
 from jarvis_common.sse import SSE_DONE, sse_event
 
+from paper_ingestion.ingestion.search_scope import SearchScope
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.rag.decomposition import decompose_query
@@ -320,6 +321,7 @@ async def _search_and_merge_chunks(
     body: CrossPaperAskRequest,
     user_id: int | None,
     library_paper_ids: list[int] | None,
+    allowed_paper_ids: list[int] | None,
 ) -> list[dict]:
     """Search all chunks — optionally via query decomposition — and merge."""
     if body.decompose:
@@ -333,8 +335,11 @@ async def _search_and_merge_chunks(
                     query_text=sq,
                     limit=per_query_limit,
                     score_threshold=_SEARCH_SCORE_THRESHOLD,
-                    user_id=user_id,
-                    library_paper_ids=library_paper_ids,
+                    scope=SearchScope(
+                        user_id=user_id,
+                        library_paper_ids=library_paper_ids,
+                        allowed_paper_ids=allowed_paper_ids,
+                    ),
                 )
                 for sq in sub_queries
             )
@@ -355,10 +360,28 @@ async def _search_and_merge_chunks(
             query_text=body.question,
             limit=body.max_chunks * 2,
             score_threshold=_SEARCH_SCORE_THRESHOLD,
-            user_id=user_id,
-            library_paper_ids=library_paper_ids,
+            scope=SearchScope(
+                user_id=user_id,
+                library_paper_ids=library_paper_ids,
+                allowed_paper_ids=allowed_paper_ids,
+            ),
         )
     )
+
+
+def _allowed_cross_paper_ids(
+    requested_paper_ids: list[int] | None,
+    library_paper_ids: list[int] | None,
+    user_id: int | None,
+) -> list[int] | None:
+    """Return explicit cross-paper scope after user-library intersection."""
+    if not requested_paper_ids:
+        return None
+    requested = list(dict.fromkeys(int(paper_id) for paper_id in requested_paper_ids))
+    if user_id is None:
+        return requested
+    allowed = set(library_paper_ids or [])
+    return [paper_id for paper_id in requested if paper_id in allowed]
 
 
 def _select_chunks_by_paper(all_chunks: list[dict], max_papers: int, max_chunks: int) -> list[dict]:
@@ -436,8 +459,17 @@ async def prepare_cross_paper_rag(
                 )
             library_paper_ids = [row["paper_id"] for row in lib_rows]
 
+        allowed_paper_ids = _allowed_cross_paper_ids(body.paper_ids, library_paper_ids, user_id)
+        if body.paper_ids and not allowed_paper_ids:
+            return CrossPaperRagNoResults(
+                answer="No relevant information found in the paper collection.",
+                sources=[],
+            )
+
         # 1. Search all chunks — optionally via query decomposition
-        all_chunks = await _search_and_merge_chunks(embedder, body, user_id, library_paper_ids)
+        all_chunks = await _search_and_merge_chunks(
+            embedder, body, user_id, library_paper_ids, allowed_paper_ids
+        )
 
         if not all_chunks:
             logger.warning(
@@ -496,9 +528,11 @@ async def prepare_cross_paper_rag(
                 "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
                 "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
                 "                  WHERE ul2.paper_id = p.id)"
-                " )",
+                " )"
+                " AND ($3::int[] IS NULL OR p.id = ANY($3::int[]))",
                 unique_paper_ids,
                 user_id,
+                allowed_paper_ids,
             )
         paper_meta = {row["id"]: row for row in rows}
 

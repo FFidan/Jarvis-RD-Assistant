@@ -59,10 +59,14 @@ def test_dry_run_writes_answers_summary_and_report(tmp_path: Path) -> None:
 
     assert exit_code == 0
     assert (tmp_path / "answers.jsonl").exists()
-    assert (tmp_path / "summary.csv").exists()
-    report = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "dry-run-fixture" in report
-    assert "not promotion evidence" in report
+    assert not (tmp_path / "summary.csv").exists()
+    assert not (tmp_path / "report.md").exists()
+    report = (tmp_path / "dry_run_report.md").read_text(encoding="utf-8")
+    assert "not benchmark evidence" in report
+    assert "cannot be aggregated" in report
+    assert "Manifest SHA-256" in report
+    assert "Fixture SHA-256" in report
+    assert "jarvis-cookie" not in report
 
 
 def test_manifest_refuses_too_few_papers(tmp_path: Path) -> None:
@@ -109,6 +113,21 @@ def _valid_answer_row(mod, question_id: str, candidate: str = "candidate-a") -> 
     }
 
 
+def _rows_for_manifest(mod, manifest, candidate: str = "candidate-a") -> list[dict]:
+    rows = []
+    for question in manifest.questions:
+        row = _valid_answer_row(mod, question.question_id, candidate=candidate)
+        row["scope"] = question.scope
+        row["required_papers"] = question.required_papers
+        if question.scope == "single_paper":
+            row["retrieval_scope"] = "single_paper_endpoint"
+            row["citations"] = [
+                {"paper_key": question.required_papers[0], "evidence": "section anchor"}
+            ]
+        rows.append(row)
+    return rows
+
+
 def test_summary_requires_exact_question_coverage_per_candidate() -> None:
     """Verify aggregation rejects duplicate rows and missing questions."""
     mod = _load_module()
@@ -129,7 +148,7 @@ def test_summary_rejects_unknown_question_ids() -> None:
     """Verify aggregation rejects rows for questions outside the manifest."""
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     rows[0] = _valid_answer_row(mod, "q999_not_in_manifest")
 
     try:
@@ -146,12 +165,24 @@ def test_summary_accepts_one_answer_for_each_manifest_question() -> None:
     """Verify exact one-row-per-question coverage can be summarized."""
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
 
     summaries = mod.summarize_answers(manifest, rows)
 
     assert summaries[0]["candidate"] == "candidate-a"
     assert summaries[0]["decision"] == "defer"
+
+
+def test_summary_marks_non_promotable_judged_rows_without_dry_run_label() -> None:
+    """Verify real judged rows do not receive dry-run decision wording."""
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["promotion_eligible"] = False
+
+    summaries = mod.summarize_answers(manifest, rows)
+
+    assert summaries[0]["decision"] == "defer:not_promotion_eligible"
 
 
 def test_product_rag_request_builds_single_and_cross_payloads() -> None:
@@ -177,7 +208,54 @@ def test_product_rag_request_builds_single_and_cross_payloads() -> None:
         "max_chunks": 7,
         "max_papers": 8,
         "decompose": False,
+        "paper_ids": [101, 303],
     }
+
+
+def test_aggregation_writes_reproducibility_metadata(tmp_path: Path) -> None:
+    """Verify summaries include hashes and non-secret runtime labels.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows and summaries.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    answers_path = tmp_path / "judged_answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    runtime_inventory = tmp_path / "runtime_inventory.json"
+    runtime_inventory.write_text('{"gpu":"test"}', encoding="utf-8")
+
+    exit_code = mod.main(
+        [
+            "--manifest",
+            str(_MANIFEST),
+            "--answers-jsonl",
+            str(answers_path),
+            "--route-label",
+            "smart",
+            "--backend-label",
+            "ollama",
+            "--runtime-inventory",
+            str(runtime_inventory),
+            "--out-dir",
+            str(tmp_path / "summary"),
+        ]
+    )
+
+    assert exit_code == 0
+    report = (tmp_path / "summary" / "report.md").read_text(encoding="utf-8")
+    assert "Manifest SHA-256" in report
+    assert "Answers SHA-256" in report
+    assert "Answer key SHA-256" in report
+    assert "Route label: `smart`" in report
+    assert "Backend label: `ollama`" in report
+    summary_csv = (tmp_path / "summary" / "summary.csv").read_text(encoding="utf-8")
+    assert "manifest_sha256" in summary_csv
+    assert "answers_sha256" in summary_csv
+    assert "cookie" not in report.lower()
 
 
 def test_capture_only_writes_raw_rows_without_scores(
@@ -322,7 +400,7 @@ def test_answer_rows_reject_model_self_judged_scores(tmp_path: Path) -> None:
     """
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     rows[0]["judge_type"] = "model_self"
     answers_path = tmp_path / "answers.jsonl"
     answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -345,7 +423,7 @@ def test_answer_rows_require_complete_judged_metadata(tmp_path: Path) -> None:
     """
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     del rows[0]["wrong_paper_central_claim"]
     answers_path = tmp_path / "answers.jsonl"
     answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -368,7 +446,7 @@ def test_answer_rows_require_non_empty_evidence(tmp_path: Path) -> None:
     """
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     rows[0]["citations"] = []
     answers_path = tmp_path / "answers.jsonl"
     answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -391,7 +469,7 @@ def test_answer_rows_require_numeric_vram(tmp_path: Path) -> None:
     """
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     rows[0]["vram_peak_mb"] = None
     answers_path = tmp_path / "answers.jsonl"
     answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -404,6 +482,50 @@ def test_answer_rows_require_numeric_vram(tmp_path: Path) -> None:
         raise AssertionError("judged rows without numeric VRAM must be rejected")
 
 
+def test_summary_rejects_visible_hidden_reasoning_candidate(tmp_path: Path) -> None:
+    """Verify hidden-reasoning markers force a rejected candidate decision.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["answer"] = "<think>private reasoning</think> visible answer"
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    loaded_rows = mod.load_answer_rows(answers_path)
+    summaries = mod.summarize_answers(manifest, loaded_rows)
+
+    assert summaries[0]["hidden_reasoning_leak_count"] == 1
+    assert summaries[0]["decision"] == "reject"
+
+
+def test_summary_rejects_visible_control_token_continuation(tmp_path: Path) -> None:
+    """Verify chat/control-token continuations force a rejected decision.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["answer"] = "Grounded answer. <|im_start|>assistant I need to continue."
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    loaded_rows = mod.load_answer_rows(answers_path)
+    summaries = mod.summarize_answers(manifest, loaded_rows)
+
+    assert summaries[0]["hidden_reasoning_leak_count"] == 1
+    assert summaries[0]["decision"] == "reject"
+
+
 def test_summary_requires_fixed_pack_scope_for_library_wide_rows(tmp_path: Path) -> None:
     """Verify library-wide judged rows preserve fixed-pack scope markers.
 
@@ -414,7 +536,7 @@ def test_summary_requires_fixed_pack_scope_for_library_wide_rows(tmp_path: Path)
     """
     mod = _load_module()
     manifest = mod.load_manifest(_MANIFEST)
-    rows = [_valid_answer_row(mod, q.question_id) for q in manifest.questions]
+    rows = _rows_for_manifest(mod, manifest)
     cross_index = next(
         index
         for index, question in enumerate(manifest.questions)
@@ -428,6 +550,150 @@ def test_summary_requires_fixed_pack_scope_for_library_wide_rows(tmp_path: Path)
         assert "fixed-pack retrieval_scope" in str(exc)
     else:
         raise AssertionError("library-wide rows must preserve fixed-pack retrieval scope")
+
+
+def test_answer_rows_reject_dry_run_rows_as_evidence(tmp_path: Path) -> None:
+    """Verify fixture rows cannot be re-aggregated as benchmark evidence.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for fixture answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    answers_path = mod.write_dry_run_answers(manifest, tmp_path, ["dry-run-fixture"])
+
+    try:
+        mod.load_answer_rows(answers_path)
+    except mod.EvalHarnessError as exc:
+        assert "dry-run rows are not benchmark evidence" in str(exc)
+    else:
+        raise AssertionError("dry-run rows must not load as judged evidence")
+
+
+def test_answer_rows_reject_id_only_evidence(tmp_path: Path) -> None:
+    """Verify source ids alone do not satisfy evidence support.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["citations"] = [{"paper_key": rows[0]["required_papers"][0]}]
+    rows[0]["sources"] = []
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    try:
+        mod.load_answer_rows(answers_path)
+    except mod.EvalHarnessError as exc:
+        assert "non-empty citations or sources" in str(exc)
+    else:
+        raise AssertionError("id-only evidence must be rejected")
+
+
+def test_answer_rows_accept_product_source_content(tmp_path: Path) -> None:
+    """Verify product RAG source ``content`` counts as judged evidence.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["citations"] = []
+    rows[0]["sources"] = [{"paper_id": 101, "content": "source excerpt supporting the answer"}]
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    loaded = mod.load_answer_rows(answers_path)
+
+    assert loaded[0]["sources"][0]["content"] == "source excerpt supporting the answer"
+
+
+def test_answer_rows_reject_title_identifier_only_evidence(tmp_path: Path) -> None:
+    """Verify source titles and identifiers are metadata, not evidence content.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["citations"] = [
+        {"paper_key": rows[0]["required_papers"][0], "title": "Paper title", "identifier": "10.1/x"}
+    ]
+    rows[0]["sources"] = [{"title": "Paper title", "identifier": "arXiv:1234"}]
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    try:
+        mod.load_answer_rows(answers_path)
+    except mod.EvalHarnessError as exc:
+        assert "non-empty citations or sources" in str(exc)
+    else:
+        raise AssertionError("title/identifier-only evidence must be rejected")
+
+
+def test_summary_rejects_single_paper_wrong_scope_and_paper_key() -> None:
+    """Verify single-paper rows must match endpoint scope and paper key."""
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    single_index = next(
+        index
+        for index, question in enumerate(manifest.questions)
+        if question.scope == "single_paper"
+    )
+    rows[single_index]["retrieval_scope"] = "fixed_pack_isolated_library"
+
+    try:
+        mod.summarize_answers(manifest, rows)
+    except mod.EvalHarnessError as exc:
+        assert "single-paper row missing endpoint scope" in str(exc)
+    else:
+        raise AssertionError("single-paper rows from wrong retrieval scope must fail")
+
+    rows = _rows_for_manifest(mod, manifest)
+    rows[single_index]["citations"] = [{"paper_key": "p999_wrong", "evidence": "text"}]
+    try:
+        mod.summarize_answers(manifest, rows)
+    except mod.EvalHarnessError as exc:
+        assert "does not match" in str(exc)
+    else:
+        raise AssertionError("single-paper rows with wrong citation paper_key must fail")
+
+
+def test_answer_rows_reject_placeholder_evidence(tmp_path: Path) -> None:
+    """Verify placeholder citation/source objects are not evidence.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for judged answer rows.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["citations"] = [{}]
+    rows[0]["sources"] = []
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    try:
+        mod.load_answer_rows(answers_path)
+    except mod.EvalHarnessError as exc:
+        assert "non-empty citations or sources" in str(exc)
+    else:
+        raise AssertionError("placeholder evidence must be rejected")
 
 
 def test_main_rejects_ambiguous_modes(tmp_path: Path) -> None:
