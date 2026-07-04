@@ -10,15 +10,14 @@
 #   docker compose -f docker-compose.yml -f docker-compose.vllm.yml \
 #     --profile vllm up -d
 #
-#   # 2. Uncomment the vLLM "smart" alias block in litellm/config.yaml and
-#   #    comment out the Ollama "smart" block, then reload LiteLLM:
-#   docker compose restart litellm
+#   # 2. Route the LiteLLM admin-DB "smart" alias to the vLLM endpoint with
+#   #    scripts/perf/litellm_route_alias.py. Do NOT edit litellm/config.yaml:
+#   #    smart/fast/fallback aliases are runtime DB deployments, while YAML is
+#   #    reserved for dimension-locked embed entries and router settings.
 #
-#   # 3. Run the bench harness:
-#   PERF_CONCURRENCY=4  make profile   # smart hot-path: concurrency 1/4/8
-#   PERF_CONCURRENCY=8  make profile
+#   # 3. Run the benchmark harness against the normal product API.
 #
-#   # 4. Restore Ollama alias + stop vLLM when done:
+#   # 4. Restore the saved smart-alias snapshot + stop vLLM when done:
 #   docker compose -f docker-compose.yml -f docker-compose.vllm.yml \
 #     --profile vllm stop vllm
 #
@@ -26,8 +25,8 @@
 #   - Profile "vllm" — never starts unless explicitly requested.
 #   - Loopback-bound port 8080 (host). No cross-pollination with Ollama port
 #     11434 or any other service.
-#   - The LiteLLM alias seam (litellm/config.yaml) is the ONLY touch point.
-#     Zero call-site changes required.  db_helpers.validated_model() and
+#   - The LiteLLM admin-DB alias seam is the ONLY routing touch point.
+#     Zero call-site changes required. db_helpers.validated_model() and
 #     get_smart_model() always return the alias "smart"; LiteLLM routes it.
 #
 # VRAM budget reasoning (≈16 GB GPU):
@@ -54,6 +53,13 @@
 # =============================================================================
 
 services:
+  paper_ingestion:
+    environment:
+      # Benchmark overlay only: keep the temporary admin-DB smart route stable
+      # while scripts/perf/litellm_route_alias.py points it at vLLM. The
+      # default compose path leaves the reconciler enabled.
+      JARVIS_LITELLM_RECONCILER_ENABLED: ${JARVIS_LITELLM_RECONCILER_ENABLED:-false}
+
   vllm:
     # IMAGE PULL — not VRAM — is the bench's practical gate. `:latest` is the
     # largest (~7–12 GB) and non-reproducible. For a recorded bench, override
@@ -69,9 +75,12 @@ services:
     profiles: [vllm]
     restart: "no"
     security_opt: ["no-new-privileges:true"]
-    # vLLM upstream image (vllm/vllm-openai) runs as uid 0. Running as 1000:1000
-    # is preferred; verify the image accepts it before deploying on a new release.
-    user: "1000:1000"
+    ipc: host
+    # vLLM's official CUDA image defaults to root and expects its cache under
+    # root's home. Earlier non-root UID overrides failed on current images
+    # because PyTorch/vLLM expects a passwd entry for that uid. Keep this
+    # profile loopback-bound and benchmark-only; use a dedicated non-root image
+    # if this overlay ever graduates beyond performance comparison.
     # Loopback-bind only — same security posture as the ollama service
     # (127.0.0.1:${host_port}:${container_port}).
     ports:
@@ -79,9 +88,10 @@ services:
     # vLLM OpenAI-compatible server args:
     #   --model          HuggingFace model ID (AWQ variant for 16 GB fit)
     #   --dtype          auto — vLLM selects best dtype for the quant format
+    #   --host           bind inside the container; host exposure stays loopback-only
     #   --port           bind to 8080 inside the container
-    #   --max-model-len  token context window; 8192 matches the Ollama smart
-    #                    alias num_ctx value (litellm/config.yaml — active Ollama "smart" block)
+    #   --max-model-len  token context window; 8192 matches the default smart
+    #                    alias context budget used by the benchmark harness
     #   --gpu-memory-utilization  cap at 0.75 to leave room for the embedder
     #                    (~2.4 GB) + OS overhead on the 16 GB box.
     #                    Adjust up to 0.90 on a 48 GB box where all models
@@ -91,6 +101,8 @@ services:
       - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}"
       - "--dtype"
       - "auto"
+      - "--host"
+      - "0.0.0.0"
       - "--port"
       - "8080"
       - "--max-model-len"
@@ -101,12 +113,11 @@ services:
       # Persist downloaded model weights across container restarts.
       # Reuses the same cache convention as the hf_cache volume in
       # paper_ingestion (Marker/Surya models).
-      # /tmp/hf-cache is world-writable, ensuring uid 1000 can write without
-      # needing a chown step that would require root.
-      - vllm_model_cache:/tmp/hf-cache/huggingface
+      # The official image's default user writes under /root.
+      - vllm_model_cache:/root/.cache/huggingface
     environment:
-      # HuggingFace cache: keep model weights out of /root (non-root runtime).
-      HF_HOME: /tmp/hf-cache/huggingface
+      # HuggingFace cache: persist model weights across benchmark containers.
+      HF_HOME: /root/.cache/huggingface
       # Suppress HF token warning — model is public, no token needed.
       TRANSFORMERS_OFFLINE: "0"
     # docker-compose.gpu.yml is the canonical GPU overlay for the DEFAULT
@@ -120,7 +131,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    mem_limit: 8g
+    mem_limit: ${VLLM_MEM_LIMIT:-32g}
     healthcheck:
       test:
         - "CMD-SHELL"

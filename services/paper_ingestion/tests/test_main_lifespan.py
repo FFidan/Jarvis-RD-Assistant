@@ -1108,6 +1108,30 @@ async def test_reconciler_loop_is_persistent_across_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_litellm_reconciler_can_be_disabled_for_maintenance(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The maintenance flag skips only the background reconciler task."""
+    from fastapi import FastAPI
+    from paper_ingestion.main import (
+        _shutdown_litellm_reconciler,
+        _start_litellm_reconciler,
+    )
+
+    app = FastAPI()
+    app.state.db_pool = MagicMock()
+    monkeypatch.setenv("JARVIS_LITELLM_RECONCILER_ENABLED", "false")
+
+    with caplog.at_level("INFO", logger="paper_ingestion.main"):
+        await _start_litellm_reconciler(app)
+
+    assert app.state.litellm_reconciler_task is None
+    assert "LiteLLM model reconciler disabled" in caplog.text
+    await _shutdown_litellm_reconciler(app)
+
+
+@pytest.mark.asyncio
 async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
     """_start creates the named background task; _shutdown cancels and awaits it."""
     from fastapi import FastAPI

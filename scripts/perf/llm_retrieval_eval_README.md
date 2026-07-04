@@ -93,6 +93,38 @@ uv run python3 scripts/perf/llm_retrieval_eval.py \
   --out-dir artifacts/perf/<run-id>
 ```
 
+### vLLM Backend Candidate Route
+
+For vLLM comparisons, start the vLLM server as a loopback-only backend and route
+LiteLLM's `smart` alias through the admin DB. Do not edit `litellm/config.yaml`;
+that file no longer owns switchable smart/fast/fallback deployments. The vLLM
+compose overlay sets `JARVIS_LITELLM_RECONCILER_ENABLED=false` for
+`paper_ingestion` so the temporary admin-DB route is not overwritten during the
+benchmark window; the default compose path keeps the reconciler enabled.
+
+Create a restore snapshot before the temporary route, then route one candidate:
+
+```bash
+uv run python3 scripts/perf/litellm_route_alias.py route-openai \
+  --alias smart \
+  --served-model Qwen/Qwen2.5-7B-Instruct-AWQ \
+  --api-base http://vllm:8080/v1 \
+  --snapshot-out artifacts/perf/<run-id>/smart-route-before-vllm.json
+```
+
+After capture, restore the original deployment and verify route status:
+
+```bash
+uv run python3 scripts/perf/litellm_route_alias.py restore \
+  --alias smart \
+  --snapshot artifacts/perf/<run-id>/smart-route-before-vllm.json
+uv run python3 scripts/perf/litellm_route_alias.py status --alias smart
+```
+
+Run the exact product capture command above after route status confirms `smart`
+points at the intended vLLM deployment. Raw vLLM endpoint smoke is a readiness
+check only; it is not benchmark evidence.
+
 `--api-key` can be used instead of `--auth-cookie-file` only when the target
 route accepts that authentication mode. Raw capture rows are written to
 `artifacts/perf/<run-id>/raw_answers.jsonl` with `scores: null`; those rows are

@@ -61,6 +61,39 @@ remain under ignored `artifacts/perf/<run-id>/`.
 | `qwen3:4b` | Failed the product-route hard gate: 24 HTTP 200 rows, 1 HTTP 502 row, 1 empty answer, and 6 visible working-note rows. |
 | `gpt-oss:20b` | Failed the product-route hard gate: 12 HTTP 200 rows, 13 HTTP 502 rows, and 13 empty answers. |
 
+## vLLM Product-Route Addendum
+
+A follow-up run on the benchmark GPU host routed the same product `smart` alias through the
+LiteLLM admin DB to a loopback vLLM OpenAI-compatible backend. This was a raw
+capture gate only: rows have not received independent scientific judging, so no
+vLLM candidate is promoted or scored here. Raw answers, local ids, cookies, route
+snapshots, boot logs, and monitor CSVs remain ignored under
+`artifacts/perf/2026-07-04-vllm-product-route/`.
+
+Benchmark setup notes:
+
+- The vLLM compose overlay paused the LiteLLM settings reconciler only during
+  the benchmark window so the temporary admin-DB `smart` route stayed stable.
+- The authenticated benchmark library was isolated to the fixed 10-paper pack
+  before valid capture. Earlier failed-auth and owner-scope attempts were kept
+  as ignored diagnostic artifacts and are not evidence rows.
+- The product route was restored to the normal Ollama `smart` deployment after
+  the run, and the normal reconciler was restarted.
+
+| vLLM candidate | raw rows | HTTP status counts | empty rows | visible reasoning leaks | median latency ms | max latency ms | peak VRAM MB | gate result |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| `Qwen/Qwen2.5-7B-Instruct-AWQ` | 25 | 23x 200, 2x 502 | 2 | 0 | 5147.17 | 39108.76 | 45369 | reject before judging: incomplete product-route capture |
+| `Qwen/Qwen3-8B-AWQ` | 25 | 25x 200 | 0 | 0 | 4112.99 | 13196.46 | 45374 | eligible for judged-row review; not promoted |
+| `Qwen/Qwen3-14B-AWQ` | 25 | 24x 200, 1x 502 | 1 | 0 | 5212.47 | 46839.06 | 45350 | reject before judging: incomplete product-route capture |
+| `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` | 0 | boot failed | n/a | n/a | n/a | n/a | n/a | not runnable at 8192 tokens: insufficient KV-cache memory |
+
+Interpretation: `Qwen/Qwen3-8B-AWQ` is the only vLLM candidate from this pass
+that cleared the raw product-route completeness gate. It still needs judged-row
+review against the answer key and returned sources before it can affect model
+defaults. The 30B FP8 candidate should not be retried at a lower context length
+inside this fixed-pack comparison unless the benchmark protocol explicitly adds
+a separate reduced-context hardware tier.
+
 ## Main Findings
 
 - `qwen3:1.7b` is the strongest follow-up candidate for local-first RAG: it was
@@ -84,5 +117,5 @@ remain under ignored `artifacts/perf/<run-id>/`.
    default replacement.
 3. Add an independent maintainer review of judged rows before publishing this as
    public benchmark evidence.
-4. Revisit vLLM candidates only after product routing can pin them through the
-   same LiteLLM alias path without manual runtime overrides.
+4. Judge the complete `Qwen/Qwen3-8B-AWQ` vLLM capture before any default
+   discussion; do not publish vLLM results until that review is complete.

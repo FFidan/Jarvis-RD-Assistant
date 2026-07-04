@@ -68,6 +68,18 @@ _ALIAS_PLACEHOLDER_LOGGED: set[tuple[str, str]] = set()
 _EMBED_MISMATCH_WARNED: set[str] = set()
 
 
+def _litellm_reconciler_enabled() -> bool:
+    """Return whether the persistent LiteLLM reconciler should start.
+
+    The reconciler is enabled by default because it is the product path that
+    keeps switchable aliases aligned with stored Settings choices. Operators can
+    disable only this background task during controlled maintenance or
+    benchmark runs that need a temporary admin-DB route.
+    """
+    value = os.environ.get("JARVIS_LITELLM_RECONCILER_ENABLED", "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _log_reconcile_failure(target: str) -> None:
     """Streak-aware delivery-failure logging (call from an ``except`` block)."""
     streak = _RECONCILE_FAILURE_STREAKS.get(target, 0)
@@ -246,6 +258,10 @@ async def _litellm_model_reconciler_loop(pool: Any) -> None:
 
 async def _start_litellm_reconciler(app: FastAPI) -> None:
     """Start the persistent LiteLLM model reconciler as a background task."""
+    if not _litellm_reconciler_enabled():
+        app.state.litellm_reconciler_task = None
+        logger.info("LiteLLM model reconciler disabled by JARVIS_LITELLM_RECONCILER_ENABLED")
+        return
     app.state.litellm_reconciler_task = asyncio.create_task(
         _litellm_model_reconciler_loop(app.state.db_pool),
         name="litellm_model_reconciler",
