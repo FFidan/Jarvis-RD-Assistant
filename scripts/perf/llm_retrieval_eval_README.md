@@ -96,10 +96,10 @@ uv run python3 scripts/perf/llm_retrieval_eval.py \
 ### vLLM Backend Candidate Route
 
 For vLLM comparisons, start the vLLM server as a loopback-only backend and route
-LiteLLM's `smart` alias through the admin DB. Do not edit `litellm/config.yaml`;
+LiteLLM's `smart` alias through the runtime route table. Do not edit `litellm/config.yaml`;
 that file no longer owns switchable smart/fast/fallback deployments. The vLLM
 compose overlay sets `JARVIS_LITELLM_RECONCILER_ENABLED=false` for
-`paper_ingestion` so the temporary admin-DB route is not overwritten during the
+`paper_ingestion` so the temporary runtime route is not overwritten during the
 benchmark window; the default compose path keeps the reconciler enabled.
 
 Create a restore snapshot before the temporary route, then route one candidate:
@@ -132,6 +132,27 @@ intentionally rejected by aggregation until judged. Rows with missing judge
 provenance, `judge_type: "model_self"`, missing non-empty source/citation data,
 non-numeric latency/VRAM metadata, missing hard-fail booleans, or missing
 fixed-pack scope confirmation for library-wide questions are also rejected.
+
+## Raw Capture Gate
+
+Before judging, run the raw gate over capture-only rows. This is a hard gate for
+row completeness, fixed-pack scope, visible hidden-reasoning markers, non-200
+responses, outside-corpus source ids, and latency/VRAM metadata. It writes a
+JSON intake summary only; it does not score scientific quality and it does not
+produce promotion decisions.
+
+```bash
+uv run python3 scripts/perf/llm_retrieval_eval.py \
+  --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
+  --raw-gate-jsonl artifacts/perf/<run-id>/raw_answers.jsonl \
+  --paper-map-json artifacts/perf/<run-id>/paper_map.json \
+  --vram-csv artifacts/perf/<run-id>/monitors/candidate-vram.csv \
+  --out-dir artifacts/perf/<run-id>/raw-gate
+```
+
+`eligible_for_judging: true` means the raw capture is complete enough for
+source-backed judging against the answer key. It is not benchmark evidence until
+complete judged rows pass aggregation and independent review.
 
 ## Judge And Aggregate
 

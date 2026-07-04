@@ -17,7 +17,7 @@ import math
 import statistics
 import subprocess
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from http.cookiejar import LoadError, MozillaCookieJar
@@ -175,6 +175,48 @@ class CaptureConfig:
     max_papers: int
     decompose: bool
     fixed_pack_library_confirmed: bool
+
+
+@dataclass(frozen=True)
+class RawCaptureGateResult:
+    """Pre-judging hard-gate summary for capture-only product rows.
+
+    The raw gate verifies that capture rows are complete enough to hand to a
+    human or executor judge. It is intentionally not a scoring path and does
+    not make promotion decisions.
+    """
+
+    row_count: int
+    candidate_labels: list[str]
+    question_coverage: dict[str, Any]
+    http_status_counts: dict[str, int]
+    empty_answer_count: int
+    hidden_reasoning_leak_count: int
+    retrieval_scope_counts: dict[str, int]
+    outside_fixed_pack_source_count: int | str
+    latency_ms: dict[str, float | str]
+    vram_peak_mb: float | str
+    null_scores_count: int
+    eligible_for_judging: bool
+    blocking_reasons: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a stable JSON-serializable representation."""
+        return {
+            "row_count": self.row_count,
+            "candidate_labels": self.candidate_labels,
+            "question_coverage": self.question_coverage,
+            "http_status_counts": self.http_status_counts,
+            "empty_answer_count": self.empty_answer_count,
+            "hidden_reasoning_leak_count": self.hidden_reasoning_leak_count,
+            "retrieval_scope_counts": self.retrieval_scope_counts,
+            "outside_fixed_pack_source_count": self.outside_fixed_pack_source_count,
+            "latency_ms": self.latency_ms,
+            "vram_peak_mb": self.vram_peak_mb,
+            "null_scores_count": self.null_scores_count,
+            "eligible_for_judging": self.eligible_for_judging,
+            "blocking_reasons": self.blocking_reasons,
+        }
 
 
 @dataclass
@@ -587,6 +629,302 @@ def _dry_run_answer(manifest: EvalManifest, question: EvalQuestion) -> str:
         return f"The fixed corpus does not contain evidence for this claim. Checked: {titles}."
     evidence = question.expected_evidence[0]
     return f"Dry-run fixture answer for {question.question_id}. Evidence anchor: {evidence}."
+
+
+def load_raw_capture_rows(path: Path) -> list[dict[str, Any]]:
+    """Load capture-only answer rows without treating them as judged evidence.
+
+    Parameters
+    ----------
+    path
+        JSONL file written by ``--capture-only``.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Raw rows for pre-judging completeness checks.
+    """
+
+    return _read_jsonl(path)
+
+
+def summarize_raw_capture_gate(
+    manifest: EvalManifest,
+    rows: Sequence[dict[str, Any]],
+    *,
+    paper_map: dict[str, int | str] | None = None,
+    vram_csv: Path | None = None,
+) -> RawCaptureGateResult:
+    """Summarize whether raw capture rows are eligible for judging.
+
+    Parameters
+    ----------
+    manifest
+        Fixed question pack used to verify exact raw-row coverage.
+    rows
+        Raw capture rows, usually from ``raw_answers.jsonl``.
+    paper_map
+        Optional fixed-pack local paper-id map used to detect outside sources.
+    vram_csv
+        Optional GPU monitor CSV used to report peak observed VRAM.
+
+    Returns
+    -------
+    RawCaptureGateResult
+        Hard-gate summary for operator/reviewer intake.
+    """
+
+    manifest_questions = {question.question_id: question for question in manifest.questions}
+    blocking_reasons: list[str] = []
+    candidate_labels = sorted(
+        {value for row in rows if isinstance(value := row.get("candidate"), str) and value}
+    )
+    question_coverage = _raw_question_coverage(rows, set(manifest_questions))
+    http_status_counts = _string_count(row.get("http_status", "missing") for row in rows)
+    empty_answer_count = sum(1 for row in rows if not str(row.get("answer", "")).strip())
+    hidden_reasoning_leak_count = _raw_hidden_reasoning_leak_count(rows)
+    retrieval_scope_counts = _string_count(row.get("retrieval_scope", "missing") for row in rows)
+    missing_evidence_count = _raw_missing_evidence_count(rows)
+    outside_count = _raw_outside_count(rows, paper_map)
+    latency_ms = _raw_latency_summary(rows)
+    vram_peak_mb = (
+        _read_vram_peak_mb(vram_csv) if vram_csv is not None else "not_checked:no_vram_csv"
+    )
+    null_scores_count = sum(1 for row in rows if row.get("scores") is None)
+    gate_metrics = {
+        "row_count": len(rows),
+        "candidate_labels": candidate_labels,
+        "question_coverage": question_coverage,
+        "http_status_counts": http_status_counts,
+        "empty_answer_count": empty_answer_count,
+        "hidden_reasoning_leak_count": hidden_reasoning_leak_count,
+        "scope_blockers": _raw_scope_blockers(rows, manifest_questions),
+        "missing_evidence_count": missing_evidence_count,
+        "outside_count": outside_count,
+        "latency_ms": latency_ms,
+        "null_scores_count": null_scores_count,
+    }
+    blocking_reasons = _raw_gate_blocking_reasons(gate_metrics)
+
+    return RawCaptureGateResult(
+        row_count=len(rows),
+        candidate_labels=candidate_labels,
+        question_coverage=question_coverage,
+        http_status_counts=http_status_counts,
+        empty_answer_count=empty_answer_count,
+        hidden_reasoning_leak_count=hidden_reasoning_leak_count,
+        retrieval_scope_counts=retrieval_scope_counts,
+        outside_fixed_pack_source_count=outside_count,
+        latency_ms=latency_ms,
+        vram_peak_mb=vram_peak_mb,
+        null_scores_count=null_scores_count,
+        eligible_for_judging=not blocking_reasons,
+        blocking_reasons=sorted(set(blocking_reasons)),
+    )
+
+
+def write_raw_capture_gate(path: Path, result: RawCaptureGateResult) -> None:
+    """Write raw capture gate output as stable JSON.
+
+    Parameters
+    ----------
+    path
+        Destination JSON path.
+    result
+        Gate result returned by ``summarize_raw_capture_gate``.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result.as_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _raw_hidden_reasoning_leak_count(rows: Sequence[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if any(marker in str(row.get("answer", "")).lower() for marker in HIDDEN_REASONING_MARKERS)
+    )
+
+
+def _raw_missing_evidence_count(rows: Sequence[dict[str, Any]]) -> int:
+    return sum(1 for row in rows if not _has_non_empty_evidence_list(row))
+
+
+def _raw_outside_count(
+    rows: Sequence[dict[str, Any]], paper_map: dict[str, int | str] | None
+) -> int | str:
+    if paper_map is None:
+        return "not_checked:no_paper_map"
+    return _outside_fixed_pack_source_count(rows, paper_map)
+
+
+def _raw_gate_blocking_reasons(metrics: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    checks = (
+        (len(metrics["candidate_labels"]) != 1, "expected_exactly_one_candidate_label"),
+        (
+            _raw_coverage_has_errors(metrics["question_coverage"]),
+            "fixed_question_coverage_mismatch",
+        ),
+        (set(metrics["http_status_counts"]) != {"200"}, "non_200_http_status"),
+        (metrics["empty_answer_count"] > 0, "empty_visible_answer"),
+        (metrics["hidden_reasoning_leak_count"] > 0, "visible_hidden_reasoning_or_control_token"),
+        (metrics["missing_evidence_count"] > 0, "missing_source_or_citation_evidence"),
+        (_raw_has_outside_sources(metrics["outside_count"]), "outside_fixed_pack_source"),
+        (metrics["latency_ms"].get("missing_or_invalid_count") != 0, "missing_or_invalid_latency"),
+        (metrics["null_scores_count"] != metrics["row_count"], "raw_rows_must_have_scores_null"),
+    )
+    reasons.extend(reason for failed, reason in checks if failed)
+    reasons.extend(metrics["scope_blockers"])
+    return sorted(set(reasons))
+
+
+def _raw_coverage_has_errors(question_coverage: dict[str, Any]) -> bool:
+    return bool(
+        question_coverage["missing"]
+        or question_coverage["unknown"]
+        or question_coverage["duplicate"]
+    )
+
+
+def _raw_has_outside_sources(outside_count: int | str) -> bool:
+    return outside_count != "not_checked:no_paper_map" and bool(outside_count)
+
+
+def _raw_question_coverage(
+    rows: Sequence[dict[str, Any]], manifest_question_ids: set[str]
+) -> dict[str, Any]:
+    question_ids = [
+        row.get("question_id") for row in rows if isinstance(row.get("question_id"), str)
+    ]
+    counts = Counter(question_ids)
+    seen = set(counts)
+    return {
+        "expected_count": len(manifest_question_ids),
+        "seen_count": len(seen),
+        "missing": sorted(manifest_question_ids - seen),
+        "unknown": sorted(seen - manifest_question_ids),
+        "duplicate": sorted(question_id for question_id, count in counts.items() if count > 1),
+    }
+
+
+def _string_count(values: Iterable[Any]) -> dict[str, int]:
+    return dict(sorted(Counter(str(value) for value in values).items()))
+
+
+def _raw_scope_blockers(
+    rows: Sequence[dict[str, Any]], manifest_questions: dict[str, EvalQuestion]
+) -> list[str]:
+    blockers: list[str] = []
+    for row in rows:
+        question_id = row.get("question_id")
+        if not isinstance(question_id, str) or question_id not in manifest_questions:
+            continue
+        question = manifest_questions[question_id]
+        if row.get("scope") != question.scope:
+            blockers.append("scope_mismatch")
+        if row.get("required_papers") != question.required_papers:
+            blockers.append("required_papers_mismatch")
+        if question.scope == "single_paper":
+            if row.get("retrieval_scope") != "single_paper_endpoint":
+                blockers.append("single_paper_scope_mismatch")
+            continue
+        if row.get("retrieval_scope") != "fixed_pack_isolated_library":
+            blockers.append("library_scope_mismatch")
+        if row.get("fixed_pack_library_confirmed") is not True:
+            blockers.append("fixed_pack_library_not_confirmed")
+    return blockers
+
+
+def _outside_fixed_pack_source_count(
+    rows: Sequence[dict[str, Any]], paper_map: dict[str, int | str]
+) -> int:
+    allowed_ids = _paper_map_ids(paper_map)
+    outside_count = 0
+    for row in rows:
+        for item in _evidence_items(row):
+            source_id = _source_paper_id(item)
+            if source_id is not None and source_id not in allowed_ids:
+                outside_count += 1
+    return outside_count
+
+
+def _paper_map_ids(paper_map: dict[str, int | str]) -> set[int]:
+    ids: set[int] = set()
+    for paper_key, raw_id in paper_map.items():
+        try:
+            ids.add(int(raw_id))
+        except (TypeError, ValueError) as exc:
+            raise EvalHarnessError(f"paper map value for {paper_key!r} must be an int") from exc
+    return ids
+
+
+def _source_paper_id(item: Any) -> int | None:
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("paper_id")
+    if raw_id is None:
+        return None
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _raw_latency_summary(rows: Sequence[dict[str, Any]]) -> dict[str, float | int | str]:
+    latencies: list[float] = []
+    missing_or_invalid_count = 0
+    for row in rows:
+        latency = row.get("latency_ms")
+        if isinstance(latency, int | float) and latency >= 0:
+            latencies.append(float(latency))
+        else:
+            missing_or_invalid_count += 1
+    if not latencies:
+        return {
+            "count": 0,
+            "missing_or_invalid_count": missing_or_invalid_count,
+            "min": "not_runnable:no_latency",
+            "median": "not_runnable:no_latency",
+            "p95": "not_runnable:no_latency",
+            "max": "not_runnable:no_latency",
+        }
+    return {
+        "count": len(latencies),
+        "missing_or_invalid_count": missing_or_invalid_count,
+        "min": round(min(latencies), 2),
+        "median": round(statistics.median(latencies), 2),
+        "p95": _p95(latencies),
+        "max": round(max(latencies), 2),
+    }
+
+
+def _read_vram_peak_mb(path: Path) -> float | str:
+    if not path.exists():
+        return "not_checked:vram_csv_missing"
+    values: list[float] = []
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        if reader.fieldnames is None:
+            return "not_checked:vram_csv_empty"
+        preferred_fields = [
+            field
+            for field in reader.fieldnames
+            if "vram" in field.lower() or "memory" in field.lower()
+        ]
+        fields = preferred_fields or reader.fieldnames
+        for row in reader:
+            for field in fields:
+                raw_value = row.get(field)
+                if raw_value is None:
+                    continue
+                try:
+                    values.append(float(raw_value))
+                except ValueError:
+                    continue
+    if not values:
+        return "not_checked:no_numeric_vram"
+    return round(max(values), 2)
 
 
 def load_answer_rows(path: Path) -> list[dict[str, Any]]:
@@ -1435,6 +1773,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, default=Path("artifacts/perf/llm-retrieval-eval"))
     parser.add_argument("--candidate", action="append", default=[])
     parser.add_argument("--answers-jsonl", type=Path)
+    parser.add_argument("--raw-gate-jsonl", type=Path)
+    parser.add_argument("--raw-gate-output", type=Path)
+    parser.add_argument("--vram-csv", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--api-base")
     parser.add_argument("--capture-only", action="store_true")
@@ -1456,6 +1797,90 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _validate_mode_selection(args: argparse.Namespace) -> None:
+    modes = [
+        bool(args.dry_run),
+        bool(args.answers_jsonl),
+        bool(args.capture_only),
+        bool(args.raw_gate_jsonl),
+    ]
+    if sum(modes) != 1:
+        raise EvalHarnessError(
+            "choose exactly one mode: --dry-run, --answers-jsonl, --capture-only, "
+            "or --raw-gate-jsonl"
+        )
+    if args.api_base and not args.capture_only:
+        raise EvalHarnessError("--api-base is only valid with --capture-only")
+
+
+def _run_dry_mode(args: argparse.Namespace, manifest: EvalManifest) -> int:
+    candidates = args.candidate or ["dry-run-fixture"]
+    answers_path = write_dry_run_answers(manifest, args.out_dir, candidates)
+    write_dry_run_report(args.out_dir / "dry_run_report.md", manifest, args.manifest, answers_path)
+    return 0
+
+
+def _run_capture_mode(args: argparse.Namespace, manifest: EvalManifest) -> int:
+    if not args.api_base:
+        raise EvalHarnessError("--capture-only requires --api-base")
+    if not args.candidate or len(args.candidate) != 1:
+        raise EvalHarnessError("--capture-only requires exactly one --candidate")
+    if not args.paper_map_json:
+        raise EvalHarnessError("--capture-only requires --paper-map-json")
+    if not (args.auth_cookie_file or args.api_key):
+        raise EvalHarnessError("--capture-only requires --auth-cookie-file or --api-key")
+    capture_product_rag_answers(
+        manifest,
+        args.out_dir,
+        CaptureConfig(
+            api_base=args.api_base,
+            candidate=args.candidate[0],
+            paper_map=load_paper_map(args.paper_map_json),
+            api_key=args.api_key,
+            auth_cookie_file=args.auth_cookie_file,
+            timeout=args.timeout,
+            max_chunks=args.max_chunks,
+            max_papers=args.max_papers,
+            decompose=args.decompose,
+            fixed_pack_library_confirmed=args.fixed_pack_library_confirmed,
+        ),
+    )
+    return 0
+
+
+def _run_raw_gate_mode(args: argparse.Namespace, manifest: EvalManifest) -> int:
+    paper_map = load_paper_map(args.paper_map_json) if args.paper_map_json else None
+    result = summarize_raw_capture_gate(
+        manifest,
+        load_raw_capture_rows(args.raw_gate_jsonl),
+        paper_map=paper_map,
+        vram_csv=args.vram_csv,
+    )
+    output_path = args.raw_gate_output or args.out_dir / "raw_gate.json"
+    write_raw_capture_gate(output_path, result)
+    return 0
+
+
+def _run_aggregation_mode(args: argparse.Namespace, manifest: EvalManifest) -> int:
+    answer_rows = load_answer_rows(args.answers_jsonl)
+    summaries = summarize_answers(manifest, answer_rows)
+    metadata = build_run_metadata(
+        RunMetadataInputs(
+            manifest_path=args.manifest,
+            answers_path=args.answers_jsonl,
+            answer_key_path=args.answer_key,
+            route_label=args.route_label,
+            backend_label=args.backend_label,
+            runtime_inventory=args.runtime_inventory,
+        )
+    )
+    write_summary_csv(args.out_dir / "summary.csv", summaries, metadata)
+    write_markdown_report(
+        args.out_dir / "report.md", manifest, summaries, args.answers_jsonl, metadata
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one benchmark harness mode.
 
@@ -1472,68 +1897,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parse_args(argv)
     manifest = load_manifest(args.manifest)
-    modes = [bool(args.dry_run), bool(args.answers_jsonl), bool(args.capture_only)]
-    if sum(modes) != 1:
-        raise EvalHarnessError(
-            "choose exactly one mode: --dry-run, --answers-jsonl, or --capture-only"
-        )
-    if args.api_base and not args.capture_only:
-        raise EvalHarnessError("--api-base is only valid with --capture-only")
-    candidates = args.candidate or ["dry-run-fixture"]
-
+    _validate_mode_selection(args)
     if args.dry_run:
-        answers_path = write_dry_run_answers(manifest, args.out_dir, candidates)
-        write_dry_run_report(
-            args.out_dir / "dry_run_report.md", manifest, args.manifest, answers_path
-        )
-        return 0
-    elif args.capture_only:
-        if not args.api_base:
-            raise EvalHarnessError("--capture-only requires --api-base")
-        if not args.candidate or len(args.candidate) != 1:
-            raise EvalHarnessError("--capture-only requires exactly one --candidate")
-        if not args.paper_map_json:
-            raise EvalHarnessError("--capture-only requires --paper-map-json")
-        if not (args.auth_cookie_file or args.api_key):
-            raise EvalHarnessError("--capture-only requires --auth-cookie-file or --api-key")
-        paper_map = load_paper_map(args.paper_map_json)
-        capture_product_rag_answers(
-            manifest,
-            args.out_dir,
-            CaptureConfig(
-                api_base=args.api_base,
-                candidate=args.candidate[0],
-                paper_map=paper_map,
-                api_key=args.api_key,
-                auth_cookie_file=args.auth_cookie_file,
-                timeout=args.timeout,
-                max_chunks=args.max_chunks,
-                max_papers=args.max_papers,
-                decompose=args.decompose,
-                fixed_pack_library_confirmed=args.fixed_pack_library_confirmed,
-            ),
-        )
-        return 0
-    elif args.answers_jsonl:
-        answers_path = args.answers_jsonl
-    else:
-        raise EvalHarnessError("endpoint capture requires --capture-only")
-
-    answer_rows = load_answer_rows(answers_path)
-    summaries = summarize_answers(manifest, answer_rows)
-    metadata = build_run_metadata(
-        RunMetadataInputs(
-            manifest_path=args.manifest,
-            answers_path=answers_path,
-            answer_key_path=args.answer_key,
-            route_label=args.route_label,
-            backend_label=args.backend_label,
-            runtime_inventory=args.runtime_inventory,
-        )
-    )
-    write_summary_csv(args.out_dir / "summary.csv", summaries, metadata)
-    write_markdown_report(args.out_dir / "report.md", manifest, summaries, answers_path, metadata)
-    return 0
+        return _run_dry_mode(args, manifest)
+    if args.capture_only:
+        return _run_capture_mode(args, manifest)
+    if args.raw_gate_jsonl:
+        return _run_raw_gate_mode(args, manifest)
+    return _run_aggregation_mode(args, manifest)
 
 
 if __name__ == "__main__":

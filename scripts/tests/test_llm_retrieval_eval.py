@@ -128,6 +128,39 @@ def _rows_for_manifest(mod, manifest, candidate: str = "candidate-a") -> list[di
     return rows
 
 
+def _paper_map_for_manifest(manifest) -> dict[str, int]:
+    return {paper.paper_key: index for index, paper in enumerate(manifest.papers.values(), 1)}
+
+
+def _raw_capture_rows_for_manifest(
+    mod, manifest, candidate: str = "vllm-qwen3-8b-awq"
+) -> list[dict]:
+    paper_map = _paper_map_for_manifest(manifest)
+    rows = []
+    for question in manifest.questions:
+        paper_id = paper_map[question.required_papers[0]]
+        row = {
+            "candidate": candidate,
+            "question_id": question.question_id,
+            "scope": question.scope,
+            "required_papers": question.required_papers,
+            "answer": "Captured answer with visible evidence.",
+            "sources": [{"paper_id": paper_id, "content": "supporting source text"}],
+            "http_status": 200,
+            "latency_ms": 100 + len(rows),
+            "backend_metadata": {"backend": "vllm"},
+            "retrieval_scope": "fixed_pack_isolated_library",
+            "fixed_pack_library_confirmed": True,
+            "scores": None,
+            "promotion_eligible": False,
+            "run_note": "capture_only_needs_judging",
+        }
+        if question.scope == "single_paper":
+            row["retrieval_scope"] = "single_paper_endpoint"
+        rows.append(row)
+    return rows
+
+
 def test_summary_requires_exact_question_coverage_per_candidate() -> None:
     """Verify aggregation rejects duplicate rows and missing questions."""
     mod = _load_module()
@@ -256,6 +289,96 @@ def test_aggregation_writes_reproducibility_metadata(tmp_path: Path) -> None:
     assert "manifest_sha256" in summary_csv
     assert "answers_sha256" in summary_csv
     assert "cookie" not in report.lower()
+
+
+def test_raw_gate_accepts_complete_capture_rows(tmp_path: Path) -> None:
+    """Verify the raw gate marks complete capture rows eligible for judging.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for raw gate artifacts.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _raw_capture_rows_for_manifest(mod, manifest)
+    raw_path = tmp_path / "raw_answers.jsonl"
+    raw_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    paper_map_path = tmp_path / "paper_map.json"
+    paper_map_path.write_text(json.dumps(_paper_map_for_manifest(manifest)), encoding="utf-8")
+    vram_csv = tmp_path / "monitor.csv"
+    vram_csv.write_text("ts_ms,vram_mb\n1,42000\n2,45374\n", encoding="utf-8")
+
+    exit_code = mod.main(
+        [
+            "--manifest",
+            str(_MANIFEST),
+            "--raw-gate-jsonl",
+            str(raw_path),
+            "--paper-map-json",
+            str(paper_map_path),
+            "--vram-csv",
+            str(vram_csv),
+            "--out-dir",
+            str(tmp_path / "gate"),
+        ]
+    )
+
+    assert exit_code == 0
+    gate = json.loads((tmp_path / "gate" / "raw_gate.json").read_text(encoding="utf-8"))
+    assert gate["row_count"] == len(manifest.questions)
+    assert gate["candidate_labels"] == ["vllm-qwen3-8b-awq"]
+    assert gate["http_status_counts"] == {"200": len(manifest.questions)}
+    assert gate["empty_answer_count"] == 0
+    assert gate["hidden_reasoning_leak_count"] == 0
+    assert gate["retrieval_scope_counts"] == {
+        "fixed_pack_isolated_library": 7,
+        "single_paper_endpoint": 18,
+    }
+    assert gate["outside_fixed_pack_source_count"] == 0
+    assert gate["vram_peak_mb"] == 45374
+    assert gate["null_scores_count"] == len(manifest.questions)
+    assert gate["eligible_for_judging"] is True
+    assert gate["blocking_reasons"] == []
+    assert "decision" not in gate
+
+
+def test_raw_gate_blocks_incomplete_or_contaminated_capture_rows(tmp_path: Path) -> None:
+    """Verify raw capture rows fail closed before scientific judging.
+
+    Parameters
+    ----------
+    tmp_path
+        Pytest-managed temporary directory for raw gate artifacts.
+    """
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _raw_capture_rows_for_manifest(mod, manifest)
+    rows[0]["answer"] = "<think>private work</think> visible answer"
+    rows[1]["http_status"] = 502
+    rows[2]["sources"] = [{"paper_id": 999999, "content": "outside source"}]
+    rows[3]["scores"] = {dimension: 2 for dimension in mod.SCORE_DIMENSIONS}
+    rows[4]["sources"] = []
+    raw_path = tmp_path / "raw_answers.jsonl"
+    raw_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    result = mod.summarize_raw_capture_gate(
+        manifest,
+        mod.load_raw_capture_rows(raw_path),
+        paper_map=_paper_map_for_manifest(manifest),
+    )
+
+    assert result.eligible_for_judging is False
+    assert set(result.blocking_reasons) >= {
+        "non_200_http_status",
+        "visible_hidden_reasoning_or_control_token",
+        "outside_fixed_pack_source",
+        "raw_rows_must_have_scores_null",
+        "missing_source_or_citation_evidence",
+    }
+    assert result.http_status_counts["502"] == 1
+    assert result.hidden_reasoning_leak_count == 1
+    assert result.outside_fixed_pack_source_count == 1
 
 
 def test_capture_only_writes_raw_rows_without_scores(

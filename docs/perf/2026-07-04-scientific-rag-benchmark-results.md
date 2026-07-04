@@ -63,17 +63,20 @@ remain under ignored `artifacts/perf/<run-id>/`.
 
 ## vLLM Product-Route Addendum
 
-A follow-up run on the benchmark GPU host routed the same product `smart` alias through the
-LiteLLM admin DB to a loopback vLLM OpenAI-compatible backend. This was a raw
-capture gate only: rows have not received independent scientific judging, so no
-vLLM candidate is promoted or scored here. Raw answers, local ids, cookies, route
-snapshots, boot logs, and monitor CSVs remain ignored under
+A follow-up run routed the same product `smart` alias through benchmark-only
+vLLM backend wiring. Raw answers, local ids, cookies, route snapshots, boot logs,
+review notes, and monitor CSVs remain ignored under
 `artifacts/perf/2026-07-04-vllm-product-route/`.
+
+`Qwen/Qwen3-8B-AWQ` is the only vLLM candidate from this pass that cleared the
+raw product-route completeness gate and received judged-row review. It is not
+promoted: independent review found eight non-promotable rows, mostly from
+source-thin or incomplete scientific answers rather than route failures.
 
 Benchmark setup notes:
 
 - The vLLM compose overlay paused the LiteLLM settings reconciler only during
-  the benchmark window so the temporary admin-DB `smart` route stayed stable.
+  the benchmark window so the temporary `smart` route stayed stable.
 - The authenticated benchmark library was isolated to the fixed 10-paper pack
   before valid capture. Earlier failed-auth and owner-scope attempts were kept
   as ignored diagnostic artifacts and are not evidence rows.
@@ -83,16 +86,27 @@ Benchmark setup notes:
 | vLLM candidate | raw rows | HTTP status counts | empty rows | visible reasoning leaks | median latency ms | max latency ms | peak VRAM MB | gate result |
 |---|---:|---|---:|---:|---:|---:|---:|---|
 | `Qwen/Qwen2.5-7B-Instruct-AWQ` | 25 | 23x 200, 2x 502 | 2 | 0 | 5147.17 | 39108.76 | 45369 | reject before judging: incomplete product-route capture |
-| `Qwen/Qwen3-8B-AWQ` | 25 | 25x 200 | 0 | 0 | 4112.99 | 13196.46 | 45374 | eligible for judged-row review; not promoted |
+| `Qwen/Qwen3-8B-AWQ` | 25 | 25x 200 | 0 | 0 | 4112.99 | 13196.46 | 45374 | judged; defer: source-quality blockers |
 | `Qwen/Qwen3-14B-AWQ` | 25 | 24x 200, 1x 502 | 1 | 0 | 5212.47 | 46839.06 | 45350 | reject before judging: incomplete product-route capture |
 | `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` | 0 | boot failed | n/a | n/a | n/a | n/a | n/a | not runnable at 8192 tokens: insufficient KV-cache memory |
 
-Interpretation: `Qwen/Qwen3-8B-AWQ` is the only vLLM candidate from this pass
-that cleared the raw product-route completeness gate. It still needs judged-row
-review against the answer key and returned sources before it can affect model
-defaults. The 30B FP8 candidate should not be retried at a lower context length
-inside this fixed-pack comparison unless the benchmark protocol explicitly adds
-a separate reduced-context hardware tier.
+Judged `Qwen/Qwen3-8B-AWQ` summary:
+
+| candidate | quality | grounding | wrong-paper rows | empty rows | visible reasoning leaks | p95 latency ms | peak VRAM MB | decision |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `vllm-qwen3-8b-awq` | 89.22 | 92.00 | 0 | 0 | 0 | 13194.24 | 45374 | defer: eight non-promotable judged rows |
+
+Reproducibility hashes for the judged vLLM row:
+
+| artifact | sha256 |
+|---|---|
+| judged rows | `752afef1d0ede7af520cdd76560803debba1488a1d076abd872d50bb68b6239d` |
+| manifest | `99a4f32376dc1e21fb3d8364af847c4be4cb378a0c263f66239e82f41c8be799` |
+| answer key | `abbf3a1c641f857c838efd53d0626bc015e6d54bfe39a29129ac67e1a0d5e8df` |
+
+The 30B FP8 candidate should not be retried at a lower context length inside
+this fixed-pack comparison unless the benchmark protocol explicitly adds a
+separate reduced-context hardware tier.
 
 ## Main Findings
 
@@ -109,13 +123,17 @@ a separate reduced-context hardware tier.
 - The larger Qwen3 baseline and `gpt-oss:20b` need structured-output and visible
   reasoning suppression work before they are meaningful product-route RAG
   candidates.
+- The vLLM `Qwen/Qwen3-8B-AWQ` route is operationally viable for the fixed pack,
+  but its judged answers are still source-thin or incomplete in enough rows to
+  block model or backend promotion.
 
 ## Follow-Up
 
 1. Keep current defaults unchanged.
 2. Treat `qwen3:1.7b` as the next prompt/route-hardening candidate, not a
    default replacement.
-3. Add an independent maintainer review of judged rows before publishing this as
-   public benchmark evidence.
-4. Judge the complete `Qwen/Qwen3-8B-AWQ` vLLM capture before any default
-   discussion; do not publish vLLM results until that review is complete.
+3. Keep vLLM as a measured backend candidate, not a default. The next vLLM work
+   should target route/prompt/source-quality hardening only if that remains more
+   valuable than the Day-One Library Value Pipeline.
+4. Do not add a public MkDocs/GH Pages link for this benchmark until a maintainer
+   approves the judged rows and publication wording.
