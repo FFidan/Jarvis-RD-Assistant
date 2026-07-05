@@ -2110,7 +2110,7 @@
 <h3 id="design-choices">Design choices<a class="headerlink" href="#design-choices" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Evidence grounding and verification.</strong> Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.</li>
-<li><strong>Local-first deployment.</strong> Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. See the <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/perf/2026-05-22-llm-tier-bench.md">LLM tier benchmark</a> for model recommendations.</li>
+<li><strong>Local-first deployment.</strong> Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. Model recommendations are surfaced in Settings based on the detected hardware tier.</li>
 <li><strong>Hybrid search.</strong> BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.</li>
 </ul>
 <h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
@@ -2294,7 +2294,7 @@
 <li><a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a> — single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.</li>
 <li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md">docs/PRD.md</a> — product requirements and feature-level spec, including the Discovery &amp; Pulse design.</li>
 <li><a href="../REQUIREMENTS/">docs/REQUIREMENTS.md</a> — non-functional requirements and technical constraints.</li>
-<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/tree/main/docs/perf">docs/perf/</a> — empirical model recommendations per hardware tier.</li>
+<li><a href="../METHODS_AND_LIMITATIONS/">docs/METHODS_AND_LIMITATIONS.md</a> — verification meaning, privacy boundaries, and evaluation limits.</li>
 <li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CHANGELOG.md">CHANGELOG.md</a> — release notes per version.</li>
 </ul>
 <h2 id="methods-and-limitations">Methods and limitations<a class="headerlink" href="#methods-and-limitations" title="Permanent link">&para;</a></h2>
