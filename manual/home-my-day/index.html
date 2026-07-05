@@ -643,10 +643,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-operations" class="md-nav__link">
+  <a href="#prepare-library" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch Operations
+        Prepare library
       
     </span>
   </a>
@@ -1752,10 +1752,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-operations" class="md-nav__link">
+  <a href="#prepare-library" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch Operations
+        Prepare library
       
     </span>
   </a>
@@ -1947,7 +1947,7 @@
   
 
 
-<!-- verified-against-UI: 2026-06-06 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-07-05 | routes: /, /my-day -->
 
 <h1 id="my-day-home">My Day &amp; Home<a class="headerlink" href="#my-day-home" title="Permanent link">&para;</a></h1>
 <hr />
@@ -1961,8 +1961,8 @@
 <p>If the onboarding wizard has not been fully completed, a <strong>SetupBanner</strong> may appear at the top of the Home page. Once setup is complete it no longer appears. See <a href="../getting-started/">Getting Started</a> for the full onboarding wizard flow.</p>
 <h3 id="onboarding-checklist">Onboarding checklist<a class="headerlink" href="#onboarding-checklist" title="Permanent link">&para;</a></h3>
 <p>Alongside the SetupBanner, an <strong>onboarding checklist</strong> ("Get started in 3 steps") tracks three first-use milestones: <strong>Add a research topic</strong>, <strong>Fetch your first papers</strong>, and <strong>Analyze a paper</strong>. Each step has a shortcut button (Go to Settings, Open Library) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.</p>
-<h3 id="batch-operations">Batch Operations<a class="headerlink" href="#batch-operations" title="Permanent link">&para;</a></h3>
-<p>A section of the Home page provides <strong>Batch Operations</strong> that act across your entire library:</p>
+<h3 id="prepare-library">Prepare library<a class="headerlink" href="#prepare-library" title="Permanent link">&para;</a></h3>
+<p>A <strong>Prepare library</strong> section queues background work for papers that are already in your library:</p>
 <table>
 <thead>
 <tr>
@@ -1973,19 +1973,16 @@
 <tbody>
 <tr>
 <td>Process PDFs</td>
-<td>Run text extraction and chunking for all papers that have a downloaded PDF but have not yet been processed</td>
+<td>Run text extraction and chunking for papers that have a local PDF but have not yet been processed</td>
 </tr>
 <tr>
 <td>Summarise</td>
-<td>Generate summaries for all processed papers that have not yet been summarised</td>
-</tr>
-<tr>
-<td>Extract Entities</td>
-<td>Run entity extraction for all papers to populate the Knowledge Graph</td>
+<td>Generate summaries for processed papers that do not yet have summaries</td>
 </tr>
 </tbody>
 </table>
-<p>Each batch operation launches a background job. Progress is visible in the Jobs panel (accessible from the TopBar).</p>
+<p>Each queued operation appears in the Jobs panel while it runs. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.</p>
+<p>Entity extraction is an administrator action and is shown only to admins after the advanced controls are opened.</p>
 <hr />
 <h2 id="my-day-my-day">My Day — <code>/my-day</code><a class="headerlink" href="#my-day-my-day" title="Permanent link">&para;</a></h2>
 <p>The <strong>My Day</strong> page gives you a focused daily research workspace. It is structured as a vertical sequence of sections, described below in order.</p>
