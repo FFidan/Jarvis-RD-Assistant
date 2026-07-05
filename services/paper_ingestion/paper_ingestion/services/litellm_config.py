@@ -486,10 +486,22 @@ def _resolve_new_model(alias: str, target: _ModelTarget, base_params: dict[str, 
     local_default_prefix = "ollama/" if alias == "embed" else "ollama_chat/"
     if "/" in model_name:
         return model_name
+    if _is_catalog_ollama_tag(model_name):
+        return f"{local_default_prefix}{model_name}"
     if "/" in existing_model and not is_local_ollama(existing_model):
         existing_prefix = existing_model.split("/")[0]
         return f"{existing_prefix}/{model_name}"
     return f"{local_default_prefix}{model_name}"
+
+
+def _is_catalog_ollama_tag(model_name: str) -> bool:
+    """Return True when *model_name* is a known local catalog Ollama tag."""
+    from jarvis_common.model_catalog import load_model_catalog  # noqa: PLC0415
+
+    for entry in load_model_catalog():
+        if model_name in {entry.id, entry.ollama_tag}:
+            return True
+    return False
 
 
 def _deliver_embed(

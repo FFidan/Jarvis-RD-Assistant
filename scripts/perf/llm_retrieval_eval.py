@@ -1601,6 +1601,7 @@ def _capture_question_row(
         "answer": str(body.get("answer", "")) if isinstance(body, dict) else "",
         "sources": body.get("sources", []) if isinstance(body, dict) else [],
         "http_status": status,
+        "response_error": _response_error(status, body),
         "latency_ms": latency_ms,
         "backend_metadata": _backend_metadata(body),
         "retrieval_scope": _capture_retrieval_scope(question, config),
@@ -1689,6 +1690,34 @@ def _decode_json_body(raw: bytes) -> Any:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def _response_error(status: int, body: Any) -> dict[str, Any] | None:
+    """Return sanitized non-200 response evidence for raw benchmark rows."""
+    if status < 400 or not isinstance(body, dict):
+        return None
+    evidence: dict[str, Any] = {}
+    detail = body.get("detail")
+    if isinstance(detail, dict):
+        safe_detail = {
+            key: detail[key]
+            for key in ("status", "code", "message")
+            if isinstance(detail.get(key), str)
+        }
+        if safe_detail:
+            evidence["detail"] = safe_detail
+    elif isinstance(detail, str) and detail.strip():
+        evidence["detail"] = {
+            "code": "unstructured_error_detail",
+            "message": "Unstructured error detail omitted.",
+        }
+    error = body.get("error")
+    if isinstance(error, str) and error.strip():
+        evidence["error"] = "unstructured_error"
+    request_id = body.get("request_id")
+    if isinstance(request_id, str):
+        evidence["request_id"] = request_id[:128]
+    return evidence or None
 
 
 def _backend_metadata(body: Any) -> dict[str, Any]:

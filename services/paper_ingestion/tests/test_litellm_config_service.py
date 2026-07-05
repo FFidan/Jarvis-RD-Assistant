@@ -178,6 +178,39 @@ async def test_update_preserves_non_ollama_prefix_and_api_base():
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_update_known_local_tag_overrides_inherited_vllm_api_base(monkeypatch):
+    """Known local catalog tags route back to Ollama after a vLLM benchmark route."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    _mock_model_info(
+        [
+            _entry(
+                "smart",
+                {"model": "openai/Qwen/Qwen3-14B-AWQ", "api_base": "http://vllm:8080/v1"},
+            )
+        ]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model(
+        "llm.smart_model",
+        "qwen3:30b-a3b",
+        num_ctx=8192,
+        thinking_disabled=True,
+    )
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama_chat/qwen3:30b-a3b"
+    assert params["api_base"] == "http://ollama:11434"
+    assert params["num_ctx"] == 8192
+    assert params["think"] is False
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_update_preserves_existing_num_ctx_when_disabling_think():
     """think=False merges with the deployment's num_ctx — both TOP-LEVEL."""
     _mock_model_info(

@@ -442,6 +442,102 @@ def test_capture_only_writes_raw_rows_without_scores(
     assert not (tmp_path / "summary.csv").exists()
 
 
+def test_capture_row_preserves_sanitized_error_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify non-200 product responses keep diagnosable, non-secret evidence."""
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    question = next(q for q in manifest.questions if q.scope == "single_paper")
+    config = mod.CaptureConfig(
+        api_base="http://jarvis.local",
+        candidate="current-smart-local",
+        paper_map={
+            paper.paper_key: index for index, paper in enumerate(manifest.papers.values(), 1)
+        },
+        api_key="test-key",
+        auth_cookie_file=None,
+        timeout=30.0,
+        max_chunks=8,
+        max_papers=5,
+        decompose=False,
+        fixed_pack_library_confirmed=True,
+    )
+
+    def fake_post_json(url, payload, headers, timeout):
+        return 502, {
+            "detail": {
+                "status": "degraded",
+                "code": "llm_empty_visible_content",
+                "message": "LLM response contained no visible answer.",
+                "raw_answer": "<think>unsanitized marker</think>",
+            },
+            "request_id": "req-123",
+            "api_key": "sensitive-marker-should-not-appear",
+        }
+
+    monkeypatch.setattr(mod, "_post_json", fake_post_json)
+
+    row = mod._capture_question_row(question, config=config, headers={"X-API-Key": "test-key"})
+
+    assert row["http_status"] == 502
+    assert row["answer"] == ""
+    assert row["response_error"] == {
+        "detail": {
+            "status": "degraded",
+            "code": "llm_empty_visible_content",
+            "message": "LLM response contained no visible answer.",
+        },
+        "request_id": "req-123",
+    }
+    assert "api_key" not in json.dumps(row)
+    assert "unsanitized marker" not in json.dumps(row)
+
+
+def test_capture_row_omits_unstructured_error_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify arbitrary error strings are classified without preserving provider text."""
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    question = next(q for q in manifest.questions if q.scope == "single_paper")
+    config = mod.CaptureConfig(
+        api_base="http://jarvis.local",
+        candidate="current-smart-local",
+        paper_map={
+            paper.paper_key: index for index, paper in enumerate(manifest.papers.values(), 1)
+        },
+        api_key="test-key",
+        auth_cookie_file=None,
+        timeout=30.0,
+        max_chunks=8,
+        max_papers=5,
+        decompose=False,
+        fixed_pack_library_confirmed=True,
+    )
+
+    def fake_post_json(url, payload, headers, timeout):
+        return 502, {
+            "detail": "provider failed with sk-secret <think>hidden</think>",
+            "error": "Cookie: session=secret-token provider trace",
+            "request_id": "req-456",
+        }
+
+    monkeypatch.setattr(mod, "_post_json", fake_post_json)
+
+    row = mod._capture_question_row(question, config=config, headers={"X-API-Key": "test-key"})
+
+    assert row["response_error"] == {
+        "detail": {
+            "code": "unstructured_error_detail",
+            "message": "Unstructured error detail omitted.",
+        },
+        "error": "unstructured_error",
+        "request_id": "req-456",
+    }
+    serialized = json.dumps(row)
+    assert "sk-secret" not in serialized
+    assert "hidden" not in serialized
+    assert "session=secret-token" not in serialized
+    assert "provider trace" not in serialized
+
+
 def test_capture_only_requires_fixed_pack_confirmation_for_library_wide_questions(
     tmp_path: Path,
 ) -> None:

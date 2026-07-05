@@ -7,6 +7,7 @@ summarization, and weekly digest.
 import json
 import logging
 import os
+from dataclasses import dataclass
 
 import asyncpg
 import httpx
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
 from jarvis_common.auth import get_current_user_id
 from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.event_log import log_event
 from jarvis_common.litellm_observer import observed_share
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
@@ -35,6 +37,7 @@ from paper_ingestion.deps import (
     get_verifier,
     limiter,
 )
+from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     AskRequest,
     AskResponse,
@@ -49,6 +52,7 @@ from paper_ingestion.rag.exceptions import (
 )
 from paper_ingestion.rag.streaming import (
     CrossPaperRagNoResults,
+    CrossPaperRagPrep,
     prepare_cross_paper_rag,
     prepare_single_paper_rag,
     sse_error_stream,
@@ -77,6 +81,16 @@ class _RagServiceNotReadyError(RuntimeError):
     """Raised when the OpenAI client is not yet initialised (startup misconfiguration)."""
 
 
+@dataclass(frozen=True)
+class _RagRouteDeps:
+    """Dependencies shared by RAG preparation helpers."""
+
+    embedder: Embedder
+    db_pool: asyncpg.Pool
+    http_client: httpx.AsyncClient
+    user_id: int
+
+
 def _is_timeout_failure(exc: BaseException) -> bool:
     """Return True when an exception chain came from an httpx timeout."""
     seen: set[int] = set()
@@ -95,6 +109,43 @@ def _empty_visible_detail() -> dict[str, str]:
         "code": "llm_empty_visible_content",
         "message": "LLM response contained no visible answer.",
     }
+
+
+def _rag_preparation_failed_detail() -> dict[str, str]:
+    """Return a stable client-facing detail for unexpected RAG prep failures."""
+    return {
+        "status": "degraded",
+        "code": "rag_preparation_failed",
+        "message": "RAG preparation failed.",
+    }
+
+
+async def _log_rag_error_event(
+    db_pool: asyncpg.Pool,
+    *,
+    endpoint: str,
+    phase: str,
+    status_code: int,
+    exc: BaseException,
+) -> None:
+    """Persist sanitized RAG failure context for the admin log view."""
+    context: dict[str, object] = {
+        "endpoint": endpoint,
+        "phase": phase,
+        "status_code": status_code,
+        "exception_class": exc.__class__.__name__,
+    }
+    try:
+        await log_event(
+            pool=db_pool,
+            level="error",
+            category="error",
+            source="rag",
+            message=f"{phase}_failed",
+            context=context,
+        )
+    except Exception as log_exc:  # noqa: BLE001
+        logger.warning("RAG admin event logging failed: %s", log_exc)
 
 
 def _strip_think_blocks(text: str) -> str:
@@ -120,6 +171,61 @@ async def _qdrant_degraded_sse_stream():
         }
     )
     yield SSE_DONE
+
+
+async def _prepare_single_paper_or_raise(
+    deps: _RagRouteDeps,
+    *,
+    paper_id: int,
+    body: AskRequest,
+) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
+    """Build single-paper RAG inputs or raise stable route errors."""
+    try:
+        return await prepare_single_paper_rag(
+            deps.embedder, deps.db_pool, paper_id, body, deps.http_client, user_id=deps.user_id
+        )
+    except PaperNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Paper not found") from exc
+    except NoRelevantChunksError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except QdrantUnavailableError:
+        raise
+    except Exception as exc:
+        logger.error("RAG preparation failed for paper %d: %s", paper_id, exc.__class__.__name__)
+        await _log_rag_error_event(
+            deps.db_pool,
+            endpoint="single_paper",
+            phase="preparation",
+            status_code=502,
+            exc=exc,
+        )
+        raise HTTPException(status_code=502, detail=_rag_preparation_failed_detail()) from exc
+
+
+async def _prepare_cross_paper_or_raise(
+    deps: _RagRouteDeps,
+    *,
+    body: CrossPaperAskRequest,
+) -> CrossPaperRagPrep | CrossPaperRagNoResults:
+    """Build cross-paper RAG inputs or raise stable route errors."""
+    try:
+        return await prepare_cross_paper_rag(
+            deps.embedder, deps.db_pool, body, deps.http_client, user_id=deps.user_id
+        )
+    except HTTPException:
+        raise
+    except QdrantUnavailableError:
+        raise
+    except Exception as exc:
+        logger.error("Cross-paper RAG preparation failed: %s", exc.__class__.__name__)
+        await _log_rag_error_event(
+            deps.db_pool,
+            endpoint="cross_paper",
+            phase="preparation",
+            status_code=502,
+            exc=exc,
+        )
+        raise HTTPException(status_code=502, detail=_rag_preparation_failed_detail()) from exc
 
 
 @observe()
@@ -296,14 +402,10 @@ async def ask_paper(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    try:
-        messages, raw_sources = await prepare_single_paper_rag(
-            embedder, db_pool, paper_id, body, http_client, user_id=user_id
-        )
-    except PaperNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Paper not found") from exc
-    except NoRelevantChunksError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    deps = _RagRouteDeps(
+        embedder=embedder, db_pool=db_pool, http_client=http_client, user_id=user_id
+    )
+    messages, raw_sources = await _prepare_single_paper_or_raise(deps, paper_id=paper_id, body=body)
 
     smart_model = get_smart_model()
 
@@ -466,7 +568,10 @@ async def ask_cross_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client, user_id=user_id)
+    deps = _RagRouteDeps(
+        embedder=embedder, db_pool=db_pool, http_client=http_client, user_id=user_id
+    )
+    result = await _prepare_cross_paper_or_raise(deps, body=body)
 
     # Short-circuit when no chunks were found
     if isinstance(result, CrossPaperRagNoResults):

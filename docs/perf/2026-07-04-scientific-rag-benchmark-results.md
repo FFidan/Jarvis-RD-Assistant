@@ -1,20 +1,22 @@
 # Scientific RAG Local Model Benchmark Results
 
-**Date:** 2026-07-04
-**Status:** internal evidence gate; no default model promoted
-**Scope:** product RAG route over the fixed 10-paper / 25-question scientific
-question pack.
+**Date:** 2026-07-05
+**Status:** internal evidence gate; no default model, backend, reranker, or embedding setting promoted
+**Scope:** product RAG route over the fixed 10-paper / 25-question scientific question pack.
 
 ## Decision
 
 No local model is promoted as the default smart model from this run.
 
-The monitored product-route candidates show that smaller local models can satisfy
-basic structured-output and fixed-corpus retrieval gates, but each candidate that
-was scientifically scored still has at least one promotion blocker. The current
-larger baseline and the newly staged `gpt-oss:20b` candidate were rejected before
-scientific scoring because they produced too many failed or empty product-route
-answers.
+The fixed-pack rerun produced useful evidence, but every judged candidate still
+has promotion blockers. Runtime failures are kept separate from scientific answer
+quality: candidates with HTTP failures, empty visible answers, or visible
+reasoning/control-token leakage were not judged as scientific-quality rows.
+
+`vllm:Qwen/Qwen3-8B-AWQ` was the strongest judged row set in this pass, but it
+still had wrong-paper/source-support blockers and is not a default candidate.
+`qwen2.5:7b-instruct` remains the strongest Ollama local candidate that cleared
+the raw product-route gate, but it also remains below the promotion bar.
 
 ## Method
 
@@ -23,16 +25,18 @@ answers.
 - Fixed questions: 25 scientific RAG questions covering single-paper,
   cross-paper, quantitative, reproducibility, limitation, and unanswerable
   cases.
-- Capture path: the normal product RAG API through the `smart` route and the
-  Ollama backend.
-- Isolation: cross-paper and unanswerable questions passed an explicit fixed
-  `paper_ids` scope; captured source rows were checked for outside-corpus paper
-  ids.
-- VRAM: monitored with one-second GPU memory sampling while resident local
-  models were unloaded before each monitored rerun.
+- Capture path: the normal product RAG API through the product `smart` route.
+- Backend comparison: Ollama and benchmark-only vLLM routes were both exercised
+  through the product LiteLLM boundary; vLLM was not made a default.
 - Judging: executor-reviewed against the checked-in answer key and returned
-  source excerpts. Scores are internal gate evidence and should receive an
-  independent maintainer review before being presented as a public benchmark.
+  source evidence, followed by an adversarial reproducibility review.
+- Raw answers, local paper ids, cookies, route snapshots, long source excerpts,
+  review notes, and GPU monitor CSVs remain under ignored `artifacts/perf/`.
+
+Benchmark captures were run from the branch revision recorded in the generated
+summary. A later route-restoration fix in the same PR prevents known Ollama
+catalog models from inheriting a temporary vLLM API base after benchmark routing;
+it does not change the captured answer rows.
 
 ## Reproducibility Hashes
 
@@ -40,100 +44,66 @@ answers.
 |---|---|
 | manifest | `99a4f32376dc1e21fb3d8364af847c4be4cb378a0c263f66239e82f41c8be799` |
 | answer key | `abbf3a1c641f857c838efd53d0626bc015e6d54bfe39a29129ac67e1a0d5e8df` |
-| judged rows | `32ec9ec7a5c7989915c70193a009861311cc8117121c676210187fa8268b2587` |
+| judged rows | `c359e1a5914c5b96b31428625d847ab9c5ae1221e787d76568bbacc0cba78d2d` |
 
-Raw answers, local paper ids, cookies, long source excerpts, and GPU monitor CSVs
-remain under ignored `artifacts/perf/<run-id>/`.
+## Judged Fixed-Pack Candidates
 
-## Monitored Product-Route Candidates
-
-| candidate | quality | grounding | wrong-paper rows | empty rows | visible reasoning leaks | p95 latency ms | peak VRAM MB | decision |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| `qwen3:1.7b` | 83.08 | 90.00 | 1 | 0 | 0 | 5244.92 | 18434 | defer: synthesis error blocks promotion |
-| `qwen2.5:7b-instruct` | 80.96 | 82.50 | 0 | 0 | 1 | 9765.71 | 20822 | reject: visible control-token continuation |
-| `deepseek-r1:7b` | 83.06 | 85.50 | 1 | 0 | 0 | 26305.64 | 20822 | defer: unanswerable overclaim and latency |
-
-## Hard-Gate Rejections Before Scientific Scoring
-
-| candidate | reason |
-|---|---|
-| `qwen3:30b-a3b` | Failed the product-route hard gate: 12 HTTP 200 rows, 3 HTTP 502 rows, 10 HTTP 500 rows, 13 empty answers, and 11 visible working-note rows. |
-| `qwen3:4b` | Failed the product-route hard gate: 24 HTTP 200 rows, 1 HTTP 502 row, 1 empty answer, and 6 visible working-note rows. |
-| `gpt-oss:20b` | Failed the product-route hard gate: 12 HTTP 200 rows, 13 HTTP 502 rows, and 13 empty answers. |
-
-## vLLM Product-Route Addendum
-
-A follow-up run routed the same product `smart` alias through benchmark-only
-vLLM backend wiring. Raw answers, local ids, cookies, route snapshots, boot logs,
-review notes, and monitor CSVs remain ignored under
-`artifacts/perf/2026-07-04-vllm-product-route/`.
-
-`Qwen/Qwen3-8B-AWQ` is the only vLLM candidate from this pass that cleared the
-raw product-route completeness gate and received judged-row review. It is not
-promoted: independent review found eight non-promotable rows, mostly from
-source-thin or incomplete scientific answers rather than route failures.
-
-Benchmark setup notes:
-
-- The vLLM compose overlay paused the LiteLLM settings reconciler only during
-  the benchmark window so the temporary `smart` route stayed stable.
-- The authenticated benchmark library was isolated to the fixed 10-paper pack
-  before valid capture. Earlier failed-auth and owner-scope attempts were kept
-  as ignored diagnostic artifacts and are not evidence rows.
-- The product route was restored to the normal Ollama `smart` deployment after
-  the run, and the normal reconciler was restarted.
-
-| vLLM candidate | raw rows | HTTP status counts | empty rows | visible reasoning leaks | median latency ms | max latency ms | peak VRAM MB | gate result |
-|---|---:|---|---:|---:|---:|---:|---:|---|
-| `Qwen/Qwen2.5-7B-Instruct-AWQ` | 25 | 23x 200, 2x 502 | 2 | 0 | 5147.17 | 39108.76 | 45369 | reject before judging: incomplete product-route capture |
-| `Qwen/Qwen3-8B-AWQ` | 25 | 25x 200 | 0 | 0 | 4112.99 | 13196.46 | 45374 | judged; defer: source-quality blockers |
-| `Qwen/Qwen3-14B-AWQ` | 25 | 24x 200, 1x 502 | 1 | 0 | 5212.47 | 46839.06 | 45350 | reject before judging: incomplete product-route capture |
-| `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` | 0 | boot failed | n/a | n/a | n/a | n/a | n/a | not runnable at 8192 tokens: insufficient KV-cache memory |
-
-Judged `Qwen/Qwen3-8B-AWQ` summary:
+These rows passed the raw product-route gate before judging: 25 HTTP 200 rows,
+non-empty visible answers, no visible hidden-reasoning/control-token leakage,
+numeric latency, numeric VRAM, and fixed-pack scope markers.
 
 | candidate | quality | grounding | wrong-paper rows | empty rows | visible reasoning leaks | p95 latency ms | peak VRAM MB | decision |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| `vllm-qwen3-8b-awq` | 89.22 | 92.00 | 0 | 0 | 0 | 13194.24 | 45374 | defer: eight non-promotable judged rows |
+| `deepseek-r1:7b` | 73.06 | 71.00 | 2 | 0 | 0 | 12711.68 | 34542 | reject |
+| `qwen2.5:7b-instruct` | 80.77 | 83.00 | 2 | 0 | 0 | 6979.91 | 34542 | defer: row-level promotion blockers |
+| `vllm:Qwen/Qwen3-14B-AWQ` | 83.72 | 71.00 | 2 | 0 | 0 | 14136.10 | 44970 | defer: row-level promotion blockers |
+| `vllm:Qwen/Qwen3-8B-AWQ` | 84.89 | 86.00 | 1 | 0 | 0 | 13001.73 | 45196 | defer: row-level promotion blockers |
 
-Reproducibility hashes for the judged vLLM row:
+The most common blockers were wrong-paper or weak source support, unsupported
+numeric context, incomplete cross-paper support, and overconfident answers on
+unanswerable or weakly supported prompts. These are model/retrieval quality
+issues, not transport failures.
 
-| artifact | sha256 |
+## Hard-Gated Before Scientific Scoring
+
+These candidates were captured or started through the product route but were not
+judged as scientific-quality evidence.
+
+| candidate | raw gate result |
 |---|---|
-| judged rows | `752afef1d0ede7af520cdd76560803debba1488a1d076abd872d50bb68b6239d` |
-| manifest | `99a4f32376dc1e21fb3d8364af847c4be4cb378a0c263f66239e82f41c8be799` |
-| answer key | `abbf3a1c641f857c838efd53d0626bc015e6d54bfe39a29129ac67e1a0d5e8df` |
+| current `smart` route (`qwen3:30b-a3b`) | 22 HTTP 200 rows, 3 HTTP 502 rows, 3 empty answers, and 19 visible hidden-reasoning/control-token rows. |
+| `qwen3:4b` | 25 HTTP 200 rows, but 8 visible hidden-reasoning/control-token rows. |
+| `qwen3:1.7b` | 24 HTTP 200 rows, 1 HTTP 502 row, and 1 empty answer. |
+| `gpt-oss:20b` | 11 HTTP 200 rows, 14 HTTP 502 rows, and 14 empty answers. |
+| `vllm:Qwen/Qwen2.5-7B-Instruct-AWQ` | 23 HTTP 200 rows, 2 HTTP 502 rows, and 2 empty answers. |
+| `vllm:Qwen/Qwen3-30B-A3B-Instruct-2507-FP8` | Not runnable at the 8192-token protocol tier: vLLM loaded weights but reported no available KV-cache memory before serving. |
 
-The 30B FP8 candidate should not be retried at a lower context length inside
-this fixed-pack comparison unless the benchmark protocol explicitly adds a
-separate reduced-context hardware tier.
+The 30B FP8 vLLM candidate should not be retried at a lower context length inside
+this fixed-pack comparison unless the protocol adds a separate reduced-context
+tier.
 
 ## Main Findings
 
-- `qwen3:1.7b` is the strongest follow-up candidate for local-first RAG: it was
-  fastest, used the least monitored VRAM among scored candidates, and had the
-  best grounding score. It still made a central cross-paper synthesis error on
-  Transformer versus LoRA efficiency, so it must not be promoted without prompt,
-  retrieval, or scoring follow-up.
-- `qwen2.5:7b-instruct` is usable in many single-paper answers, but one row
-  emitted visible chat/control-token continuation text. That is a hard product
-  quality failure even though the row returned HTTP 200.
-- `deepseek-r1:7b` produced complete rows but is substantially slower and made
-  an overclaim on an unanswerable Adam/U-Net question.
-- The larger Qwen3 baseline and `gpt-oss:20b` need structured-output and visible
-  reasoning suppression work before they are meaningful product-route RAG
-  candidates.
-- The vLLM `Qwen/Qwen3-8B-AWQ` route is operationally viable for the fixed pack,
-  but its judged answers are still source-thin or incomplete in enough rows to
-  block model or backend promotion.
+- Keep current defaults unchanged. The current large local route still needs
+  visible-reasoning and 502/empty-answer hardening before it can be judged.
+- `qwen2.5:7b-instruct` is the best current Ollama candidate from this rerun,
+  but it does not clear the source-support and wrong-paper gates.
+- vLLM is operationally viable for Qwen3 8B/14B AWQ product-route captures after
+  resident answer models are unloaded, but the judged answers still do not clear
+  the promotion rule.
+- `gpt-oss:20b` remains a compatibility candidate only. It needs response-format
+  and empty-answer hardening before scientific RAG judging.
+- Reranker and embedding changes remain separate gates. This run does not promote
+  a reranker or embedding default.
 
 ## Follow-Up
 
-1. Keep current defaults unchanged.
-2. Treat `qwen3:1.7b` as the next prompt/route-hardening candidate, not a
-   default replacement.
-3. Keep vLLM as a measured backend candidate, not a default. The next vLLM work
-   should target route/prompt/source-quality hardening only if that remains more
-   valuable than the Day-One Library Value Pipeline.
-4. Do not add a public MkDocs/GH Pages link for this benchmark until a maintainer
-   approves the judged rows and publication wording.
+1. Keep local-first defaults unchanged for v1.0.2.
+2. Fix route/runtime hard gates before spending more effort on public benchmark
+   presentation.
+3. Treat vLLM Qwen3 8B/14B AWQ as measured backend candidates, not product
+   defaults.
+4. Keep BGE-M3, reranker ablations, and re-embedding work as separate plans with
+   Qdrant snapshot and rollback requirements.
+5. Do not add a public MkDocs/GH Pages benchmark link until a maintainer approves
+   publication wording and independently reviews the judged rows.

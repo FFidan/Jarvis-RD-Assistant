@@ -227,6 +227,49 @@ async def test_ask_paper_qdrant_error_returns_503(
     assert resp.status_code == 503, f"Expected 503, got {resp.status_code}: {resp.text}"
 
 
+async def test_ask_paper_preparation_error_returns_502_and_logs_admin_event(
+    _configure_api_key,
+    _patched_app_ownership,
+    _stub_rag_deps,
+    monkeypatch,
+    caplog,
+):
+    """Unexpected single-paper preparation errors are controlled and admin-visible."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    log_event_mock = AsyncMock()
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_single_paper_rag",
+        AsyncMock(side_effect=RuntimeError("provider returned 500 with marker abc123")),
+    )
+    monkeypatch.setattr("paper_ingestion.routers.rag.log_event", log_event_mock, raising=False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/papers/1/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == {
+        "status": "degraded",
+        "code": "rag_preparation_failed",
+        "message": "RAG preparation failed.",
+    }
+    assert "abc123" not in resp.text
+    assert "abc123" not in caplog.text
+    log_event_mock.assert_awaited_once()
+    assert log_event_mock.await_args.kwargs["context"] == {
+        "endpoint": "single_paper",
+        "phase": "preparation",
+        "status_code": 502,
+        "exception_class": "RuntimeError",
+    }
+
+
 # ---- ask_paper_stream (stream): Qdrant error → degraded SSE frame ----
 
 
@@ -282,6 +325,53 @@ async def test_ask_cross_paper_qdrant_error_returns_503(
             headers={"X-Api-Key": _configure_api_key},
         )
     assert resp.status_code == 503, f"Expected 503, got {resp.status_code}: {resp.text}"
+
+
+async def test_ask_cross_paper_preparation_error_returns_502_and_logs_admin_event(
+    _configure_api_key,
+    _stub_rag_deps,
+    monkeypatch,
+    caplog,
+):
+    """Unexpected cross-paper preparation errors are controlled and admin-visible."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    log_event_mock = AsyncMock()
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_cross_paper_rag",
+        AsyncMock(side_effect=RuntimeError("provider returned 500 with marker abc123")),
+    )
+    monkeypatch.setattr("paper_ingestion.routers.rag.log_event", log_event_mock, raising=False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == {
+        "status": "degraded",
+        "code": "rag_preparation_failed",
+        "message": "RAG preparation failed.",
+    }
+    assert "abc123" not in resp.text
+    assert "abc123" not in caplog.text
+    log_event_mock.assert_awaited_once()
+    kwargs = log_event_mock.await_args.kwargs
+    assert kwargs["level"] == "error"
+    assert kwargs["category"] == "error"
+    assert kwargs["source"] == "rag"
+    assert kwargs["message"] == "preparation_failed"
+    assert kwargs["context"] == {
+        "endpoint": "cross_paper",
+        "phase": "preparation",
+        "status_code": 502,
+        "exception_class": "RuntimeError",
+    }
 
 
 # ---- ask_cross_paper_stream (stream): Qdrant error → degraded SSE frame ----
