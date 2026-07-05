@@ -4,6 +4,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -174,9 +175,172 @@ async def teststream_rag_events_token_parsing():
     assert "".join(tokens) == "The answer is 42."
 
 
+async def teststream_rag_events_allows_split_paragraph_boundary_whitespace():
+    """Whitespace after a paragraph boundary should not fail before the next chunk."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    chunks = [
+        "The result is supported.\n\n ",
+        "The next paragraph is also supported.",
+    ]
+    sse_lines = [
+        f'data: {{"choices": [{{"delta": {{"content": {json.dumps(chunk)}}}}}]}}'
+        for chunk in chunks
+    ]
+    sse_lines.append("data: [DONE]")
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    events = [
+        event
+        async for event in stream_rag_events(
+            mock_client,
+            [{"role": "user", "content": "question"}],
+            [{"content": "source", "page_number": 1, "score": 0.9}],
+        )
+    ]
+
+    parsed = [
+        json.loads(event.replace("data: ", "").strip())
+        for event in events
+        if event.replace("data: ", "").strip() != "[DONE]"
+    ]
+    event_types = [event["type"] for event in parsed]
+    assert "error" not in event_types
+    assert event_types[-2:] == ["sources", "done"]
+    token_text = "".join(event["content"] for event in parsed if event["type"] == "token")
+    assert token_text == "The result is supported.\n\n The next paragraph is also supported."
+    assert parsed[-1]["full_answer"] == token_text
+
+
 # ---------------------------------------------------------------------------
 # Test 3: Error handling — error event yielded on stream failure
 # ---------------------------------------------------------------------------
+
+
+async def teststream_rag_events_work_notes_fails_closed():
+    """Visible work notes emits only a sanitized error and DONE sentinel."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "Let me look at the sources."}}]}',
+        'data: {"choices": [{"delta": {"content": " The final answer is not ready."}}]}',
+        "data: [DONE]",
+    ]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    events = []
+    async for event in stream_rag_events(
+        mock_client,
+        [{"role": "user", "content": "question"}],
+        [{"content": "source", "page_number": 1, "score": 0.9}],
+        verifier=MagicMock(),
+        db_pool=MagicMock(),
+    ):
+        events.append(event)
+
+    assert len(events) == 2
+    error_event = json.loads(events[0].replace("data: ", "").strip())
+    assert error_event == {
+        "type": "error",
+        "message": "The model did not return a usable final answer. Please try again.",
+    }
+    assert events[1].strip() == "data: [DONE]"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        ["I need t", "o compare the papers first."],
+        ["I'll che", "ck the sources first."],
+        ["First, I n", "eed to compare the papers first."],
+    ],
+)
+async def teststream_rag_events_partial_work_note_prefix_is_not_leaked(chunks):
+    """Risky partial prefixes stay quarantined until classified."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    sse_lines = [
+        f'data: {{"choices": [{{"delta": {{"content": {json.dumps(chunk)}}}}}]}}'
+        for chunk in chunks
+    ]
+    sse_lines.append("data: [DONE]")
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    events = [
+        event
+        async for event in stream_rag_events(
+            mock_client,
+            [{"role": "user", "content": "question"}],
+            [{"content": "source", "page_number": 1, "score": 0.9}],
+        )
+    ]
+
+    assert len(events) == 2
+    assert '"type": "token"' not in "".join(events)
+    error_event = json.loads(events[0].replace("data: ", "").strip())
+    assert error_event["type"] == "error"
+    assert events[1].strip() == "data: [DONE]"
+
+
+async def teststream_rag_events_empty_visible_answer_fails_closed():
+    """Empty post-filter answers do not emit sources, done, or confidence events."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "<think>hidden only</think>"}}]}',
+        "data: [DONE]",
+    ]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    events = [
+        event
+        async for event in stream_rag_events(
+            mock_client,
+            [{"role": "user", "content": "question"}],
+            [{"content": "source", "page_number": 1, "score": 0.9}],
+        )
+    ]
+
+    parsed_types = []
+    for event in events:
+        data_str = event.replace("data: ", "").strip()
+        if data_str == "[DONE]":
+            parsed_types.append("DONE")
+        else:
+            parsed_types.append(json.loads(data_str)["type"])
+
+    assert parsed_types == ["error", "DONE"]
+
+
+async def teststream_rag_events_whitespace_only_visible_answer_fails_closed():
+    """Whitespace-only visible output does not emit a token before the error."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "   "}}]}',
+        "data: [DONE]",
+    ]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    events = [
+        event
+        async for event in stream_rag_events(
+            mock_client,
+            [{"role": "user", "content": "question"}],
+            [{"content": "source", "page_number": 1, "score": 0.9}],
+        )
+    ]
+
+    assert len(events) == 2
+    assert '"type": "token"' not in "".join(events)
+    error_event = json.loads(events[0].replace("data: ", "").strip())
+    assert error_event["type"] == "error"
+    assert events[1].strip() == "data: [DONE]"
 
 
 async def teststream_rag_events_error_handling():
@@ -222,9 +386,11 @@ async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch)
     ):
         events.append(event)
 
+    error_event = json.loads(events[0].replace("data: ", "").strip())
+    assert error_event["type"] == "error"
+    assert "usable final answer" in error_event["message"]
     assert events == [
-        'data: {"type": "sources", "sources": []}\n\n',
-        'data: {"type": "done", "full_answer": "", "model_used": null}\n\n',
+        'data: {"type": "error", "message": "The model did not return a usable final answer. Please try again."}\n\n',
         "data: [DONE]\n\n",
     ]
     mock_client.stream.assert_called_once_with(

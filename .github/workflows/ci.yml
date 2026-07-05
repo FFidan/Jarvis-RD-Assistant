@@ -288,7 +288,7 @@ jobs:
         run: npm --prefix frontend run typecheck
 
       - name: Unit tests
-        run: npm --prefix frontend run test -- --run
+        run: npm --prefix frontend run test -- --run --no-file-parallelism
 
       - name: Build
         run: npm --prefix frontend run build

@@ -3,6 +3,7 @@
 import functools
 import logging
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast, overload
@@ -70,9 +71,140 @@ LLM_TIMEOUT_SHORT = 30.0
 LLM_TIMEOUT_DEFAULT = 120.0
 LLM_TIMEOUT_LONG = 300.0
 
+_WORK_NOTE_MARKER_RE = re.compile(
+    r"^\s*(?:"
+    r"let\s+me\b|"
+    r"let['’]s\s+(?:look|analy[sz]e|think|break|work)\b|"
+    r"i\s+(?:need|should|will)\s+(?:to\s+)?"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"i['’]ll\s+"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"i\s+am\s+going\s+to\s+"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"first,?\s+(?:i\s+(?:need|should|will)|i['’]ll)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_WORK_NOTE_PARAGRAPH_RE = re.compile(
+    r"(?:^|\n\s*\n)\s*(?:"
+    r"let\s+me\b|"
+    r"let['’]s\s+(?:look|analy[sz]e|think|break|work)\b|"
+    r"i\s+(?:need|should|will)\s+(?:to\s+)?"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"i['’]ll\s+"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"i\s+am\s+going\s+to\s+"
+    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
+    r"first,?\s+(?:i\s+(?:need|should|will)|i['’]ll)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_WORK_NOTE_PREFIX_MARKERS = (
+    "let me",
+    "let's look",
+    "let's analyse",
+    "let's analyze",
+    "let's think",
+    "let's break",
+    "let's work",
+    "i need look",
+    "i need to look",
+    "i need analyse",
+    "i need to analyse",
+    "i need analyze",
+    "i need to analyze",
+    "i need think",
+    "i need to think",
+    "i need check",
+    "i need to check",
+    "i need determine",
+    "i need to determine",
+    "i need compare",
+    "i need to compare",
+    "i need answer",
+    "i need to answer",
+    "i should look",
+    "i should to look",
+    "i should analyse",
+    "i should to analyse",
+    "i should analyze",
+    "i should to analyze",
+    "i should think",
+    "i should to think",
+    "i should check",
+    "i should to check",
+    "i should determine",
+    "i should to determine",
+    "i should compare",
+    "i should to compare",
+    "i should answer",
+    "i should to answer",
+    "i will look",
+    "i will to look",
+    "i will analyse",
+    "i will to analyse",
+    "i will analyze",
+    "i will to analyze",
+    "i will think",
+    "i will to think",
+    "i will check",
+    "i will to check",
+    "i will determine",
+    "i will to determine",
+    "i will compare",
+    "i will to compare",
+    "i will answer",
+    "i will to answer",
+    "i'll look",
+    "i am going to look",
+    "i'll analyse",
+    "i am going to analyse",
+    "i'll analyze",
+    "i am going to analyze",
+    "i'll think",
+    "i am going to think",
+    "i'll check",
+    "i am going to check",
+    "i'll determine",
+    "i am going to determine",
+    "i'll compare",
+    "i am going to compare",
+    "i'll answer",
+    "i am going to answer",
+    "first i need",
+    "first, i need",
+    "first i should",
+    "first, i should",
+    "first i will",
+    "first, i will",
+    "first i'll",
+    "first, i'll",
+)
+
 
 class EmptyVisibleLLMContentError(RuntimeError):
     """Raised when a scalar chat response has no user-visible content."""
+
+
+@dataclass(frozen=True)
+class VisibleWorkNoteDetection:
+    """Classification for visible model work notes in user-facing answers.
+
+    Attributes
+    ----------
+    has_work_notes
+        Whether the visible answer starts with reasoning/process prose that
+        should not be shown as the final RAG answer.
+    marker
+        The matched leading marker, when available. The marker is safe for
+        assertions and metrics but never contains the discarded answer text.
+
+    """
+
+    has_work_notes: bool
+    marker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +284,38 @@ def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG
     if master_key:
         return {"Authorization": f"Bearer {master_key}"}
     return {}
+
+
+def _normalize_visible_work_note_prefix(answer: str) -> str:
+    """Normalize a candidate work-note prefix for partial-stream checks."""
+    normalized = answer.lower().replace("’", "'")
+    return " ".join(normalized.strip().split())
+
+
+def could_be_visible_work_note_prefix(answer: str) -> bool:
+    """Return whether partial visible text could still become a work-note marker."""
+    normalized = _normalize_visible_work_note_prefix(answer)
+    if not normalized:
+        return True
+    return any(marker.startswith(normalized) for marker in _WORK_NOTE_PREFIX_MARKERS)
+
+
+def detect_visible_work_notes(answer: str) -> VisibleWorkNoteDetection:
+    """Detect visible reasoning/process prose in a candidate final answer.
+
+    The detector is deliberately conservative: it catches common leading
+    assistant work-notes while allowing ordinary final-answer language such as
+    "The problem is..." or domain uses of "analysis".
+    """
+    match = _WORK_NOTE_MARKER_RE.search(answer)
+    if match is None:
+        match = _WORK_NOTE_PARAGRAPH_RE.search(answer)
+    if match is None:
+        return VisibleWorkNoteDetection(has_work_notes=False)
+    return VisibleWorkNoteDetection(
+        has_work_notes=True,
+        marker=" ".join(match.group(0).strip().split()).lower(),
+    )
 
 
 def strip_think_blocks(raw: str) -> str:

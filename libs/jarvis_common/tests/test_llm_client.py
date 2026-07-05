@@ -67,6 +67,56 @@ def test_build_litellm_headers_reads_key_from_file_var(monkeypatch, tmp_path):
     }
 
 
+def test_detect_visible_work_notes_flags_process_preambles():
+    """Visible-answer hygiene catches leading process prose without storing text."""
+    detection = llm_client.detect_visible_work_notes(
+        "Let me look at the papers first. The answer is unsupported."
+    )
+    contraction = llm_client.detect_visible_work_notes(
+        "I'll check the sources first. The answer is unsupported."
+    )
+
+    assert detection.has_work_notes is True
+    assert detection.marker == "let me"
+    assert contraction.has_work_notes is True
+    assert contraction.marker == "i'll check"
+
+
+def test_could_be_visible_work_note_prefix_only_holds_risky_starts():
+    """Partial-stream quarantine only holds prefixes that could become work notes."""
+    assert llm_client.could_be_visible_work_note_prefix("Let") is True
+    assert llm_client.could_be_visible_work_note_prefix("I") is True
+    assert llm_client.could_be_visible_work_note_prefix("I need t") is True
+    assert llm_client.could_be_visible_work_note_prefix("I need to comp") is True
+    assert llm_client.could_be_visible_work_note_prefix("First, I n") is True
+    assert llm_client.could_be_visible_work_note_prefix("First, I compare") is False
+    assert llm_client.could_be_visible_work_note_prefix("I compare") is False
+    assert llm_client.could_be_visible_work_note_prefix("Hello") is False
+
+
+def test_detect_visible_work_notes_flags_paragraph_preambles():
+    """Paragraph-start work notes are unsafe even after a short prefix."""
+    detection = llm_client.detect_visible_work_notes(
+        "The sources are relevant.\n\nI need to compare the papers before answering."
+    )
+
+    assert detection.has_work_notes is True
+    assert detection.marker == "i need to compare"
+
+
+def test_detect_visible_work_notes_allows_normal_final_answers():
+    """Ordinary final-answer language is not classified as work notes."""
+    safe_answers = [
+        "The problem is addressed by the control experiment in Table 2.",
+        "The analysis section reports a smaller effect size than the abstract.",
+        "I compare the papers by their reported evaluation settings.",
+    ]
+
+    assert all(
+        not llm_client.detect_visible_work_notes(answer).has_work_notes for answer in safe_answers
+    )
+
+
 def test_strip_think_blocks_removes_multiple_sections():
     """strip_think_blocks should remove all think blocks before JSON parsing."""
     raw = '<think>draft</think>\n{"step":1}\n<think>hidden</think>\n{"answer":"ok"}'

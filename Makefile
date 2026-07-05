@@ -87,7 +87,7 @@ frontend-check:
 	npm --prefix frontend ci
 	npm --prefix frontend run lint
 	npm --prefix frontend run typecheck
-	npm --prefix frontend run test -- --run
+	npm --prefix frontend run test -- --run --no-file-parallelism
 	npm --prefix frontend run build
 
 ## Run all local quality gates (mirrors CI lint-test job + frontend job).

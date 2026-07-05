@@ -8,7 +8,8 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Callable
+import re
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,8 @@ import httpx
 from jarvis_common import effective_num_ctx, get_fast_model
 from jarvis_common.llm_client import (
     build_litellm_headers,
+    could_be_visible_work_note_prefix,
+    detect_visible_work_notes,
     get_litellm_config,
     observe,
     strip_think_streaming,
@@ -55,6 +58,7 @@ __all__ = [
 _SEARCH_SCORE_THRESHOLD = 0.05
 
 _ANSWER_MAX_TOKENS = 700
+_PARAGRAPH_BOUNDARY_RE = re.compile(r"\n\s*\n")
 
 _SYSTEM_SINGLE_PAPER_RAG = "Answer using ONLY the excerpts provided. If not covered, say so."
 
@@ -651,6 +655,120 @@ async def _confidence_events(
             logger.warning("RAG verification failed: %s", exc, exc_info=True)
 
 
+class VisibleAnswerHygieneError(RuntimeError):
+    """Raised when a visible streamed answer is empty or unsafe to show."""
+
+
+def _visible_answer_error_message(full_answer: str) -> str | None:
+    """Return a retryable user message when the visible answer is not safe to show."""
+    work_notes = detect_visible_work_notes(full_answer)
+    if work_notes.has_work_notes:
+        logger.warning(
+            "RAG answer failed visible-answer hygiene marker=%s",
+            work_notes.marker,
+        )
+    if not full_answer.strip() or work_notes.has_work_notes:
+        return "The model did not return a usable final answer. Please try again."
+    return None
+
+
+def _split_visible_guard_segment(pending: str) -> tuple[str, str]:
+    """Split flushable paragraph text from the segment still needing prefix checks."""
+    matches = list(_PARAGRAPH_BOUNDARY_RE.finditer(pending))
+    if not matches:
+        return "", pending
+    boundary_end = matches[-1].end()
+    return pending[:boundary_end], pending[boundary_end:]
+
+
+def _release_safe_visible_prefix(pending: str, *, final: bool) -> tuple[str, str]:
+    """Return text safe to emit now and text that still needs prefix quarantine."""
+    flushable, guard_segment = _split_visible_guard_segment(pending)
+    if guard_segment.strip():
+        visible_answer_error = _visible_answer_error_message(guard_segment)
+        if visible_answer_error is not None:
+            raise VisibleAnswerHygieneError(visible_answer_error)
+    if final or not guard_segment or not could_be_visible_work_note_prefix(guard_segment):
+        return pending, ""
+    if flushable.strip():
+        return flushable, guard_segment
+    return "", pending
+
+
+def _visible_delta_from_line(
+    line: str,
+    *,
+    model_used: str | None,
+    in_think: bool,
+    think_carry: str,
+) -> tuple[str, str | None, bool, bool, str]:
+    """Parse one LiteLLM SSE line into visible text and updated stream state."""
+    content, chunk_model, done = _extract_delta(line)
+    if done:
+        return "", model_used, True, in_think, think_carry
+    if model_used is None:
+        model_used = chunk_model
+    if not content:
+        return "", model_used, False, in_think, think_carry
+    visible, in_think, think_carry = strip_think_streaming(content, in_think, think_carry)
+    return visible, model_used, False, in_think, think_carry
+
+
+async def _stream_validated_visible_answer_parts(
+    http_client: httpx.AsyncClient,
+    messages: list[dict],
+    *,
+    model: str,
+    answer_parts: list[str],
+) -> AsyncIterator[tuple[str, str | None]]:
+    """Yield visible deltas once their current paragraph prefix is safe to show."""
+    litellm_config = get_litellm_config()
+    pending = ""
+    model_used: str | None = None
+    in_think = False
+    think_carry = ""
+    async with http_client.stream(
+        "POST",
+        f"{litellm_config.base_url}/v1/chat/completions",
+        json={
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "temperature": 0.1,
+            "max_tokens": _ANSWER_MAX_TOKENS,
+        },
+        headers=build_litellm_headers(litellm_config),
+        timeout=300.0,  # RAG prompts with many chunks need longer prefill
+    ) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            visible, model_used, done, in_think, think_carry = _visible_delta_from_line(
+                line,
+                model_used=model_used,
+                in_think=in_think,
+                think_carry=think_carry,
+            )
+            if done:
+                break
+            if not visible:
+                continue
+            answer_parts.append(visible)
+            pending += visible
+            safe_part, pending = _release_safe_visible_prefix(pending, final=False)
+            if safe_part:
+                yield safe_part, model_used
+    if not in_think and think_carry:
+        answer_parts.append(think_carry)
+        pending += think_carry
+    visible_answer_error = _visible_answer_error_message("".join(answer_parts))
+    if visible_answer_error is not None:
+        raise VisibleAnswerHygieneError(visible_answer_error)
+    if pending:
+        safe_part, pending = _release_safe_visible_prefix(pending, final=True)
+        if safe_part:
+            yield safe_part, model_used
+
+
 @observe(as_type="generation")
 async def stream_rag_events(
     http_client: httpx.AsyncClient,
@@ -662,53 +780,33 @@ async def stream_rag_events(
     db_pool: "asyncpg.Pool | None" = None,
 ):
     """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
-    litellm_config = get_litellm_config()
-    full_answer = ""
+    answer_parts: list[str] = []
     model_used: str | None = None
-    in_think = False
-    think_carry = ""
     try:
-        async with http_client.stream(
-            "POST",
-            f"{litellm_config.base_url}/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": messages,
-                "stream": True,
-                "temperature": 0.1,
-                "max_tokens": _ANSWER_MAX_TOKENS,
-            },
-            headers=build_litellm_headers(litellm_config),
-            timeout=300.0,  # RAG prompts with many chunks need longer prefill
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                content, chunk_model, done = _extract_delta(line)
-                if done:
-                    break
-                if model_used is None:
-                    model_used = chunk_model
-                if not content:
-                    continue
-                visible, in_think, think_carry = strip_think_streaming(
-                    content, in_think, think_carry
-                )
-                if visible:
-                    full_answer += visible
-                    yield sse_event({"type": "token", "content": visible})
+        async for visible, chunk_model in _stream_validated_visible_answer_parts(
+            http_client,
+            messages,
+            model=model,
+            answer_parts=answer_parts,
+        ):
+            if model_used is None:
+                model_used = chunk_model
+            yield sse_event({"type": "token", "content": visible})
+    except VisibleAnswerHygieneError as e:
+        async for event in sse_error_stream(str(e)):
+            yield event
+        return
     except Exception as e:
         msg = _stream_error_message(e)
         logger.error("LLM streaming failed: %r", e, exc_info=True)
         async for event in sse_error_stream(msg):
             yield event
         return
-    # Flush any non-think carry buffered at the chunk boundary
-    if not in_think and think_carry:
-        full_answer += think_carry
-        yield sse_event({"type": "token", "content": think_carry})
+
+    full_answer = "".join(answer_parts)
     yield sse_event({"type": "sources", "sources": sources_list})
     yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
-    # Sentence-level verification — runs after tokens have streamed (additive latency only)
+    # Sentence-level verification runs only against the validated answer the user saw.
     async for event in _confidence_events(full_answer, sources_list, verifier, db_pool):
         yield event
     yield SSE_DONE

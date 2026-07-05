@@ -16,6 +16,7 @@ A focused maintenance release that keeps the local-first defaults unchanged whil
 - **Setup and deployment wording.** Docs emphasize `setup.sh` as the preferred install path, keep cloud keys optional, and clarify the boundary between a signed-in user’s export and the shared scholarly corpus.
 
 ### Fixed
+- **Ask answer hygiene.** Streaming Ask responses now validate the assembled visible answer before emitting sources or completion metadata. Empty or non-final model output returns a friendly retryable error instead of presenting unsupported content.
 - **Local model-route restoration.** Saved local model choices continue to route through the local Ollama backend even after an operator temporarily exercises another backend for a model alias. No model, backend, reranker, embedding, or cloud default changes in this release.
 - **SMTP configuration documentation.** Public security and residual-risk docs now match the settings behavior: explicit empty-string SMTP secrets are rejected, while intentionally unset SMTP remains supported for single-user/API-key deployments.
 - **Version metadata drift.** Package metadata, compose image fallbacks, citation metadata, roadmap wording, and the frontend lockfile are aligned for v1.0.2.
