@@ -1395,10 +1395,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#empty-string-smtp-env-vars-silently-accepted" class="md-nav__link">
+  <a href="#smtp-relay-intentionally-unset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Empty-string SMTP env vars silently accepted
+        SMTP relay intentionally unset
       
     </span>
   </a>
@@ -1912,10 +1912,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#empty-string-smtp-env-vars-silently-accepted" class="md-nav__link">
+  <a href="#smtp-relay-intentionally-unset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Empty-string SMTP env vars silently accepted
+        SMTP relay intentionally unset
       
     </span>
   </a>
@@ -2114,7 +2114,7 @@
 
 
 <h1 id="known-residual-risks">Known Residual Risks<a class="headerlink" href="#known-residual-risks" title="Permanent link">&para;</a></h1>
-<p><em>Last updated: 2026-06-27</em></p>
+<p><em>Last updated: 2026-07-05</em></p>
 <p>This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.</p>
 <p>Related docs:</p>
 <ul>
@@ -2155,12 +2155,21 @@ pass with proper ephemeral-Postgres test infra.</p>
 <h3 id="botconfigfrom_env-syncasync-split-deferred"><code>BotConfig.from_env()</code> sync/async split deferred<a class="headerlink" href="#botconfigfrom_env-syncasync-split-deferred" title="Permanent link">&para;</a></h3>
 <p><code>from_env()</code> runs its one-shot DB bot-token read via <code>asyncio.run(...)</code>. This is correct today — <code>from_env()</code> is only called from the synchronous <code>main()</code> before <code>run_polling()</code> starts the event loop, so there is no running loop to conflict with. Splitting it into a sync <code>from_env()</code> + an <code>async_from_env()</code> was scoped as a bloat-reduction but carries no current bug; deferred out of the bugs/security pass to keep its regression surface zero.</p>
 <hr />
-<h2 id="empty-string-smtp-env-vars-silently-accepted">Empty-string SMTP env vars silently accepted<a class="headerlink" href="#empty-string-smtp-env-vars-silently-accepted" title="Permanent link">&para;</a></h2>
-<p><strong>Symptom:</strong> Setting any of <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, or <code>SMTP_PASS</code> to an empty string is silently accepted by <code>SecretsSettings</code> (no Pydantic validator rejects <code>""</code>). <code>_EffectiveSmtp.deliverable</code> evaluates <code>bool("") == False</code>, so the magic-link sender falls through to the dev-mode logging path. <strong>The operator sees nothing at startup; users do not receive magic-link emails; the failure is silent.</strong></p>
-<p><strong>Impact:</strong> HIGH (operator-facing silent failure, not data loss). Affects any deployment where SMTP env vars are mis-set to <code>""</code> rather than left unset — <code>""</code> and unset have different semantics, and only unset is correctly handled.</p>
-<p><strong>Partial mitigation (UI):</strong> Settings → System → Email / SMTP now shows an amber warning banner whenever the effective mail relay is not deliverable — covering the empty-string case, a partial configuration (e.g. host set but From missing), or no relay configured at all. The form remains editable so the admin can correct the problem in place. A <strong>Save &amp; send test email</strong> button with an optional test recipient allows immediate delivery verification and surfaces the real SMTP error inline. This makes the failure visible at configuration time rather than only at sign-in time.</p>
-<p><strong>Bootstrap-window note:</strong> during the first-run wizard (before any admin account exists), the SMTP test-send endpoint is unauthenticated; the test recipient is forced to the From address so an operator can only mail themselves. Once an admin account exists, an arbitrary test recipient is accepted.</p>
-<p><strong>Remaining gap:</strong> no startup-level or save-time validator rejects empty-string values in the env-var path (<code>SecretsSettings</code>). Four <code>xfail(strict=False)</code> tests in <code>libs/jarvis_common/tests/test_secrets_settings.py</code> document the gap and will auto-green when validators are added.</p>
+<h2 id="smtp-relay-intentionally-unset">SMTP relay intentionally unset<a class="headerlink" href="#smtp-relay-intentionally-unset" title="Permanent link">&para;</a></h2>
+<p><strong>Current behavior:</strong> Explicit empty-string SMTP secret values are rejected by
+<code>SecretsSettings</code>, and the settings UI surfaces incomplete SMTP configuration
+with an amber warning plus an in-place test-send action.</p>
+<p><strong>Residual surface:</strong> An instance with SMTP intentionally unset cannot deliver
+magic-link email. Single-user installs can still use API-key login; multi-user
+operators should configure and test SMTP before inviting users.</p>
+<p><strong>Bootstrap-window note:</strong> During the first-run wizard, before any admin account
+exists, the SMTP test-send endpoint is unauthenticated; the test recipient is
+forced to the From address so an operator can only mail themselves. Once an
+admin account exists, an arbitrary test recipient is accepted.</p>
+<p><strong>Watch for:</strong> Treat it as a configuration regression if a future settings path
+accepts an explicit empty SMTP secret, if a partial SMTP configuration is
+reported as healthy, or if multi-user invite flow reports success without either
+sending email or returning a usable fallback link.</p>
 <hr />
 <h2 id="builder-stage-installs-build-without-require-hashes">Builder stage installs <code>build</code> without <code>--require-hashes</code><a class="headerlink" href="#builder-stage-installs-build-without-require-hashes" title="Permanent link">&para;</a></h2>
 <p>The Stage 1 <code>jarvis-common-builder</code> installs <code>build==1.2.2.post1</code> (and its

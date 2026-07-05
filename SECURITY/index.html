@@ -2236,8 +2236,8 @@ explicitly set in the environment. An explicit env var always wins.</p>
 </tr>
 <tr>
 <td><code>SMTP_HOST</code> / <code>SMTP_USER</code> / <code>SMTP_PASS</code></td>
-<td>SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in <a href="../known-residual-risks/">known-residual-risks.md</a>), links fall back to container stdout.</td>
-<td>Strongly recommended</td>
+<td>SMTP relay credentials for magic-link delivery. Without these, single-user installs can still use API-key login. Multi-user magic-link email is not deliverable until SMTP is configured and tested. Explicit empty-string SMTP secret values are rejected at settings load; leave fields unset when SMTP is intentionally disabled.</td>
+<td>Strongly recommended for multi-user mode</td>
 </tr>
 <tr>
 <td><code>SMTP_REPLY_TO</code></td>
