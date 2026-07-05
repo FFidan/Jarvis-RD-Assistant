@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 **Release-history note:** This changelog is retrospective. The repository remained private through the pre-v1.0.0 tags; all entries before v1.0.0 describe private development and hardening milestones.
 Wording such as "public-ready", "public-readiness", or "public-launch groundwork" in older entries means preparation for the v1.0.0 public launch, not earlier public availability.
 
+## v1.0.2 (2026-07-05) — First-hour setup clarity, account export, and release alignment
+
+A focused maintenance release that keeps the local-first defaults unchanged while improving first-run clarity, account data access, and release metadata consistency.
+
+### Changed
+- **Account data export in Settings.** Signed-in users can download their own structured account data from Settings → Account. The export is scoped to the user’s private activity and output; it is not a shared scholarly corpus export or a PDF backup.
+- **Clearer library preparation from Home.** Admin users can trigger useful library-preparation actions from Home, with job tracking for returned background work and honest feedback when no action is available.
+- **Setup and deployment wording.** Docs emphasize `setup.sh` as the preferred install path, keep cloud keys optional, and clarify the boundary between a signed-in user’s export and the shared scholarly corpus.
+
+### Fixed
+- **Local model-route restoration.** Saved local model choices continue to route through the local Ollama backend even after an operator temporarily exercises another backend for a model alias. No model, backend, reranker, embedding, or cloud default changes in this release.
+- **SMTP configuration documentation.** Public security and residual-risk docs now match the settings behavior: explicit empty-string SMTP secrets are rejected, while intentionally unset SMTP remains supported for single-user/API-key deployments.
+- **Version metadata drift.** Package metadata, compose image fallbacks, citation metadata, roadmap wording, and the frontend lockfile are aligned for v1.0.2.
+
+
 ## v1.0.1 (2026-07-03) — Maintenance: first-run reliability, security hardening, and module decomposition
 
 A maintenance release focused on first-run reliability, security hardening, and backend code structure. There are no user-facing feature changes and public API behavior is unchanged.

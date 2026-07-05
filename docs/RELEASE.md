@@ -9,7 +9,7 @@ Releases follow [Semantic Versioning](https://semver.org/): `vMAJOR.MINOR.PATCH`
 
 - `MAJOR` — breaking API or schema changes that require manual operator steps.
 - `MINOR` — new features; existing deployments can upgrade with `./update.sh`.
-- `PATCH` — bug fixes and security patches only.
+- `PATCH` — backwards-compatible fixes, security patches, release metadata updates, and maintainer-approved documentation or UX corrections that do not require API, schema, or operator migration changes.
 
 To cut a release:
 
@@ -80,11 +80,12 @@ commits since the last Git tag.
 ## Docker Image Versioning
 
 The four main services (`paper_ingestion`, `learning_engine`, `telegram_bot`,
-`dashboard`) are tagged using the `JARVIS_VERSION` environment variable
-(defaults to `1.0.0`). Set it in `.env` or `versions.env` before building:
+`dashboard`) are tagged using the `JARVIS_VERSION` environment variable. The
+compose fallback tracks the current release; set it explicitly in `.env` or
+`versions.env` before building a different version:
 
 ```bash
-JARVIS_VERSION=1.0.0
+JARVIS_VERSION=1.0.2
 docker compose build
 docker compose up -d
 ```

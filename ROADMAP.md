@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.0.1**. See [CHANGELOG.md](CHANGELOG.md) for the
+Current release: **v1.0.2**. See [CHANGELOG.md](CHANGELOG.md) for the
 maintenance changes since the v1.0.0 public baseline.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
@@ -30,8 +30,8 @@ maintenance changes since the v1.0.0 public baseline.
 - **Researcher-grade model plane + trust polish.** Per-hardware model selection
   that actually takes effect, full-coverage summaries with verified quotes, and a
   reliability/comprehensibility pass: plain-language settings (no implementation
-  jargon on screen), honest degraded states with a cause and a next step, and no
-  silent settings dead-ends.
+  jargon on screen), honest degraded states with a cause and a next step, account
+  data export from Settings, and no silent settings dead-ends.
 - **Documentation site + user guide.** A published companion site with
   operator/developer docs and an end-user manual covering install through every
   capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction
@@ -41,10 +41,9 @@ maintenance changes since the v1.0.0 public baseline.
 ## In progress
 
 - **First-hour local-first polish.** Tighten the early experience so a fresh
-  install is more honest and immediately useful: first-party assets only,
-  clearer library-preparation actions, account data export from Settings,
-  current public version wording, and an onboarding path that helps users
-  discover papers before the dashboard feels empty.
+  install is more honest and immediately useful: first-party assets only, clearer
+  library-preparation actions, current public version wording, and an onboarding
+  path that helps users discover papers before the dashboard feels empty.
 - **Local model and retrieval quality validation.** Candidate local model and
   reranking defaults are being evaluated against JARVIS-specific retrieval,
   citation, latency, and structured-output behavior before any public default

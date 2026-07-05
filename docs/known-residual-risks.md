@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-07-05_
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.
 
@@ -75,17 +75,25 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 
 ---
 
-## Empty-string SMTP env vars silently accepted
+## SMTP relay intentionally unset
 
-**Symptom:** Setting any of `SMTP_HOST`, `SMTP_FROM`, `SMTP_USER`, or `SMTP_PASS` to an empty string is silently accepted by `SecretsSettings` (no Pydantic validator rejects `""`). `_EffectiveSmtp.deliverable` evaluates `bool("") == False`, so the magic-link sender falls through to the dev-mode logging path. **The operator sees nothing at startup; users do not receive magic-link emails; the failure is silent.**
+**Current behavior:** Explicit empty-string SMTP secret values are rejected by
+`SecretsSettings`, and the settings UI surfaces incomplete SMTP configuration
+with an amber warning plus an in-place test-send action.
 
-**Impact:** HIGH (operator-facing silent failure, not data loss). Affects any deployment where SMTP env vars are mis-set to `""` rather than left unset — `""` and unset have different semantics, and only unset is correctly handled.
+**Residual surface:** An instance with SMTP intentionally unset cannot deliver
+magic-link email. Single-user installs can still use API-key login; multi-user
+operators should configure and test SMTP before inviting users.
 
-**Partial mitigation (UI):** Settings → System → Email / SMTP now shows an amber warning banner whenever the effective mail relay is not deliverable — covering the empty-string case, a partial configuration (e.g. host set but From missing), or no relay configured at all. The form remains editable so the admin can correct the problem in place. A **Save & send test email** button with an optional test recipient allows immediate delivery verification and surfaces the real SMTP error inline. This makes the failure visible at configuration time rather than only at sign-in time.
+**Bootstrap-window note:** During the first-run wizard, before any admin account
+exists, the SMTP test-send endpoint is unauthenticated; the test recipient is
+forced to the From address so an operator can only mail themselves. Once an
+admin account exists, an arbitrary test recipient is accepted.
 
-**Bootstrap-window note:** during the first-run wizard (before any admin account exists), the SMTP test-send endpoint is unauthenticated; the test recipient is forced to the From address so an operator can only mail themselves. Once an admin account exists, an arbitrary test recipient is accepted.
-
-**Remaining gap:** no startup-level or save-time validator rejects empty-string values in the env-var path (`SecretsSettings`). Four `xfail(strict=False)` tests in `libs/jarvis_common/tests/test_secrets_settings.py` document the gap and will auto-green when validators are added.
+**Watch for:** Treat it as a configuration regression if a future settings path
+accepts an explicit empty SMTP secret, if a partial SMTP configuration is
+reported as healthy, or if multi-user invite flow reports success without either
+sending email or returning a usable fallback link.
 
 ---
 
