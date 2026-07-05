@@ -67,13 +67,10 @@ maintenance changes since the v1.0.0 public baseline.
   before the broad conversational layer depends on that context.
 - **Hermes — conversational layer.** A chat-native interface over the existing
   RAG / citation / contradiction / knowledge-graph substrate: ask your library
-  questions and get cited, contradiction-aware answers. **Conditional GO** —
-  sequenced after cross-service auth hardening lands, a performance profiling
-  pass (to isolate any model fan-out regressions), and an evaluation harness
-  as the first task (canned research-question set + expected tool sequences,
-  so the interface is testable from day one). The orchestration substrate
-  (thin custom loop vs an existing framework) is an explicit spike — the
-  plan does not pre-assume any particular library. Realistic estimate ~20d.
+  questions and get cited, contradiction-aware answers. This follows the
+  library-value, learning, and project-workspace lanes so the conversation layer
+  depends on mature, inspectable context rather than becoming the first place
+  core workflows are introduced.
 - **Research-workflow expansion.** Longer-horizon exploration of systematic
   review workflows, a JARVIS MCP surface for external research tools, and
   graph-assisted retrieval over the existing citation and knowledge-graph

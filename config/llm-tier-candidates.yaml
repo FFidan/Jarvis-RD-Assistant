@@ -80,13 +80,6 @@ tiers:
         sim_vram_mb: 19320
         sim_or_native: sim
         reasoning: "Optional vLLM candidate for 16-24 GB GPUs; measure on the fixed pack before recommendation."
-      - backend: ollama
-        model: gpt-oss:20b
-        rank: 3
-        score: null
-        evidence: pending-bench
-        reasoning: "Apache-2.0 local reasoning candidate for 16 GB-plus systems; needs fixed-pack scientific RAG scores and visible-reasoning suppression before recommendation."
-
   24-48:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
@@ -132,9 +125,3 @@ tiers:
         score: null
         evidence: pending-bench
         reasoning: "Apache-2.0 non-thinking HF/vLLM refresh with long-context support; benchmark before changing defaults."
-      - backend: vllm
-        model: openai/gpt-oss-20b
-        rank: 5
-        score: null
-        evidence: pending-bench
-        reasoning: "HF/vLLM serving path for GPT-OSS 20B; requires Harmony-aware prompting and visible-reasoning suppression before user-facing use."

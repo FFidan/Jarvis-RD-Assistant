@@ -75,11 +75,7 @@ def test_pending_model_refresh_candidates_do_not_replace_ranked_defaults() -> No
     )
     assert optional_mid_vllm["backend"] == "vllm"
     assert optional_mid_vllm["evidence"] == "sim-bench"
-    gpt_oss_ollama = next(c for c in mid_tier.candidates if c["model"] == "gpt-oss:20b")
-    assert gpt_oss_ollama["backend"] == "ollama"
-    assert gpt_oss_ollama["catalog_id"] == "gpt-oss:20b"
-    assert gpt_oss_ollama["source"] == "catalog"
-    assert gpt_oss_ollama["evidence"] == "pending-bench"
+    assert all(c["model"] != "gpt-oss:20b" for c in mid_tier.candidates)
 
     high_tier = resolve_candidates_for_tier("ge-48", config_path=config_path)
     assert high_tier.recommended["backend"] == "ollama"
@@ -92,9 +88,7 @@ def test_pending_model_refresh_candidates_do_not_replace_ranked_defaults() -> No
     assert qwen_refresh["source"] == "tier-candidates"
     assert qwen_refresh["evidence"] == "pending-bench"
 
-    gpt_oss_vllm = next(c for c in high_tier.candidates if c["model"] == "openai/gpt-oss-20b")
-    assert gpt_oss_vllm["backend"] == "vllm"
-    assert gpt_oss_vllm["evidence"] == "pending-bench"
+    assert all(c["model"] != "openai/gpt-oss-20b" for c in high_tier.candidates)
 
 
 @pytest.mark.parametrize("tier", _TIERS)

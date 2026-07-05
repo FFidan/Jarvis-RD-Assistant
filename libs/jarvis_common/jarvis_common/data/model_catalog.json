@@ -102,7 +102,7 @@
     "notes": "Ollama MXFP4 tag reviewed 2026-07-04. Requires Harmony-aware prompting, user-facing reasoning suppression, and fixed-pack scientific RAG scores before recommendation.",
     "last_reviewed": "2026-07-04",
     "phase": "future",
-    "assignable": true,
+    "assignable": false,
     "min_vram_gb_at_default_ctx": 16.0,
     "kv_cache_bytes_per_token": 600000,
     "default_num_ctx": 8192,

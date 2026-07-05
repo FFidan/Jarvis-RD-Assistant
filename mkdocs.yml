@@ -65,6 +65,7 @@ validation:
 #  - archive/   historical plans, audit reports, old roadmaps (not operator docs)
 #  - plans/     in-flight implementation plans (internal working docs)
 #  - specs/     dated transition specs (not evergreen)
+#  - exec/      local execution ledgers and scratch notes
 #  - perf/      profiling snapshots
 #
 # Without this exclusion, `mkdocs build --strict` would fail because those
@@ -76,6 +77,7 @@ exclude_docs: |
   archive/
   plans/
   specs/
+  exec/
   perf/
   audit/
   personal/

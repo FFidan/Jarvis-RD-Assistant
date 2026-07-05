@@ -96,11 +96,14 @@ def test_nonassignable_catalog_entries_surface_assignment_blocker() -> None:
     embedding entry so this guard remains meaningful. Pre-2026-05-07 the
     fixture used ``qwen3-embedding:4b``; that entry was promoted to
     assignable=true when the production embed stack was upgraded.
-    ``mxbai-embed-large`` and ``openai/text-embedding-3-small`` remain
-    phase=future / assignable=false in the catalog and exercise the same code
-    path."""
+    ``mxbai-embed-large``, ``openai/text-embedding-3-small``, and
+    ``gpt-oss:20b`` remain phase=future / assignable=false in the catalog and
+    exercise the same code path."""
     statuses = build_model_statuses(
-        installed=[{"name": "mxbai-embed-large", "size": 1, "details": {}}],
+        installed=[
+            {"name": "mxbai-embed-large", "size": 1, "details": {}},
+            {"name": "gpt-oss:20b", "size": 1, "details": {}},
+        ],
         current={},
         embedding_model_name="qwen3-embedding:0.6b",
         hardware=_hardware(tier=2),
@@ -110,6 +113,8 @@ def test_nonassignable_catalog_entries_surface_assignment_blocker() -> None:
 
     assert by_id["mxbai-embed-large"]["status"] == "pulled"
     assert by_id["mxbai-embed-large"]["can_assign"] is False
+    assert by_id["gpt-oss:20b"]["status"] == "pulled"
+    assert by_id["gpt-oss:20b"]["can_assign"] is False
     assert by_id["openai/text-embedding-3-small"]["can_assign"] is False
 
 

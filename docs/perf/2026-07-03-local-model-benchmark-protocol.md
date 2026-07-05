@@ -1,15 +1,14 @@
 # Local Model and Scientific RAG Benchmark Protocol
 
 **Date:** 2026-07-03
-**Status:** initialized; route smoke only; no scientific RAG benchmark results yet
+**Status:** maintained protocol; July 2026 evidence run completed separately; no default promoted
 **Scope:** local-first model, backend, reranker, and embedding validation for
 JARVIS scientific-paper RAG.
 
-This document defines the checked-in protocol for the model evidence gate. It is not a
-benchmark result report and it does not promote a model, backend, reranker, or
-embedding default. The full scientific RAG benchmark still has to run over the
-fixed paper/question pack with reproducible answer rows, source-backed scoring,
-and clear promote/defer/reject decisions.
+This document defines the checked-in protocol for the model evidence gate. Result
+reports are separate evidence records and are not added to public site navigation
+by default. A result report does not promote a model, backend, reranker, or
+embedding default unless its decision section explicitly says so.
 
 `docs/perf/` is excluded from the rendered MkDocs site. The protocol and fixed
 eval inputs are versioned in the repository so future benchmark results can be
@@ -18,8 +17,8 @@ belong under ignored `artifacts/perf/<run-id>/`.
 
 ## Current Decision
 
-No default changes are made by this protocol PR. The fixed manifest and harness
-exist so a later benchmark run can compare the current baseline against
+No default changes are made by this protocol. The fixed manifest and harness
+exist so benchmark runs can compare the current baseline against
 candidate local models, serving backends, rerankers, and embedding/retrieval
 choices before any default is changed.
 
@@ -36,13 +35,13 @@ stored at `artifacts/perf/2026-07-03-litellm-smoke/runtime_smoke.json`
 | current-fast-local | all | current route baseline | route smoke returned reasoning-like visible prefix | fix or configure hidden-reasoning suppression, then run the fixed RAG pack |
 | current-smart-local | configured hardware | current route baseline | route smoke returned exact `OK` | run the fixed RAG pack before any promotion claim |
 | current-smart-fallback-local | configured fallback | current route baseline | route smoke returned reasoning-like visible prefix | fix or configure hidden-reasoning suppression, then run the fixed RAG pack |
-| qwen3:30b-a3b | high-vram local | existing local candidate | not benchmarked in this protocol PR | measure quality, grounding, latency, and VRAM on the fixed pack |
-| Qwen3-30B-A3B-Instruct-2507 | high-vram local candidate | external candidate to evaluate | not benchmarked in this protocol PR | install/configure locally, then measure the fixed pack |
+| qwen3:30b-a3b | high-vram local | existing local candidate | not covered by the protocol initialization | measure quality, grounding, latency, and VRAM on the fixed pack |
+| Qwen3-30B-A3B-Instruct-2507 | high-vram local candidate | external candidate to evaluate | not covered by the protocol initialization | install/configure locally, then measure the fixed pack |
 | gpt-oss:20b | 16GB-plus compatibility candidate | external candidate to evaluate | not benchmarked; Harmony and visible-reasoning handling required | prove user-visible answer suppression before scientific scoring |
-| reranker-off | all baseline | retrieval ablation | not benchmarked in this protocol PR | run as a fixed baseline for reranker comparison |
-| Qwen3-Reranker-0.6B | optional reranker candidate | low-cost reranker candidate | not benchmarked in this protocol PR | measure cold start, memory, top-k latency, and grounding deltas |
-| Qwen3-Reranker-4B | high-vram reranker candidate | stronger reranker candidate | not benchmarked in this protocol PR | measure cold start, memory, top-k latency, and grounding deltas |
-| vLLM backend behind LiteLLM alias | operator/high-vram serving candidate | serving backend comparison | not benchmarked in this protocol PR | compare latency, structured output, and route stability behind the same alias |
+| reranker-off | all baseline | retrieval ablation | not covered by the protocol initialization | run as a fixed baseline for reranker comparison |
+| Qwen3-Reranker-0.6B | optional reranker candidate | low-cost reranker candidate | not covered by the protocol initialization | measure cold start, memory, top-k latency, and grounding deltas |
+| Qwen3-Reranker-4B | high-vram reranker candidate | stronger reranker candidate | not covered by the protocol initialization | measure cold start, memory, top-k latency, and grounding deltas |
+| vLLM backend behind LiteLLM alias | operator/high-vram serving candidate | serving backend comparison | not covered by the protocol initialization | compare latency, structured output, and route stability behind the same alias |
 | BGE-M3 embedding/retrieval | reembed-plan-only candidate | retrieval/indexing candidate | not benchmarked; adoption needs reindex planning | create Qdrant snapshot/reembed plan before quality comparison |
 
 ## Local Runtime Smoke on 2026-07-03
@@ -87,12 +86,12 @@ The harness now separates three phases:
    explicit paper-id list.
 3. `--answers-jsonl` aggregates only complete judge-reviewed rows with real
    score objects, exact fixed-question coverage, non-empty source/citation
-   evidence, numeric latency/VRAM metadata, and fixed-pack scope markers for
+   evidence, numeric latency/VRAM metadata, and evaluation-scope markers for
    library-wide questions.
 
-The capture phase requires an explicit paper map from stable `paper_key` values
-to local database paper ids. That map, cookies, raw answers, local logs, and
-reviewer notes are operator artifacts and must not be committed. Reranker,
+The capture phase requires a local mapping from stable `paper_key` values
+to deployment-specific paper identifiers. Raw responses, local runtime logs, and
+review notes are run artifacts and must not be committed. Reranker,
 backend, and model candidates should be measured behind existing aliases or
 explicit temporary overrides, then rolled back before normal product use.
 

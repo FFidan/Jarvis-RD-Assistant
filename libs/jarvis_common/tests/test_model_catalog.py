@@ -29,7 +29,7 @@ def test_gpt_oss_is_pullable_but_not_a_default() -> None:
     assert entry.provider == "ollama"
     assert entry.ollama_tag == "gpt-oss:20b"
     assert entry.phase == "future"
-    assert entry.assignable is True
+    assert entry.assignable is False
     assert entry.supports_thinking is True
     assert entry.min_vram_gb_at_default_ctx == 16.0
 

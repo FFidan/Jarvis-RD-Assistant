@@ -1,16 +1,16 @@
 # Scientific RAG Local Model Benchmark Results
 
 **Date:** 2026-07-05
-**Status:** internal evidence gate; no default model, backend, reranker, or embedding setting promoted
+**Status:** reproducibility evidence; no default model, backend, reranker, or embedding setting promoted
 **Scope:** product RAG route over the fixed 10-paper / 25-question scientific question pack.
 
 ## Decision
 
 No local model is promoted as the default smart model from this run.
 
-The fixed-pack rerun produced useful evidence, but every judged candidate still
-has promotion blockers. Runtime failures are kept separate from scientific answer
-quality: candidates with HTTP failures, empty visible answers, or visible
+The fixed evaluation run produced useful evidence, but every judged candidate
+still has promotion blockers. Runtime failures are kept separate from scientific
+answer quality: candidates with HTTP failures, empty visible answers, or visible
 reasoning/control-token leakage were not judged as scientific-quality rows.
 
 `vllm:Qwen/Qwen3-8B-AWQ` was the strongest judged row set in this pass, but it
@@ -26,17 +26,16 @@ the raw product-route gate, but it also remains below the promotion bar.
   cross-paper, quantitative, reproducibility, limitation, and unanswerable
   cases.
 - Capture path: the normal product RAG API through the product `smart` route.
-- Backend comparison: Ollama and benchmark-only vLLM routes were both exercised
+- Backend comparison: Ollama and evaluation vLLM routes were both exercised
   through the product LiteLLM boundary; vLLM was not made a default.
-- Judging: executor-reviewed against the checked-in answer key and returned
-  source evidence, followed by an adversarial reproducibility review.
-- Raw answers, local paper ids, cookies, route snapshots, long source excerpts,
-  review notes, and GPU monitor CSVs remain under ignored `artifacts/perf/`.
+- Judging: reviewed against the checked-in answer key and returned source
+  evidence, followed by a reproducibility review.
+- Raw run artifacts, long source excerpts, review notes, and GPU monitor CSVs
+  remain under ignored `artifacts/perf/`.
 
-Benchmark captures were run from the branch revision recorded in the generated
-summary. A later route-restoration fix in the same PR prevents known Ollama
-catalog models from inheriting a temporary vLLM API base after benchmark routing;
-it does not change the captured answer rows.
+The captured answer rows are preserved as-run. The later route-restoration fix
+prevents known Ollama catalog models from inheriting an evaluation vLLM API base
+after benchmark routing; it does not change the captured answers.
 
 ## Reproducibility Hashes
 
@@ -46,11 +45,11 @@ it does not change the captured answer rows.
 | answer key | `abbf3a1c641f857c838efd53d0626bc015e6d54bfe39a29129ac67e1a0d5e8df` |
 | judged rows | `c359e1a5914c5b96b31428625d847ab9c5ae1221e787d76568bbacc0cba78d2d` |
 
-## Judged Fixed-Pack Candidates
+## Judged Fixed Evaluation Candidates
 
 These rows passed the raw product-route gate before judging: 25 HTTP 200 rows,
 non-empty visible answers, no visible hidden-reasoning/control-token leakage,
-numeric latency, numeric VRAM, and fixed-pack scope markers.
+numeric latency, numeric VRAM, and evaluation-scope markers.
 
 | candidate | quality | grounding | wrong-paper rows | empty rows | visible reasoning leaks | p95 latency ms | peak VRAM MB | decision |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -99,11 +98,11 @@ tier.
 ## Follow-Up
 
 1. Keep local-first defaults unchanged for v1.0.2.
-2. Fix route/runtime hard gates before spending more effort on public benchmark
-   presentation.
+2. Fix route/runtime hard gates before spending more effort on benchmark
+   publication.
 3. Treat vLLM Qwen3 8B/14B AWQ as measured backend candidates, not product
    defaults.
 4. Keep BGE-M3, reranker ablations, and re-embedding work as separate plans with
    Qdrant snapshot and rollback requirements.
-5. Do not add a public MkDocs/GH Pages benchmark link until a maintainer approves
-   publication wording and independently reviews the judged rows.
+5. Do not add public-site benchmark links until the judged rows and
+   publication wording have a separate review.

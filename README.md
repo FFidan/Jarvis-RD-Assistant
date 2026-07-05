@@ -86,7 +86,7 @@ Runs on your own hardware with Ollama, with optional cloud-model access through 
 ### Design choices
 
 - **Evidence grounding and verification.** Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.
-- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/perf/2026-05-22-llm-tier-bench.md) for model recommendations.
+- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. Model recommendations are surfaced in Settings based on the detected hardware tier.
 - **Hybrid search.** BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.
 
 ## Architecture
@@ -237,7 +237,7 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.
 - [docs/PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) — product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — non-functional requirements and technical constraints.
-- [docs/perf/](https://github.com/FFidan/Jarvis-RD-Assistant/tree/main/docs/perf) — empirical model recommendations per hardware tier.
+- [docs/METHODS_AND_LIMITATIONS.md](docs/METHODS_AND_LIMITATIONS.md) — verification meaning, privacy boundaries, and evaluation limits.
 - [CHANGELOG.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CHANGELOG.md) — release notes per version.
 
 ## Methods and limitations
