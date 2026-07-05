@@ -93,6 +93,7 @@ async def test_export_returns_zip_of_caller_data() -> None:
 
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == ('attachment; filename="jarvis-data-export.zip"')
     body = resp.content
 
     with zipfile.ZipFile(io.BytesIO(body)) as zf:

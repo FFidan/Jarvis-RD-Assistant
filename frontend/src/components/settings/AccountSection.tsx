@@ -14,12 +14,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useSearchParams } from 'react-router-dom';
-import { fetchAccount, updateAccount, confirmEmailChange } from '@/lib/api';
+import { fetchAccount, updateAccount, confirmEmailChange, downloadMyData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
-import { Pencil, Check, X, User, Mail, ShieldCheck } from 'lucide-react';
+import { Pencil, Check, X, User, Mail, ShieldCheck, Download } from 'lucide-react';
 import { errorMessage } from '@/lib/errors';
 import type { AccountResponse } from '@/types';
 
@@ -326,6 +326,52 @@ function EmailRow({ account }: { account: AccountResponse }) {
 }
 
 // ---------------------------------------------------------------------------
+// Account data export
+// ---------------------------------------------------------------------------
+
+function AccountDataExportCard() {
+  const [downloadStarted, setDownloadStarted] = useState(false);
+
+  const mut = useMutation({
+    mutationFn: downloadMyData,
+    onSuccess: () => {
+      setDownloadStarted(true);
+    },
+  });
+
+  const startDownload = () => {
+    setDownloadStarted(false);
+    mut.mutate();
+  };
+
+  return (
+    <Card className="rounded-md border-hair shadow-none">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Download className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-semibold">Account data export</span>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Download a ZIP of your account data, including papers saved to your library and your
+          private workspace records.
+        </p>
+        <Button size="sm" variant="outline" onClick={startDownload} disabled={mut.isPending}>
+          {mut.isPending ? 'Preparing download…' : 'Download my data'}
+        </Button>
+        {downloadStarted && (
+          <p className="text-xs text-[hsl(var(--status-ok))]">Download started.</p>
+        )}
+        {mut.isError && (
+          <p className="text-xs text-destructive" role="alert">
+            Account data export could not be downloaded. Please try again.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AccountSection — public export
 // ---------------------------------------------------------------------------
 
@@ -377,6 +423,8 @@ export function AccountSection() {
           </div>
         </CardContent>
       </Card>
+
+      <AccountDataExportCard />
 
       {/* Metadata card */}
       <Card className="rounded-md border-hair shadow-none">

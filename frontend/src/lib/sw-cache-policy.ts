@@ -77,6 +77,7 @@ const DENYLIST: RegExp[] = [
   /\/stream\b/,
   /\/api\/jobs\/[^/]+\/stream\b/,
   // Exports / file downloads / raw assets — not part of read mode
+  /\/api\/me\/export\b/,
   /\/api\/export\//,
   /\/api\/download-pdf\//,
   /\/api\/upload-pdf\b/,

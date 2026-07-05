@@ -5,6 +5,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HomePage } from '@/pages/HomePage';
 import { useUIStore } from '@/stores/ui-store';
+import { useAuthStore } from '@/stores/auth-store';
+
+const { trackExternalJobMock } = vi.hoisted(() => ({
+  trackExternalJobMock: vi.fn(),
+}));
+
+vi.mock('@/stores/job-store', () => ({
+  useJobStore: (selector: (state: { trackExternalJob: typeof trackExternalJobMock }) => unknown) =>
+    selector({ trackExternalJob: trackExternalJobMock }),
+}));
 
 // Mock the api module
 vi.mock('@/lib/api', () => ({
@@ -53,6 +63,12 @@ const mockMetrics = {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    trackExternalJobMock.mockReset();
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 1, email: 'user@example.com', role: 'user' },
+      authTime: Date.now(),
+    });
   });
 
   it('renders the dashboard heading', () => {
@@ -140,14 +156,22 @@ describe('HomePage', () => {
       vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     });
 
+    it('describes preparation without claiming one action downloads, processes, and summarizes', async () => {
+      renderHomePage();
+      expect(await screen.findByText('Prepare library')).toBeInTheDocument();
+      expect(screen.getByText(/Queue PDF processing and summaries/i)).toBeInTheDocument();
+      expect(screen.queryByText('Analyze all new papers')).not.toBeInTheDocument();
+      expect(screen.queryByText(/downloads, processes, and summarizes each one/i)).not.toBeInTheDocument();
+    });
+
     it('does not call batchProcessPapers when user cancels confirmation', async () => {
       renderHomePage();
-      const button = screen.getByRole('button', { name: /Analyze all new papers/i });
+      const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
-      expect(screen.getByText('Analyze all new papers?')).toBeInTheDocument();
+      expect(screen.getByText('Process library PDFs?')).toBeInTheDocument();
       expect(
         screen.getByText(
-          'This will analyze all new papers in your library. This may take several minutes and costs LLM tokens. Continue?',
+          'This will queue PDF text extraction for papers that already have local PDFs. Continue?',
         ),
       ).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
@@ -157,21 +181,36 @@ describe('HomePage', () => {
     it('calls batchProcessPapers when user confirms', async () => {
       vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 5, skipped_missing_pdf: 0, job_id: 'job-123' });
       renderHomePage();
-      const button = screen.getByRole('button', { name: /Analyze all new papers/i });
+      const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
-      expect(screen.getByText('Analyze all new papers?')).toBeInTheDocument();
+      expect(screen.getByText('Process library PDFs?')).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
     });
 
-    it('shows queued count after analyze completes', async () => {
+    it('tracks the batch process job when the backend returns a job id', async () => {
       vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 5, skipped_missing_pdf: 0, job_id: 'job-123' });
       renderHomePage();
-      const button = screen.getByRole('button', { name: /Analyze all new papers/i });
+      const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
-      expect(await screen.findByText('Queued 5 papers')).toBeInTheDocument();
+      expect(await screen.findByText('Queued 5 PDFs')).toBeInTheDocument();
+      expect(trackExternalJobMock).toHaveBeenCalledWith({
+        jobId: 'job-123',
+        kind: 'papers.batch_process',
+        payload: { limit: 10 },
+        status: 'queued',
+      });
+    });
+
+    it('does not track a batch process job when nothing is queued', async () => {
+      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 0, total_unprocessed: 0, skipped_missing_pdf: 0, job_id: null });
+      renderHomePage();
+      await userEvent.click(screen.getByRole('button', { name: /Process PDFs/i }));
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      expect(await screen.findByText('No PDFs to process')).toBeInTheDocument();
+      expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
   });
 
@@ -182,45 +221,68 @@ describe('HomePage', () => {
 
     it('sub-step buttons are absent when disclosure is collapsed', async () => {
       renderHomePage();
-      expect(await screen.findByText('Analyze all new papers')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Process PDFs/i })).toBeNull();
+      expect(await screen.findByText('Prepare library')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Summarize/i })).toBeNull();
       expect(screen.queryByRole('button', { name: /Extract Entities/i })).toBeNull();
     });
 
-    it('expanding disclosure reveals all three sub-step buttons', async () => {
+    it('expanding disclosure reveals summarization but not admin-only extraction for regular users', async () => {
       renderHomePage();
-      await screen.findByText('Analyze all new papers');
+      await screen.findByText('Prepare library');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
-      expect(screen.getByRole('button', { name: /Process PDFs/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Summarize/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Extract Entities/i })).toBeNull();
+      expect(screen.getByText(/Entity extraction is available to administrators/i)).toBeInTheDocument();
+    });
+
+    it('expanding disclosure reveals entity extraction for admins', async () => {
+      useAuthStore.setState({
+        isAuthenticated: true,
+        user: { id: 1, email: 'admin@example.com', role: 'admin' },
+        authTime: Date.now(),
+      });
+      renderHomePage();
+      await screen.findByText('Prepare library');
+      await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       expect(screen.getByRole('button', { name: /Extract Entities/i })).toBeInTheDocument();
     });
 
-    it('Process PDFs calls batchProcessPapers after confirm', async () => {
-      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 2, total_unprocessed: 2, skipped_missing_pdf: 0, job_id: null });
+    it('Summarize tracks the returned durable job id', async () => {
+      vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 3, job_id: 'job-sum' });
       renderHomePage();
-      await screen.findByText('Analyze all new papers');
-      await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
-      await userEvent.click(screen.getByRole('button', { name: /Process PDFs/i }));
-      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
-      await waitFor(() => expect(batchProcessPapers).toHaveBeenCalled());
-    });
-
-    it('Summarize calls batchSummarizePapers after confirm', async () => {
-      vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 3, job_id: null });
-      renderHomePage();
-      await screen.findByText('Analyze all new papers');
+      await screen.findByText('Prepare library');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       await userEvent.click(screen.getByRole('button', { name: /Summarize/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchSummarizePapers).toHaveBeenCalled());
+      expect(trackExternalJobMock).toHaveBeenCalledWith({
+        jobId: 'job-sum',
+        kind: 'papers.batch_summarize',
+        payload: { limit: 10 },
+        status: 'queued',
+      });
+    });
+
+    it('Summarize does not track a job when nothing is queued', async () => {
+      vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 0, job_id: null });
+      renderHomePage();
+      await screen.findByText('Prepare library');
+      await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
+      await userEvent.click(screen.getByRole('button', { name: /Summarize/i }));
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      expect(await screen.findByText('No summaries to queue')).toBeInTheDocument();
+      expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
 
     it('Extract Entities calls batchExtractEntities after confirm', async () => {
+      useAuthStore.setState({
+        isAuthenticated: true,
+        user: { id: 1, email: 'admin@example.com', role: 'admin' },
+        authTime: Date.now(),
+      });
       vi.mocked(batchExtractEntities).mockResolvedValue({ extracted: 4, failed: 0, total: 4 });
       renderHomePage();
-      await screen.findByText('Analyze all new papers');
+      await screen.findByText('Prepare library');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       await userEvent.click(screen.getByRole('button', { name: /Extract Entities/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));

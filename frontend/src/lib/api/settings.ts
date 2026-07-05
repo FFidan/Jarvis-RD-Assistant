@@ -1,7 +1,7 @@
 // Settings & configuration: topics, sources, tracked authors, config,
 // setup/pairing, first-run wizard, Telegram, nudges, extraction templates,
 // SMTP relay, per-source credentials, cloud LLM providers, access mode.
-import { apiFetch } from './core';
+import { apiFetch, apiFetchRaw, triggerBlobDownload } from './core';
 import type {
   Topic,
   SourceConfig,
@@ -56,6 +56,15 @@ export const autoDetectAuthors = () =>
   apiFetch<{ added: number; already_tracked: number }>('/api/authors/auto-detect', { method: 'POST' });
 export const checkTrackedAuthors = () =>
   apiFetch<{ new_papers: number; authors_checked: number }>('/api/authors/check', { method: 'POST' });
+
+// --- Account data export ---
+const ACCOUNT_EXPORT_FILENAME = 'jarvis-data-export.zip';
+
+export async function downloadMyData(): Promise<void> {
+  const res = await apiFetchRaw('/api/me/export');
+  const blob = await res.blob();
+  triggerBlobDownload(blob, ACCOUNT_EXPORT_FILENAME);
+}
 
 // --- Settings / Config ---
 export const fetchConfig = () => apiFetch<ConfigEntry[]>('/api/config');

@@ -38,6 +38,7 @@ describe('@/lib/api barrel export parity', () => {
     'setConfig',
     'getProviderStatuses',
     'saveSetupMode',
+    'downloadMyData',
     // analytics
     'fetchAnalyticsSummary',
     'fetchContradictions',

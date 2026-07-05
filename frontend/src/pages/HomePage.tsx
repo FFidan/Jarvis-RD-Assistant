@@ -4,7 +4,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
 import {
   CheckCircle2, Circle, ArrowRight, X,
-  Wand2, Loader2, ChevronDown, ChevronRight, Cog, FileText, Sparkles,
+  Loader2, ChevronDown, ChevronRight, Cog, FileText, Sparkles,
 } from 'lucide-react';
 import { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } from '@/lib/api';
 import { MetricTileGrid } from '@/components/home/MetricTileGrid';
@@ -15,6 +15,8 @@ import { errorMessage } from '@/lib/errors';
 import { SetupBanner } from '@/components/setup/SetupBanner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useConfirm } from '@/hooks/use-confirm';
+import { useJobStore } from '@/stores/job-store';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface BatchButtonProps<T> {
   label: string;
@@ -23,6 +25,7 @@ interface BatchButtonProps<T> {
   formatResult: (data: T) => string;
   confirmMessage?: string;
   confirmTitle?: string;
+  onSuccessResult?: (data: T) => void;
 }
 
 function BatchButton<T>({
@@ -32,12 +35,14 @@ function BatchButton<T>({
   formatResult,
   confirmMessage,
   confirmTitle,
+  onSuccessResult,
 }: BatchButtonProps<T>) {
   const queryClient = useQueryClient();
   const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
   const mutation = useMutation({
     mutationFn,
-    onSuccess: () => {
+    onSuccess: (data) => {
+      onSuccessResult?.(data);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboard.metrics() });
     },
   });
@@ -89,8 +94,14 @@ function BatchButton<T>({
   );
 }
 
+const BATCH_LIMIT = 10;
+
+type BatchJobResponse = { job_id: string | null };
+
 export function HomePage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const trackExternalJob = useJobStore((s) => s.trackExternalJob);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const { data: metrics, isLoading, isError, isSuccess } = useQuery({
     queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
@@ -106,6 +117,15 @@ export function HomePage() {
   const hasProcessedPapers = hasPapers && stage === 'complete';
 
   const showChecklist = !checklistDismissed && metrics?.onboarding_stage !== 'complete' && isSuccess;
+  const trackBatchJob = (data: BatchJobResponse, kind: string) => {
+    if (data.job_id == null) return;
+    trackExternalJob({
+      jobId: data.job_id,
+      kind,
+      payload: { limit: BATCH_LIMIT },
+      status: 'queued',
+    });
+  };
 
   // One-time onboarding-complete celebration. Visibility is latched into local
   // state BEFORE the persisted flag flips: marking celebrated immediately makes
@@ -210,19 +230,21 @@ export function HomePage() {
 
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
-          <CardTitle className="text-lg">Batch Operations</CardTitle>
+          <CardTitle className="text-lg">Prepare library</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-muted-foreground">
-            Analyze unprocessed papers in bulk — downloads, processes, and summarizes each one.
+            Queue PDF processing and summaries for papers that are already in your library. New
+            jobs appear in the jobs panel while they run.
           </p>
           <BatchButton
-            label="Analyze all new papers"
-            icon={Wand2}
-            mutationFn={batchProcessPapers}
-            formatResult={(d) => `Queued ${d.queued} papers`}
-            confirmMessage="This will analyze all new papers in your library. This may take several minutes and costs LLM tokens. Continue?"
-            confirmTitle="Analyze all new papers?"
+            label="Process PDFs"
+            icon={Cog}
+            mutationFn={() => batchProcessPapers(BATCH_LIMIT)}
+            formatResult={(d) => (d.job_id ? `Queued ${d.queued} PDFs` : 'No PDFs to process')}
+            onSuccessResult={(d) => trackBatchJob(d, 'papers.batch_process')}
+            confirmMessage="This will queue PDF text extraction for papers that already have local PDFs. Continue?"
+            confirmTitle="Process library PDFs?"
           />
           <div className="mt-4">
             <button
@@ -242,26 +264,28 @@ export function HomePage() {
             {advancedOpen && (
               <div id="batch-advanced" className="mt-3 flex flex-wrap gap-3">
                 <BatchButton
-                  label="Process PDFs"
-                  icon={Cog}
-                  mutationFn={batchProcessPapers}
-                  formatResult={(d) => `Queued ${d.queued} papers`}
-                  confirmMessage="This will process PDFs for all papers in your library. This may take several minutes. Continue?"
-                />
-                <BatchButton
                   label="Summarize"
                   icon={FileText}
-                  mutationFn={batchSummarizePapers}
-                  formatResult={(d) => `Queued ${d.total_unsummarized} papers`}
-                  confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
+                  mutationFn={() => batchSummarizePapers(BATCH_LIMIT)}
+                  formatResult={(d) => (
+                    d.job_id ? `Queued ${d.total_unsummarized} summaries` : 'No summaries to queue'
+                  )}
+                  onSuccessResult={(d) => trackBatchJob(d, 'papers.batch_summarize')}
+                  confirmMessage="This will queue summaries for processed papers that do not have summaries yet. Continue?"
                 />
-                <BatchButton
-                  label="Extract Entities"
-                  icon={Sparkles}
-                  mutationFn={batchExtractEntities}
-                  formatResult={(d) => `Extracted ${d.extracted} papers`}
-                  confirmMessage="This will extract entities from all papers. This costs LLM tokens. Continue?"
-                />
+                {isAdmin ? (
+                  <BatchButton
+                    label="Extract Entities"
+                    icon={Sparkles}
+                    mutationFn={batchExtractEntities}
+                    formatResult={(d) => `Extracted ${d.extracted} papers`}
+                    confirmMessage="This will extract entities from all summarized papers. Continue?"
+                  />
+                ) : (
+                  <p className="basis-full text-xs text-muted-foreground">
+                    Entity extraction is available to administrators after papers are summarized.
+                  </p>
+                )}
               </div>
             )}
           </div>

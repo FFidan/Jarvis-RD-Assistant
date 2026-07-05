@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-06 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-07-05 | routes: /settings, /settings?section=&item= -->
 
 # Settings
 
@@ -19,6 +19,10 @@ Available to **all users**.
 ### Profile & Email
 
 Edit your display name and email address. Changing your email triggers a verification flow to confirm the new address before it takes effect.
+
+### Account data export
+
+Download a ZIP of your own account data from the Account section. The export is scoped to the signed-in user and includes structured account records; it is not a shared corpus export or a PDF backup.
 
 ### Appearance
 

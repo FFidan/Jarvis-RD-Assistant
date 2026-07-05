@@ -60,6 +60,7 @@ const DENYLIST = [
   /\/api\/contradictions\b/,
   /\/stream\b/,
   /\/api\/jobs\/[^/]+\/stream\b/,
+  /\/api\/me\/export\b/,
   /\/api\/export\//,
   /\/api\/download-pdf\//,
   /\/api\/upload-pdf\b/,

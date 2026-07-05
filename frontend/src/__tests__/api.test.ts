@@ -6,6 +6,8 @@ import {
   fetchContradictions,
   fetchSystemModels,
   fetchStackHealth,
+  batchProcessPapers,
+  downloadMyData,
   promoteZoteroNote,
   scanContradictions,
   scanPaperContradictions,
@@ -299,6 +301,77 @@ describe('apiFetch', () => {
     const url = _calls[_calls.length - 1]?.[0];
     expect(url).toEqual(expect.stringContaining('source_types=arxiv'));
     expect(url).toEqual(expect.stringContaining('topic_id=7'));
+  });
+
+  it('sends batch-process limit as a query parameter', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ queued: 0, total_unprocessed: 0, skipped_missing_pdf: 0, job_id: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await batchProcessPapers(7);
+
+    const calls = vi.mocked(globalThis.fetch).mock.calls;
+    const [url, init] = calls[calls.length - 1] ?? [];
+    expect(url).toBe('/api/papers/batch-process?limit=7');
+    expect(init).toEqual(expect.objectContaining({ method: 'POST' }));
+    expect((init as RequestInit).body).toBeUndefined();
+  });
+});
+
+
+describe('downloadMyData', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('downloads the authenticated account export from /api/me/export', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const createUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:account-export');
+    const revokeUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const createElementSpy = vi.spyOn(document, 'createElement');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('zip', {
+        status: 200,
+        headers: { 'Content-Disposition': 'attachment; filename="jarvis-data-export.zip"' },
+      }),
+    );
+
+    await downloadMyData();
+
+    const anchor = createElementSpy.mock.results
+      .map((result) => result.value)
+      .find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/me/export',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(anchor?.download).toBe('jarvis-data-export.zip');
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(createUrlSpy).toHaveBeenCalledTimes(1);
+    expect(revokeUrlSpy).toHaveBeenCalledWith('blob:account-export');
+  });
+
+  it('uses a neutral filename if a stale server header contains a user id', async () => {
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:account-export');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const createElementSpy = vi.spyOn(document, 'createElement');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('zip', {
+        status: 200,
+        headers: { 'Content-Disposition': 'attachment; filename="jarvis-export-user-42.zip"' },
+      }),
+    );
+
+    await downloadMyData();
+
+    const anchor = createElementSpy.mock.results
+      .map((result) => result.value)
+      .find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
+    expect(anchor?.download).toBe('jarvis-data-export.zip');
   });
 });
 

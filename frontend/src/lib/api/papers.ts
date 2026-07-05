@@ -356,10 +356,10 @@ export async function uploadPdf(file: File, title: string): Promise<{ id: number
 }
 
 export const batchProcessPapers = (limit?: number) =>
-  apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number; job_id: string | null }>('/api/papers/batch-process', {
-    method: 'POST',
-    body: JSON.stringify({ limit: limit || 10 }),
-  });
+  apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number; job_id: string | null }>(
+    `/api/papers/batch-process?limit=${limit || 10}`,
+    { method: 'POST' },
+  );
 
 
 export const batchSummarizePapers = (limit?: number) =>

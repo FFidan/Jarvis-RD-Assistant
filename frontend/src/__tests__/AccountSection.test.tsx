@@ -22,11 +22,13 @@ import { AccountSection } from '@/components/settings/AccountSection';
 const mockFetchAccount = vi.fn();
 const mockUpdateAccount = vi.fn();
 const mockConfirmEmailChange = vi.fn();
+const mockDownloadMyData = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   fetchAccount: (...args: unknown[]) => mockFetchAccount(...args),
   updateAccount: (...args: unknown[]) => mockUpdateAccount(...args),
   confirmEmailChange: (...args: unknown[]) => mockConfirmEmailChange(...args),
+  downloadMyData: (...args: unknown[]) => mockDownloadMyData(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ describe('AccountSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetchAccount.mockResolvedValue(ACCOUNT);
+    mockDownloadMyData.mockResolvedValue(undefined);
   });
 
   // --- Profile render ---
@@ -245,5 +248,28 @@ describe('AccountSection', () => {
     renderAccountSection();
     await waitFor(() => screen.getByTestId('display-name-value'));
     expect(mockConfirmEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('downloads the authenticated user account data export', async () => {
+    const user = userEvent.setup();
+    renderAccountSection();
+    await waitFor(() => screen.getByTestId('display-name-value'));
+
+    await user.click(screen.getByRole('button', { name: /download my data/i }));
+
+    await waitFor(() => expect(mockDownloadMyData).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/Download started/i)).toBeInTheDocument();
+  });
+
+  it('shows an error when account data export fails', async () => {
+    const user = userEvent.setup();
+    mockDownloadMyData.mockRejectedValue(new Error('Export unavailable'));
+    renderAccountSection();
+    await waitFor(() => screen.getByTestId('display-name-value'));
+
+    await user.click(screen.getByRole('button', { name: /download my data/i }));
+
+    expect(await screen.findByText(/Account data export could not be downloaded/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Export unavailable/i)).not.toBeInTheDocument();
   });
 });

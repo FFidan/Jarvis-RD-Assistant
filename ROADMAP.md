@@ -42,9 +42,9 @@ maintenance changes since the v1.0.0 public baseline.
 
 - **First-hour local-first polish.** Tighten the early experience so a fresh
   install is more honest and immediately useful: first-party assets only,
-  clearer library-processing actions, current public version wording, and an
-  onboarding path that helps users discover papers before the dashboard feels
-  empty.
+  clearer library-preparation actions, account data export from Settings,
+  current public version wording, and an onboarding path that helps users
+  discover papers before the dashboard feels empty.
 - **Local model and retrieval quality validation.** Candidate local model and
   reranking defaults are being evaluated against JARVIS-specific retrieval,
   citation, latency, and structured-output behavior before any public default
@@ -61,9 +61,8 @@ maintenance changes since the v1.0.0 public baseline.
   download, process, summarize, extract, and show progress for a real imported
   or discovered corpus without requiring users to understand the internal
   processing stages.
-- **Knowledge export and account self-service.** Markdown-friendly exports for
-  generated research knowledge, plus easier access to already-supported
-  account-level data export.
+- **Knowledge export.** Markdown-friendly exports for generated research
+  knowledge and project-centered research outputs.
 - **Learning and project workspace evolution.** Better flashcard quality, review
   momentum, project-centered queues, and research-work management should mature
   before the broad conversational layer depends on that context.
@@ -71,11 +70,11 @@ maintenance changes since the v1.0.0 public baseline.
   RAG / citation / contradiction / knowledge-graph substrate: ask your library
   questions and get cited, contradiction-aware answers. **Conditional GO** —
   sequenced after cross-service auth hardening lands, a performance profiling
-  pass (to isolate any LLM fan-out regressions), and an evaluation harness
+  pass (to isolate any model fan-out regressions), and an evaluation harness
   as the first task (canned research-question set + expected tool sequences,
-  so the agent is testable from day one). The orchestration substrate
-  (thin custom loop vs an existing agent framework) is an explicit spike —
-  the plan does not pre-assume any particular library. Realistic estimate ~20d.
+  so the interface is testable from day one). The orchestration substrate
+  (thin custom loop vs an existing framework) is an explicit spike — the
+  plan does not pre-assume any particular library. Realistic estimate ~20d.
 - **Research-workflow expansion.** Longer-horizon exploration of systematic
   review workflows, a JARVIS MCP surface for external research tools, and
   graph-assisted retrieval over the existing citation and knowledge-graph

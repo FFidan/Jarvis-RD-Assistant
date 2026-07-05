@@ -364,9 +364,5 @@ async def export_my_data(
     return StreamingResponse(
         iter([data]),
         media_type="application/zip",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="jarvis-export-user-{caller_user_id}.zip"'
-            )
-        },
+        headers={"Content-Disposition": 'attachment; filename="jarvis-data-export.zip"'},
     )

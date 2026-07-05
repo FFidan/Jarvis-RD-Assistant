@@ -57,6 +57,7 @@ describe('isCacheableApiRequest — NON-GOAL endpoints (NEVER cacheable)', () =>
     // streams
     '/api/jobs/abc/stream',
     // exports / downloads / raw assets
+    '/api/me/export',
     '/api/export/anki/5',
     '/api/download-pdf/123',
     '/api/snapshots/123/2',

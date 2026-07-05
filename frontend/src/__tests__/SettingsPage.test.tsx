@@ -82,6 +82,7 @@ vi.mock('@/lib/api', () => ({
     last_login_at: null,
   }),
   updateAccount: vi.fn(),
+  downloadMyData: vi.fn().mockResolvedValue(undefined),
   confirmEmailChange: vi.fn(),
   apiFetch: vi.fn(),
   getTelegramBotToken: vi.fn().mockResolvedValue({ has_token: false }),

@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-06 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-07-05 | routes: /, /my-day -->
 
 # My Day & Home
 
@@ -22,17 +22,18 @@ If the onboarding wizard has not been fully completed, a **SetupBanner** may app
 
 Alongside the SetupBanner, an **onboarding checklist** ("Get started in 3 steps") tracks three first-use milestones: **Add a research topic**, **Fetch your first papers**, and **Analyze a paper**. Each step has a shortcut button (Go to Settings, Open Library) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.
 
-### Batch Operations
+### Prepare library
 
-A section of the Home page provides **Batch Operations** that act across your entire library:
+A **Prepare library** section queues background work for papers that are already in your library:
 
 | Operation | What it does |
 |-----------|-------------|
-| Process PDFs | Run text extraction and chunking for all papers that have a downloaded PDF but have not yet been processed |
-| Summarise | Generate summaries for all processed papers that have not yet been summarised |
-| Extract Entities | Run entity extraction for all papers to populate the Knowledge Graph |
+| Process PDFs | Run text extraction and chunking for papers that have a local PDF but have not yet been processed |
+| Summarise | Generate summaries for processed papers that do not yet have summaries |
 
-Each batch operation launches a background job. Progress is visible in the Jobs panel (accessible from the TopBar).
+Each queued operation appears in the Jobs panel while it runs. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.
+
+Entity extraction is an administrator action and is shown only to admins after the advanced controls are opened.
 
 ---
 

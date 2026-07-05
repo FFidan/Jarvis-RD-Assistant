@@ -14,7 +14,7 @@ Every page in this manual (except `index.md` and `_meta.md`) starts with:
 <!-- verified-against-UI: YYYY-MM-DD | routes: /route1, /route2 -->
 ```
 
-- `YYYY-MM-DD` — the date on which a human or agent last verified the page content against the live UI.
+- `YYYY-MM-DD` — the date on which a maintainer last verified the page content against the live UI.
 - `routes` — the React Router routes the page covers (taken from the verified IA map).
 
 **When the UI changes:** update the page content to match, then bump the date to today. Do not update the date without also verifying the content.
