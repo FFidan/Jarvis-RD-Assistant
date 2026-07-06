@@ -307,7 +307,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../ARCHITECTURE/" class="md-tabs__link">
+        <a href="../contributing/" class="md-tabs__link">
           
   
   
@@ -1521,7 +1521,7 @@
   <span class="md-ellipsis">
     
   
-    Known Residual Risks
+    Risk Register
   
 
     
@@ -1593,6 +1593,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1693,6 +1721,34 @@
     
   
     Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license-notices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License / Notices
   
 
     
@@ -2022,7 +2078,7 @@
 <blockquote>
 <p>A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.</p>
 </blockquote>
-<p>JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It pairs local-first models with source-linked retrieval so generated claims can be traced back to papers in the researcher's library.</p>
+<p>JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.</p>
 <p>📖 <strong>Docs:</strong> https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 <strong>Releases:</strong> https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 <strong>Security:</strong> <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md">SECURITY.md</a></p>
 <p><a href="https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=main" /></a>
@@ -2110,7 +2166,7 @@
 <h3 id="design-choices">Design choices<a class="headerlink" href="#design-choices" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Evidence grounding and verification.</strong> Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.</li>
-<li><strong>Local-first deployment.</strong> Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. Model recommendations are surfaced in Settings based on the detected hardware tier.</li>
+<li><strong>Local-first, not cloud-excluding.</strong> Default model inference runs through Ollama on infrastructure you control. If an administrator configures a cloud provider through LiteLLM, the prompts and source excerpts needed for the selected task are sent to that provider. Offline behavior is feature-specific: cached reading and review workflows can remain usable without external network access, while discovery feeds need upstream APIs and generation requires the local stack plus the configured model backend.</li>
 <li><strong>Hybrid search.</strong> BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.</li>
 </ul>
 <h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
@@ -2237,7 +2293,7 @@
 </tr>
 <tr>
 <td><strong>LLM Gateway</strong></td>
-<td>LiteLLM (routes to Ollama, OpenAI, Anthropic, etc.)</td>
+<td>LiteLLM (routes to Ollama and optional configured cloud providers)</td>
 </tr>
 <tr>
 <td><strong>Local LLM</strong></td>

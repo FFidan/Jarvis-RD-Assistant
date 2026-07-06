@@ -307,7 +307,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+        <a href="../../contributing/" class="md-tabs__link">
           
   
   
@@ -1617,7 +1617,7 @@
   <span class="md-ellipsis">
     
   
-    Known Residual Risks
+    Risk Register
   
 
     
@@ -1689,6 +1689,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1789,6 +1817,34 @@
     
   
     Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../license-notices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License / Notices
   
 
     
@@ -2246,14 +2302,16 @@
 <p><strong>GPU overlay divergence warning.</strong> If an amber warning reads "{N} GB detected on host — GPU overlay not active", JARVIS detected GPU VRAM from the host but the Docker GPU overlay is not active for this container. Re-run <code>setup.sh</code> with GPU support enabled to activate the overlay and use the detected VRAM for model inference.</p>
 <p>If a model card shows a <strong>pending — applying automatically</strong> badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.</p>
 <h3 id="cloud-providers">Cloud Providers<a class="headerlink" href="#cloud-providers" title="Permanent link">&para;</a></h3>
-<p>Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gemini) and LiteLLM routing. Changes here affect which models are available for the LLM configuration item above.</p>
+<p>Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses <strong>Add cloud provider</strong> for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.</p>
+<p>Provider settings are admin-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
+<p>Adding a key does not make cloud the default. It only makes matching cloud models assignable in the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> controls above. Leave all provider keys blank to keep the deployment local-only.</p>
 <h3 id="ai-backend">AI Backend<a class="headerlink" href="#ai-backend" title="Permanent link">&para;</a></h3>
 <p>Select the inference backend and model used for LLM calls. The panel shows:</p>
 <ul>
 <li><strong>Hardware Tier</strong> — the automatically detected GPU/CPU tier for this machine, with a <strong>Re-detect</strong> button to refresh. If a GPU was present at install but the stack is running on CPU (overlay not engaged), an amber banner here tells you to re-run <code>setup.sh</code>.</li>
 <li><strong>Current Status</strong> — the configured backend/model, the recently observed backend, and the recommended model for the detected hardware tier.</li>
 <li><strong>Backend selector</strong> — toggle between <strong>ollama</strong> (local, the recommended default) and <strong>vllm</strong> (advanced, high-throughput GPU). The recommended <strong>model</strong> scales with the detected hardware tier.</li>
-<li><strong>Model dropdown</strong> — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model.</li>
+<li><strong>Model dropdown</strong> — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model. Cloud providers are configured separately and are optional role assignments, not backend defaults.</li>
 <li><strong>Apply / Reset</strong> — save the selection or revert to the last saved state.</li>
 </ul>
 <hr />

@@ -307,7 +307,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../ARCHITECTURE/" class="md-tabs__link">
+        <a href="../contributing/" class="md-tabs__link">
           
   
   
@@ -1357,10 +1357,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#cloud-llm-provider-keys-at-rest" class="md-nav__link">
+  <a href="#cloud-llm-provider-settings-at-rest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cloud LLM Provider Keys at Rest
+        Cloud LLM Provider Settings at Rest
       
     </span>
   </a>
@@ -1545,7 +1545,7 @@
   <span class="md-ellipsis">
     
   
-    Known Residual Risks
+    Risk Register
   
 
     
@@ -1617,6 +1617,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1717,6 +1745,34 @@
     
   
     Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license-notices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License / Notices
   
 
     
@@ -1876,10 +1932,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#cloud-llm-provider-keys-at-rest" class="md-nav__link">
+  <a href="#cloud-llm-provider-settings-at-rest" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cloud LLM Provider Keys at Rest
+        Cloud LLM Provider Settings at Rest
       
     </span>
   </a>
@@ -2261,9 +2317,16 @@ explicitly set in the environment. An explicit env var always wins.</p>
 </tr>
 </tbody>
 </table>
-<h3 id="cloud-llm-provider-keys-at-rest">Cloud LLM Provider Keys at Rest<a class="headerlink" href="#cloud-llm-provider-keys-at-rest" title="Permanent link">&para;</a></h3>
-<p>Cloud provider API keys (<code>llm.anthropic.api_key</code>, <code>llm.openai.api_key</code>,
-<code>llm.google.api_key</code>) entered in Settings live in TWO encrypted stores:</p>
+<h3 id="cloud-llm-provider-settings-at-rest">Cloud LLM Provider Settings at Rest<a class="headerlink" href="#cloud-llm-provider-settings-at-rest" title="Permanent link">&para;</a></h3>
+<p>Cloud provider settings entered in Settings are deployment-wide admin settings.
+Existing providers keep their backward-compatible flat keys (<code>llm.anthropic.api_key</code>,
+<code>llm.openai.api_key</code>, <code>llm.google.api_key</code>); newer providers use namespaced keys
+such as <code>llm.providers.openrouter.api_key</code>, <code>llm.providers.deepseek.api_key</code>,
+<code>llm.providers.mistral.api_key</code>, <code>llm.providers.moonshot.api_key</code>,
+<code>llm.providers.zai.api_key</code>, and <code>llm.providers.custom_openai_compatible.api_key</code>.
+The custom OpenAI-compatible endpoint also stores
+<code>llm.providers.custom_openai_compatible.base_url</code>.</p>
+<p>Provider keys live in TWO encrypted stores when assigned to a role:</p>
 <ol>
 <li><strong><code>user_config.encrypted_value</code></strong> — Fernet-encrypted under
    <code>JARVIS_CONFIG_KEY</code>. This is the source of truth; it survives LiteLLM
@@ -2277,6 +2340,13 @@ explicitly set in the environment. An explicit env var always wins.</p>
 environment blocks (visible via <code>docker inspect</code>), or any other file.
 Rotating <code>JARVIS_CONFIG_KEY</code> (supported, see below) does not affect store 2;
 <code>LITELLM_SALT_KEY</code> itself must never rotate (see the table above).</p>
+<p>Custom endpoint base URLs are validated before save. The validator rejects
+credentials in the URL, fragments, invalid schemes, and unsafe IP ranges such
+as metadata-service, link-local, multicast, and unspecified addresses. HTTPS is
+allowed for normal remote endpoints; HTTP is limited to loopback development or
+self-hosted gateway use. Administrators should only configure endpoints they
+trust, because prompts and relevant source excerpts are sent there when a custom
+model is assigned.</p>
 <h3 id="x-owner-user-id-mechanism">X-Owner-User-Id Mechanism<a class="headerlink" href="#x-owner-user-id-mechanism" title="Permanent link">&para;</a></h3>
 <p>The Telegram bot sends <code>X-Owner-User-Id: &lt;user_id&gt;</code> to route per-user API
 calls. This header is only honored when all three guards pass:</p>

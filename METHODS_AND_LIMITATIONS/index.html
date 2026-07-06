@@ -307,7 +307,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../ARCHITECTURE/" class="md-tabs__link">
+        <a href="../contributing/" class="md-tabs__link">
           
   
   
@@ -1317,7 +1317,7 @@
   <span class="md-ellipsis">
     
   
-    Known Residual Risks
+    Risk Register
   
 
     
@@ -1389,6 +1389,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1489,6 +1517,34 @@
     
   
     Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license-notices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License / Notices
   
 
     
@@ -1628,7 +1684,7 @@
 <h2 id="consensus-and-evidence-extraction">Consensus and evidence extraction<a class="headerlink" href="#consensus-and-evidence-extraction" title="Permanent link">&para;</a></h2>
 <p>Consensus views summarize model-interpreted relationships among the available papers. Extraction tables organize model-extracted fields for comparison. Neither feature implements a systematic-review protocol, risk-of-bias assessment, statistical meta-analysis, or comprehensive literature search.</p>
 <h2 id="data-flow-and-privacy">Data flow and privacy<a class="headerlink" href="#data-flow-and-privacy" title="Permanent link">&para;</a></h2>
-<p>The application and its databases are self-hosted. With Ollama, model inference can remain on infrastructure controlled by the operator. When a cloud model is configured through LiteLLM, prompts and relevant source excerpts are transmitted to that provider under its terms and retention policies.</p>
+<p>The application and its databases are self-hosted. With Ollama, model inference can remain on infrastructure controlled by the operator. When a cloud model is configured through LiteLLM, prompts and relevant source excerpts are transmitted to that provider under its terms and retention policies. "Local-first" describes the default deployment and inference posture; it is not a guarantee that every feature works fully offline.</p>
 <p>Application-level user isolation does not remove the infrastructure trust boundary. Operators with access to the host, database, backups, logs, or configured model providers may be able to access research data.</p>
 <h2 id="evaluation-status">Evaluation status<a class="headerlink" href="#evaluation-status" title="Permanent link">&para;</a></h2>
 <p>Repository tests exercise software behavior, retrieval contracts, tenant isolation, and user-interface flows. They are not a peer-reviewed evaluation of scientific accuracy. Performance notes in the repository document engineering measurements in their stated environments and should not be generalized beyond those conditions.</p>

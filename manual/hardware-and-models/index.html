@@ -307,7 +307,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+        <a href="../../contributing/" class="md-tabs__link">
           
   
   
@@ -1328,7 +1328,7 @@
   <span class="md-ellipsis">
     
   
-    Known Residual Risks
+    Risk Register
   
 
     
@@ -1400,6 +1400,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1500,6 +1528,34 @@
     
   
     Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../license-notices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License / Notices
   
 
     
@@ -1741,7 +1797,7 @@ visible until you either pull the model or reassign the role to one that is alre
 installed.</p>
 <hr />
 <h2 id="when-to-use-a-cloud-model-instead">When to use a cloud model instead<a class="headerlink" href="#when-to-use-a-cloud-model-instead" title="Permanent link">&para;</a></h2>
-<p>Cloud models (Anthropic Claude, OpenAI GPT-4o) are a good fit when:</p>
+<p>Optional cloud providers are a good fit when:</p>
 <ul>
 <li>Your local GPU is too small for the summary quality you want, and you do not want
   to upgrade hardware.</li>
@@ -1749,16 +1805,10 @@ installed.</p>
   leaving your machine.</li>
 <li>You want to experiment with a larger model before committing to pulling it locally.</li>
 </ul>
-<p>To add a cloud model, enter your API key in <strong>Settings → Cloud Providers</strong>. The key
-is stored encrypted on your server and is never written to any file on disk.
-Once a provider key is active, its models appear in the <strong>Settings → Models</strong> dropdowns
-alongside your local Ollama models, and you can assign them to the <code>smart</code> or <code>fast</code>
-role just like a local model.</p>
+<p>To add cloud capacity, use <strong>Settings → Models → Cloud Providers</strong>. JARVIS supports OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint. Provider settings are admin-wide and keys are stored encrypted at rest. Once a provider key is active, matching cloud models can be assigned to the <code>smart</code> or <code>fast</code> role alongside local Ollama models.</p>
 <div class="admonition note">
 <p class="admonition-title">Privacy</p>
-<p>When a cloud model is assigned to a role, the text of the papers you analyse is
-sent to that cloud provider for that role's requests. Local models keep all data
-on your machine.</p>
+<p>When a cloud model is assigned to a role, the prompts and relevant paper excerpts for that role's requests are sent to the configured provider. Local models keep model inference on infrastructure controlled by the operator. The embedding model is separate: changing it requires a deliberate re-index workflow, not a runtime provider switch.</p>
 </div>
 
 
