@@ -12,9 +12,23 @@ vi.mock('@/lib/api', () => ({
   scanContradictions: () => scanContradictionsMock(),
 }));
 
+const jobStoreMock = vi.hoisted(() => ({
+  jobs: {} as Record<string, unknown>,
+  trackExternalJob: vi.fn(),
+  isRunning: vi.fn(() => false),
+}));
+
 vi.mock('@/stores/job-store', () => ({
-  useJobStore: (selector: (s: { trackExternalJob: () => void; isRunning: () => boolean }) => unknown) =>
-    selector({ trackExternalJob: () => {}, isRunning: () => false }),
+  useJobStore: (selector: (s: {
+    jobs: Record<string, unknown>;
+    trackExternalJob: typeof jobStoreMock.trackExternalJob;
+    isRunning: typeof jobStoreMock.isRunning;
+  }) => unknown) =>
+    selector({
+      jobs: jobStoreMock.jobs,
+      trackExternalJob: jobStoreMock.trackExternalJob,
+      isRunning: jobStoreMock.isRunning,
+    }),
 }));
 
 function renderPage() {
@@ -31,6 +45,10 @@ function renderPage() {
 beforeEach(() => {
   fetchConsensusMock.mockReset();
   scanContradictionsMock.mockClear();
+  jobStoreMock.jobs = {};
+  jobStoreMock.trackExternalJob.mockClear();
+  jobStoreMock.isRunning.mockReset();
+  jobStoreMock.isRunning.mockReturnValue(false);
 });
 
 describe('ConsensusPage', () => {
@@ -73,6 +91,56 @@ describe('ConsensusPage', () => {
     fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
     renderPage();
     expect(await screen.findByText('No related-paper claims yet')).toBeInTheDocument();
+  });
+
+  it('distinguishes a completed scan that found no consensus clusters', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'job-scan': {
+        id: 'job-scan',
+        kind: 'contradictions.scan',
+        status: 'succeeded',
+        progress: 1,
+        progress_message: 'Done',
+        payload: {},
+        result: {},
+        error: null,
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: '2026-07-06T10:00:10Z',
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByText('No consensus clusters found')).toBeInTheDocument();
+    expect(screen.getByText(/scan finished/i)).toBeInTheDocument();
+  });
+
+  it('surfaces a failed consensus scan without hiding the retry action', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'job-scan': {
+        id: 'job-scan',
+        kind: 'contradictions.scan',
+        status: 'failed',
+        progress: 0.4,
+        progress_message: 'Failed',
+        payload: {},
+        result: null,
+        error: { message: 'Model route unavailable' },
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: '2026-07-06T10:00:10Z',
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByText('No related-paper claims yet')).toBeInTheDocument();
+    expect(screen.getByText(/last contradiction scan failed/i)).toBeInTheDocument();
+    expect(screen.getByText('Model route unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run consensus scan/i })).toBeInTheDocument();
   });
 
   it('runs a consensus scan from the empty-state CTA', async () => {

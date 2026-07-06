@@ -21,7 +21,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
-import { apiFetch, fetchSystemModels } from '@/lib/api';
+import { apiFetch, cloudProviderLabel, compareCloudProviders, fetchSystemModels } from '@/lib/api';
 import type { SystemModelsResponse } from '@/lib/api';
 import type { ModelFitDetail } from '@/types';
 
@@ -119,12 +119,15 @@ const effectiveFit = (e: ModelCatalogEntry): string => e.fit_detail?.default ?? 
 
 // ---------------------------------------------------------------------------
 
-const PROVIDER_LABELS: Record<string, string> = {
-  local: 'Ollama (default)',
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-};
+function modelProviderLabel(provider: string): string {
+  return provider === 'local' ? 'Ollama (default)' : cloudProviderLabel(provider);
+}
+
+function compareModelProviders(a: string, b: string): number {
+  if (a === 'local') return b === 'local' ? 0 : -1;
+  if (b === 'local') return 1;
+  return compareCloudProviders(a, b);
+}
 
 function roleFromConfigKey(configKey?: string): ModelRole | undefined {
   const role = configKey?.replace(/^llm\./, '').replace(/_model$/, '');
@@ -155,7 +158,7 @@ function isEntrySelectableForRole(entry: ModelCatalogEntry, role?: ModelRole): b
 
 function isEntryVisibleForRole(entry: ModelCatalogEntry, role?: ModelRole): boolean {
   if (role && !entry.roles.includes(role)) return false;
-  return isLocalModel(entry) || isEntrySelectableForRole(entry, role);
+  return isLocalModel(entry) || entry.provider !== 'ollama';
 }
 
 function assignmentBlocker(entry: ModelCatalogEntry, role?: ModelRole): string | null {
@@ -167,7 +170,7 @@ function assignmentBlocker(entry: ModelCatalogEntry, role?: ModelRole): string |
     if (!entry.active && !entry.pulled) return 'Pull this model before assigning it.';
   }
   if (!entry.provider_key_present && !entry.active && entry.status !== 'cloud_active') {
-    return `Add a ${PROVIDER_LABELS[entry.provider] ?? entry.provider} API key before assigning this model.`;
+    return `Add a ${cloudProviderLabel(entry.provider)} API key before assigning this model.`;
   }
   return null;
 }
@@ -257,14 +260,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     return '';
   };
 
-  const providerOrder = ['local', 'anthropic', 'openai', 'google'];
-  const groups = Array.from(new Set(allModels.map(providerGroup))).sort((a, b) => {
-    const ia = providerOrder.indexOf(a);
-    const ib = providerOrder.indexOf(b);
-    const oa = ia === -1 ? providerOrder.length : ia;
-    const ob = ib === -1 ? providerOrder.length : ib;
-    return oa - ob || a.localeCompare(b);
-  });
+  const groups = Array.from(new Set(allModels.map(providerGroup))).sort(compareModelProviders);
 
   const groupedModels = groups
     .map((group) => ({
@@ -401,7 +397,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
             groupedModels.map(({ group, models: groupModels }, index) => (
               <SelectGroup key={group}>
                 {index > 0 && <SelectSeparator />}
-                <SelectLabel>{PROVIDER_LABELS[group] ?? group}</SelectLabel>
+                <SelectLabel>{modelProviderLabel(group)}</SelectLabel>
                 {groupModels.map((m) => {
                   const blocker = assignmentBlocker(m, currentRole);
                   const canAssign = blocker === null && isEntrySelectableForRole(m, currentRole);

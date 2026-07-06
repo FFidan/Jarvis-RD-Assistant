@@ -6,6 +6,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 **Release-history note:** This changelog is retrospective. The repository remained private through the pre-v1.0.0 tags; all entries before v1.0.0 describe private development and hardening milestones.
 Wording such as "public-ready", "public-readiness", or "public-launch groundwork" in older entries means preparation for the v1.0.0 public launch, not earlier public availability.
 
+## Unreleased
+
+### Added
+- **Provider setup and routing.** Settings now has a registry-driven provider setup flow for OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and Custom OpenAI-compatible endpoints. Cloud providers remain optional and admin-wide; local-only installs continue to work without API keys.
+
+### Changed
+- **AI settings clarity.** Model selection keeps local models first while showing cloud entries only when their provider prerequisites are met. Documentation now distinguishes local-first defaults from whole-application offline guarantees.
+- **Consensus scan feedback.** The Consensus page now reflects scan progress and completed zero-result or failed scan outcomes without asking users to reload manually.
+
+### Fixed
+- **Magic-link verification.** Transient backend/proxy errors during magic-link verification are retried before showing a terminal sign-in failure, while invalid or expired tokens still fail immediately.
+
 ## v1.0.2 (2026-07-05) — First-hour setup clarity, account export, and release alignment
 
 A focused maintenance release that keeps the local-first defaults unchanged while improving first-run clarity, account data access, and release metadata consistency.

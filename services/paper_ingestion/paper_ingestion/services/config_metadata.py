@@ -5,6 +5,13 @@ import re
 from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
+from paper_ingestion.services.llm_provider_registry import (
+    CLOUD_MODEL_PREFIXES as _CLOUD_MODEL_PREFIXES,
+)
+from paper_ingestion.services.llm_provider_registry import (
+    CLOUD_PROVIDERS,
+    PROVIDER_CONFIG_KEYS,
+)
 
 __all__ = [
     "API_KEY_LOGIN_CONFIG_KEY",
@@ -136,12 +143,6 @@ def _classify_litellm_runtime_key(key: str) -> dict[str, str] | None:
     return None
 
 
-_CLOUD_MODEL_PREFIXES = ("anthropic/", "openai/", "gemini/")
-
-# Canonical provider names accepted in ``llm.<provider>.api_key`` config keys.
-CLOUD_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google"})
-
-
 def _is_cloud_model_assignment(model_id: str) -> bool:
     """Return True for LiteLLM cloud-provider model IDs."""
     return model_id.startswith(_CLOUD_MODEL_PREFIXES)
@@ -150,6 +151,8 @@ def _is_cloud_model_assignment(model_id: str) -> bool:
 def _is_allowed_config_key(key: str) -> bool:
     """Return True if *key* is either a known static key or a valid dynamic pattern."""
     if key in _ALLOWED_CONFIG_KEYS:
+        return True
+    if key in PROVIDER_CONFIG_KEYS:
         return True
     return _classify_litellm_runtime_key(key) is not None
 
@@ -180,48 +183,45 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
     }
 )
 
-SYSTEM_KEYS: frozenset[str] = frozenset(
-    {
-        # System-wide LLM model role assignments (affects all users + LiteLLM)
-        "llm.smart_model",
-        "llm.fast_model",
-        "llm.embed_model",
-        # Pulse overnight deck (system-wide scheduler job)
-        "pulse.enabled",
-        "pulse.cron",
-        "pulse.deck_size",
-        "pulse.stage2_top_k",
-        "pulse.weights",
-        "pulse.l2_lambda",
-        "pulse.lookback_days",
-        "pulse.startup_grace_seconds",
-        # Setup wizard gate
-        "setup.completed",
-        # Multi-tenant API-key-login gate — deployment-wide, admin-only write;
-        # read WHERE user_id IS NULL by jarvis_common.auth.api_key_login_enabled,
-        # so write-scope must match that read-scope.
-        API_KEY_LOGIN_CONFIG_KEY,
-        # Telegram owner pairing (single owner, system-wide)
-        "telegram.owner_chat_id",
-        # SMTP relay — one deployment-wide mail config; admin-only.
-        "smtp.host",
-        "smtp.port",
-        "smtp.user",
-        "smtp.from",
-        "smtp.pass",
-        "smtp.reply_to",
-        "smtp.from_name",
-        # Observability — one deployment-wide Langfuse dashboard link; admin-only.
-        "observability.langfuse_dashboard_url",
-        # Automation — pipeline interval; system-wide, admin-only.
-        "automation.fetch_interval_hours",
-        # Cloud LLM provider API keys — deployment-wide admin-only credentials;
-        # read by get_provider_api_key / cloud_provider_key_present with
-        # WHERE user_id IS NULL, so write-scope must match read-scope.
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-    }
+SYSTEM_KEYS: frozenset[str] = (
+    frozenset(
+        {
+            # System-wide LLM model role assignments (affects all users + LiteLLM)
+            "llm.smart_model",
+            "llm.fast_model",
+            "llm.embed_model",
+            # Pulse overnight deck (system-wide scheduler job)
+            "pulse.enabled",
+            "pulse.cron",
+            "pulse.deck_size",
+            "pulse.stage2_top_k",
+            "pulse.weights",
+            "pulse.l2_lambda",
+            "pulse.lookback_days",
+            "pulse.startup_grace_seconds",
+            # Setup wizard gate
+            "setup.completed",
+            # Multi-tenant API-key-login gate — deployment-wide, admin-only write;
+            # read WHERE user_id IS NULL by jarvis_common.auth.api_key_login_enabled,
+            # so write-scope must match that read-scope.
+            API_KEY_LOGIN_CONFIG_KEY,
+            # Telegram owner pairing (single owner, system-wide)
+            "telegram.owner_chat_id",
+            # SMTP relay — one deployment-wide mail config; admin-only.
+            "smtp.host",
+            "smtp.port",
+            "smtp.user",
+            "smtp.from",
+            "smtp.pass",
+            "smtp.reply_to",
+            "smtp.from_name",
+            # Observability — one deployment-wide Langfuse dashboard link; admin-only.
+            "observability.langfuse_dashboard_url",
+            # Automation — pipeline interval; system-wide, admin-only.
+            "automation.fetch_interval_hours",
+        }
+    )
+    | PROVIDER_CONFIG_KEYS
 )
 # Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
 # They cannot be listed here as literals since they contain the machine hostname.
@@ -244,29 +244,32 @@ def _classify_config_key(key: str) -> str:
     return "unknown"
 
 
-_SECRET_KEYS: frozenset[str] = frozenset(
-    {
-        "zotero.api_key",
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-        "smtp.pass",
-        "telegram.bot_token",
-    }
+_SECRET_KEYS: frozenset[str] = (
+    frozenset(
+        {
+            "zotero.api_key",
+            "smtp.pass",
+            "telegram.bot_token",
+        }
+    )
+    | PROVIDER_CONFIG_KEYS
 )
 
-_ENCRYPTED_KEYS: frozenset[str] = frozenset(
-    {
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-        "zotero.api_key",
-        # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
-        # keep the generic /api/config surface masking it consistently.
-        "smtp.pass",
-        # Telegram bot token stored via setup flow — must be encrypted at rest.
-        "telegram.bot_token",
-    }
+_ENCRYPTED_KEYS: frozenset[str] = (
+    frozenset(
+        {
+            "llm.anthropic.api_key",
+            "llm.openai.api_key",
+            "llm.google.api_key",
+            "zotero.api_key",
+            # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
+            # keep the generic /api/config surface masking it consistently.
+            "smtp.pass",
+            # Telegram bot token stored via setup flow — must be encrypted at rest.
+            "telegram.bot_token",
+        }
+    )
+    | PROVIDER_CONFIG_KEYS
 )
 
 # ---------------------------------------------------------------------------

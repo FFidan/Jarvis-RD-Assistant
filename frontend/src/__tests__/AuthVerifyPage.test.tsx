@@ -17,7 +17,20 @@ import { AuthVerifyPage, __resetVerifyDedupeForTests } from '@/pages/AuthVerifyP
 const verifyMock = vi.fn();
 const loginWithSessionMock = vi.fn();
 
+const { MockApiError } = vi.hoisted(() => ({
+  MockApiError: class MockApiError extends Error {
+    constructor(
+      public status: number,
+      public body: string,
+    ) {
+      super(body);
+      this.name = 'ApiError';
+    }
+  },
+}));
+
 vi.mock('@/lib/api', () => ({
+  ApiError: MockApiError,
   verifyMagicLink: (token: string) => verifyMock(token),
 }));
 
@@ -75,6 +88,37 @@ describe('AuthVerifyPage', () => {
       },
       { timeout: 4000 },
     );
+  });
+
+
+
+  it('retries a transient 503 verify failure and finishes sign-in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    verifyMock
+      .mockRejectedValueOnce(new MockApiError(503, 'Server error'))
+      .mockResolvedValueOnce({ id: 7, email: 'a@b.com', role: 'admin' });
+
+    renderWithRoute('/auth/verify?token=retry-token');
+
+    await waitFor(() => expect(verifyMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    await waitFor(() => {
+      expect(verifyMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('HOME')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/sign-in failed/i)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('does not retry invalid-token failures', async () => {
+    verifyMock.mockRejectedValueOnce(new MockApiError(400, 'Invalid or expired token'));
+    renderWithRoute('/auth/verify?token=invalid-token');
+
+    expect(await screen.findByText(/invalid or expired token/i)).toBeInTheDocument();
+    expect(verifyMock).toHaveBeenCalledTimes(1);
   });
 
   it('without a token, redirects straight to /login', async () => {

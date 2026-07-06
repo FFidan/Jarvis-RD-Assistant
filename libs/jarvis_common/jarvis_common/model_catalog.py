@@ -12,7 +12,18 @@ from typing import Any, Literal
 logger = logging.getLogger(__name__)
 
 Role = Literal["smart", "fast", "embed"]
-Provider = Literal["ollama", "anthropic", "openai"]
+Provider = Literal[
+    "ollama",
+    "anthropic",
+    "openai",
+    "google",
+    "openrouter",
+    "deepseek",
+    "mistral",
+    "moonshot",
+    "zai",
+    "custom_openai_compatible",
+]
 CatalogPhase = Literal["default", "advanced", "future"]
 
 

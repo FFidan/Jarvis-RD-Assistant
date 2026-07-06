@@ -10,6 +10,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
 
+from paper_ingestion.services.llm_provider_registry import (
+    PROVIDER_API_KEY_CONFIG_KEYS,
+    PROVIDER_BASE_URL_CONFIG_KEYS,
+    validate_custom_openai_base_url,
+)
+
 __all__ = [
     "_PULSE_WEIGHT_KEYS",
     "_PULSE_REQUIRED_WEIGHT_KEYS",
@@ -30,6 +36,7 @@ __all__ = [
     "_validate_group_id",
     "_validate_zotero_cron",
     "_validate_langfuse_dashboard_url",
+    "validate_custom_openai_base_url",
     "_validate_fsrs_retention",
     "_validate_fsrs_learning_steps",
     "_validate_timezone",
@@ -354,9 +361,8 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     # Automation
     "automation.fetch_interval_hours": _validate_positive_int,
     # Cloud LLM provider keys
-    "llm.anthropic.api_key": _validate_nonempty_str,
-    "llm.openai.api_key": _validate_nonempty_str,
-    "llm.google.api_key": _validate_nonempty_str,
+    **{key: _validate_nonempty_str for key in PROVIDER_API_KEY_CONFIG_KEYS},
+    **{key: validate_custom_openai_base_url for key in PROVIDER_BASE_URL_CONFIG_KEYS},
     # SMTP outbound mail
     "smtp.host": _validate_nonempty_str,
     "smtp.port": _validate_positive_int,

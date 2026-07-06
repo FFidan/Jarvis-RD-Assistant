@@ -49,6 +49,10 @@ maintenance changes since the v1.0.0 public baseline.
   citation, latency, and structured-output behavior before any public default
   changes. The default product posture remains local-first; cloud providers are
   optional integrations, not requirements.
+- **AI provider setup and first-hour reliability.** A v1.0.3 lane is adding
+  registry-driven provider setup, optional cloud routing for administrators,
+  clearer model-selection states, magic-link retry hardening, and more truthful
+  Consensus scan outcomes while preserving local-only installs.
 - **Tablet / PWA reading-experience polish.** Refinements to offline reading,
   installable PWA affordances, and tablet layout optimizations for the already-shipped
   information-architecture redesign so already-processed material (summaries,
@@ -62,6 +66,17 @@ maintenance changes since the v1.0.0 public baseline.
   processing stages.
 - **Knowledge export.** Markdown-friendly exports for generated research
   knowledge and project-centered research outputs.
+- **Per-user provider keys and routing.** Optional bring-your-own-key behavior,
+  per-user routing preferences, and privacy controls for multi-user deployments.
+  v1.0.3 keeps provider settings admin-wide.
+- **Scientific task routing.** Role-aware routing beyond `smart` and `fast`, so
+  extraction, synthesis, contradiction checks, card generation, and freshness
+  checks can use different local or cloud backends with visible provenance.
+- **Cloud budget and privacy guardrails.** Cost estimates, spending caps, and
+  provider-use policies for unpublished PDFs, notes, and router providers.
+- **Web and academic freshness checks.** Perplexity/Sonar-like search-backed
+  providers should be evaluated as explicit freshness tools, not normal private
+  library LLM routes.
 - **Learning and project workspace evolution.** Better flashcard quality, review
   momentum, project-centered queues, and research-work management should mature
   before the broad conversational layer depends on that context.

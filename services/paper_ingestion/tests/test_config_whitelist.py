@@ -260,3 +260,56 @@ def test_api_key_login_key_allowed_and_system_scoped():
     assert API_KEY_LOGIN_CONFIG_KEY in SYSTEM_KEYS
     assert API_KEY_LOGIN_CONFIG_KEY not in PERSONAL_KEYS
     assert _classify_config_key(API_KEY_LOGIN_CONFIG_KEY) == "system"
+
+
+# --- LLM provider registry keys ---
+
+
+def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
+    """Every provider registry config key must be admin/system scoped and protected."""
+    from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
+    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+
+    assert PROVIDER_CONFIG_KEYS <= SYSTEM_KEYS
+    assert PROVIDER_CONFIG_KEYS <= _SECRET_KEYS
+    assert PROVIDER_CONFIG_KEYS <= _ENCRYPTED_KEYS
+    assert all(_classify_config_key(key) == "system" for key in PROVIDER_CONFIG_KEYS)
+
+
+def test_provider_registry_keys_have_validators():
+    """Every provider registry config key must be writable only through a validator."""
+    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+
+    missing = PROVIDER_CONFIG_KEYS - set(_CONFIG_VALIDATORS)
+    assert not missing
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://llm.example.com/v1",
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+    ],
+)
+def test_custom_openai_base_url_accepts_safe_values(value: str):
+    """Custom endpoints must accept HTTPS and loopback HTTP endpoints."""
+    _CONFIG_VALIDATORS["llm.providers.custom_openai_compatible.base_url"](value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ftp://llm.example.com/v1",
+        "https://user:pass@example.com/v1",
+        "https://llm.example.com/v1#frag",
+        "http://192.168.1.20:8000/v1",
+        "http://169.254.169.254/v1",
+        "not a url",
+        "",
+    ],
+)
+def test_custom_openai_base_url_rejects_unsafe_values(value: str):
+    """Custom endpoints must reject unsafe schemes, credentials, fragments, and addresses."""
+    with pytest.raises(ValueError):
+        _CONFIG_VALIDATORS["llm.providers.custom_openai_compatible.base_url"](value)

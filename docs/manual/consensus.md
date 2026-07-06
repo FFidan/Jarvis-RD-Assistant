@@ -42,9 +42,9 @@ When the pipeline has not yet run a consensus scan, the page shows:
 > **No related-paper claims yet**
 > Run a contradiction scan across related papers to see where they agree and disagree.
 
-Click **Run consensus scan** to queue a full contradiction scan across your library. The button label changes to **Scanning…** while the job is running. Once the scan completes, reload the page to see the results.
+Click **Run consensus scan** to queue a full contradiction scan across your library. The button label changes to **Scanning…** while the job is queued or running, and the background-task menu shows progress. When the whole-library job succeeds, the Consensus page refreshes its data automatically.
 
-If the scan fails to queue, an error message is shown below the button.
+A completed scan can still produce no chart. In that case the page distinguishes a true empty outcome from a failed scan: a successful zero-result scan says that no verified agreement or contradiction clusters are available yet, while a failed scan shows the failure message and leaves the retry action available. JARVIS does not lower quote-verification thresholds just to populate this view.
 
 ---
 

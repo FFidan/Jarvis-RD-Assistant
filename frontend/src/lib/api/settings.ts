@@ -254,28 +254,94 @@ export const clearSourceCooldown = (sourceType: string) =>
 
 // --- Cloud LLM Providers ---
 
-export type CloudProvider = 'anthropic' | 'openai' | 'google';
+export type CloudProvider = string;
+
+export const CLOUD_PROVIDER_DISPLAY_ORDER = [
+  'anthropic',
+  'openai',
+  'google',
+  'openrouter',
+  'deepseek',
+  'mistral',
+  'moonshot',
+  'zai',
+  'custom_openai_compatible',
+] as const;
+
+const CLOUD_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google Gemini',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+  mistral: 'Mistral AI',
+  moonshot: 'Kimi / Moonshot',
+  zai: 'Z.ai / GLM',
+  custom_openai_compatible: 'Custom OpenAI-compatible endpoint',
+};
+
+export function cloudProviderLabel(provider: string): string {
+  return CLOUD_PROVIDER_LABELS[provider] ?? provider;
+}
+
+export function compareCloudProviders(a: string, b: string): number {
+  const ia = CLOUD_PROVIDER_DISPLAY_ORDER.indexOf(a as (typeof CLOUD_PROVIDER_DISPLAY_ORDER)[number]);
+  const ib = CLOUD_PROVIDER_DISPLAY_ORDER.indexOf(b as (typeof CLOUD_PROVIDER_DISPLAY_ORDER)[number]);
+  const oa = ia === -1 ? CLOUD_PROVIDER_DISPLAY_ORDER.length : ia;
+  const ob = ib === -1 ? CLOUD_PROVIDER_DISPLAY_ORDER.length : ib;
+  return oa - ob || a.localeCompare(b);
+}
+
+export type ProviderMetadata = {
+  id: CloudProvider;
+  display_name: string;
+  kind: 'direct' | 'router' | 'self_hosted' | string;
+  api_key_config_key: string;
+  base_url_config_key: string | null;
+  assignment_prefix: string;
+  litellm_prefix: string;
+  privacy_boundary: string;
+  best_for: string;
+  data_note: string;
+  configured: boolean;
+  base_url_configured: boolean;
+  supports_assignment: boolean;
+};
+
+/** Return non-secret provider metadata and configured statuses. */
+export async function listProviders(): Promise<ProviderMetadata[]> {
+  return apiFetch<ProviderMetadata[]>('/api/providers');
+}
 
 /**
  * Returns the masked key value for each cloud provider (e.g. "sk-a****").
  * Null if no key is stored.
  */
 export async function getProviderStatuses(): Promise<Record<CloudProvider, string | null>> {
-  const configs = await apiFetch<Array<{ key: string; value: unknown }>>('/api/config');
-  const result: Record<CloudProvider, string | null> = { anthropic: null, openai: null, google: null };
-  for (const provider of ['anthropic', 'openai', 'google'] as CloudProvider[]) {
-    const entry = configs.find((c) => c.key === `llm.${provider}.api_key`);
+  const [configs, providers] = await Promise.all([
+    apiFetch<Array<{ key: string; value: unknown }>>('/api/config'),
+    listProviders(),
+  ]);
+  const result: Record<CloudProvider, string | null> = {};
+  for (const provider of providers) {
+    const entry = configs.find((c) => c.key === provider.api_key_config_key);
     if (entry != null && entry.value != null) {
       const v = entry.value;
-      result[provider] = typeof v === 'string' ? v.replace(/^"|"$/g, '') : String(v);
+      result[provider.id] = typeof v === 'string' ? v.replace(/^"|"$/g, '') : String(v);
+    } else {
+      result[provider.id] = null;
     }
   }
   return result;
 }
 
 /** Save a cloud provider API key via the unified config endpoint. */
-export async function setProviderKey(provider: CloudProvider, apiKey: string): Promise<void> {
-  await setConfig(`llm.${provider}.api_key`, apiKey);
+export async function setProviderKey(
+  provider: CloudProvider,
+  apiKey: string,
+  configKey?: string,
+): Promise<void> {
+  await setConfig(configKey ?? `llm.${provider}.api_key`, apiKey);
 }
 
 /** Test connectivity for a cloud provider. */

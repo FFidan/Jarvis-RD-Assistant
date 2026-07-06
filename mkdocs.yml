@@ -126,12 +126,14 @@ nav:
       - Deployment: DEPLOYMENT.md
       - Requirements: REQUIREMENTS.md
       - Security: SECURITY.md
-      - Known Residual Risks: known-residual-risks.md
+      - Risk Register: known-residual-risks.md
   - Contribute & Internals:
+      - Contributing: contributing.md
       - Architecture: ARCHITECTURE.md
       - Engineering Standards: ENGINEERING_STANDARDS.md
       - Migrations: migrations-shim.md
       - Release Process: RELEASE.md
+      - License / Notices: license-notices.md
 
 theme:
   name: material

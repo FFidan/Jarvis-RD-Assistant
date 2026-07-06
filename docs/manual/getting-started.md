@@ -52,7 +52,7 @@ This step is skipped when an admin already exists (for example, when resuming a 
 
 ### Step 4 — Cloud LLM keys (skippable)
 
-Optionally provide API keys for **OpenAI**, **Anthropic**, and/or **Gemini**. These enable cloud-hosted language models alongside the local Ollama models. This step is skippable; keys can be added later in Settings → Models → Providers.
+Optionally provide cloud provider API keys. Cloud models can supplement the local Ollama models when an administrator enables them, but this step is skippable and local-only installs remain supported. More providers and custom OpenAI-compatible endpoints can be added later in Settings → Models → Cloud Providers.
 
 ### Step 5 — First research topic
 

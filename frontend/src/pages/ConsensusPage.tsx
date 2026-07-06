@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { errorMessage } from '@/lib/errors';
@@ -11,9 +11,22 @@ import { EmptyState } from '@/components/EmptyState';
 import { ConsensusMeter } from '@/components/consensus/ConsensusMeter';
 import { fetchConsensus, scanContradictions } from '@/lib/api';
 import type { ConsensusClaim } from '@/types';
+import type { Job } from '@/stores/job-store';
 
 function stanceTone(stance: string): string {
   return stance === 'supports' ? 'text-emerald-600' : 'text-red-600';
+}
+
+function latestLibraryConsensusScan(jobs: Record<string, Job>): Job | null {
+  const scans = Object.values(jobs).filter(
+    (job) => job.kind === 'contradictions.scan' && job.payload?.paper_id == null,
+  );
+  scans.sort((a, b) => {
+    const aTime = a.finished_at ?? a.started_at ?? a.created_at;
+    const bTime = b.finished_at ?? b.started_at ?? b.created_at;
+    return bTime.localeCompare(aTime);
+  });
+  return scans[0] ?? null;
 }
 
 function ClaimEvidence({ claim }: { claim: ConsensusClaim }) {
@@ -74,6 +87,8 @@ export function ConsensusPage() {
 
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const isScanning = useJobStore((s) => s.isRunning('contradictions.scan', {}));
+  const jobs = useJobStore((s) => s.jobs);
+  const latestScan = useMemo(() => latestLibraryConsensusScan(jobs), [jobs]);
   const scanMutation = useMutation({
     mutationFn: () => scanContradictions(),
     onSuccess: (r) =>
@@ -87,6 +102,16 @@ export function ConsensusPage() {
   const pending = scanMutation.isPending || isScanning;
 
   const claims = consensusQuery.data?.claims ?? [];
+  const scanFailed = latestScan?.status === 'failed';
+  const scanSucceeded = latestScan?.status === 'succeeded';
+  const emptyTitle = scanSucceeded
+    ? 'No consensus clusters found'
+    : 'No related-paper claims yet';
+  const emptyDescription = scanFailed
+    ? 'The last contradiction scan failed before consensus data could be refreshed.'
+    : scanSucceeded
+      ? 'The scan finished, but the current library did not produce verified agreement or contradiction clusters.'
+      : 'Run a contradiction scan across related papers to see where they agree and disagree.';
 
   return (
     <div className="space-y-6 p-6">
@@ -128,16 +153,18 @@ export function ConsensusPage() {
           ) : (
             <>
               <EmptyState
-                title="No related-paper claims yet"
-                description="Run a contradiction scan across related papers to see where they agree and disagree."
+                title={emptyTitle}
+                description={emptyDescription}
                 actionLabel={pending ? 'Scanning…' : 'Run consensus scan'}
                 onAction={() => {
                   if (!pending) scanMutation.mutate();
                 }}
               />
-              {scanMutation.isError && (
+              {(scanMutation.isError || scanFailed) && (
                 <p className="mt-2 text-center text-sm text-destructive">
-                  {errorMessage(scanMutation.error, 'Failed to queue consensus scan.')}
+                  {scanFailed
+                    ? (latestScan.error?.message ?? 'Consensus scan failed.')
+                    : errorMessage(scanMutation.error, 'Failed to queue consensus scan.')}
                 </p>
               )}
             </>

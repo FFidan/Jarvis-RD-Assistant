@@ -2,7 +2,7 @@
 
 > A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.
 
-JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It pairs local-first models with source-linked retrieval so generated claims can be traced back to papers in the researcher's library.
+JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.
 
 📖 **Docs:** https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md)
 
@@ -86,7 +86,7 @@ Runs on your own hardware with Ollama, with optional cloud-model access through 
 ### Design choices
 
 - **Evidence grounding and verification.** Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.
-- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. Model recommendations are surfaced in Settings based on the detected hardware tier.
+- **Local-first, not cloud-excluding.** Default model inference runs through Ollama on infrastructure you control. If an administrator configures a cloud provider through LiteLLM, the prompts and source excerpts needed for the selected task are sent to that provider. Offline behavior is feature-specific: cached reading and review workflows can remain usable without external network access, while discovery feeds need upstream APIs and generation requires the local stack plus the configured model backend.
 - **Hybrid search.** BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.
 
 ## Architecture
@@ -202,7 +202,7 @@ See [CONTRIBUTING.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CO
 |-------|-----------|
 | **Frontend** | React 19, TypeScript, Vite, Shadcn/ui, TanStack Query v5, Zustand, React Router v7, Recharts, Cytoscape.js |
 | **Backend** | FastAPI, Python 3.12, asyncpg, Pydantic v2 |
-| **LLM Gateway** | LiteLLM (routes to Ollama, OpenAI, Anthropic, etc.) |
+| **LLM Gateway** | LiteLLM (routes to Ollama and optional configured cloud providers) |
 | **Local LLM** | Ollama (qwen3:8b, qwen3:4b, qwen3-embedding:4b) |
 | **Database** | PostgreSQL 16 |
 | **Vector DB** | Qdrant |

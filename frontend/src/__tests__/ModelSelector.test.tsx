@@ -281,13 +281,22 @@ describe('ModelSelector', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('shows cloud entries when provider key is present', async () => {
-    renderComponent({ configKey: 'llm.smart_model' });
+  it('shows cloud entries and disables missing-key providers with a clear reason', async () => {
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
     await waitFor(() => {
       expect(screen.getByText('OpenAI')).toBeInTheDocument();
       expect(screen.getByText('GPT-4o')).toBeInTheDocument();
     });
-    expect(screen.queryByText('Claude Haiku 4.5')).not.toBeInTheDocument();
+
+    expect(screen.getByText('Anthropic')).toBeInTheDocument();
+    expect(screen.getByText('Claude Haiku 4.5')).toBeInTheDocument();
+    expect(screen.getByText('Add an Anthropic API key before assigning this model.')).toBeInTheDocument();
+
+    const disabledCloud = screen.getByTestId('select-item-anthropic/claude-haiku-4-5');
+    expect(disabledCloud).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(disabledCloud);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('renders detected hardware and per-model hardware requirements', async () => {

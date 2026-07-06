@@ -7,6 +7,7 @@ import httpx
 from jarvis_common.settings import get_secrets_settings, get_telegram_settings
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
+from paper_ingestion.services.llm_provider_registry import provider_for_id
 from paper_ingestion.services.model_lifecycle import catalog_entry_for_model, normalize_model_tag
 
 __all__ = [
@@ -40,7 +41,7 @@ async def reload_telegram_nudges() -> None:
 
 async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:
     """Return True if an API key for *provider* is stored in user_config."""
-    config_key = f"llm.{provider}.api_key"
+    config_key = provider_for_id(provider).api_key_config_key
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",

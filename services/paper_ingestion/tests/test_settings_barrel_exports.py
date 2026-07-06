@@ -35,6 +35,7 @@ EXPECTED_PUBLIC_EXPORTS = frozenset(
         "migrate_plaintext_secrets",
         "reload_telegram_nudges",
         "test_provider_connectivity",
+        "validate_custom_openai_base_url",
         "validate_model_assignment",
         "write_config",
     }

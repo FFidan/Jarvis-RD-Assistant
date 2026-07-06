@@ -26,7 +26,7 @@ Consensus views summarize model-interpreted relationships among the available pa
 
 ## Data flow and privacy
 
-The application and its databases are self-hosted. With Ollama, model inference can remain on infrastructure controlled by the operator. When a cloud model is configured through LiteLLM, prompts and relevant source excerpts are transmitted to that provider under its terms and retention policies.
+The application and its databases are self-hosted. With Ollama, model inference can remain on infrastructure controlled by the operator. When a cloud model is configured through LiteLLM, prompts and relevant source excerpts are transmitted to that provider under its terms and retention policies. "Local-first" describes the default deployment and inference posture; it is not a guarantee that every feature works fully offline.
 
 Application-level user isolation does not remove the infrastructure trust boundary. Operators with access to the host, database, backups, logs, or configured model providers may be able to access research data.
 

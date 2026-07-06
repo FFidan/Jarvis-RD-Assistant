@@ -67,7 +67,11 @@ If a model card shows a **pending — applying automatically** badge, your choic
 
 ### Cloud Providers
 
-Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gemini) and LiteLLM routing. Changes here affect which models are available for the LLM configuration item above.
+Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses **Add cloud provider** for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.
+
+Provider settings are admin-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.
+
+Adding a key does not make cloud the default. It only makes matching cloud models assignable in the **Main model (smart)** and **Quick model (fast)** controls above. Leave all provider keys blank to keep the deployment local-only.
 
 ### AI Backend
 
@@ -76,7 +80,7 @@ Select the inference backend and model used for LLM calls. The panel shows:
 - **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh. If a GPU was present at install but the stack is running on CPU (overlay not engaged), an amber banner here tells you to re-run `setup.sh`.
 - **Current Status** — the configured backend/model, the recently observed backend, and the recommended model for the detected hardware tier.
 - **Backend selector** — toggle between **ollama** (local, the recommended default) and **vllm** (advanced, high-throughput GPU). The recommended **model** scales with the detected hardware tier.
-- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model.
+- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model. Cloud providers are configured separately and are optional role assignments, not backend defaults.
 - **Apply / Reset** — save the selection or revert to the last saved state.
 
 ---

@@ -267,3 +267,56 @@ async def test_update_litellm_model_local_model_never_reads_provider_keys(monkey
 
         # get_provider_api_key must NOT have been called — this is a local model.
         mock_gpa.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_provider_api_key_reads_registry_key():
+    """New providers use registry-owned llm.providers.<id>.api_key rows."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {
+        "value": "sk-or-test",
+        "encrypted_value": None,
+    }
+
+    result = await get_provider_api_key("openrouter", pool)
+
+    assert result == "sk-or-test"
+    conn.fetchrow.assert_awaited_once_with(
+        "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        "llm.providers.openrouter.api_key",
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_litellm_model_delivers_custom_openai_endpoint(monkeypatch):
+    """Custom OpenAI-compatible routes use openai/<model> plus stored api_base."""
+    monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        {"value": "sk-custom", "encrypted_value": None},
+        {"value": "http://127.0.0.1:8000/v1", "encrypted_value": None},
+    ]
+
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_entry("smart", {"model": "ollama_chat/qwen3:8b"}, dep_id="old-1")]},
+        )
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model(
+        "smart",
+        "custom_openai/local-model",
+        db_pool=pool,
+    )
+
+    assert result is True
+    params = json.loads(new_route.calls.last.request.content)["litellm_params"]
+    assert params["model"] == "openai/local-model"
+    assert params["api_base"] == "http://127.0.0.1:8000/v1"
+    assert params["api_key"] == "sk-custom"

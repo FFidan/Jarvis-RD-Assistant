@@ -17,7 +17,7 @@ latency-based routing could keep preferring the stale model. The switchable
 aliases therefore live ONLY in the admin DB; ``litellm/config.yaml`` keeps the
 dimension-locked ``embed`` aliases plus router/general settings.
 
-Cloud-provider keys (anthropic/openai/gemini) are Fernet-decrypted from
+Cloud-provider keys are Fernet-decrypted from
 ``user_config`` in memory and carried in the ``/model/new`` payload; LiteLLM
 stores them encrypted under the pinned ``LITELLM_SALT_KEY`` in its admin DB.
 They are never written to the YAML or any other file.
@@ -43,6 +43,12 @@ from paper_ingestion.services.litellm_api import (
     _redact_secret,  # noqa: F401
     get_litellm_deployments,
 )
+from paper_ingestion.services.llm_provider_registry import (
+    PROVIDER_REGISTRY,
+    provider_for_id,
+    provider_for_prefix,
+    provider_model_for_delivery,
+)
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
 logger = logging.getLogger(__name__)
@@ -54,12 +60,9 @@ logger = logging.getLogger(__name__)
 _config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
 
 
-# Map from LiteLLM model prefix → canonical provider name used in user_config keys.
-# gemini/ is the LiteLLM prefix for Google models; the config key uses "google".
+# Map from app-facing model prefix -> provider id used in the registry.
 _CLOUD_PREFIX_TO_PROVIDER: dict[str, str] = {
-    "anthropic": "anthropic",
-    "openai": "openai",
-    "gemini": "google",
+    provider.assignment_prefix.rstrip("/"): provider.id for provider in PROVIDER_REGISTRY
 }
 
 ROLE_TO_ALIAS: dict[str, str] = {
@@ -151,7 +154,7 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     Parameters
     ----------
     provider:
-        One of ``"anthropic"``, ``"openai"``, ``"google"``.
+        Provider id from the central provider registry.
     db_pool:
         asyncpg Pool instance.
 
@@ -160,14 +163,8 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     ValueError
         If *provider* is not in the allowed set.
     """
-    from paper_ingestion.services.config_metadata import CLOUD_PROVIDERS  # noqa: PLC0415
-
-    if provider not in CLOUD_PROVIDERS:
-        raise ValueError(
-            f"Unsupported provider {provider!r}. Allowed values: {sorted(CLOUD_PROVIDERS)}"
-        )
-
-    config_key = f"llm.{provider}.api_key"
+    definition = provider_for_id(provider)
+    config_key = definition.api_key_config_key
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
@@ -177,6 +174,22 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     if row is None:
         return None
     return resolve_secret_row(row)
+
+
+async def get_provider_base_url(provider: str, db_pool: Any) -> str | None:
+    """Fetch a configured provider base URL from system-scoped config."""
+    definition = provider_for_id(provider)
+    if definition.base_url_config_key is None:
+        return definition.default_base_url
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
+            definition.base_url_config_key,
+        )
+    if row is None:
+        return definition.default_base_url
+    value = resolve_secret_row(row)
+    return value or definition.default_base_url
 
 
 def _validate_model_name(ollama_model_name: str) -> None:
@@ -414,7 +427,8 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
     cloud_provider: str | None = None
     if "/" in model_name:
         prefix, model_suffix = model_name.split("/", 1)
-        cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(prefix)
+        provider = provider_for_prefix(prefix)
+        cloud_provider = provider.id if provider is not None else None
 
     # Validate the model-name portion (no path traversal / shell chars).
     # For "provider/model-name" strings we validate only the model-name suffix.
@@ -538,12 +552,15 @@ async def _deliver_cloud(
     """Deliver a cloud-provider model + its Fernet-decrypted key.
 
     The no-op mirrors the ollama shape (single DB entry, no YAML stack, signature
-    match) with the cloud signature = (model, think, key-fingerprint) — num_ctx /
-    api_base don't apply. /v1/model/info pops api_key, so the key leg is the
-    process-local fingerprint of the last delivery; key rotation re-delivers
+    match) with the cloud signature = (model, think, key-fingerprint). ``num_ctx``
+    never applies; custom OpenAI-compatible endpoints may add ``api_base``.
+    /v1/model/info pops api_key, so the key leg is the process-local
+    fingerprint of the last delivery; key rotation re-delivers
     because the fresh key's fingerprint differs from the cached one.
     """
+    provider_definition = provider_for_id(cloud_provider)
     api_key: str | None = None
+    api_base: str | None = None
     if db_pool is None:
         logger.warning(
             "Cannot inject cloud API key for alias %r -- db_pool not provided; "
@@ -552,6 +569,7 @@ async def _deliver_cloud(
         )
     else:
         api_key = await get_provider_api_key(cloud_provider, db_pool)
+        api_base = await get_provider_base_url(cloud_provider, db_pool)
         if api_key is None:
             logger.warning(
                 "No API key configured for provider %r (alias %r) -- "
@@ -566,17 +584,24 @@ async def _deliver_cloud(
         # Ollama-only / local-transport params must not leak onto a cloud deployment.
         if k not in ("api_base", "num_ctx", "keep_alive", "dimensions", "think", "model")
     }
-    new_params["model"] = new_model
+    if new_model.startswith(provider_definition.assignment_prefix):
+        model_suffix = new_model.split("/", 1)[1]
+        new_params["model"] = provider_model_for_delivery(provider_definition, model_suffix)
+    else:
+        new_params["model"] = new_model
     if api_key is not None:
         new_params["api_key"] = api_key
+    if api_base is not None:
+        new_params["api_base"] = api_base
     if effective_thinking_disabled:
         new_params["think"] = False
 
-    desired_cloud = (new_model, new_params.get("think"), _key_fingerprint(api_key))
+    desired_model = str(new_params["model"])
+    desired_cloud = (desired_model, new_params.get("think"), _key_fingerprint(api_key))
     if len(db_entries) == 1 and not yaml_entries:
         deployed = db_entries[0].litellm_params
         if (
-            deployed.get("model") == new_model
+            deployed.get("model") == desired_model
             and deployed.get("think") == new_params.get("think")
             and _CLOUD_DELIVERED_FINGERPRINTS.get(alias) == desired_cloud
         ):

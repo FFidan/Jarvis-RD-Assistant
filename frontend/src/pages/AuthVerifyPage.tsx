@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { SessionUser } from '@/stores/auth-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { verifyMagicLink } from '@/lib/api';
+import { ApiError, verifyMagicLink } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -28,10 +28,35 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 // token is POSTed exactly once; both mounts await the same promise.
 const inflightVerifications = new Map<string, Promise<SessionUser>>();
 
+function isRetryableSignInError(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return err.status === 0 || [500, 502, 503, 504].includes(err.status);
+  }
+  return err instanceof TypeError;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function verifyWithRetry(token: string): Promise<SessionUser> {
+  const delays = [250, 750];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await verifyMagicLink(token);
+    } catch (err) {
+      if (!isRetryableSignInError(err) || attempt >= delays.length) {
+        throw err;
+      }
+      await wait(delays[attempt] ?? 0);
+    }
+  }
+}
+
 function verifyOnce(token: string): Promise<SessionUser> {
   let p = inflightVerifications.get(token);
   if (!p) {
-    p = verifyMagicLink(token);
+    p = verifyWithRetry(token);
     inflightVerifications.set(token, p);
   }
   return p;

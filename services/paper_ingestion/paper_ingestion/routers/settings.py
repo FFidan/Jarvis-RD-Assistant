@@ -48,7 +48,12 @@ from paper_ingestion.routers.settings_sources import (  # noqa: F401
 # previously imported it from this module.
 from paper_ingestion.services.litellm_config import (
     ROLE_TO_ALIAS,  # noqa: F401
+    get_provider_base_url,
     update_litellm_model,
+)
+from paper_ingestion.services.llm_provider_registry import (
+    PROVIDER_REGISTRY,
+    provider_for_id,
 )
 
 # --- Symbols used by handler code ---
@@ -119,6 +124,24 @@ router.include_router(sources_router)
 class ProviderTestResponse(BaseModel):
     ok: bool
     error: str | None = None
+
+
+class ProviderMetadataResponse(BaseModel):
+    """Public, non-secret metadata for one supported cloud provider."""
+
+    id: str
+    display_name: str
+    kind: str
+    api_key_config_key: str
+    base_url_config_key: str | None = None
+    assignment_prefix: str
+    litellm_prefix: str
+    privacy_boundary: str
+    best_for: str
+    data_note: str
+    configured: bool
+    base_url_configured: bool = False
+    supports_assignment: bool
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +329,43 @@ async def papers_by_status(
 
 
 # ---------------------------------------------------------------------------
-# Cloud LLM Provider Test
+# Cloud LLM Providers
 # ---------------------------------------------------------------------------
+
+
+@router.get("/providers", response_model=list[ProviderMetadataResponse])
+@limiter.limit("30/minute")
+async def list_providers(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> list[ProviderMetadataResponse]:
+    """Return supported provider metadata without exposing stored secrets."""
+    rows: list[ProviderMetadataResponse] = []
+    for provider in PROVIDER_REGISTRY:
+        configured = await cloud_provider_key_present(provider.id, db_pool)
+        base_url_configured = False
+        if provider.base_url_config_key is not None:
+            base_url_configured = await get_provider_base_url(provider.id, db_pool) is not None
+        rows.append(
+            ProviderMetadataResponse(
+                id=provider.id,
+                display_name=provider.display_name,
+                kind=provider.kind,
+                api_key_config_key=provider.api_key_config_key,
+                base_url_config_key=provider.base_url_config_key,
+                assignment_prefix=provider.assignment_prefix,
+                litellm_prefix=provider.provider_model_prefix,
+                privacy_boundary=provider.privacy_boundary,
+                best_for=provider.best_for,
+                data_note=provider.data_note,
+                configured=configured,
+                base_url_configured=base_url_configured,
+                supports_assignment=provider.supports_assignment,
+            )
+        )
+    return rows
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
@@ -323,7 +381,8 @@ async def test_provider(
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail="unsupported provider")
 
-    config_key = f"llm.{provider}.api_key"
+    provider_definition = provider_for_id(provider)
+    config_key = provider_definition.api_key_config_key
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         row = await _fetch_effective_config_row(conn, config_key, caller_user_id, is_admin=is_admin)
@@ -338,7 +397,13 @@ async def test_provider(
     if not api_key:
         return ProviderTestResponse(ok=False, error="no api key configured")
 
-    result = await test_provider_connectivity(provider, api_key)
+    base_url = None
+    if provider_definition.base_url_config_key is not None:
+        base_url = await get_provider_base_url(provider, db_pool)
+        if base_url is None:
+            return ProviderTestResponse(ok=False, error="no base URL configured")
+
+    result = await test_provider_connectivity(provider, api_key, base_url=base_url)
     return ProviderTestResponse(ok=result.ok, error=result.error)
 
 

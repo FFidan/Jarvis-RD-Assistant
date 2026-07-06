@@ -4,8 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
-
-// --- Module mocks ---
+import type { ProviderMetadata } from '@/lib/api';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -19,8 +18,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...orig,
     fetchConfig: vi.fn(),
+    listProviders: vi.fn(),
     setConfig: vi.fn().mockResolvedValue({ key: '', value: null }),
-    setProviderKey: vi.fn().mockResolvedValue(undefined),
     testProvider: vi.fn(),
     listJobs: vi.fn().mockResolvedValue([]),
     cancelJob: vi.fn(),
@@ -37,256 +36,165 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
-const { fetchConfig, setProviderKey, testProvider } = await import('@/lib/api');
+const { fetchConfig, listProviders, setConfig, testProvider } = await import('@/lib/api');
 const { toast } = await import('sonner');
 
-const EMPTY_CONFIG: Array<{ key: string; value: unknown }> = [];
-
-const MASKED_CONFIG = [
-  { key: 'llm.anthropic.api_key', value: 'sk-ant-a****' },
-  { key: 'llm.openai.api_key', value: 'sk-o****' },
-  { key: 'llm.google.api_key', value: 'AIza****' },
+const PROVIDERS: ProviderMetadata[] = [
+  {
+    id: 'anthropic',
+    display_name: 'Anthropic Claude',
+    kind: 'direct',
+    api_key_config_key: 'llm.anthropic.api_key',
+    base_url_config_key: null,
+    assignment_prefix: 'anthropic/',
+    litellm_prefix: 'anthropic/',
+    privacy_boundary: 'direct_provider',
+    best_for: 'Careful long-context synthesis and writing.',
+    data_note: 'Selected prompts and source excerpts are sent to Anthropic when assigned.',
+    configured: true,
+    base_url_configured: false,
+    supports_assignment: true,
+  },
+  {
+    id: 'openrouter',
+    display_name: 'OpenRouter',
+    kind: 'router',
+    api_key_config_key: 'llm.providers.openrouter.api_key',
+    base_url_config_key: null,
+    assignment_prefix: 'openrouter/',
+    litellm_prefix: 'openrouter/',
+    privacy_boundary: 'router',
+    best_for: 'Trying many hosted models through one router account.',
+    data_note: 'Requests pass through OpenRouter and then the selected upstream provider.',
+    configured: false,
+    base_url_configured: false,
+    supports_assignment: true,
+  },
+  {
+    id: 'custom_openai_compatible',
+    display_name: 'Custom OpenAI-compatible endpoint',
+    kind: 'self_hosted',
+    api_key_config_key: 'llm.providers.custom_openai_compatible.api_key',
+    base_url_config_key: 'llm.providers.custom_openai_compatible.base_url',
+    assignment_prefix: 'custom_openai/',
+    litellm_prefix: 'openai/',
+    privacy_boundary: 'self_hosted',
+    best_for: 'Self-hosted vLLM, institutional gateways, or compatible endpoints.',
+    data_note: 'Requests are sent to the configured endpoint. Verify its operator and logs.',
+    configured: false,
+    base_url_configured: false,
+    supports_assignment: true,
+  },
 ];
+
+const MASKED_CONFIG = [{ key: 'llm.anthropic.api_key', value: '****1234' }];
 
 function renderSection() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return {
-    queryClient,
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ProvidersSection />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    ),
-  };
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe('ProvidersSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(fetchConfig).mockResolvedValue(EMPTY_CONFIG);
-  });
-
-  it('renders three labeled inputs and three Test buttons', async () => {
-    renderSection();
-    // Use id-based queries to avoid ambiguity with the button aria-labels
-    await waitFor(() => {
-      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
-      expect(document.getElementById('provider-key-openai')).toBeInTheDocument();
-      expect(document.getElementById('provider-key-google')).toBeInTheDocument();
-    });
-    // Three visible labels
-    expect(screen.getByText('Anthropic (Claude)')).toBeInTheDocument();
-    expect(screen.getByText('OpenAI (GPT / o-series)')).toBeInTheDocument();
-    expect(screen.getByText('Google (Gemini)')).toBeInTheDocument();
-    // Three Test buttons
-    const testButtons = screen.getAllByRole('button', { name: /test/i });
-    expect(testButtons).toHaveLength(3);
-  });
-
-  it('displays masked values from backend in each input', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
+    vi.mocked(listProviders).mockResolvedValue(PROVIDERS);
+  });
+
+  it('shows connected providers first without exposing every provider input', async () => {
     renderSection();
 
     await waitFor(() => {
-      const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
-      expect(anthropicInput).not.toBeNull();
-      expect(anthropicInput.value).toBe('sk-ant-a****');
-
-      const openaiInput = document.getElementById('provider-key-openai') as HTMLInputElement;
-      expect(openaiInput).not.toBeNull();
-      expect(openaiInput.value).toBe('sk-o****');
-
-      const googleInput = document.getElementById('provider-key-google') as HTMLInputElement;
-      expect(googleInput).not.toBeNull();
-      expect(googleInput.value).toBe('AIza****');
+      expect(screen.getByText('Providers and routing')).toBeInTheDocument();
     });
-    expect(screen.getAllByText('Configured, not tested')).toHaveLength(3);
+
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getAllByText('Anthropic Claude')).not.toHaveLength(0);
+    expect(screen.getByRole('button', { name: /add cloud provider/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument();
   });
 
-  it('calls setProviderKey with correct provider on blur when value changed', async () => {
+  it('opens an add-provider chooser and selects OpenRouter', async () => {
     const user = userEvent.setup();
     renderSection();
 
-    // Wait for component to render (loading state resolves)
-    await waitFor(() => {
-      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
-    });
-    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
-    await user.click(anthropicInput);
-    await user.type(anthropicInput, 'sk-ant-new-key');
-    await user.tab(); // trigger blur
+    await user.click(await screen.findByRole('button', { name: /add cloud provider/i }));
+    await user.click(screen.getByRole('button', { name: /OpenRouter/i }));
+
+    expect(screen.getByText('Trying many hosted models through one router account.')).toBeInTheDocument();
+    expect(document.getElementById('provider-key-openrouter')).toBeInTheDocument();
+  });
+
+  it('saves changed API keys on blur and preserves blank drafts as no-op', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    const input = (await screen.findByLabelText('API key')) as HTMLInputElement;
+    expect(input.value).toBe('****1234');
+    await user.clear(input);
+    await user.tab();
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, 'sk-ant-new');
+    await user.tab();
 
     await waitFor(() => {
-      expect(vi.mocked(setProviderKey)).toHaveBeenCalledWith(
-        'anthropic',
-        expect.stringContaining('sk-ant-new-key'),
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith('llm.anthropic.api_key', 'sk-ant-new');
+    });
+  });
+
+  it('saves custom endpoint base URL through the provider registry config key', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: /add cloud provider/i }));
+    await user.click(screen.getByRole('button', { name: /Custom OpenAI-compatible endpoint/i }));
+
+    const baseUrl = screen.getByLabelText('Base URL');
+    await user.type(baseUrl, 'http://127.0.0.1:8000/v1');
+    await user.tab();
+
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
+        'llm.providers.custom_openai_compatible.base_url',
+        'http://127.0.0.1:8000/v1',
       );
     });
   });
 
-  it('does NOT call setProviderKey on blur when value is unchanged (masked)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => {
-      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
-    });
-    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
-    // Focus then blur without changing value
-    await user.click(anthropicInput);
-    await user.tab();
-
-    await waitFor(() => {
-      expect(vi.mocked(setProviderKey)).not.toHaveBeenCalled();
-    });
-  });
-
-  it('does NOT call setProviderKey on blur when draft is cleared to blank (blank is not delete)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => {
-      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
-    });
-    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
-    // Clear the masked value to empty, then blur. The stored key must survive —
-    // a blank draft is "left empty", not "delete the key".
-    await user.clear(anthropicInput);
-    await user.tab();
-
-    await waitFor(() => {
-      // After blur the draft resets to null, so the masked value re-displays.
-      expect(anthropicInput.value).toBe('sk-ant-a****');
-    });
-    expect(vi.mocked(setProviderKey)).not.toHaveBeenCalled();
-  });
-
-  it('does NOT call setProviderKey on blur when draft is whitespace-only', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => {
-      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
-    });
-    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
-    await user.clear(anthropicInput);
-    await user.type(anthropicInput, '   ');
-    await user.tab();
-
-    await waitFor(() => {
-      expect(vi.mocked(setProviderKey)).not.toHaveBeenCalled();
-    });
-  });
-
-  it('calls testProvider with correct provider on Test button click', async () => {
+  it('tests the selected provider and reports success', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
     const user = userEvent.setup();
     renderSection();
 
-    await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const testBtns1 = screen.getAllByRole('button', { name: /test/i });
-    const anthropicTestBtn1 = testBtns1[0];
-    if (!anthropicTestBtn1) throw new Error('test fixture: Anthropic test button not found');
-    await user.click(anthropicTestBtn1);
+    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
 
     await waitFor(() => {
       expect(vi.mocked(testProvider)).toHaveBeenCalledWith('anthropic');
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Anthropic Claude connection OK');
     });
   });
 
-  it('shows success toast when testProvider returns ok=true', async () => {
-    vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const testBtns2 = screen.getAllByRole('button', { name: /test/i });
-    const anthropicTestBtn2 = testBtns2[0];
-    if (!anthropicTestBtn2) throw new Error('test fixture: Anthropic test button not found');
-    await user.click(anthropicTestBtn2);
-
-    await waitFor(() => {
-      expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
-        expect.stringContaining('connection OK'),
-      );
-    });
-  });
-
-  it('shows error toast when testProvider returns ok=false', async () => {
+  it('shows provider test failures without clearing the stored key', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: false, error: 'Invalid API key' });
     const user = userEvent.setup();
     renderSection();
 
-    await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const testBtns3 = screen.getAllByRole('button', { name: /test/i });
-    const anthropicTestBtn3 = testBtns3[0];
-    if (!anthropicTestBtn3) throw new Error('test fixture: Anthropic test button not found');
-    await user.click(anthropicTestBtn3);
+    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
     });
     expect(screen.getByText('Configured, degraded: Invalid API key')).toBeInTheDocument();
-  });
-
-  it('shows not configured status for blank providers', async () => {
-    renderSection();
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Not configured')).toHaveLength(3);
-    });
-  });
-
-  it('shows error toast when testProvider throws', async () => {
-    vi.mocked(testProvider).mockRejectedValue(new Error('Network error'));
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const testBtns4 = screen.getAllByRole('button', { name: /test/i });
-    const anthropicTestBtn4 = testBtns4[0];
-    if (!anthropicTestBtn4) throw new Error('test fixture: Anthropic test button not found');
-    await user.click(anthropicTestBtn4);
-
-    await waitFor(() => {
-      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Network error');
-    });
-  });
-
-  it('disables Test button while test is in flight', async () => {
-    let resolveTest!: (v: { ok: boolean; error: string | null }) => void;
-    vi.mocked(testProvider).mockImplementation(
-      () =>
-        new Promise((res) => {
-          resolveTest = res;
-        }),
-    );
-
-    const user = userEvent.setup();
-    renderSection();
-
-    await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const testBtns5 = screen.getAllByRole('button', { name: /test/i });
-    const anthropicTestBtn5 = testBtns5[0];
-    if (!anthropicTestBtn5) throw new Error('test fixture: Anthropic test button not found');
-    await user.click(anthropicTestBtn5);
-
-    // Button should be disabled while in flight
-    await waitFor(() => {
-      expect(anthropicTestBtn5).toBeDisabled();
-    });
-
-    // Resolve and button should re-enable
-    resolveTest({ ok: true, error: null });
-    await waitFor(() => {
-      expect(anthropicTestBtn5).not.toBeDisabled();
-    });
   });
 });

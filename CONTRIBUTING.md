@@ -11,9 +11,10 @@ isolation expectation that every contributor must follow.
 - `main` is the default branch. All merged changes land here.
 - Work on a feature branch: `git checkout -b feat/<short-description>` or
   `fix/<short-description>`.
-- Open a Pull Request against `main`. The project is currently maintained solo;
-  no approving review is required. Branch protection enforces the CI gate (`gate`
-  job) before merging.
+- Open a pull request against `main`. This project is currently solo-maintained.
+  Pull requests are expected to pass the required CI and security gates; maintainer
+  review happens before merge. Branch protection enforces the terminal CI and
+  security gates before merging.
 - Squash-merge or rebase-merge to keep `main` history linear.
 - Delete the branch after merging.
 

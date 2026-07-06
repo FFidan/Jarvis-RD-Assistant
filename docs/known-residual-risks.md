@@ -1,6 +1,8 @@
-# Known Residual Risks
+# Risk Register
 
-_Last updated: 2026-07-05_
+_Last updated: 2026-07-06_
+
+_Known residual risks and accepted operational/code-quality deferrals._
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.
 

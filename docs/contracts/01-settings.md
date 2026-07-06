@@ -111,9 +111,11 @@ validation and is an intentional non-regression: the omission is by design, not 
 | `llm.smart_model` | (no seed — first boot auto-configures a best-fit model id; the reconciler falls back to `JARVIS_SMART_MODEL` env, then `qwen3:8b`) | On write: calls `update_litellm_model` ([litellm_config.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/litellm_config.py)) which delivers via LiteLLM's admin DB — `GET /v1/model/info`, `POST /model/new`, `POST /model/delete` (the YAML carries no smart/fast aliases and is never written) | Runtime authority is LiteLLM's admin DB, not `user_config`. The `user_config` row is the desired state the persistent ~30 s reconciler converges LiteLLM onto (plus the UI's read-back display). On delivery failure the role is marked in `llm.delivery_pending` and the reconciler keeps retrying. See §9. |
 | `llm.fast_model` | (no seed — same auto-configure; env fallback `JARVIS_FAST_MODEL`, then `qwen3:4b`) | Same as above | Same |
 | `llm.embed_model` | (no seed) | Dimension-locked: the `embed` alias stays YAML-seeded; `update_litellm_model` refuses any runtime re-route (re-selecting the routed model is a no-op). Switching embedders = edit `litellm/config.yaml` + re-embed | Runtime authority for `embed` is the YAML, by design (a DB copy would stack with the YAML deployment). See §9. |
-| `llm.anthropic.api_key` | (none) | Encrypted per-user credential. Read by [litellm_config.py:get_provider_api_key](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([routers/settings.py:429](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/routers/settings.py#L429)) | Preferred BYO-provider path. Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. `.env` provider keys are bootstrap/legacy only, not the request-time Settings authority. |
-| `llm.openai.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` `OPENAI_API_KEY` is bootstrap/legacy only |
-| `llm.google.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` Google provider keys are bootstrap/legacy only |
+| `llm.anthropic.api_key` | (none) | Encrypted deployment-wide admin credential. Read by [litellm_config.py:get_provider_api_key](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/litellm_config.py) when an `anthropic/...` model alias is selected; also read by `POST /api/providers/anthropic/test`. | Conditional cloud-provider credential. Stored as a system row (`user_id IS NULL`), admin-only, and dormant unless a matching cloud model is assigned or tested. |
+| `llm.openai.api_key` | (none) | Same deployment-wide encrypted pattern for `openai/...` aliases. | Same |
+| `llm.google.api_key` | (none) | Same deployment-wide encrypted pattern for `gemini/...` aliases. | Same |
+| `llm.providers.<provider>.api_key` | (none) | Registry-derived deployment-wide encrypted keys for `openrouter`, `deepseek`, `mistral`, `moonshot`, `zai`, and `custom_openai_compatible`. | New provider integrations use namespaced system keys instead of adding more flat key names. |
+| `llm.providers.custom_openai_compatible.base_url` | (none) | Registry-derived endpoint URL used only with the Custom OpenAI-compatible provider. | Validated before save; blocks credentials/fragments, invalid schemes, and unsafe IP ranges. Stored as an encrypted system row with the provider settings. |
 
 ### 2.3 System-wide admin keys (one deployment-wide value, admin-only)
 
@@ -309,9 +311,11 @@ The implementation MUST satisfy these. Testable.
 | `smtp.from_name` | Active (optional sender display name in From header; empty value clears) |
 | `automation.fetch_interval_hours` | Active (system-wide auto-fetch scheduler) |
 | `observability.langfuse_dashboard_url` | Active (Settings → Observability link target) |
-| `llm.anthropic.api_key` | Partial (used only when model alias is `anthropic/*` or for `/test` endpoint) |
-| `llm.openai.api_key` | Partial |
-| `llm.google.api_key` | Partial |
+| `llm.anthropic.api_key` | Partial (admin-wide encrypted provider key; used only when model alias is `anthropic/*` or for `/test`) |
+| `llm.openai.api_key` | Partial (admin-wide encrypted provider key; used only when model alias is `openai/*` or for `/test`) |
+| `llm.google.api_key` | Partial (admin-wide encrypted provider key; used only when model alias is `gemini/*` or for `/test`) |
+| `llm.providers.<provider>.api_key` | Partial (admin-wide encrypted provider key for namespaced provider registry entries) |
+| `llm.providers.custom_openai_compatible.base_url` | Partial (admin-wide custom endpoint URL, validated before save) |
 
 ---
 
@@ -320,7 +324,7 @@ The implementation MUST satisfy these. Testable.
 | Item | Why accepted |
 |---|---|
 | `llm.{smart,fast,embed}_model` Partial | LiteLLM's admin DB is the deliberate runtime authority for smart/fast (deployments delivered via `/model/new` + `/model/delete` and re-verified by the ~30 s reconciler); the YAML-seeded `embed` alias is dimension-locked. The `user_config` row is the desired state the reconciler converges on, plus UI read-back. See [03-llm.md §1](03-llm.md). |
-| `llm.{anthropic,openai,google}.api_key` Partial | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id`, and reads are scoped to the caller's row with no cross-user fallback. The onboarding wizard and the Settings wizard surface these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
+| Cloud-provider keys Partial | Conditional secrets by design — only consumed when a matching cloud-provider model alias is selected or a `/test` endpoint is invoked. In v1.0.3 these settings are deployment-wide, admin-only system rows; per-user BYOK/routing is future work, not current behavior. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
 
 ---
 

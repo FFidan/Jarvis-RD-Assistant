@@ -128,10 +128,18 @@ explicitly set in the environment. An explicit env var always wins.
 | `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
 
-### Cloud LLM Provider Keys at Rest
+### Cloud LLM Provider Settings at Rest
 
-Cloud provider API keys (`llm.anthropic.api_key`, `llm.openai.api_key`,
-`llm.google.api_key`) entered in Settings live in TWO encrypted stores:
+Cloud provider settings entered in Settings are deployment-wide admin settings.
+Existing providers keep their backward-compatible flat keys (`llm.anthropic.api_key`,
+`llm.openai.api_key`, `llm.google.api_key`); newer providers use namespaced keys
+such as `llm.providers.openrouter.api_key`, `llm.providers.deepseek.api_key`,
+`llm.providers.mistral.api_key`, `llm.providers.moonshot.api_key`,
+`llm.providers.zai.api_key`, and `llm.providers.custom_openai_compatible.api_key`.
+The custom OpenAI-compatible endpoint also stores
+`llm.providers.custom_openai_compatible.base_url`.
+
+Provider keys live in TWO encrypted stores when assigned to a role:
 
 1. **`user_config.encrypted_value`** — Fernet-encrypted under
    `JARVIS_CONFIG_KEY`. This is the source of truth; it survives LiteLLM
@@ -145,6 +153,14 @@ Keys are never written to `.env`, `litellm/config.yaml`, container
 environment blocks (visible via `docker inspect`), or any other file.
 Rotating `JARVIS_CONFIG_KEY` (supported, see below) does not affect store 2;
 `LITELLM_SALT_KEY` itself must never rotate (see the table above).
+
+Custom endpoint base URLs are validated before save. The validator rejects
+credentials in the URL, fragments, invalid schemes, and unsafe IP ranges such
+as metadata-service, link-local, multicast, and unspecified addresses. HTTPS is
+allowed for normal remote endpoints; HTTP is limited to loopback development or
+self-hosted gateway use. Administrators should only configure endpoints they
+trust, because prompts and relevant source excerpts are sent there when a custom
+model is assigned.
 
 ### X-Owner-User-Id Mechanism
 
