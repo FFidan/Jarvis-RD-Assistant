@@ -52,7 +52,7 @@ This step is skipped when an admin already exists (for example, when resuming a 
 
 ### Step 4 — Cloud LLM keys (skippable)
 
-Optionally provide cloud provider API keys. Cloud models can supplement the local Ollama models when an administrator enables them, but this step is skippable and local-only installs remain supported. More providers and custom OpenAI-compatible endpoints can be added later in Settings → Models → Cloud Providers.
+Optionally provide cloud provider API keys. Cloud models can supplement the local Ollama models when an administrator enables them, but this step is skippable and local-only installs remain supported. More providers and custom OpenAI-compatible endpoints can be added later in Settings → Models → Providers & Routing.
 
 ### Step 5 — First research topic
 

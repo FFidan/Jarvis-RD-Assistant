@@ -57,7 +57,7 @@ export const ALL_SECTIONS: RailSection[] = [
     adminOnly: true,
     items: [
       { section: 'models', item: 'llm', label: 'AI models' },
-      { section: 'models', item: 'providers', label: 'Cloud Providers' },
+      { section: 'models', item: 'providers', label: 'Providers & Routing' },
     ],
   },
   {

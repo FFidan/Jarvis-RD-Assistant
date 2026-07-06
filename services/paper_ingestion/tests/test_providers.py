@@ -9,6 +9,8 @@ Covers:
 
 from __future__ import annotations
 
+import socket
+
 import httpx
 import pytest
 import respx
@@ -90,9 +92,18 @@ async def _get_config(app, key: str):
         return await client.get(f"/api/config/{key}")
 
 
-async def _post_provider_test(app, provider: str):
+async def _get_providers(app, *, role: str | None = "admin"):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=transport_app), base_url="http://test"
+    ) as client:
+        return await client.get("/api/providers")
+
+
+async def _post_provider_test(app, provider: str, *, role: str | None = "admin"):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
         return await client.post(f"/api/providers/{provider}/test")
 
@@ -251,6 +262,53 @@ async def test_legacy_plaintext_row_masks_on_read(_app):
     assert "****" in body["value"]
     # H.1: mask shows last 4 chars; "legacytoken12345" → "****2345"
     assert body["value"] == "****2345"
+
+
+# ---------------------------------------------------------------------------
+# Tests: /api/providers admin boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_list_providers_requires_admin_session(_app):
+    """Provider configured-status metadata is admin-only."""
+    app, conn = _app
+
+    api_key_only = await _get_providers(app, role=None)
+    member = await _get_providers(app, role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_list_providers_admin_returns_metadata(_app):
+    """Admins can list provider metadata and configured flags."""
+    app, conn = _app
+    conn.fetchrow.return_value = None
+
+    resp = await _get_providers(app, role="admin")
+
+    assert resp.status_code == 200
+    provider_ids = {item["id"] for item in resp.json()}
+    assert {"anthropic", "openai", "custom_openai_compatible"} <= provider_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_requires_admin_session(_app):
+    """Live provider probes must not be callable by non-admin or API-key-only users."""
+    app, conn = _app
+
+    api_key_only = await _post_provider_test(app, "anthropic", role=None)
+    member = await _post_provider_test(app, "anthropic", role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetchrow.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +509,35 @@ async def test_test_provider_connection_error_returns_ok_false(_app):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
-    assert body["error"] is not None
+    assert body["error"] == "provider request failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_custom_endpoint_blocks_link_local_resolution(_app, monkeypatch):
+    """Custom endpoint tests reject blocked resolved addresses before outbound HTTP."""
+    from jarvis_common.crypto import encrypt_secret
+
+    app, conn = _app
+    conn.fetchrow.side_effect = [
+        {"value": None, "encrypted_value": encrypt_secret("sk-custom").encode("ascii")},
+        {"value": "https://custom.internal/v1", "encrypted_value": None},
+    ]
+
+    def fake_getaddrinfo(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo", fake_getaddrinfo
+    )
+
+    resp = await _post_provider_test(app, "custom_openai_compatible")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": False,
+        "error": "custom endpoint resolves to a blocked network address",
+    }
 
 
 @pytest.mark.asyncio

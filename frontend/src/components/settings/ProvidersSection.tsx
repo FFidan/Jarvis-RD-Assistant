@@ -70,15 +70,30 @@ function sortProviders(providers: ProviderMetadata[]): ProviderMetadata[] {
 export function ProvidersSection() {
   const queryClient = useQueryClient();
 
-  const { data: configs = [], isLoading: configsLoading } = useQuery({
+  const {
+    data: configs = [],
+    isLoading: configsLoading,
+    isError: configsError,
+    error: configsErrorValue,
+  } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
-  const { data: providerRows = [], isLoading: providersLoading } = useQuery({
+  const {
+    data: providerRows = [],
+    isLoading: providersLoading,
+    isError: providersError,
+    error: providersErrorValue,
+  } = useQuery({
     queryKey: ['settings', 'providers'],
     queryFn: listProviders,
   });
 
+  const loadError = configsError
+    ? errorMessage(configsErrorValue, 'Could not load stored provider keys')
+    : providersError
+      ? errorMessage(providersErrorValue, 'Could not load provider metadata')
+      : null;
   const providers = useMemo(() => sortProviders(providerRows), [providerRows]);
   const configuredProviders = providers.filter(
     (provider) => provider.configured || getMaskedConfig(configs, provider.api_key_config_key),
@@ -142,12 +157,30 @@ export function ProvidersSection() {
     return <div className="py-4 text-sm text-muted-foreground">Loading provider settings...</div>;
   }
 
+  if (loadError) {
+    return (
+      <Card className="rounded-md border-hair shadow-none">
+        <CardHeader className="space-y-2">
+          <h3 className="text-base font-semibold">Providers &amp; Routing</h3>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            Local models stay the default. Provider keys are deployment-wide and encrypted at rest.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            Could not load provider settings. {loadError}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <h3 className="text-base font-semibold">Providers and routing</h3>
+            <h3 className="text-base font-semibold">Providers &amp; Routing</h3>
             <p className="max-w-3xl text-sm text-muted-foreground">
               Local models stay the default. Add cloud providers only when you want selected Main or
               Quick model routes to use external compute. Provider keys are deployment-wide and
@@ -292,8 +325,8 @@ export function ProvidersSection() {
             )}
 
             <p className="text-xs text-muted-foreground">
-              Admin-wide setting. {selectedProvider.data_note} Leave the key blank to keep this
-              provider disabled; local Ollama/vLLM routes remain available.
+              Admin-wide setting. {selectedProvider.data_note} Leave all provider keys blank to keep this
+              deployment local-only; local Ollama/vLLM routes remain available.
             </p>
           </div>
         )}

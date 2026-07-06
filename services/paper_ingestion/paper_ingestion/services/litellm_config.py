@@ -48,6 +48,7 @@ from paper_ingestion.services.llm_provider_registry import (
     provider_for_id,
     provider_for_prefix,
     provider_model_for_delivery,
+    validate_custom_openai_base_url_for_outbound,
 )
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
@@ -539,6 +540,39 @@ def _deliver_embed(
     )
 
 
+async def _provider_credentials_for_delivery(
+    alias: str,
+    cloud_provider: str,
+    db_pool: Any,
+) -> tuple[str | None, str | None]:
+    """Return provider API key and optional base URL for LiteLLM delivery."""
+
+    if db_pool is None:
+        logger.warning(
+            "Cannot inject cloud API key for alias %r -- db_pool not provided; "
+            "delivering the deployment without a key",
+            alias,
+        )
+        return None, None
+
+    api_key = await get_provider_api_key(cloud_provider, db_pool)
+    api_base = await get_provider_base_url(cloud_provider, db_pool)
+    if api_base is not None and cloud_provider == "custom_openai_compatible":
+        try:
+            await validate_custom_openai_base_url_for_outbound(api_base)
+        except ValueError as exc:
+            raise RuntimeError("custom provider endpoint is blocked by network policy") from exc
+    if api_key is None:
+        logger.warning(
+            "No API key configured for provider %r (alias %r) -- "
+            "delivering the deployment without a key; requests will fail "
+            "until the key is saved",
+            cloud_provider,
+            alias,
+        )
+    return api_key, api_base
+
+
 async def _deliver_cloud(
     alias: str,
     cloud_provider: str,
@@ -559,25 +593,7 @@ async def _deliver_cloud(
     because the fresh key's fingerprint differs from the cached one.
     """
     provider_definition = provider_for_id(cloud_provider)
-    api_key: str | None = None
-    api_base: str | None = None
-    if db_pool is None:
-        logger.warning(
-            "Cannot inject cloud API key for alias %r -- db_pool not provided; "
-            "delivering the deployment without a key",
-            alias,
-        )
-    else:
-        api_key = await get_provider_api_key(cloud_provider, db_pool)
-        api_base = await get_provider_base_url(cloud_provider, db_pool)
-        if api_key is None:
-            logger.warning(
-                "No API key configured for provider %r (alias %r) -- "
-                "delivering the deployment without a key; requests will fail "
-                "until the key is saved",
-                cloud_provider,
-                alias,
-            )
+    api_key, api_base = await _provider_credentials_for_delivery(alias, cloud_provider, db_pool)
     new_params: dict[str, Any] = {
         k: v
         for k, v in base_params.items()

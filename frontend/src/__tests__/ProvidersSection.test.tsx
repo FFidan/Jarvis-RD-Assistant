@@ -113,7 +113,7 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => {
-      expect(screen.getByText('Providers and routing')).toBeInTheDocument();
+      expect(screen.getByText('Providers & Routing')).toBeInTheDocument();
     });
 
     expect(screen.getByText('Connected')).toBeInTheDocument();
@@ -183,6 +183,16 @@ describe('ProvidersSection', () => {
       expect(vi.mocked(testProvider)).toHaveBeenCalledWith('anthropic');
       expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Anthropic Claude connection OK');
     });
+  });
+
+  it('shows provider metadata load failures', async () => {
+    vi.mocked(listProviders).mockRejectedValue(new Error('Admin access required'));
+
+    renderSection();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load provider settings. Admin access required',
+    );
   });
 
   it('shows provider test failures without clearing the stored key', async () => {

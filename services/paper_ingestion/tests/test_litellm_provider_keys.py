@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import socket
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -320,3 +321,32 @@ async def test_update_litellm_model_delivers_custom_openai_endpoint(monkeypatch)
     assert params["model"] == "openai/local-model"
     assert params["api_base"] == "http://127.0.0.1:8000/v1"
     assert params["api_key"] == "sk-custom"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_litellm_model_rejects_blocked_custom_endpoint(monkeypatch):
+    """Blocked custom endpoints fail before LiteLLM receives a deployment."""
+    import paper_ingestion.services.llm_provider_registry as registry
+
+    monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        {"value": "sk-custom", "encrypted_value": None},
+        {"value": "https://llm.example.test/v1", "encrypted_value": None},
+    ]
+
+    def fake_getaddrinfo(*_args):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
+
+    monkeypatch.setattr(registry.socket, "getaddrinfo", fake_getaddrinfo)
+
+    respx.get(f"{LITELLM}/v1/model/info").mock(return_value=httpx.Response(200, json={"data": []}))
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+
+    with pytest.raises(RuntimeError, match="custom provider endpoint is blocked"):
+        await update_litellm_model("smart", "custom_openai/local-model", db_pool=pool)
+
+    assert not new_route.called

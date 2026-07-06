@@ -339,6 +339,7 @@ async def list_providers(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
     caller_user_id: int = Depends(current_user_id_strict),
 ) -> list[ProviderMetadataResponse]:
     """Return supported provider metadata without exposing stored secrets."""
@@ -375,6 +376,7 @@ async def test_provider(
     provider: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
     caller_user_id: int = Depends(current_user_id_strict),
 ) -> ProviderTestResponse:
     """Probe a cloud LLM provider with its stored API key to verify connectivity."""

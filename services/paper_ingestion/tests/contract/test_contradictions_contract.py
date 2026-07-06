@@ -32,6 +32,7 @@ import pytest
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
 )
+from paper_ingestion.services.contradictions_extract import _load_verified_findings
 
 pytestmark = [
     pytest.mark.contract,
@@ -96,6 +97,31 @@ async def _seed_stance_row(
     )
 
 
+async def _seed_summary_findings(
+    conn,
+    paper_id: int,
+    *,
+    user_id: int | None,
+    finding: str,
+    quote: str,
+    related_paper_id: int | None = None,
+) -> None:
+    """Insert a paper_summaries row with one verified-style key finding."""
+    refs = [] if related_paper_id is None else [{"related_paper_id": related_paper_id}]
+    await conn.execute(
+        """
+        INSERT INTO paper_summaries (
+            paper_id, user_id, summary_brief, summary_detailed, key_findings, cross_references
+        )
+        VALUES ($1, $2, 'brief', 'detailed', $3::jsonb, $4::jsonb)
+        """,
+        paper_id,
+        user_id,
+        [{"finding": finding, "quote": quote, "page_number": 1}],
+        refs,
+    )
+
+
 async def _seed_library_paper(conn, user_id: int, external_id: str) -> int:
     """Insert a paper owned by *user_id* and add it to their library."""
     paper_id = int(
@@ -116,6 +142,62 @@ async def _seed_library_paper(conn, user_id: int, external_id: str) -> int:
         paper_id,
     )
     return paper_id
+
+
+# ---------------------------------------------------------------------------
+# Finding load scoping
+# ---------------------------------------------------------------------------
+
+
+async def test_load_verified_findings_requires_user_library_membership(
+    contract_two_users, contract_conn
+):
+    """Library scans load only findings for papers in the caller's library."""
+    user_a = contract_two_users.user_a_id
+    owned = await _seed_library_paper(contract_conn, user_a, "finding-owned")
+    unowned = await _seed_library_paper(
+        contract_conn, contract_two_users.user_b_id, "finding-unowned"
+    )
+    await _seed_summary_findings(
+        contract_conn, owned, user_id=None, finding="owned finding", quote="owned quote"
+    )
+    await _seed_summary_findings(
+        contract_conn, unowned, user_id=None, finding="unowned finding", quote="unowned quote"
+    )
+
+    findings = await _load_verified_findings(contract_conn, user_id=user_a)
+
+    assert {finding.paper_id for finding in findings} == {owned}
+
+
+async def test_load_verified_findings_focused_scan_keeps_related_papers_in_library(
+    contract_two_users, contract_conn
+):
+    """Focused scans do not pull unowned related papers through cross-references."""
+    user_a = contract_two_users.user_a_id
+    owned = await _seed_library_paper(contract_conn, user_a, "focused-owned")
+    unowned = await _seed_library_paper(
+        contract_conn, contract_two_users.user_b_id, "focused-unowned"
+    )
+    await _seed_summary_findings(
+        contract_conn,
+        owned,
+        user_id=None,
+        finding="owned focused finding",
+        quote="owned focused quote",
+        related_paper_id=unowned,
+    )
+    await _seed_summary_findings(
+        contract_conn,
+        unowned,
+        user_id=None,
+        finding="unowned related finding",
+        quote="unowned related quote",
+    )
+
+    findings = await _load_verified_findings(contract_conn, paper_id=owned, user_id=user_a)
+
+    assert {finding.paper_id for finding in findings} == {owned}
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +222,12 @@ async def test_c5_01_list_contradictions_returns_rows_scoped_to_user(
         """,
         contract_two_users.user_a_id,
     )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        paper_b_id,
+    )
+
     cid_a = await _seed_contradiction(
         contract_conn, contract_two_users.paper_id_a, paper_b_id, contract_two_users.user_a_id
     )
@@ -162,6 +250,25 @@ async def test_c5_01_list_contradictions_returns_rows_scoped_to_user(
 # GET /api/contradictions — user B sees empty when A seeded rows
 # (sub-assertion of the list-scoped-to-caller test — kept separate for clarity)
 # ---------------------------------------------------------------------------
+
+
+async def test_c5_01b_list_contradictions_hides_mixed_library_pair(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """A row owned by the caller is hidden when either evidence paper is outside their library."""
+    user_a = contract_two_users.user_a_id
+    owned = await _seed_library_paper(contract_conn, user_a, "mixed-list-owned")
+    unowned = await _seed_library_paper(
+        contract_conn, contract_two_users.user_b_id, "mixed-list-unowned"
+    )
+    mixed_id = await _seed_contradiction(contract_conn, owned, unowned, user_a)
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/contradictions")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [row["id"] for row in resp.json()["contradictions"]]
+    assert mixed_id not in ids
 
 
 async def test_c5_02_list_contradictions_user_b_returns_empty(
@@ -305,13 +412,15 @@ async def test_c5_05_list_contradictions_paper_id_filter(
         contract_two_users.user_a_id,
     )
 
-    # list_contradictions scopes via EXISTS user_library: at least one paper in
-    # each contradiction pair must be in the caller's library. Add paper_y_id
-    # (which appears in BOTH contradictions below) to user A's library.
-    await contract_conn.execute(
+    # list_contradictions requires the full evidence pair in the caller's
+    # library. Add all three papers so this test isolates the paper_id filter.
+    await contract_conn.executemany(
         "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        contract_two_users.user_a_id,
-        paper_y_id,
+        [
+            (contract_two_users.user_a_id, paper_x_id),
+            (contract_two_users.user_a_id, paper_y_id),
+            (contract_two_users.user_a_id, paper_z_id),
+        ],
     )
 
     cid_xy = await _seed_contradiction(
@@ -506,7 +615,7 @@ async def test_c5_09_consensus_tenancy_isolation(
 ):
     """User B cannot see a consensus cluster built only from user A's papers.
 
-    # Verified: aggregate_consensus reuses the user_library OR-predicate.
+    # Verified: aggregate_consensus requires both evidence papers in user_library.
     """
     user_a = contract_two_users.user_a_id
     p1 = await _seed_library_paper(contract_conn, user_a, "consensus-tenancy-p1")
@@ -522,6 +631,27 @@ async def test_c5_09_consensus_tenancy_isolation(
     body = resp.json()
     assert body["total"] == 0, f"user B must not see user A's private cluster: {body}"
     assert body["claims"] == []
+
+
+async def test_c5_09b_consensus_hides_mixed_library_pair(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """Consensus aggregation hides rows whose evidence pair is only partly in library."""
+    user_a = contract_two_users.user_a_id
+    owned = await _seed_library_paper(contract_conn, user_a, "mixed-consensus-owned")
+    unowned = await _seed_library_paper(
+        contract_conn, contract_two_users.user_b_id, "mixed-consensus-unowned"
+    )
+    await _seed_stance_row(
+        contract_conn, owned, unowned, user_a, stance="supports", claim_topic="mixed claim"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/consensus")
+
+    assert resp.status_code == 200, resp.text[:300]
+    topics = [claim["claim_topic"] for claim in resp.json()["claims"]]
+    assert "mixed claim" not in topics
 
 
 async def test_c5_10_unique_index_ignores_stance_and_topic_labels(

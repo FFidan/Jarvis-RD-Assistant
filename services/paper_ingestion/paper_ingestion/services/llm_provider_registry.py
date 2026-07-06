@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
 ProviderKind = Literal["direct", "router", "self_hosted"]
 PrivacyBoundary = Literal["direct_provider", "router", "self_hosted"]
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 @dataclass(frozen=True)
@@ -200,6 +203,10 @@ def validate_custom_openai_base_url(value: str) -> None:
         raise ValueError("custom endpoint base URL must not include credentials")
     if parsed.fragment:
         raise ValueError("custom endpoint base URL must not include a fragment")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("custom endpoint base URL has an invalid port") from exc
 
     hostname = parsed.hostname
     try:
@@ -218,3 +225,62 @@ def validate_custom_openai_base_url(value: str) -> None:
     is_loopback = hostname in {"localhost"} or (ip is not None and ip.is_loopback)
     if parsed.scheme == "http" and not is_loopback:
         raise ValueError("plain HTTP custom endpoints must be loopback-only")
+
+
+def _blocked_custom_endpoint_ip(ip: IPAddress) -> bool:
+    """Return True for resolved addresses custom provider endpoints must not use."""
+
+    return (
+        ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip == ipaddress.ip_address("169.254.169.254")
+    )
+
+
+def _ip_literal(hostname: str) -> IPAddress | None:
+    """Parse *hostname* as an IP literal, returning None for DNS names."""
+
+    try:
+        return ipaddress.ip_address(hostname)
+    except ValueError:
+        return None
+
+
+async def validate_custom_openai_base_url_for_outbound(value: str) -> None:
+    """Resolve and validate a custom OpenAI-compatible endpoint before outbound use."""
+
+    validate_custom_openai_base_url(value)
+    parsed = urlparse(value.strip())
+    hostname = parsed.hostname
+    if hostname is None:
+        raise ValueError("custom endpoint base URL must include a host")
+
+    literal_ip = _ip_literal(hostname)
+    explicit_loopback = hostname == "localhost" or (
+        literal_ip is not None and literal_ip.is_loopback
+    )
+    if literal_ip is not None:
+        resolved_ips = {literal_ip}
+    else:
+        loop = asyncio.get_running_loop()
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            infos = await loop.run_in_executor(
+                None, socket.getaddrinfo, hostname, port, 0, socket.SOCK_STREAM
+            )
+        except socket.gaierror as exc:
+            raise ValueError("custom endpoint host could not be resolved") from exc
+        resolved_ips = set()
+        for info in infos:
+            address = info[4][0]
+            try:
+                resolved_ips.add(ipaddress.ip_address(address))
+            except ValueError:
+                continue
+
+    if not resolved_ips:
+        raise ValueError("custom endpoint host could not be resolved")
+    for ip in resolved_ips:
+        if _blocked_custom_endpoint_ip(ip) or (ip.is_loopback and not explicit_loopback):
+            raise ValueError("custom endpoint resolves to a blocked network address")

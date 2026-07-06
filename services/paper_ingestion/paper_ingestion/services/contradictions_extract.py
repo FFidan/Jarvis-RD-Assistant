@@ -7,6 +7,7 @@ constants used by the scoring path in ``contradictions.py``.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -134,20 +135,30 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
+def _json_list(raw: Any) -> list[Any]:
+    """Return *raw* as a list, accepting JSON strings from DB fixtures."""
+
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
 def _cross_reference_ids(raw: Any) -> frozenset[int]:
-    if not isinstance(raw, list):
-        return frozenset()
     ids: set[int] = set()
-    for item in raw:
+    for item in _json_list(raw):
         if isinstance(item, dict) and isinstance(item.get("related_paper_id"), int):
             ids.add(item["related_paper_id"])
     return frozenset(ids)
 
 
 def _parse_findings(row: asyncpg.Record) -> list[VerifiedFinding]:
-    raw_findings = row["key_findings"] or []
-    if not isinstance(raw_findings, list):
-        return []
+    raw_findings = _json_list(row["key_findings"] or [])
     cross_reference_ids = _cross_reference_ids(row["cross_references"] or [])
     parsed: list[VerifiedFinding] = []
     for item in raw_findings:
@@ -180,20 +191,35 @@ async def _load_verified_findings(
     paper_id: int | None = None,
     user_id: int | None = None,
 ) -> list[VerifiedFinding]:
+    """Load verified findings, scoped to the caller's library when available."""
     rows = await conn.fetch(
         """
         SELECT p.id AS paper_id, p.title, ps.key_findings, ps.cross_references
         FROM paper_summaries ps
         JOIN papers p ON p.id = ps.paper_id
-        WHERE jsonb_typeof(ps.key_findings) = 'array'
-          AND jsonb_array_length(ps.key_findings) > 0
+        WHERE CASE
+                  WHEN jsonb_typeof(ps.key_findings) = 'array'
+                  THEN jsonb_array_length(ps.key_findings)
+                  ELSE 0
+              END > 0
           AND ($1::integer IS NULL OR p.id = $1 OR EXISTS (
               SELECT 1
-              FROM jsonb_array_elements(COALESCE(ps.cross_references, '[]'::jsonb)) AS ref
+              FROM jsonb_array_elements(
+                  CASE
+                      WHEN jsonb_typeof(ps.cross_references) = 'array'
+                      THEN ps.cross_references
+                      ELSE '[]'::jsonb
+                  END
+              ) AS ref
               WHERE ref->>'related_paper_id' ~ '^[0-9]+$'
                 AND (ref->>'related_paper_id')::integer = $1
           ))
           AND ($2::integer IS NULL OR ps.user_id IS NULL OR ps.user_id = $2)
+          AND ($2::integer IS NULL OR EXISTS (
+              SELECT 1
+              FROM user_library ul
+              WHERE ul.paper_id = p.id AND ul.user_id = $2
+          ))
         ORDER BY ps.created_at DESC
         LIMIT 250
         """,

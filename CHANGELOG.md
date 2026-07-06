@@ -8,12 +8,24 @@ Wording such as "public-ready", "public-readiness", or "public-launch groundwork
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v1.0.3 (2026-07-06) — Provider routing, sign-in resilience, and consensus trust hardening
+
+A maintenance release that expands optional cloud-provider setup without changing the local-first default, improves first-hour reliability, and tightens multi-user data boundaries around Consensus evidence.
+
 ### Added
 - **Provider setup and routing.** Settings now has a registry-driven provider setup flow for OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and Custom OpenAI-compatible endpoints. Cloud providers remain optional and admin-wide; local-only installs continue to work without API keys.
 
 ### Changed
 - **AI settings clarity.** Model selection keeps local models first while showing cloud entries only when their provider prerequisites are met. Documentation now distinguishes local-first defaults from whole-application offline guarantees.
+- **Providers & Routing navigation.** The provider settings page, settings rail, and public manual now use the same label and show an explicit error state when provider metadata cannot load.
 - **Consensus scan feedback.** The Consensus page now reflects scan progress and completed zero-result or failed scan outcomes without asking users to reload manually.
+
+### Security
+- **Provider administration boundary.** Provider metadata and provider connection tests now require an administrator session, matching the admin-wide storage model for provider credentials.
+- **Custom endpoint validation.** Custom OpenAI-compatible endpoints are validated before test and routing delivery, including resolved-address checks for implicit loopback, link-local, multicast, unspecified, and metadata-service addresses while still allowing explicitly configured localhost endpoints.
+- **Consensus evidence isolation.** Persisted contradiction and consensus reads now require both evidence papers to belong to the caller's library, and candidate finding loads are scoped to the caller's library during scans.
 
 ### Fixed
 - **Magic-link verification.** Transient backend/proxy errors during magic-link verification are retried before showing a terminal sign-in failure, while invalid or expired tokens still fail immediately.

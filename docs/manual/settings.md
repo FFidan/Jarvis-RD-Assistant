@@ -65,7 +65,7 @@ Your choice applies automatically — there is no separate "save and restart" st
 
 If a model card shows a **pending — applying automatically** badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.
 
-### Cloud Providers
+### Providers & Routing
 
 Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses **Add cloud provider** for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.
 

@@ -1,5 +1,7 @@
 """Tests for config key whitelist and settings validation."""
 
+import socket
+
 import pytest
 from paper_ingestion.services.config_metadata import (
     _ALLOWED_CONFIG_KEYS,
@@ -313,3 +315,41 @@ def test_custom_openai_base_url_rejects_unsafe_values(value: str):
     """Custom endpoints must reject unsafe schemes, credentials, fragments, and addresses."""
     with pytest.raises(ValueError):
         _CONFIG_VALIDATORS["llm.providers.custom_openai_compatible.base_url"](value)
+
+
+@pytest.mark.asyncio
+async def test_custom_openai_outbound_guard_rejects_link_local_resolution(monkeypatch):
+    """Outbound custom endpoints must reject hostnames resolving to link-local IPs."""
+    from paper_ingestion.services import llm_provider_registry as registry
+
+    def fake_getaddrinfo(*_args):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
+
+    monkeypatch.setattr(registry.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(ValueError, match="blocked network address"):
+        await registry.validate_custom_openai_base_url_for_outbound("https://llm.example.test/v1")
+
+
+@pytest.mark.asyncio
+async def test_custom_openai_outbound_guard_rejects_implicit_loopback(monkeypatch):
+    """DNS names resolving to loopback are blocked unless the host is explicit loopback."""
+    from paper_ingestion.services import llm_provider_registry as registry
+
+    def fake_getaddrinfo(*_args):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(registry.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(ValueError, match="blocked network address"):
+        await registry.validate_custom_openai_base_url_for_outbound("https://llm.example.test/v1")
+
+
+@pytest.mark.asyncio
+async def test_custom_openai_outbound_guard_allows_explicit_loopback():
+    """Explicit loopback development endpoints remain valid for custom providers."""
+    from paper_ingestion.services.llm_provider_registry import (
+        validate_custom_openai_base_url_for_outbound,
+    )
+
+    await validate_custom_openai_base_url_for_outbound("http://127.0.0.1:8000/v1")

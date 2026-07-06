@@ -3,7 +3,10 @@
 import httpx
 from pydantic import BaseModel
 
-from paper_ingestion.services.llm_provider_registry import CLOUD_PROVIDERS
+from paper_ingestion.services.llm_provider_registry import (
+    CLOUD_PROVIDERS,
+    validate_custom_openai_base_url_for_outbound,
+)
 
 __all__ = [
     "ProviderTestResult",
@@ -93,11 +96,17 @@ async def test_provider_connectivity(
     provider HTTP failures.
     """
 
+    if provider == "custom_openai_compatible" and base_url:
+        try:
+            await validate_custom_openai_base_url_for_outbound(base_url)
+        except ValueError as exc:
+            return ProviderTestResult(ok=False, error=str(exc))
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             resp = await _probe_provider_models(client, provider, api_key, base_url=base_url)
-    except httpx.HTTPError as exc:
-        return ProviderTestResult(ok=False, error=str(exc)[:200])
+    except httpx.HTTPError:
+        return ProviderTestResult(ok=False, error="provider request failed")
 
     if resp is None:
         return ProviderTestResult(ok=False, error="unsupported provider")

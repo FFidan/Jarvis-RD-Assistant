@@ -110,16 +110,15 @@ async def list_contradictions(
     status: str | None = "verified",
     limit: int = 20,
 ) -> tuple[list[PaperContradictionResponse], int]:
-    """List persisted contradictions scoped to the caller's library."""
+    """List persisted contradictions whose full evidence pair is in the caller's library."""
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
-    # Scope to papers in the caller's user_library (both sides of contradiction).
     conditions.append(
         f"("
         f"EXISTS (SELECT 1 FROM user_library ul"
         f" WHERE ul.paper_id = pc.paper_a_id AND ul.user_id = ${idx})"
-        f" OR EXISTS (SELECT 1 FROM user_library ul"
+        f" AND EXISTS (SELECT 1 FROM user_library ul"
         f" WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = ${idx})"
         f")"
     )
@@ -196,15 +195,11 @@ async def aggregate_consensus(
     limit: int = 50,
     evidence_per_claim: int = 5,
 ) -> list[ConsensusClaim]:
-    """Aggregate persisted supports/opposes stances by normalized claim_topic.
+    """Aggregate supports/opposes whose full evidence pair is in the caller's library.
 
-    Scoped to the caller's library via the same OR-predicate as
-    ``list_contradictions`` (visible when the user owns either paper). Topics
-    are grouped on a normalized form (lowercased, punctuation collapsed) so
-    near-duplicate phrasings cluster together; the shortest original topic is
-    returned for display. Each cluster carries up to ``evidence_per_claim``
-    verified assessments (quotes + pages) so the consensus view can show its
-    grounding.
+    Topics are grouped on a normalized form (lowercased, punctuation collapsed)
+    so near-duplicate phrasings cluster together. Each cluster carries up to
+    ``evidence_per_claim`` verified assessments for evidence drill-down.
     """
     rows = await conn.fetch(
         """
@@ -218,12 +213,10 @@ async def aggregate_consensus(
           AND pc.stance IN ('supports', 'opposes')
           AND pc.claim_topic IS NOT NULL
           AND btrim(pc.claim_topic) <> ''
-          AND (
-              EXISTS (SELECT 1 FROM user_library ul
+          AND EXISTS (SELECT 1 FROM user_library ul
                       WHERE ul.paper_id = pc.paper_a_id AND ul.user_id = $1)
-              OR EXISTS (SELECT 1 FROM user_library ul
+          AND EXISTS (SELECT 1 FROM user_library ul
                       WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = $1)
-          )
         ORDER BY pc.created_at DESC
         LIMIT 1000
         """,

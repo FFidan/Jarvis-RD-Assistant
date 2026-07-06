@@ -51,7 +51,7 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   },
   models: {
     llm: 'AI models',
-    providers: 'Cloud Providers',
+    providers: 'Providers & Routing',
     // Stale ?item=ai deep-links now land on the consolidated AI models page.
     ai: 'AI models',
   },

@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.0.2**. See [CHANGELOG.md](CHANGELOG.md) for the
+Current release: **v1.0.3**. See [CHANGELOG.md](CHANGELOG.md) for the
 maintenance changes since the v1.0.0 public baseline.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
@@ -28,7 +28,8 @@ maintenance changes since the v1.0.0 public baseline.
   shared across users on an instance; all user activity and intellectual
   output is strictly private (see the SECURITY.md "Data Sharing Boundary").
 - **Researcher-grade model plane + trust polish.** Per-hardware model selection
-  that actually takes effect, full-coverage summaries with verified quotes, and a
+  that actually takes effect, optional admin-wide cloud providers for the `smart`
+  and `fast` roles, full-coverage summaries with verified quotes, and a
   reliability/comprehensibility pass: plain-language settings (no implementation
   jargon on screen), honest degraded states with a cause and a next step, account
   data export from Settings, and no silent settings dead-ends.
@@ -49,10 +50,6 @@ maintenance changes since the v1.0.0 public baseline.
   citation, latency, and structured-output behavior before any public default
   changes. The default product posture remains local-first; cloud providers are
   optional integrations, not requirements.
-- **AI provider setup and first-hour reliability.** A v1.0.3 lane is adding
-  registry-driven provider setup, optional cloud routing for administrators,
-  clearer model-selection states, magic-link retry hardening, and more truthful
-  Consensus scan outcomes while preserving local-only installs.
 - **Tablet / PWA reading-experience polish.** Refinements to offline reading,
   installable PWA affordances, and tablet layout optimizations for the already-shipped
   information-architecture redesign so already-processed material (summaries,
@@ -68,7 +65,7 @@ maintenance changes since the v1.0.0 public baseline.
   knowledge and project-centered research outputs.
 - **Per-user provider keys and routing.** Optional bring-your-own-key behavior,
   per-user routing preferences, and privacy controls for multi-user deployments.
-  v1.0.3 keeps provider settings admin-wide.
+  Current provider settings are admin-wide.
 - **Scientific task routing.** Role-aware routing beyond `smart` and `fast`, so
   extraction, synthesis, contradiction checks, card generation, and freshness
   checks can use different local or cloud backends with visible provenance.

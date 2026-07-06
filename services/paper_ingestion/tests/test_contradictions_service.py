@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -21,7 +22,31 @@ from paper_ingestion.services.contradictions import (
     scan_contradictions,
 )
 from pydantic import ValidationError
+from paper_ingestion.services.contradictions_extract import _parse_findings
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+def test_parse_findings_accepts_json_string_fields():
+    """Summary JSONB fields may arrive as strings in live contract fixtures."""
+
+    row = FakeRecord(
+        {
+            "paper_id": 10,
+            "title": "Paper",
+            "key_findings": json.dumps(
+                [{"finding": "A finding", "quote": "A quote", "page_number": 4}]
+            ),
+            "cross_references": json.dumps([{"related_paper_id": 11}]),
+        }
+    )
+
+    findings = _parse_findings(row)
+
+    assert len(findings) == 1
+    assert findings[0].paper_id == 10
+    assert findings[0].quote == "A quote"
+    assert findings[0].page_number == 4
+    assert findings[0].cross_reference_ids == frozenset({11})
 
 
 def test_build_contradiction_candidates_prefers_cross_references():
