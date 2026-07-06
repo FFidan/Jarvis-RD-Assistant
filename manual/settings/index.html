@@ -1063,10 +1063,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cloud-providers" class="md-nav__link">
+  <a href="#providers-routing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cloud Providers
+        Providers &amp; Routing
       
     </span>
   </a>
@@ -1993,10 +1993,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cloud-providers" class="md-nav__link">
+  <a href="#providers-routing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cloud Providers
+        Providers &amp; Routing
       
     </span>
   </a>
@@ -2301,7 +2301,7 @@
 <p><strong>Hardware source line.</strong> JARVIS shows a short detail line below the hardware strip explaining how VRAM was detected — for example, "GPU detected inside the container" (or "GPU detected on the host at install time", "estimated from Apple Silicon unified memory", or "no GPU detected — running on CPU").</p>
 <p><strong>GPU overlay divergence warning.</strong> If an amber warning reads "{N} GB detected on host — GPU overlay not active", JARVIS detected GPU VRAM from the host but the Docker GPU overlay is not active for this container. Re-run <code>setup.sh</code> with GPU support enabled to activate the overlay and use the detected VRAM for model inference.</p>
 <p>If a model card shows a <strong>pending — applying automatically</strong> badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.</p>
-<h3 id="cloud-providers">Cloud Providers<a class="headerlink" href="#cloud-providers" title="Permanent link">&para;</a></h3>
+<h3 id="providers-routing">Providers &amp; Routing<a class="headerlink" href="#providers-routing" title="Permanent link">&para;</a></h3>
 <p>Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses <strong>Add cloud provider</strong> for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.</p>
 <p>Provider settings are admin-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
 <p>Adding a key does not make cloud the default. It only makes matching cloud models assignable in the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> controls above. Leave all provider keys blank to keep the deployment local-only.</p>
