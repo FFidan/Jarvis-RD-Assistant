@@ -151,6 +151,98 @@ describe('ConsensusPage', () => {
     expect(scanContradictionsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('does not treat paper-level scans as library-wide scan progress', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'paper-scan': {
+        id: 'paper-scan',
+        kind: 'contradictions.scan',
+        status: 'running',
+        progress: 0.5,
+        progress_message: 'Scanning one paper',
+        payload: { paper_id: 42, limit: 20 },
+        result: null,
+        error: null,
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: null,
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: /run consensus scan/i })).toBeInTheDocument();
+  });
+
+  it('shows scanning state for a library-wide scan', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'library-scan': {
+        id: 'library-scan',
+        kind: 'contradictions.scan',
+        status: 'queued',
+        progress: 0,
+        progress_message: 'Queued',
+        payload: {},
+        result: null,
+        error: null,
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: null,
+        finished_at: null,
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: /scanning/i })).toBeInTheDocument();
+  });
+
+  it('warns when cached claims are shown after the latest library scan failed', async () => {
+    fetchConsensusMock.mockResolvedValue({
+      total: 1,
+      claims: [
+        {
+          claim_topic: 'stale claim',
+          supports: 1,
+          opposes: 0,
+          paper_ids: [1, 2],
+          assessments: [
+            {
+              stance: 'supports',
+              paper_a_title: 'Paper A',
+              paper_b_title: 'Paper B',
+              quote_a: 'A supports X',
+              quote_b: 'B supports X',
+              page_a: null,
+              page_b: null,
+            },
+          ],
+        },
+      ],
+    });
+    jobStoreMock.jobs = {
+      'failed-library-scan': {
+        id: 'failed-library-scan',
+        kind: 'contradictions.scan',
+        status: 'failed',
+        progress: 0.5,
+        progress_message: 'Failed',
+        payload: {},
+        result: null,
+        error: { message: 'Model route unavailable' },
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: '2026-07-06T10:00:10Z',
+      },
+    };
+
+    renderPage();
+
+    expect(await screen.findByText(/1 support/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('The latest consensus scan failed.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Model route unavailable');
+  });
+
   it('shows a degraded state when the fetch fails', async () => {
     fetchConsensusMock.mockRejectedValue(new Error('boom'));
     renderPage();

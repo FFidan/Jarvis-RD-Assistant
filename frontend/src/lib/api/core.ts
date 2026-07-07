@@ -205,9 +205,9 @@ function unknownStackHealth(): StackHealthSummary {
 /**
  * Probe every stack component and assemble the real per-service summary.
  *
- * Calls public endpoints for service-level status (paper_ingestion,
- * learning_engine) and the authenticated internal endpoint for
- * per-dependency breakdown (postgres, qdrant, ollama, litellm, vector).
+ * Calls liveness endpoints for process-level service rows (paper_ingestion,
+ * learning_engine) and the authenticated internal endpoint for dependency
+ * readiness breakdown (postgres, qdrant, ollama, litellm, vector).
  *
  * Individual fetch failures are mapped to 'down' so a single unreachable
  * service never throws — callers always get a StackHealthSummary.
@@ -233,8 +233,8 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
       // If internal endpoint is unreachable, mark all deps as unknown.
       () => Object.fromEntries(Object.keys(depLabels).map((key) => [key, 'unknown'])),
     ),
-    checkHealth('/health/paper_ingestion'),
-    checkHealth('/health/learning_engine'),
+    checkHealth('/health/paper_ingestion/live'),
+    checkHealth('/health/learning_engine/live'),
   ]);
   const depChecks: Record<string, string> = internalResult;
 

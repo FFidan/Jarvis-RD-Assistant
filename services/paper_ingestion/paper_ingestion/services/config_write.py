@@ -3,6 +3,7 @@
 import logging
 import re
 import socket
+from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
@@ -36,7 +37,6 @@ from paper_ingestion.services.model_assignment import (
 from paper_ingestion.services.scheduler_effects import (
     apply_fetch_interval,
     apply_pulse_cron,
-    apply_zotero_cron,
 )
 
 __all__ = [
@@ -54,6 +54,32 @@ logger = logging.getLogger(__name__)
 # surfaces these roles as delivery="pending_restart" while the boot reconciler
 # keeps retrying.
 _DELIVERY_PENDING_KEY = "llm.delivery_pending"
+_ZOTERO_POLL_RECONCILE_KEYS = frozenset(
+    {
+        "zotero.poll_cron",
+        "zotero.poll_enabled",
+        "zotero.api_key",
+        "zotero.user_id",
+        "zotero.library_type",
+        "zotero.group_id",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _ScheduleRuntime:
+    """Explicit runtime context for scheduler side effects."""
+
+    scheduler: Any
+    app: Any | None = None
+
+
+def _schedule_runtime(scheduler: Any, app: Any | None = None) -> _ScheduleRuntime:
+    """Return scheduler side-effect context without widening helper signatures."""
+    if isinstance(scheduler, _ScheduleRuntime):
+        return scheduler
+    return _ScheduleRuntime(scheduler=scheduler, app=app)
+
 
 # A masked secret echo from GET /api/config: mask_secret() emits exactly '****'
 # (secret shorter than 4 chars) or '****' + the last 4 chars. Re-submitting that
@@ -278,21 +304,22 @@ async def _apply_schedules(
 ) -> list[str]:
     """Apply scheduler side-effects for cron/interval keys; return names of any that failed.
 
-    *cron_ctx* is ``(old_cron, row_user_id)`` — the pre-read old cron expression and the
-    scoped user-id needed for zotero rollback.  Only the relevant component is used per key.
+    *cron_ctx* is ``(old_cron, row_user_id)`` — the pulse rollback value and the
+    scoped user-id needed for personal scheduler reconciliation.
 
     Each apply is wrapped in a broad try/except so a scheduler failure never blocks the
     response (the DB commit already stands).  The startup reconciler re-reads cron from DB
     on boot, so any live inconsistency is transient.
     """
     old_cron, row_user_id = cron_ctx
+    runtime = _schedule_runtime(scheduler)
     failed: list[str] = []
 
     if key == "pulse.cron":
         try:
             await apply_pulse_cron(
                 db_pool=db_pool,
-                scheduler=scheduler,
+                scheduler=runtime.scheduler,
                 new_cron=value,
                 old_cron=old_cron,
             )
@@ -302,24 +329,27 @@ async def _apply_schedules(
             )
             failed.append("pulse_cron")
 
-    if key == "zotero.poll_cron":
+    if key in _ZOTERO_POLL_RECONCILE_KEYS and row_user_id is not None and runtime.app is not None:
         try:
-            await apply_zotero_cron(
+            from importlib import import_module  # noqa: PLC0415
+
+            scheduler_module = import_module("paper_ingestion.scheduler")
+
+            await scheduler_module.reconcile_zotero_poll_job(
+                scheduler=runtime.scheduler,
+                app=runtime.app,
                 db_pool=db_pool,
-                scheduler=scheduler,
-                new_cron=value,
-                old_cron=old_cron,
-                row_user_id=row_user_id,
+                user_id=row_user_id,
             )
         except Exception as exc:
             logger.warning(
-                "zotero_cron scheduler apply failed (value saved): %s", exc, exc_info=True
+                "zotero_poll scheduler reconcile failed (value saved): %s", exc, exc_info=True
             )
-            failed.append("zotero_cron")
+            failed.append("zotero_poll")
 
     if key == "automation.fetch_interval_hours":
         try:
-            apply_fetch_interval(scheduler=scheduler, hours=max(int(value), 1))
+            apply_fetch_interval(scheduler=runtime.scheduler, hours=max(int(value), 1))
         except Exception as exc:
             logger.warning(
                 "fetch_interval scheduler apply failed (value saved): %s", exc, exc_info=True
@@ -339,6 +369,7 @@ async def write_config(
     value: Any,
     caller_user_id: int | None,
     update_litellm_model_fn: Any = None,
+    app: Any | None = None,
 ) -> "ConfigWriteResult":
     """Persist a config value and apply all related side-effects.
 
@@ -482,17 +513,6 @@ async def write_config(
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
 
-    old_zotero_poll_cron: str | None = None
-    if key == "zotero.poll_cron":
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config"
-                " WHERE key = 'zotero.poll_cron' AND user_id IS NOT DISTINCT FROM $1",
-                row_user_id,
-            )
-        if row is not None and isinstance(row["value"], str):
-            old_zotero_poll_cron = row["value"]
-
     # DB write first — DB is the source of truth.
     # Single acquire covers both encrypted and non-encrypted paths (acquire-collapse DRY).
     async with db_pool.acquire() as conn:
@@ -514,10 +534,10 @@ async def write_config(
         invalidate_api_key_login_cache()
 
     # Scheduler side-effects — failures are caught, logged, and surfaced as warnings.
-    _old_cron = old_pulse_cron if key == "pulse.cron" else old_zotero_poll_cron
+    _old_cron = old_pulse_cron if key == "pulse.cron" else None
     schedule_warnings = await _apply_schedules(
         db_pool=db_pool,
-        scheduler=scheduler,
+        scheduler=_schedule_runtime(scheduler, app),
         key=key,
         value=value,
         cron_ctx=(_old_cron, row_user_id),

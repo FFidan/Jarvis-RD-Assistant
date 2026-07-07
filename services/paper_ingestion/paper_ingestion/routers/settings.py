@@ -262,6 +262,7 @@ async def set_config(
         value=body.value,
         caller_user_id=caller_user_id,
         update_litellm_model_fn=update_litellm_model,
+        app=request.app,
     )
     display_value = result.display_value
 

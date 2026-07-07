@@ -7,7 +7,7 @@ Covers:
 - zotero.poll_enabled / zotero.auto_push_on_star accept True/False, reject strings
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -134,6 +134,21 @@ async def test_zotero_bool_key_accepts_bool(_app, key: str, value: bool):
     resp = await _put_config(app, key, value)
     assert resp.status_code == 200
     assert resp.json()["value"] is value
+
+
+@pytest.mark.asyncio
+async def test_zotero_poll_enabled_write_reconciles_caller_job(_app):
+    """Personal Zotero readiness writes should reconcile only the caller's poll job."""
+    app, _conn = _app
+    app.state.scheduler = MagicMock()
+
+    with patch("paper_ingestion.scheduler.reconcile_zotero_poll_job", new=AsyncMock()) as reconcile:
+        resp = await _put_config(app, "zotero.poll_enabled", True)
+
+    assert resp.status_code == 200
+    reconcile.assert_awaited_once()
+    assert reconcile.await_args.kwargs["app"] is app
+    assert reconcile.await_args.kwargs["user_id"] == 1
 
 
 @pytest.mark.asyncio

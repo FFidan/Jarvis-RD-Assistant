@@ -149,8 +149,8 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
     await setupProviderMocks(page);
     await page.goto('/settings?section=models&item=providers');
 
-    await expect(page.getByRole('heading', { name: 'Cloud Providers', level: 2 })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByRole('heading', { name: 'Providers and routing' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Providers & Routing', level: 2 })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Providers & Routing', level: 3 })).toBeVisible();
     await expect(page.getByRole('button', { name: 'OpenAI Configured, not tested' })).toBeVisible();
     await expect(page.getByText('Configured, not tested')).toBeVisible();
 
@@ -185,7 +185,7 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
     await setupProviderMocks(page);
     await page.goto('/settings?section=models&item=providers');
 
-    await expect(page.getByRole('heading', { name: 'Providers and routing' })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Providers & Routing', level: 2 })).toBeVisible({ timeout: 8000 });
     await page.getByRole('button', { name: 'Add cloud provider' }).click();
     await expect(page.getByRole('button', { name: /Custom OpenAI-compatible endpoint/ })).toBeVisible();
   });

@@ -76,8 +76,8 @@ describe('HeaderPill', () => {
     });
   });
 
-  it('calls getSummary with excludeInfra:true to skip nginx rate-limit 503s', async () => {
-    // The queryFn passes { excludeInfra: true } so self-inflicted infra errors
+  it('calls getSummary with excludeInfra:true to skip nginx infra events', async () => {
+    // The queryFn passes { excludeInfra: true } so infrastructure events
     // (category=infra) are excluded from the badge count.
     mockGetSummary.mockResolvedValue({
       by_level: { error: 2 },

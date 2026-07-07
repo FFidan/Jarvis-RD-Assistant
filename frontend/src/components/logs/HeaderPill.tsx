@@ -16,8 +16,8 @@ export function HeaderPill() {
 
   const { data } = useQuery({
     queryKey: QUERY_KEYS.logs.summaryAppOnly(),
-    // exclude_infra=1 so nginx rate-limit 503s (category=infra) don't inflate
-    // the badge — those are self-inflicted infra noise, not application errors.
+    // exclude_infra=1 so nginx proxy/rate-limit events (category=infra) don't
+    // inflate the badge — those are infrastructure noise, not application errors.
     queryFn: () => getSummary({ excludeInfra: true }),
     refetchInterval: isLogsPage ? 30_000 : 60_000,
     staleTime: 20_000,

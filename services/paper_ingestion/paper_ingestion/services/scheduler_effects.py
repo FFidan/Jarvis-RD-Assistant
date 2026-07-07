@@ -118,7 +118,7 @@ async def apply_zotero_cron(
     old_cron: str | None,
     row_user_id: int | None,
 ) -> None:
-    """Reschedule the zotero_library_sync job; roll back DB on failure."""
+    """Legacy global Zotero cron updater kept for compatibility exports."""
     if scheduler is None:
         return
 

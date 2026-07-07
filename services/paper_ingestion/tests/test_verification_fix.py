@@ -115,3 +115,34 @@ class TestFuzzyBestMatch:
         assert result.chunk_id == 10, "Should select chunk_0 (perfect match)"
         assert result.page_number == 2
         assert call_count == 1, "Loop should break after first chunk (perfect match)"
+
+
+class TestQuoteFormattingNoise:
+    """Verify common LLM quote formatting noise without loosening fuzzy matching."""
+
+    def test_accepts_wrapped_exact_quote_with_smart_punctuation(self) -> None:
+        """Curly wrappers and smart apostrophes should not hide exact source text."""
+        verifier = QuoteVerifier()
+        quote = "“The model’s accuracy improves.”"
+        source = "Background. The model's accuracy improves. Conclusion."
+        chunk = _make_chunk(30, "The model's accuracy improves.", page_number=3)
+
+        result = verifier.verify_quote(quote, source, [chunk])
+
+        assert result.verified is True
+        assert result.match_type == "exact"
+        assert result.quote == quote
+        assert result.chunk_id == 30
+        assert result.page_number == 3
+
+    def test_rejects_below_threshold_paraphrase(self) -> None:
+        """Formatting cleanup must not lower the strict fuzzy threshold."""
+        verifier = QuoteVerifier()
+        quote = "The model's accuracy improves."
+        chunk = _make_chunk(40, "The approach reports stronger accuracy.", page_number=4)
+
+        with patch("jarvis_common.verify.fuzz.partial_ratio", return_value=96.0):
+            result = verifier.verify_quote(quote, "unrelated source text", [chunk])
+
+        assert result.verified is False
+        assert result.match_score == 0.96

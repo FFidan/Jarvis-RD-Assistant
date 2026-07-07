@@ -487,7 +487,7 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
-      // Public health probes — both ok
+      // Liveness probes — both ok
       return new Response(JSON.stringify({ status: 'ok' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -502,6 +502,9 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
     expect(summary.downCount).toBe(0);
     // Overall rolls up to 'degraded' when any dep is degraded but none are down
     expect(summary.overall).toBe('degraded');
+    const calledUrls = vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url));
+    expect(calledUrls).toContain('/health/paper_ingestion/live');
+    expect(calledUrls).toContain('/health/learning_engine/live');
   });
 });
 
@@ -517,7 +520,7 @@ describe('fetchStackHealth — unknown-aware rollup', () => {
         // Internal endpoint unreachable → every dep is unknown.
         return new Response(null, { status: 503 });
       }
-      // Both public service probes report ok.
+      // Both service liveness probes report ok.
       return new Response(JSON.stringify({ status: 'ok' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -537,6 +540,29 @@ describe('fetchStackHealth — unknown-aware rollup', () => {
     // 'unknown' is not a real down/degraded count.
     expect(summary.downCount).toBe(0);
     expect(summary.degradedCount).toBe(0);
+  });
+
+  it('keeps service rows alive when dependency readiness is degraded', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(null, { status: 503 });
+      }
+      if (u.includes('/health/paper_ingestion/live') || u.includes('/health/learning_engine/live')) {
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    const summary = await fetchStackHealth();
+
+    expect(summary.services.find((s) => s.name === 'paper_ingestion')?.status).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'learning_engine')?.status).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'litellm')?.status).toBe('unknown');
+    expect(summary.overall).toBe('unknown');
   });
 
   it("only the optional 'vector' dep unknown → overall stays 'ok'", async () => {

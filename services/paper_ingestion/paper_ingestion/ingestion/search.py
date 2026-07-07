@@ -95,6 +95,18 @@ def _coerce_search_scope(
     )
 
 
+async def _fetch_library_paper_ids_for_scope(
+    db_pool: asyncpg.Pool,
+    user_id: int | None,
+) -> list[int] | None:
+    """Return the caller's library IDs when semantic search needs user scope."""
+    if user_id is None:
+        return None
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT paper_id FROM user_library WHERE user_id = $1", user_id)
+    return [int(row["paper_id"]) for row in rows]
+
+
 async def _fetch_missing_metadata(
     db_pool: asyncpg.Pool, missing_ids: list[int], user_id: int | None
 ) -> dict[int, dict]:
@@ -557,6 +569,7 @@ class EmbeddingSearchMixin:
         # after RRF fusion.  Cap at 200 to match search_chunks_global's guard.
         candidate_limit = min(limit + offset, 200)
         bm25_sql, bm25_args = _build_bm25_query(query, candidate_limit, user_id)
+        library_paper_ids = await _fetch_library_paper_ids_for_scope(db_pool, user_id)
         async with db_pool.acquire() as conn:
             with probe_span("hybrid_search_bm25_sql", candidate_limit=candidate_limit):
                 bm25_rows = await conn.fetch(bm25_sql, *bm25_args)
@@ -585,7 +598,7 @@ class EmbeddingSearchMixin:
             query,
             limit=candidate_limit,
             score_threshold=_HYBRID_SEARCH_SCORE_THRESHOLD,
-            scope=SearchScope(user_id=user_id),
+            scope=SearchScope(user_id=user_id, library_paper_ids=library_paper_ids),
         )
 
         # Aggregate: max chunk score per paper

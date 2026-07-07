@@ -754,6 +754,16 @@ def test_system_summarize_contains_rules():
     assert "verbatim quote" in _SYSTEM_SUMMARIZE.lower() or "verbatim" in _SYSTEM_SUMMARIZE
 
 
+def test_summary_prompt_shapes_include_relevance_notes():
+    """Prompt JSON examples should match the optional relevance_notes schema field."""
+    from paper_ingestion.services.summarization import _SYSTEM_REDUCE, _SYSTEM_SUMMARIZE
+
+    assert '"relevance_notes"' in _SYSTEM_SUMMARIZE
+    assert '"relevance_notes"' in _SYSTEM_REDUCE
+    assert "null" in _SYSTEM_SUMMARIZE
+    assert "null" in _SYSTEM_REDUCE
+
+
 @pytest.mark.asyncio
 async def test_generate_paper_summary_uses_arg_client_when_svc_client_none(monkeypatch):
     """When svc.openai_client is None, an explicit openai_client arg is used.

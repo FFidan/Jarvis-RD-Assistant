@@ -120,12 +120,17 @@ class ContradictionCandidate:
     reason: str
 
 
+def _is_term(word: str) -> bool:
+    lowered = word.lower()
+    if lowered in _STOP_WORDS:
+        return False
+    if len(word) > 3:
+        return True
+    return len(word) == 3 and word.isupper()
+
+
 def _terms(text: str) -> set[str]:
-    return {
-        word.lower()
-        for word in _WORD_RE.findall(text)
-        if len(word) > 3 and word.lower() not in _STOP_WORDS
-    }
+    return {word.lower() for word in _WORD_RE.findall(text) if _is_term(word)}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:

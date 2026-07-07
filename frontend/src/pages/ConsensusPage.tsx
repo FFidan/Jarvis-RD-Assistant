@@ -17,10 +17,16 @@ function stanceTone(stance: string): string {
   return stance === 'supports' ? 'text-emerald-600' : 'text-red-600';
 }
 
+function isLibraryConsensusScan(job: Job): boolean {
+  return job.kind === 'contradictions.scan' && job.payload?.paper_id == null;
+}
+
+function isActiveLibraryConsensusScan(job: Job): boolean {
+  return isLibraryConsensusScan(job) && (job.status === 'running' || job.status === 'queued');
+}
+
 function latestLibraryConsensusScan(jobs: Record<string, Job>): Job | null {
-  const scans = Object.values(jobs).filter(
-    (job) => job.kind === 'contradictions.scan' && job.payload?.paper_id == null,
-  );
+  const scans = Object.values(jobs).filter(isLibraryConsensusScan);
   scans.sort((a, b) => {
     const aTime = a.finished_at ?? a.started_at ?? a.created_at;
     const bTime = b.finished_at ?? b.started_at ?? b.created_at;
@@ -86,7 +92,7 @@ export function ConsensusPage() {
   });
 
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
-  const isScanning = useJobStore((s) => s.isRunning('contradictions.scan', {}));
+  const isScanning = useJobStore((s) => Object.values(s.jobs).some(isActiveLibraryConsensusScan));
   const jobs = useJobStore((s) => s.jobs);
   const latestScan = useMemo(() => latestLibraryConsensusScan(jobs), [jobs]);
   const scanMutation = useMutation({
@@ -175,6 +181,17 @@ export function ConsensusPage() {
       {claims.length > 0 && (
         <>
           <MarkerCaption marker="EVIDENCE" />
+          {scanFailed && (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              <p className="font-medium">The latest consensus scan failed.</p>
+              <p className="mt-1">
+                Displayed claims may be stale. {latestScan.error?.message ?? 'Run the scan again after checking model and retrieval health.'}
+              </p>
+            </div>
+          )}
           <div className="space-y-4">
             {claims.map((claim, index) => (
               <ClaimEvidence key={`${index}-${claim.claim_topic}`} claim={claim} />

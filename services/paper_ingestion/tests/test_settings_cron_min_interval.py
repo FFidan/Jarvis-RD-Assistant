@@ -8,6 +8,7 @@ scheduler-apply warning surface added to write_config (_apply_schedules).
 """
 
 from __future__ import annotations
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -172,23 +173,55 @@ async def test_apply_schedules_pulse_failure_returns_warning_not_raise():
 @pytest.mark.asyncio
 async def test_apply_schedules_zotero_failure_returns_warning_not_raise():
     """_apply_schedules catches a zotero_cron failure and returns its name, never raises."""
-    from paper_ingestion.services.config_write import _apply_schedules
+    from paper_ingestion.services.config_write import _apply_schedules, _schedule_runtime
 
     mock_pool = MagicMock()
 
     with patch(
-        "paper_ingestion.services.config_write.apply_zotero_cron",
+        "paper_ingestion.scheduler.reconcile_zotero_poll_job",
         side_effect=RuntimeError("zotero scheduler down"),
     ):
         failed = await _apply_schedules(
             db_pool=mock_pool,
-            scheduler=MagicMock(),
+            scheduler=_schedule_runtime(MagicMock(), object()),
             key="zotero.poll_cron",
             value="0 3 * * *",
-            cron_ctx=(None, None),
+            cron_ctx=(None, 7),
         )
 
-    assert failed == ["zotero_cron"]
+    assert failed == ["zotero_poll"]
+
+
+@pytest.mark.asyncio
+async def test_apply_schedules_zotero_uses_imported_scheduler_module(monkeypatch):
+    """Zotero reconcile uses sys.modules even if the package attr is stale."""
+    import paper_ingestion
+    from paper_ingestion.services.config_write import _apply_schedules, _schedule_runtime
+
+    stale_reconcile = AsyncMock()
+    monkeypatch.setattr(
+        paper_ingestion,
+        "scheduler",
+        SimpleNamespace(reconcile_zotero_poll_job=stale_reconcile),
+        raising=False,
+    )
+    patched_reconcile = AsyncMock(side_effect=RuntimeError("patched scheduler down"))
+
+    with patch(
+        "paper_ingestion.scheduler.reconcile_zotero_poll_job",
+        new=patched_reconcile,
+    ):
+        failed = await _apply_schedules(
+            db_pool=MagicMock(),
+            scheduler=_schedule_runtime(MagicMock(), object()),
+            key="zotero.poll_cron",
+            value="0 3 * * *",
+            cron_ctx=(None, 7),
+        )
+
+    assert failed == ["zotero_poll"]
+    patched_reconcile.assert_awaited_once()
+    stale_reconcile.assert_not_awaited()
 
 
 @pytest.mark.asyncio

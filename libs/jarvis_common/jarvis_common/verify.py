@@ -141,13 +141,13 @@ class QuoteVerifier:
             )
             quote = quote[:max_quote_length]
 
-        normalized_quote = self._normalize(quote)
+        normalized_quote = self._normalize_for_match(quote)
 
         # --- Strategy 1: Exact substring match ---
         # Use pre-normalized if provided, otherwise normalize here
-        normalized_full = (
-            _normalized_full if _normalized_full is not None else self._normalize(full_text)
-        )
+        normalized_full = _normalized_full
+        if normalized_full is None:
+            normalized_full = self._normalize_for_match(full_text)
         if normalized_quote in normalized_full:
             chunk_id, page_number = self._find_chunk_for_quote(quote, chunks)
             # Raw find may return -1 when normalization changed whitespace/Unicode.
@@ -169,7 +169,7 @@ class QuoteVerifier:
         best_chunk: ChunkLike | None = None
 
         for chunk in chunks:
-            score = fuzz.partial_ratio(normalized_quote, self._normalize(chunk.content))
+            score = fuzz.partial_ratio(normalized_quote, self._normalize_for_match(chunk.content))
             if score > best_score:
                 best_score = score
                 best_chunk = chunk
@@ -223,7 +223,7 @@ class QuoteVerifier:
             )
 
         # Pre-normalize once for all findings
-        normalized_full = self._normalize(full_text)
+        normalized_full = self._normalize_for_match(full_text)
 
         results: list[VerificationResult] = []
         for finding in findings:
@@ -268,6 +268,54 @@ class QuoteVerifier:
         text = unicodedata.normalize("NFKD", text)
         return " ".join(text.lower().split())
 
+    @staticmethod
+    def _strip_surrounding_quote_wrappers(text: str) -> str:
+        """Remove balanced outer quote wrappers without touching inner punctuation."""
+        stripped = text.strip()
+        quote_pairs = (
+            ('"', '"'),
+            ("'", "'"),
+            ("\u201c", "\u201d"),
+            ("\u2018", "\u2019"),
+            ("\u00ab", "\u00bb"),
+            ("\u2039", "\u203a"),
+        )
+        changed = True
+        while changed and len(stripped) >= 2:
+            changed = False
+            for left, right in quote_pairs:
+                if stripped.startswith(left) and stripped.endswith(right):
+                    stripped = stripped[1:-1].strip()
+                    changed = True
+                    break
+        return stripped
+
+    @classmethod
+    def _normalize_for_match(cls, text: str) -> str:
+        """Normalize deterministic quote-formatting noise for matching only."""
+        text = cls._strip_surrounding_quote_wrappers(text)
+        text = text.translate(
+            str.maketrans(
+                {
+                    "\u2018": "'",
+                    "\u2019": "'",
+                    "\u201a": "'",
+                    "\u201b": "'",
+                    "\u201c": '"',
+                    "\u201d": '"',
+                    "\u201e": '"',
+                    "\u201f": '"',
+                    "\u2010": "-",
+                    "\u2011": "-",
+                    "\u2012": "-",
+                    "\u2013": "-",
+                    "\u2014": "-",
+                    "\u2212": "-",
+                }
+            )
+        )
+        return cls._normalize(text)
+
     def _find_chunk_for_quote(
         self,
         quote: str,
@@ -277,8 +325,8 @@ class QuoteVerifier:
 
         Returns ``(None, None)`` if no chunk contains the quote.
         """
-        normalized_quote = self._normalize(quote)
+        normalized_quote = self._normalize_for_match(quote)
         for chunk in chunks:
-            if normalized_quote in self._normalize(chunk.content):
+            if normalized_quote in self._normalize_for_match(chunk.content):
                 return chunk.id, chunk.page_number
         return None, None

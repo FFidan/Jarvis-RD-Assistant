@@ -92,7 +92,8 @@ Respond in this exact JSON format:
         ...
     ],
     "methodology": "methodology description or null",
-    "limitations": "limitations or null"
+    "limitations": "limitations or null",
+    "relevance_notes": "why this paper is relevant to the research context, or null"
 }
 """
 
@@ -149,7 +150,8 @@ Respond in this exact JSON format:
     "summary_brief": "2-3 sentence summary",
     "summary_detailed": "Detailed paragraph summary",
     "methodology": "methodology description or null",
-    "limitations": "limitations or null"
+    "limitations": "limitations or null",
+    "relevance_notes": "why this paper is relevant to the research context, or null"
 }
 """
 

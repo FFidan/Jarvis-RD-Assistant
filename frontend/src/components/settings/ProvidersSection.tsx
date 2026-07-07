@@ -19,6 +19,13 @@ type DraftState = {
   baseUrl?: string | null;
 };
 
+type SaveProviderConfigVariables = {
+  providerId: string;
+  field: keyof DraftState;
+  key: string;
+  value: string;
+};
+
 function getMaskedConfig(configs: ConfigEntry[], key: string | null | undefined): string {
   if (!key) return '';
   const entry = configs.find((c) => c.key === key);
@@ -108,10 +115,23 @@ export function ProvidersSection() {
   const [testResults, setTestResults] = useState<Record<string, TestState>>({});
 
   const saveMut = useMutation({
-    mutationFn: ({ key, value }: { key: string; value: string }) => setConfig(key, value),
-    onSuccess: () => {
+    mutationFn: ({ key, value }: SaveProviderConfigVariables) => setConfig(key, value),
+    onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
       queryClient.invalidateQueries({ queryKey: ['settings', 'providers'] });
+      setDrafts((prev) => {
+        const currentDraft = prev[variables.providerId]?.[variables.field];
+        if (currentDraft?.trim() !== variables.value) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [variables.providerId]: {
+            ...prev[variables.providerId],
+            [variables.field]: null,
+          },
+        };
+      });
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'Failed to save provider setting');
@@ -127,8 +147,11 @@ export function ProvidersSection() {
     if (!key) return;
     const draft = drafts[provider.id]?.[field];
     const current = getMaskedConfig(configs, key);
-    if (draft !== null && draft !== undefined && draft.trim() !== '' && draft !== current) {
-      saveMut.mutate({ key, value: draft.trim() });
+    if (draft === null || draft === undefined) return;
+    const value = draft.trim();
+    if (value !== '' && value !== current) {
+      saveMut.mutate({ providerId: provider.id, field, key, value });
+      return;
     }
     setDrafts((prev) => ({ ...prev, [provider.id]: { ...prev[provider.id], [field]: null } }));
   };

@@ -212,8 +212,9 @@ async def test_hybrid_semantic_only_paper_gets_metadata_fetched():
 
 @pytest.mark.asyncio
 async def test_hybrid_user_scoped_threads_user_id_into_queries():
-    """When user_id is set, both the BM25 and metadata fetches (and the semantic leg) receive it."""
+    """When user_id is set, BM25, metadata, and semantic scope use caller visibility."""
     embedder = _make_embedder()
+    library_records = [_dict_to_record({"paper_id": 1}), _dict_to_record({"paper_id": 42})]
     bm25_records = [_dict_to_record(r) for r in _make_bm25_rows(1)]
     semantic_meta = _dict_to_record(
         {
@@ -225,15 +226,35 @@ async def test_hybrid_user_scoped_threads_user_id_into_queries():
             "published_date": None,
         }
     )
-    pool, conn = _make_pool_with_fetch_sequence([bm25_records, [semantic_meta]])
+    pool, conn = _make_pool_with_fetch_sequence([library_records, bm25_records, [semantic_meta]])
 
     chunks = [{"paper_id": 42, "score": 0.9}]
     search_global = AsyncMock(return_value=chunks)
     with patch.object(embedder, "search_chunks_global", search_global):
         await embedder.hybrid_search("q", pool, limit=10, offset=0, user_id=7)
 
-    assert 7 in conn.fetch.await_args_list[0].args  # BM25 leg scoped to user 7
-    assert 7 in conn.fetch.await_args_list[1].args  # semantic-only metadata scoped to user 7
+    assert 7 in conn.fetch.await_args_list[0].args  # library visibility fetch scoped to user 7
+    assert 7 in conn.fetch.await_args_list[1].args  # BM25 leg scoped to user 7
+    assert 7 in conn.fetch.await_args_list[2].args  # semantic-only metadata scoped to user 7
     semantic_scope = search_global.await_args.kwargs.get("scope")
     assert semantic_scope is not None
     assert semantic_scope.user_id == 7
+    assert semantic_scope.library_paper_ids == [1, 42]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_global_search_does_not_fetch_library_scope():
+    """Anonymous/global hybrid search must not add a user-library widening query."""
+    embedder = _make_embedder()
+    bm25_records = [_dict_to_record(r) for r in _make_bm25_rows(1)]
+    pool, conn = _make_pool_with_fetch_sequence([bm25_records])
+
+    search_global = AsyncMock(return_value=[])
+    with patch.object(embedder, "search_chunks_global", search_global):
+        await embedder.hybrid_search("q", pool, limit=10, offset=0, user_id=None)
+
+    assert conn.fetch.await_count == 1
+    semantic_scope = search_global.await_args.kwargs.get("scope")
+    assert semantic_scope is not None
+    assert semantic_scope.user_id is None
+    assert semantic_scope.library_paper_ids is None

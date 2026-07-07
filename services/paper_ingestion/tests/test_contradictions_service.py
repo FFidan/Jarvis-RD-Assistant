@@ -118,6 +118,54 @@ def test_build_contradiction_candidates_uses_semantic_overlap_without_cross_refe
     assert candidates[0].score > 0
 
 
+def test_build_contradiction_candidates_keeps_three_letter_scientific_acronyms():
+    """Acronym-heavy topics should still produce candidate overlap."""
+    positive = VerifiedFinding(
+        paper_id=1,
+        title="A",
+        finding="RAG GNN improves.",
+        quote="RAG GNN improves.",
+        page_number=1,
+        cross_reference_ids=frozenset(),
+    )
+    negative = VerifiedFinding(
+        paper_id=2,
+        title="B",
+        finding="RAG GNN reduces.",
+        quote="RAG GNN reduces.",
+        page_number=2,
+        cross_reference_ids=frozenset(),
+    )
+
+    candidates = build_contradiction_candidates([positive, negative], paper_id=1)
+
+    assert len(candidates) == 1
+    assert "term_overlap" in candidates[0].reason
+    assert candidates[0].score > 0
+
+
+def test_build_contradiction_candidates_ignores_three_letter_noise_words():
+    """Common short words should not create contradiction candidates by themselves."""
+    positive = VerifiedFinding(
+        paper_id=1,
+        title="A",
+        finding="The and for improves.",
+        quote="The and for improves.",
+        page_number=1,
+        cross_reference_ids=frozenset(),
+    )
+    negative = VerifiedFinding(
+        paper_id=2,
+        title="B",
+        finding="The and for reduces.",
+        quote="The and for reduces.",
+        page_number=2,
+        cross_reference_ids=frozenset(),
+    )
+
+    assert build_contradiction_candidates([positive, negative], paper_id=1) == []
+
+
 def test_build_contradiction_candidates_boosts_opposite_polarity():
     """Opposite-polarity cues are soft ranking signals, not hard filters.
 

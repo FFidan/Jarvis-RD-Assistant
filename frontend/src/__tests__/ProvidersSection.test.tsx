@@ -172,6 +172,40 @@ describe('ProvidersSection', () => {
     });
   });
 
+  it('keeps an API key draft visible when saving fails', async () => {
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error('Save failed'));
+    const user = userEvent.setup();
+    renderSection();
+
+    const input = (await screen.findByLabelText('API key')) as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, 'sk-ant-unsaved');
+    await user.tab();
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Save failed');
+    });
+    expect(input.value).toBe('sk-ant-unsaved');
+  });
+
+  it('keeps a base URL draft visible when saving fails', async () => {
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error('Invalid base URL'));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: /add cloud provider/i }));
+    await user.click(screen.getByRole('button', { name: /Custom OpenAI-compatible endpoint/i }));
+
+    const baseUrl = screen.getByLabelText('Base URL') as HTMLInputElement;
+    await user.type(baseUrl, 'https://gateway.example.invalid/v1');
+    await user.tab();
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid base URL');
+    });
+    expect(baseUrl.value).toBe('https://gateway.example.invalid/v1');
+  });
+
   it('tests the selected provider and reports success', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
     const user = userEvent.setup();

@@ -22,6 +22,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NGINX_CONF = REPO_ROOT / "frontend" / "nginx.conf"
+NGINX_RATE_LIMIT_CONF = REPO_ROOT / "frontend" / "nginx-rate-limit.conf"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
 
@@ -32,6 +33,10 @@ COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
 def _nginx_text() -> str:
     return NGINX_CONF.read_text()
+
+
+def _nginx_rate_limit_text() -> str:
+    return NGINX_RATE_LIMIT_CONF.read_text()
 
 
 def _compose_text() -> str:
@@ -105,6 +110,32 @@ def test_nginx_serves_mjs_assets_with_javascript_mime():
     assert text.index("location ~* \\.mjs$") < text.index(
         "location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$"
     )
+
+
+def test_api_rate_limit_classifies_rejections_as_429():
+    """API throttling must not be indistinguishable from upstream 503 outages."""
+    text = _nginx_rate_limit_text()
+    assert "limit_req_zone $binary_remote_addr zone=api_zone:10m rate=10r/s;" in text
+    assert "limit_req_status 429;" in text
+
+
+def test_nginx_general_api_routes_absorb_spa_bursts():
+    """Normal SPA API locations get burst=80 while uploads stay stricter."""
+    text = _nginx_text()
+    assert text.count("limit_req zone=api_zone burst=80 nodelay;") >= 5
+    upload_limit = (
+        "location = /api/papers/upload {\n        limit_req zone=api_zone burst=2 nodelay;"
+    )
+    assert upload_limit in text
+
+
+def test_nginx_proxies_backend_liveness_routes():
+    """The dashboard can check process liveness without deep dependency probes."""
+    text = _nginx_text()
+    assert "location = /health/paper_ingestion/live" in text
+    assert "proxy_pass http://paper_ingestion:8000/health/live;" in text
+    assert "location = /health/learning_engine/live" in text
+    assert "proxy_pass http://learning_engine:8001/health/live;" in text
 
 
 # ---------------------------------------------------------------------------

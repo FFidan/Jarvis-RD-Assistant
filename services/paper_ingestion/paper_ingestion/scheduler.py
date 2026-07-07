@@ -31,6 +31,19 @@ _DEFAULT_PULSE_CRON = "0 4 * * *"
 _DEFAULT_PULSE_CLASSIFIER_CRON = "30 3 * * *"
 _DEFAULT_WEEKLY_DIGEST_CRON = "0 9 * * 1"  # Monday 09:00
 _DEFAULT_ZOTERO_CRON = "0 * * * *"  # hourly
+_ZOTERO_POLL_CONFIG_KEYS = [
+    "zotero.poll_enabled",
+    "zotero.api_key",
+    "zotero.user_id",
+    "zotero.library_type",
+    "zotero.group_id",
+    "zotero.poll_cron",
+]
+
+
+def _zotero_poll_job_id(user_id: int) -> str:
+    """Return the APScheduler job id for one user's Zotero poll."""
+    return f"zotero_library_sync_{user_id}"
 
 
 async def _is_pulse_enabled(db_pool: Any) -> bool:
@@ -102,54 +115,83 @@ def _has_config_value(cfg: dict[str, Any], key: str) -> bool:
     return value is not None and str(value).strip() != ""
 
 
-async def _list_zotero_polling_users(db_pool: Any) -> list[int]:
-    """List users whose personal Zotero config is ready for scheduled polling."""
-    try:
-        async with db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT u.id, c.key, c.value, c.encrypted_value
-                FROM users u
-                JOIN user_config c ON c.user_id = u.id
-                WHERE u.deleted_at IS NULL
-                  AND c.key = ANY($1::text[])
-                ORDER BY u.id ASC
-                """,
-                [
-                    "zotero.poll_enabled",
-                    "zotero.api_key",
-                    "zotero.user_id",
-                    "zotero.library_type",
-                    "zotero.group_id",
-                ],
-            )
-    except Exception:
-        logger.debug("scheduler: Zotero user_config unreadable; skipping scheduled poll")
-        return []
+async def _fetch_zotero_poll_config_rows(db_pool: Any, user_id: int | None) -> list[Any]:
+    """Fetch personal Zotero polling config rows, optionally for one user."""
+    async with db_pool.acquire() as conn:
+        sql = """
+            SELECT u.id, c.key, c.value, c.encrypted_value
+            FROM users u
+            JOIN user_config c ON c.user_id = u.id
+            WHERE u.deleted_at IS NULL
+              AND c.key = ANY($1::text[])
+        """
+        args: list[Any] = [_ZOTERO_POLL_CONFIG_KEYS]
+        if user_id is not None:
+            sql += " AND u.id = $2"
+            args.append(user_id)
+        sql += " ORDER BY u.id ASC"
+        return await conn.fetch(sql, *args)
 
+
+def _zotero_rows_by_user(rows: list[Any]) -> dict[int, dict[str, Any]]:
+    """Group user_config rows into a per-user config mapping."""
     by_user: dict[int, dict[str, Any]] = {}
     for row in rows:
-        user_id = int(row["id"])
-        cfg = by_user.setdefault(user_id, {})
-        if row["encrypted_value"] is not None:
-            cfg[row["key"]] = "<encrypted>"
-        else:
-            cfg[row["key"]] = row["value"]
+        uid = int(row["id"])
+        cfg = by_user.setdefault(uid, {})
+        cfg[row["key"]] = "<encrypted>" if row["encrypted_value"] is not None else row["value"]
+    return by_user
 
-    ready: list[int] = []
-    for user_id, cfg in by_user.items():
-        if not _coerce_bool(cfg.get("zotero.poll_enabled")):
-            continue
-        if not _has_config_value(cfg, "zotero.api_key"):
-            continue
-        if not _has_config_value(cfg, "zotero.user_id"):
-            continue
-        if cfg.get("zotero.library_type") == "group" and not _has_config_value(
-            cfg, "zotero.group_id"
-        ):
-            continue
-        ready.append(user_id)
-    return ready
+
+def _zotero_poll_config_ready(cfg: dict[str, Any]) -> bool:
+    """Return whether a per-user Zotero config is ready for polling."""
+    if not _coerce_bool(cfg.get("zotero.poll_enabled")):
+        return False
+    if not _has_config_value(cfg, "zotero.api_key"):
+        return False
+    if not _has_config_value(cfg, "zotero.user_id"):
+        return False
+    return not (
+        cfg.get("zotero.library_type") == "group" and not _has_config_value(cfg, "zotero.group_id")
+    )
+
+
+def _zotero_poll_cron(cfg: dict[str, Any], user_id: int) -> str:
+    """Return a validated per-user Zotero poll cron, falling back to default."""
+    raw_cron = cfg.get("zotero.poll_cron")
+    if not isinstance(raw_cron, str) or not raw_cron.strip():
+        return _DEFAULT_ZOTERO_CRON
+    expr = raw_cron.strip()
+    try:
+        CronTrigger.from_crontab(expr)
+    except Exception:
+        logger.warning(
+            "zotero.poll_cron value %r for user %d is invalid; using default",
+            expr,
+            user_id,
+            exc_info=True,
+        )
+        return _DEFAULT_ZOTERO_CRON
+    return expr
+
+
+async def _list_zotero_polling_schedules(
+    db_pool: Any,
+    *,
+    user_id: int | None = None,
+) -> list[tuple[int, str]]:
+    """List ready Zotero polling users with their personal cron schedules."""
+    rows = await _fetch_zotero_poll_config_rows(db_pool, user_id)
+    return [
+        (uid, _zotero_poll_cron(cfg, uid))
+        for uid, cfg in _zotero_rows_by_user(rows).items()
+        if _zotero_poll_config_ready(cfg)
+    ]
+
+
+async def _list_zotero_polling_users(db_pool: Any) -> list[int]:
+    """List users whose personal Zotero config is ready for scheduled polling."""
+    return [uid for uid, _cron in await _list_zotero_polling_schedules(db_pool)]
 
 
 async def _get_pulse_cron(db_pool: Any) -> str:
@@ -262,16 +304,21 @@ async def _defer_per_user(
     return deferred
 
 
-async def run_zotero_sync_wrapper(app: Any) -> None:
+async def run_zotero_sync_wrapper(app: Any, user_id: int | None = None) -> None:
     """APScheduler entrypoint for Zotero library sync — defers via procrastinate."""
     db_pool = app.state.db_pool
     try:
-        user_ids = await _list_zotero_polling_users(db_pool)
+        ready_user_ids = await _list_zotero_polling_users(db_pool)
+        if user_id is not None:
+            if user_id not in ready_user_ids:
+                logger.info("zotero: polling not ready for user %d; skipping", user_id)
+                return
+            ready_user_ids = [user_id]
         await _defer_per_user(
             task_kind="zotero.sync_from_zotero",
             db_pool=db_pool,
             log_label="zotero",
-            user_ids=user_ids,
+            user_ids=ready_user_ids,
         )
     except Exception:
         logger.exception("zotero: failed to defer sync job")
@@ -373,6 +420,37 @@ async def purge_system_events_task(app: Any) -> None:
         )
     except Exception:
         logger.exception("purge_system_events: failed to purge old events")
+
+
+async def reconcile_zotero_poll_job(
+    *,
+    scheduler: Any,
+    app: Any,
+    db_pool: Any,
+    user_id: int,
+) -> None:
+    """Add, replace, or remove one user's Zotero poll job from DB truth."""
+    if scheduler is None:
+        return
+    job_id = _zotero_poll_job_id(user_id)
+    schedules = await _list_zotero_polling_schedules(db_pool, user_id=user_id)
+    if not schedules:
+        if scheduler.get_job(job_id) is not None:
+            scheduler.remove_job(job_id)
+            logger.info("%s scheduler removed; Zotero polling no longer ready", job_id)
+        return
+
+    _uid, cron_expr = schedules[0]
+    scheduler.add_job(
+        run_zotero_sync_wrapper,
+        trigger=CronTrigger.from_crontab(cron_expr),
+        args=[app, user_id],
+        id=job_id,
+        name=f"Zotero library sync for user {user_id}",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("%s scheduler reconciled (cron=%s)", job_id, cron_expr)
 
 
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
@@ -481,25 +559,22 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     except Exception:
         logger.exception("Failed to register weekly_digest job")
 
-    # Zotero library sync (cron-scheduled, gated on zotero.poll_enabled)
+    # Zotero library sync (per-user cron-scheduled, gated on each user's config)
     try:
-        _zotero_enabled, zotero_cron = await _get_zotero_poll_config(app.state.db_pool)
-        scheduler.add_job(
-            run_zotero_sync_wrapper,
-            trigger=CronTrigger.from_crontab(zotero_cron),
-            args=[app],
-            id="zotero_library_sync",
-            name="Zotero library sync",
-            replace_existing=True,
-            max_instances=1,
-        )
-        logger.info(
-            "zotero_library_sync scheduler registered (cron=%s, enabled=%s)",
-            zotero_cron,
-            _zotero_enabled,
-        )
+        zotero_schedules = await _list_zotero_polling_schedules(app.state.db_pool)
+        for uid, zotero_cron in zotero_schedules:
+            scheduler.add_job(
+                run_zotero_sync_wrapper,
+                trigger=CronTrigger.from_crontab(zotero_cron),
+                args=[app, uid],
+                id=_zotero_poll_job_id(uid),
+                name=f"Zotero library sync for user {uid}",
+                replace_existing=True,
+                max_instances=1,
+            )
+        logger.info("zotero_library_sync scheduler registered (%d users)", len(zotero_schedules))
     except Exception:
-        logger.exception("Failed to register zotero_library_sync job")
+        logger.exception("Failed to register zotero_library_sync jobs")
 
     # Tiered system_events purge (daily at 2 AM)
     try:

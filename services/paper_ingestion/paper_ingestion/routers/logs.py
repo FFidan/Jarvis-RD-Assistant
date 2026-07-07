@@ -195,8 +195,8 @@ async def get_summary(
     """Return event counts by level and category for the last 24 hours.
 
     Pass ``?exclude_infra=1`` to omit ``category='infra'`` events from the
-    counts — used by the header error-badge so nginx rate-limit 503s
-    (self-inflicted infra noise) don't inflate the user-visible error count.
+    counts. The header error badge uses this to exclude proxy/rate-limit
+    infrastructure events from the user-visible application error count.
     """
     where = "WHERE created_at >= NOW() - INTERVAL '24 hours'"
     if exclude_infra:

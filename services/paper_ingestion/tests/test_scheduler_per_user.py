@@ -101,6 +101,40 @@ async def test_zotero_wrapper_defers_one_job_per_user(task_registry_mocks):
 
 
 @pytest.mark.asyncio
+async def test_zotero_wrapper_with_job_user_defers_only_that_user(task_registry_mocks):
+    """Per-user APScheduler jobs must not fan out to every ready Zotero user."""
+    pool, _conn = _pool_with_users([7, 8])
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch.object(
+        scheduler,
+        "_list_zotero_polling_users",
+        AsyncMock(return_value=[7, 8]),
+    ):
+        await scheduler.run_zotero_sync_wrapper(app, user_id=8)
+
+    defer = task_registry_mocks["zotero.sync_from_zotero"].defer_async
+    defer.assert_awaited_once()
+    assert defer.await_args.kwargs["user_id"] == 8
+
+
+@pytest.mark.asyncio
+async def test_zotero_wrapper_skips_unready_job_user(task_registry_mocks):
+    """A stale per-user scheduled job should not enqueue after readiness is removed."""
+    pool, _conn = _pool_with_users([7, 8])
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch.object(
+        scheduler,
+        "_list_zotero_polling_users",
+        AsyncMock(return_value=[7]),
+    ):
+        await scheduler.run_zotero_sync_wrapper(app, user_id=8)
+
+    task_registry_mocks["zotero.sync_from_zotero"].defer_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_zotero_wrapper_uses_per_user_readiness_without_global_poll_row(
     task_registry_mocks,
 ):
@@ -156,6 +190,112 @@ async def test_list_zotero_polling_users_requires_user_credentials():
     pool.acquire.return_value = ctx
 
     assert await scheduler._list_zotero_polling_users(pool) == [1, 4]
+
+
+@pytest.mark.asyncio
+async def test_list_zotero_polling_schedules_uses_personal_cron_per_user():
+    """Ready Zotero users keep distinct personal poll schedules."""
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": 1, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 1, "key": "zotero.api_key", "value": None, "encrypted_value": b"cipher"},
+        {"id": 1, "key": "zotero.user_id", "value": "123", "encrypted_value": None},
+        {"id": 1, "key": "zotero.poll_cron", "value": "0 6 * * *", "encrypted_value": None},
+        {"id": 2, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 2, "key": "zotero.api_key", "value": None, "encrypted_value": b"cipher"},
+        {"id": 2, "key": "zotero.user_id", "value": "456", "encrypted_value": None},
+    ]
+    pool = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    assert await scheduler._list_zotero_polling_schedules(pool) == [
+        (1, "0 6 * * *"),
+        (2, "0 * * * *"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_start_scheduler_registers_per_user_zotero_jobs():
+    """Startup registers one Zotero poll job per ready user, not a global job."""
+    pool = MagicMock()
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with (
+        patch.object(scheduler, "_get_pulse_cron", AsyncMock(return_value="0 4 * * *")),
+        patch.object(
+            scheduler,
+            "_list_zotero_polling_schedules",
+            AsyncMock(return_value=[(7, "0 6 * * *"), (8, "0 8 * * *")]),
+        ),
+        patch("paper_ingestion.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)),
+    ):
+        started = await scheduler.start_scheduler(app, interval_hours=0)
+
+    try:
+        assert started.get_job("zotero_library_sync") is None
+        assert started.get_job("zotero_library_sync_7") is not None
+        assert started.get_job("zotero_library_sync_8") is not None
+    finally:
+        started.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_zotero_poll_job_adds_and_removes_user_job():
+    """Live settings writes reconcile only the caller's scheduler job."""
+    fake_scheduler = MagicMock()
+    fake_scheduler.get_job.return_value = object()
+    pool = MagicMock()
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch.object(
+        scheduler,
+        "_list_zotero_polling_schedules",
+        AsyncMock(side_effect=[[(7, "0 6 * * *")], []]),
+    ):
+        await scheduler.reconcile_zotero_poll_job(
+            scheduler=fake_scheduler,
+            app=app,
+            db_pool=pool,
+            user_id=7,
+        )
+        await scheduler.reconcile_zotero_poll_job(
+            scheduler=fake_scheduler,
+            app=app,
+            db_pool=pool,
+            user_id=7,
+        )
+
+    fake_scheduler.add_job.assert_called_once()
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "zotero_library_sync_7"
+    assert fake_scheduler.add_job.call_args.kwargs["args"] == [app, 7]
+    fake_scheduler.remove_job.assert_called_once_with("zotero_library_sync_7")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_zotero_poll_job_keeps_job_when_read_fails():
+    """Transient config-read failures must not be interpreted as readiness loss."""
+    fake_scheduler = MagicMock()
+    fake_scheduler.get_job.return_value = object()
+    pool = MagicMock()
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch.object(
+        scheduler,
+        "_fetch_zotero_poll_config_rows",
+        AsyncMock(side_effect=RuntimeError("db unavailable")),
+    ):
+        with pytest.raises(RuntimeError, match="db unavailable"):
+            await scheduler.reconcile_zotero_poll_job(
+                scheduler=fake_scheduler,
+                app=app,
+                db_pool=pool,
+                user_id=7,
+            )
+
+    fake_scheduler.remove_job.assert_not_called()
 
 
 @pytest.mark.asyncio
