@@ -1,0 +1,33 @@
+JARVIS RD Assistant documentation
+
+JARVIS RD Assistant is a self-hosted research workspace for scientific literature
+discovery, source-linked RAG, PDF annotation, Zotero workflows, project tracking,
+and spaced repetition.
+
+Repository: https://github.com/FFidan/Jarvis-RD-Assistant
+Documentation: https://ffidan.github.io/Jarvis-RD-Assistant/
+License: Apache-2.0
+
+Important boundaries
+
+- Local-first means the default deployment and inference posture uses local
+  infrastructure such as Ollama or vLLM when configured.
+- Cloud providers are optional. If an administrator configures one, selected
+  prompts and source excerpts are sent to that provider for the chosen task.
+- "Verified" means an answer or claim is traceable to retrieved source text; it
+  does not mean the scientific claim is independently proven correct.
+- The canonical paper corpus is shared within a deployment, while user library
+  state, annotations, tasks, exports, and review data are scoped to the user.
+
+Primary documentation map
+
+- Overview and quickstart: /
+- User manual: /manual/
+- Deployment: /DEPLOYMENT/
+- Requirements: /REQUIREMENTS/
+- Security: /SECURITY/
+- Methods and limitations: /METHODS_AND_LIMITATIONS/
+- Architecture: /ARCHITECTURE/
+- Engineering standards: /ENGINEERING_STANDARDS/
+- Release process: /RELEASE/
+- Risk register: /known-residual-risks/
