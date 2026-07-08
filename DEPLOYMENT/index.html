@@ -1534,6 +1534,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#guided-prerequisite-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guided prerequisite installation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#single-user-vs-multi-user-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2431,6 +2442,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#guided-prerequisite-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guided prerequisite installation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#single-user-vs-multi-user-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2751,7 +2773,7 @@ the first-run wizard or Settings after the stack starts.</p>
 <p>vLLM is a <strong>separate, optional overlay</strong> — it is not auto-started by <code>setup.sh</code>. Use it to serve large models locally at higher throughput than Ollama.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.gpu.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.vllm.yml<span class="w"> </span>--profile<span class="w"> </span>vllm<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
-<p>After the vLLM container is healthy, point the LiteLLM <code>smart</code> alias at it: open <strong>Settings → Models</strong> and update the <code>smart</code> model alias to your vLLM endpoint (e.g. <code>openai/meta-llama/Meta-Llama-3-8B-Instruct</code> with <code>api_base</code> set to your vLLM URL).</p>
+<p>After the vLLM container is healthy, expose it through the local LiteLLM route and choose the served model in <strong>Settings → Models → AI models</strong>. The advanced backend and hardware panel shows local runtime guidance, while the Main and Quick model cards remain the assignment surface.</p>
 <hr />
 <h2 id="observability-optional-off-by-default">Observability (optional, off by default)<a class="headerlink" href="#observability-optional-off-by-default" title="Permanent link">&para;</a></h2>
 <p>LLM-call tracing via Langfuse is opt-in. <code>OBSERVABILITY_ENABLED</code> defaults to <code>false</code> and the Langfuse SDK is never constructed — zero overhead.</p>
@@ -3069,34 +3091,49 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <h3 id="pre-flight-check">Pre-flight check<a class="headerlink" href="#pre-flight-check" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>./setup.sh<span class="w"> </span>--check
 </code></pre></div>
-<p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, <code>openssl</code>, GPU toolkit (informational), and <code>.env</code> presence. Exit 0 = PASS, exit 1 = FAIL.</p>
+<p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, <code>openssl</code>, GPU toolkit (informational), and <code>.env</code> presence. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs packages, writes <code>.env</code>, or starts services, even if <code>--install-prereqs</code> is also present.</p>
 <p><code>setup.sh</code> verifies the Docker <em>daemon</em> is reachable (<code>docker info</code>), not just that the <code>docker</code> binary is installed — both in <code>./setup.sh --check</code> and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, <code>DOCKER_HOST</code> misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.</p>
+<h3 id="guided-prerequisite-installation">Guided prerequisite installation<a class="headerlink" href="#guided-prerequisite-installation" title="Permanent link">&para;</a></h3>
+<p>If Docker, the Docker Compose v2 plugin, or <code>openssl</code> are missing, normal interactive setup prints the exact package-manager commands it can run and asks for consent before touching the host. Automated installs never prompt: use <code>--install-prereqs</code> only after reviewing the printed commands, or install the prerequisites manually and re-run <code>./setup.sh --check</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Preflight only; never installs packages</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>./setup.sh<span class="w"> </span>--check
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># Review the guided install plan without running it</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Interactive setup; prompts before running supported apt/Homebrew commands</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>./setup.sh
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="c1"># Unattended setup that is allowed to run the reviewed prerequisite plan</span>
+<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--install-prereqs<span class="w"> </span>--profile<span class="o">=</span>dev
+</code></pre></div>
+<p>The guided installer supports common Debian/Ubuntu-style <code>apt-get</code> hosts and macOS Homebrew. Unsupported distributions, hosts without the needed package manager, and Docker Desktop/daemon startup issues receive manual guidance instead of automatic package changes. Docker may still need to be started manually, and Linux users may need to log out and back in after Docker group changes.</p>
 <p>Re-runs: running <code>./setup.sh</code> with an existing <code>.env</code> and declining the overwrite prompt no longer exits with services stopped — it keeps your <code>.env</code> (secrets, database, and model selection untouched) and starts the stack with it via <code>docker compose up -d</code>, honouring the <code>COMPOSE_FILE</code> and <code>COMPOSE_PROFILES</code> values persisted in <code>.env</code>. New installs write <code>COMPOSE_PROFILES=&lt;selection&gt;</code> (for example <code>telegram</code>, <code>tunnel</code>) into <code>.env</code>; for older <code>.env</code> files without it, setup derives the telegram profile from a non-empty <code>TELEGRAM_BOT_TOKEN</code> and prints a notice.</p>
 <p>Key flags: <code>--mode &lt;single|multi&gt;</code>, <code>--domain &lt;host&gt;</code>, <code>--admin-email &lt;email&gt;</code>, <code>--profile &lt;dev|local-https|letsencrypt&gt;</code> (default <code>dev</code>; <code>letsencrypt</code> requires <code>--domain</code> + <code>--admin-email</code>), <code>--smtp-host/--smtp-user/--smtp-pass-file</code>. Run <code>./setup.sh --help</code> for the full reference. <code>TELEGRAM_BOT_TOKEN</code> in the environment enables Telegram automatically.</p>
 <h3 id="single-user-vs-multi-user-mode">Single-user vs multi-user mode<a class="headerlink" href="#single-user-vs-multi-user-mode" title="Permanent link">&para;</a></h3>
-<p><code>single</code> (default) — API-key login, no SMTP required. <code>multi</code> — email magic-link, SMTP relay required. Single-user is not an auth downgrade — <code>JARVIS_API_KEY</code> still gates all REST calls.</p>
+<p><code>single</code> (default) makes the sign-in screen offer API-key login first and does not require SMTP. <code>multi</code> makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization.</p>
 <h3 id="copy-paste-examples">Copy-paste examples<a class="headerlink" href="#copy-paste-examples" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Local development / CI smoke test:</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
-<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
-<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># Self-hosted with self-signed HTTPS (home lab):</span>
-<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.local<span class="w"> </span>--admin-email<span class="o">=</span>admin@example.com<span class="w"> </span>--profile<span class="o">=</span>local-https
-<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
-<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
-<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>/run/secrets/smtp_pass<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/run/secrets/smtp_pass
-<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a><span class="w">  </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-14" name="__codelineno-21-14" href="#__codelineno-21-14"></a><span class="w">  </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-21-15" name="__codelineno-21-15" href="#__codelineno-21-15"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Local development / CI smoke test:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Self-hosted with self-signed HTTPS (home lab):</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.local<span class="w"> </span>--admin-email<span class="o">=</span>admin@example.com<span class="w"> </span>--profile<span class="o">=</span>local-https
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>/run/secrets/smtp_pass<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/run/secrets/smtp_pass
+<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="w">  </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
 </code></pre></div>
-<p>After setup, invite the first admin: <code>https://jarvis.example.com/admin/users</code></p>
+<p>After setup, open the dashboard and create the initial admin in the onboarding wizard. Once signed in as an admin, invite additional users at <code>https://jarvis.example.com/admin/users</code>.</p>
 <hr />
 <h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>git<span class="w"> </span>pull
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./update.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>git<span class="w"> </span>pull
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>./update.sh
 </code></pre></div>
 <p><code>update.sh</code> loads pinned versions from <code>versions.env</code>, diffs running vs pinned images, prompts to pull stale services and rebuild local containers, and waits up to 180 s per service. On failure it prints: <code>git checkout HEAD~1 -- versions.env &amp;&amp; ./update.sh</code>.</p>
 <h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
@@ -3120,11 +3157,11 @@ re-assigns any pre-existing product rows with a NULL owner to the single admin
 account. This is automatic and non-destructive; it only runs when exactly one
 admin user exists (the normal single-tenant state).</p>
 <p>Makefile shortcuts for development:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
-<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
-<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
 </code></pre></div>
 <hr />
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
@@ -3246,51 +3283,51 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <h4 id="manual-restore-fallback">Manual restore (fallback)<a class="headerlink" href="#manual-restore-fallback" title="Permanent link">&para;</a></h4>
 <p>Use the steps below when the app itself cannot start — for example, after a total host failure where you are starting fresh on a new machine. The one-click path is unavailable in that case; this procedure does the same work from the host.</p>
 <p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
 </code></pre></div>
 <p>The decryption flags match what <code>scripts/backup.sh</code> uses (<code>-aes-256-cbc -pbkdf2 -iter 600000</code>). Repeat for each <code>.enc</code> archive before using it.</p>
 <blockquote>
 <p><strong>Key dependency warning:</strong> the <code>jarvis</code> DB stores provider/model credentials encrypted with <code>JARVIS_CONFIG_KEY</code>; the LiteLLM DB stores its model keys encrypted with <code>LITELLM_SALT_KEY</code>. Restoring a DB dump without the <strong>same key that encrypted it</strong> leaves those secrets undecryptable. Always restore the matching <code>secrets/</code> archive (or confirm the keys are already in place) before starting the stack.</p>
 </blockquote>
 <p><strong>Step 1 — <code>secrets/</code></strong> (restore before starting the stack, so the right keys are in place):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
 </code></pre></div>
 <p><strong>Step 2 — Postgres (<code>jarvis</code> and <code>litellm</code>)</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
-<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
-<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
-<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
-<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
 </code></pre></div>
 <p><strong>Step 3 — Qdrant</strong> — stop the container first so the snapshot restore doesn't race an active index write:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
-<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>
-<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
-<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
-<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
-<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a>
-<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
-<a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
-<a id="__codelineno-27-18" name="__codelineno-27-18" href="#__codelineno-27-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-27-19" name="__codelineno-27-19" href="#__codelineno-27-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
+<a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-28-12" name="__codelineno-28-12" href="#__codelineno-28-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
+<a id="__codelineno-28-13" name="__codelineno-28-13" href="#__codelineno-28-13"></a>
+<a id="__codelineno-28-14" name="__codelineno-28-14" href="#__codelineno-28-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
+<a id="__codelineno-28-15" name="__codelineno-28-15" href="#__codelineno-28-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-28-16" name="__codelineno-28-16" href="#__codelineno-28-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-28-17" name="__codelineno-28-17" href="#__codelineno-28-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
+<a id="__codelineno-28-18" name="__codelineno-28-18" href="#__codelineno-28-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-28-19" name="__codelineno-28-19" href="#__codelineno-28-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
 </code></pre></div>
 <hr />
 <h4 id="off-host-total-host-loss-recovery-inbox-restore">Off-host / total-host-loss recovery (inbox restore)<a class="headerlink" href="#off-host-total-host-loss-recovery-inbox-restore" title="Permanent link">&para;</a></h4>
@@ -3306,19 +3343,19 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <p><strong>Place the archive set into the inbox.</strong> Either copy it from your off-site store, or pull it from S3 with the built-in helper (S3-pull is optional and aws-guarded; it does nothing and prints a notice if <code>aws</code>/<code>BACKUP_S3_BUCKET</code> are absent):</p>
 </li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
-<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
-<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
-<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
 </code></pre></div>
 <ol>
 <li><strong>Place the one-time backup key</strong> into the inbox as the file <strong><code>operator_key</code></strong> (fixed name), then write the restore trigger. <code>restore.sh</code> validates the key exists before any destructive step and verifies it actually decrypts the database archives before any <code>DROP</code> (a wrong key fails safe, destroying nothing):</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
-<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
 </code></pre></div>
 <p>The sidecar's poll loop runs <code>restore.sh</code> within a few seconds. Watch progress in <code>/backup-trigger/.restore_status.json</code> (or the sidecar logs).</p>
 <ol>
@@ -3329,16 +3366,16 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <p><strong>Materialize the host <code>./secrets</code> and recreate the app + sidecar.</strong> <code>restore.sh</code> decrypts the secrets archive only internally (to read the role password for the rebind) and then <strong>shreds that staging</strong> on exit (<code>shred</code> per file, then remove) — it does not leave the decrypted bundle on the volume. Populate the host <code>./secrets</code> yourself from the same archive so the app can decrypt the restored config-key Fernet rows, then <strong>recreate</strong> (not merely restart) every container that authenticates with <code>postgres_password</code>, <strong>including the <code>postgres-backup</code> sidecar</strong> — Docker file-secrets are re-read only when a container is recreated, so a sidecar left running would keep the stale new-host password and its scheduled backups would start failing authentication:</p>
 </li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span>-kfile<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span>-in<span class="w"> </span>secrets_&lt;ts&gt;.tar.gz.enc<span class="w"> </span><span class="p">|</span><span class="w"> </span>tar<span class="w"> </span>-xzf<span class="w"> </span>-<span class="w"> </span>-C<span class="w"> </span>./secrets
-<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--force-recreate<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">  </span>paper_ingestion<span class="w"> </span>learning_engine<span class="w"> </span>litellm<span class="w"> </span>dashboard<span class="w"> </span>postgres-backup
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="w">  </span>-kfile<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="w">  </span>-in<span class="w"> </span>secrets_&lt;ts&gt;.tar.gz.enc<span class="w"> </span><span class="p">|</span><span class="w"> </span>tar<span class="w"> </span>-xzf<span class="w"> </span>-<span class="w"> </span>-C<span class="w"> </span>./secrets
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--force-recreate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="w">  </span>paper_ingestion<span class="w"> </span>learning_engine<span class="w"> </span>litellm<span class="w"> </span>dashboard<span class="w"> </span>postgres-backup
 </code></pre></div>
 <ol>
 <li><strong>Clear maintenance.</strong> Unlike the same-host one-click restore, the off-host path deliberately leaves the stack in maintenance (HTTP 503) until you finish — the app boots with the new-host password while the role was rebound to the restored one, so it is not servable until step 5 completes. Once the recreated containers are healthy, lift the gate:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
 </code></pre></div>
 <p>The off-host path opens the destructive window (it drops and reloads the databases), so it holds a <strong>durable</strong> <code>.destructive</code> sentinel that — unlike the soft <code>.maintenance</code> sentinel — does <strong>not</strong> auto-expire after <code>MAINTENANCE_MAX_AGE_S</code>. You <strong>must</strong> clear both sentinels explicitly with the command above; skipping it leaves the stack at HTTP 503 indefinitely.</p>
 <ol>
@@ -3396,11 +3433,11 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </tbody>
 </table>
 <p>Once the required step is done, clear both sentinels:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
 </code></pre></div>
 <hr />
 <h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
 </code></pre></div>
 <p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
 <hr />

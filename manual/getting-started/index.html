@@ -2036,11 +2036,11 @@
 <h2 id="signing-in-authverify-user">Signing in — <code>/auth/verify</code> (user)<a class="headerlink" href="#signing-in-authverify-user" title="Permanent link">&para;</a></h2>
 <!-- screenshot: LoginPage showing the email input and "Send magic link" button -->
 
-<p><strong>Signing in</strong> depends on how the server is configured.</p>
+<p><strong>Signing in</strong> depends on the instance's sign-in method and email configuration.</p>
 <ul>
-<li><strong>If SMTP is configured</strong> (your admin set up an email relay in Settings → System → Email / SMTP), the login page defaults to the magic-link tab: enter your email address, click <strong>Send magic link</strong>, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.</li>
-<li><strong>Single-user mode without SMTP:</strong> the login page defaults to the API-key tab. Enter the <code>JARVIS_API_KEY</code> value set in your server's environment and click <strong>Sign In</strong>.</li>
-<li><strong>Multi-user mode without SMTP:</strong> the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but the backend rejects API-key sign-in once more than one account exists — unless the operator has explicitly set <code>API_KEY_LOGIN_ENABLED=true</code>.</li>
+<li><strong>Single-user mode:</strong> the login page defaults to the API-key tab. Enter the <code>JARVIS_API_KEY</code> value set in your server's environment and click <strong>Sign In</strong>. SMTP is optional for this mode.</li>
+<li><strong>Multi-user mode with SMTP configured:</strong> the login page defaults to the magic-link tab. Enter your email address, click <strong>Send magic link</strong>, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.</li>
+<li><strong>Multi-user mode without SMTP:</strong> the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but API-key sign-in is limited to the configured owner/admin or to deployments where the operator explicitly enables it.</li>
 </ul>
 <hr />
 <h2 id="onboarding-tour-user">Onboarding tour (user)<a class="headerlink" href="#onboarding-tour-user" title="Permanent link">&para;</a></h2>

@@ -1693,7 +1693,7 @@ to add a cloud model instead.</p>
 <h2 id="hardware-tiers-and-default-models">Hardware tiers and default models<a class="headerlink" href="#hardware-tiers-and-default-models" title="Permanent link">&para;</a></h2>
 <p>At first boot, JARVIS probes your GPU's VRAM and automatically selects models suited
 to your hardware. The recommendation is advisory — you can change any assignment at
-any time in <strong>Settings → Models</strong>.</p>
+any time in <strong>Settings → Models → AI models</strong>.</p>
 <table>
 <thead>
 <tr>
@@ -1795,6 +1795,7 @@ any role whose assigned model is not installed, with a <strong>Pull</strong> but
 JARVIS will not silently fall back to a different model for a role — the warning stays
 visible until you either pull the model or reassign the role to one that is already
 installed.</p>
+<p>The advanced backend and hardware panel on the same page is diagnostics only. It shows hardware fit, observed runtime traffic, and Ollama/vLLM guidance, but active role assignment stays in the Main, Quick, and Embedding model cards.</p>
 <hr />
 <h2 id="when-to-use-a-cloud-model-instead">When to use a cloud model instead<a class="headerlink" href="#when-to-use-a-cloud-model-instead" title="Permanent link">&para;</a></h2>
 <p>Optional cloud providers are a good fit when:</p>

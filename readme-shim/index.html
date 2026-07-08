@@ -2132,14 +2132,14 @@
 <li>~20 GB free disk space</li>
 <li>NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. The first run pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection.</li>
 <li>On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</li>
-<li><code>./setup.sh --check</code> verifies all of these (read-only preflight)</li>
+<li><code>./setup.sh --check</code> verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or <code>openssl</code> are missing, <code>./setup.sh --install-prereqs</code> can run the guided installer after showing the exact commands.</li>
 <li><strong>Windows:</strong> use WSL2 + Docker Desktop</li>
 <li><strong>Non-interactive installs:</strong> use <code>scripts/jarvis-setup.sh</code> for CI / cloud-init</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/FFidan/Jarvis-RD-Assistant.git
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>Jarvis-RD-Assistant
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>./setup.sh<span class="w"> </span>--check<span class="w">   </span><span class="c1"># preflight (read-only, exits 0 on pass)</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>./setup.sh
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>./setup.sh<span class="w">             </span><span class="c1"># add --install-prereqs only if you want setup to install missing host packages</span>
 </code></pre></div>
 <p><code>setup.sh</code> generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens <strong>http://localhost:3001</strong> — the first-run wizard creates the admin account. Pass <code>--mode single</code> (API-key login, no SMTP) or <code>--mode multi</code> (magic-link email). See <a href="../DEPLOYMENT/#single-user-vs-multi-user-mode">docs/DEPLOYMENT.md</a> for the trade-off.</p>
 <p>Re-running <code>./setup.sh</code> keeps your data: answering <code>N</code> (the default) at the <code>Overwrite?</code> prompt preserves your existing <code>.env</code> — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (7–11 GB; 20–60 min on a typical connection) streams its progress directly to your terminal before the services start, so the initial pull shows visible progress instead of a silent wait.</p>
