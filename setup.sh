@@ -21,7 +21,11 @@
 #                             multi            — team instance, email/magic-link login.
 #   --check                   Doctor / preflight check (read-only). Exits 0 if all
 #                             requirements are met, 1 if any are missing. Does NOT
-#                             generate .env or start services.
+#                             generate .env, install packages, or start services.
+#   --install-prereqs        Explicitly run the guided prerequisite installer when
+#                             Docker, Docker Compose, or openssl are missing.
+#                             In --non-interactive mode this flag is required for
+#                             host package installation.
 #   --backend ollama|vllm|auto
 #                             Override AI backend selection. Default: auto (inferred
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
@@ -305,6 +309,7 @@ NI_SMTP_PASS=""
 NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
 NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
+INSTALL_PREREQS=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -366,6 +371,8 @@ while [ $# -gt 0 ]; do
       NI_MODE="${1#*=}"; NI_MODE_EXPLICIT=1; shift ;;
     --check)
       RUN_DOCTOR=1; shift ;;
+    --install-prereqs)
+      INSTALL_PREREQS=1; shift ;;
     --backend)
       case "$2" in
         ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
@@ -411,20 +418,119 @@ fi
 
 if [ "$RUN_DOCTOR" -eq 1 ]; then run_doctor; exit $?; fi
 
+
+missing_prereqs() {
+  local missing=()
+  command -v docker >/dev/null 2>&1 || missing+=(docker)
+  if command -v docker >/dev/null 2>&1; then
+    docker compose version >/dev/null 2>&1 || missing+=(docker-compose)
+  else
+    missing+=(docker-compose)
+  fi
+  command -v openssl >/dev/null 2>&1 || missing+=(openssl)
+  printf '%s\n' "${missing[@]}"
+}
+
+_host_os_id() {
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091  # /etc/os-release is standard KEY=VALUE data.
+    . /etc/os-release
+    printf '%s' "${ID:-unknown}"
+  else
+    printf 'unknown'
+  fi
+}
+
+_prereq_install_plan_for_host() {
+  local os os_id has_apt=0 has_brew=0
+  os="$(uname -s 2>/dev/null || printf unknown)"
+  os_id="$(_host_os_id)"
+  command -v apt-get >/dev/null 2>&1 && has_apt=1
+  command -v brew >/dev/null 2>&1 && has_brew=1
+  prereq_install_plan "$os" "$os_id" "$has_apt" "$has_brew" "$@"
+}
+
+_run_prereq_plan() {
+  local plan="$1" noninteractive="${2:-0}" cmd run_cmd
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    run_cmd="$cmd"
+    if [ "$noninteractive" -eq 1 ]; then
+      case "$run_cmd" in
+        sudo\ *) run_cmd="sudo -n ${run_cmd#sudo }" ;;
+      esac
+    fi
+    info "Running: $run_cmd"
+    bash -c "$run_cmd"
+  done <<< "$plan"
+}
+
+handle_missing_prereqs() {
+  local missing=("$@")
+  local plan=""
+  printf '%sMissing prerequisites:%s %s\n' "$C_YELLOW" "$C_RESET" "${missing[*]}" >&2
+
+  if ! plan="$(_prereq_install_plan_for_host "${missing[@]}")" || [ -z "$plan" ]; then
+    die "Automatic prerequisite installation is not available on this host." \
+        "$(prereq_manual_guidance "${missing[@]}")"
+  fi
+
+  printf '%sGuided prerequisite installer would run:%s\n%s\n' "$C_BOLD" "$C_RESET" "$plan" >&2
+
+  if [ "$INSTALL_PREREQS" -eq 1 ]; then
+    _run_prereq_plan "$plan" "$NON_INTERACTIVE"
+    return
+  fi
+
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    die "Prerequisites are missing in non-interactive mode." \
+        "Re-run with --install-prereqs after reviewing the commands above, or install them manually."
+  fi
+
+  if [ ! -t 0 ]; then
+    die "Prerequisites are missing and setup cannot prompt for consent." \
+        "Run interactively, pass --install-prereqs, or install them manually."
+  fi
+
+  local reply=""
+  read -rp "Run these prerequisite installation commands now? [y/N]: " reply
+  case "$reply" in
+    [yY]|[yY][eE][sS]) _run_prereq_plan "$plan" 0 ;;
+    *) die "Prerequisites are missing." "$(prereq_manual_guidance "${missing[@]}")" ;;
+  esac
+}
+
+ensure_prerequisites() {
+  local missing=()
+  while IFS= read -r item; do
+    [ -n "$item" ] && missing+=("$item")
+  done < <(missing_prereqs)
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    handle_missing_prereqs "${missing[@]}"
+  fi
+
+  command -v docker >/dev/null 2>&1 \
+    || die "Docker not found in PATH." "$(os_install_hint docker)"
+
+  if ! docker compose version >/dev/null 2>&1; then
+    die "Docker Compose v2 is required (the 'docker compose' plugin)." \
+        "$(os_install_hint docker)"
+  fi
+
+  command -v openssl >/dev/null 2>&1 \
+    || die "openssl required for secret generation." \
+           "$(prereq_manual_guidance openssl)"
+}
+
 # -----------------------------------------------------------------------------
 # 2. Prerequisites
 # -----------------------------------------------------------------------------
 info "Checking prerequisites..."
 
-command -v docker >/dev/null 2>&1 \
-  || die "Docker not found in PATH." \
-         "$(os_install_hint docker)"
+ensure_prerequisites
 
 # docker compose v2 (space form). `docker-compose` (hyphen) is v1 and unsupported.
-if ! docker compose version >/dev/null 2>&1; then
-  die "Docker Compose v2 is required (the 'docker compose' plugin)." \
-      "$(os_install_hint docker)"
-fi
 COMPOSE_VER="$(docker compose version --short 2>/dev/null || echo 'unknown')"
 case "$COMPOSE_VER" in
   2.*|v2.*) ok "Docker Compose v${COMPOSE_VER#v}" ;;
@@ -437,10 +543,6 @@ esac
 docker info >/dev/null 2>&1 \
   || die "Docker daemon is not reachable ('docker info' failed)." \
          "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
-
-command -v openssl >/dev/null 2>&1 \
-  || die "openssl required for secret generation." \
-         "$(os_install_hint docker)"
 
 # GPU is informational — not fatal. Resolve nvidia-smi via the WSL2-aware helper
 # (same as detect_hw_tier) so WSL2 hosts — where nvidia-smi is off PATH at
@@ -465,7 +567,15 @@ else
 fi
 
 # Port pre-check — warn only. Probes all ports JARVIS exposes on the host.
-JARVIS_PORTS=(3001 4000 5432 6333 8010 8011 11434)
+JARVIS_PORTS=(
+  "${DASHBOARD_HOST_PORT:-3001}"
+  "${LITELLM_HOST_PORT:-4000}"
+  "${POSTGRES_HOST_PORT:-5432}"
+  "${QDRANT_HOST_PORT:-6333}"
+  "${PAPER_INGESTION_HOST_PORT:-8010}"
+  "${LEARNING_ENGINE_HOST_PORT:-8011}"
+  "${OLLAMA_HOST_PORT:-11434}"
+)
 PORTS_IN_USE=()
 for port in "${JARVIS_PORTS[@]}"; do
   if command -v ss >/dev/null 2>&1; then
@@ -1122,7 +1232,8 @@ fi
 # -----------------------------------------------------------------------------
 # 12. Summary (only reached when all mandatory services are healthy)
 # -----------------------------------------------------------------------------
-DASHBOARD_URL="http://localhost:3001"
+DASHBOARD_HOST_PORT_RESOLVED="${DASHBOARD_HOST_PORT:-3001}"
+DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"
 # Let's Encrypt / --domain production deploys serve TLS on the public hostname
 # (Caddy + ACME), not localhost. access_mode stays "1" (the dashboard still
 # binds locally behind Caddy), so key off the profile/domain here.
@@ -1132,9 +1243,9 @@ fi
 case "$ACCESS_MODE_LABEL" in
   lan)
     if [ -n "$LAN_IP" ]; then
-      DASHBOARD_URL="https://${LAN_IP}:3001"
+      DASHBOARD_URL="https://${LAN_IP}:${DASHBOARD_HOST_PORT_RESOLVED}"
     else
-      DASHBOARD_URL="https://<this-machine-ip>:3001"
+      DASHBOARD_URL="https://<this-machine-ip>:${DASHBOARD_HOST_PORT_RESOLVED}"
     fi
     ;;
   tunnel)

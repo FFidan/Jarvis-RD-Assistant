@@ -27,6 +27,72 @@ resolve_nvidia_smi() {
   return 1
 }
 
+
+
+# prereq_install_plan OS OS_ID HAS_APT HAS_BREW MISSING...
+# Prints explicit package-manager commands for supported hosts, one command per
+# line. Returns non-zero when the host cannot be installed safely. This function
+# only plans; setup.sh decides whether to prompt and execute the plan.
+prereq_install_plan() {
+  local os="$1" os_id="$2" has_apt="$3" has_brew="$4"
+  shift 4
+  local needs_docker=0 needs_compose=0 needs_openssl=0 item
+  for item in "$@"; do
+    case "$item" in
+      docker) needs_docker=1 ;;
+      docker-compose) needs_compose=1 ;;
+      openssl) needs_openssl=1 ;;
+    esac
+  done
+
+  case "$os" in
+    Linux)
+      case "$os_id" in
+        debian|ubuntu|linuxmint|pop|popos)
+          [ "$has_apt" = "1" ] || return 1
+          local apt_packages=()
+          if [ "$needs_docker" = "1" ]; then
+            apt_packages+=(docker.io docker-compose-plugin)
+          elif [ "$needs_compose" = "1" ]; then
+            apt_packages+=(docker-compose-plugin)
+          fi
+          if [ "$needs_openssl" = "1" ]; then
+            apt_packages+=(openssl)
+          fi
+          [ "${#apt_packages[@]}" -gt 0 ] || return 0
+          printf 'sudo apt-get update\n'
+          printf 'sudo apt-get install -y %s\n' "${apt_packages[*]}"
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    Darwin)
+      [ "$has_brew" = "1" ] || return 1
+      if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
+        printf 'brew install --cask docker\n'
+      fi
+      if [ "$needs_openssl" = "1" ]; then
+        printf 'brew install openssl\n'
+      fi
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# prereq_manual_guidance MISSING... -> human-readable fallback for unsupported
+# or non-mutating paths. Keep this free of private host paths and secrets.
+prereq_manual_guidance() {
+  local item
+  for item in "$@"; do
+    case "$item" in
+      docker) printf 'Install Docker Engine or Docker Desktop: https://docs.docker.com/engine/install/\n' ;;
+      docker-compose) printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
+      openssl) printf 'Install openssl with your OS package manager.\n' ;;
+    esac
+  done
+  printf 'After installing Docker, start the daemon and re-run ./setup.sh --check.\n'
+}
+
 # _default_model_for_tier TIER BACKEND -> echoes the default model id for the
 # tier/backend pair. Reads config/llm-tier-candidates.yaml (relative — setup.sh
 # cd's to the repo root) when host python3 has PyYAML; without PyYAML or without

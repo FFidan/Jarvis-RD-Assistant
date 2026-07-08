@@ -73,6 +73,24 @@ describe('TopicSection subscription switch', () => {
     await waitFor(() => expect(sw).toBeChecked());
   });
 
+
+  it('explains enabled topics versus auto-add subscriptions without toggling from the tooltip', async () => {
+    vi.mocked(fetchMySubscriptions).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByLabelText('Auto-add matches to my library');
+    const info = screen.getByLabelText('More info');
+
+    await user.hover(info);
+    await screen.findAllByText(/Enabled topics are used for discovery and ranking/i);
+    expect(screen.getAllByText(/adds newly fetched matching papers to your library/i).length).toBeGreaterThan(0);
+
+    await user.click(info);
+    expect(vi.mocked(subscribeToTopic)).not.toHaveBeenCalled();
+    expect(vi.mocked(unsubscribeFromTopic)).not.toHaveBeenCalled();
+  });
+
   it('toggling on calls subscribeToTopic', async () => {
     vi.mocked(fetchMySubscriptions).mockResolvedValue([]);
     const user = userEvent.setup();

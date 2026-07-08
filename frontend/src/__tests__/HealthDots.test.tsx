@@ -8,12 +8,32 @@
  * - Loading / error states
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HealthDots } from '@/components/shared/HealthDots';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
+
+const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
+type AuthTestState = {
+  isAuthenticated: boolean;
+  authTime: number | null;
+  isSessionValid: () => boolean;
+  expireSession: ReturnType<typeof vi.fn>;
+};
+
+let authState: AuthTestState = {
+  isAuthenticated: true,
+  authTime: Date.now(),
+  isSessionValid: () => true,
+  expireSession: vi.fn(),
+};
+
+vi.mock('@/stores/auth-store', () => ({
+  useAuthStore: (selector: (state: typeof authState) => unknown) => selector(authState),
+}));
 
 // Mock the api module so we control fetchStackHealth return values
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -116,6 +136,72 @@ function renderHealthDots(compact = false) {
 describe('HealthDots', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState = {
+      isAuthenticated: true,
+      authTime: Date.now(),
+      isSessionValid: () => true,
+      expireSession: vi.fn(),
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not poll protected health endpoints before authentication', () => {
+    authState = {
+      isAuthenticated: false,
+      authTime: null,
+      isSessionValid: () => false,
+      expireSession: vi.fn(),
+    };
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+    renderHealthDots();
+
+    expect(mockFetchStackHealth).not.toHaveBeenCalled();
+    expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
+  });
+
+
+
+  it('hides cached protected health data when authentication is no longer valid', () => {
+    authState = {
+      isAuthenticated: false,
+      authTime: null,
+      isSessionValid: () => false,
+      expireSession: vi.fn(),
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(QUERY_KEYS.stack.health(), makeAllOk());
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HealthDots />
+      </QueryClientProvider>,
+    );
+
+    expect(mockFetchStackHealth).not.toHaveBeenCalled();
+    expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
+    expect(screen.queryByText('All healthy')).not.toBeInTheDocument();
+  });
+
+  it('does not poll protected health when the client session is already expired', () => {
+    const expireSession = vi.fn();
+    authState = {
+      isAuthenticated: true,
+      authTime: Date.now() - SESSION_DURATION_MS - 1,
+      isSessionValid: () => false,
+      expireSession,
+    };
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+
+    renderHealthDots();
+
+    expect(mockFetchStackHealth).not.toHaveBeenCalled();
+    expect(expireSession).not.toHaveBeenCalled();
+    expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
   });
 
   // --- Collapsed pill ---

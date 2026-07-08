@@ -73,6 +73,31 @@ async def test_s2_fetch_json_returns_empty_on_429(status_code: int) -> None:
     assert result == {}, f"Expected {{}} for status {status_code}, got {result!r}"
 
 
+@respx.mock
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+async def test_s2_fetch_by_id_returns_none_on_transient_empty_payload(status_code: int) -> None:
+    """fetch_by_id must not parse transient S2 failures into empty paper shells."""
+    respx.get(f"{S2_API_URL}/paper/abc123").mock(return_value=httpx.Response(status_code))
+
+    source = _make_s2_source()
+    paper = await source.fetch_by_id("abc123")
+
+    assert paper is None
+
+
+@respx.mock
+async def test_s2_fetch_by_id_returns_none_for_malformed_payload() -> None:
+    """fetch_by_id rejects payloads that cannot identify a real paper."""
+    respx.get(f"{S2_API_URL}/paper/abc123").mock(
+        return_value=httpx.Response(200, json={"paperId": "", "title": ""})
+    )
+
+    source = _make_s2_source()
+    paper = await source.fetch_by_id("abc123")
+
+    assert paper is None
+
+
 # ---------------------------------------------------------------------------
 # H21: OpenAlex pdf_url scheme check — file:// rejected even if hostname in allowlist
 # ---------------------------------------------------------------------------

@@ -142,6 +142,8 @@ class QuoteVerifier:
             quote = quote[:max_quote_length]
 
         normalized_quote = self._normalize_for_match(quote)
+        if not normalized_quote or not any(ch.isalnum() for ch in normalized_quote):
+            return VerificationResult(quote=quote, verified=False)
 
         # --- Strategy 1: Exact substring match ---
         # Use pre-normalized if provided, otherwise normalize here
@@ -326,6 +328,8 @@ class QuoteVerifier:
         Returns ``(None, None)`` if no chunk contains the quote.
         """
         normalized_quote = self._normalize_for_match(quote)
+        if not normalized_quote or not any(ch.isalnum() for ch in normalized_quote):
+            return None, None
         for chunk in chunks:
             if normalized_quote in self._normalize_for_match(chunk.content):
                 return chunk.id, chunk.page_number

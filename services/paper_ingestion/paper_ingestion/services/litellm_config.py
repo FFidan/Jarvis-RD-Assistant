@@ -128,14 +128,15 @@ _CARRIED_PARAM_KEYS = (
 # re-deliver every cloud alias forever: deployment-id churn, router
 # cooldown/latency state resets, an INFO line every pass, and the plaintext key
 # re-transmitted 2,880x/day. Instead we remember, per alias, the
-# (model, think, key-fingerprint) of the LAST successful delivery made BY THIS
-# PROCESS and no-op only when both the live routing state (model/think from
-# /v1/model/info) and the fingerprint match. Process-local on purpose: the
+# (model, think, key-fingerprint, api-base) of the LAST successful delivery
+# made BY THIS PROCESS and no-op only when both the live routing state
+# (model/think from /v1/model/info) and the fingerprint match. Process-local
+# on purpose: the
 # cache clears on restart (one harmless redelivery per boot, which
 # self-corrects), and a genuine key rotation changes the fingerprint so the
 # very next delivery call (configure_cloud_llm_keys re-push, Settings PUT, or
 # a reconciler pass) carries the fresh key.
-_CLOUD_DELIVERED_FINGERPRINTS: dict[str, tuple[str, Any, str]] = {}
+_CLOUD_DELIVERED_FINGERPRINTS: dict[str, tuple[str, Any, str, str | None]] = {}
 
 # The always-pulled OLLAMA_MODELS default for the fast tier (matches the
 # static fallback in main.py's _LITELLM_ROLE_FALLBACKS). Used to pin
@@ -586,7 +587,7 @@ async def _deliver_cloud(
     """Deliver a cloud-provider model + its Fernet-decrypted key.
 
     The no-op mirrors the ollama shape (single DB entry, no YAML stack, signature
-    match) with the cloud signature = (model, think, key-fingerprint). ``num_ctx``
+    match) with the cloud signature = (model, think, key-fingerprint, api-base). ``num_ctx``
     never applies; custom OpenAI-compatible endpoints may add ``api_base``.
     /v1/model/info pops api_key, so the key leg is the process-local
     fingerprint of the last delivery; key rotation re-delivers
@@ -613,7 +614,7 @@ async def _deliver_cloud(
         new_params["think"] = False
 
     desired_model = str(new_params["model"])
-    desired_cloud = (desired_model, new_params.get("think"), _key_fingerprint(api_key))
+    desired_cloud = (desired_model, new_params.get("think"), _key_fingerprint(api_key), api_base)
     if len(db_entries) == 1 and not yaml_entries:
         deployed = db_entries[0].litellm_params
         if (
@@ -865,7 +866,7 @@ async def _smart_fallback_deliver_cloud(
     """Deliver (or no-op) the cloud smart-fallback deployment."""
     # Process-local fingerprint in the no-op check: a rotated key re-delivers
     # within one reconciler pass instead of riding the stale key forever.
-    desired_cloud = (new_model, None, _key_fingerprint(api_key))
+    desired_cloud = (new_model, None, _key_fingerprint(api_key), None)
     if (
         len(db_entries) == 1
         and not yaml_entries

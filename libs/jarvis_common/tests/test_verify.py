@@ -53,6 +53,30 @@ def test_verify_quote_no_match():
     assert result.verified is False
 
 
+def test_verify_quote_rejects_wrapper_only_quote_after_normalization():
+    """Balanced quote wrappers must not normalize to an exact empty-string match."""
+    verifier = QuoteVerifier()
+    full_text = "Neural networks achieve state-of-the-art results."
+    chunks = [DictChunk(_make_dict_chunk(1, full_text, page_number=1))]
+
+    for quote in ['""', "“”", "' '", "--"]:
+        result = verifier.verify_quote(quote, full_text, chunks)
+        assert result.verified is False
+
+
+def test_verify_quote_preserves_short_acronym_matches():
+    """Do not reject meaningful scientific acronyms while blocking empty quotes."""
+    verifier = QuoteVerifier()
+    full_text = "The RAG pipeline retrieved DNA and RNA papers."
+    chunks = [DictChunk(_make_dict_chunk(1, full_text, page_number=3))]
+
+    result = verifier.verify_quote("RAG", full_text, chunks)
+
+    assert result.verified is True
+    assert result.match_type == "exact"
+    assert result.chunk_id == 1
+
+
 def test_dict_chunk_protocol():
     """DictChunk exposes .id, .content, .page_number as required by ChunkLike."""
     raw = {"id": 42, "content": "Some text here.", "page_number": 5}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AIPanel } from '@/components/settings/AIPanel';
 import * as api from '@/lib/api';
@@ -65,19 +65,15 @@ describe('AIPanel', () => {
     vi.mocked(api.dismissBanner).mockResolvedValue(undefined as any);
   });
 
-  it('renders configured state and candidate dropdown', async () => {
+  it('renders configured state and read-only model-routing guidance', async () => {
     vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
     render(wrap(<AIPanel />));
     expect(await screen.findByText(/ge-48/)).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Qwen3-14B-AWQ/ })).toBeInTheDocument();
-  });
-
-  it('renders plain backend names on the toggle buttons', async () => {
-    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
-    render(wrap(<AIPanel />));
-    await screen.findByText(/ge-48/);
-    expect(screen.getByRole('button', { name: /vLLM \(high-throughput\)/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Ollama \(default\)/ })).toBeInTheDocument();
+    expect(screen.getByText(/select quick and main models in the role cards above/i)).toBeInTheDocument();
+    expect(screen.getByTestId('backend-guidance-list')).toHaveTextContent('vLLM (high-throughput)');
+    expect(screen.getByTestId('backend-guidance-list')).toHaveTextContent('Ollama (default)');
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^apply$/i })).not.toBeInTheDocument();
   });
 
 
@@ -115,15 +111,11 @@ describe('AIPanel', () => {
 
     expect(await screen.findByText('Validated')).toBeInTheDocument();
     expect(screen.getByText('Needs validation')).toBeInTheDocument();
-    expect(screen.getByText(/vLLM models must already be running behind the local LiteLLM route/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /Ollama \(default\)/ }));
+    expect(screen.getByText(/Use when you already run vLLM behind the local LiteLLM route/i)).toBeInTheDocument();
     expect(screen.getByText('Reference')).toBeInTheDocument();
   });
 
-  it('guides the user instead of dead-ending when a backend has no candidates for the tier', async () => {
-    // Recommended backend is ollama; only ollama has a candidate, so selecting
-    // the vllm backend yields an empty model list → guidance, not a dead-end.
+  it('does not dead-end when a backend has no candidates for the tier', async () => {
     vi.mocked(api.getAISettings).mockResolvedValue({
       ...baseSettings,
       recommended_backend: 'ollama',
@@ -136,15 +128,10 @@ describe('AIPanel', () => {
     } as any);
     render(wrap(<AIPanel />));
 
-    // configured_backend=vllm is not selectable (no vllm candidate) so the panel
-    // opens on the recommended ollama backend; click vllm to reach the empty state.
-    const vllmButton = await screen.findByRole('button', { name: /vLLM \(high-throughput\)/ });
-    fireEvent.click(vllmButton);
-
-    const guidance = await screen.findByTestId('no-candidates-guidance');
-    expect(guidance).toHaveTextContent(/no curated model for your hardware tier/i);
-    expect(guidance).toHaveTextContent(/Ollama \(default\)/);
-    expect(guidance).toHaveTextContent(/AI models page/i);
+    expect(await screen.findByText(/model routing/i)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('backend-guidance-list')).toHaveTextContent('vLLM (high-throughput)');
+    expect(screen.getByTestId('backend-guidance-list')).toHaveTextContent('Ollama (default)');
   });
 
   it('shows offline banner when observed != configured', async () => {
@@ -167,7 +154,7 @@ describe('AIPanel', () => {
       configured_model: 'Qwen/Qwen3-14B-AWQ',
       observed_backend: 'vllm/Qwen/Qwen3-14B-AWQ',
       candidates_for_tier: [
-        { backend: 'ollama', model: 'qwen3:72b', rank: 1, reasoning: 'Catalog fallback.' },
+        { backend: 'ollama', model: 'qwen3:72b', rank: 1, reasoning: 'Catalog fallback.', evidence: 'catalog' },
       ],
       candidate_issues: [
         'ge-48 rank 1 vllm/Qwen/Qwen3-14B-AWQ: model is not in the curated model catalog',
@@ -186,7 +173,7 @@ describe('AIPanel', () => {
     expect(screen.getAllByText('Recommended')[0]!.nextElementSibling!).toHaveTextContent(
       'ollama / qwen3:72b',
     );
-    expect(screen.getByRole('option', { name: /qwen3:72b/ })).toBeInTheDocument();
+    expect(screen.getByTestId('candidate-status-list')).toHaveTextContent('ollama / qwen3:72b');
   });
 
   it('shows hw-change banner when hw_tier_changed is true', async () => {

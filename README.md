@@ -41,7 +41,7 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 - ~20 GB free disk space
 - NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. The first run pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection.
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
-- `./setup.sh --check` verifies all of these (read-only preflight)
+- `./setup.sh --check` verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or `openssl` are missing, `./setup.sh --install-prereqs` can run the guided installer after showing the exact commands.
 - **Windows:** use WSL2 + Docker Desktop
 - **Non-interactive installs:** use `scripts/jarvis-setup.sh` for CI / cloud-init
 
@@ -49,7 +49,7 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
 ./setup.sh --check   # preflight (read-only, exits 0 on pass)
-./setup.sh
+./setup.sh             # add --install-prereqs only if you want setup to install missing host packages
 ```
 
 `setup.sh` generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens **http://localhost:3001** — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off.

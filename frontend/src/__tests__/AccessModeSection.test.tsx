@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 // ---------------------------------------------------------------------------
 // Hoisted fixtures
@@ -54,11 +55,14 @@ function makeQC() {
 async function renderSection() {
   const { AccessModeSection } = await import('@/components/settings/AccessModeSection');
   const qc = makeQC();
-  return render(
-    <QueryClientProvider client={qc}>
-      <AccessModeSection />
-    </QueryClientProvider>,
-  );
+  return {
+    qc,
+    ...render(
+      <QueryClientProvider client={qc}>
+        <AccessModeSection />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +116,24 @@ describe('AccessModeSection', () => {
     await waitFor(() => {
       expect(mockSave).toHaveBeenCalled();
       expect(mockSave.mock.calls[0]?.[0]).toBe('multi');
+    });
+  });
+
+  it('updates the setup-status cache after a successful save', async () => {
+    mockGetStatus
+      .mockResolvedValueOnce(fixtures.statusSingle)
+      .mockResolvedValue(fixtures.statusMulti);
+    const user = userEvent.setup();
+    const { qc } = await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole('radio', { name: /multi-user/i }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(qc.getQueryData<{ setup_mode?: string }>(QUERY_KEYS.setup.firstRun())?.setup_mode).toBe('multi');
     });
   });
 

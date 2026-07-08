@@ -1,11 +1,11 @@
 /**
- * AIPanel — AI backend configuration panel.
+ * AIPanel — AI runtime diagnostics panel.
  *
- * Shows hardware tier, configured vs observed backend, candidate list, and
- * allows the user to apply a new backend/model combination.
+ * Shows hardware tier, configured vs observed backend, candidate evidence, and
+ * local runtime guidance. Model assignment is handled by the Quick, Main, and
+ * Embedding role cards above this advanced panel.
  *
  * GET  /api/settings/ai           → getAISettings()
- * POST /api/settings/ai           → postAISettings({ backend, model })
  * POST /api/settings/ai/redetect  → redetectHW()
  * GET  /api/setup/status          → getFirstRunStatus() (for hw_tier_changed banner)
  * POST /api/settings/ai/dismiss-banner → dismissBanner('hw_change')
@@ -13,18 +13,33 @@
  * HW-change banner limitation (Phase-3): dismissing the banner writes a
  * system_events row but does NOT update JARVIS_HW_TIER_BASELINE in .env.
  * The banner will reappear on the next page refresh until someone manually
- * updates JARVIS_HW_TIER in .env to match the current tier.  This is a
+ * updates JARVIS_HW_TIER in .env to match the current tier. This is a
  * known Phase-3 limitation; a future phase should persist the baseline in
  * the DB and update it on dismiss.
  */
 
-import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAISettings, postAISettings, redetectHW, getFirstRunStatus, dismissBanner } from '@/lib/api';
+import { dismissBanner, getAISettings, getFirstRunStatus, redetectHW } from '@/lib/api';
+import type { AIBackendCandidate } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
-import { errorMessage } from '@/lib/errors';
 import { BACKEND_LABELS, BACKEND_TOOLTIP } from '@/lib/labels/backends';
+
+function candidateStatusLabel(candidate: AIBackendCandidate): string | null {
+  switch (candidate.evidence) {
+    case 'bench':
+      return 'Validated';
+    case 'pending-bench':
+      return 'Needs validation';
+    case 'sim-bench':
+      return 'Reference run';
+    case 'static-benchmark':
+    case 'catalog':
+      return 'Reference';
+    default:
+      return null;
+  }
+}
 
 export function AIPanel() {
   const qc = useQueryClient();
@@ -46,7 +61,7 @@ export function AIPanel() {
     onSuccess: () => {
       // Refetch so hw_tier_changed reflects the updated server state.
       // Note: the banner may reappear on next refresh until JARVIS_HW_TIER
-      // is updated in .env — see file-level comment for the Phase-3 limitation.
+      // is updated in .env; see file-level comment for the Phase-3 limitation.
       void qc.invalidateQueries({ queryKey: QUERY_KEYS.setup.firstRun() });
     },
   });
@@ -58,90 +73,21 @@ export function AIPanel() {
     },
   });
 
-  const applyMut = useMutation({
-    mutationFn: postAISettings,
-    onSuccess: (fresh) => {
-      qc.setQueryData(QUERY_KEYS.aiSettings.settings(), fresh);
-    },
-  });
+  const candidates = data?.candidates_for_tier ?? [];
+  const recommendedBackend = data?.recommended_backend === 'vllm' ? 'vllm' : 'ollama';
 
-  const candidateBackends = new Set((data?.candidates_for_tier ?? []).map((c) => c.backend));
-  const recommendedBackend: 'ollama' | 'vllm' =
-    data?.recommended_backend === 'vllm' ? 'vllm' : 'ollama';
-
-  // Only surface a recommendation the catalog plane can actually assign — the
-  // AI models page is authoritative, so a recommendation it can't honour would
-  // contradict it. A recommended (backend, model) counts only if it appears in
-  // candidates_for_tier.
-  const recommendationIsAssignable = (data?.candidates_for_tier ?? []).some(
-    (c) => c.backend === data?.recommended_backend && c.model === data?.recommended_model,
+  // Only surface a recommendation the catalog plane can actually assign. The
+  // AI model role cards are authoritative, so a recommendation they cannot
+  // honour would contradict the user-facing configuration surface.
+  const recommendationIsAssignable = candidates.some(
+    (candidate) =>
+      candidate.backend === data?.recommended_backend && candidate.model === data?.recommended_model,
   );
 
-  // Derive the initial selection from configured state only when it is selectable.
-  const rawBackend = data?.configured_backend ?? data?.recommended_backend ?? 'ollama';
-  const initialBackend: 'ollama' | 'vllm' =
-    rawBackend === 'vllm' && candidateBackends.has('vllm')
-      ? 'vllm'
-      : rawBackend === 'ollama' && candidateBackends.has('ollama')
-        ? 'ollama'
-        : recommendedBackend;
-
-  const [selectedBackend, setSelectedBackend] = useState<'ollama' | 'vllm' | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-
-  // Resolved values: pending selection falls back to server state
-  const activeBackend: 'ollama' | 'vllm' = selectedBackend ?? initialBackend;
-  const modelsForBackend = (data?.candidates_for_tier ?? []).filter(
-    (c) => c.backend === activeBackend,
-  );
-  const firstModelForBackend = modelsForBackend[0]?.model ?? '';
-  // Reset model when backend changes
-  const activeModel =
-    selectedModel !== null &&
-    modelsForBackend.some((c) => c.model === selectedModel)
-      ? selectedModel
-      : firstModelForBackend;
-  const selectedCandidate = modelsForBackend.find((c) => c.model === activeModel);
-
-  const candidateStatusLabel = (candidate: (typeof modelsForBackend)[number]) => {
-    switch (candidate.evidence) {
-      case 'bench':
-        return 'Validated';
-      case 'pending-bench':
-        return 'Needs validation';
-      case 'sim-bench':
-        return 'Reference run';
-      case 'static-benchmark':
-      case 'catalog':
-        return 'Reference';
-      default:
-        return null;
-    }
-  };
-  const candidateStatusRows = modelsForBackend
+  const candidateStatusRows = candidates
     .map((candidate) => ({ candidate, label: candidateStatusLabel(candidate) }))
-    .filter((row): row is { candidate: (typeof modelsForBackend)[number]; label: string } => row.label !== null);
+    .filter((row): row is { candidate: AIBackendCandidate; label: string } => row.label !== null);
 
-  const isDirty =
-    activeBackend !== (data?.configured_backend ?? data?.recommended_backend) ||
-    activeModel !== (data?.configured_model ?? data?.recommended_model);
-
-  const handleBackendChange = (b: 'ollama' | 'vllm') => {
-    setSelectedBackend(b);
-    setSelectedModel(null); // reset model on backend switch
-  };
-
-  const handleApply = () => {
-    applyMut.mutate({ backend: activeBackend, model: activeModel });
-  };
-
-  const handleReset = () => {
-    setSelectedBackend(null);
-    setSelectedModel(null);
-    applyMut.reset();
-  };
-
-  // Offline banner: observed backend prefix doesn't match configured backend
   const isOffline =
     data?.observed_backend != null &&
     data?.configured_backend != null &&
@@ -149,14 +95,10 @@ export function AIPanel() {
 
   // GPU-on-CPU mismatch: GPU was detected at install (baseline is a GPU tier)
   // but the container is now on CPU (overlay not engaged / GPU gone).
-  // detect_tier runs INSIDE the paper_ingestion container, so
-  // hw_tier_current === "cpu" means the container isn't getting the GPU.
   const gpuCpuMismatch =
     setupStatus?.hw_tier_baseline != null &&
     setupStatus.hw_tier_baseline !== 'cpu' &&
     setupStatus?.hw_tier_current === 'cpu';
-  // Suppress the generic hw-change banner when the more specific GPU-on-CPU
-  // banner is showing (baseline!==current also makes hw_tier_changed true).
   const showHWChangeBanner = setupStatus?.hw_tier_changed === true && !gpuCpuMismatch;
 
   if (isLoading) {
@@ -174,9 +116,8 @@ export function AIPanel() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* Hardware tier row */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium">Hardware Tier</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
@@ -200,9 +141,6 @@ export function AIPanel() {
         )}
       </section>
 
-      {/* GPU-on-CPU mismatch banner — GPU was present at install but the stack is
-          now running on CPU (overlay not engaged). No dismiss button: this is a
-          config-fix prompt, not a transient notice. */}
       {gpuCpuMismatch && (
         <div
           role="alert"
@@ -211,8 +149,9 @@ export function AIPanel() {
         >
           <span>
             A GPU was detected at install but the stack is running on CPU — your GPU
-            isn&apos;t being used. Re-run <code>setup.sh</code> (or set <code>COMPOSE_FILE</code> to
-            include <code>docker-compose.gpu.yml</code>) and confirm the NVIDIA container runtime is installed.{' '}
+            isn&apos;t being used. Re-run <code>setup.sh</code> or set <code>COMPOSE_FILE</code>
+            to include <code>docker-compose.gpu.yml</code>, then confirm the NVIDIA
+            container runtime is installed.{' '}
             <a
               href="https://ffidan.github.io/Jarvis-RD-Assistant/manual/hardware-and-models/"
               target="_blank"
@@ -225,10 +164,6 @@ export function AIPanel() {
         </div>
       )}
 
-      {/* HW-change banner — shown when the hardware tier has changed since baseline.
-          Amber/orange to distinguish from the yellow offline banner.
-          Dismiss writes a system_events row but does NOT update the baseline in .env;
-          see file-level comment for the Phase-3 limitation. */}
       {showHWChangeBanner && (
         <div
           role="alert"
@@ -240,7 +175,7 @@ export function AIPanel() {
             {setupStatus?.hw_tier_baseline && setupStatus?.hw_tier_current
               ? ` from ${setupStatus.hw_tier_baseline} to ${setupStatus.hw_tier_current}`
               : ''}
-            . Review the recommended backend and model below, then click Apply.
+            . Review the Quick and Main model cards above, then choose models that fit the current hardware.
           </span>
           <Button
             variant="ghost"
@@ -254,7 +189,6 @@ export function AIPanel() {
         </div>
       )}
 
-      {/* Offline banner */}
       {isOffline && (
         <div
           role="alert"
@@ -289,7 +223,14 @@ export function AIPanel() {
         </div>
       )}
 
-      {/* Configured vs observed status */}
+      <section className="space-y-2 rounded-md border border-input p-3" data-testid="model-assignment-guidance">
+        <h3 className="text-sm font-medium">Model routing</h3>
+        <p className="text-sm text-muted-foreground">
+          Select Quick and Main models in the role cards above. This panel reports runtime
+          diagnostics and recommendations only; it does not change active model assignments.
+        </p>
+      </section>
+
       <section className="space-y-1">
         <h3 className="text-sm font-medium">Current Status</h3>
         <dl className="text-sm space-y-1">
@@ -320,109 +261,50 @@ export function AIPanel() {
         </dl>
       </section>
 
-      {/* Backend toggle */}
-      <section className="space-y-3">
-        <h3 className="text-sm font-medium">Backend</h3>
+      <section className="space-y-3" data-testid="runtime-guidance">
+        <h3 className="text-sm font-medium">Local runtime guidance</h3>
         <p className="text-xs text-muted-foreground">{BACKEND_TOOLTIP}</p>
-        <div className="flex flex-wrap gap-3">
-          {(['vllm', 'ollama'] as const).map((b) => {
-            const isRecommended = b === data?.recommended_backend;
-            const isActive = activeBackend === b;
+        <div className="grid gap-2 sm:grid-cols-2" data-testid="backend-guidance-list">
+          {(['ollama', 'vllm'] as const).map((backend) => {
+            const isRecommended = backend === recommendedBackend;
             return (
-              <button
-                key={b}
-                type="button"
-                onClick={() => handleBackendChange(b)}
-                className={[
-                  'relative flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-input bg-background text-muted-foreground hover:border-foreground hover:text-foreground',
-                ].join(' ')}
-              >
-                {BACKEND_LABELS[b]}
-                {isRecommended && (
-                  <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5 leading-none">
-                    Recommended
-                  </span>
-                )}
-              </button>
+              <div key={backend} className="rounded-md border border-input px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center gap-2 font-medium">
+                  {BACKEND_LABELS[backend]}
+                  {isRecommended && (
+                    <span className="rounded bg-primary px-1.5 py-0.5 text-xs leading-none text-primary-foreground">
+                      Recommended
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {backend === 'vllm'
+                    ? 'Use when you already run vLLM behind the local LiteLLM route, then assign the served model in the role cards above.'
+                    : 'Default local runtime for most self-hosted installs; assign installed models in the role cards above.'}
+                </p>
+              </div>
             );
           })}
         </div>
       </section>
 
-      {/* Model dropdown */}
-      <section className="space-y-2">
-        <h3 className="text-sm font-medium">Model</h3>
-        {modelsForBackend.length === 0 ? (
-          <p className="text-sm text-muted-foreground" data-testid="no-candidates-guidance">
-            {BACKEND_LABELS[activeBackend]} has no curated model for your hardware tier. Switch to
-            the {BACKEND_LABELS[recommendedBackend]} backend
-            {recommendedBackend === activeBackend ? '' : ' (marked Recommended above)'}, or pick a
-            model on the AI models page.
-          </p>
-        ) : (
-          <select
-            value={activeModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            {modelsForBackend.map((c) => (
-              <option key={c.model} value={c.model}>
-                {c.rank === 1 ? `${c.model} (recommended)` : c.model}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {activeBackend === 'vllm' && modelsForBackend.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            vLLM models must already be running behind the local LiteLLM route before you apply them.
-          </p>
-        )}
-
-        {candidateStatusRows.length > 0 && (
-          <div className="space-y-1" data-testid="candidate-status-list">
-            {candidateStatusRows.map(({ candidate, label }) => (
-              <div key={`${candidate.backend}-${candidate.model}`} className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-mono text-muted-foreground">{candidate.model}</span>
+      {candidateStatusRows.length > 0 && (
+        <section className="space-y-2" data-testid="candidate-status-list">
+          <h3 className="text-sm font-medium">Candidate evidence</h3>
+          {candidateStatusRows.map(({ candidate, label }) => (
+            <div key={`${candidate.backend}-${candidate.model}`} className="rounded-md border border-input px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-muted-foreground">{candidate.backend} / {candidate.model}</span>
                 <span className="rounded border border-input px-1.5 py-0.5 text-muted-foreground">
                   {label}
                 </span>
               </div>
-            ))}
-          </div>
-        )}
-
-        {selectedCandidate?.reasoning ? (
-          <p className="text-xs text-muted-foreground">{selectedCandidate.reasoning}</p>
-        ) : null}
-      </section>
-
-      {/* Apply / Reset */}
-      <div className="flex items-center gap-3 pt-2">
-        <Button onClick={handleApply} disabled={applyMut.isPending || !isDirty || !activeModel}>
-          {applyMut.isPending ? 'Applying…' : 'Apply'}
-        </Button>
-        <Button variant="ghost" onClick={handleReset} disabled={!isDirty && !applyMut.isError}>
-          Reset
-        </Button>
-
-        {applyMut.isSuccess && (
-          <p className="text-sm text-green-600 dark:text-green-400">Settings applied.</p>
-        )}
-      </div>
-
-      {/* Error alert */}
-      {applyMut.isError && (
-        <div
-          role="alert"
-          className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          Failed to apply settings:{' '}
-          {errorMessage(applyMut.error, 'unknown error')}
-        </div>
+              {candidate.reasoning ? (
+                <p className="mt-1 text-muted-foreground">{candidate.reasoning}</p>
+              ) : null}
+            </div>
+          ))}
+        </section>
       )}
     </div>
   );

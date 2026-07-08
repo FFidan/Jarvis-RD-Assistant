@@ -568,6 +568,37 @@ async def test_cross_references_semantic_path_falls_back_to_owner_for_system_job
     assert conn.fetch.await_args.args[-1] == 99
 
 
+@pytest.mark.asyncio
+async def test_cross_references_db_filters_qdrant_hits_against_current_library():
+    """Qdrant hits must pass a final relational user-library visibility check."""
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
+    conn.fetch.side_effect = [
+        [{"paper_id": 7}, {"paper_id": 555}],
+        [{"paper_id": 555}],
+    ]
+    embedder = AsyncMock()
+    embedder.search_similar.return_value = [
+        {"paper_id": 555, "score": 0.9},
+        {"paper_id": 999, "score": 0.95},
+    ]
+
+    result = await summarization._find_cross_references(
+        conn,
+        paper_id=7,
+        title="Retrieval Augmented Generation",
+        embedder=embedder,
+        requester_id=42,
+    )
+
+    assert [r.related_paper_id for r in result] == [555]
+    assert conn.fetch.await_args_list[1].args == (
+        "SELECT paper_id FROM user_library WHERE user_id = $1 AND paper_id = ANY($2::int[])",
+        42,
+        [999, 555],
+    )
+
+
 # ---------------------------------------------------------------------------
 # INSERT includes user_id
 # ---------------------------------------------------------------------------

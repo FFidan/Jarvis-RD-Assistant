@@ -86,11 +86,11 @@ Setup is complete. `setup_completed` is set to `true`. The wizard does not appea
 
 <!-- screenshot: LoginPage showing the email input and "Send magic link" button -->
 
-**Signing in** depends on how the server is configured.
+**Signing in** depends on the instance's sign-in method and email configuration.
 
-- **If SMTP is configured** (your admin set up an email relay in Settings → System → Email / SMTP), the login page defaults to the magic-link tab: enter your email address, click **Send magic link**, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.
-- **Single-user mode without SMTP:** the login page defaults to the API-key tab. Enter the `JARVIS_API_KEY` value set in your server's environment and click **Sign In**.
-- **Multi-user mode without SMTP:** the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but the backend rejects API-key sign-in once more than one account exists — unless the operator has explicitly set `API_KEY_LOGIN_ENABLED=true`.
+- **Single-user mode:** the login page defaults to the API-key tab. Enter the `JARVIS_API_KEY` value set in your server's environment and click **Sign In**. SMTP is optional for this mode.
+- **Multi-user mode with SMTP configured:** the login page defaults to the magic-link tab. Enter your email address, click **Send magic link**, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.
+- **Multi-user mode without SMTP:** the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but API-key sign-in is limited to the configured owner/admin or to deployments where the operator explicitly enables it.
 
 ---
 

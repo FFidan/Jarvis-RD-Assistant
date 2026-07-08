@@ -66,6 +66,26 @@ const SETUP_STATUS = {
  * defaults. Any other /api/** request returns 501 to make missing mocks obvious.
  */
 export async function installMockedApiDefaults(page: Page): Promise<void> {
+  await page.route(/^https?:\/\/[^/]+\/health\/(paper_ingestion|learning_engine)(?:\/|\?|$)/, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/internal')) {
+      await route.fulfill(
+        jsonResponse({
+          status: 'ok',
+          checks: {
+            postgres: 'ok',
+            qdrant: 'ok',
+            litellm: 'ok',
+            ollama: 'ok',
+            vector: 'ok',
+          },
+        }),
+      );
+      return;
+    }
+    await route.fulfill(jsonResponse({ status: 'ok' }));
+  });
+
   await page.route(/^https?:\/\/[^/]+\/api(?:\/|\?|$)/, async (route) => {
     const request = route.request();
     const url = new URL(request.url());

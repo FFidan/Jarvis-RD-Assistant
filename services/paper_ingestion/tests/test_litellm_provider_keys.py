@@ -19,6 +19,7 @@ import httpx
 import pytest
 import respx
 from paper_ingestion.services.litellm_config import (
+    _CLOUD_DELIVERED_FINGERPRINTS,
     get_provider_api_key,
     update_litellm_model,
 )
@@ -26,6 +27,14 @@ from paper_ingestion.services.litellm_config import (
 from tests.conftest import _make_pool_and_conn
 
 LITELLM = "http://litellm-test:4000"
+
+
+@pytest.fixture(autouse=True)
+def _clear_cloud_delivery_fingerprints():
+    """Keep process-local LiteLLM delivery fingerprints isolated per test."""
+    _CLOUD_DELIVERED_FINGERPRINTS.clear()
+    yield
+    _CLOUD_DELIVERED_FINGERPRINTS.clear()
 
 
 def _entry(
@@ -321,6 +330,38 @@ async def test_update_litellm_model_delivers_custom_openai_endpoint(monkeypatch)
     assert params["model"] == "openai/local-model"
     assert params["api_base"] == "http://127.0.0.1:8000/v1"
     assert params["api_key"] == "sk-custom"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_litellm_model_redelivers_custom_endpoint_base_url_change(monkeypatch):
+    """Changing only api_base must re-deliver the custom OpenAI-compatible route."""
+    monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        {"value": "sk-custom", "encrypted_value": None},
+        {"value": "http://127.0.0.1:8000/v1", "encrypted_value": None},
+        {"value": "sk-custom", "encrypted_value": None},
+        {"value": "http://127.0.0.1:8001/v1", "encrypted_value": None},
+    ]
+
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_entry("smart", {"model": "openai/local-model"}, dep_id="old-1")]},
+        )
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    assert await update_litellm_model("smart", "custom_openai/local-model", db_pool=pool) is True
+    assert await update_litellm_model("smart", "custom_openai/local-model", db_pool=pool) is True
+
+    assert new_route.call_count == 2
+    params = json.loads(new_route.calls.last.request.content)["litellm_params"]
+    assert params["api_base"] == "http://127.0.0.1:8001/v1"
 
 
 @respx.mock

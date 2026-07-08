@@ -22,4 +22,17 @@ describe('InfoTooltip', () => {
       expect(matches.length).toBeGreaterThan(0);
     });
   });
+
+  it('keeps span triggers keyboard focusable', async () => {
+    const user = userEvent.setup();
+    render(<InfoTooltip content="span tooltip text" triggerElement="span" />);
+    const trigger = screen.getByRole('button', { name: 'More info' });
+
+    await user.tab();
+    expect(trigger).toHaveFocus();
+
+    await waitFor(() => {
+      expect(screen.getAllByText('span tooltip text').length).toBeGreaterThan(0);
+    });
+  });
 });

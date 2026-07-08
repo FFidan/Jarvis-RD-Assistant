@@ -78,7 +78,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis}"]
       interval: 5s
@@ -169,7 +169,7 @@ services:
     secrets:
       - qdrant_api_key
     ports:
-      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:${QDRANT_HOST_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
       # Read-only view of the sidecar's decrypted-snapshot staging dir so the
@@ -230,7 +230,7 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
-      - "127.0.0.1:4000:4000"
+      - "127.0.0.1:${LITELLM_HOST_PORT:-4000}:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     # OPENAI_API_KEY and ANTHROPIC_API_KEY are intentionally omitted here.

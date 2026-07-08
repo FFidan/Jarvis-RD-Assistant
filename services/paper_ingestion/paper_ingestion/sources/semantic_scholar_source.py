@@ -208,6 +208,13 @@ class SemanticScholarSource(PaperSource):
             metadata=metadata,
         )
 
+    @staticmethod
+    def _is_fetch_by_id_payload_importable(data: dict[str, Any]) -> bool:
+        """Return true when a fetch-by-id payload can create a real paper."""
+        paper_id = str(data.get("paperId") or "").strip()
+        title = str(data.get("title") or "").strip()
+        return bool(paper_id and title)
+
     async def search(
         self,
         query: str,
@@ -306,6 +313,13 @@ class SemanticScholarSource(PaperSource):
             if exc.response.status_code == 404:
                 return None
             raise
+
+        if not self._is_fetch_by_id_payload_importable(data):
+            logger.warning(
+                "S2 fetch_by_id returned malformed or transient-empty payload for %s; skipping",
+                paper_id,
+            )
+            return None
 
         return self._parse_paper(data)
 

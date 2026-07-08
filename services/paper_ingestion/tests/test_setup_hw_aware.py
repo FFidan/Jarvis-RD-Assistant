@@ -342,3 +342,114 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
         f"stack-start path not reached; docker invocations: {invocations}"
     )
     assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+
+
+def _write_missing_compose_docker_shim(tmp: Path) -> Path:
+    """Return a PATH dir whose docker exists but lacks compose v2."""
+    bin_dir = tmp / "missing-compose-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  "compose version"*) exit 1 ;;\n'
+        '  "info"*) exit 1 ;;\n'
+        "esac\n"
+        "exit 1\n"
+    )
+    stub.chmod(0o755)
+    return bin_dir
+
+
+def _write_sudo_logger(tmp: Path) -> tuple[Path, Path]:
+    """Return a PATH dir with sudo that logs reviewed installer commands."""
+    bin_dir = tmp / "sudo-bin"
+    bin_dir.mkdir()
+    log = tmp / "sudo-invocations.log"
+    log.touch()
+    sudo = bin_dir / "sudo"
+    sudo.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n")
+    sudo.chmod(0o755)
+    return bin_dir, log
+
+
+@_requires_bash
+def test_setup_noninteractive_missing_prereqs_requires_explicit_install_flag(tmp_path):
+    """Noninteractive setup must not install host packages without opt-in."""
+    _stage_hw_tmpdir(tmp_path)
+    docker_bin = _write_missing_compose_docker_shim(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "setup.sh", "--non-interactive", "--mode", "single"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Guided prerequisite installer would run" in combined
+    assert "sudo apt-get" in combined
+    assert "--install-prereqs" in combined
+    assert not (tmp_path / ".env").exists()
+
+
+@_requires_bash
+def test_setup_check_install_prereqs_stays_read_only(tmp_path):
+    """--check never executes installer commands, even with --install-prereqs."""
+    _stage_hw_tmpdir(tmp_path)
+    docker_bin = _write_missing_compose_docker_shim(tmp_path)
+    sudo_bin, sudo_log = _write_sudo_logger(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = f"{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "setup.sh", "--check", "--install-prereqs"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode in (0, 1)
+    assert "PREFLIGHT:" in combined
+    assert sudo_log.read_text() == ""
+    assert not (tmp_path / ".env").exists()
+
+
+@_requires_bash
+def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
+    """--install-prereqs runs explicit package-manager commands via the reviewed plan."""
+    _stage_hw_tmpdir(tmp_path)
+    docker_bin = _write_missing_compose_docker_shim(tmp_path)
+    sudo_bin, sudo_log = _write_sudo_logger(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = f"{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "setup.sh", "--non-interactive", "--install-prereqs", "--mode", "single"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert "Guided prerequisite installer would run" in combined
+    assert "Running: sudo -n apt-get update" in combined
+    assert sudo_log.read_text().splitlines() == [
+        "-n apt-get update",
+        "-n apt-get install -y docker-compose-plugin",
+    ]
+    assert result.returncode != 0  # docker shim still lacks compose after the fake install.
+    assert not (tmp_path / ".env").exists()

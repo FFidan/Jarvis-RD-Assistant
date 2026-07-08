@@ -16,6 +16,24 @@ import { MemoryRouter } from 'react-router-dom';
 import { HealthDots } from '@/components/shared/HealthDots';
 import type { StackHealthSummary } from '@/lib/api';
 
+type AuthTestState = {
+  isAuthenticated: boolean;
+  authTime: number | null;
+  isSessionValid: () => boolean;
+  expireSession: ReturnType<typeof vi.fn>;
+};
+
+let authState: AuthTestState = {
+  isAuthenticated: true,
+  authTime: Date.now(),
+  isSessionValid: () => true,
+  expireSession: vi.fn(),
+};
+
+vi.mock('@/stores/auth-store', () => ({
+  useAuthStore: (selector: (state: typeof authState) => unknown) => selector(authState),
+}));
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
   return {
@@ -55,6 +73,12 @@ function renderHealthDots({ compact = false, adminLink }: { compact?: boolean; a
 describe('HealthDots — adminLink prop (admin popover behavior)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState = {
+      isAuthenticated: true,
+      authTime: Date.now(),
+      isSessionValid: () => true,
+      expireSession: vi.fn(),
+    };
   });
 
   it('renders popover trigger button when adminLink is provided', async () => {

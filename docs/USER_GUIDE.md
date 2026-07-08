@@ -10,13 +10,13 @@
 
 ### Signing in
 
-JARVIS uses magic links — there is no password.
+JARVIS does not use passwords. Depending on how the instance is configured, the sign-in screen offers either magic-link email or API-key login first.
 
 1. Open the JARVIS dashboard URL your administrator shared with you.
-2. On the sign-in screen, enter your email address and click **Send sign-in link**.
-3. Check your inbox for the one-time link and click it. You are signed in for 30 days.
+2. If magic-link login is shown, enter your email address and click **Send sign-in link**, then open the one-time link from your inbox.
+3. If API-key login is shown, enter the `JARVIS_API_KEY` value from the server operator.
 
-If SMTP is not configured, click **Use API key instead** on the login page. For full details, see the [User Guide](manual/index.md).
+Single-user installs can use API-key login without SMTP. Multi-user installs need SMTP configured and tested before magic-link invites can be delivered. For full details, see the [User Guide](manual/index.md).
 
 ### Where to get help
 

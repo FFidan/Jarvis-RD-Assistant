@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { visualizer } from 'rollup-plugin-visualizer';
 
 const paperIngestionPort = process.env.PAPER_INGESTION_HOST_PORT || '8010';
@@ -10,9 +11,52 @@ const learningEnginePort = process.env.LEARNING_ENGINE_HOST_PORT || '8011';
 const paperIngestionBase = `http://localhost:${paperIngestionPort}`;
 const learningEngineBase = `http://localhost:${learningEnginePort}`;
 const analyzeBundle = process.env.ANALYZE_BUNDLE === 'true';
+const mockE2EHealth = process.env.JARVIS_E2E_MOCK_HEALTH === 'true';
+
+function writeMockHealthResponse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+): void {
+  const pathName = new URL(req.url ?? '/', 'http://localhost').pathname;
+  const isHealthPath = pathName.startsWith('/health/paper_ingestion')
+    || pathName.startsWith('/health/learning_engine');
+  if (!isHealthPath) {
+    next();
+    return;
+  }
+
+  const body = pathName.endsWith('/internal')
+    ? {
+        status: 'ok',
+        checks: {
+          postgres: 'ok',
+          qdrant: 'ok',
+          litellm: 'ok',
+          ollama: 'ok',
+          vector: 'ok',
+        },
+      }
+    : { status: 'ok' };
+
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify(body));
+}
 
 export default defineConfig({
   plugins: [
+    mockE2EHealth
+      ? {
+          name: 'jarvis-mocked-health',
+          configureServer(server) {
+            server.middlewares.use(writeMockHealthResponse);
+          },
+          configurePreviewServer(server) {
+            server.middlewares.use(writeMockHealthResponse);
+          },
+        }
+      : null,
     react(),
     tailwindcss(),
     analyzeBundle
@@ -54,6 +98,30 @@ export default defineConfig({
   server: {
     port: 3001,
     proxy: {
+      '/health/paper_ingestion/internal': {
+        target: paperIngestionBase,
+        rewrite: () => '/health/internal',
+      },
+      '/health/paper_ingestion/live': {
+        target: paperIngestionBase,
+        rewrite: () => '/health/live',
+      },
+      '/health/paper_ingestion': {
+        target: paperIngestionBase,
+        rewrite: () => '/health',
+      },
+      '/health/learning_engine/internal': {
+        target: learningEngineBase,
+        rewrite: () => '/health/internal',
+      },
+      '/health/learning_engine/live': {
+        target: learningEngineBase,
+        rewrite: () => '/health/live',
+      },
+      '/health/learning_engine': {
+        target: learningEngineBase,
+        rewrite: () => '/health',
+      },
       '/api/decks': learningEngineBase,
       '/api/cards': learningEngineBase,
       '/api/review': learningEngineBase,

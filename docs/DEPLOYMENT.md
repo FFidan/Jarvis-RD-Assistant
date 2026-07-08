@@ -109,7 +109,7 @@ vLLM is a **separate, optional overlay** — it is not auto-started by `setup.sh
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.vllm.yml --profile vllm up -d
 ```
 
-After the vLLM container is healthy, point the LiteLLM `smart` alias at it: open **Settings → Models** and update the `smart` model alias to your vLLM endpoint (e.g. `openai/meta-llama/Meta-Llama-3-8B-Instruct` with `api_base` set to your vLLM URL).
+After the vLLM container is healthy, expose it through the local LiteLLM route and choose the served model in **Settings → Models → AI models**. The advanced backend and hardware panel shows local runtime guidance, while the Main and Quick model cards remain the assignment surface.
 
 ---
 
@@ -409,9 +409,29 @@ docker compose up -d dashboard
 ./setup.sh --check
 ```
 
-Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, `openssl`, GPU toolkit (informational), and `.env` presence. Exit 0 = PASS, exit 1 = FAIL.
+Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, `openssl`, GPU toolkit (informational), and `.env` presence. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs packages, writes `.env`, or starts services, even if `--install-prereqs` is also present.
 
 `setup.sh` verifies the Docker *daemon* is reachable (`docker info`), not just that the `docker` binary is installed — both in `./setup.sh --check` and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, `DOCKER_HOST` misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.
+
+### Guided prerequisite installation
+
+If Docker, the Docker Compose v2 plugin, or `openssl` are missing, normal interactive setup prints the exact package-manager commands it can run and asks for consent before touching the host. Automated installs never prompt: use `--install-prereqs` only after reviewing the printed commands, or install the prerequisites manually and re-run `./setup.sh --check`.
+
+```bash
+# Preflight only; never installs packages
+./setup.sh --check
+
+# Review the guided install plan without running it
+./setup.sh --non-interactive --profile=dev
+
+# Interactive setup; prompts before running supported apt/Homebrew commands
+./setup.sh
+
+# Unattended setup that is allowed to run the reviewed prerequisite plan
+./setup.sh --non-interactive --install-prereqs --profile=dev
+```
+
+The guided installer supports common Debian/Ubuntu-style `apt-get` hosts and macOS Homebrew. Unsupported distributions, hosts without the needed package manager, and Docker Desktop/daemon startup issues receive manual guidance instead of automatic package changes. Docker may still need to be started manually, and Linux users may need to log out and back in after Docker group changes.
 
 Re-runs: running `./setup.sh` with an existing `.env` and declining the overwrite prompt no longer exits with services stopped — it keeps your `.env` (secrets, database, and model selection untouched) and starts the stack with it via `docker compose up -d`, honouring the `COMPOSE_FILE` and `COMPOSE_PROFILES` values persisted in `.env`. New installs write `COMPOSE_PROFILES=<selection>` (for example `telegram`, `tunnel`) into `.env`; for older `.env` files without it, setup derives the telegram profile from a non-empty `TELEGRAM_BOT_TOKEN` and prints a notice.
 
@@ -419,7 +439,7 @@ Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, 
 
 ### Single-user vs multi-user mode
 
-`single` (default) — API-key login, no SMTP required. `multi` — email magic-link, SMTP relay required. Single-user is not an auth downgrade — `JARVIS_API_KEY` still gates all REST calls.
+`single` (default) makes the sign-in screen offer API-key login first and does not require SMTP. `multi` makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization.
 
 ### Copy-paste examples
 
@@ -441,7 +461,7 @@ printf '%s' "$MY_SMTP_PASS" > /run/secrets/smtp_pass && chmod 600 /run/secrets/s
   --smtp-pass-file=/run/secrets/smtp_pass
 ```
 
-After setup, invite the first admin: `https://jarvis.example.com/admin/users`
+After setup, open the dashboard and create the initial admin in the onboarding wizard. Once signed in as an admin, invite additional users at `https://jarvis.example.com/admin/users`.
 
 ---
 

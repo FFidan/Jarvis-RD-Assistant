@@ -17,6 +17,9 @@ import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { fetchStackHealth, type ServiceHealth, type ServiceHealthStatus } from '@/lib/api';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { useAuthStore } from '@/stores/auth-store';
+
+const CLIENT_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,18 +117,29 @@ interface HealthDotsProps {
 
 export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
   const [expanded, setExpanded] = useState(false);
+  const selectedIsAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const selectedAuthTime = useAuthStore((s) => s.authTime);
+  const selectedIsSessionValid = useAuthStore((s) => s.isSessionValid);
+  const isAuthenticated = selectedIsAuthenticated === true;
+  const authTime = typeof selectedAuthTime === 'number' ? selectedAuthTime : null;
+  const isSessionValid = typeof selectedIsSessionValid === 'function' ? selectedIsSessionValid : () => false;
+  const sessionAgeMs = authTime === null ? Number.POSITIVE_INFINITY : Date.now() - authTime;
+  const healthPollingEnabled = isAuthenticated && sessionAgeMs < CLIENT_SESSION_DURATION_MS && isSessionValid();
 
   const { data, isError } = useQuery({
     queryKey: QUERY_KEYS.stack.health(),
     queryFn: fetchStackHealth,
+    enabled: healthPollingEnabled,
     refetchInterval: 30_000,
     // Don't throw on individual probe failures — fetchStackHealth never rejects
     retry: false,
     placeholderData: (prev) => prev,
   });
 
-  // While loading or if the whole query errored, show a neutral dot
-  if (!data || isError) {
+  // While logged out, loading, or if the whole query errored, show a neutral dot.
+  // Disabled TanStack queries can still expose cached data for this key; do not
+  // render protected health state unless the current auth state is valid.
+  if (!healthPollingEnabled || !data || isError) {
     if (compact) {
       return (
         <div className="flex justify-center gap-1" data-testid="health-dots-loading">

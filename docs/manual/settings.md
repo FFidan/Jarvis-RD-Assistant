@@ -2,8 +2,6 @@
 
 # Settings
 
-_This area is evolving; verified 2026-06-06._
-
 The **Settings** page at `/settings` is a two-pane interface: a **SettingsRail** on the left lists the sections and items, and the right panel shows the detail form for the currently selected item. The active section and item are reflected in the URL query parameters (`?section=&item=`).
 
 Settings are organised into six sections. Access to each section or item depends on your role (**Admin** or regular **User**). Items marked **ADMIN** are only editable by users with the Admin role.
@@ -73,15 +71,18 @@ Provider settings are admin-wide: changes affect the instance, not only the sign
 
 Adding a key does not make cloud the default. It only makes matching cloud models assignable in the **Main model (smart)** and **Quick model (fast)** controls above. Leave all provider keys blank to keep the deployment local-only.
 
-### AI Backend
+### Advanced: backend & hardware diagnostics
 
-Select the inference backend and model used for LLM calls. The panel shows:
+The **AI models** page is the authoritative place to assign the **Main model (smart)** and **Quick model (fast)** roles. The advanced diagnostics panel below those role cards is read-only for routing: it explains the current hardware/runtime state and points you back to the role cards when a model assignment should change.
+
+The panel shows:
 
 - **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh. If a GPU was present at install but the stack is running on CPU (overlay not engaged), an amber banner here tells you to re-run `setup.sh`.
 - **Current Status** — the configured backend/model, the recently observed backend, and the recommended model for the detected hardware tier.
-- **Backend selector** — toggle between **ollama** (local, the recommended default) and **vllm** (advanced, high-throughput GPU). The recommended **model** scales with the detected hardware tier.
-- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model. Cloud providers are configured separately and are optional role assignments, not backend defaults.
-- **Apply / Reset** — save the selection or revert to the last saved state.
+- **Backend guidance** — a short explanation of **Ollama** as the default local runtime and **vLLM** as an optional high-throughput runtime when you already operate it behind the local LiteLLM route.
+- **Model routing** — a reminder to select role models in the cards above, plus evidence labels for candidates when benchmark or catalog metadata is available.
+
+Cloud providers are configured separately in **Providers & Routing**. Adding a cloud key makes matching cloud models assignable in the role cards; it does not change the deployment away from local-first operation by itself.
 
 ---
 
@@ -123,14 +124,12 @@ Configure the Pomodoro-style session timer available in the TopBar: work interva
 
 Configure the Langfuse observability integration for tracing LLM calls. This setting is **hardware- and opt-in gated** — it requires a running Langfuse instance and is only active when explicitly enabled.
 
-_This area is evolving; verified 2026-06-06._
-
 ### Sign-in Method
 
-Control how people sign in to this instance.
+Choose which login method the sign-in screen offers first. This setting does not change tenancy, library scoping, or whether admins can invite users. Admin invites are available in either mode.
 
-- **Single-user** — only the admin account can log in (API-key login; no email/SMTP required).
-- **Multi-user** — additional accounts can be invited via magic-link email (see [Admin & Multi-tenant](admin.md)).
+- **Single-user** — the sign-in screen offers API-key login first; email/SMTP is optional for a solo local install.
+- **Multi-user** — the sign-in screen offers magic-link login first; configure and test SMTP before inviting other users so links can be delivered.
 
 The change applies on the next status check — no restart required.
 

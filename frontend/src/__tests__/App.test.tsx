@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -53,6 +53,11 @@ function renderApp(initialEntries: string[] = ['/']) {
 }
 
 describe('App', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+  });
+
   it('shows login page when not authenticated', async () => {
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
     renderApp();
@@ -71,6 +76,22 @@ describe('App', () => {
     // renders a loading placeholder until the setup-status query resolves.
     const dashboards = await screen.findAllByText('Dashboard');
     expect(dashboards.length).toBeGreaterThanOrEqual(1);
+  });
+
+
+  it('redirects authenticated magic-link visits home without reusing the token', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: 'test-key',
+      user: { id: 7, email: 'a@b.com', role: 'admin' },
+    });
+
+    renderApp(['/auth/verify?token=already-consumed-token']);
+
+    const dashboards = await screen.findAllByText('Dashboard');
+    expect(dashboards.length).toBeGreaterThanOrEqual(1);
+    expect(vi.mocked(api.verifyMagicLink)).not.toHaveBeenCalled();
   });
 
 

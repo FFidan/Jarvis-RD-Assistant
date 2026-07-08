@@ -11,9 +11,10 @@
  */
 
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { getFirstRunStatus, saveSetupMode } from '@/lib/api';
+import type { FirstRunStatus } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -25,6 +26,7 @@ const MODE_LABELS: Record<'single' | 'multi', string> = {
 };
 
 export function AccessModeSection() {
+  const queryClient = useQueryClient();
   const [pendingMode, setPendingMode] = useState<'single' | 'multi' | null>(null);
 
   const { data: status, isLoading } = useQuery({
@@ -38,7 +40,12 @@ export function AccessModeSection() {
 
   const saveMut = useMutation({
     mutationFn: saveSetupMode,
-    onSuccess: () => {
+    onSuccess: (response) => {
+      queryClient.setQueryData<FirstRunStatus | undefined>(
+        QUERY_KEYS.setup.firstRun(),
+        (prev) => (prev ? { ...prev, setup_mode: response.mode } : prev),
+      );
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.firstRun() });
       setPendingMode(null);
     },
   });

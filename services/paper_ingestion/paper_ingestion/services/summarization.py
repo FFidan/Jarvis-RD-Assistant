@@ -593,6 +593,17 @@ async def _find_cross_references(
 
     deduped = deduplicate_by_paper_id(results or [])
     sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
+
+    if scope_user_id is not None and sorted_results:
+        candidate_ids = [r["paper_id"] for r in sorted_results]
+        visible_rows = await conn.fetch(
+            "SELECT paper_id FROM user_library WHERE user_id = $1 AND paper_id = ANY($2::int[])",
+            scope_user_id,
+            candidate_ids,
+        )
+        visible_ids = {row["paper_id"] for row in visible_rows}
+        sorted_results = [r for r in sorted_results if r["paper_id"] in visible_ids]
+
     return [
         CrossReference(
             related_paper_id=r["paper_id"],

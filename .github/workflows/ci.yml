@@ -332,7 +332,7 @@ jobs:
         run: |
           # Serve the production build on :3001 (matches PLAYWRIGHT_BASE_URL default).
           # vite preview is available as a devDependency (vite is already installed).
-          npm --prefix frontend run preview -- --port 3001 --host 127.0.0.1 &
+          JARVIS_E2E_MOCK_HEALTH=true npm --prefix frontend run preview -- --port 3001 --host 127.0.0.1 &
           SERVER_PID=$!
           # Wait for the preview server to be ready (up to 30 s).
           for i in $(seq 1 30); do

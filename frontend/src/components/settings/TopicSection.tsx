@@ -250,10 +250,18 @@ export function TopicSection() {
                         />
                         <label
                           htmlFor={`sub-${topic.id}`}
-                          className="cursor-pointer whitespace-nowrap text-xs text-muted-foreground"
-                          title="When enabled, papers matching this topic are automatically added to your library during auto-fetch."
+                          className="flex cursor-pointer items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
                         >
                           Auto-add matches
+                          <InfoTooltip
+                            triggerElement="span"
+                            side="top"
+                            content={
+                              <span>
+                                Enabled topics are used for discovery and ranking. Auto-add matches adds newly fetched matching papers to your library.
+                              </span>
+                            }
+                          />
                         </label>
                       </div>
                       <div className="flex items-center gap-1">

@@ -12,7 +12,7 @@ to add a cloud model instead.
 
 At first boot, JARVIS probes your GPU's VRAM and automatically selects models suited
 to your hardware. The recommendation is advisory — you can change any assignment at
-any time in **Settings → Models**.
+any time in **Settings → Models → AI models**.
 
 | VRAM | Example hardware | Main model (smart) | Quick model (fast) | Embedding model (embed) |
 |------|-----------------|-------------------|--------------------|------------------------|
@@ -81,6 +81,8 @@ any role whose assigned model is not installed, with a **Pull** button to downlo
 JARVIS will not silently fall back to a different model for a role — the warning stays
 visible until you either pull the model or reassign the role to one that is already
 installed.
+
+The advanced backend and hardware panel on the same page is diagnostics only. It shows hardware fit, observed runtime traffic, and Ollama/vLLM guidance, but active role assignment stays in the Main, Quick, and Embedding model cards.
 
 ---
 

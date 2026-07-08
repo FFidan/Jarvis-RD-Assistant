@@ -16,6 +16,7 @@ import { AuthVerifyPage, __resetVerifyDedupeForTests } from '@/pages/AuthVerifyP
 
 const verifyMock = vi.fn();
 const loginWithSessionMock = vi.fn();
+let authState = { isAuthenticated: false, isSessionValid: () => false };
 
 const { MockApiError } = vi.hoisted(() => ({
   MockApiError: class MockApiError extends Error {
@@ -37,6 +38,8 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: () => ({
     loginWithSession: loginWithSessionMock,
+    isAuthenticated: authState.isAuthenticated,
+    isSessionValid: authState.isSessionValid,
   }),
 }));
 
@@ -55,7 +58,19 @@ function renderWithRoute(initialUrl: string) {
 describe('AuthVerifyPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState = { isAuthenticated: false, isSessionValid: () => false };
     __resetVerifyDedupeForTests();
+  });
+
+  it('redirects without verifying when a valid session is already present', async () => {
+    authState = { isAuthenticated: true, isSessionValid: () => true };
+    renderWithRoute('/auth/verify?token=already-authed-token');
+
+    await waitFor(() => {
+      expect(screen.getByText('HOME')).toBeInTheDocument();
+    });
+    expect(verifyMock).not.toHaveBeenCalled();
+    expect(loginWithSessionMock).not.toHaveBeenCalled();
   });
 
   it('on success, calls loginWithSession with returned user and navigates to /', async () => {
@@ -111,6 +126,53 @@ describe('AuthVerifyPage', () => {
     });
     expect(screen.queryByText(/sign-in failed/i)).not.toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it('clears failed in-flight verification so a later mount can retry', async () => {
+    verifyMock
+      .mockRejectedValueOnce(new MockApiError(400, 'Invalid or expired token'))
+      .mockResolvedValueOnce({ id: 8, email: 'retry@b.com', role: 'user' });
+
+    const first = renderWithRoute('/auth/verify?token=retry-after-failure');
+    expect(await screen.findByText(/invalid or expired token/i)).toBeInTheDocument();
+    first.unmount();
+
+    renderWithRoute('/auth/verify?token=retry-after-failure');
+    await waitFor(() => {
+      expect(verifyMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('HOME')).toBeInTheDocument();
+    });
+  });
+
+
+  it('clears a successful verification when the verifying mount is cancelled before login', async () => {
+    let resolveFirst!: (user: { id: number; email: string; role: 'admin' }) => void;
+    verifyMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+
+    const first = renderWithRoute('/auth/verify?token=cancel-success-token');
+    await waitFor(() => expect(verifyMock).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    await act(async () => {
+      resolveFirst({ id: 9, email: 'cancelled@example.com', role: 'admin' });
+    });
+    expect(loginWithSessionMock).not.toHaveBeenCalled();
+
+    verifyMock.mockResolvedValueOnce({ id: 10, email: 'fresh@example.com', role: 'admin' });
+    renderWithRoute('/auth/verify?token=cancel-success-token');
+
+    await waitFor(() => {
+      expect(verifyMock).toHaveBeenCalledTimes(2);
+      expect(loginWithSessionMock).toHaveBeenCalledWith({
+        id: 10,
+        email: 'fresh@example.com',
+        role: 'admin',
+      });
+    });
   });
 
   it('does not retry invalid-token failures', async () => {

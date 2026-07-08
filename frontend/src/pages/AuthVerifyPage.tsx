@@ -56,10 +56,17 @@ async function verifyWithRetry(token: string): Promise<SessionUser> {
 function verifyOnce(token: string): Promise<SessionUser> {
   let p = inflightVerifications.get(token);
   if (!p) {
-    p = verifyWithRetry(token);
+    p = verifyWithRetry(token).catch((err) => {
+      inflightVerifications.delete(token);
+      throw err;
+    });
     inflightVerifications.set(token, p);
   }
   return p;
+}
+
+function clearVerification(token: string): void {
+  inflightVerifications.delete(token);
 }
 
 /** Exposed only for test tear-down — call in beforeEach to prevent Map leakage across tests. */
@@ -70,12 +77,17 @@ export function __resetVerifyDedupeForTests(): void {
 export function AuthVerifyPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { loginWithSession } = useAuthStore();
+  const { loginWithSession, isAuthenticated, isSessionValid } = useAuthStore();
   const [status, setStatus] = useState<'verifying' | 'error'>('verifying');
   const [errorMsg, setErrorMsg] = useState('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (isAuthenticated && isSessionValid()) {
+      navigate('/', { replace: true });
+      return;
+    }
+
     const token = searchParams.get('token');
     if (!token) {
       navigate('/login?error=Missing+token', { replace: true });
@@ -86,8 +98,12 @@ export function AuthVerifyPage() {
     void (async () => {
       try {
         const user = await verifyOnce(token);
-        if (cancelled) return;
+        if (cancelled) {
+          clearVerification(token);
+          return;
+        }
         await loginWithSession(user);
+        clearVerification(token);
         if (cancelled) return;
         navigate('/', { replace: true });
       } catch (err) {
@@ -105,8 +121,7 @@ export function AuthVerifyPage() {
       cancelled = true;
       if (timerRef.current !== null) clearTimeout(timerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, isSessionValid, loginWithSession, navigate, searchParams]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">

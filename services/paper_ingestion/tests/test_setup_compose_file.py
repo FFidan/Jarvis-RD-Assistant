@@ -23,6 +23,32 @@ LIB = REPO_ROOT / "scripts" / "setup_lib.sh"
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="setup_lib.sh needs bash")
 
 
+def test_infra_host_ports_are_overridable_for_isolated_smoke() -> None:
+    """Infrastructure services should all support isolated smoke host ports.
+
+    The first-run smoke runs beside normal local stacks, so services must not be
+    pinned to default host ports while the smoke exports non-default ports.
+    """
+    compose = (REPO_ROOT / "docker-compose.yml").read_text()
+    first_run = (REPO_ROOT / "scripts" / "first-run-smoke.sh").read_text()
+    setup = (REPO_ROOT / "setup.sh").read_text()
+
+    assert "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432" in compose
+    assert "127.0.0.1:${LITELLM_HOST_PORT:-4000}:4000" in compose
+    assert "127.0.0.1:${QDRANT_HOST_PORT:-6333}:6333" in compose
+
+    assert ': "${POSTGRES_HOST_PORT:=15432}"' in first_run
+    assert ': "${LITELLM_HOST_PORT:=14000}"' in first_run
+    assert ': "${QDRANT_HOST_PORT:=16333}"' in first_run
+    assert ': "${PAPER_INGESTION_HOST_PORT:=18010}"' in first_run
+    assert ': "${LEARNING_ENGINE_HOST_PORT:=18011}"' in first_run
+    assert ': "${OLLAMA_HOST_PORT:=11444}"' in first_run
+
+    assert '"${POSTGRES_HOST_PORT:-5432}"' in setup
+    assert '"${LITELLM_HOST_PORT:-4000}"' in setup
+    assert 'DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"' in setup
+
+
 def _compute(nvidia: str, override: str) -> str:
     """Source the lib and echo compute_compose_file's output."""
     proc = subprocess.run(
@@ -156,3 +182,53 @@ def test_resolve_nvidia_smi_returns_nonzero_when_absent(tmp_path: Path) -> None:
     )
     assert proc.returncode == 1
     assert proc.stdout.strip() == ""
+
+
+def _prereq_plan(
+    os_name: str, os_id: str, has_apt: str, has_brew: str, *missing: str
+) -> subprocess.CompletedProcess[str]:
+    """Return the setup_lib prerequisite install plan for a synthetic host."""
+    args = " ".join([os_name, os_id, has_apt, has_brew, *missing])
+    return subprocess.run(
+        ["bash", "-c", f'source "{LIB}"; prereq_install_plan {args}'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_prereq_plan_for_ubuntu_apt_host() -> None:
+    result = _prereq_plan("Linux", "ubuntu", "1", "0", "docker", "docker-compose", "openssl")
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "sudo apt-get update",
+        "sudo apt-get install -y docker.io docker-compose-plugin openssl",
+    ]
+
+
+def test_prereq_plan_for_macos_homebrew_host() -> None:
+    result = _prereq_plan("Darwin", "unknown", "0", "1", "docker", "docker-compose", "openssl")
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "brew install --cask docker",
+        "brew install openssl",
+    ]
+
+
+def test_prereq_plan_rejects_unsupported_host() -> None:
+    result = _prereq_plan("Linux", "arch", "0", "0", "docker")
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_prereq_manual_guidance_is_actionable() -> None:
+    proc = subprocess.run(
+        ["bash", "-c", f'source "{LIB}"; prereq_manual_guidance docker docker-compose openssl'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Install Docker Engine or Docker Desktop" in proc.stdout
+    assert "Docker Compose v2 plugin" in proc.stdout
+    assert "Install openssl" in proc.stdout
+    assert "re-run ./setup.sh --check" in proc.stdout

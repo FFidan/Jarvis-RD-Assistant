@@ -98,7 +98,6 @@ vi.mock('@/lib/api', () => ({
     candidates_for_tier: [{ backend: 'ollama', model: 'qwen3:1.7b', rank: 1 }],
     candidate_issues: [],
   }),
-  postAISettings: vi.fn(),
   redetectHW: vi.fn(),
   getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, hw_tier_changed: false }),
   dismissBanner: vi.fn().mockResolvedValue(undefined),

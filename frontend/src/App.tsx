@@ -196,7 +196,7 @@ export function App() {
           <Route path="/setup" element={<Navigate to="/" replace />} />
           <Route path="/first-run" element={<Navigate to="/" replace />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
-          <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
+          <Route path="/auth/verify" element={<Navigate to="/" replace />} />
           <Route
             path="*"
             element={

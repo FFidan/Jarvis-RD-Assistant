@@ -2,13 +2,12 @@
  * Tests for LoginPage — magic-link login surface, SMTP-aware.
  *
  * Scope:
- * - smtp_configured=true  → magic-link form is the default tab.
  * - smtp_configured=false, single mode → API-key form is the default tab;
  *   magic-link tab still reachable but shows an SMTP-unconfigured notice.
  * - smtp_configured=false, multi mode → magic-link form is the default tab
  *   with an honest notice that links cannot be delivered; API-key tab still
  *   reachable but the server rejects it once more than one account exists.
- * - smtp_configured absent (cache empty / status fetch failed) → magic-link
+ * - setup_mode and smtp_configured absent -> magic-link
  *   is the default (safe fallback, no behavior change).
  * - "Use API key instead" toggle reveals the API-key form.
  * - 422 from requestMagicLink surfaces as an email-validation message.
@@ -21,15 +20,16 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { QUERY_KEYS } from '@/lib/query-keys';
 import { LoginPage } from '@/pages/LoginPage';
 
 const requestMagicLinkMock = vi.fn().mockResolvedValue({ sent: true });
+const getFirstRunStatusMock = vi.fn();
 const loginMock = vi.fn().mockResolvedValue(false);
 
 vi.mock('@/lib/api', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/api')>()),
   requestMagicLink: (email: string) => requestMagicLinkMock(email),
+  getFirstRunStatus: () => getFirstRunStatusMock(),
 }));
 
 let storeLastError: string | null = null;
@@ -46,11 +46,14 @@ function makeQC() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-/** Render LoginPage with an optional pre-seeded first-run status in the cache. */
+/** Render LoginPage with an optional mocked first-run status response. */
 function renderLoginPage(firstRunData?: object | null) {
   const qc = makeQC();
-  if (firstRunData !== undefined && firstRunData !== null) {
-    qc.setQueryData(QUERY_KEYS.setup.firstRun(), firstRunData);
+  const response = firstRunData === undefined ? { configured: true } : firstRunData;
+  if (response !== null) {
+    getFirstRunStatusMock.mockResolvedValue(response);
+  } else {
+    getFirstRunStatusMock.mockRejectedValue(new Error('setup status unavailable'));
   }
   return {
     qc,
@@ -67,6 +70,7 @@ function renderLoginPage(firstRunData?: object | null) {
 describe('LoginPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getFirstRunStatusMock.mockReset();
     storeLastError = null;
     loginMock.mockResolvedValue(false);
   });
@@ -75,10 +79,18 @@ describe('LoginPage', () => {
   // Default tab conditioning on smtp_configured
   // ---------------------------------------------------------------------------
 
-  it('renders the magic-link email input by default when smtp_configured=true', () => {
-    // Pre-seed cache: SMTP configured → magic-link is primary.
+  it('defaults to the API-key tab when saved setup_mode=single even if SMTP is configured', async () => {
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
-    const input = screen.getByPlaceholderText(/you@example\.com/i);
+
+    const input = await screen.findByPlaceholderText(/Your API key/i);
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveAttribute('type', 'password');
+  });
+
+  it('renders the magic-link email input by default when saved setup_mode=multi', async () => {
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+
+    const input = await screen.findByPlaceholderText(/you@example\.com/i);
     expect(input).toBeInTheDocument();
     expect(input).toHaveAttribute('type', 'email');
   });
@@ -114,18 +126,18 @@ describe('LoginPage', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/email is not configured/i);
   });
 
-  it('shows multi-user SMTP notice without "use API key" suggestion when smtp_configured=false and multi mode', () => {
+  it('shows multi-user SMTP notice without "use API key" suggestion when smtp_configured=false and multi mode', async () => {
     // In multi mode the magic-link tab is primary; notice must NOT suggest API-key
     // as a working path because the backend rejects it once >1 account exists.
     renderLoginPage({ configured: true, smtp_configured: false, setup_mode: 'multi' });
-    expect(screen.getByRole('status')).toHaveTextContent(/ask your admin/i);
-    expect(screen.getByRole('status')).not.toHaveTextContent(/use the api key tab/i);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/ask your admin/i);
+    expect(notice).not.toHaveTextContent(/use the api key tab/i);
   });
 
-  it('defaults to magic-link when cache is empty (status fetch failed / no data)', () => {
-    // No pre-seeded cache → getQueryData returns undefined → safe fallback.
-    renderLoginPage();
-    expect(screen.getByPlaceholderText(/you@example\.com/i)).toBeInTheDocument();
+  it('defaults to magic-link when setup status omits mode and SMTP state', async () => {
+    renderLoginPage({ configured: true });
+    expect(await screen.findByPlaceholderText(/you@example\.com/i)).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------
@@ -134,15 +146,15 @@ describe('LoginPage', () => {
 
   it('submits the email to requestMagicLink and shows confirmation', async () => {
     const user = userEvent.setup();
-    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
-    const input = screen.getByPlaceholderText(/you@example\.com/i);
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+    const input = await screen.findByPlaceholderText(/you@example\.com/i);
     await user.type(input, 'ferhat@example.com');
     await user.click(screen.getByRole('button', { name: /send magic link/i }));
 
     await waitFor(() => {
       expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
     });
-    expect(await screen.findByText(/if an account exists for that address/i)).toBeInTheDocument();
+    expect(await screen.findByText(/will be delivered when email is configured/i)).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------
@@ -151,7 +163,7 @@ describe('LoginPage', () => {
 
   it('toggles to the API-key form on click', async () => {
     const user = userEvent.setup();
-    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
 
     await user.click(screen.getByRole('button', { name: /use api key instead/i }));
     const input = screen.getByPlaceholderText(/Your API key/i);
@@ -184,8 +196,8 @@ describe('LoginPage', () => {
 
   it('API-key input opts out of browser credential storage', async () => {
     const user = userEvent.setup();
-    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
-    await user.click(screen.getByRole('button', { name: /use api key instead/i }));
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+    await user.click(await screen.findByRole('button', { name: /use api key instead/i }));
     const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toHaveAttribute('autocomplete', 'off');
   });
@@ -205,8 +217,8 @@ describe('LoginPage', () => {
   it('maps a 422 from request-link to an email-validation message, not a connection error', async () => {
     const { ApiError } = await import('@/lib/api');
     requestMagicLinkMock.mockRejectedValueOnce(new ApiError(422, '{"detail":"value is not a valid email address"}'));
-    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
-    await userEvent.type(screen.getByLabelText('Email'), 'not-an-email@x');
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+    await userEvent.type(await screen.findByLabelText('Email'), 'not-an-email@x');
     await userEvent.click(screen.getByRole('button', { name: /send magic link/i }));
     expect(await screen.findByText(/valid email/i)).toBeInTheDocument();
     expect(screen.queryByText(/check your connection/i)).not.toBeInTheDocument();
@@ -218,8 +230,8 @@ describe('LoginPage', () => {
   });
 
   it('announces email-required error via role="alert"', async () => {
-    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
-    await userEvent.click(screen.getByRole('button', { name: /send magic link/i }));
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+    await userEvent.click(await screen.findByRole('button', { name: /send magic link/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(/email is required/i);
   });
 });
