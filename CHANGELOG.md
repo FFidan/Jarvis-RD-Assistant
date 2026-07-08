@@ -10,6 +10,19 @@ Wording such as "public-ready", "public-readiness", or "public-launch groundwork
 
 _No unreleased changes yet._
 
+## v1.0.4 (2026-07-08)
+
+A focused maintenance and polish release that stabilizes magic-link email verification, simplifies Advanced settings to prevent duplicate model assignment, and introduces guided preflight prerequisite installation.
+
+### Fixed
+- **Magic-link verification loop.** The authentication verify page and routing engine now prevent infinite loop states and UI flickering on authenticated remounts and token reuse, while preserving secure cross-user cache purging.
+
+### Changed
+- **AI settings simplification.** Conflicting and redundant model dropdown selectors and backend apply/reset actions are removed from the collapsible Advanced settings panel. Model selection is now managed exclusively by the primary Quick and Main model cards at the top.
+
+### Added
+- **Guided prerequisite installer.** Bumps setup script preflight checks to plan, prompt, and install Docker and OpenSSL on supported hosts (`apt` for Ubuntu/Debian, `brew` for macOS) when run with `--install-prereqs` or interactively.
+
 ## v1.0.3 (2026-07-06) — Provider routing, sign-in resilience, and consensus trust hardening
 
 A maintenance release that expands optional cloud-provider setup without changing the local-first default, improves first-hour reliability, and tightens multi-user data boundaries around Consensus evidence.
@@ -547,3 +560,5 @@ A six-week audit-and-remediation pass closed roughly 120 findings ahead of the e
 ## Early private foundations (v0.1 – v0.4.1)
 
 The v0.1 through v0.4.1 entries summarize the earliest private milestones. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 consolidation.
+
+

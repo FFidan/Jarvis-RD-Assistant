@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.0.3**. See [CHANGELOG.md](CHANGELOG.md) for the
+Current release: **v1.0.4**. See [CHANGELOG.md](CHANGELOG.md) for the
 maintenance changes since the v1.0.0 public baseline.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session

@@ -85,7 +85,7 @@ compose fallback tracks the current release; set it explicitly in `.env` or
 `versions.env` before building a different version:
 
 ```bash
-JARVIS_VERSION=1.0.3
+JARVIS_VERSION=1.0.4
 docker compose build
 docker compose up -d
 ```

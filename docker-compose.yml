@@ -320,7 +320,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-1.0.3}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-1.0.4}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -403,7 +403,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-1.0.3}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-1.0.4}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -457,7 +457,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-1.0.3}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-1.0.4}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -504,7 +504,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-1.0.3}
+    image: jarvis/dashboard:${JARVIS_VERSION:-1.0.4}
     build:
       context: ./frontend
       args:
@@ -575,7 +575,7 @@ services:
       SECRETS_DIR: /secrets
       # Stamped into each backup manifest's app_version (so a restore point shows
       # the JARVIS version it was taken on, not a constant "unknown").
-      JARVIS_VERSION: ${JARVIS_VERSION:-1.0.3}
+      JARVIS_VERSION: ${JARVIS_VERSION:-1.0.4}
     secrets:
       - postgres_password
       - backup_encrypt_key
@@ -658,7 +658,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.0.3}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.0.4}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
