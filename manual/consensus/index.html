@@ -908,6 +908,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Empty state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1616,6 +1633,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Empty state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1682,7 +1716,13 @@
 Run a contradiction scan across related papers to see where they agree and disagree.</p>
 </blockquote>
 <p>Click <strong>Run consensus scan</strong> to queue a full contradiction scan across your library. The button label changes to <strong>Scanning…</strong> while the job is queued or running, and the background-task menu shows progress. When the whole-library job succeeds, the Consensus page refreshes its data automatically.</p>
-<p>A completed scan can still produce no chart. In that case the page distinguishes a true empty outcome from a failed scan: a successful zero-result scan says that no verified agreement or contradiction clusters are available yet, while a failed scan shows the failure message and leaves the retry action available. JARVIS does not lower quote-verification thresholds just to populate this view.</p>
+<h3 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h3>
+<p>A consensus scan can only produce claims when both preconditions hold:</p>
+<ol>
+<li><strong>Summarized papers with verified findings.</strong> Papers must be processed so their key findings (with verified quotes) exist. If your library has none, the scan request is skipped immediately with a <em>"Process some papers first"</em> message instead of queuing a job that cannot find anything.</li>
+<li><strong>Cross-references between library papers.</strong> The library-wide scan only compares pairs of papers that were cross-referenced as related during summarization. A library of processed but unlinked papers finishes instantly and explains that none of your processed papers are cross-referenced yet.</li>
+</ol>
+<p>A completed scan can still produce no chart. In that case the page explains why rather than showing a generic empty state: it distinguishes <em>no cross-referenced candidate pairs</em>, <em>candidates found but none passed quote verification</em> (with the pair counts shown beneath the empty state), and a true zero-cluster outcome. A failed scan — including the case where the analysis model was unreachable for every candidate pair — shows the failure message and leaves the retry action available. JARVIS does not lower quote-verification thresholds just to populate this view.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
 <ul>
