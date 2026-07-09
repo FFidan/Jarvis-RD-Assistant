@@ -57,6 +57,28 @@ _DEFAULT_MAX_AGE_S = 1800
 _RETRY_AFTER_S = 30
 
 
+def maintenance_active() -> bool:
+    """Return ``True`` while a maintenance sentinel currently gates serving.
+
+    Mirrors :class:`MaintenanceMiddleware` with the same env-overridable paths
+    and max age: the durable destructive sentinel is active regardless of age;
+    the soft sentinel is active only while fresher than the max age. Never
+    raises — an unreadable soft sentinel means "not active".
+    """
+    destructive_path = os.environ.get(
+        "MAINTENANCE_DESTRUCTIVE_SENTINEL", _DEFAULT_DESTRUCTIVE_SENTINEL_PATH
+    )
+    if os.path.exists(destructive_path):
+        return True
+    sentinel_path = os.environ.get("MAINTENANCE_SENTINEL", _DEFAULT_SENTINEL_PATH)
+    max_age_s = int(os.environ.get("MAINTENANCE_MAX_AGE_S", str(_DEFAULT_MAX_AGE_S)))
+    try:
+        mtime = os.stat(sentinel_path).st_mtime
+    except OSError:
+        return False
+    return time.time() - mtime <= max_age_s
+
+
 class MaintenanceMiddleware:
     """Return ``503`` while a fresh maintenance sentinel exists (pure-ASGI)."""
 

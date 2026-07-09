@@ -290,12 +290,14 @@ def test_provider_registry_keys_have_validators():
     "value",
     [
         "https://llm.example.com/v1",
+        "https://api.openai.com/v1",
         "http://localhost:8000/v1",
         "http://127.0.0.1:8000/v1",
+        "https://127.0.0.1",
     ],
 )
 def test_custom_openai_base_url_accepts_safe_values(value: str):
-    """Custom endpoints must accept HTTPS and loopback HTTP endpoints."""
+    """Custom endpoints must accept HTTPS, public hosts, and loopback endpoints."""
     _CONFIG_VALIDATORS["llm.providers.custom_openai_compatible.base_url"](value)
 
 
@@ -307,6 +309,13 @@ def test_custom_openai_base_url_accepts_safe_values(value: str):
         "https://llm.example.com/v1#frag",
         "http://192.168.1.20:8000/v1",
         "http://169.254.169.254/v1",
+        # RFC1918 / CGNAT / ULA literal IPs must be blocked even over HTTPS,
+        # where the loopback-only HTTP rule would not otherwise fire.
+        "http://10.0.0.5:8000",
+        "https://192.168.1.1",
+        "https://172.16.0.1",
+        "https://100.64.0.1",
+        "https://[fc00::1]",
         "not a url",
         "",
     ],
@@ -315,6 +324,28 @@ def test_custom_openai_base_url_rejects_unsafe_values(value: str):
     """Custom endpoints must reject unsafe schemes, credentials, fragments, and addresses."""
     with pytest.raises(ValueError):
         _CONFIG_VALIDATORS["llm.providers.custom_openai_compatible.base_url"](value)
+
+
+@pytest.mark.parametrize(
+    ("address", "blocked"),
+    [
+        ("10.0.0.5", True),
+        ("192.168.1.1", True),
+        ("172.16.0.1", True),
+        ("100.64.0.1", True),  # CGNAT (RFC 6598)
+        ("fc00::1", True),  # ULA (RFC 4193)
+        ("127.0.0.1", False),  # loopback dev carve-out
+        ("::1", False),  # IPv6 loopback
+        ("1.1.1.1", False),  # public
+    ],
+)
+def test_blocked_custom_endpoint_ip_covers_private_ranges(address: str, blocked: bool):
+    """Resolved-address guard blocks private/reserved ranges but allows loopback and public."""
+    import ipaddress
+
+    from paper_ingestion.services.llm_provider_registry import _blocked_custom_endpoint_ip
+
+    assert _blocked_custom_endpoint_ip(ipaddress.ip_address(address)) is blocked
 
 
 @pytest.mark.asyncio

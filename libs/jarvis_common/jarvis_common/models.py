@@ -6,11 +6,17 @@ from pydantic import BaseModel
 
 
 class HealthCheckResponse(BaseModel):
-    """Standard health check response for all services."""
+    """Standard health check response for all services.
+
+    ``maintenance`` and ``version`` are populated only by ``/health/internal``;
+    ``/health`` and ``/health/live`` stay minimal.
+    """
 
     status: str
     service: str
     checks: dict[str, str]
+    maintenance: bool = False
+    version: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -26,10 +32,16 @@ class ErrorResponse(BaseModel):
 
 
 class JobCreateResponse(BaseModel):
-    """Response body returned by ``POST /api/jobs``."""
+    """Response body returned by ``POST /api/jobs`` and job-enqueueing endpoints.
 
-    job_id: str
+    ``job_id`` is null only when ``status == "skipped"`` — the endpoint decided
+    not to queue a job and ``reason`` carries the machine-readable cause.
+    Regular enqueues always return a string ``job_id`` and omit ``reason``.
+    """
+
+    job_id: str | None
     status: str
+    reason: str | None = None
 
 
 class JobStatusResponse(BaseModel):

@@ -9,6 +9,7 @@ import { useAppearance } from '@/hooks/use-appearance';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 import { ConnectivityBanner } from '@/components/layout/ConnectivityBanner';
+import { MaintenanceBanner } from '@/components/shared/MaintenanceBanner';
 
 // Lazy-loaded: defers react-joyride + react-floater + popper.js (~50 kB gz)
 // from the eager bundle. The tour is only shown to first-time users.
@@ -55,6 +56,7 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
+        <MaintenanceBanner />
         <TopBar onMenuClick={() => setMobileOpen(true)} />
         <ConnectivityBanner />
         <main className="flex-1 overflow-y-auto bg-paper p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">{children}</main>

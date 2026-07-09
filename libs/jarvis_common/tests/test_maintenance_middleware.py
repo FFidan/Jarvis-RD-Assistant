@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jarvis_common.maintenance import MaintenanceMiddleware
+from jarvis_common.maintenance import MaintenanceMiddleware, maintenance_active
 
 _MAX_AGE_S = 1800
 
@@ -143,3 +143,26 @@ def test_absent_destructive_falls_through_to_soft_logic(tmp_path):
 
     resp = client.get("/ping")
     assert resp.status_code == 503
+
+
+def test_maintenance_active_mirrors_middleware_sentinel_logic(tmp_path, monkeypatch):
+    # The module-level helper follows the same lifecycle as the middleware:
+    # absent -> False; fresh soft -> True; stale soft -> False; destructive -> True
+    # regardless of age.
+    soft = tmp_path / ".maintenance"
+    destructive = tmp_path / ".destructive"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(destructive))
+
+    assert maintenance_active() is False
+
+    soft.touch()
+    assert maintenance_active() is True
+
+    stale = time.time() - _MAX_AGE_S - 60
+    os.utime(soft, (stale, stale))
+    assert maintenance_active() is False
+
+    destructive.touch()
+    os.utime(destructive, (stale, stale))
+    assert maintenance_active() is True

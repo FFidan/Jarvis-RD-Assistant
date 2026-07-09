@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from dataclasses import dataclass
 from email.utils import formataddr
 
@@ -250,6 +251,101 @@ async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
     return any(r["value"] is not None and str(r["value"]) == "" for r in rows)
 
 
+# Reachability-probe cache: effective ``"host:port"`` -> (monotonic expiry,
+# (reachable, issue)). Keyed on host:port so a config change to a different
+# relay is a new key and re-probes naturally. TTL is kept well above any
+# status-poll cadence so repeated polls never reconnect. ``time.monotonic()``
+# (not wall clock) so a system clock step cannot expire or extend an entry.
+_REACHABILITY_TTL_SECONDS = 600.0
+_reachability_cache: dict[str, tuple[float, tuple[bool, str | None]]] = {}
+
+# A liveness connect should be fast; cap it well under the 30s send timeout so an
+# unreachable/hung relay cannot block the (unauthenticated, cached) status poll
+# for long — this cost is paid at most once per TTL per host:port.
+_REACHABILITY_PROBE_TIMEOUT_SECONDS = 8.0
+
+# Value-free, operator-facing (mirrors the ``effective_smtp_status`` issue
+# style): it never embeds the host, port, or any credential.
+_UNREACHABLE_ISSUE = (
+    "The mail server is not accepting connections — sign-in emails may not be delivered."
+)
+
+
+async def _probe_relay(eff: _EffectiveSmtp) -> tuple[bool, str | None]:
+    """Open a connection + EHLO to the effective relay; never raise.
+
+    A liveness check only: connect + EHLO + QUIT — no mail is sent and AUTH is
+    NOT attempted (AUTH would put credentials on the wire and risk lockouts).
+    Reuses ``send_magic_link``'s SSRF guard + TLS-flag construction, but with a
+    short liveness timeout (a relay too slow to connect within it is treated as
+    failing — the user will not wait that long for a sign-in link anyway).
+    Returns ``(reachable, issue)`` with a value-free issue string on any failure.
+    """
+    # SSRF parity with the live send: refuse a non-public relay unless the
+    # operator opted in. A send would be skipped for such a host anyway, so it
+    # is effectively unreachable for delivery — and this keeps the probe from
+    # opening an outbound connection to an internal address.
+    if not get_core_settings().allow_private_smtp_host:
+        try:
+            await _reject_non_public_host(eff.host)
+        except Exception:  # noqa: BLE001 — unresolved/non-public → treat as unreachable
+            logger.debug("smtp reachability probe: host rejected", exc_info=True)
+            return False, _UNREACHABLE_ISSUE
+
+    import aiosmtplib  # noqa: PLC0415
+
+    use_tls, start_tls = smtp_tls_flags(eff.port)
+    client = aiosmtplib.SMTP(
+        hostname=eff.host,
+        port=eff.port,
+        use_tls=use_tls,
+        start_tls=start_tls,
+        timeout=_REACHABILITY_PROBE_TIMEOUT_SECONDS,
+    )
+    try:
+        await client.connect()
+        await client.ehlo()
+    except Exception:  # noqa: BLE001 — any connect/EHLO failure → unreachable, never propagate
+        logger.debug("smtp reachability probe failed", exc_info=True)
+        return False, _UNREACHABLE_ISSUE
+    # Reachable: the relay accepted a connection and EHLO. QUIT is best-effort
+    # cleanup — a QUIT failure must NOT flip a reachable relay to unreachable.
+    try:
+        await client.quit()
+    except Exception:  # noqa: BLE001 — best-effort disconnect
+        logger.debug("smtp reachability probe quit failed (non-fatal)", exc_info=True)
+    return True, None
+
+
+async def probe_smtp_reachable(pool: asyncpg.Pool | None = None) -> tuple[bool, str | None]:
+    """Return ``(reachable, issue)`` for the EFFECTIVE relay, cached per host:port.
+
+    When the relay is not ``deliverable`` (host/sender missing) there is nothing
+    to probe → ``(False, None)`` and NO connection is attempted. Otherwise a
+    lightweight, cached, short-timeout liveness probe (connect + EHLO, no mail,
+    no AUTH) runs and its result is cached for ``_REACHABILITY_TTL_SECONDS`` so
+    repeated status polls never reconnect. Never raises; the issue string is
+    value-free (no host/port/credentials).
+
+    Safe on any authenticated status/admin/setup surface. It must NEVER be
+    called inline on the unauthenticated ``request-link`` path — that path's
+    shape and timing are the anti-enumeration defense.
+    """
+    eff = await _effective_smtp(pool)
+    if not eff.deliverable:
+        return False, None
+
+    cache_key = f"{eff.host}:{eff.port}"
+    now = time.monotonic()
+    cached = _reachability_cache.get(cache_key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+
+    result = await _probe_relay(eff)
+    _reachability_cache[cache_key] = (now + _REACHABILITY_TTL_SECONDS, result)
+    return result
+
+
 async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool, list[str]]:
     """Return ``(deliverable, issues)`` for the EFFECTIVE relay (DB over env).
 
@@ -272,6 +368,13 @@ async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool,
         )
 
     if eff.deliverable:
+        # Deliverable is presence-only; a configured relay can still be down or
+        # unreachable. Surface that as an additional value-free issue (does NOT
+        # flip deliverable). The probe is cached + short-timeout, so this adds no
+        # login-page latency; it never runs on the unauthenticated request-link path.
+        reachable, reach_issue = await probe_smtp_reachable(pool)
+        if not reachable and reach_issue is not None:
+            issues.append(reach_issue)
         return True, issues
 
     if await _required_smtp_empty_string(pool):
@@ -472,4 +575,4 @@ async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
     return await _smtp_configured(pool)
 
 
-__all__ = ["send_magic_link", "smtp_configured"]
+__all__ = ["probe_smtp_reachable", "send_magic_link", "smtp_configured"]

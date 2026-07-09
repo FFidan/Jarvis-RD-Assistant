@@ -441,11 +441,17 @@ async def test_send_magic_link_whitespace_from_name_bare_sender(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_effective_smtp_status_env_only_deliverable(monkeypatch) -> None:
     """env-only SMTP with host+from set: (True, [])."""
+    from unittest.mock import AsyncMock
+
     from jarvis_common.email import effective_smtp_status
     from jarvis_common.settings import get_secrets_settings
 
     monkeypatch.setenv("SMTP_HOST", "mail.example.com")
     monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    # Reachability is probed separately; a reachable relay adds no issue.
+    monkeypatch.setattr(
+        "jarvis_common.email.probe_smtp_reachable", AsyncMock(return_value=(True, None))
+    )
     get_secrets_settings.cache_clear()
 
     deliverable, issues = await effective_smtp_status(pool=None)
@@ -518,19 +524,26 @@ async def test_effective_smtp_status_from_only_no_host(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_effective_smtp_status_empty_string_required_field(monkeypatch) -> None:
-    """Explicit empty SMTP env now fails settings validation instead of degrading."""
+    """Explicit empty SMTP env is treated as unset and degrades diagnostically.
+
+    An empty ``SMTP_HOST`` must NOT crash the ``SecretsSettings`` singleton;
+    ``effective_smtp_status`` reports ``(False, issues)`` with a value-free
+    "required field … empty value" diagnostic and never echoes a configured value.
+    """
     from jarvis_common.email import effective_smtp_status
     from jarvis_common.settings import get_secrets_settings
-    from pydantic import ValidationError
 
     monkeypatch.setenv("SMTP_HOST", "")
     monkeypatch.setenv("SMTP_FROM", "bot@example.com")
     get_secrets_settings.cache_clear()
 
-    with pytest.raises(ValidationError, match="SMTP secret values must be unset or non-empty"):
-        await effective_smtp_status(pool=None)
+    deliverable, issues = await effective_smtp_status(pool=None)
 
     get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert any("empty value" in issue for issue in issues)
+    # Value-free: no issue may echo the configured sender
+    assert all("bot@example.com" not in issue for issue in issues)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +559,8 @@ async def test_effective_smtp_status_user_set_no_password_surfaces_issue(monkeyp
     ``deliverable`` is True (it previously returned ``(True, [])`` early and hid
     a half-configured login).
     """
+    from unittest.mock import AsyncMock
+
     from jarvis_common.email import effective_smtp_status
     from jarvis_common.settings import get_secrets_settings
 
@@ -553,6 +568,10 @@ async def test_effective_smtp_status_user_set_no_password_surfaces_issue(monkeyp
     monkeypatch.setenv("SMTP_FROM", "bot@example.com")
     monkeypatch.setenv("SMTP_USER", "relay-user")
     monkeypatch.delenv("SMTP_PASS", raising=False)
+    # Isolate the auth-consistency issue: reachable relay adds nothing.
+    monkeypatch.setattr(
+        "jarvis_common.email.probe_smtp_reachable", AsyncMock(return_value=(True, None))
+    )
     get_secrets_settings.cache_clear()
 
     deliverable, issues = await effective_smtp_status(pool=None)
@@ -569,6 +588,8 @@ async def test_effective_smtp_status_user_set_no_password_surfaces_issue(monkeyp
 @pytest.mark.asyncio
 async def test_effective_smtp_status_ip_allowlist_relay_stays_clean(monkeypatch) -> None:
     """host+sender, NO user, NO pass (IP-allowlist relay) → (True, []) — no false auth warning."""
+    from unittest.mock import AsyncMock
+
     from jarvis_common.email import effective_smtp_status
     from jarvis_common.settings import get_secrets_settings
 
@@ -576,6 +597,9 @@ async def test_effective_smtp_status_ip_allowlist_relay_stays_clean(monkeypatch)
     monkeypatch.setenv("SMTP_FROM", "bot@example.com")
     monkeypatch.delenv("SMTP_USER", raising=False)
     monkeypatch.delenv("SMTP_PASS", raising=False)
+    monkeypatch.setattr(
+        "jarvis_common.email.probe_smtp_reachable", AsyncMock(return_value=(True, None))
+    )
     get_secrets_settings.cache_clear()
 
     deliverable, issues = await effective_smtp_status(pool=None)
@@ -583,6 +607,112 @@ async def test_effective_smtp_status_ip_allowlist_relay_stays_clean(monkeypatch)
     get_secrets_settings.cache_clear()
     assert deliverable is True
     assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# Reachability probe (probe_smtp_reachable) + its effect on effective_smtp_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_deliverable_but_unreachable_appends_value_free_issue(
+    monkeypatch,
+) -> None:
+    """A deliverable relay that refuses a connection stays deliverable but gains a
+    value-free reachability issue (host / port / credentials never leak)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import aiosmtplib
+    import jarvis_common.email as email_mod
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    # Skip the SSRF guard so the probe reaches the (mocked) connect.
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+
+    failing_client = MagicMock()
+    failing_client.connect = AsyncMock(side_effect=aiosmtplib.SMTPConnectError("refused"))
+    failing_client.ehlo = AsyncMock()
+    failing_client.quit = AsyncMock()
+    monkeypatch.setattr(aiosmtplib, "SMTP", MagicMock(return_value=failing_client))
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+    assert deliverable is True, "deliverable is presence-based; unreachable must not flip it"
+    assert len(issues) == 1, f"expected exactly the reachability issue; got {issues!r}"
+    issue = issues[0]
+    assert "connection" in issue.lower() or "mail server" in issue.lower()
+    # Value-free: never echo the configured host / port / credentials.
+    for leak in ("mail.example.com", "bot@example.com", "587"):
+        assert leak not in issue, f"reachability issue leaked a configured value: {issue!r}"
+    failing_client.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_probe_smtp_reachable_caches_within_ttl(monkeypatch) -> None:
+    """Two probes within the TTL reconnect only once (result cached per host:port)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import aiosmtplib
+    import jarvis_common.email as email_mod
+    from jarvis_common.email import probe_smtp_reachable
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.ehlo = AsyncMock()
+    client.quit = AsyncMock()
+    monkeypatch.setattr(aiosmtplib, "SMTP", MagicMock(return_value=client))
+
+    first = await probe_smtp_reachable(pool=None)
+    second = await probe_smtp_reachable(pool=None)
+
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+    assert first == (True, None)
+    assert second == (True, None)
+    client.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_probe_smtp_reachable_not_deliverable_skips_connection(monkeypatch) -> None:
+    """A not-deliverable config returns (False, None) and never opens a connection."""
+    from unittest.mock import MagicMock
+
+    import aiosmtplib
+    import jarvis_common.email as email_mod
+    from jarvis_common.email import probe_smtp_reachable
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+
+    smtp_cls = MagicMock()
+    monkeypatch.setattr(aiosmtplib, "SMTP", smtp_cls)
+
+    reachable, issue = await probe_smtp_reachable(pool=None)
+
+    get_secrets_settings.cache_clear()
+    email_mod._reachability_cache.clear()
+    assert (reachable, issue) == (False, None)
+    smtp_cls.assert_not_called()
 
 
 def test_effective_smtp_auth_consistent_property() -> None:

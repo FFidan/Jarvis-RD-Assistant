@@ -190,16 +190,11 @@ def _parse_findings(row: asyncpg.Record) -> list[VerifiedFinding]:
     return parsed
 
 
-async def _load_verified_findings(
-    conn: ConnLike,
-    *,
-    paper_id: int | None = None,
-    user_id: int | None = None,
-) -> list[VerifiedFinding]:
-    """Load verified findings, scoped to the caller's library when available."""
-    rows = await conn.fetch(
-        """
-        SELECT p.id AS paper_id, p.title, ps.key_findings, ps.cross_references
+# Shared scope for scannable summary rows: non-empty key_findings, optional
+# paper focus ($1 = paper_id), and the caller's tenancy scope ($2 = user_id).
+# Used by both the findings loader and the cheap preflight COUNT below so the
+# two predicates can never drift apart.
+_SCANNABLE_SUMMARIES_SQL = """
         FROM paper_summaries ps
         JOIN papers p ON p.id = ps.paper_id
         WHERE CASE
@@ -225,6 +220,20 @@ async def _load_verified_findings(
               FROM user_library ul
               WHERE ul.paper_id = p.id AND ul.user_id = $2
           ))
+"""
+
+
+async def _load_verified_findings(
+    conn: ConnLike,
+    *,
+    paper_id: int | None = None,
+    user_id: int | None = None,
+) -> list[VerifiedFinding]:
+    """Load verified findings, scoped to the caller's library when available."""
+    rows = await conn.fetch(
+        f"""
+        SELECT p.id AS paper_id, p.title, ps.key_findings, ps.cross_references
+        {_SCANNABLE_SUMMARIES_SQL}
         ORDER BY ps.created_at DESC
         LIMIT 250
         """,
@@ -235,6 +244,17 @@ async def _load_verified_findings(
     for row in rows:
         findings.extend(_parse_findings(row))
     return findings
+
+
+async def count_scannable_summaries(conn: ConnLike, *, user_id: int) -> int:
+    """Cheap preflight count of summary rows a library-wide scan would load.
+
+    Mirrors ``_load_verified_findings``'s scope via the shared SQL fragment
+    without fetching row payloads. Zero rows means any scan for this caller is
+    guaranteed to produce no candidates, so the router can skip queuing a job.
+    """
+    count = await conn.fetchval(f"SELECT COUNT(*) {_SCANNABLE_SUMMARIES_SQL}", None, user_id)
+    return int(count or 0)
 
 
 def _build_prompt(candidate: ContradictionCandidate) -> str:

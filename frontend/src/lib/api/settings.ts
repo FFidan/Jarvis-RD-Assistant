@@ -104,6 +104,13 @@ export interface FirstRunStatus {
    * unknown (no default-override applied).
    */
   smtp_configured?: boolean;
+  /**
+   * True iff the configured relay currently accepts a connection (cached
+   * liveness probe). `smtp_configured` is presence-only, so a relay can be
+   * configured yet unreachable; LoginPage surfaces that "configured but
+   * failing" state from this field. Optional — older backends omit it.
+   */
+  smtp_reachable?: boolean;
 }
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }

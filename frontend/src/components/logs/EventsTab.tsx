@@ -10,6 +10,7 @@ import { LEVEL_BADGE_CLASSES, CATEGORY_BADGE_CLASSES } from './utils';
 import { cn } from '@/lib/utils';
 import { useSearchParams } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Search } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 
@@ -178,6 +179,16 @@ export function EventsTab() {
     clearPreset();
   }
 
+  // Honest empty state: distinguish "nothing recorded yet" from "your
+  // filters exclude everything" so a user isn't left guessing why the list
+  // is blank.
+  const hasActiveFilter = Boolean(
+    levelFilter || categoryFilter || sourceFilter || since || until || query || searchText,
+  );
+  const emptyMessage = hasActiveFilter
+    ? 'No events match the current filters.'
+    : 'No events recorded recently. Events are recorded for auth, jobs, sources, config, and errors.';
+
   return (
     <div className="space-y-4">
       {/* Spark-line error chart */}
@@ -235,6 +246,16 @@ export function EventsTab() {
               className={LEVEL_BADGE_CLASSES[lv]}
             />
           ))}
+          {levelFilter && (
+            <button
+              type="button"
+              aria-label="Clear severity filter"
+              onClick={() => { setLevelFilter(''); clearPreset(); }}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         {/* Area chips */}
@@ -250,6 +271,16 @@ export function EventsTab() {
               tooltip={cat === 'infra' ? 'Infrastructure events forwarded by the log pipeline; may be empty if not configured' : undefined}
             />
           ))}
+          {categoryFilter && (
+            <button
+              type="button"
+              aria-label="Clear area filter"
+              onClick={() => { setCategoryFilter(''); clearPreset(); }}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         {/* Source select + date range + backend search + client free-text */}
@@ -267,50 +298,74 @@ export function EventsTab() {
             ))}
           </select>
 
-          <input
-            type="datetime-local"
-            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-            value={since ? since.slice(0, 16) : ''}
-            onChange={(e) => {
-              setSince(e.target.value ? new Date(e.target.value).toISOString() : '');
-              clearPreset();
-            }}
-            placeholder="Since"
-            title="Since"
-          />
-          <input
-            type="datetime-local"
-            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-            value={until ? until.slice(0, 16) : ''}
-            onChange={(e) => {
-              setUntil(e.target.value ? new Date(e.target.value).toISOString() : '');
-              clearPreset();
-            }}
-            placeholder="Until"
-            title="Until"
-          />
-
-          {/* Backend full-text search */}
-          <div className="relative w-full sm:w-auto sm:min-w-[160px]">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              className="pl-8"
-              placeholder="Full-text search…"
-              value={query}
-              onChange={(e) => { setQuery(e.target.value); clearPreset(); }}
+          <div className="flex flex-col gap-0.5">
+            <Label htmlFor="events-since-input" className="text-xs text-muted-foreground">
+              Since
+            </Label>
+            <input
+              id="events-since-input"
+              type="datetime-local"
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              value={since ? since.slice(0, 16) : ''}
+              onChange={(e) => {
+                setSince(e.target.value ? new Date(e.target.value).toISOString() : '');
+                clearPreset();
+              }}
+              placeholder="Since"
+              title="Since"
+            />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <Label htmlFor="events-until-input" className="text-xs text-muted-foreground">
+              Until
+            </Label>
+            <input
+              id="events-until-input"
+              type="datetime-local"
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              value={until ? until.slice(0, 16) : ''}
+              onChange={(e) => {
+                setUntil(e.target.value ? new Date(e.target.value).toISOString() : '');
+                clearPreset();
+              }}
+              placeholder="Until"
+              title="Until"
             />
           </div>
 
+          {/* Backend full-text search */}
+          <div className="flex flex-col gap-0.5 w-full sm:w-auto sm:min-w-[160px]">
+            <Label htmlFor="events-search-all-input" className="text-xs text-muted-foreground">
+              Search all events
+            </Label>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="events-search-all-input"
+                className="pl-8"
+                placeholder="Full-text search…"
+                value={query}
+                onChange={(e) => { setQuery(e.target.value); clearPreset(); }}
+              />
+            </div>
+          </div>
+
           {/* Client-side free-text search */}
-          <div className="relative w-full sm:w-auto sm:min-w-[160px]">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              data-testid="search-input"
-              className="pl-8"
-              placeholder="Filter rows…"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-            />
+          <div className="flex flex-col gap-0.5 w-full sm:w-auto sm:min-w-[160px]">
+            <Label htmlFor="events-filter-rows-input" className="text-xs text-muted-foreground">
+              Filter loaded rows
+            </Label>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="events-filter-rows-input"
+                data-testid="search-input"
+                className="pl-8"
+                placeholder="Filter rows…"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -324,9 +379,7 @@ export function EventsTab() {
       {!isLoading && groupByCorrelation && correlationGroups && (
         <>
           {correlationGroups.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No events match the current filters.
-            </p>
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
           )}
           <div className="space-y-2">
             {correlationGroups.map(([corrId, evs]) => {
@@ -383,9 +436,7 @@ export function EventsTab() {
       {!isLoading && !groupByCorrelation && (
         <>
           {filteredEvents.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No events match the current filters.
-            </p>
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
           )}
           {filteredEvents.length > 0 && (
             <div className="rounded-md border border-border overflow-hidden divide-y divide-border">

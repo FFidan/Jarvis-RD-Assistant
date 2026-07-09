@@ -125,20 +125,14 @@ function DetailContent({
 
   if (section === 'models') {
     // AI models is the single authoritative model plane. Backend & hardware
-    // controls live behind an "Advanced" disclosure here rather than as a peer
-    // rail item, so the two planes can't drift or contradict each other.
+    // diagnostics live on the admin System Health page; this page keeps only the
+    // per-role model pickers plus a compact pointer, so the two planes can't
+    // drift or contradict each other.
     if (item === 'llm' || item === 'ai') {
       return (
         <div className="space-y-6">
           <IngestionSection filterGroups={['AI models']} />
-          <details className="rounded-md border border-hair" data-testid="advanced-backend-disclosure">
-            <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
-              Advanced: backend &amp; hardware
-            </summary>
-            <div className="border-t border-hair p-4">
-              <AIPanel />
-            </div>
-          </details>
+          <AIPanel />
         </div>
       );
     }

@@ -271,6 +271,80 @@ describe('EventsTab — free-text search', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Honest empty state
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — honest empty state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListEvents.mockResolvedValue({ events: [], next_cursor: null });
+    // The ui-store persists logsPreset globally; reset so no leftover preset
+    // from another describe block activates a filter on mount here.
+    useUIStore.getState()._reset();
+  });
+
+  afterEach(() => {
+    useUIStore.getState()._reset();
+  });
+
+  it('shows the "nothing recorded" copy when no filter is active and there are zero events', async () => {
+    renderEventsTab();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No events recorded recently\. Events are recorded for auth, jobs, sources, config, and errors\./),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText('No events match the current filters.')).not.toBeInTheDocument();
+  });
+
+  it('shows the "match the current filters" copy when a filter is active and there are zero results', async () => {
+    renderEventsTab();
+    await waitFor(() => {
+      expect(screen.getByText(/No events recorded recently/)).toBeInTheDocument();
+    });
+
+    // 'critical' is a severity-only label (unlike 'error', which also names an
+    // area chip) so this click is unambiguous.
+    await userEvent.click(screen.getByRole('button', { name: 'critical' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No events match the current filters.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/No events recorded recently/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accessible labels — datetime inputs + search boxes
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — accessible filter labels', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListEvents.mockResolvedValue({ events: [], next_cursor: null });
+    useUIStore.getState()._reset();
+  });
+
+  afterEach(() => {
+    useUIStore.getState()._reset();
+  });
+
+  it('the two datetime inputs are reachable by label text', () => {
+    renderEventsTab();
+    expect(screen.getByLabelText(/since/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/until/i)).toBeInTheDocument();
+  });
+
+  it('the two search inputs are distinguishable by accessible name', () => {
+    renderEventsTab();
+    expect(screen.getByLabelText(/search all events/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/filter loaded rows/i)).toBeInTheDocument();
+    // Still reachable by the existing client-search testid.
+    expect(screen.getByTestId('search-input')).toHaveAccessibleName(/filter loaded rows/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Correlation group expand/collapse
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +12,9 @@ const triggerBackupMock = vi.fn();
 const downloadBackupMock = vi.fn();
 const requestRestoreMock = vi.fn();
 const getRestoreStatusMock = vi.fn();
+const deleteRestorePointMock = vi.fn();
+const getRetentionMock = vi.fn();
+const putRetentionMock = vi.fn();
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -22,6 +25,10 @@ vi.mock('@/lib/api/backups', () => ({
   downloadBackup: (name: string) => downloadBackupMock(name),
   requestRestore: (timestamp: string, confirm: string) => requestRestoreMock(timestamp, confirm),
   getRestoreStatus: () => getRestoreStatusMock(),
+  deleteRestorePoint: (timestamp: string, confirm: string) =>
+    deleteRestorePointMock(timestamp, confirm),
+  getRetention: () => getRetentionMock(),
+  putRetention: (config: unknown) => putRetentionMock(config),
 }));
 
 let _mockRole: 'user' | 'admin' = 'admin';
@@ -117,6 +124,9 @@ describe('AdminBackupsPage', () => {
     getBackupStatusMock.mockResolvedValue(_okStatus);
     requestRestoreMock.mockResolvedValue({ status: 'started' });
     getRestoreStatusMock.mockResolvedValue(_runningRestore);
+    deleteRestorePointMock.mockResolvedValue({ status: 'scheduled' });
+    getRetentionMock.mockResolvedValue({ keep_last_n: null, max_age_days: 14 });
+    putRetentionMock.mockResolvedValue({ keep_last_n: 5, max_age_days: 30 });
   });
 
   it('shows a loading status, not "not available", while the status query is pending', () => {
@@ -330,6 +340,58 @@ describe('AdminBackupsPage', () => {
     });
   });
 
+  it('shows a "one more step" notice and no success toast when a restore finishes held in maintenance', async () => {
+    getRestoreStatusMock.mockResolvedValue({
+      state: 'done',
+      current_step: null,
+      steps: [],
+      safety_backup_ts: null,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      error:
+        'The stack stays in maintenance until you recreate the app containers and clear the markers.',
+      manual_steps_required: true,
+      phase: 'maintenance-held',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    const notice = await screen.findByTestId('restore-manual-steps');
+    expect(notice).toHaveTextContent(/one more step/i);
+    expect(notice).toHaveTextContent(/recreate the app containers/i);
+    // A held restore must never claim success.
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('still shows the success toast when a restore finishes clean (manual_steps_required false)', async () => {
+    getRestoreStatusMock.mockResolvedValue({
+      state: 'done',
+      current_step: null,
+      steps: [],
+      safety_backup_ts: null,
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      error: null,
+      manual_steps_required: false,
+      phase: null,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Restore complete. Your data has been restored.'),
+    );
+    expect(screen.queryByTestId('restore-manual-steps')).not.toBeInTheDocument();
+  });
+
   it('a second restore does not fire a premature success toast from the stale done state', async () => {
     // Two restore points so we can run two separate restores in sequence.
     getRestorePointsMock.mockResolvedValue({
@@ -412,6 +474,103 @@ describe('AdminBackupsPage', () => {
     // Monitoring must stay active — the restore-progress panel must be visible.
     await waitFor(() =>
       expect(screen.getByTestId('restore-progress')).toBeInTheDocument(),
+    );
+  });
+
+  it('labels the count as restore points, not archives', async () => {
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    expect(screen.getByTestId('backup-status')).toHaveTextContent('1 restore point');
+    expect(screen.getByTestId('backup-status')).not.toHaveTextContent('archive');
+  });
+
+  it('shows a "Backup running…" row while a backup is pending', async () => {
+    getBackupStatusMock.mockResolvedValue({ ..._okStatus, trigger_pending: true });
+    renderPage();
+    expect(await screen.findByTestId('backup-running')).toHaveTextContent(/backup running/i);
+  });
+
+  it('hides the backup-running row when no backup is pending', async () => {
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    expect(screen.queryByTestId('backup-running')).not.toBeInTheDocument();
+  });
+
+  it('runs the typed-DELETE confirm flow and calls deleteRestorePoint', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    // Only the card Delete button exists while the dialog is closed.
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    const input = await screen.findByLabelText(/type DELETE to confirm/i);
+    // The dialog's confirm stays disabled until the exact word is typed.
+    expect(within(dialog).getByRole('button', { name: /^delete$/i })).toBeDisabled();
+    await user.type(input, 'DELETE');
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() =>
+      expect(deleteRestorePointMock).toHaveBeenCalledWith('20260617_120000', 'DELETE'),
+    );
+  });
+
+  it('disables Delete for the restore point currently being restored', async () => {
+    getRestoreStatusMock.mockResolvedValue({
+      state: 'pending',
+      current_step: 'Queued',
+      steps: [],
+      safety_backup_ts: null,
+      started_at: null,
+      finished_at: null,
+      error: null,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    // Can't delete the point a restore is using.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^delete$/i })).toBeDisabled());
+  });
+
+  it('loads and saves the retention policy', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const keepInput = await screen.findByLabelText(/keep most recent restore points/i);
+    const ageInput = screen.getByLabelText(/maximum age in days/i);
+    // Seeded from getRetention (keep_last_n null -> blank, max_age_days 14).
+    await waitFor(() => expect(ageInput).toHaveValue(14));
+
+    await user.clear(keepInput);
+    await user.type(keepInput, '5');
+    await user.clear(ageInput);
+    await user.type(ageInput, '30');
+    await user.click(screen.getByRole('button', { name: /save retention policy/i }));
+
+    await waitFor(() =>
+      expect(putRetentionMock).toHaveBeenCalledWith({ keep_last_n: 5, max_age_days: 30 }),
+    );
+  });
+
+  it('treats a retention value of 0 as "no cap" (null), never a 0-day window', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const keepInput = await screen.findByLabelText(/keep most recent restore points/i);
+    const ageInput = screen.getByLabelText(/maximum age in days/i);
+
+    await user.clear(keepInput);
+    await user.type(keepInput, '0');
+    await user.clear(ageInput);
+    await user.type(ageInput, '0');
+    await user.click(screen.getByRole('button', { name: /save retention policy/i }));
+
+    // A 0-day age window would delete everything but the last day; 0 kept points
+    // is meaningless. Both collapse to null so the sidecar keeps its default.
+    await waitFor(() =>
+      expect(putRetentionMock).toHaveBeenCalledWith({ keep_last_n: null, max_age_days: null }),
     );
   });
 });

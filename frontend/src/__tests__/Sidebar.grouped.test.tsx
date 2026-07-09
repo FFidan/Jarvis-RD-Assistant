@@ -461,6 +461,24 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
   });
 });
 
+describe('Sidebar — footer app version', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the build version in the footer (expanded)', () => {
+    renderSidebar({ role: 'user', collapsed: false });
+
+    expect(screen.getByTestId('sidebar-app-version')).toHaveTextContent(`v${__APP_VERSION__}`);
+  });
+
+  it('hides the version caption when collapsed (no room for text)', () => {
+    renderSidebar({ role: 'user', collapsed: true });
+
+    expect(screen.queryByTestId('sidebar-app-version')).not.toBeInTheDocument();
+  });
+});
+
 describe('Sidebar — navMode persistence (survives logout)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

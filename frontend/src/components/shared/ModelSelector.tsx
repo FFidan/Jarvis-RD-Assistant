@@ -507,25 +507,9 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
           You selected &quot;{savedModel}&quot; but the system is currently using &quot;{routedModel}&quot;.
         </p>
       )}
-      {pullableModels.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {pullableModels.map((entry) => (
-            <Button
-              key={`pull-${entry.id}`}
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => handlePull(entry)}
-              disabled={pullingIds.has(entry.id)}
-              aria-label={`Pull model ${entry.name}`}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Pull {entry.name}
-            </Button>
-          ))}
-        </div>
-      )}
-      {((canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
+      {(pullableModels.length > 0 ||
+        (canDeleteSelected && selectedEntry) ||
+        deletableModels.length > 0) && (
         <div className="border-t pt-2">
           <button
             type="button"
@@ -538,37 +522,59 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
             ) : (
               <ChevronRight className="h-3 w-3" />
             )}
-            Manage installed models
+            Install &amp; manage models
           </button>
           {manageOpen && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {canDeleteSelected && selectedEntry && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleDelete(selectedEntry)}
-                  disabled={deleteMutation.isPending || !!deleteTarget}
-                  aria-label={`Delete model ${selectedEntry.name}`}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete {selectedEntry.name}
-                </Button>
+            <div className="mt-2 space-y-3">
+              {pullableModels.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {pullableModels.map((entry) => (
+                    <Button
+                      key={`pull-${entry.id}`}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handlePull(entry)}
+                      disabled={pullingIds.has(entry.id)}
+                      aria-label={`Pull model ${entry.name}`}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Pull {entry.name}
+                    </Button>
+                  ))}
+                </div>
               )}
-              {deletableModels.map((entry) => (
-                <Button
-                  key={`delete-${entry.id}`}
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleDelete(entry)}
-                  disabled={deleteMutation.isPending || !!deleteTarget}
-                  aria-label={`Delete model ${entry.name}`}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete {entry.name}
-                </Button>
-              ))}
+              {((canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
+                <div className="flex flex-wrap gap-2">
+                  {canDeleteSelected && selectedEntry && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDelete(selectedEntry)}
+                      disabled={deleteMutation.isPending || !!deleteTarget}
+                      aria-label={`Delete model ${selectedEntry.name}`}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete {selectedEntry.name}
+                    </Button>
+                  )}
+                  {deletableModels.map((entry) => (
+                    <Button
+                      key={`delete-${entry.id}`}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDelete(entry)}
+                      disabled={deleteMutation.isPending || !!deleteTarget}
+                      aria-label={`Delete model ${entry.name}`}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete {entry.name}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

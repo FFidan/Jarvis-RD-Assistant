@@ -18,6 +18,7 @@
 
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
+import { useMaintenanceStore } from '@/stores/maintenance-store';
 
 /** Build auth headers from the current session API key. */
 export function authHeaders(): Record<string, string> {
@@ -89,10 +90,11 @@ function _handleFetchError(
  * Shared fetch core for apiFetch and apiFetchRaw.
  *
  * Owns the 5-min timeout controller, caller-signal combination, cookie
- * credentials, auth headers, the !res.ok error path (auto-logout + ApiError),
- * and the abort/error translation. Returns the raw ok Response; callers decide
- * whether to parse JSON. The Content-Type default is supplied by the caller via
- * `init.headers` so blob/raw callers can omit it.
+ * credentials, auth headers, the !res.ok error path (auto-logout + ApiError +
+ * maintenance-mode detection on a machine-readable 503), and the abort/error
+ * translation. Returns the raw ok Response; callers decide whether to parse
+ * JSON. The Content-Type default is supplied by the caller via `init.headers`
+ * so blob/raw callers can omit it.
  */
 async function _doFetch(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -115,8 +117,21 @@ async function _doFetch(url: string, init?: RequestInit): Promise<Response> {
       },
     });
     if (!res.ok) {
+      const bodyText = await res.text();
+      if (res.status === 503) {
+        try {
+          const parsed = JSON.parse(bodyText);
+          if (parsed?.detail === 'Restore in progress') {
+            useMaintenanceStore
+              .getState()
+              .setMaintenance(true, Number(res.headers.get('retry-after')) || 30);
+          }
+        } catch {
+          // non-JSON 503 body — not a maintenance signal
+        }
+      }
       handleAuthFailure(res.status);
-      throw new ApiError(res.status, await res.text());
+      throw new ApiError(res.status, bodyText);
     }
     return res;
   } catch (err) {
@@ -157,6 +172,12 @@ export async function checkHealth(path: string): Promise<boolean> {
 
 export type ServiceHealthStatus = 'ok' | 'degraded' | 'down' | 'unknown';
 
+/**
+ * Overall stack rollup. 'maintenance' (a restore is running) exists only at
+ * the rollup level — per-service statuses stay plain ServiceHealthStatus.
+ */
+export type StackOverall = ServiceHealthStatus | 'maintenance';
+
 export interface ServiceHealth {
   name: string;
   label: string;
@@ -169,8 +190,12 @@ export interface StackHealthSummary {
   degradedCount: number;
   /** Number of services with status 'down' */
   downCount: number;
-  /** Overall rollup: ok / degraded / down */
-  overall: ServiceHealthStatus;
+  /** Overall rollup: maintenance takes precedence over down / degraded / unknown / ok */
+  overall: StackOverall;
+  /** True while a restore holds the maintenance sentinel (from /health/internal). */
+  maintenance?: boolean;
+  /** Backend application version (from /health/internal). */
+  version?: string;
 }
 
 /** Static labels for every stack component, in display order. */
@@ -199,7 +224,15 @@ function unknownStackHealth(): StackHealthSummary {
     label: s.label,
     status: 'unknown',
   }));
-  return { services, degradedCount: 0, downCount: 0, overall: 'unknown' };
+  return {
+    services,
+    degradedCount: 0,
+    downCount: 0,
+    overall: 'unknown',
+    // A probe timeout does not know the maintenance state — undefined, not
+    // false, so a timeout mid-restore never satisfies the banner's clear check.
+    maintenance: undefined,
+  };
 }
 
 /**
@@ -225,18 +258,52 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
   // Fire all three probes concurrently so wall time is max(one probe), not the
   // sum — comfortably under STACK_HEALTH_DEADLINE_MS. allSettled so one rejected
   // probe never drops the others' results.
-  const [internalResult, piOk, leOk] = await Promise.all([
-    apiFetch<{ status: string; checks: Record<string, string> }>(
-      '/health/paper_ingestion/internal',
-    ).then(
-      (internal) => internal.checks ?? {},
-      // If internal endpoint is unreachable, mark all deps as unknown.
-      () => Object.fromEntries(Object.keys(depLabels).map((key) => [key, 'unknown'])),
+  const [internal, piOk, leOk] = await Promise.all([
+    apiFetch<{
+      status: string;
+      checks: Record<string, string>;
+      maintenance?: boolean;
+      version?: string;
+    }>('/health/paper_ingestion/internal').then(
+      (payload) => ({
+        checks: payload.checks ?? {},
+        maintenance: payload.maintenance,
+        version: payload.version,
+      }),
+      // A 503 "degraded" internal-health response is informative, not
+      // unreachable: during a restore's DB reload the postgres probe is down
+      // (degraded → 503) yet the body still reports maintenance:true. Recover
+      // checks/maintenance/version from a degraded ApiError body so the rollup
+      // reflects 'maintenance' (not 'unknown') and the banner does not wrongly
+      // clear. Only a true transport failure / non-JSON body falls to all-unknown.
+      (err: unknown) => {
+        if (err instanceof ApiError && err.status === 503) {
+          try {
+            const parsed = JSON.parse(err.body) as {
+              checks?: Record<string, string>;
+              maintenance?: boolean;
+              version?: string;
+            };
+            return {
+              checks: parsed.checks ?? {},
+              maintenance: parsed.maintenance,
+              version: parsed.version,
+            };
+          } catch {
+            // non-JSON 503 body → fall through to all-unknown
+          }
+        }
+        return {
+          checks: Object.fromEntries(Object.keys(depLabels).map((key) => [key, 'unknown'])),
+          maintenance: undefined,
+          version: undefined,
+        };
+      },
     ),
     checkHealth('/health/paper_ingestion/live'),
     checkHealth('/health/learning_engine/live'),
   ]);
-  const depChecks: Record<string, string> = internalResult;
+  const depChecks: Record<string, string> = internal.checks;
 
   const toStatus = (raw: string | undefined): ServiceHealthStatus => {
     if (raw === 'ok') return 'ok';
@@ -264,16 +331,27 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
   const requiredUnknown = services.some(
     (s) => s.name !== 'vector' && s.status === 'unknown',
   );
-  const overall: ServiceHealthStatus =
-    downCount > 0
-      ? 'down'
-      : degradedCount > 0
-        ? 'degraded'
-        : requiredUnknown
-          ? 'unknown'
-          : 'ok';
+  // A live restore (maintenance sentinel) trumps every per-service status:
+  // the stack is intentionally offline, not broken.
+  const overall: StackOverall =
+    internal.maintenance === true
+      ? 'maintenance'
+      : downCount > 0
+        ? 'down'
+        : degradedCount > 0
+          ? 'degraded'
+          : requiredUnknown
+            ? 'unknown'
+            : 'ok';
 
-  return { services, degradedCount, downCount, overall };
+  return {
+    services,
+    degradedCount,
+    downCount,
+    overall,
+    maintenance: internal.maintenance,
+    version: internal.version,
+  };
 }
 
 /**

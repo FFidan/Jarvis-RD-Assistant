@@ -428,8 +428,9 @@ describe('ModelSelector', () => {
     renderComponent({ value: 'qwen3:4b', configKey: 'llm.fast_model' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Pull model Qwen3 4B' })).toBeInTheDocument();
+      expect(screen.getByText('Install & manage models')).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByText('Install & manage models'));
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 4B' }));
 
     await waitFor(() => {
@@ -469,9 +470,9 @@ describe('ModelSelector', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'qwen3:14b');
-      expect(screen.getByRole('button', { name: 'Pull model Qwen3 8B' })).toBeInTheDocument();
+      expect(screen.getByText('Install & manage models')).toBeInTheDocument();
     });
-
+    fireEvent.click(screen.getByText('Install & manage models'));
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
 
     await waitFor(() => {
@@ -516,9 +517,9 @@ describe('ModelSelector', () => {
     renderComponent({ value: 'qwen3:14b', onChange, configKey: 'llm.smart_model' });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Pull model Qwen3 8B' })).toBeInTheDocument();
+      expect(screen.getByText('Install & manage models')).toBeInTheDocument();
     });
-
+    fireEvent.click(screen.getByText('Install & manage models'));
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
 
     await waitFor(() => {
@@ -542,7 +543,7 @@ describe('ModelSelector', () => {
     renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
 
     await waitFor(() => {
-      expect(screen.getByText('Manage installed models')).toBeInTheDocument();
+      expect(screen.getByText('Install & manage models')).toBeInTheDocument();
     });
 
     // Delete button is hidden until the manage section is expanded
@@ -550,7 +551,7 @@ describe('ModelSelector', () => {
       screen.queryByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Manage installed models'));
+    fireEvent.click(screen.getByText('Install & manage models'));
 
     await waitFor(() => {
       expect(
@@ -624,14 +625,14 @@ describe('ModelSelector', () => {
     renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
 
     await waitFor(() => {
-      expect(screen.getByText('Manage installed models')).toBeInTheDocument();
+      expect(screen.getByText('Install & manage models')).toBeInTheDocument();
     });
 
     expect(
       screen.queryByRole('button', { name: /delete model/i }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Manage installed models'));
+    fireEvent.click(screen.getByText('Install & manage models'));
 
     await waitFor(() => {
       expect(
@@ -881,6 +882,6 @@ describe('ModelSelector', () => {
 
     expect(screen.queryByRole('button', { name: /pull model gpt-4o/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete model gpt-4o/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('Manage installed models')).not.toBeInTheDocument();
+    expect(screen.queryByText('Install & manage models')).not.toBeInTheDocument();
   });
 });

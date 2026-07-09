@@ -157,6 +157,38 @@ describe('LoginPage', () => {
     expect(await screen.findByText(/will be delivered when email is configured/i)).toBeInTheDocument();
   });
 
+  it('shows the static cooldown hint on the magic-link tab', async () => {
+    renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+    // Static, no per-account data — leaks nothing, always present pre-submit.
+    expect(await screen.findByText(/only one link is sent per 2 minutes/i)).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // SMTP configured-but-failing notice (smtp_reachable === false)
+  // ---------------------------------------------------------------------------
+
+  it('shows the failing-relay notice when SMTP is configured but not reachable', async () => {
+    renderLoginPage({
+      configured: true,
+      smtp_configured: true,
+      smtp_reachable: false,
+      setup_mode: 'multi',
+    });
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/mail server is not responding/i);
+  });
+
+  it('does not show the failing-relay notice when SMTP is reachable', async () => {
+    renderLoginPage({
+      configured: true,
+      smtp_configured: true,
+      smtp_reachable: true,
+      setup_mode: 'multi',
+    });
+    await screen.findByPlaceholderText(/you@example\.com/i);
+    expect(screen.queryByText(/mail server is not responding/i)).not.toBeInTheDocument();
+  });
+
   // ---------------------------------------------------------------------------
   // Toggle behaviour
   // ---------------------------------------------------------------------------

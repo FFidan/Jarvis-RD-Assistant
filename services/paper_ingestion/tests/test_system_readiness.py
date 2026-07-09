@@ -115,6 +115,11 @@ async def test_readiness_all_green_aggregate(_app, monkeypatch):
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 40)
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+    # Reachability is probed separately; pin it reachable so a configured relay
+    # reports green (this test asserts the aggregate, not live relay liveness).
+    monkeypatch.setattr(
+        "jarvis_common.email.probe_smtp_reachable", AsyncMock(return_value=(True, None))
+    )
 
     from jarvis_common.settings import get_secrets_settings
 

@@ -66,6 +66,8 @@ DROP_STARTED=0
 RESTORE_CLEAN=0
 RESTORE_OLDER=0
 HEARTBEAT_PID=""
+MANUAL_STEPS_REQUIRED=0
+PHASE=""
 # Restore source: "local" (same-host WebUI restore, the default) reads the
 # archive set + key exactly as before; "inbox" (off-host DR) reads them from the
 # rw restore_inbox volume and additionally materializes secrets + rebinds the
@@ -89,8 +91,9 @@ _json_or_null() {
 }
 
 write_status() {
-  local tmp="${STATUS_FILE}.tmp" drop_json
+  local tmp="${STATUS_FILE}.tmp" drop_json manual_json
   if [ "$DROP_STARTED" = "1" ]; then drop_json="true"; else drop_json="false"; fi
+  if [ "$MANUAL_STEPS_REQUIRED" = "1" ]; then manual_json="true"; else manual_json="false"; fi
   {
     printf '{"state":"%s","current_step":%s,"steps":[' "$STATE" "$(_json_or_null "$CURRENT_STEP")"
     printf '{"name":"Safety backup","status":"%s"},' "$STEP_SAFETY"
@@ -98,9 +101,10 @@ write_status() {
     printf '{"name":"Restoring API-key store","status":"%s"},' "$STEP_LITELLM"
     printf '{"name":"Restoring search index","status":"%s"},' "$STEP_QDRANT"
     printf '{"name":"Finishing up","status":"%s"}],' "$STEP_FINISH"
-    printf '"safety_backup_ts":%s,"started_at":%s,"finished_at":%s,"error":%s,"drop_started":%s}' \
+    printf '"safety_backup_ts":%s,"started_at":%s,"finished_at":%s,"error":%s,"drop_started":%s,"manual_steps_required":%s,"phase":%s}' \
       "$(_json_or_null "$SAFETY_BACKUP_TS")" "$(_json_or_null "$STARTED_AT")" \
-      "$(_json_or_null "$FINISHED_AT")" "$(_json_or_null "$ERROR")" "$drop_json"
+      "$(_json_or_null "$FINISHED_AT")" "$(_json_or_null "$ERROR")" "$drop_json" \
+      "$manual_json" "$(_json_or_null "$PHASE")"
   } > "$tmp" 2>/dev/null || return 0
   mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || return 0
 }
@@ -264,7 +268,13 @@ _cleanup() {
   if [ "$STATE" = "running" ]; then
     STATE="failed"
     if [ -z "$ERROR" ]; then
-      if [ "$DROP_STARTED" = "1" ]; then
+      if [ -f "${TRIGGER_DIR}/.restore_timeout" ]; then
+        if [ "$DROP_STARTED" = "1" ]; then
+          ERROR="restore exceeded its time limit and was abandoned; the database may be inconsistent — restore from the safety backup ${SAFETY_BACKUP_TS:-<unknown>}"
+        else
+          ERROR="restore exceeded its time limit and was abandoned; nothing was destroyed"
+        fi
+      elif [ "$DROP_STARTED" = "1" ]; then
         if [ "$SOURCE" = "inbox" ]; then
           ERROR="off-host restore failed mid-reload on a fresh host — re-run the off-host recovery per the runbook"
         else
@@ -294,14 +304,18 @@ _cleanup() {
     rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null
     rm -f "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null
   fi
+  rm -f "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
   # Never crash-restart the sidecar: a recorded terminal failure exits 0.
   exit 0
 }
 trap _cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 # === STEP 1: consume the request FIRST (at-most-once) + validate =============
 REQ_CONTENT="$(cat "$REQUEST_FILE" 2>/dev/null || true)"
 rm -f "$REQUEST_FILE" 2>/dev/null || true
+rm -f "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
 
 TIMESTAMP="$(printf '%s' "$REQ_CONTENT" \
   | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[0-9]{8}_[0-9]{6}"' \
@@ -438,11 +452,32 @@ done
 # Turn the stack to 503 for the whole restore, and re-touch the sentinel every
 # 60s so a >30-min restore does not auto-expire (MAINTENANCE_MAX_AGE_S) mid-flight.
 touch "$MAINTENANCE_SENTINEL"
-( while true; do sleep 60; touch "$MAINTENANCE_SENTINEL" 2>/dev/null || true; done ) &
+MAIN_PID=$$
+RESTORE_DEADLINE=$(( $(date +%s) + ${RESTORE_MAX_SECONDS:-3600} ))
+(
+  while true; do
+    sleep 60
+    touch "$MAINTENANCE_SENTINEL" 2>/dev/null || true
+    if [ "$(date +%s)" -gt "$RESTORE_DEADLINE" ]; then
+      # Deadline exceeded — abandon. If a DROP began (.destructive present) the
+      # DB may be inconsistent: HOLD maintenance. If not, nothing was destroyed:
+      # LIFT .maintenance. Then signal the main process so its EXIT trap writes
+      # the single terminal status. The .restore_timeout marker tells _cleanup to
+      # word the error as a timeout.
+      : > "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
+      if [ ! -f "$MAINTENANCE_DESTRUCTIVE" ]; then
+        rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null || true
+      fi
+      kill "$MAIN_PID" 2>/dev/null || true
+      exit 0
+    fi
+  done
+) &
 HEARTBEAT_PID=$!
 
 # === STEP 4: safety pre-backup (before ANY destruction) ======================
 CURRENT_STEP="Safety backup"
+PHASE="safety"
 STEP_SAFETY="running"
 write_status
 # Skip the retention prune in the safety pre-backup: it would otherwise delete the
@@ -476,6 +511,7 @@ done
 
 # === STEP 5: restore the DBs — the ONLY destructive step =====================
 CURRENT_STEP="Restoring database"
+PHASE="reload-db"
 STEP_DB="running"
 write_status
 if restore_one_db "$JARVIS_DB" "$JARVIS_ARCHIVE"; then
@@ -487,6 +523,7 @@ fi
 write_status
 
 CURRENT_STEP="Restoring API-key store"
+PHASE="reload-litellm"
 STEP_LITELLM="running"
 write_status
 if restore_one_db "$LITELLM_DB" "$LITELLM_ARCHIVE"; then
@@ -501,6 +538,7 @@ write_status
 # Vectors are rebuildable from Postgres by re-embedding, so a Qdrant failure is
 # recorded as degraded and never fails the restore.
 CURRENT_STEP="Restoring search index"
+PHASE="qdrant"
 if [ "${#QDRANT_SNAPS[@]}" -eq 0 ]; then
   STEP_QDRANT="skipped"
   write_status
@@ -552,6 +590,7 @@ fi
 # failure (DROP_STARTED=1).
 if [ "$SOURCE" = "inbox" ]; then
   CURRENT_STEP="Restoring secrets"
+  PHASE="secrets"
   write_status
   SECRETS_ARCHIVE=""
   for cand in "${ARCHIVE_DIR}/secrets_${TIMESTAMP}.tar.gz.enc" \
@@ -564,8 +603,26 @@ if [ "$SOURCE" = "inbox" ]; then
   purge_secrets_staging  # shred any leftover plaintext from a SIGKILLed prior run
   mkdir -p "$SECRETS_STAGING"
   chmod 700 "$SECRETS_STAGING"
-  if ! decrypt_or_passthrough "$SECRETS_ARCHIVE" | tar -xzf - -C "$SECRETS_STAGING"; then
-    fail_after_restore "off-host restore: could not decrypt/extract the secrets archive (wrong operator key or corrupt); databases were restored — see the runbook"
+  # The off-host secrets archive is OPERATOR-SUPPLIED and therefore untrusted:
+  # materialize the decrypted stream to a temp file, enumerate its members, and
+  # REJECT any absolute path or '..' traversal BEFORE extracting (a crafted member
+  # like /etc/x or ../../x could otherwise escape the staging dir). Extract with
+  # --no-same-owner --no-same-permissions so the archive cannot set ownership or
+  # setuid/setgid bits. The staging dir is already chmod 700; the temp .tar and the
+  # extracted plaintext are both shredded by purge_secrets_staging on exit. The
+  # member check reads a captured var via a here-string (NOT a pipe): under
+  # pipefail a `grep -q` that closes a pipe early on a huge crafted member list
+  # would surface as SIGPIPE and be misread as "no unsafe member found".
+  SECRETS_TAR_TMP="${SECRETS_STAGING}/.incoming.tar"
+  if ! decrypt_or_passthrough "$SECRETS_ARCHIVE" > "$SECRETS_TAR_TMP" 2>/dev/null; then
+    fail_after_restore "off-host restore: could not decrypt the secrets archive (wrong operator key or corrupt); databases were restored — see the runbook"
+  fi
+  SECRETS_TAR_MEMBERS="$(tar -tzf "$SECRETS_TAR_TMP" 2>/dev/null || true)"
+  if grep -Eq '^/|\.\.|^[A-Za-z]:' <<<"$SECRETS_TAR_MEMBERS"; then
+    fail_after_restore "off-host restore: the secrets archive contains an unsafe member path (absolute or '..' traversal); refusing to extract — see the runbook"
+  fi
+  if ! tar --no-same-owner --no-same-permissions -xzf "$SECRETS_TAR_TMP" -C "$SECRETS_STAGING" 2>/dev/null; then
+    fail_after_restore "off-host restore: could not extract the secrets archive (corrupt); databases were restored — see the runbook"
   fi
   chmod -R go-rwx "$SECRETS_STAGING" 2>/dev/null || true
   OLD_PG_PW_FILE="${SECRETS_STAGING}/postgres_password.txt"
@@ -595,10 +652,15 @@ fi
 # so this clear is mandatory) — otherwise the app would serve 5xx auth errors
 # instead of an honest 503.
 CURRENT_STEP="Finishing up"
+PHASE="finalize"
 STEP_FINISH="running"
 write_status
 RESTORE_CLEAN=1
 STATE="done"
+if [ "$SOURCE" = "inbox" ] || [ "$RESTORE_OLDER" = "1" ]; then
+  MANUAL_STEPS_REQUIRED=1
+  PHASE="maintenance-held"
+fi
 STEP_FINISH="done"
 FINISHED_AT="$(date -Iseconds)"
 write_status

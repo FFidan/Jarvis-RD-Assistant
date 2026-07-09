@@ -214,12 +214,7 @@ def validate_custom_openai_base_url(value: str) -> None:
     except ValueError:
         ip = None
 
-    if ip is not None and (
-        ip.is_link_local
-        or ip.is_multicast
-        or ip.is_unspecified
-        or ip == ipaddress.ip_address("169.254.169.254")
-    ):
+    if ip is not None and _blocked_custom_endpoint_ip(ip):
         raise ValueError("custom endpoint base URL uses a blocked network address")
 
     is_loopback = hostname in {"localhost"} or (ip is not None and ip.is_loopback)
@@ -227,14 +222,25 @@ def validate_custom_openai_base_url(value: str) -> None:
         raise ValueError("plain HTTP custom endpoints must be loopback-only")
 
 
+# RFC 6598 carrier-grade NAT shared address space is not flagged by
+# ``ipaddress.is_private`` on all supported interpreters, so match it explicitly.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _blocked_custom_endpoint_ip(ip: IPAddress) -> bool:
-    """Return True for resolved addresses custom provider endpoints must not use."""
+    """Return True for resolved addresses custom provider endpoints must not use.
+
+    Loopback is deliberately excluded so the loopback-only HTTP dev carve-out in
+    :func:`validate_custom_openai_base_url` keeps working (``is_private`` covers
+    ``127.0.0.0/8`` and ``::1``).
+    """
 
     return (
         ip.is_link_local
         or ip.is_multicast
         or ip.is_unspecified
         or ip == ipaddress.ip_address("169.254.169.254")
+        or ((ip.is_private or ip.is_reserved or ip in _CGNAT_NETWORK) and not ip.is_loopback)
     )
 
 

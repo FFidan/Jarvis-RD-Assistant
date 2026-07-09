@@ -46,7 +46,7 @@ def test_recommended_models_are_catalog_backed() -> None:
         "lt-8": "qwen3:1.7b",
         "8-16": "qwen2.5:7b-instruct",
         "16-24": "qwen2.5:7b-instruct",
-        "24-48": "qwen2.5:7b-instruct",
+        "24-48": "qwen3:14b",
         "ge-48": "qwen3:30b-a3b",
     }
     config_path = find_candidate_config_path()
@@ -61,6 +61,28 @@ def test_recommended_models_are_catalog_backed() -> None:
     # deepseek-r1:7b is the rank-2 Ollama candidate at the 8-16 tier.
     eight_to_sixteen = resolve_candidates_for_tier("8-16", config_path=config_path)
     assert any(c["model"] == "deepseek-r1:7b" for c in eight_to_sixteen.candidates)
+
+
+def test_24_48_tier_recommends_a_fitting_model_over_the_7b_baseline() -> None:
+    """The 24-48 tier recommends qwen3:14b (fits the whole range) over the 7B baseline.
+
+    qwen3:14b mirrors the hardware_fit mid-high advisory and fits a 24 GB card
+    alongside the embedder; qwen3:30b-a3b stays the ge-48 headline. The lighter
+    7B pick remains selectable.
+    """
+    selection = resolve_candidates_for_tier("24-48", config_path=find_candidate_config_path())
+    assert selection.recommended["backend"] == "ollama"
+    assert selection.recommended["model"] == "qwen3:14b"
+    assert selection.recommended["source"] == "catalog"
+    # The lighter conservative pick stays selectable, just not the headline.
+    assert any(c["model"] == "qwen2.5:7b-instruct" for c in selection.candidates)
+
+
+def test_selection_exposes_generated_at_date_not_the_doc_path() -> None:
+    """CandidateSelection surfaces the YAML generated_at date; generated_from stays the doc path."""
+    selection = resolve_candidates_for_tier("24-48", config_path=find_candidate_config_path())
+    assert selection.generated_at == "2026-05-22"
+    assert selection.generated_from == "docs/perf/2026-05-22-llm-tier-bench.md"
 
 
 def test_pending_model_refresh_candidates_do_not_replace_ranked_defaults() -> None:

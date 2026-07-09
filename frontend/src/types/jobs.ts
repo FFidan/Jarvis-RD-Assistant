@@ -3,6 +3,17 @@ export interface JobAccepted {
   status: 'queued' | string;
 }
 
+/**
+ * POST /api/contradictions/scan — the library-wide scan preflight may decide
+ * not to queue a job at all (`status: 'skipped'`, `job_id: null`, with a
+ * machine-readable `reason` such as 'no_findings').
+ */
+export interface ScanJobAccepted {
+  job_id: string | null;
+  status: 'queued' | 'skipped' | string;
+  reason?: string | null;
+}
+
 export interface JobActionLink {
   label: string;
   href: string;

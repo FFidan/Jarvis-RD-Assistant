@@ -302,9 +302,18 @@ class SecretsSettings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _reject_empty_smtp_secret(cls, value):
+    def _empty_smtp_secret_as_unset(cls, value):
+        """Treat an explicit empty SMTP env value as unset.
+
+        ``.env.example`` ships these keys empty; ``SecretsSettings`` is a
+        process-wide ``@lru_cache`` singleton, so raising here would crash every
+        path that constructs it while ``SMTP_HOST=""`` (etc.) is exported. Empty
+        is strictly more permissive than a raise and matches how the setup
+        wizard's cleared-field path treats a blank value. The value-free
+        empty-string diagnostic in ``effective_smtp_status`` remains reachable.
+        """
         if value == "":
-            raise ValueError("SMTP secret values must be unset or non-empty")
+            return None
         return value
 
 

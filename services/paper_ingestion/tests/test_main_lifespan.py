@@ -303,6 +303,22 @@ def test_lifespan_config_includes_autoconfigure_hook() -> None:
     assert _lifespan_config.custom_teardown_tasks[idx] is None
 
 
+def test_app_version_matches_installed_distribution() -> None:
+    """FastAPI app version must delegate to jarvis_common.version.app_version(), not a stale literal.
+
+    Regression guard for the historical ``version="0.1.0"`` hardcode that never
+    tracked ``pyproject.toml``. Compares against the canonical helper (rather than
+    a literal like "1.0.4" or a duplicated ``importlib.metadata`` call) so the test
+    is agnostic to whether the ``jarvis-rd-assistant`` distribution is
+    installed/discoverable in the running environment.
+    """
+    from jarvis_common.version import app_version
+    from paper_ingestion.main import app
+
+    assert app.version == app_version()
+    assert app.version != "0.1.0"
+
+
 @pytest.mark.asyncio
 async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> None:
     """On first boot, the hook detects tier and writes llm.* + autoconfigured flag."""

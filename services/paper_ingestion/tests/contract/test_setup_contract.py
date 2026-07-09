@@ -796,6 +796,14 @@ async def test_t04_status_smtp_configured_false_on_fresh_db(setup_client):
     assert body["smtp_configured"] is False, (
         f"Expected smtp_configured=False on fresh DB with no SMTP env; got: {body['smtp_configured']!r}"
     )
+    # smtp_reachable (liveness) is separate from configured (presence); a fresh
+    # DB is not deliverable, so the probe returns False without any connection.
+    assert "smtp_reachable" in body, (
+        f"GET /api/setup/status must include 'smtp_reachable' field; got keys={list(body.keys())}"
+    )
+    assert body["smtp_reachable"] is False, (
+        f"Expected smtp_reachable=False on a fresh, undeliverable DB; got: {body['smtp_reachable']!r}"
+    )
 
 
 async def test_t04_status_smtp_configured_true_when_db_rows_seeded(setup_client, contract_conn):

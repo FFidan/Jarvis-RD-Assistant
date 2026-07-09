@@ -25,6 +25,7 @@ import {
 } from '@/lib/api';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
 
 type StatusLevel = ReadinessCheck['status'];
 
@@ -170,7 +171,7 @@ export function AdminSystemHealthPage() {
     isLoading: stackLoading,
     isError: stackError,
   } = useQuery({
-    queryKey: QUERY_KEYS.admin.stackHealth(),
+    queryKey: QUERY_KEYS.stack.health(),
     queryFn: fetchStackHealth,
     refetchInterval: 30_000,
     retry: false,
@@ -261,6 +262,11 @@ export function AdminSystemHealthPage() {
           </>
         )}
       </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Model runtime diagnostics                                           */}
+      {/* ------------------------------------------------------------------ */}
+      <ModelDiagnosticsCard />
 
       {/* ------------------------------------------------------------------ */}
       {/* Readiness checks section                                            */}

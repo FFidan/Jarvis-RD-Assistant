@@ -393,10 +393,85 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   fi
 fi
 
+# --- UI retention config (system-wide /backup-trigger/.retention.json, written
+# by the admin API) refines the env defaults: `max_age_days` overrides the age
+# window and `keep_last_n` caps the number of restore points kept. Both may be
+# absent/null -> env fallback only. The helpers below share their shape with
+# scripts/prune.sh (in-flight refusal) — kept inline to avoid a second mount.
+TRIGGER_DIR="${BACKUP_TRIGGER_DIR:-/backup-trigger}"
+RETENTION_FILE="${TRIGGER_DIR}/.retention.json"
+RESTORE_REQUEST_FILE="${TRIGGER_DIR}/.restore_request.json"
+RESTORE_STATUS_FILE="${TRIGGER_DIR}/.restore_status.json"
+
+# resolve_retention_days <retention_file> <env_default> — the effective age
+# window in days. A UI max_age_days >= 1 overrides the env default; 0, absent, or
+# non-numeric is a no-op (the env default stands) so a stray 0 can never become
+# `find -mtime +0 -delete`, which would reap every archive older than ~24h. This
+# mirrors the keep_last_n < 1 no-op floor in retention_keep_last_n.
+resolve_retention_days() {
+  local file="$1" env_default="$2" ui
+  ui="$(grep -oE '"max_age_days"[[:space:]]*:[[:space:]]*[0-9]+' "$file" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
+  if [ -n "${ui:-}" ] && [ "$ui" -ge 1 ] 2>/dev/null; then
+    printf '%s' "$ui"
+  else
+    printf '%s' "$env_default"
+  fi
+}
+
+KEEP_LAST_N=""
+if [ -f "$RETENTION_FILE" ]; then
+  RETENTION_DAYS="$(resolve_retention_days "$RETENTION_FILE" "$RETENTION_DAYS")"
+  ui_keep_n="$(grep -oE '"keep_last_n"[[:space:]]*:[[:space:]]*[0-9]+' "$RETENTION_FILE" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
+  [ -n "${ui_keep_n:-}" ] && KEEP_LAST_N="$ui_keep_n"
+fi
+
+# prune_in_flight_ts — every timestamp a present restore is using (its target +
+# safety backup), one per line, so keep-last-N never prunes a restore's source.
+# (Belt-and-braces: the safety pre-backup already sets BACKUP_SKIP_PRUNE and the
+# single-threaded sidecar loop never backs up during a restore.) Mirrors the same
+# helper in scripts/prune.sh.
+prune_in_flight_ts() {
+  local f
+  for f in "$RESTORE_REQUEST_FILE" "$RESTORE_STATUS_FILE"; do
+    [ -f "$f" ] || continue
+    grep -oE '"(timestamp|safety_backup_ts)"[[:space:]]*:[[:space:]]*"[0-9]{8}_[0-9]{6}"' "$f" 2>/dev/null \
+      | grep -oE '[0-9]{8}_[0-9]{6}' || true
+  done
+}
+
+# retention_keep_last_n <backup_dir> <keep_n> <in_flight_ts_newline_list>
+# Delete every archive file whose restore-point timestamp falls past the newest
+# <keep_n> jarvis_* dumps (one dump == one restore point). The newest N are kept,
+# so the just-taken backup is never pruned. keep_n < 1 (or non-numeric) is a no-op.
+retention_keep_last_n() {
+  local dir="$1" keep="$2" in_flight="$3" ts n=0
+  [ "$keep" -ge 1 ] 2>/dev/null || return 0
+  while IFS= read -r ts; do
+    [ -n "$ts" ] || continue
+    n=$((n + 1))
+    [ "$n" -le "$keep" ] && continue
+    if grep -qxF "$ts" <<<"$in_flight"; then
+      echo "[$(date -Iseconds)] keep-last-${keep}: not pruning ${ts} (in-flight restore)"
+      continue
+    fi
+    find "$dir" -maxdepth 1 \( \
+        -name "jarvis_${ts}.sql.gz" -o -name "jarvis_${ts}.sql.gz.enc" \
+        -o -name "litellm_${ts}.sql.gz" -o -name "litellm_${ts}.sql.gz.enc" \
+        -o -name "secrets_${ts}.tar.gz" -o -name "secrets_${ts}.tar.gz.enc" \
+        -o -name "qdrant_*_${ts}.snapshot" -o -name "qdrant_*_${ts}.snapshot.enc" \
+        -o -name "manifest_${ts}.json" \
+      \) -delete
+  done < <(ls -1 "$dir" 2>/dev/null \
+      | grep -oE '^jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?$' \
+      | grep -oE '[0-9]{8}_[0-9]{6}' | sort -ru)
+}
+
 # --- Prune old backups (DB dumps, secrets archives, Qdrant snapshots) --------
 # Gated on BACKUP_SKIP_PRUNE: restore.sh's safety pre-backup sets it so the prune
 # can never delete the archive being restored (an old `local` target older than
-# RETENTION_DAYS would otherwise be eligible).
+# the age window would otherwise be eligible). max_age_days (if >= 1) has already
+# overridden RETENTION_DAYS above; keep_last_n additionally caps the restore-point
+# count after the age prune.
 if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
   find "$BACKUP_DIR" \( \
       -name "jarvis_*.sql.gz" -o -name "jarvis_*.sql.gz.enc" \
@@ -407,6 +482,10 @@ if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
       -o -name "*.tmp" -o -name "*.raw" \
     \) -mtime "+${RETENTION_DAYS}" -delete
   echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+  if [ -n "${KEEP_LAST_N:-}" ]; then
+    retention_keep_last_n "$BACKUP_DIR" "$KEEP_LAST_N" "$(prune_in_flight_ts)"
+    echo "[$(date -Iseconds)] keep-last-${KEEP_LAST_N} retention applied"
+  fi
 else
   echo "[$(date -Iseconds)] Retention prune skipped (BACKUP_SKIP_PRUNE set)"
 fi

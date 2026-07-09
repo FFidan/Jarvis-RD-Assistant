@@ -1,16 +1,53 @@
 """Shared exception handlers for FastAPI services."""
 
 import logging
+import time
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from jarvis_common.event_log import log_event
 from jarvis_common.logging_config import request_id_ctx
 from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
+
+# Bridges unhandled 500s into the `system_events` Events log so operators see
+# them without grepping service logs. Best-effort, deduped, and bounded — see
+# generic_exception_handler().
+_ERROR_EVENT_SOURCE = "api"
+_ERROR_EVENT_WINDOW_SECONDS = 60.0
+_ERROR_EVENT_DEDUP_MAX = 512
+
+# Keyed by (exception type name, route path) -> monotonic time of last emit.
+_last_error_event_emitted: dict[tuple[str, str], float] = {}
+
+
+def _should_emit_error_event(key: tuple[str, str], now: float) -> bool:
+    """Return True (and record ``now``) iff ``key`` hasn't fired within the window.
+
+    Bounds ``_last_error_event_emitted`` so a 500-storm across many distinct
+    routes/exception types can't grow it without limit: once over
+    ``_ERROR_EVENT_DEDUP_MAX`` entries, stale (out-of-window) entries are
+    evicted first, falling back to a full clear if that isn't enough.
+    """
+    last = _last_error_event_emitted.get(key)
+    if last is not None and now - last < _ERROR_EVENT_WINDOW_SECONDS:
+        return False
+    if len(_last_error_event_emitted) > _ERROR_EVENT_DEDUP_MAX:
+        stale_keys = [
+            k
+            for k, ts in _last_error_event_emitted.items()
+            if now - ts >= _ERROR_EVENT_WINDOW_SECONDS
+        ]
+        for k in stale_keys:
+            del _last_error_event_emitted[k]
+        if len(_last_error_event_emitted) > _ERROR_EVENT_DEDUP_MAX:
+            _last_error_event_emitted.clear()
+    _last_error_event_emitted[key] = now
+    return True
 
 
 def _is_dev_mode() -> bool:
@@ -82,7 +119,10 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
 
     Logs the full traceback server-side (keyed by ``X-Request-ID``) and
     returns a generic ``"An internal error occurred."`` response so exception
-    details are never leaked to clients.
+    details are never leaked to clients. Also makes a best-effort, deduped
+    attempt to record the failure as a ``category="error"`` row in the Events
+    log (see :func:`_should_emit_error_event`) so operators see unhandled 500s
+    without grepping service logs; this can never affect the response.
 
     Parameters
     ----------
@@ -99,6 +139,23 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     """
     request_id = request_id_ctx.get("") or None
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    try:
+        pool = getattr(request.app.state, "db_pool", None)
+        if pool is not None:
+            key = (type(exc).__name__, request.url.path)
+            if _should_emit_error_event(key, time.monotonic()):
+                await log_event(
+                    pool=pool,
+                    level="error",
+                    category="error",
+                    source=_ERROR_EVENT_SOURCE,
+                    message=type(exc).__name__,
+                    context={"route": request.url.path, "method": request.method},
+                )
+    except Exception:
+        # Last line of defense: an unhandled-exception handler must never
+        # itself raise, no matter what goes wrong recording the event.
+        pass
     return JSONResponse(
         status_code=500,
         content={"detail": "An internal error occurred.", "request_id": request_id},

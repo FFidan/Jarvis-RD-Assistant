@@ -15,7 +15,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { fetchStackHealth, type ServiceHealth, type ServiceHealthStatus } from '@/lib/api';
+import { fetchStackHealth, type ServiceHealth, type StackOverall } from '@/lib/api';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -25,7 +25,7 @@ const CLIENT_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function statusColor(status: ServiceHealthStatus): string {
+function statusColor(status: StackOverall): string {
   switch (status) {
     case 'ok':
       return 'bg-green-500';
@@ -33,13 +33,15 @@ function statusColor(status: ServiceHealthStatus): string {
       return 'bg-amber-400';
     case 'down':
       return 'bg-red-500';
+    case 'maintenance':
+      return 'bg-blue-500';
     case 'unknown':
     default:
       return 'bg-gray-400';
   }
 }
 
-function pillColor(status: ServiceHealthStatus): string {
+function pillColor(status: StackOverall): string {
   switch (status) {
     case 'ok':
       return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
@@ -47,13 +49,16 @@ function pillColor(status: ServiceHealthStatus): string {
       return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
     case 'down':
       return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
+    case 'maintenance':
+      return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
     case 'unknown':
     default:
       return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
   }
 }
 
-function pillLabel(overall: ServiceHealthStatus, downCount: number, degradedCount: number): string {
+function pillLabel(overall: StackOverall, downCount: number, degradedCount: number): string {
+  if (overall === 'maintenance') return 'Maintenance in progress';
   if (overall === 'ok') return 'All healthy';
   if (overall === 'down') return `${downCount} down`;
   // No probe response within the deadline: every service is 'unknown'.

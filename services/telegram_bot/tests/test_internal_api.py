@@ -19,6 +19,17 @@ def test_internal_api_import_does_not_pull_paper_ingestion() -> None:
         sys.modules.update(saved_tb)
 
 
+def test_internal_api_version_delegates_to_app_version() -> None:
+    # Regression guard for the FastAPI default "0.1.0": the internal API must
+    # report the shared app_version() like the other services, not the stale
+    # framework default. (app_version()'s own resolution is covered in
+    # libs/jarvis_common/tests/test_version.py.)
+    from jarvis_common.version import app_version
+    from telegram_bot.internal_api import _internal_app
+
+    assert _internal_app.version == app_version()
+
+
 def test_internal_api_has_session_and_slowapi_middleware() -> None:
     from telegram_bot.internal_api import _internal_app
 

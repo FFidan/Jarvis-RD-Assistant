@@ -8,6 +8,10 @@
 # =============================================================================
 
 x-shared-env: &shared-env
+  # Release version surfaced by /health/internal + FastAPI metadata + the UI.
+  # The service images don't install the root distribution, so app_version()
+  # reads this env; defaults to the release tag (same var drives the image tags).
+  JARVIS_VERSION: ${JARVIS_VERSION:-1.0.4}
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
@@ -583,21 +587,28 @@ services:
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
       - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro  # one-click DR restore (runs in this already-privileged sidecar; the app gains zero new privilege)
+      - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
       - ./secrets:/secrets:ro
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears
       - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
       - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
       - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
-    # When a restore request is present, run restore.sh (drop+reload both DBs +
-    # recover Qdrant behind the maintenance gate); otherwise take the scheduled
-    # backup. The inner poll breaks early on EITHER sentinel so an on-demand
-    # backup or a restore fires within ~5s rather than after the full interval.
+    # Loop dispatch by sentinel: a restore request runs restore.sh (drop+reload
+    # both DBs + recover Qdrant behind the maintenance gate); a delete request runs
+    # prune.sh (delete named restore points); otherwise take the scheduled backup.
+    # `sh -uc` deliberately drops -e so ONE failed run cannot kill the loop (a
+    # non-zero exit would restart:unless-stopped into a fresh-archive-set-per-restart
+    # loop); each branch logs its failure via `|| echo ... rc=$?` and continues. The
+    # inner poll breaks early on ANY of the three sentinels so an on-demand backup,
+    # restore, or delete fires within ~5s rather than after the full interval.
     entrypoint: >
-      sh -euc "while true;
-      do if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh; else /usr/local/bin/backup.sh; fi;
+      sh -uc "while true;
+      do if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
+      elif [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
+      else /usr/local/bin/backup.sh || echo \"[sidecar] backup failed rc=$$?\" >&2; fi;
       i=0; while [ \"$$i\" -lt \"$${BACKUP_INTERVAL_SECONDS:-86400}\" ]; do
-      if [ -f /backup-trigger/.backup_now ] || [ -f /backup-trigger/.restore_request.json ]; then break; fi;
+      if [ -f /backup-trigger/.backup_now ] || [ -f /backup-trigger/.restore_request.json ] || [ -f /backup-trigger/.delete_request.json ]; then break; fi;
       sleep 5; i=$$((i+5)); done; done"
     depends_on:
       postgres:

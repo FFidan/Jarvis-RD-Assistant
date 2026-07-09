@@ -11,6 +11,7 @@ import type {
   PaperContradictionsResponse,
   ConsensusResponse,
   JobAccepted,
+  ScanJobAccepted,
 } from '@/types';
 
 // --- Analytics ---
@@ -50,7 +51,7 @@ export const fetchContradictions = (params?: {
 };
 
 export const scanContradictions = (body?: { paper_id?: number; limit?: number }) =>
-  apiFetch<JobAccepted>('/api/contradictions/scan', {
+  apiFetch<ScanJobAccepted>('/api/contradictions/scan', {
     method: 'POST',
     body: JSON.stringify(body ?? {}),
   });

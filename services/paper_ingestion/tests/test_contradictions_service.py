@@ -14,6 +14,7 @@ from paper_ingestion.services.contradictions import (
     ContradictionCandidate,
     VerifiedFinding,
     _classify_candidate,
+    _do_scan_contradictions,
     _load_verified_findings,
     _persist_contradiction,
     _polarity_score,
@@ -1079,6 +1080,81 @@ async def test_scan_contradictions_dedup_proceeds_when_lock_acquired(monkeypatch
     assert result == expected
     assert "scan_already_in_progress" not in result
     inner_scan.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Total model failure fails the scan loudly instead of reporting empty success
+# ---------------------------------------------------------------------------
+
+
+def _summary_row(paper_id: int, cross_reference_ids: list[int]) -> FakeRecord:
+    """One paper_summaries row with a single verified finding."""
+    return FakeRecord(
+        {
+            "paper_id": paper_id,
+            "title": f"Paper {paper_id}",
+            "key_findings": [
+                {
+                    "finding": f"Method improves accuracy in paper {paper_id}.",
+                    "quote": f"Method improves accuracy in paper {paper_id}.",
+                    "page_number": 1,
+                }
+            ],
+            "cross_references": [{"related_paper_id": rid} for rid in cross_reference_ids],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_do_scan_raises_when_every_candidate_fails_llm(monkeypatch):
+    """All-candidate classifier failure raises so the job is marked failed."""
+    pool, conn = _make_pool_and_conn()
+    # One cross-referenced pair (1, 2) → exactly one candidate.
+    conn.fetch.return_value = [_summary_row(1, [2]), _summary_row(2, [])]
+
+    async def failing_classify(*_args, **_kwargs):
+        raise RuntimeError("model unreachable")
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.contradictions._classify_candidate",
+        failing_classify,
+    )
+
+    with pytest.raises(RuntimeError, match="failed for all 1 candidate"):
+        await _do_scan_contradictions(pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_do_scan_partial_llm_failure_still_returns_counts(monkeypatch):
+    """A partial classifier failure does not raise and reports honest counts."""
+    pool, conn = _make_pool_and_conn()
+    # Paper 1 cross-references 2 and 3 → two candidates: (1,2) and (1,3).
+    conn.fetch.return_value = [
+        _summary_row(1, [2, 3]),
+        _summary_row(2, []),
+        _summary_row(3, []),
+    ]
+
+    calls = {"n": 0}
+
+    async def flaky_classify(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("model unreachable")
+        return None  # neutral → skipped, not a failure
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.contradictions._classify_candidate",
+        flaky_classify,
+    )
+
+    result = await _do_scan_contradictions(
+        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+    )
+
+    assert result["candidate_count"] == 2
+    assert result["llm_failures"] == 1
+    assert result["contradictions_found"] == 0
 
 
 # ---------------------------------------------------------------------------

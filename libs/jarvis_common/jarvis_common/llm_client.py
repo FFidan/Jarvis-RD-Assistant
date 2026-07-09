@@ -86,20 +86,6 @@ _WORK_NOTE_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
-_WORK_NOTE_PARAGRAPH_RE = re.compile(
-    r"(?:^|\n\s*\n)\s*(?:"
-    r"let\s+me\b|"
-    r"let['’]s\s+(?:look|analy[sz]e|think|break|work)\b|"
-    r"i\s+(?:need|should|will)\s+(?:to\s+)?"
-    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
-    r"i['’]ll\s+"
-    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
-    r"i\s+am\s+going\s+to\s+"
-    r"(?:look|analy[sz]e|think|check|determine|compare|answer)\b|"
-    r"first,?\s+(?:i\s+(?:need|should|will)|i['’]ll)\b"
-    r")",
-    re.IGNORECASE,
-)
 
 _WORK_NOTE_PREFIX_MARKERS = (
     "let me",
@@ -308,8 +294,6 @@ def detect_visible_work_notes(answer: str) -> VisibleWorkNoteDetection:
     "The problem is..." or domain uses of "analysis".
     """
     match = _WORK_NOTE_MARKER_RE.search(answer)
-    if match is None:
-        match = _WORK_NOTE_PARAGRAPH_RE.search(answer)
     if match is None:
         return VisibleWorkNoteDetection(has_work_notes=False)
     return VisibleWorkNoteDetection(

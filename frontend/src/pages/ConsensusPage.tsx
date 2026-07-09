@@ -35,6 +35,44 @@ function latestLibraryConsensusScan(jobs: Record<string, Job>): Job | null {
   return scans[0] ?? null;
 }
 
+interface ScanCounts {
+  hasCounts: boolean;
+  candidates: number;
+  verificationFailures: number;
+  contradictions: number;
+}
+
+/** Read the scan job's result diagnostics defensively (fields may be absent). */
+function scanResultCounts(scan: Job | null): ScanCounts {
+  const result = scan?.result ?? null;
+  return {
+    hasCounts: result != null && 'candidate_count' in result,
+    candidates: Number(result?.candidate_count ?? 0),
+    verificationFailures: Number(result?.verification_failures ?? 0),
+    contradictions: Number(result?.contradictions_found ?? 0),
+  };
+}
+
+/** Explain WHY a succeeded scan produced no consensus clusters. */
+function succeededScanDescription(counts: ScanCounts): string {
+  if (counts.hasCounts && counts.candidates === 0) {
+    return 'Consensus needs papers that are summarized AND cross-referenced as related. None of your processed papers are cross-referenced yet.';
+  }
+  // Only claim "none passed verification" when EVERY candidate failed verification
+  // (no model failures, no neutrals) — otherwise the wording misleads; the counts
+  // line below shows the real breakdown for mixed outcomes.
+  if (
+    counts.hasCounts &&
+    counts.candidates > 0 &&
+    counts.contradictions === 0 &&
+    counts.verificationFailures === counts.candidates
+  ) {
+    const pairs = counts.candidates === 1 ? 'pair' : 'pairs';
+    return `Found ${counts.candidates} candidate ${pairs}; none passed quote verification.`;
+  }
+  return 'The scan finished, but the current library did not produce verified agreement or contradiction clusters.';
+}
+
 function ClaimEvidence({ claim }: { claim: ConsensusClaim }) {
   const [open, setOpen] = useState(false);
   return (
@@ -95,29 +133,42 @@ export function ConsensusPage() {
   const isScanning = useJobStore((s) => Object.values(s.jobs).some(isActiveLibraryConsensusScan));
   const jobs = useJobStore((s) => s.jobs);
   const latestScan = useMemo(() => latestLibraryConsensusScan(jobs), [jobs]);
+  const [scanSkipped, setScanSkipped] = useState(false);
   const scanMutation = useMutation({
     mutationFn: () => scanContradictions(),
-    onSuccess: (r) =>
+    onSuccess: (r) => {
+      if (r.status === 'skipped' || r.job_id == null) {
+        // The backend refused to queue a guaranteed-empty scan — nothing to track.
+        setScanSkipped(true);
+        return;
+      }
+      setScanSkipped(false);
       trackExternalJob({
         jobId: r.job_id,
         kind: 'contradictions.scan',
         payload: {},
         status: r.status === 'running' || r.status === 'queued' ? r.status : 'queued',
-      }),
+      });
+    },
   });
   const pending = scanMutation.isPending || isScanning;
 
   const claims = consensusQuery.data?.claims ?? [];
   const scanFailed = latestScan?.status === 'failed';
   const scanSucceeded = latestScan?.status === 'succeeded';
-  const emptyTitle = scanSucceeded
-    ? 'No consensus clusters found'
-    : 'No related-paper claims yet';
-  const emptyDescription = scanFailed
-    ? 'The last contradiction scan failed before consensus data could be refreshed.'
+  const scanCounts = scanResultCounts(scanSucceeded ? latestScan : null);
+  const emptyTitle = scanSkipped
+    ? 'Nothing to scan yet'
     : scanSucceeded
-      ? 'The scan finished, but the current library did not produce verified agreement or contradiction clusters.'
-      : 'Run a contradiction scan across related papers to see where they agree and disagree.';
+      ? 'No consensus clusters found'
+      : 'No related-paper claims yet';
+  const emptyDescription = scanSkipped
+    ? 'Process some papers first — consensus needs summarized papers with verified findings.'
+    : scanFailed
+      ? 'The last contradiction scan failed before consensus data could be refreshed.'
+      : scanSucceeded
+        ? succeededScanDescription(scanCounts)
+        : 'Run a contradiction scan across related papers to see where they agree and disagree.';
 
   return (
     <div className="space-y-6 p-6">
@@ -136,7 +187,8 @@ export function ConsensusPage() {
           Consensus
         </h1>
         <p className="font-serif text-base italic text-muted-foreground">
-          Where the papers in your library agree and disagree on shared claims.
+          Where the papers in your library agree and disagree on shared claims. Works on papers
+          that are processed and cross-referenced.
         </p>
       </div>
 
@@ -166,6 +218,12 @@ export function ConsensusPage() {
                   if (!pending) scanMutation.mutate();
                 }}
               />
+              {scanSucceeded && scanCounts.hasCounts && scanCounts.candidates > 0 && (
+                <p className="mt-2 text-center font-mono text-xs text-meta">
+                  {scanCounts.candidates} candidate pairs · {scanCounts.verificationFailures}{' '}
+                  verification failures · {scanCounts.contradictions} verified contradictions
+                </p>
+              )}
               {(scanMutation.isError || scanFailed) && (
                 <p className="mt-2 text-center text-sm text-destructive">
                   {scanFailed

@@ -117,8 +117,6 @@ export interface AISettings {
   hw_tier: string;
   recommended_backend: string;
   recommended_model: string;
-  configured_backend: string | null;
-  configured_model: string | null;
   observed_backend: string | null;
   observed_recent_share: number;
   candidates_for_tier: AIBackendCandidate[];
@@ -128,10 +126,6 @@ export interface AISettings {
 
 export function getAISettings() {
   return apiFetch<AISettings>('/api/settings/ai');
-}
-
-export function postAISettings(body: { backend: string; model: string }) {
-  return apiFetch<AISettings>('/api/settings/ai', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export function redetectHW() {

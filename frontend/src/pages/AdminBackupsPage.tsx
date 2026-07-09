@@ -24,7 +24,11 @@ import {
   downloadBackup,
   requestRestore,
   getRestoreStatus,
+  deleteRestorePoint,
+  getRetention,
+  putRetention,
   type RestorePoint,
+  type RetentionConfig,
 } from '@/lib/api/backups';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
@@ -60,12 +64,14 @@ function RestorePointCard({
   retentionDays,
   onDownload,
   onRestore,
+  onDelete,
   restoringTimestamp,
 }: {
   point: RestorePoint;
   retentionDays: number | null;
   onDownload: (name: string) => void;
   onRestore: (timestamp: string) => void;
+  onDelete: (timestamp: string) => void;
   restoringTimestamp: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -166,14 +172,24 @@ function RestorePointCard({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <button
-          type="button"
-          className="self-start rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
-          disabled={restoreDisabled}
-          onClick={() => onRestore(point.timestamp)}
-        >
-          {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            disabled={restoreDisabled}
+            onClick={() => onRestore(point.timestamp)}
+          >
+            {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-destructive px-3 py-1.5 text-sm font-medium text-destructive disabled:opacity-50"
+            disabled={isThisRestoring}
+            onClick={() => onDelete(point.timestamp)}
+          >
+            Delete
+          </button>
+        </div>
         {isNewer && (
           <span className="text-xs text-muted-foreground">
             This backup is newer than the current app version — update first.
@@ -188,7 +204,11 @@ export function AdminBackupsPage() {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
+  const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
   const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(null);
+  const [manualStepsNotice, setManualStepsNotice] = useState<string | null>(null);
+  const [keepLastN, setKeepLastN] = useState('');
+  const [maxAgeDays, setMaxAgeDays] = useState('');
 
   const {
     data: status,
@@ -245,13 +265,24 @@ export function AdminBackupsPage() {
     // restore never reads as 'idle' and a leftover status file from a prior run
     // can never end tracking early.
     if (restoreState === 'done') {
-      toast.success('Restore complete. Your data has been restored.');
+      // Off-host / older-schema restores finish 'done' but stay held in
+      // maintenance (every route still 503s) until the operator recreates the
+      // app containers and clears the markers. Don't claim success there — show
+      // a "one more step" notice pointing at the guided steps below instead.
+      if (restoreStatus.data?.manual_steps_required === true) {
+        setManualStepsNotice(
+          restoreStatus.data.error ??
+            'The restore finished but the app is held in maintenance until you recreate the app containers and clear the maintenance markers — see the steps below.',
+        );
+      } else {
+        toast.success('Restore complete. Your data has been restored.');
+      }
       void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
       setRestoringTimestamp(null);
     } else if (restoreState === 'failed') {
       setRestoringTimestamp(null);
     }
-  }, [restoreState, restoringTimestamp, queryClient]);
+  }, [restoreState, restoringTimestamp, restoreStatus.data, queryClient]);
 
   const restoreMutation = useMutation({
     mutationFn: (timestamp: string) => requestRestore(timestamp, 'RESTORE'),
@@ -268,6 +299,60 @@ export function AdminBackupsPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (timestamp: string) => deleteRestorePoint(timestamp, 'DELETE'),
+    onSuccess: () => {
+      toast.success('Delete requested. The restore point will be removed shortly.');
+      setDeleteConfirmTs(null);
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof Error ? e.message : 'Could not delete the restore point.');
+      setDeleteConfirmTs(null);
+    },
+  });
+
+  const retentionQuery = useQuery({
+    queryKey: ['admin', 'backups', 'retention'],
+    queryFn: getRetention,
+  });
+
+  // Seed the inputs from the saved policy once it loads (empty string == "no cap").
+  useEffect(() => {
+    if (retentionQuery.data) {
+      setKeepLastN(retentionQuery.data.keep_last_n?.toString() ?? '');
+      setMaxAgeDays(retentionQuery.data.max_age_days?.toString() ?? '');
+    }
+  }, [retentionQuery.data]);
+
+  const retentionMutation = useMutation({
+    mutationFn: putRetention,
+    onSuccess: (data) => {
+      toast.success('Retention policy saved.');
+      queryClient.setQueryData(['admin', 'backups', 'retention'], data);
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof Error ? e.message : 'Could not save the retention policy.');
+    },
+  });
+
+  const handleSaveRetention = () => {
+    // Blank, 0, or an invalid value all mean "no cap" (null): a 0 window would be
+    // a footgun (delete everything but the last day), and 0 kept points is
+    // meaningless — both collapse to the default, matching the sidecar's floors.
+    const parse = (raw: string): number | null => {
+      const trimmed = raw.trim();
+      if (trimmed === '') return null;
+      const n = Number(trimmed);
+      return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
+    };
+    const config: RetentionConfig = {
+      keep_last_n: parse(keepLastN),
+      max_age_days: parse(maxAgeDays),
+    };
+    retentionMutation.mutate(config);
+  };
+
   const handleDownload = async (name: string) => {
     try {
       await downloadBackup(name);
@@ -278,8 +363,12 @@ export function AdminBackupsPage() {
 
   const points = restore?.restore_points ?? [];
   const confirmPoint = confirmTs ? (points.find((p) => p.timestamp === confirmTs) ?? null) : null;
+  const deleteConfirmPoint = deleteConfirmTs
+    ? (points.find((p) => p.timestamp === deleteConfirmTs) ?? null)
+    : null;
   const restoreData = restoreStatus.data;
-  const showRestorePanel = restoringTimestamp !== null || restoreData?.state === 'failed';
+  const showRestorePanel =
+    restoringTimestamp !== null || restoreData?.state === 'failed' || manualStepsNotice !== null;
 
   return (
     <div className="p-6 space-y-6">
@@ -306,7 +395,7 @@ export function AdminBackupsPage() {
               {status.last_attempt_at ? ` (${formatAge(status.last_attempt_at)})` : ''}
             </span>
           ) : status?.last_run_at ? (
-            `Last backup ${formatAge(status.last_run_at)} · ${status.archive_count} archive${status.archive_count !== 1 ? 's' : ''}`
+            `Last backup ${formatAge(status.last_run_at)} · ${points.length} restore point${points.length !== 1 ? 's' : ''}`
           ) : (
             'No backups yet.'
           )}
@@ -342,6 +431,17 @@ export function AdminBackupsPage() {
         )}
       </div>
 
+      {status?.trigger_pending && (
+        <div
+          data-testid="backup-running"
+          role="status"
+          aria-live="polite"
+          className="rounded-md border border-primary/40 bg-primary/5 px-4 py-2 text-sm text-primary"
+        >
+          Backup running… This can take a few minutes; new restore points appear when it finishes.
+        </div>
+      )}
+
       {isLoading && <div className="text-sm text-muted-foreground">Loading backups…</div>}
       {isError && <div className="text-sm text-destructive">Failed to load backups.</div>}
 
@@ -359,12 +459,61 @@ export function AdminBackupsPage() {
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
                 onRestore={(ts) => setConfirmTs(ts)}
+                onDelete={(ts) => setDeleteConfirmTs(ts)}
                 restoringTimestamp={restoringTimestamp}
               />
             ))
           )}
         </div>
       )}
+
+      <div className="rounded-md border p-4 space-y-3" data-testid="retention-controls">
+        <div>
+          <h2 className="text-sm font-medium">Retention policy</h2>
+          <p className="text-xs text-muted-foreground">
+            How long backups are kept. Leave a field blank to use the default. Older or excess
+            restore points are removed automatically by the backup service.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs font-medium">Keep most recent</span>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              aria-label="Keep most recent restore points"
+              className="w-32 rounded-md border px-2 py-1 text-sm"
+              placeholder="All"
+              value={keepLastN}
+              onChange={(e) => setKeepLastN(e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">restore points</span>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs font-medium">Maximum age</span>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              aria-label="Maximum age in days"
+              className="w-32 rounded-md border px-2 py-1 text-sm"
+              placeholder="Default"
+              value={maxAgeDays}
+              onChange={(e) => setMaxAgeDays(e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">days</span>
+          </label>
+          <button
+            type="button"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            onClick={handleSaveRetention}
+            disabled={retentionMutation.isPending}
+          >
+            Save retention policy
+          </button>
+        </div>
+      </div>
 
       {showRestorePanel && (
         <div
@@ -399,6 +548,23 @@ export function AdminBackupsPage() {
                 type="button"
                 className="self-start rounded-md border px-3 py-1.5 text-sm"
                 onClick={() => queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : manualStepsNotice !== null ? (
+            <div data-testid="restore-manual-steps" className="space-y-2">
+              <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                One more step needed to finish
+              </div>
+              <p className="text-sm text-muted-foreground">{manualStepsNotice}</p>
+              <p className="text-xs text-muted-foreground">
+                Follow the guided steps below to finish and bring the app back online.
+              </p>
+              <button
+                type="button"
+                className="self-start rounded-md border px-3 py-1.5 text-sm"
+                onClick={() => setManualStepsNotice(null)}
               >
                 Dismiss
               </button>
@@ -453,6 +619,29 @@ export function AdminBackupsPage() {
         }
         onConfirm={() => {
           if (confirmTs) restoreMutation.mutate(confirmTs);
+        }}
+      />
+
+      <TypedConfirmDialog
+        requiredWord="DELETE"
+        open={deleteConfirmTs !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmTs(null);
+        }}
+        title="Delete this restore point?"
+        confirmLabel="Delete"
+        description={
+          <span>
+            This permanently deletes every archive in this restore point
+            {deleteConfirmPoint
+              ? ` from ${new Date(deleteConfirmPoint.created_at).toLocaleString()}`
+              : ''}
+            . This cannot be undone. Type{' '}
+            <span className="font-mono font-semibold">DELETE</span> to confirm.
+          </span>
+        }
+        onConfirm={() => {
+          if (deleteConfirmTs) deleteMutation.mutate(deleteConfirmTs);
         }}
       />
 

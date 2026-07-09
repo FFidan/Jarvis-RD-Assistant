@@ -15,6 +15,7 @@ import {
   fetchFeed,
   fetchFeedCounts,
 } from '@/lib/api';
+import { useMaintenanceStore } from '@/stores/maintenance-store';
 
 describe('apiFetch', () => {
   beforeEach(() => {
@@ -449,6 +450,79 @@ describe('apiFetchRaw', () => {
   });
 });
 
+describe('apiFetch — 503 maintenance interceptor', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    useMaintenanceStore.getState().clear();
+  });
+
+  it('sets maintenance active on a 503 with the machine-readable "Restore in progress" detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Restore in progress', retry_after: 45 }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'retry-after': '45' },
+      }),
+    );
+
+    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+
+    const state = useMaintenanceStore.getState();
+    expect(state.active).toBe(true);
+    expect(state.retryAfterS).toBe(45);
+  });
+
+  it('does NOT set maintenance for a 503 with a different (non-machine-readable) detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'something else' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+    expect(useMaintenanceStore.getState().active).toBe(false);
+  });
+
+  it('does not throw a parse error and does not set maintenance for a non-JSON 503 body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>Bad Gateway</html>', { status: 503 }),
+    );
+
+    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+    expect(useMaintenanceStore.getState().active).toBe(false);
+  });
+
+  it('does not clear maintenance state on a 2xx response (health endpoints are maintenance-exempt)', async () => {
+    useMaintenanceStore.getState().setMaintenance(true, 30);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await apiFetch('/health/paper_ingestion/internal');
+
+    expect(useMaintenanceStore.getState().active).toBe(true);
+  });
+
+  it('preserves `since` across repeated setMaintenance calls during one restore', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Restore in progress' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await apiFetch('/api/test').catch(() => undefined);
+    const firstSince = useMaintenanceStore.getState().since;
+    expect(firstSince).not.toBeNull();
+
+    await apiFetch('/api/test').catch(() => undefined);
+    expect(useMaintenanceStore.getState().since).toBe(firstSince);
+  });
+});
+
 describe('fetchSystemModels', () => {
   it('is exported from api.ts as a function', () => {
     expect(typeof fetchSystemModels).toBe('function');
@@ -505,6 +579,70 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
     const calledUrls = vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url));
     expect(calledUrls).toContain('/health/paper_ingestion/live');
     expect(calledUrls).toContain('/health/learning_engine/live');
+  });
+});
+
+describe('fetchStackHealth — degraded 503 internal body is informative', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("503 'degraded' body with maintenance:true → overall 'maintenance' (the restore DB-reload window)", async () => {
+    // During STEP 5 of a restore the jarvis DB is mid-reload (ALLOW_CONNECTIONS
+    // false / dropped), so the internal health endpoint returns HTTP 503
+    // (degraded) — but its body still reports maintenance:true. The rollup must
+    // reflect 'maintenance', not fall to all-'unknown'.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'degraded',
+            checks: { postgres: 'unavailable', qdrant: 'ok', ollama: 'ok', litellm: 'ok', vector: 'ok' },
+            maintenance: true,
+            version: '1.0.4',
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    expect(summary.overall).toBe('maintenance');
+    expect(summary.maintenance).toBe(true);
+    expect(summary.version).toBe('1.0.4');
+  });
+
+  it("503 'degraded' body without maintenance surfaces the real degraded deps (not all-unknown)", async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'degraded',
+            checks: { postgres: 'ok', qdrant: 'unavailable', ollama: 'ok', litellm: 'ok', vector: 'ok' },
+            maintenance: false,
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    // The real 'unavailable' qdrant → 'down' is surfaced, not masked as all-unknown.
+    expect(summary.services.find((s) => s.name === 'qdrant')?.status).toBe('down');
+    expect(summary.overall).toBe('down');
+    expect(summary.maintenance).toBe(false);
   });
 });
 
@@ -589,6 +727,95 @@ describe('fetchStackHealth — unknown-aware rollup', () => {
     expect(summary.overall).toBe('ok');
     expect(summary.services.find((s) => s.name === 'vector')?.status).toBe('unknown');
   });
+
+  it("payload missing one dep key → only that dep 'unknown', others intact", async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            // 'ollama' key absent from the payload
+            checks: { postgres: 'ok', qdrant: 'ok', litellm: 'ok', vector: 'ok' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    expect(summary.services.find((s) => s.name === 'ollama')?.status).toBe('unknown');
+    expect(summary.services.find((s) => s.name === 'postgres')?.status).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'qdrant')?.status).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'litellm')?.status).toBe('ok');
+    // ollama is a required dep — the rollup honestly stays off 'ok'.
+    expect(summary.overall).toBe('unknown');
+  });
+});
+
+describe('fetchStackHealth — maintenance rollup', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("payload maintenance:true → overall 'maintenance' even with services down", async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            checks: { postgres: 'ok', qdrant: 'ok', ollama: 'ok', litellm: 'ok', vector: 'ok' },
+            maintenance: true,
+            version: '1.0.4',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      // Liveness probes 503 during the restore window.
+      return new Response(null, { status: 503 });
+    });
+
+    const summary = await fetchStackHealth();
+
+    // Maintenance takes precedence over the down rollup — the stack is
+    // intentionally offline, not broken.
+    expect(summary.overall).toBe('maintenance');
+    expect(summary.maintenance).toBe(true);
+    expect(summary.version).toBe('1.0.4');
+    // Per-service statuses stay truthful underneath the rollup.
+    expect(summary.downCount).toBe(2);
+  });
+
+  it('payload without a maintenance flag keeps the normal rollup', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            checks: { postgres: 'ok', qdrant: 'ok', ollama: 'ok', litellm: 'ok', vector: 'ok' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    expect(summary.overall).toBe('ok');
+    expect(summary.maintenance).toBeUndefined();
+    expect(summary.version).toBeUndefined();
+  });
 });
 
 describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
@@ -621,9 +848,14 @@ describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
     ]);
     expect(summary.services.every((s) => s.status === 'unknown')).toBe(true);
     expect(summary.overall).toBe('unknown');
-    // The all-unknown fallback is not a real down/degraded count.
+    // The all-unknown fallback is not a real down/degraded count…
     expect(summary.downCount).toBe(0);
     expect(summary.degradedCount).toBe(0);
+    // …and the maintenance state is UNKNOWN (undefined), not a definitive
+    // "not in maintenance" — a timeout must never satisfy the banner's
+    // `maintenance === false` clear-check, or it would flip-flop mid-restore.
+    expect(summary.maintenance).toBeUndefined();
+    expect(summary.version).toBeUndefined();
 
     vi.useRealTimers();
   });

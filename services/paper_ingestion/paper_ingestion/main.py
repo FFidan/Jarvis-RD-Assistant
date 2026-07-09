@@ -51,6 +51,7 @@ from jarvis_common.cached_transport import CachingTransport
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.verify import QuoteVerifier
+from jarvis_common.version import app_version
 from jarvis_common.warmup import make_warmup_hook, warm_chat_model, warm_embedding_model
 from qdrant_client import AsyncQdrantClient
 
@@ -540,7 +541,7 @@ _lifespan_config = ServiceLifespanConfig(
 app = FastAPI(
     title="JARVIS Paper Ingestion",
     description="Paper fetching, PDF processing, and embedding service",
-    version="0.1.0",
+    version=app_version(),
     lifespan=configure_lifespan(_lifespan_config),
     dependencies=[Depends(verify_api_key)],
     default_response_class=DEFAULT_RESPONSE_CLASS,

@@ -45,6 +45,7 @@ export function LoginPage() {
   });
 
   const smtpConfigured = firstRunStatus?.smtp_configured;
+  const smtpReachable = firstRunStatus?.smtp_reachable;
   const setupMode = firstRunStatus?.setup_mode;
   const isMultiMode = setupMode === 'multi';
 
@@ -142,6 +143,18 @@ export function LoginPage() {
       )
     ) : null;
 
+  // Configured-but-failing: the relay is set up but a cached liveness probe
+  // could not reach it, so links may silently fail to arrive. Mutually
+  // exclusive with the not-configured notice above (that requires
+  // smtp_configured === false), so only one renders at a time.
+  const smtpUnreachableNotice =
+    smtpConfigured === true && smtpReachable === false ? (
+      <p className="text-sm text-amber-600" role="status">
+        Email is configured but the mail server is not responding right now —
+        sign-in links may not arrive. An administrator can check the mail settings.
+      </p>
+    ) : null;
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
@@ -174,8 +187,13 @@ export function LoginPage() {
                 />
               </div>
               {smtpNotConfiguredNotice}
+              {smtpUnreachableNotice}
               {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               {info && <p className="text-sm text-emerald-600" aria-live="polite">{info}</p>}
+              <p className="text-xs text-muted-foreground">
+                Already requested a link in the last 2 minutes? Wait before retrying —
+                only one link is sent per 2 minutes.
+              </p>
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Sending...' : 'Send magic link'}
               </Button>

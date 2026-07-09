@@ -53,6 +53,8 @@ export interface RestoreStatus {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  manual_steps_required: boolean;
+  phase: string | null;
 }
 
 export interface RestoreLastRun {
@@ -65,6 +67,11 @@ export interface RestorePointsResponse {
   restore_points: RestorePoint[];
   retention_days: number | null;
   last_run: RestoreLastRun | null;
+}
+
+export interface RetentionConfig {
+  keep_last_n: number | null;
+  max_age_days: number | null;
 }
 
 /** Sidecar reachability + inferred last-run time. */
@@ -97,3 +104,23 @@ export const requestRestore = (timestamp: string, confirm: string) =>
 /** Poll the live restore progress (state machine + per-step status). */
 export const getRestoreStatus = () =>
   apiFetch<RestoreStatus>('/api/admin/backups/restore/status');
+
+/**
+ * Request deletion of a restore point. `confirm` ('DELETE') gates the destructive
+ * op. Writes a sentinel the sidecar's prune executes — the app deletes nothing.
+ */
+export const deleteRestorePoint = (timestamp: string, confirm: string) =>
+  apiFetch<{ status: string }>(
+    `/api/admin/backups/restore-points/${encodeURIComponent(timestamp)}/delete`,
+    { method: 'POST', body: JSON.stringify({ confirm }) },
+  );
+
+/** Read the backup retention policy (keep-last-N + max-age-days; nulls = env default). */
+export const getRetention = () => apiFetch<RetentionConfig>('/api/admin/backups/retention');
+
+/** Update the backup retention policy the sidecar reads. */
+export const putRetention = (config: RetentionConfig) =>
+  apiFetch<RetentionConfig>('/api/admin/backups/retention', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });

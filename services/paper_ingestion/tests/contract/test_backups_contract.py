@@ -279,6 +279,20 @@ async def test_trigger_non_admin_gets_403(plain_client):
     assert resp.status_code == 403, resp.text
 
 
+async def test_trigger_emits_job_event(admin_client, backups_dir, monkeypatch):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_event = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_event", mock_event)
+
+    resp = await admin_client.post("/api/admin/backups")
+    assert resp.status_code == 202, resp.text
+    mock_event.assert_awaited_once()
+    assert mock_event.await_args.kwargs["category"] == "job"
+    assert mock_event.await_args.kwargs["source"] == "backups"
+
+
 async def test_restore_request_writes_sentinel(admin_client, restore_paths, restore_ready):
     resp = await admin_client.post(
         "/api/admin/backups/restore",
@@ -292,6 +306,25 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     assert written["timestamp"] == "20260617_120000"
     assert written["confirm"] == "RESTORE"
     assert "requested_at" in written
+
+
+async def test_restore_request_emits_job_event(
+    admin_client, restore_paths, restore_ready, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_event = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_event", mock_event)
+
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_ready, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 202, resp.text
+    mock_event.assert_awaited_once()
+    assert mock_event.await_args.kwargs["category"] == "job"
+    assert mock_event.await_args.kwargs["context"] == {"timestamp": restore_ready}
 
 
 async def test_restore_wrong_confirm_400(admin_client, restore_paths, restore_ready):
@@ -464,3 +497,238 @@ async def test_restore_duplicate_request_409(
     # The sentinel must not have been overwritten.
     written = sentinel.read_text()
     assert "20260617_120000" in written
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def delete_paths(tmp_path_factory, monkeypatch):
+    """Point the delete-request sentinel + retention config at a tmp trigger dir."""
+    from paper_ingestion.routers import backups as backups_router
+
+    trig = tmp_path_factory.mktemp("delete_trigger")
+    monkeypatch.setattr(backups_router, "_DELETE_SENTINEL", trig / ".delete_request.json")
+    monkeypatch.setattr(backups_router, "_RETENTION_CONFIG", trig / ".retention.json")
+    return trig
+
+
+async def test_delete_writes_sentinel(admin_client, restore_paths, delete_paths, restore_ready):
+    # Verified: paper_ingestion/routers/backups.py:657 request_delete_restore_point
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"status": "scheduled"}
+    sentinel = delete_paths / ".delete_request.json"
+    assert sentinel.exists()
+    written = json.loads(sentinel.read_text())
+    # Byte-shape the sidecar's prune.sh parses: a timestamps list, the confirm
+    # token, and version 1. Assert the whole request shape at once.
+    assert {k: written[k] for k in ("timestamps", "confirm", "version")} == {
+        "timestamps": ["20260617_120000"],
+        "confirm": "DELETE",
+        "version": 1,
+    }
+    assert "requested_at" in written
+
+
+async def test_delete_emits_job_event(
+    admin_client, restore_paths, delete_paths, restore_ready, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_event = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_event", mock_event)
+
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 202, resp.text
+    mock_event.assert_awaited_once()
+    assert mock_event.await_args.kwargs["category"] == "job"
+    assert mock_event.await_args.kwargs["context"] == {"timestamp": restore_ready}
+
+
+async def test_delete_never_writes_under_backup_dir(
+    admin_client, restore_paths, delete_paths, restore_ready, backups_dir
+):
+    # The delete endpoint writes ONLY into the trigger volume; /backups is read-only.
+    before = {p.name for p in backups_dir.iterdir()}
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 202, resp.text
+    # No sentinel (or any new file) landed under _BACKUP_DIR, and no archive was removed.
+    assert not (backups_dir / ".delete_request.json").exists()
+    assert {p.name for p in backups_dir.iterdir()} == before
+
+
+async def test_delete_wrong_confirm_400(admin_client, restore_paths, delete_paths, restore_ready):
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "yes please"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert not (delete_paths / ".delete_request.json").exists()
+
+
+async def test_delete_unknown_timestamp_404(admin_client, restore_paths, delete_paths):
+    resp = await admin_client.post(
+        "/api/admin/backups/restore-points/20990101_000000/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 404, resp.text
+    assert not (delete_paths / ".delete_request.json").exists()
+
+
+async def test_delete_in_flight_restore_409(
+    admin_client, restore_paths, delete_paths, restore_ready
+):
+    # Seed a restore whose target IS this timestamp -> deleting it must be refused.
+    (restore_paths / ".restore_request.json").write_text(
+        '{"timestamp": "20260617_120000", "confirm": "RESTORE"}'
+    )
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "restore" in resp.json()["detail"].lower()
+    assert not (delete_paths / ".delete_request.json").exists()
+
+
+async def test_delete_in_flight_safety_backup_409(
+    admin_client, restore_paths, delete_paths, backups_dir
+):
+    # A restore's just-taken safety backup is also protected (matches prune.sh).
+    ts = "20260101_090000"
+    (backups_dir / f"jarvis_{ts}.sql.gz").write_bytes(b"X")
+    (restore_paths / ".restore_status.json").write_text(
+        f'{{"state": "running", "safety_backup_ts": "{ts}"}}'
+    )
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{ts}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert not (delete_paths / ".delete_request.json").exists()
+
+
+async def test_delete_audits_before_writing_sentinel(
+    admin_client, restore_paths, delete_paths, restore_ready, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    sentinel = delete_paths / ".delete_request.json"
+
+    async def _audit_before_write(*_args, **_kwargs):
+        # The audit row must be written while the sentinel does NOT yet exist, so a
+        # failed audit 500s without ever queuing a delete.
+        assert not sentinel.exists()
+
+    mock_audit = AsyncMock(side_effect=_audit_before_write)
+    monkeypatch.setattr(backups_router, "log_audit", mock_audit)
+
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert sentinel.exists()
+    mock_audit.assert_called_once()
+    assert mock_audit.call_args.kwargs["action"] == "backup.delete_requested"
+    assert mock_audit.call_args.kwargs["resource"] == f"backups/{restore_ready}"
+
+
+async def test_delete_duplicate_pending_409(
+    admin_client, restore_paths, delete_paths, restore_ready, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_audit", mock_audit)
+
+    # A delete is already pending -> the second request is a no-op (no audit row).
+    sentinel = delete_paths / ".delete_request.json"
+    sentinel.write_text('{"timestamps": ["20260615_000000"], "confirm": "DELETE", "version": 1}')
+    resp = await admin_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "pending" in resp.json()["detail"].lower()
+    mock_audit.assert_not_called()
+    # The pending sentinel must not have been overwritten.
+    assert "20260615_000000" in sentinel.read_text()
+
+
+async def test_delete_non_admin_gets_403(plain_client, restore_paths, delete_paths, restore_ready):
+    resp = await plain_client.post(
+        f"/api/admin/backups/restore-points/{restore_ready}/delete",
+        json={"confirm": "DELETE"},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_retention_get_defaults_when_absent(admin_client, delete_paths):
+    resp = await admin_client.get("/api/admin/backups/retention")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"keep_last_n": None, "max_age_days": None}
+
+
+async def test_retention_put_persists_and_get_reads_back(admin_client, delete_paths):
+    resp = await admin_client.put(
+        "/api/admin/backups/retention",
+        json={"keep_last_n": 5, "max_age_days": 30},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"keep_last_n": 5, "max_age_days": 30}
+    # Persisted to the file the bash sidecar greps (integers, not the DB).
+    on_disk = json.loads((delete_paths / ".retention.json").read_text())
+    assert on_disk == {"keep_last_n": 5, "max_age_days": 30}
+    got = await admin_client.get("/api/admin/backups/retention")
+    assert got.json() == {"keep_last_n": 5, "max_age_days": 30}
+
+
+async def test_retention_put_emits_config_event(admin_client, delete_paths, monkeypatch):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_event = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_event", mock_event)
+
+    resp = await admin_client.put(
+        "/api/admin/backups/retention",
+        json={"keep_last_n": 5, "max_age_days": 30},
+    )
+    assert resp.status_code == 200, resp.text
+    mock_event.assert_awaited_once()
+    assert mock_event.await_args.kwargs["category"] == "config"
+    assert mock_event.await_args.kwargs["source"] == "backups"
+
+
+async def test_retention_put_accepts_null(admin_client, delete_paths):
+    resp = await admin_client.put(
+        "/api/admin/backups/retention",
+        json={"keep_last_n": None, "max_age_days": None},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"keep_last_n": None, "max_age_days": None}
+
+
+async def test_retention_put_rejects_negative(admin_client, delete_paths):
+    resp = await admin_client.put(
+        "/api/admin/backups/retention",
+        json={"keep_last_n": -1, "max_age_days": 30},
+    )
+    assert resp.status_code == 422, resp.text
+    assert not (delete_paths / ".retention.json").exists()
+
+
+async def test_retention_non_admin_gets_403(plain_client, delete_paths):
+    resp = await plain_client.get("/api/admin/backups/retention")
+    assert resp.status_code == 403, resp.text

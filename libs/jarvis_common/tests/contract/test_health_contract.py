@@ -278,6 +278,24 @@ async def test_health_internal_200_full_payload(rhr_app):
     assert body["checks"].get("postgres") == "ok"
 
 
+async def test_health_internal_reports_app_version(rhr_app):
+    """version field delegates to jarvis_common.version.app_version() — not a hardcoded literal.
+
+    Compares against the canonical helper (rather than a literal like "1.0.4" or a
+    duplicated ``importlib.metadata`` call) so the test is agnostic to whether the
+    ``jarvis-rd-assistant`` distribution is installed/discoverable in the running
+    environment; it still pins the historical ``0.1.0`` regression.
+    """
+    from jarvis_common.version import app_version
+
+    _name, app = rhr_app
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/health/internal")
+    body = resp.json()
+    assert body["version"] == app_version()
+    assert body["version"] != "0.1.0"
+
+
 async def test_health_internal_503_when_db_down(rhr_app):
     """GET /health/internal → 503 with degraded status and checks dict when DB fails."""
     name, _app = rhr_app
@@ -295,6 +313,47 @@ async def test_health_internal_503_when_db_down(rhr_app):
         assert body["checks"]["postgres"] == "unavailable"
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_health_internal_includes_maintenance_and_version(
+    rhr_app, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """GET /health/internal exposes the maintenance flag (bool) and app version."""
+    _name, app = rhr_app
+    # Point the sentinels at an empty dir so a stray host sentinel can't flip this.
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(tmp_path / ".maintenance"))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/health/internal")
+    body = resp.json()
+    assert body["maintenance"] is False
+    assert isinstance(body["version"], str)
+    assert body["version"]
+
+
+async def test_health_internal_reports_active_maintenance(
+    rhr_app, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A fresh maintenance sentinel surfaces as maintenance=true in /health/internal."""
+    _name, app = rhr_app
+    sentinel = tmp_path / ".maintenance"
+    sentinel.touch()
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(sentinel))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/health/internal")
+    assert resp.json()["maintenance"] is True
+
+
+async def test_health_live_and_public_stay_minimal(rhr_app):
+    """/health/live and /health never expose maintenance or version (probes parse them)."""
+    _name, app = rhr_app
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        live_body = (await c.get("/health/live")).json()
+        public_body = (await c.get("/health")).json()
+    for body in (live_body, public_body):
+        assert "maintenance" not in body
+        assert "version" not in body
 
 
 # ---------------------------------------------------------------------------

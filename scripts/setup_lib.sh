@@ -113,7 +113,7 @@ tier, backend = sys.argv[1:3]
 _OLLAMA_FALLBACK = {
     "cpu": "qwen3:1.7b", "lt-8": "qwen3:1.7b",
     "8-16": "qwen2.5:7b-instruct", "16-24": "qwen2.5:7b-instruct",
-    "24-48": "qwen2.5:7b-instruct", "ge-48": "qwen3:30b-a3b",
+    "24-48": "qwen3:14b", "ge-48": "qwen3:30b-a3b",
 }
 
 

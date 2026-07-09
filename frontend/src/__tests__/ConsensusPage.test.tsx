@@ -117,6 +117,88 @@ describe('ConsensusPage', () => {
     expect(screen.getByText(/scan finished/i)).toBeInTheDocument();
   });
 
+  it('explains a succeeded scan that had no cross-referenced candidate pairs', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'job-scan': {
+        id: 'job-scan',
+        kind: 'contradictions.scan',
+        status: 'succeeded',
+        progress: 1,
+        progress_message: 'Done',
+        payload: {},
+        result: {
+          candidate_count: 0,
+          contradictions_found: 0,
+          contradiction_ids: [],
+          llm_failures: 0,
+          verification_failures: 0,
+        },
+        error: null,
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: '2026-07-06T10:00:10Z',
+      },
+    };
+
+    renderPage();
+
+    expect(
+      await screen.findByText(/none of your processed papers are cross-referenced/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/scan finished/i)).not.toBeInTheDocument();
+  });
+
+  it('explains a succeeded scan whose candidates all failed quote verification', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    jobStoreMock.jobs = {
+      'job-scan': {
+        id: 'job-scan',
+        kind: 'contradictions.scan',
+        status: 'succeeded',
+        progress: 1,
+        progress_message: 'Done',
+        payload: {},
+        result: {
+          candidate_count: 3,
+          contradictions_found: 0,
+          contradiction_ids: [],
+          llm_failures: 0,
+          verification_failures: 3,
+        },
+        error: null,
+        created_at: '2026-07-06T10:00:00Z',
+        started_at: '2026-07-06T10:00:01Z',
+        finished_at: '2026-07-06T10:00:10Z',
+      },
+    };
+
+    renderPage();
+
+    expect(
+      await screen.findByText(/found 3 candidate pairs; none passed quote verification/i),
+    ).toBeInTheDocument();
+    // Compact diagnostics line with the raw scan counts.
+    expect(
+      screen.getByText('3 candidate pairs · 3 verification failures · 0 verified contradictions'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an actionable message when the scan is skipped for an unprocessed library', async () => {
+    fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
+    scanContradictionsMock.mockResolvedValueOnce({
+      job_id: null,
+      status: 'skipped',
+      reason: 'no_findings',
+    });
+
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /run consensus scan/i }));
+
+    expect(await screen.findByText(/process some papers first/i)).toBeInTheDocument();
+    expect(jobStoreMock.trackExternalJob).not.toHaveBeenCalled();
+  });
+
   it('surfaces a failed consensus scan without hiding the retry action', async () => {
     fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
     jobStoreMock.jobs = {

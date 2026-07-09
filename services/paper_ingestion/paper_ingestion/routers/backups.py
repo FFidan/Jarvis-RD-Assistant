@@ -31,9 +31,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin, require_admin_or_api_key, verify_api_key
+from jarvis_common.event_log import log_event
 from jarvis_common.migrations import required_code_schema
 from jarvis_common.paths import secure_path
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from paper_ingestion.deps import limiter
 
@@ -55,6 +56,16 @@ _RESTORE_SENTINEL = (
 )
 _RESTORE_STATUS = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".restore_status.json"
+)
+# Delete request sentinel (this service writes it) + retention config (this
+# service reads/writes it). Same RW volume as the backup trigger; the actual
+# ``rm`` of archives is performed by the sidecar's ``prune.sh`` — this service
+# never deletes a file nor opens anything under _BACKUP_DIR (mounted read-only).
+_DELETE_SENTINEL = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".delete_request.json"
+)
+_RETENTION_CONFIG = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".retention.json"
 )
 
 # Strict allowlist for the four archive shapes scripts/backup.sh emits:
@@ -155,6 +166,24 @@ class RestoreStatus(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    manual_steps_required: bool = False
+    phase: str | None = None
+
+
+class DeleteRequest(BaseModel):
+    confirm: str
+
+
+class RetentionConfig(BaseModel):
+    """Backup retention policy the sidecar reads from ``.retention.json``.
+
+    ``keep_last_n`` caps the number of restore points kept; ``max_age_days``
+    overrides the age window. Either may be null (that dimension falls back to the
+    sidecar's env default). Non-negative ints only.
+    """
+
+    keep_last_n: int | None = Field(default=None, ge=0)
+    max_age_days: int | None = Field(default=None, ge=0)
 
 
 def _classify(name: str) -> str:
@@ -428,6 +457,14 @@ async def trigger_backup(request: Request) -> dict[str, str]:
         resource="backups",
         user_id=_caller_id(request),
     )
+    await log_event(
+        pool=request.app.state.db_pool,
+        level="info",
+        category="job",
+        source="backups",
+        message="Backup requested",
+        context={},
+    )
     return {"status": "scheduled"}
 
 
@@ -496,6 +533,14 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
         action="backup.restore_requested",
         resource=f"backups/{req.timestamp}",
         user_id=_caller_id(request),
+    )
+    await log_event(
+        pool=request.app.state.db_pool,
+        level="info",
+        category="job",
+        source="backups",
+        message="Restore requested",
+        context={"timestamp": req.timestamp},
     )
     try:
         _RESTORE_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
@@ -595,6 +640,182 @@ async def download_backup(name: str, request: Request) -> FileResponse:
         media_type="application/octet-stream",
         filename=name,
     )
+
+
+def _restore_in_flight_timestamps() -> set[str]:
+    """Timestamps a present restore is using (its target + its safety backup).
+
+    Mirrors ``prune.sh``'s ``restore_in_flight_ts`` (defense in depth): a delete
+    must never pull a running restore's source archive — or the safety backup it
+    just took — out from under it. Reads both sentinels defensively; a missing or
+    malformed file degrades to "no in-flight timestamps" and never raises. A bare
+    sentinel *existence* does not block deleting an unrelated point — only a
+    timestamp match does.
+    """
+    in_flight: set[str] = set()
+    for path, key in ((_RESTORE_SENTINEL, "timestamp"), (_RESTORE_STATUS, "safety_backup_ts")):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            value = data.get(key)
+            if isinstance(value, str):
+                in_flight.add(value)
+    return in_flight
+
+
+@router.post(
+    "/restore-points/{timestamp}/delete",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_admin)],
+)
+@limiter.limit("3/minute")
+async def request_delete_restore_point(
+    timestamp: str, req: DeleteRequest, request: Request
+) -> dict[str, str]:
+    """Schedule deletion of a restore point by writing a sentinel the sidecar consumes.
+
+    The app gains no new privilege: it only writes a JSON request file into the
+    shared trigger volume; the postgres-backup sidecar's ``prune.sh`` performs the
+    actual ``rm`` (the ``/backups`` mount stays read-only here). Only a validated
+    timestamp is accepted — a client filename is never trusted — and a point a
+    running restore is using (its target or its safety backup) is refused so a
+    delete can never undermine a live restore.
+    """
+    if req.confirm != "DELETE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type DELETE to confirm",
+        )
+    pt = next(
+        (p for p in _group_restore_points(_list_entries()) if p.timestamp == timestamp),
+        None,
+    )
+    if pt is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No backup at that time",
+        )
+    if timestamp in _restore_in_flight_timestamps():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That restore point is in use by a running restore",
+        )
+    # Reject a duplicate request BEFORE auditing: an already-pending sentinel means
+    # a delete is queued; no audit row should be produced for a no-op.
+    if _DELETE_SENTINEL.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A delete is already pending. Wait for it to complete before requesting another."
+            ),
+        )
+    # Audit the destructive request BEFORE writing the sentinel: a failed audit
+    # 500s without ever queuing a delete, keeping the record consistent with what
+    # the operator is told.
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.delete_requested",
+        resource=f"backups/{timestamp}",
+        user_id=_caller_id(request),
+    )
+    await log_event(
+        pool=request.app.state.db_pool,
+        level="info",
+        category="job",
+        source="backups",
+        message="Restore point deletion requested",
+        context={"timestamp": timestamp},
+    )
+    try:
+        _DELETE_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic exclusive create (O_EXCL) closes the TOCTOU race where two
+        # concurrent requests both pass the exists() check above.
+        with _DELETE_SENTINEL.open("x") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "timestamps": [timestamp],
+                        "confirm": "DELETE",
+                        "requested_at": datetime.now(UTC).isoformat(),
+                        "version": 1,
+                    }
+                )
+            )
+    except FileExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A delete is already pending. Wait for it to complete before requesting another."
+            ),
+        )
+    except OSError as exc:
+        logger.error("delete request sentinel write failed: %r", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Backup sidecar trigger is unavailable. "
+                "Ensure the postgres-backup service is running."
+            ),
+        ) from exc
+    return {"status": "scheduled"}
+
+
+@router.get("/retention", response_model=RetentionConfig, dependencies=[Depends(require_admin)])
+@limiter.limit("30/minute")
+async def get_retention(request: Request) -> RetentionConfig:
+    """Return the backup retention policy the sidecar reads (defaults when unset).
+
+    A missing, unreadable, or malformed ``.retention.json`` degrades to the
+    all-null default (both dimensions fall back to the sidecar env default) — it
+    never 500s.
+    """
+    try:
+        data = json.loads(_RETENTION_CONFIG.read_text())
+        return RetentionConfig.model_validate(data)
+    except (OSError, ValueError, ValidationError):
+        return RetentionConfig()
+
+
+@router.put("/retention", response_model=RetentionConfig, dependencies=[Depends(require_admin)])
+@limiter.limit("10/minute")
+async def put_retention(config: RetentionConfig, request: Request) -> RetentionConfig:
+    """Persist the retention policy to the trigger volume the backup sidecar reads.
+
+    Written to a file (not the DB ``user_config``) because the bash sidecar reads
+    it directly and cannot query the database; the app already owns this RW trigger
+    volume and gains no new privilege.
+    """
+    try:
+        _RETENTION_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        _RETENTION_CONFIG.write_text(
+            json.dumps({"keep_last_n": config.keep_last_n, "max_age_days": config.max_age_days})
+        )
+    except OSError as exc:
+        logger.error("retention config write failed: %r", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Backup sidecar trigger is unavailable. "
+                "Ensure the postgres-backup service is running."
+            ),
+        ) from exc
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.retention_updated",
+        resource="backups/retention",
+        user_id=_caller_id(request),
+    )
+    await log_event(
+        pool=request.app.state.db_pool,
+        level="info",
+        category="config",
+        source="backups",
+        message="Retention policy updated",
+        context={},
+    )
+    return config
 
 
 def _caller_id(request: Request) -> str | None:

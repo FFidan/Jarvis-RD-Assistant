@@ -93,14 +93,20 @@ vi.mock('@/lib/api', () => ({
     hw_tier: 'cpu',
     recommended_backend: 'ollama',
     recommended_model: 'qwen3:1.7b',
-    configured_backend: 'ollama',
-    configured_model: 'qwen3:1.7b',
     candidates_for_tier: [{ backend: 'ollama', model: 'qwen3:1.7b', rank: 1 }],
     candidate_issues: [],
   }),
   redetectHW: vi.fn(),
   getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, hw_tier_changed: false }),
   dismissBanner: vi.fn().mockResolvedValue(undefined),
+  // AboutSection (mounted at the foot of the page) reads the shared stack-health
+  // query for the server version; stub it so the page renders under test.
+  fetchStackHealth: vi.fn().mockResolvedValue({
+    overall: 'ok',
+    checks: {},
+    maintenance: false,
+    version: undefined,
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -276,12 +282,16 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     );
   }
 
-  it('Models → LLM renders the AI models group with the advanced backend disclosure', async () => {
+  it('Models → LLM renders the AI models group with the model-runtime pointer', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
     );
-    expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
+    expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /system health/i })).toHaveAttribute(
+      'href',
+      '/admin/system-health',
+    );
   });
 
   it('Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
@@ -289,7 +299,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
     );
-    expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
+    expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
   });
 
   it('Research → Spaced Repetition renders ONLY the Spaced Repetition group', async () => {

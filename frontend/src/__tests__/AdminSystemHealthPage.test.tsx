@@ -20,6 +20,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminSystemHealthPage } from '@/pages/AdminSystemHealthPage';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,20 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     getSystemReadiness: () => getSystemReadinessMock(),
     fetchStackHealth: () => fetchStackHealthMock(),
+    // ModelDiagnosticsCard is mounted on this page; give it controlled data so
+    // it renders without hitting the network.
+    getAISettings: () =>
+      Promise.resolve({
+        hw_tier: 'cpu',
+        recommended_backend: 'ollama',
+        recommended_model: 'qwen3:1.7b',
+        observed_backend: null,
+        observed_recent_share: 0,
+        candidates_for_tier: [],
+        candidate_issues: [],
+        eval_report_date: null,
+      }),
+    getFirstRunStatus: () => Promise.resolve({ configured: true, hw_tier_changed: false }),
   };
 });
 
@@ -233,13 +248,16 @@ function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <AdminSystemHealthPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <AdminSystemHealthPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +459,20 @@ describe('AdminSystemHealthPage', () => {
     for (const name of expectedNames) {
       expect(screen.getByTestId(`live-svc-row-${name}`)).toBeInTheDocument();
     }
+  });
+
+  it('reads live services from the shared stack-health cache key (same entry as HealthDots)', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    const { queryClient } = renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+
+    // The live-services data lives under the ONE shared key — the sidebar pill
+    // and this page can never render contradictory snapshots.
+    expect(queryClient.getQueryData(QUERY_KEYS.stack.health())).toEqual(makeStackHealth());
+    expect(queryClient.getQueryData(['admin', 'stack-health'])).toBeUndefined();
   });
 
   it('settles live services to "Unknown" badges (not stuck "Checking services…") when the probe times out', async () => {

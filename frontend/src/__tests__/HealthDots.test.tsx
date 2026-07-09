@@ -235,6 +235,26 @@ describe('HealthDots', () => {
     });
   });
 
+  it('shows a non-green "Maintenance in progress" pill during a restore', async () => {
+    mockFetchStackHealth.mockResolvedValue({
+      ...makeAllOk(),
+      overall: 'maintenance',
+      maintenance: true,
+      version: '1.0.4',
+    });
+    renderHealthDots();
+
+    await waitFor(() => {
+      expect(screen.getByText('Maintenance in progress')).toBeInTheDocument();
+    });
+
+    // The pill must never read green ("All healthy") while a restore runs.
+    const pill = screen.getByTestId('health-pill-toggle');
+    expect(pill.className).not.toContain('bg-green-100');
+    expect(pill.className).toContain('bg-blue-100');
+    expect(screen.queryByText('All healthy')).not.toBeInTheDocument();
+  });
+
   // --- Expand / collapse ---
 
   it('expanded grid is hidden by default', async () => {

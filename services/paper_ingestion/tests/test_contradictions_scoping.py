@@ -1,12 +1,16 @@
-"""Auth enforcement + cross-tenant scoping for GET /api/contradictions.
+"""Contradictions router: auth, cross-tenant scoping, and scan preflight.
 
 (a) No session → 401.
 (b) User B does not receive user A's contradictions.
+(c) POST /contradictions/scan skips (does not enqueue) when the caller has
+    no scannable findings.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -175,3 +179,71 @@ async def test_get_contradictions_user_id_threaded_to_sql() -> None:
     # Also confirm user_library scoping clause is present in the SQL.
     sql = call_args.args[0]
     assert "user_library" in sql, "user_library JOIN/subquery missing from generated SQL"
+
+
+# ---------------------------------------------------------------------------
+# (c) POST /contradictions/scan preflight: skip when there is nothing to scan
+# ---------------------------------------------------------------------------
+
+
+async def _post_library_scan(scannable_count: int, monkeypatch) -> tuple[Any, Any, Any]:
+    """POST /api/contradictions/scan with the preflight COUNT returning *scannable_count*.
+
+    Returns ``(response, mock_task, conn)``.
+    """
+    import jarvis_common.task_registry as task_registry
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    pool, conn = _make_pool_and_conn(fetchval_return=scannable_count)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "contradictions.scan", mock_task)
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 7
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/api/contradictions/scan", json={})
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    return resp, mock_task, conn
+
+
+@pytest.mark.asyncio
+async def test_scan_preflight_skips_without_enqueuing_when_no_findings(monkeypatch) -> None:
+    """Zero scannable findings → 202 skipped with a reason and NO deferred job."""
+    resp, mock_task, conn = await _post_library_scan(0, monkeypatch)
+
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "skipped"
+    assert body["job_id"] is None
+    assert body["reason"] == "no_findings"
+    mock_task.defer_async.assert_not_awaited()
+    # The preflight count must be scoped to the caller.
+    count_params = conn.fetchval.await_args.args[1:]
+    assert 7 in count_params, f"user_id=7 not bound in preflight COUNT params: {count_params}"
+
+
+@pytest.mark.asyncio
+async def test_scan_preflight_enqueues_when_findings_exist(monkeypatch) -> None:
+    """A caller with scannable findings keeps the 202 + queued job contract."""
+    resp, mock_task, _conn = await _post_library_scan(3, monkeypatch)
+
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["job_id"], f"expected a job_id for the queued scan, got: {body}"
+    mock_task.defer_async.assert_awaited_once()
+    assert mock_task.defer_async.await_args.kwargs["user_id"] == 7

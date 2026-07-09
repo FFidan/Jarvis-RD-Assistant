@@ -145,3 +145,98 @@ async def test_request_link_cooldown_logs_info_on_suppression() -> None:
     assert len(info_calls) >= 1, (
         f"Expected auth_request_link_cooldown info log, got: {mock_logger.info.call_args_list}"
     )
+
+
+# ---------------------------------------------------------------------------
+# enumeration resistance + swallowed-send event
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_link_unknown_email_sent_true_no_insert() -> None:
+    """Unknown email → {sent: true}, NO token INSERT, decoy hash + second acquire.
+
+    Enumeration invariant: the response is identical to the known-email path and
+    the branch performs the decoy CPU work + an equivalent ``pool.acquire`` so
+    there is no order-of-magnitude timing split. No send-failure event is
+    emitted (an unknown email is not a failure — an event would be a per-account
+    signal).
+    """
+    from paper_ingestion.routers.auth import RequestLinkBody, RequestLinkResponse, request_link
+
+    pool, conn = make_pool_and_conn(fetchrow_return=None)  # unknown email
+    conn.execute = AsyncMock()
+
+    request = _build_request(pool)
+    body = RequestLinkBody(email="ghost@example.com")
+
+    with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()) as send_mock:
+        with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
+            with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
+                resp = await request_link(body=body, request=request)
+
+    assert isinstance(resp, RequestLinkResponse)
+    assert resp.sent is True
+    # Unknown email performs no DB write — the token INSERT never runs.
+    conn.execute.assert_not_awaited()
+    # No send attempt and therefore no send-failure event.
+    send_mock.assert_not_awaited()
+    event_mock.assert_not_awaited()
+    # Decoy: the branch performs a second pool.acquire (mirrors the known branch).
+    assert pool.acquire.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_request_link_send_failure_writes_event_and_returns_sent() -> None:
+    """A swallowed send failure writes exactly ONE auth/magic_link_send_failed
+    event and STILL returns {sent: true} (enumeration/timing defense intact)."""
+    from paper_ingestion.routers.auth import RequestLinkBody, RequestLinkResponse, request_link
+
+    pool, conn = make_pool_and_conn(fetchrow_return={"id": 7}, fetchval_return=None)
+    conn.execute = AsyncMock(return_value=None)
+
+    request = _build_request(pool)
+    body = RequestLinkBody(email="relaydown@example.com")
+
+    with patch(
+        "paper_ingestion.routers.auth.send_magic_link",
+        AsyncMock(side_effect=RuntimeError("smtp down")),
+    ):
+        with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
+            with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
+                resp = await request_link(body=body, request=request)
+
+    assert isinstance(resp, RequestLinkResponse)
+    assert resp.sent is True
+    event_mock.assert_awaited_once()
+    kwargs = event_mock.await_args.kwargs
+    assert kwargs["level"] == "warning"
+    assert kwargs["category"] == "auth"
+    assert kwargs["source"] == "auth"
+    assert kwargs["message"] == "magic_link_send_failed"
+    # PII-free: only a SHA-256 email hash, never the raw email.
+    assert "email_hash" in kwargs["context"]
+    assert "relaydown@example.com" not in str(kwargs["context"])
+
+
+@pytest.mark.asyncio
+async def test_request_link_cooldown_writes_no_send_failed_event() -> None:
+    """The cooldown early-return writes NO magic_link_send_failed event (it is
+    not a failure) and still returns {sent: true}."""
+    from paper_ingestion.routers.auth import RequestLinkBody, request_link
+
+    recent_ts = datetime.now(UTC) - timedelta(seconds=30)  # within 2-min cooldown
+    pool, conn = make_pool_and_conn(fetchrow_return={"id": 7}, fetchval_return=recent_ts)
+    conn.execute = AsyncMock(return_value=None)
+
+    request = _build_request(pool)
+    body = RequestLinkBody(email="cool@example.com")
+
+    with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()) as send_mock:
+        with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
+            with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
+                resp = await request_link(body=body, request=request)
+
+    assert resp.sent is True
+    send_mock.assert_not_awaited()
+    event_mock.assert_not_awaited()

@@ -42,7 +42,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from jarvis_common.auth import verify_api_key
+from jarvis_common.maintenance import maintenance_active
 from jarvis_common.models import HealthCheckResponse
+from jarvis_common.version import app_version
 
 if TYPE_CHECKING:
     import asyncpg
@@ -79,6 +81,11 @@ _SWEEP_MEMO_ATTR: str = "_health_sweep_memo"
 _SWEEP_TASK_ATTR: str = "_health_sweep_task"
 
 _logger = logging.getLogger(__name__)
+
+
+def _app_version() -> str:
+    """Installed distribution version, surfaced by ``/health/internal``."""
+    return app_version()
 
 
 @dataclass(slots=True)
@@ -226,7 +233,13 @@ def register_health_routes(
         _auth: None = Depends(verify_api_key),
     ) -> HealthCheckResponse:
         status, results = await run_health_checks(request, checks)
-        body = HealthCheckResponse(status=status, service=service_name, checks=results)
+        body = HealthCheckResponse(
+            status=status,
+            service=service_name,
+            checks=results,
+            maintenance=maintenance_active(),
+            version=_app_version(),
+        )
         if status == "degraded":
             return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]
         return body

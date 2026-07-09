@@ -102,7 +102,7 @@ def test_file_read_failure_does_not_fall_back_to_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# smtp.* empty-string rejection
+# smtp.* empty-string handling
 # ---------------------------------------------------------------------------
 
 
@@ -118,12 +118,17 @@ def test_file_read_failure_does_not_fall_back_to_env(monkeypatch):
         "SMTP_FROM_NAME",
     ],
 )
-def test_smtp_field_rejects_empty_string(monkeypatch, env_name: str) -> None:
-    """Explicit empty SMTP env values are rejected; unset values still mean disabled."""
+def test_smtp_field_empty_string_treated_as_unset(monkeypatch, env_name: str) -> None:
+    """Explicit empty SMTP env values are normalized to unset (``None``).
+
+    ``.env.example`` ships these keys empty; raising would crash the process-wide
+    ``SecretsSettings`` singleton, so an empty value means disabled, not an error.
+    """
     _isolated_env(monkeypatch, **{env_name: ""})
 
-    with pytest.raises(ValueError, match="SMTP secret values must be unset or non-empty"):
-        SecretsSettings()
+    settings = SecretsSettings()
+
+    assert getattr(settings, env_name.lower()) is None
 
 
 def test_unset_smtp_fields_remain_allowed(monkeypatch) -> None:

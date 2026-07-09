@@ -16,7 +16,7 @@
 
 // --- Shared primitives (core) — explicit so internal helpers stay private ---
 export { ApiError, apiFetch, apiFetchRaw, checkHealth, fetchStackHealth } from './core';
-export type { ServiceHealth, ServiceHealthStatus, StackHealthSummary } from './core';
+export type { ServiceHealth, ServiceHealthStatus, StackHealthSummary, StackOverall } from './core';
 
 // Types re-exported by the original api.ts from '@/types'.
 export type { SourceHealth, SourceRunRecord } from '@/types';

@@ -23,6 +23,7 @@ import { Menu } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
 import { SettingsRail } from '@/components/settings/SettingsRail';
 import { SettingsDetailPane } from '@/components/settings/SettingsDetailPane';
+import { AboutSection } from '@/components/settings/AboutSection';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,11 @@ export function SettingsPage() {
 
         {/* Right detail pane — full-width on mobile */}
         <SettingsDetailPane section={activeSection} item={activeItem} />
+      </div>
+
+      {/* App/server version footer — shown below every section, not part of the rail IA */}
+      <div className="px-6 py-4 shrink-0">
+        <AboutSection />
       </div>
     </div>
   );

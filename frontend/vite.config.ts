@@ -3,8 +3,23 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { visualizer } from 'rollup-plugin-visualizer';
+
+// Build-time app version, exposed to the client as `__APP_VERSION__` (see the
+// ambient declaration in src/vite-env.d.ts). Prefer the npm-injected env var
+// (set for every `npm run <script>` invocation, incl. `npm run build`); fall
+// back to reading package.json directly for direct `vite`/`vitest` binary
+// invocations where that env var isn't populated.
+function readPackageVersion(): string {
+  const pkgJson: { version: string } = JSON.parse(
+    readFileSync(new URL('./package.json', import.meta.url), 'utf-8'),
+  );
+  return pkgJson.version;
+}
+
+const appVersion = process.env.npm_package_version ?? readPackageVersion();
 
 const paperIngestionPort = process.env.PAPER_INGESTION_HOST_PORT || '8010';
 const learningEnginePort = process.env.LEARNING_ENGINE_HOST_PORT || '8011';
@@ -72,6 +87,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   build: {
     rolldownOptions: {

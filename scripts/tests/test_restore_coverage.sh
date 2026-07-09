@@ -195,13 +195,16 @@ else
     "$destr_rm_line" "$guard_line" >&2
   fail=1
 fi
-# The heartbeat re-touch loop must NOT touch .destructive: it has no age gate by
-# design, so it must survive a SIGKILL that kills the heartbeat.
-if grep -E 'sleep 60; touch' "$RESTORE_SCRIPT" | grep -q 'MAINTENANCE_DESTRUCTIVE'; then
-  printf 'FAIL: the heartbeat loop re-touches .destructive (it must never be heartbeated)\n' >&2
-  fail=1
+# The .destructive sentinel is touched exactly ONCE — at the DROP-window mark,
+# never in the heartbeat/watchdog loop: it has no age gate by design, so it must
+# survive a SIGKILL that kills the heartbeat (the watchdog only READS it).
+destr_touch_count="$(grep -Ec 'touch "\$MAINTENANCE_DESTRUCTIVE"' "$RESTORE_SCRIPT")"
+if [ "$destr_touch_count" -eq 1 ]; then
+  pass "the .destructive sentinel is touched exactly once (never re-touched by the heartbeat)"
 else
-  pass "the heartbeat loop does not re-touch the .destructive sentinel"
+  printf 'FAIL: .destructive is touched %s times (expected 1 — the heartbeat must never re-touch it)\n' \
+    "$destr_touch_count" >&2
+  fail=1
 fi
 
 # 6c. PRESENT-but-NO-CHECKSUMS manifest rejected BEFORE the DROP
@@ -230,7 +233,73 @@ check "STEP 9 prints the older-restore operator runbook line" 'OLDER backup rest
 # 7. The maintenance sentinel is heartbeated for the whole run (re-touch loop) so
 #    a long restore does not auto-expire mid-flight.
 check "heartbeats the maintenance sentinel during the run" \
-  'sleep 60; touch "\$MAINTENANCE_SENTINEL"'
+  'touch "\$MAINTENANCE_SENTINEL" 2>/dev/null'
+
+# === Watchdog (bounded restore timeout) ======================================
+# A background deadline aborts a hung restore instead of holding the stack at 503
+# forever. It cannot read the parent's live DROP_STARTED, so it fixes the
+# maintenance sentinels ITSELF — lifting .maintenance ONLY when nothing was
+# destroyed (.destructive absent) — then signals the main process so the single
+# EXIT trap writes the terminal status.
+check "computes a bounded restore deadline" 'RESTORE_DEADLINE='
+check "defaults the restore time limit to 3600s (never fires on a slow safety backup)" \
+  'RESTORE_MAX_SECONDS:-3600'
+check "captures the main PID so the watchdog can signal it" 'MAIN_PID=\$\$'
+check "the watchdog drops a .restore_timeout marker on deadline" \
+  ': > "\$\{TRIGGER_DIR\}/\.restore_timeout"'
+check "the watchdog signals the main process on deadline" 'kill "\$MAIN_PID"'
+check "routes SIGTERM into the single EXIT trap" "trap 'exit 143' TERM"
+check "routes SIGINT into the single EXIT trap" "trap 'exit 130' INT"
+check "_cleanup words a timeout distinctly from a mid-reload failure" \
+  'restore exceeded its time limit'
+check "clears a stale .restore_timeout marker at the start of a run" \
+  'rm -f "\$\{TRIGGER_DIR\}/\.restore_timeout"'
+
+# The watchdog lifts .maintenance ONLY when .destructive is absent. This is the
+# SECOND (later-in-file) maintenance removal; the first is the EXIT-trap clean
+# lift gate (section 6).
+wd_rm_line="$(grep -nE 'rm -f "\$MAINTENANCE_SENTINEL"' "$RESTORE_SCRIPT" | tail -1 | cut -d: -f1)"
+wd_guard_line="$(line_of '\[ ! -f "\$MAINTENANCE_DESTRUCTIVE" \]')"
+if [ -n "$wd_rm_line" ] && [ -n "$wd_guard_line" ] \
+   && [ "$wd_guard_line" -lt "$wd_rm_line" ] \
+   && [ "$((wd_rm_line - wd_guard_line))" -le 2 ]; then
+  pass "the watchdog lifts .maintenance only when .destructive is absent"
+else
+  printf 'FAIL: watchdog maintenance rm (%s) is not guarded by the .destructive-absent check (%s)\n' \
+    "$wd_rm_line" "$wd_guard_line" >&2
+  fail=1
+fi
+
+# Behavioral: single-source the deadline-decision block from restore.sh and run
+# both branches (no live sidecar, no 60s sleep). With .destructive ABSENT it must
+# lift .maintenance + drop .restore_timeout; with it PRESENT it must HOLD
+# .maintenance (never re-expose a destroyed DB).
+wd_block="$(sed -n '/: >/,/^      fi/p' "$RESTORE_SCRIPT")"
+run_wd() {
+  # $1 = "destroyed" -> pre-create .destructive; anything else -> absent.
+  local d; d="$(mktemp -d)"
+  touch "${d}/.maintenance"
+  [ "$1" = "destroyed" ] && touch "${d}/.destructive"
+  TRIGGER_DIR="$d" MAINTENANCE_SENTINEL="${d}/.maintenance" \
+  MAINTENANCE_DESTRUCTIVE="${d}/.destructive" bash -c '
+    set -euo pipefail
+    '"$wd_block"'
+  ' 2>/dev/null
+  local maint=absent timeout=absent
+  [ -f "${d}/.maintenance" ] && maint=present
+  [ -f "${d}/.restore_timeout" ] && timeout=present
+  printf '%s %s' "$maint" "$timeout"
+  rm -rf "$d"
+}
+wd_clean="$(run_wd clean)"
+wd_destroyed="$(run_wd destroyed)"
+if [ -n "$wd_block" ] && [ "$wd_clean" = "absent present" ] && [ "$wd_destroyed" = "present present" ]; then
+  pass "watchdog deadline branch: lifts .maintenance when nothing destroyed, holds it when .destructive present, always drops .restore_timeout"
+else
+  printf 'FAIL: watchdog deadline branch behaved wrong (clean=%s destroyed=%s)\n' \
+    "$wd_clean" "$wd_destroyed" >&2
+  fail=1
+fi
 
 # 8. exit 0 after a recorded terminal failure: every non-zero exit in the file is
 #    a perl statement (semicolon-terminated) inside qdrant_http_body — there is NO
@@ -238,11 +307,15 @@ check "heartbeats the maintenance sentinel during the run" \
 check "fails before destruction with exit 0" 'fail_before_destruction\(\)'
 check "fails during/after the drop with exit 0" 'step5_fail\(\)'
 nonzero_all="$(grep -Ec 'exit[[:space:]]+[1-9]' "$RESTORE_SCRIPT" || true)"
-nonzero_perl="$(grep -Ec 'exit[[:space:]]+[1-9];' "$RESTORE_SCRIPT" || true)"
-if [ "$nonzero_all" -eq "$nonzero_perl" ]; then
-  pass "no bash-level non-zero exit (terminal failures exit 0; sidecar never crash-restarts)"
+# Whitelisted non-zero exits: the perl (semicolon-terminated) exits inside
+# qdrant_http_body, and the TERM/INT trap handlers (exit 143/130 route a signal
+# into the single EXIT trap, which then forces exit 0 — a real script exit is
+# still always 0, so the sidecar never crash-restarts).
+nonzero_ok="$(grep -Ec "exit[[:space:]]+[1-9];|trap 'exit [0-9]+'" "$RESTORE_SCRIPT" || true)"
+if [ "$nonzero_all" -eq "$nonzero_ok" ]; then
+  pass "no unguarded bash-level non-zero exit (terminal failures exit 0; sidecar never crash-restarts)"
 else
-  printf 'FAIL: a bash-level non-zero exit exists (all=%s perl=%s)\n' "$nonzero_all" "$nonzero_perl" >&2
+  printf 'FAIL: an unguarded bash-level non-zero exit exists (all=%s ok=%s)\n' "$nonzero_all" "$nonzero_ok" >&2
   fail=1
 fi
 
@@ -337,7 +410,7 @@ if command -v python3 >/dev/null 2>&1; then
     set -euo pipefail
     STATE="running"; CURRENT_STEP="Restoring database"; ERROR="boom \"q\" \\ x"
     SAFETY_BACKUP_TS="20260626_120000"; STARTED_AT="2026-06-26T12:00:00+00:00"
-    FINISHED_AT=""; DROP_STARTED=1
+    FINISHED_AT=""; DROP_STARTED=1; MANUAL_STEPS_REQUIRED=1; PHASE="reload-db"
     STEP_SAFETY="done"; STEP_DB="running"; STEP_LITELLM="pending"
     STEP_QDRANT="pending"; STEP_FINISH="pending"
     '"$(sed -n '/^_json_escape()/,/^}/p' "$RESTORE_SCRIPT")"'
@@ -353,10 +426,12 @@ names = [s["name"] for s in d["steps"]]
 assert names == ["Safety backup", "Restoring database", "Restoring API-key store",
                  "Restoring search index", "Finishing up"], names
 for k in ("state", "current_step", "steps", "safety_backup_ts",
-          "started_at", "finished_at", "error"):
+          "started_at", "finished_at", "error", "manual_steps_required", "phase"):
     assert k in d, k
 assert d["safety_backup_ts"] == "20260626_120000"
 assert d["error"] == 'boom "q" \\ x', repr(d["error"])
+assert d["manual_steps_required"] is True, d["manual_steps_required"]
+assert d["phase"] == "reload-db", d["phase"]
 PY
   then
     pass "write_status emits valid JSON matching the RestoreStatus shape"

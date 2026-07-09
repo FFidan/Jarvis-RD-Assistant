@@ -84,14 +84,20 @@ tiers:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: ollama
-        model: qwen2.5:7b-instruct
+        model: qwen3:14b
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "Conservative local runtime pick for 24-48 GB GPUs."
+        reasoning: "Dense 14B model (~9 GB) that fits alongside the embedder across the 24-48 GB range; a stronger local default than the 7B baseline. Machines with 40 GB or more can move up to qwen3:30b-a3b."
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 2
+        score: null
+        evidence: static-benchmark
+        reasoning: "Lighter conservative local pick for constrained machines."
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
-        rank: 2
+        rank: 3
         score: 119
         evidence: sim-bench
         sim_vram_mb: 24576

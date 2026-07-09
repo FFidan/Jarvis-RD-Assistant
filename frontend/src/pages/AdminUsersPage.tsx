@@ -109,7 +109,14 @@ function InviteModal({ open, onClose }: InviteModalProps) {
       }
     },
     onError: (err) => {
-      if (err instanceof ApiError) {
+      if (err instanceof ApiError && err.status === 409) {
+        // The user already exists — point the admin at the working per-row
+        // rescue action instead of leaving a generic dead-end.
+        setError(
+          "A user with that email already exists. To send them a fresh sign-in link, " +
+            "use the 'Send sign-in link' action on their row below.",
+        );
+      } else if (err instanceof ApiError) {
         setError(err.detail);
       } else {
         setError('Failed to invite user. Please try again.');

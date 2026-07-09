@@ -157,7 +157,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # findings). scripts/check-complexity-budget.py fails only when a count GROWS;
 # lower a cap whenever a refactor reduces the real number. Tests are excluded
 # from the scan (see _EXCLUDE there) so the budget tracks production only.
-max = { C901 = 58, PLR0911 = 8, PLR0912 = 29, PLR0913 = 87, PLR0915 = 22 }
+max = { C901 = 58, PLR0911 = 8, PLR0912 = 29, PLR0913 = 86, PLR0915 = 22 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

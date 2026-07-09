@@ -13,12 +13,18 @@ from jarvis_common import create_limiter
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import verify_api_key
 from jarvis_common.settings import get_core_settings, get_secrets_settings
+from jarvis_common.version import app_version
 
 limiter = create_limiter(default_limits=["600/minute"], user_aware=False)
 
 logger = logging.getLogger(__name__)
 
-_internal_app = FastAPI(title="JARVIS Telegram Bot Internal API", docs_url=None, redoc_url=None)
+_internal_app = FastAPI(
+    title="JARVIS Telegram Bot Internal API",
+    version=app_version(),
+    docs_url=None,
+    redoc_url=None,
+)
 
 configure_middleware_and_errors(
     _internal_app,

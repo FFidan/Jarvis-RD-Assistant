@@ -449,6 +449,16 @@ export function Sidebar() {
             adminLink={isAdmin && !sidebarCollapsed ? '/admin/system-health' : undefined}
           />
 
+          {/* Build version — muted caption, hidden when collapsed (no room for text) */}
+          {!sidebarCollapsed && (
+            <p
+              className="px-2 text-[10px] text-muted-foreground text-center"
+              data-testid="sidebar-app-version"
+            >
+              v{__APP_VERSION__}
+            </p>
+          )}
+
           {/* Sign out */}
           <Tooltip>
             <TooltipTrigger asChild>

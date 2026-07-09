@@ -94,14 +94,29 @@ def test_could_be_visible_work_note_prefix_only_holds_risky_starts():
     assert llm_client.could_be_visible_work_note_prefix("Hello") is False
 
 
-def test_detect_visible_work_notes_flags_paragraph_preambles():
-    """Paragraph-start work notes are unsafe even after a short prefix."""
+def test_detect_visible_work_notes_flags_pure_leading_preamble():
+    """A leading work-note preamble is still stripped even when a real answer follows."""
     detection = llm_client.detect_visible_work_notes(
-        "The sources are relevant.\n\nI need to compare the papers before answering."
+        "Let me analyze this paper.\n\n"
+        "The control experiment in Table 2 shows a significant effect (p=0.01)."
     )
 
     assert detection.has_work_notes is True
-    assert detection.marker == "i need to compare"
+    assert detection.marker == "let me"
+
+
+def test_detect_visible_work_notes_allows_later_paragraph_work_note_phrasing():
+    """A substantive answer is not discarded just because a later paragraph opens
+    with work-note phrasing — only a *leading* work note should trigger discard.
+    """
+    detection = llm_client.detect_visible_work_notes(
+        "Paper A reports a significant effect (p=0.01) on the primary endpoint.\n\n"
+        "I need to check the second study's sample size before drawing conclusions, "
+        "but the primary result holds across both cohorts.\n\n"
+        "Overall, the evidence supports the hypothesis."
+    )
+
+    assert detection.has_work_notes is False
 
 
 def test_detect_visible_work_notes_allows_normal_final_answers():

@@ -18,7 +18,11 @@ from paper_ingestion.models import (
     ContradictionListResponse,
     ContradictionScanRequest,
 )
-from paper_ingestion.services.contradictions import aggregate_consensus, list_contradictions
+from paper_ingestion.services.contradictions import (
+    aggregate_consensus,
+    count_scannable_summaries,
+    list_contradictions,
+)
 
 router = APIRouter(
     prefix="/api",
@@ -75,7 +79,15 @@ async def scan_contradictions(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> JobCreateResponse:
-    """Enqueue a bounded cross-paper contradiction scan."""
+    """Enqueue a bounded cross-paper contradiction scan.
+
+    Preflight: when the caller has no summarized papers with findings, the
+    scan is guaranteed to be empty, so respond ``status="skipped"`` (job_id
+    null, ``reason="no_findings"``) instead of queuing a no-op job.
+    """
+    async with db_pool.acquire() as conn:
+        if await count_scannable_summaries(conn, user_id=user_id) == 0:
+            return JobCreateResponse(job_id=None, status="skipped", reason="no_findings")
     payload = body.model_dump() if body else {"paper_id": None, "limit": 25}
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["contradictions.scan"].defer_async(

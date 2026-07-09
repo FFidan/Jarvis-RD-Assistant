@@ -87,6 +87,25 @@ async def test_setup_status_includes_hw_fields(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_status_includes_smtp_reachable(monkeypatch) -> None:
+    """get_status surfaces smtp_reachable; False (and no network) when SMTP is unconfigured."""
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    get_secrets_settings.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    get_secrets_settings.cache_clear()
+    assert res.smtp_configured is False
+    assert res.smtp_reachable is False
+
+
+@pytest.mark.asyncio
 async def test_setup_status_reports_effective_backend_when_unset(monkeypatch) -> None:
     """With no JARVIS_LLM_BACKEND override, current_backend reports the effective
     runtime default ('ollama'), not null (OPS-01)."""
@@ -602,6 +621,12 @@ async def test_system_readiness_smtp_check_present_and_db_aware(monkeypatch) -> 
         app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
         headers={"x-forwarded-proto": "https"},
         url=SimpleNamespace(scheme="https"),
+    )
+
+    # Reachability is a separate signal (a live liveness probe); pin it reachable
+    # so this test isolates the DB-aware deliverability resolution → green.
+    monkeypatch.setattr(
+        "jarvis_common.email.probe_smtp_reachable", AsyncMock(return_value=(True, None))
     )
 
     res = await system_router.get_system_readiness(request)

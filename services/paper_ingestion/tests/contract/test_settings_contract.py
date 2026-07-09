@@ -697,12 +697,10 @@ async def test_put_config_litellm_skipped_pending_semantics(
 # ---------------------------------------------------------------------------
 # W1A.4 — settings/ai contract tests
 #
-# Verified: routers/settings_ai.py:60-77   (GET /api/settings/ai)
-# Verified: routers/settings_ai.py:80-99   (POST /api/settings/ai)
-# Verified: routers/settings_ai.py:102-104 (POST /api/settings/ai/redetect)
-# Verified: routers/settings_ai.py:107-127 (POST /api/settings/ai/dismiss-banner)
-# Verified: services/ai_settings.py:140-220 (resolve_candidates_for_tier)
-# Verified: services/ai_settings.py:229-238 (candidate_is_allowed)
+# Verified: routers/settings_ai.py:53-73 (GET /api/settings/ai)
+# Verified: routers/settings_ai.py:76-78 (POST /api/settings/ai/redetect)
+# Verified: routers/settings_ai.py:81-101 (POST /api/settings/ai/dismiss-banner)
+# Verified: services/ai_settings.py:133-208 (resolve_candidates_for_tier)
 # ---------------------------------------------------------------------------
 
 
@@ -735,6 +733,7 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
     config_path = tmp_path / "llm-tier-candidates.yaml"
     config_path.write_text(
         "generated_from: test-bench.md\n"
+        "generated_at: '2026-07-01'\n"
         "tiers:\n"
         "  ge-48:\n"
         "    candidates:\n"
@@ -813,83 +812,10 @@ async def test_settings_ai_get_returns_resolved_candidates(_ai_settings_client, 
         f"First candidate must be catalog-backed with catalog_id='qwen3:14b'; got {top!r}"
     )
     assert top["source"] == "catalog"
-
-
-# ---------------------------------------------------------------------------
-# test_settings_ai_post_rejects_non_candidate_model
-# Verified: routers/settings_ai.py:80-99 (apply_ai_settings 422 branch)
-# Verified: services/ai_settings.py:229-238 (candidate_is_allowed)
-# Survivor-of: test_settings_ai.py::test_post_settings_ai_rejects_random_non_candidate_model
-# ---------------------------------------------------------------------------
-
-
-async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client, monkeypatch):
-    """POST /api/settings/ai with a model not in candidates_for_tier returns 422.
-
-    candidate_is_allowed (services/ai_settings.py:229-238) must reject the
-    request before _APPLIER.apply is called.  The detail message must reference
-    'candidates_for_tier'.
-
-    # Verified: routers/settings_ai.py:87-93 (HTTPException 422 branch)
-    # Verified: services/ai_settings.py:229-238 (candidate_is_allowed returns False)
-    """
-    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
-
-    resp = await _ai_settings_client.post(
-        "/api/settings/ai",
-        json={"backend": "ollama", "model": "not-in-catalog:latest"},
+    # eval_report_date reflects the YAML generated_at date, not the doc path.
+    assert body["eval_report_date"] == "2026-07-01", (
+        f"eval_report_date must be the generated_at date; got {body['eval_report_date']!r}"
     )
-
-    assert resp.status_code == 422, (
-        f"Expected 422 for non-candidate model; got {resp.status_code}: {resp.text}"
-    )
-    detail = resp.json().get("detail", "")
-    assert "not an allowed candidate" in detail, (
-        f"422 detail must mention 'not an allowed candidate'; got: {detail!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# test_settings_ai_apply_failure_returns_generic_502
-# Verified: routers/settings_ai.py:94-102 (apply_ai_settings 502 branch)
-# regression guard — exc message must NOT appear in response body
-# ---------------------------------------------------------------------------
-
-
-async def test_settings_ai_apply_failure_returns_generic_502(_ai_settings_client, monkeypatch):
-    """POST /api/settings/ai returns 502 with a generic detail when _APPLIER.apply raises.
-
-    Regression guard: the exception message must NOT be reflected
-    in the response body (no f-string leak of str(exc)).
-
-    # Verified: routers/settings_ai.py:94-102 (try/except → HTTPException 502)
-    """
-    from unittest.mock import AsyncMock, patch
-
-    from paper_ingestion.routers import settings_ai as _sai_mod
-
-    sentinel = "SENSITIVE_INTERNAL_DETAIL_xyz_123"
-    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
-
-    # Bypass the ollama pull/validate pre-check (it has no real Ollama here and is
-    # covered separately by test_settings_ai_apply.py) so this test exercises its
-    # actual subject: the _APPLIER.apply failure → generic 502 (no str(exc) leak).
-    with (
-        patch.object(_sai_mod, "_ensure_ollama_model_present", new=AsyncMock(return_value=None)),
-        patch.object(_sai_mod._APPLIER, "apply", side_effect=Exception(sentinel)),
-    ):
-        resp = await _ai_settings_client.post(
-            "/api/settings/ai",
-            json={"backend": "ollama", "model": "qwen3:14b"},
-        )
-
-    assert resp.status_code == 502, (
-        f"Expected 502 when _APPLIER.apply raises; got {resp.status_code}: {resp.text}"
-    )
-    assert resp.json()["detail"] == "apply failed; previous config restored", (
-        f"502 detail must be generic; got: {resp.json().get('detail')!r}"
-    )
-    assert sentinel not in resp.text, "Exception message must NOT appear in the response body"
 
 
 # ---------------------------------------------------------------------------

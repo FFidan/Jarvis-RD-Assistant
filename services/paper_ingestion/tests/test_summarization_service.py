@@ -569,18 +569,58 @@ async def test_cross_references_semantic_path_falls_back_to_owner_for_system_job
 
 
 @pytest.mark.asyncio
-async def test_cross_references_db_filters_qdrant_hits_against_current_library():
-    """Qdrant hits must pass a final relational user-library visibility check."""
+async def test_cross_references_include_canonical_shared_corpus_paper():
+    """A canonical (shared-corpus) paper in NOBODY's library must NOT be dropped.
+
+    Regression: the visibility filter previously restricted candidates to the
+    caller's own ``user_library``, silently discarding every canonical paper the
+    semantic search surfaced.  The corrected predicate mirrors ``rag/streaming.py``
+    VERBATIM — visible iff the caller owns it OR it is canonical (in nobody's
+    library).  ``papers`` is the shared canonical corpus, visible to every user.
+    """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
     conn.fetch.side_effect = [
-        [{"paper_id": 7}, {"paper_id": 555}],
-        [{"paper_id": 555}],
+        # requester's library lookup (paper 7 is the source paper)
+        [{"paper_id": 7}],
+        # corrected visibility predicate: canonical 555 (in nobody's library) is
+        # visible to any user and returned keyed on `p.id`.
+        [{"id": 555}],
+    ]
+    embedder = AsyncMock()
+    embedder.search_similar.return_value = [{"paper_id": 555, "score": 0.9}]
+
+    result = await summarization._find_cross_references(
+        conn,
+        paper_id=7,
+        title="Retrieval Augmented Generation",
+        embedder=embedder,
+        requester_id=42,
+    )
+
+    assert [r.related_paper_id for r in result] == [555], (
+        "a canonical shared-corpus paper must survive the visibility filter"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_references_exclude_other_users_private_paper():
+    """A paper only in a DIFFERENT user's library must be dropped by the final
+    relational visibility filter — defense-in-depth against a mis-tagged Qdrant
+    payload surfacing another tenant's private paper.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
+    conn.fetch.side_effect = [
+        [{"paper_id": 7}, {"paper_id": 555}],  # requester's library
+        # corrected predicate: canonical 555 visible; foreign 888 (only in
+        # another user's library, not canonical) excluded.
+        [{"id": 555}],
     ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
         {"paper_id": 555, "score": 0.9},
-        {"paper_id": 999, "score": 0.95},
+        {"paper_id": 888, "score": 0.95},
     ]
 
     result = await summarization._find_cross_references(
@@ -592,10 +632,8 @@ async def test_cross_references_db_filters_qdrant_hits_against_current_library()
     )
 
     assert [r.related_paper_id for r in result] == [555]
-    assert conn.fetch.await_args_list[1].args == (
-        "SELECT paper_id FROM user_library WHERE user_id = $1 AND paper_id = ANY($2::int[])",
-        42,
-        [999, 555],
+    assert 888 not in [r.related_paper_id for r in result], (
+        "another user's private paper must never leak into cross-references"
     )
 
 

@@ -594,14 +594,28 @@ async def _find_cross_references(
     deduped = deduplicate_by_paper_id(results or [])
     sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
 
+    # Final relational visibility filter mirroring rag/streaming.py's Qdrant
+    # user-scope predicate VERBATIM so the two isolation checks cannot drift:
+    # a candidate is visible iff the caller is unscoped, OR owns it via
+    # user_library, OR it is canonical (in NOBODY's library — the shared corpus,
+    # visible to every user).  The `$2 IS NULL` branch is dead here (scope_user_id
+    # is non-None under the guard) but kept for byte-parity with streaming.py.
     if scope_user_id is not None and sorted_results:
         candidate_ids = [r["paper_id"] for r in sorted_results]
         visible_rows = await conn.fetch(
-            "SELECT paper_id FROM user_library WHERE user_id = $1 AND paper_id = ANY($2::int[])",
-            scope_user_id,
+            "SELECT p.id FROM papers p"
+            " WHERE p.id = ANY($1::int[])"
+            " AND ("
+            "   $2::int IS NULL"
+            "   OR EXISTS (SELECT 1 FROM user_library ul"
+            "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
+            "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
+            "                  WHERE ul2.paper_id = p.id)"
+            " )",
             candidate_ids,
+            scope_user_id,
         )
-        visible_ids = {row["paper_id"] for row in visible_rows}
+        visible_ids = {row["id"] for row in visible_rows}
         sorted_results = [r for r in sorted_results if r["paper_id"] in visible_ids]
 
     return [

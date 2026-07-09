@@ -269,6 +269,24 @@ describe('AdminUsersPage', () => {
       expect(screen.getByRole('alert')).toHaveTextContent(/already exists/i);
     });
   });
+
+  it('points a 409 invite failure at the per-row Send sign-in link rescue', async () => {
+    listUsersMock.mockResolvedValue(_sampleUsers);
+    inviteUserMock.mockRejectedValueOnce(
+      new ApiError(409, '{"detail":"A user with that email already exists"}'),
+    );
+
+    renderPage();
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    await userEvent.click(screen.getByRole('button', { name: /invite user/i }));
+    await userEvent.type(screen.getByLabelText(/email address/i), 'alice@example.com');
+    await userEvent.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/send sign-in link/i);
+    });
+  });
 });
 
 describe('per-row role select isolation', () => {

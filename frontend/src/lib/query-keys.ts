@@ -67,10 +67,6 @@ export const QUERY_KEYS = {
     auditLog: (actionPrefix: string) => ["admin", "audit-log", actionPrefix] as const,
     users: () => ["admin", "users"] as const,
     systemHealth: () => ["admin", "system-health"] as const,
-    /** Admin-namespaced key: ["admin", "stack-health"]. Used by AdminSystemHealthPage
-     * which has its own admin-scoped cache invalidation pattern. Distinct from
-     * `stack.health()` which is the bare key used by HealthDots / query-persister. */
-    stackHealth: () => ["admin", "stack-health"] as const,
   },
 
   // ── Citation graph ────────────────────────────────────────────────────────
@@ -258,9 +254,9 @@ export const QUERY_KEYS = {
 
   // ── Stack health ──────────────────────────────────────────────────────────
   stack: {
-    /** Bare-key health probe: ["stack-health"]. Used by HealthDots and query-persister
-     * for the public health-status query. Distinct from `admin.stackHealth()` which
-     * lives in the admin-scoped namespace. */
+    /** Bare-key health probe: ["stack-health"]. The single cache entry for all
+     * health surfaces (HealthDots, AdminSystemHealthPage, query-persister) so
+     * they can never show contradictory snapshots. */
     health: () => ["stack-health"] as const,
   },
 

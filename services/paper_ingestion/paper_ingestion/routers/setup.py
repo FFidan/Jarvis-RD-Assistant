@@ -48,6 +48,7 @@ from jarvis_common.crypto import encrypt_secret
 from jarvis_common.email import (
     _effective_smtp,
     effective_smtp_status,
+    probe_smtp_reachable,
     sanitize_header_value,
     smtp_tls_flags,
 )
@@ -114,6 +115,11 @@ class SetupStatusResponse(BaseModel):
     # LoginPage to default to the API-key tab when no mail relay is configured,
     # avoiding a lockout for non-owner users in multi-user deployments.
     smtp_configured: bool = False
+    # True iff the configured relay currently accepts a connection (cached
+    # liveness probe). ``smtp_configured`` is presence-only, so a relay can be
+    # configured but unreachable; this lets LoginPage/health show "configured
+    # but currently failing". False whenever SMTP is not configured.
+    smtp_reachable: bool = False
 
 
 class ServiceStatus(BaseModel):
@@ -397,6 +403,10 @@ async def get_status(request: Request) -> SetupStatusResponse:
     # hiccup here never converts a successful status response into a 503.
     # _smtp_configured_probe has its own DB-failure fallback (returns env value).
     smtp_ok = await _smtp_configured_probe(pool)
+    # Reachability is a cached, short-timeout, non-raising liveness probe; it
+    # returns (False, None) without connecting when SMTP is not deliverable, so
+    # a fresh/unconfigured deployment incurs no network call here.
+    smtp_reachable, _ = await probe_smtp_reachable(pool)
 
     return SetupStatusResponse(
         configured=configured,
@@ -410,6 +420,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
         observed_backend=served,
         observed_recent_share=share,
         smtp_configured=smtp_ok,
+        smtp_reachable=smtp_reachable,
     )
 
 

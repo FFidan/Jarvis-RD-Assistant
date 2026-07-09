@@ -47,6 +47,7 @@ from paper_ingestion.services.contradictions_extract import (
     _load_verified_findings,
     _parse_findings,
     _terms,
+    count_scannable_summaries,
 )
 from paper_ingestion.services.contradictions_persist import (
     SCANNER_VERSION,
@@ -378,6 +379,15 @@ async def _do_scan_contradictions(
         if contradiction_id is not None and contradiction_id not in inserted_ids:
             inserted_ids.append(contradiction_id)
 
+    if candidates and llm_failures == len(candidates):
+        # Every candidate failed classification — that is a model outage, not an
+        # empty library. Raise so the jobs framework marks the job failed with
+        # this message instead of reporting a misleading zero-result success.
+        raise RuntimeError(
+            f"Contradiction analysis failed for all {len(candidates)} candidate pairs — "
+            "check model health and try again."
+        )
+
     return {
         "paper_id": paper_id,
         "candidate_count": len(candidates),
@@ -408,6 +418,7 @@ __all__ = [
     "_terms",
     "aggregate_consensus",
     "build_contradiction_candidates",
+    "count_scannable_summaries",
     "list_contradictions",
     "scan_contradictions",
 ]

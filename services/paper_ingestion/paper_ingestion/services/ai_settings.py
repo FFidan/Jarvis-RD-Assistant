@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
-import time
-import urllib.request
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,7 +16,6 @@ from paper_ingestion.services.model_prefixes import strip_ollama_prefix
 _CONFIG_FILE = Path("config/llm-tier-candidates.yaml")
 _SUPPORTED_BACKENDS = {"ollama", "vllm"}
 _SAFE_VLLM_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
-_APPLY_ENV_KEYS = ("JARVIS_LLM_BACKEND", "JARVIS_SMART_MODEL", "COMPOSE_PROFILES")
 _TIER_TO_CATALOG_TIER = {
     "cpu": 0,
     "lt-8": 1,
@@ -38,17 +33,11 @@ class CandidateSelection:
     candidates: list[dict[str, Any]]
     issues: list[str]
     generated_from: str | None
+    generated_at: str | None
 
     @property
     def recommended(self) -> dict[str, Any]:
         return self.candidates[0]
-
-
-@dataclass(frozen=True)
-class EnvSnapshot:
-    environ: dict[str, str | None]
-    env_file: dict[str, str | None]
-    file_existed: bool
 
 
 def find_candidate_config_path() -> Path:
@@ -213,162 +202,12 @@ def resolve_candidates_for_tier(
         )
         candidates.append(fallback)
 
+    # YAML parses an unquoted ISO date (generated_at: 2026-05-22) as a date
+    # object; coerce to a string so the response model and UI get a plain date.
+    generated_at_raw = data.get("generated_at")
     return CandidateSelection(
         candidates=candidates,
         issues=issues,
         generated_from=data.get("generated_from"),
+        generated_at=str(generated_at_raw) if generated_at_raw is not None else None,
     )
-
-
-def _models_match_for_backend(*, backend: str, candidate_model: str, requested_model: str) -> bool:
-    if backend == "ollama":
-        return _normalize_model_id(candidate_model) == _normalize_model_id(requested_model)
-    return candidate_model.strip() == requested_model.strip()
-
-
-def candidate_is_allowed(selection: CandidateSelection, *, backend: str, model: str) -> bool:
-    return any(
-        candidate["backend"] == backend
-        and _models_match_for_backend(
-            backend=backend,
-            candidate_model=str(candidate["model"]),
-            requested_model=model,
-        )
-        for candidate in selection.candidates
-    )
-
-
-class EnvFileStore:
-    """Small .env adapter with exact env-var restore support."""
-
-    def __init__(
-        self,
-        path: Path | str = ".env",
-        *,
-        environ: MutableMapping[str, str] | None = None,
-    ) -> None:
-        self.path = Path(path)
-        self.environ = environ if environ is not None else os.environ
-
-    def snapshot(self, keys: Sequence[str] = _APPLY_ENV_KEYS) -> EnvSnapshot:
-        return EnvSnapshot(
-            environ={key: self.environ.get(key) for key in keys},
-            env_file=self._read_env_file_values(keys),
-            file_existed=self.path.exists(),
-        )
-
-    def apply(self, updates: Mapping[str, str]) -> None:
-        self._write_env_file_values(updates)
-        for key, value in updates.items():
-            self.environ[key] = value
-
-    def restore(self, snapshot: EnvSnapshot) -> None:
-        if snapshot.file_existed:
-            self._write_env_file_values(snapshot.env_file)
-        for key, value in snapshot.environ.items():
-            if value is None:
-                self.environ.pop(key, None)
-            else:
-                self.environ[key] = value
-
-    def _read_env_file_values(self, keys: Sequence[str]) -> dict[str, str | None]:
-        values: dict[str, str | None] = {key: None for key in keys}
-        if not self.path.exists():
-            return values
-        for line in self.path.read_text().splitlines():
-            for key in keys:
-                if line.startswith(f"{key}="):
-                    values[key] = line.split("=", 1)[1]
-        return values
-
-    def _write_env_file_values(self, values: Mapping[str, str | None]) -> None:
-        if not self.path.exists():
-            return
-        lines = self.path.read_text().splitlines()
-        seen: set[str] = set()
-        next_lines: list[str] = []
-        for line in lines:
-            key = next((name for name in values if line.startswith(f"{name}=")), None)
-            if key is None:
-                next_lines.append(line)
-                continue
-            seen.add(key)
-            value = values[key]
-            if value is not None:
-                next_lines.append(f"{key}={value}")
-        for key, value in values.items():
-            if key not in seen and value is not None:
-                next_lines.append(f"{key}={value}")
-        self.path.write_text("\n".join(next_lines) + "\n")
-
-
-def _default_health_check() -> bool:
-    try:
-        urllib.request.urlopen("http://localhost:8000/health/live", timeout=2).read()
-    except Exception:
-        return False
-    return True
-
-
-class AISettingsApplier:
-    """Apply model settings using injectable process and environment boundaries."""
-
-    def __init__(
-        self,
-        *,
-        env_store: EnvFileStore | None = None,
-        run_command: Callable[..., Any] = subprocess.run,
-        health_check: Callable[[], bool] = _default_health_check,
-        now: Callable[[], float] = time.time,
-        sleep: Callable[[float], None] = time.sleep,
-        health_timeout_s: float = 60.0,
-        poll_interval_s: float = 2.0,
-    ) -> None:
-        self.env_store = env_store or EnvFileStore()
-        self.run_command = run_command
-        self.health_check = health_check
-        self.now = now
-        self.sleep = sleep
-        self.health_timeout_s = health_timeout_s
-        self.poll_interval_s = poll_interval_s
-
-    def apply(self, *, backend: str, model: str, tier: str) -> None:
-        snapshot = self.env_store.snapshot()
-        updates = {
-            "JARVIS_LLM_BACKEND": backend,
-            "JARVIS_SMART_MODEL": model,
-            "COMPOSE_PROFILES": "vllm" if backend == "vllm" else "",
-        }
-        try:
-            self.env_store.apply(updates)
-            render_env = {
-                **self.env_store.environ,
-                "JARVIS_LLM_BACKEND": backend,
-                "JARVIS_SMART_MODEL": model,
-                "JARVIS_HW_TIER": tier,
-            }
-            self.run_command(
-                ["bash", "scripts/render-litellm-config.sh"],
-                env=render_env,
-                check=True,
-                capture_output=True,
-            )
-            self.run_command(
-                ["docker", "compose", "up", "-d"],
-                check=True,
-                capture_output=True,
-            )
-            self._wait_until_healthy()
-        except Exception:
-            self.env_store.restore(snapshot)
-            raise
-
-    def _wait_until_healthy(self) -> None:
-        deadline = self.now() + self.health_timeout_s
-        while self.now() < deadline:
-            if self.health_check():
-                return
-            self.sleep(self.poll_interval_s)
-        raise RuntimeError(
-            f"backend /health/live did not become ready within {self.health_timeout_s:g}s"
-        )

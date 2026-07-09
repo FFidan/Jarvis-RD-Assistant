@@ -308,13 +308,24 @@ async def test_c5_02_list_contradictions_user_b_returns_empty(
 
 
 async def test_c5_03_scan_enqueues_202_with_job_id(
-    contract_two_users, _pi_app_with_pool, _configure_api_key
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
     """POST /api/contradictions/scan returns 202 + job_id; task_registry carve-out.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/contradictions.py:51
+    Seeds one summarized library paper so the caller passes the no-findings
+    preflight and the scan is actually queued.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/contradictions.py:93
     # (scan_contradictions defers contradictions.scan via KIND_TO_TASK).
     """
+    await _seed_summary_findings(
+        contract_conn,
+        contract_two_users.paper_id_a,
+        user_id=None,
+        finding="scan preflight finding",
+        quote="scan preflight quote",
+    )
+
     mock_task = AsyncMock()
     mock_task.defer_async = AsyncMock()
     with patch.dict("jarvis_common.task_registry._TASK_MAP", {"contradictions.scan": mock_task}):
@@ -328,6 +339,32 @@ async def test_c5_03_scan_enqueues_202_with_job_id(
     mock_task.defer_async.assert_awaited_once()
     call_kwargs = mock_task.defer_async.call_args.kwargs
     assert str(call_kwargs["user_id"]) == str(contract_two_users.user_a_id)
+
+
+async def test_c5_03b_scan_skips_without_enqueuing_when_no_findings(
+    contract_two_users, _pi_app_with_pool, _configure_api_key
+):
+    """A caller with no summarized findings gets 202 skipped and no deferred job.
+
+    contract_two_users seeds library papers but no paper_summaries rows, so the
+    preflight COUNT (count_scannable_summaries) is exercised against the live
+    schema and must return zero for user B.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/contradictions.py:90
+    # (preflight returns status="skipped", job_id=None, reason="no_findings").
+    """
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"contradictions.scan": mock_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+            resp = await c.post("/api/contradictions/scan", json={})
+
+    assert resp.status_code == 202, resp.text[:300]
+    body = resp.json()
+    assert body.get("status") == "skipped"
+    assert body.get("job_id") is None
+    assert body.get("reason") == "no_findings"
+    mock_task.defer_async.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

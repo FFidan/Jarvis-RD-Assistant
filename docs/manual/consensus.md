@@ -44,7 +44,14 @@ When the pipeline has not yet run a consensus scan, the page shows:
 
 Click **Run consensus scan** to queue a full contradiction scan across your library. The button label changes to **Scanning…** while the job is queued or running, and the background-task menu shows progress. When the whole-library job succeeds, the Consensus page refreshes its data automatically.
 
-A completed scan can still produce no chart. In that case the page distinguishes a true empty outcome from a failed scan: a successful zero-result scan says that no verified agreement or contradiction clusters are available yet, while a failed scan shows the failure message and leaves the retry action available. JARVIS does not lower quote-verification thresholds just to populate this view.
+### Requirements
+
+A consensus scan can only produce claims when both preconditions hold:
+
+1. **Summarized papers with verified findings.** Papers must be processed so their key findings (with verified quotes) exist. If your library has none, the scan request is skipped immediately with a *"Process some papers first"* message instead of queuing a job that cannot find anything.
+2. **Cross-references between library papers.** The library-wide scan only compares pairs of papers that were cross-referenced as related during summarization. A library of processed but unlinked papers finishes instantly and explains that none of your processed papers are cross-referenced yet.
+
+A completed scan can still produce no chart. In that case the page explains why rather than showing a generic empty state: it distinguishes *no cross-referenced candidate pairs*, *candidates found but none passed quote verification* (with the pair counts shown beneath the empty state), and a true zero-cluster outcome. A failed scan — including the case where the analysis model was unreachable for every candidate pair — shows the failure message and leaves the retry action available. JARVIS does not lower quote-verification thresholds just to populate this view.
 
 ---
 

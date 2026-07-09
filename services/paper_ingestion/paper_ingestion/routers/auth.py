@@ -19,6 +19,7 @@ These endpoints are exempt from ``verify_api_key`` (registered without auth
 dependency) since they ARE the auth bootstrap.
 """
 
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -30,6 +31,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
+from jarvis_common.event_log import log_event
 from jarvis_common.owner import resolve_owner_user_id
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
@@ -197,6 +199,20 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
         await send_magic_link(email_norm, link, pool=pool)
     except Exception:  # noqa: BLE001 — never leak SMTP detail to the response
         logger.exception("send_magic_link failed for email_hash=%s", _hash_email(email_norm))
+        # Record a server-side event so an operator can see the outage in Logs
+        # Live. Suppress ANY error from the write: this unauthenticated path MUST
+        # always return sent=True (its shape + timing are the anti-enumeration
+        # defense), and the event is best-effort. The payload carries only a
+        # PII-free email hash.
+        with contextlib.suppress(Exception):
+            await log_event(
+                pool=pool,
+                level="warning",
+                category="auth",
+                source="auth",
+                message="magic_link_send_failed",
+                context={"email_hash": _hash_email(email_norm)},
+            )
         # Still return sent=true: the user can re-request, and we don't want
         # the response to advertise SMTP outage to unauthenticated callers.
 

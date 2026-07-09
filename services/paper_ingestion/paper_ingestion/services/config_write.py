@@ -433,13 +433,16 @@ async def write_config(
 
     # Model assignment check
     if key in ROLE_TO_ALIAS:
-        await validate_model_assignment(
-            http_client=http_client,
-            ollama_url=ollama_url,
-            key=key,
-            model_id=str(value),
-            db_pool=db_pool,
-        )
+        try:
+            await validate_model_assignment(
+                http_client=http_client,
+                ollama_url=ollama_url,
+                key=key,
+                model_id=str(value),
+                db_pool=db_pool,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # LiteLLM runtime keys: deliver FIRST, commit the row only on success
     # (fail-closed). The old order (commit, then deliver) produced phantom
