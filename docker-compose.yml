@@ -101,7 +101,7 @@ services:
       - jarvis
 
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.31.2}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     mem_limit: 20g
@@ -132,7 +132,7 @@ services:
       - jarvis
 
   ollama-bootstrap:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.31.2}
     security_opt: ["no-new-privileges:true"]
     # Pull-only task — no capabilities required.
     cap_drop: [ALL]

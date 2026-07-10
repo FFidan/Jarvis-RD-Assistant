@@ -8,7 +8,7 @@
 # (docling#2900; the ROCm torch wheel is 4.47 GB).
 services:
   ollama:
-    image: ${OLLAMA_ROCM_IMAGE:-ollama/ollama:0.23.1-rocm}
+    image: ${OLLAMA_ROCM_IMAGE:-ollama/ollama:0.31.2-rocm}
     devices:
       - /dev/kfd
       - /dev/dri

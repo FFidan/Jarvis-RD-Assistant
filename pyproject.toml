@@ -28,7 +28,7 @@ jarvis-common = [
     "asyncpg>=0.30.0,<0.32.0",
     "cryptography>=48.0.1",  # >=48.0.1 clears GHSA-537c-gmf6-5ccf
     "email-validator>=2.0",  # backs pydantic EmailStr
-    "fastapi>=0.136.1,<0.139.0",
+    "fastapi>=0.136.1,<0.140.0",
     "gitpython>=3.1.50",
     "httpx>=0.27.0",
     "idna>=3.15",
@@ -49,10 +49,10 @@ paper-ingestion = [
     "apscheduler>=3.10.0",
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.139.0",
+    "fastapi>=0.136.1,<0.140.0",
     "httpx>=0.27.0",
     "lxml>=6.1.0",
-    "docling[rapidocr]>=2.96.0,<2.109.0",
+    "docling[rapidocr]>=2.96.0,<2.112.0",
     "markdownify>=0.14.1",
     "orjson>=3.11.6",
     "pydantic>=2.0,<3.0.0",
@@ -79,7 +79,7 @@ learning-engine = [
     { include-group = "jarvis-common" },
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.139.0",
+    "fastapi>=0.136.1,<0.140.0",
     "fsrs>=4.0.0,<6.0.0",
     "genanki>=0.13.0",
     "httpx>=0.27.0",
@@ -94,7 +94,7 @@ telegram-bot = [
     { include-group = "jarvis-common" },
     "apscheduler>=3.10.0",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.139.0",
+    "fastapi>=0.136.1,<0.140.0",
     "httpx>=0.27.0",
     "python-telegram-bot>=21.0",
     "uvicorn>=0.30.0",
@@ -184,11 +184,12 @@ pythonpath = [
 # (e.g. paper_ingestion/tests/test_health.py and
 # learning_engine/tests/test_health.py). Safe to use here because after
 # the R12 package rename no two services share a top-level package name.
-addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"
+addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow' --ignore=tests/integration"
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",
     "services/telegram_bot/tests",
     "libs/jarvis_common/tests",
     "scripts/tests",
+    "tests",
 ]
