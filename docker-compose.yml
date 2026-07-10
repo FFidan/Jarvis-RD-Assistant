@@ -20,6 +20,9 @@ x-shared-env: &shared-env
   JARVIS_SMART_MODEL: ${JARVIS_SMART_MODEL:-}
   JARVIS_FAST_MODEL: ${JARVIS_FAST_MODEL:-}
   JARVIS_HOST_VRAM_MB: ${JARVIS_HOST_VRAM_MB:-}
+  # GPU vendor detected by setup.sh (nvidia | amd | intel | none). The
+  # in-container probe is nvidia-only, so services trust this for status.
+  JARVIS_GPU_VENDOR: ${JARVIS_GPU_VENDOR:-}
   # master_key for LiteLLM admin endpoints is mounted as a Docker Secret
   # (_FILE convention) at /run/secrets/litellm_master_key.  Each service that
   # calls LiteLLM declares ``- litellm_master_key`` under its ``secrets:`` list.

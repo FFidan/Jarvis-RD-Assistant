@@ -349,3 +349,25 @@ def test_tier_candidates_yaml_all_ollama_models_in_catalog_full_audit():
         "model_catalog.json — add catalog entries before shipping:\n"
         + "\n".join(f"  {g}" for g in new_gaps)
     )
+
+
+# ---------------------------------------------------------------------------
+# Vendor passthrough (advisory only — never branches the recommendation)
+# ---------------------------------------------------------------------------
+
+
+def test_hardware_vendor_passthrough_default_is_none():
+    assert recommend_models(16_384).vendor == "none"
+
+
+def test_hardware_vendor_passthrough_carries_value():
+    rec = recommend_models(16_384, vendor="amd")
+    assert rec.vendor == "amd"
+    # Same bucket and aliases as the vendor-less call: vendor is display-only.
+    baseline = recommend_models(16_384)
+    assert rec.bucket == baseline.bucket
+    assert rec.aliases == baseline.aliases
+
+
+def test_hardware_vendor_passthrough_on_probe_failure():
+    assert recommend_models(None, vendor="intel").vendor == "intel"

@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypedDict
 
 import httpx
+from jarvis_common.hw_detect import Vendor, vendor_from_env
 from jarvis_common.model_catalog import (
     ModelCatalogEntry,
     Role,
@@ -144,6 +145,11 @@ class HardwareInfo:
     host_gpu_divergence : bool
         True when JARVIS_HOST_VRAM_MB is set but the in-container GPU probe
         finds no GPU — signals that the GPU compose overlay is not active.
+        Never set on AMD/Intel hosts: the in-container probe is nvidia-only,
+        so its blindness there is structural, not a missing overlay.
+    vendor : Vendor
+        GPU vendor: the setup-written JARVIS_GPU_VENDOR when present, else
+        inferred from the in-container probe (nvidia or none).
     """
 
     vram_gb: float
@@ -153,6 +159,7 @@ class HardwareInfo:
     machine_id: str = ""
     vram_source_detail: str = ""
     host_gpu_divergence: bool = False
+    vendor: Vendor = "none"
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dict representation of this hardware snapshot."""
@@ -273,6 +280,9 @@ def detect_hardware() -> HardwareInfo:
     # In-container probe always runs (needed for divergence detection).
     container_vram = _probe_nvidia_smi()
 
+    env_vendor = vendor_from_env()
+    vendor: Vendor = env_vendor or ("nvidia" if container_vram is not None else "none")
+
     # Try JARVIS_HOST_VRAM_MB env override.
     host_env_gb: float | None = None
     raw_env = os.environ.get("JARVIS_HOST_VRAM_MB", "")
@@ -294,8 +304,11 @@ def detect_hardware() -> HardwareInfo:
     if host_env_gb is not None:
         source: Literal["nvidia-smi", "macos-approx", "cpu", "host-env"] = "host-env"
         vram = host_env_gb
-        # Divergence: host claims GPU but container probe found none.
-        divergence = container_vram is None
+        # Divergence: host claims GPU but the container probe found none. The
+        # probe is nvidia-only, so it is structurally blind on AMD/Intel hosts
+        # — only flag vendors it could have seen (a missing JARVIS_GPU_VENDOR,
+        # i.e. a pre-vendor .env, keeps the original always-flag behavior).
+        divergence = container_vram is None and env_vendor not in ("amd", "intel")
     else:
         divergence = False
         if container_vram is not None:
@@ -319,6 +332,7 @@ def detect_hardware() -> HardwareInfo:
         machine_id=socket.gethostname(),
         vram_source_detail=_SOURCE_DETAIL[source],
         host_gpu_divergence=divergence,
+        vendor=vendor,
     )
 
 

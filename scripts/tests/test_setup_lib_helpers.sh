@@ -354,6 +354,129 @@ chmod +x "${GPU_BIN}/nvidia-smi"
 (export PATH="${GPU_BIN}:${PATH}"; _gpu_present_for_prereqs) && rc=0 || rc=$?
 expect_eq "no usable GPU -> no toolkit (rc 1)" "$rc" "1"
 
+# === detect_gpu_vendor / resolve_amd_smi / resolve_gpu_vram_mb ===============
+# Probe order is nvidia -> amd -> intel -> none. amd-smi's JSON is the stable
+# AMD machine interface (rocm-smi's explicitly is not) and is parsed
+# missing-field-tolerant. Stubs shadow any real vendor tools on PATH;
+# JARVIS_WSL_NVIDIA_SMI/JARVIS_DRI_DIR point probes at private fixtures.
+
+AMD_JSON="${FIXTURES}/amd-smi-static.json"
+cat > "$AMD_JSON" <<'JSON'
+[
+  {
+    "gpu": 0,
+    "asic": {"market_name": "AMD Radeon RX 7800 XT", "vendor_id": "0x1002"},
+    "vram": {"type": "GDDR6", "vendor": "SAMSUNG", "size": {"value": 16368, "unit": "MB"}}
+  }
+]
+JSON
+
+# make_vendor_bin <nvidia-behavior> <amd-behavior> -> stub dir for PATH.
+# behaviors: ok = enumerate a GPU (nvidia also answers --query-gpu), fail = exit 1.
+make_vendor_bin() {
+  local dir
+  dir="$(mktemp -d "${FIXTURES}/bin.XXXXXX")"
+  if [ "$1" = "ok" ]; then
+    cat > "${dir}/nvidia-smi" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  -L) echo "GPU 0: Stub NVIDIA GPU" ;;
+  --query-gpu=memory.total) echo "24576" ;;
+esac
+EOF
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${dir}/nvidia-smi"
+  fi
+  if [ "$2" = "ok" ]; then
+    printf '#!/usr/bin/env bash\ncat "%s"\n' "$AMD_JSON" > "${dir}/amd-smi"
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${dir}/amd-smi"
+  fi
+  chmod +x "${dir}/nvidia-smi" "${dir}/amd-smi"
+  printf '%s' "$dir"
+}
+
+DRI_EMPTY="${FIXTURES}/dri-empty"; mkdir -p "$DRI_EMPTY"
+DRI_INTEL="${FIXTURES}/dri-intel"; mkdir -p "$DRI_INTEL"; touch "${DRI_INTEL}/renderD128"
+
+AMD_BIN="$(make_vendor_bin fail ok)"
+NV_BIN="$(make_vendor_bin ok ok)"
+NOGPU_BIN="$(make_vendor_bin fail fail)"
+
+vendor_env() {  # vendor_env <bin> <dri_dir> <fn...> — run fn under the stub env
+  local bin="$1" dri="$2"; shift 2
+  (export PATH="${bin}:${PATH}" JARVIS_WSL_NVIDIA_SMI=/nonexistent JARVIS_DRI_DIR="$dri"; "$@")
+}
+
+got="$(vendor_env "$NV_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
+expect_eq "nvidia wins the probe order even with amd-smi present" "$got" "nvidia"
+
+got="$(vendor_env "$AMD_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
+expect_eq "amd-smi enumerating a GPU -> amd" "$got" "amd"
+
+got="$(vendor_env "$NOGPU_BIN" "$DRI_INTEL" detect_gpu_vendor)"
+expect_eq "/dev/dri render node without a discrete probe -> intel" "$got" "intel"
+
+got="$(vendor_env "$NOGPU_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
+expect_eq "no probe answers -> none" "$got" "none"
+
+got="$(vendor_env "$NV_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb nvidia)"
+expect_eq "resolve_gpu_vram_mb nvidia reads nvidia-smi memory.total" "$got" "24576"
+
+got="$(vendor_env "$AMD_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb amd)"
+expect_eq "resolve_gpu_vram_mb amd reads the amd-smi vram size" "$got" "16368"
+
+vendor_env "$AMD_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb intel >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "intel (shared system RAM) reports no VRAM figure (rc 1)" "$rc" "1"
+
+# Missing-field tolerance: a vram block without a size must fail cleanly (rc 1),
+# and a plain-number size (older amd-smi shape) must still parse as MB.
+NOSIZE_BIN="$(make_vendor_bin fail ok)"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'[{\"gpu\": 0}]'" > "${NOSIZE_BIN}/amd-smi"
+chmod +x "${NOSIZE_BIN}/amd-smi"
+vendor_env "$NOSIZE_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb amd >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "amd-smi JSON without vram size -> rc 1 (no phantom VRAM)" "$rc" "1"
+
+PLAIN_BIN="$(make_vendor_bin fail ok)"
+printf '#!/usr/bin/env bash\nprintf %s\n' "'[{\"gpu\": 0, \"vram\": {\"size\": 8192}}]'" > "${PLAIN_BIN}/amd-smi"
+chmod +x "${PLAIN_BIN}/amd-smi"
+got="$(vendor_env "$PLAIN_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb amd)"
+expect_eq "plain-number vram size parses as MB" "$got" "8192"
+
+# Tier parity: an AMD host must land a non-CPU tier once its VRAM arrives.
+# detect_hw_tier lives in setup.sh — extract and run it against the stubs.
+tier_src="$(sed -n '/^detect_hw_tier()/,/^}/p' "$SETUP_SCRIPT")"
+got="$(export PATH="${AMD_BIN}:${PATH}" JARVIS_WSL_NVIDIA_SMI=/nonexistent JARVIS_DRI_DIR="$DRI_EMPTY"
+       eval "$tier_src"; detect_hw_tier)"
+expect_eq "amd-smi fixture (16368 MB) yields a non-CPU tier" "$got" "16-24"
+got="$(export PATH="${NOGPU_BIN}:${PATH}" JARVIS_WSL_NVIDIA_SMI=/nonexistent JARVIS_DRI_DIR="$DRI_EMPTY"
+       eval "$tier_src"; detect_hw_tier)"
+expect_eq "no measurable VRAM stays cpu tier" "$got" "cpu"
+
+# === compute_compose_file =====================================================
+# Overlay basename ("" | gpu | rocm | vulkan) + override flag -> COMPOSE_FILE.
+# override.yml must always come LAST so a dev override's `deploy: !reset null`
+# wins over any accelerator overlay.
+
+expect_eq "compute_compose_file: CPU base only" \
+  "$(compute_compose_file "" 0)" "docker-compose.yml"
+expect_eq "compute_compose_file: gpu overlay before override" \
+  "$(compute_compose_file gpu 1)" "docker-compose.yml:docker-compose.gpu.yml:docker-compose.override.yml"
+expect_eq "compute_compose_file: rocm overlay" \
+  "$(compute_compose_file rocm 0)" "docker-compose.yml:docker-compose.rocm.yml"
+expect_eq "compute_compose_file: vulkan overlay before override" \
+  "$(compute_compose_file vulkan 1)" "docker-compose.yml:docker-compose.vulkan.yml:docker-compose.override.yml"
+
+# === setup.sh GPU wiring (static) =============================================
+
+scheck "setup.sh parses --gpu with the four overlay choices" 'cuda\|rocm\|vulkan\|cpu\) NI_GPU_OVERRIDE'
+scheck "setup.sh defaults NI_GPU_OVERRIDE empty" '^NI_GPU_OVERRIDE=""'
+scheck "invalid --gpu dies with the accepted set" 'Invalid --gpu'
+scheck "overlay selection references the ROCm overlay" 'docker-compose\.rocm\.yml'
+scheck "overlay selection references the Vulkan overlay" 'docker-compose\.vulkan\.yml'
+scheck "AMD ROCm engagement is gated on /dev/kfd" 'JARVIS_KFD_DEV:-/dev/kfd'
+scheck "setup.sh persists JARVIS_GPU_VENDOR into .env" 'JARVIS_GPU_VENDOR\)'
+
 # === setup.sh prereq wiring (static) =========================================
 
 scheck "setup.sh refuses snap-packaged docker" 'snap list docker'

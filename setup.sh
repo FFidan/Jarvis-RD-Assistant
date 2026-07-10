@@ -34,6 +34,9 @@
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
 #   --smart-model <id>        Override the model id for the active backend
 #                             (Ollama tag or HuggingFace AWQ repo id).
+#   --gpu cuda|rocm|vulkan|cpu
+#                             Override GPU compose-overlay selection (default:
+#                             detected from GPU vendor + container runtime).
 #   --smtp-host <host>        SMTP relay hostname.
 #   --smtp-user <user>        SMTP relay username.
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
@@ -119,12 +122,10 @@ os_install_hint() {  # $1 = tool name (informational)
 }
 
 detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
-  local smi; smi=$(resolve_nvidia_smi) || { echo cpu; return; }
-  "$smi" -L 2>/dev/null | grep -q . || { echo cpu; return; }
+  # Vendor-neutral: the tier cuts only need a VRAM figure, whichever vendor
+  # tool produced it (detect_gpu_vendor/resolve_gpu_vram_mb in setup_lib.sh).
   local mb
-  mb=$("$smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-  [ -z "$mb" ] && { echo cpu; return; }
-  case "$mb" in *[!0-9]*) echo cpu; return ;; esac
+  mb="$(resolve_gpu_vram_mb "$(detect_gpu_vendor)")" || { echo cpu; return; }
   if   [ "$mb" -lt 8000  ]; then echo lt-8
   elif [ "$mb" -lt 16000 ]; then echo 8-16
   elif [ "$mb" -lt 24000 ]; then echo 16-24
@@ -402,6 +403,8 @@ NI_SMTP_PASS=""
 NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
 NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
+NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
+NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
@@ -485,6 +488,17 @@ while [ $# -gt 0 ]; do
       NI_SMART_MODEL="$2"; shift 2 ;;
     --smart-model=*)
       NI_SMART_MODEL="${1#*=}"; shift ;;
+    --gpu)
+      case "$2" in
+        cuda|rocm|vulkan|cpu) NI_GPU_OVERRIDE="$2"; shift 2 ;;
+        *) die "Invalid --gpu '$2'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
+      esac ;;
+    --gpu=*)
+      _v="${1#*=}"
+      case "$_v" in
+        cuda|rocm|vulkan|cpu) NI_GPU_OVERRIDE="$_v"; shift ;;
+        *) die "Invalid --gpu '$_v'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
+      esac ;;
     -h|--help)
       sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -60
       exit 0
@@ -668,26 +682,33 @@ if ! _docker_info_err="$(docker info 2>&1 >/dev/null)"; then
       "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
 fi
 
-# GPU is informational — not fatal. Resolve nvidia-smi via the WSL2-aware helper
-# (same as detect_hw_tier) so WSL2 hosts — where nvidia-smi is off PATH at
-# /usr/lib/wsl/lib/nvidia-smi — still capture JARVIS_HOST_VRAM_MB for the GPU
-# overlay handoff. A bare `command -v nvidia-smi` would miss them.
+# GPU is informational — not fatal. detect_gpu_vendor is WSL2-aware for NVIDIA
+# (nvidia-smi off PATH at /usr/lib/wsl/lib/nvidia-smi) and probes amd-smi /
+# /dev/dri for AMD/Intel. The vendor and VRAM captured here feed the .env
+# handoff (JARVIS_GPU_VENDOR + JARVIS_HOST_VRAM_MB) and overlay selection.
 NI_HOST_VRAM_MB=""
-_ni_smi="$(resolve_nvidia_smi 2>/dev/null || true)"
-if [ -n "$_ni_smi" ]; then
-  GPU_LINE="$("$_ni_smi" -L 2>/dev/null | head -n 1 || true)"
-  if [ -n "$GPU_LINE" ]; then
-    ok "GPU detected: $GPU_LINE"
-    _vram_mb="$("$_ni_smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
-    case "$_vram_mb" in
-      ''|*[!0-9]*) ;;
-      *) NI_HOST_VRAM_MB="$_vram_mb" ;;
-    esac
+NI_GPU_VENDOR="$(detect_gpu_vendor)"
+case "$NI_GPU_VENDOR" in
+  nvidia)
+    GPU_LINE="$("$(resolve_nvidia_smi)" -L 2>/dev/null | head -n 1 || true)"
+    ok "GPU detected: ${GPU_LINE:-NVIDIA}"
+    ;;
+  amd)
+    ok "GPU detected: AMD (via amd-smi)"
+    ;;
+  intel)
+    info "Intel GPU detected — no dedicated VRAM; the Vulkan overlay can accelerate Ollama (experimental)."
+    ;;
+  *)
+    info "No GPU detected — Ollama will run on CPU (slower)."
+    ;;
+esac
+if [ "$NI_GPU_VENDOR" = "nvidia" ] || [ "$NI_GPU_VENDOR" = "amd" ]; then
+  if _vram_mb="$(resolve_gpu_vram_mb "$NI_GPU_VENDOR")"; then
+    NI_HOST_VRAM_MB="$_vram_mb"
   else
-    warn "nvidia-smi present but no GPU enumerated — Ollama will run on CPU (slower)."
+    warn "${NI_GPU_VENDOR} GPU detected but VRAM could not be measured — model defaults stay conservative (CPU tier)."
   fi
-else
-  info "No NVIDIA GPU detected — Ollama will run on CPU (slower)."
 fi
 
 # Port pre-check — warn only. Probes all ports JARVIS exposes on the host.
@@ -1125,6 +1146,8 @@ sub_value() {
       printf '%s' "${NI_HW_TIER:-$(detect_hw_tier)}" ;;
     JARVIS_HOST_VRAM_MB)
       [ -n "$NI_HOST_VRAM_MB" ] && printf '%s' "$NI_HOST_VRAM_MB" || return 1 ;;
+    JARVIS_GPU_VENDOR)
+      printf '%s' "${NI_GPU_VENDOR:-none}" ;;
     JARVIS_LLM_BACKEND)
       printf '%s' "${NI_LLM_BACKEND:-auto}" ;;
     JARVIS_SMART_MODEL)
@@ -1239,17 +1262,57 @@ if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
 fi
 
 printf '\n'
-# GPU overlay is opt-in based on the Docker nvidia runtime (NOT host nvidia-smi):
-# only when the runtime is wired do we add docker-compose.gpu.yml, which re-adds
-# the GPU reservation for ollama + paper_ingestion. CPU-only hosts stay on the
-# base compose so install never hard-fails for lack of a GPU.
-COMPOSE_OVERLAY=()
-if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
-  COMPOSE_OVERLAY=(-f docker-compose.gpu.yml)
-  info "Docker nvidia runtime detected — enabling GPU overlay"
+# GPU overlay selection is vendor-driven: NVIDIA engages docker-compose.gpu.yml
+# (re-adds the GPU reservation for ollama + paper_ingestion) only when the
+# Docker nvidia runtime is wired — a present GPU without the runtime is called
+# out loudly, never silently degraded. AMD engages the ROCm overlay when
+# /dev/kfd exists, else the Vulkan overlay; Intel uses Vulkan; no GPU stays on
+# the CPU base so install never hard-fails. --gpu cuda|rocm|vulkan|cpu
+# overrides detection.
+_gpu_choice=""
+if [ -n "$NI_GPU_OVERRIDE" ]; then
+  _gpu_choice="$NI_GPU_OVERRIDE"
+  info "GPU overlay forced by --gpu: ${_gpu_choice}"
+  if [ "$_gpu_choice" = "cuda" ] \
+     && ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    warn "--gpu cuda but the Docker NVIDIA runtime is not configured — startup will fail the GPU reservation. Install nvidia-container-toolkit, then: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+  fi
 else
-  info "Docker nvidia runtime not found — CPU-only (Ollama on CPU; slower, OK)"
+  case "$NI_GPU_VENDOR" in
+    nvidia)
+      if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+        _gpu_choice="cuda"
+        info "NVIDIA GPU + Docker nvidia runtime detected — enabling the GPU overlay"
+      else
+        _gpu_choice="cpu"
+        warn "NVIDIA GPU detected but the Docker NVIDIA runtime is not configured — the stack will run on CPU. Install nvidia-container-toolkit, then: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+      fi
+      ;;
+    amd)
+      if [ -e "${JARVIS_KFD_DEV:-/dev/kfd}" ]; then
+        _gpu_choice="rocm"
+        info "AMD GPU with /dev/kfd detected — enabling the ROCm overlay (experimental)"
+      else
+        _gpu_choice="vulkan"
+        info "AMD GPU without /dev/kfd (no ROCm kernel driver) — enabling the Vulkan overlay (experimental)"
+      fi
+      ;;
+    intel)
+      _gpu_choice="vulkan"
+      info "Intel GPU detected — enabling the Vulkan overlay (experimental)"
+      ;;
+    *)
+      _gpu_choice="cpu"
+      info "No GPU detected — CPU-only (Ollama on CPU; slower, OK)"
+      ;;
+  esac
 fi
+case "$_gpu_choice" in
+  cuda)   _overlay_name="gpu";    COMPOSE_OVERLAY=(-f docker-compose.gpu.yml) ;;
+  rocm)   _overlay_name="rocm";   COMPOSE_OVERLAY=(-f docker-compose.rocm.yml) ;;
+  vulkan) _overlay_name="vulkan"; COMPOSE_OVERLAY=(-f docker-compose.vulkan.yml) ;;
+  *)      _overlay_name="";       COMPOSE_OVERLAY=() ;;
+esac
 # An explicit -f list suppresses Compose's implicit docker-compose.override.yml
 # auto-load, so when that file exists we must list it back explicitly. gpu BEFORE
 # override so a dev override's `deploy: !reset null` on ollama still wins.
@@ -1266,8 +1329,7 @@ fi
 # nvidia runtime) overwrites a stale `docker-compose.gpu.yml` entry — a leftover
 # GPU overlay on a now-CPU host fails the device reservation.
 _has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
-_has_nvidia=0; [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ] && _has_nvidia=1
-upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_has_nvidia" "$_has_override")"
+upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_overlay_name" "$_has_override")"
 # Build app images BEFORE anything heavy lands on disk: the parallel builds are
 # a cold install's peak disk consumer, so an ENOSPC surfaces here — with
 # recovery guidance and nothing else half-downloaded — instead of mid-model-pull.

@@ -8,6 +8,9 @@
 #   - preflight_disk_lib         : free-vs-required disk measurement core
 #   - upsert_env_var             : idempotent in-place .env key write
 #   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
+#   - resolve_amd_smi            : locate amd-smi (the stable AMD interface)
+#   - detect_gpu_vendor          : nvidia | amd | intel | none probe
+#   - resolve_gpu_vram_mb        : vendor-neutral total-VRAM (MB) probe
 #   - _default_model_for_tier    : tier+backend -> default model id
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
@@ -28,6 +31,88 @@ resolve_nvidia_smi() {
     return 0
   fi
   return 1
+}
+
+# resolve_amd_smi -> echoes a usable amd-smi path, or returns 1 if none.
+# amd-smi (ROCm >= 5.7) is AMD's stable machine interface; rocm-smi's JSON
+# output is explicitly unstable across releases, so it is never parsed here.
+resolve_amd_smi() {
+  command -v amd-smi 2>/dev/null || return 1
+}
+
+# detect_gpu_vendor -> echoes nvidia | amd | intel | none.
+# Probe order nvidia -> amd -> intel: discrete vendor tools first (nvidia-smi
+# enumerates a GPU; amd-smi static reports one), then a bare /dev/dri render
+# node (Intel iGPU/dGPU, or an AMD card without any vendor tool installed).
+# JARVIS_DRI_DIR overrides the /dev/dri location for tests.
+detect_gpu_vendor() {
+  local smi
+  if smi="$(resolve_nvidia_smi)" && "$smi" -L 2>/dev/null | grep -q .; then
+    printf 'nvidia'
+    return 0
+  fi
+  if smi="$(resolve_amd_smi)" && "$smi" static --json 2>/dev/null | grep -qi '"gpu"'; then
+    printf 'amd'
+    return 0
+  fi
+  if ls "${JARVIS_DRI_DIR:-/dev/dri}"/renderD* >/dev/null 2>&1; then
+    printf 'intel'
+    return 0
+  fi
+  printf 'none'
+}
+
+# resolve_gpu_vram_mb VENDOR -> echoes the GPU's total VRAM in MB, or returns 1
+# when it cannot be measured (unknown vendor, missing tool, missing fields).
+# nvidia reads nvidia-smi; amd parses `amd-smi static --json` tolerant of
+# missing fields and of both size shapes ({"value": N, "unit": "MB"} and a
+# plain number, treated as MB). Intel iGPUs share system RAM — no VRAM figure,
+# so callers keep their conservative CPU-tier defaults.
+resolve_gpu_vram_mb() {
+  local vendor="$1" smi mb
+  case "$vendor" in
+    nvidia)
+      smi="$(resolve_nvidia_smi)" || return 1
+      mb="$("$smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')" || mb=""
+      ;;
+    amd)
+      smi="$(resolve_amd_smi)" || return 1
+      # -c (not a heredoc program) so the piped JSON stays on stdin.
+      mb="$("$smi" static --json 2>/dev/null | python3 -c '
+import json
+import sys
+
+def size_mb(vram):
+    if not isinstance(vram, dict):
+        return None
+    size = vram.get("size", vram.get("size_mb"))
+    if isinstance(size, dict):
+        value = size.get("value")
+        unit = str(size.get("unit", "MB")).upper()
+        if isinstance(value, (int, float)):
+            return float(value) * 1024 if unit == "GB" else float(value)
+        return None
+    if isinstance(size, (int, float)):
+        return float(size)
+    return None
+
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+gpus = data if isinstance(data, list) else [data]
+sizes = [s for g in gpus if isinstance(g, dict) for s in [size_mb(g.get("vram"))] if s]
+if not sizes:
+    sys.exit(1)
+print(int(max(sizes)))
+')" || mb=""
+      ;;
+    *) return 1 ;;
+  esac
+  case "$mb" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$mb"
 }
 
 
@@ -245,13 +330,15 @@ print(fb["model"])
 PY
 }
 
-# compute_compose_file NVIDIA_PRESENT OVERRIDE_PRESENT -> echoes colon-joined COMPOSE_FILE.
-# gpu.yml is added only when the Docker nvidia runtime is present; override.yml is
-# appended LAST (an explicit COMPOSE_FILE suppresses Compose's implicit override
-# auto-load, and gpu-before-override lets a dev override's `deploy: !reset null` win).
+# compute_compose_file OVERLAY OVERRIDE_PRESENT -> echoes colon-joined COMPOSE_FILE.
+# OVERLAY is the accelerator overlay basename ("gpu", "rocm", "vulkan") or ""
+# for the CPU base; setup.sh picks it from GPU vendor + runtime detection (or
+# --gpu). override.yml is appended LAST (an explicit COMPOSE_FILE suppresses
+# Compose's implicit override auto-load, and overlay-before-override lets a dev
+# override's `deploy: !reset null` win).
 compute_compose_file() {
-  local nvidia="$1" override="$2" files="docker-compose.yml"
-  [ "$nvidia" = "1" ] && files="${files}:docker-compose.gpu.yml"
+  local overlay="$1" override="$2" files="docker-compose.yml"
+  [ -n "$overlay" ] && files="${files}:docker-compose.${overlay}.yml"
   [ "$override" = "1" ] && files="${files}:docker-compose.override.yml"
   printf '%s' "$files"
 }

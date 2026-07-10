@@ -107,6 +107,9 @@ class SetupStatusResponse(BaseModel):
     hw_tier_baseline: str | None = None
     hw_tier_current: str | None = None
     hw_tier_changed: bool = False
+    # GPU vendor: the setup-written JARVIS_GPU_VENDOR (host truth) when
+    # present, else inferred in-container (nvidia | amd | intel | none).
+    gpu_vendor: str = "none"
     recommended_backend: str | None = None
     current_backend: str | None = None
     observed_backend: str | None = None
@@ -354,7 +357,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
     Always reachable — the SetupGate on the frontend polls this on every
     boot, so it must never 401/403/500 on a fresh DB.
     """
-    from jarvis_common.hw_detect import detect_tier  # noqa: PLC0415
+    from jarvis_common.hw_detect import detect_tier, detect_vendor  # noqa: PLC0415
     from jarvis_common.litellm_observer import observed_share  # noqa: PLC0415
 
     pool = request.app.state.db_pool
@@ -362,6 +365,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
 
     baseline = os.getenv("JARVIS_HW_TIER") or None
     current = detect_tier()
+    vendor = detect_vendor()
     # Effective backend = explicit override, else the runtime default the LLM
     # router actually uses (rag.py: os.getenv("JARVIS_LLM_BACKEND", "ollama")).
     # recommended_backend (the tier suggestion) is reported separately — don't conflate.
@@ -415,6 +419,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
         hw_tier_baseline=baseline,
         hw_tier_current=current,
         hw_tier_changed=changed,
+        gpu_vendor=vendor,
         recommended_backend=recommended,
         current_backend=backend,
         observed_backend=served,

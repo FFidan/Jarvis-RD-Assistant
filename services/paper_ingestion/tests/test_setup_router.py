@@ -87,6 +87,36 @@ async def test_setup_status_includes_hw_fields(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_status_reports_gpu_vendor(monkeypatch) -> None:
+    """The setup-written JARVIS_GPU_VENDOR reaches /status verbatim."""
+    monkeypatch.setenv("JARVIS_GPU_VENDOR", "amd")
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.gpu_vendor == "amd"
+
+
+@pytest.mark.asyncio
+async def test_setup_status_gpu_vendor_defaults_without_env(monkeypatch) -> None:
+    """Without the env conduit, gpu_vendor falls back to the in-container probe."""
+    monkeypatch.delenv("JARVIS_GPU_VENDOR", raising=False)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.gpu_vendor in ("nvidia", "amd", "intel", "none")
+
+
+@pytest.mark.asyncio
 async def test_setup_status_includes_smtp_reachable(monkeypatch) -> None:
     """get_status surfaces smtp_reachable; False (and no network) when SMTP is unconfigured."""
     monkeypatch.delenv("SMTP_HOST", raising=False)

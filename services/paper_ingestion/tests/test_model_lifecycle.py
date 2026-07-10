@@ -554,6 +554,87 @@ def test_detect_hardware_env_garbage_ignored() -> None:
 
 
 # ---------------------------------------------------------------------------
+# JARVIS_GPU_VENDOR (HardwareInfo.vendor + divergence suppression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("vendor", ["amd", "intel"])
+def test_detect_hardware_amd_intel_host_suppresses_divergence(vendor: str) -> None:
+    """The in-container probe is nvidia-only, so it is structurally blind on
+    AMD/Intel hosts — the no-GPU divergence warning must not fire there."""
+    with (
+        patch.dict(
+            "os.environ",
+            {"JARVIS_HOST_VRAM_MB": "16368", "JARVIS_GPU_VENDOR": vendor},
+        ),
+        patch("paper_ingestion.services.model_lifecycle._probe_nvidia_smi", return_value=None),
+    ):
+        hw = detect_hardware()
+
+    assert hw.vendor == vendor
+    assert hw.host_gpu_divergence is False
+    assert hw.vram_source == "host-env"
+    assert hw.tier > 0
+
+
+def test_detect_hardware_nvidia_host_keeps_divergence() -> None:
+    """An NVIDIA host with a blind container probe still flags the missing overlay."""
+    with (
+        patch.dict(
+            "os.environ",
+            {"JARVIS_HOST_VRAM_MB": "8192", "JARVIS_GPU_VENDOR": "nvidia"},
+        ),
+        patch("paper_ingestion.services.model_lifecycle._probe_nvidia_smi", return_value=None),
+    ):
+        hw = detect_hardware()
+
+    assert hw.vendor == "nvidia"
+    assert hw.host_gpu_divergence is True
+
+
+def test_detect_hardware_legacy_env_without_vendor_keeps_divergence() -> None:
+    """Pre-vendor .env files (JARVIS_HOST_VRAM_MB set, no JARVIS_GPU_VENDOR)
+    preserve the original divergence behavior."""
+    env = {k: v for k, v in os.environ.items() if k != "JARVIS_GPU_VENDOR"}
+    env["JARVIS_HOST_VRAM_MB"] = "8192"
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch("paper_ingestion.services.model_lifecycle._probe_nvidia_smi", return_value=None),
+    ):
+        hw = detect_hardware()
+
+    assert hw.vendor == "none"
+    assert hw.host_gpu_divergence is True
+
+
+def test_detect_hardware_vendor_inferred_from_container_probe() -> None:
+    """No vendor env: a successful in-container nvidia probe implies nvidia."""
+    env = {k: v for k, v in os.environ.items() if k != "JARVIS_GPU_VENDOR"}
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch("paper_ingestion.services.model_lifecycle._probe_nvidia_smi", return_value=16.0),
+    ):
+        hw = detect_hardware()
+
+    assert hw.vendor == "nvidia"
+
+
+def test_detect_hardware_vendor_invalid_env_ignored() -> None:
+    """An unrecognized JARVIS_GPU_VENDOR value falls back to inference."""
+    with (
+        patch.dict(
+            "os.environ",
+            {"JARVIS_HOST_VRAM_MB": "8192", "JARVIS_GPU_VENDOR": "matrox"},
+        ),
+        patch("paper_ingestion.services.model_lifecycle._probe_nvidia_smi", return_value=None),
+    ):
+        hw = detect_hardware()
+
+    assert hw.vendor == "none"
+    assert hw.host_gpu_divergence is True
+
+
+# ---------------------------------------------------------------------------
 # safe_num_ctx (D9) — largest slider stop that fits beside the embed model.
 # All expectations are derived from model_catalog.json numbers (qwen3:8b:
 # min_vram 6.0 GB, kv 250000 B/token, default 8192, max 32768; embed reserve =

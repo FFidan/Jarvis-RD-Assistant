@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Literal
 
+from jarvis_common.hw_detect import Vendor
+
 # ---------------------------------------------------------------------------
 # Named VRAM thresholds (MiB).  Comment each with hardware examples and the
 # reasoning behind the cutoff so future maintainers never see a mystery number.
@@ -92,6 +94,9 @@ class HardwareRecommendation:
     aliases: list[AliasRecommendation] = field(default_factory=list)
     # Human-readable context string safe to print in setup.sh --check output.
     summary: str = ""
+    # Detected GPU vendor, passed through verbatim for display — it never
+    # influences the recommendation (buckets are pure VRAM cuts).
+    vendor: Vendor = "none"
 
 
 # Validation note reused for the ≥40 GB tier recommendation (AliasRecommendation
@@ -206,7 +211,7 @@ def _classify(vram_mb: int) -> VramBucket:
     return VramBucket.HIGH
 
 
-def recommend_models(vram_mb: int | None) -> HardwareRecommendation:
+def recommend_models(vram_mb: int | None, vendor: Vendor = "none") -> HardwareRecommendation:
     """Return an advisory model recommendation for the given VRAM amount.
 
     Parameters
@@ -217,6 +222,9 @@ def recommend_models(vram_mb: int | None) -> HardwareRecommendation:
         ``None`` when the GPU probe failed entirely — a safe CPU-fallback
         recommendation is returned with an empty aliases list so callers
         can distinguish "no GPU" from "tiny GPU".
+    vendor:
+        Detected GPU vendor, passed through for display only — the bucket
+        cuts and alias table are vendor-neutral.
 
     Returns
     -------
@@ -234,6 +242,7 @@ def recommend_models(vram_mb: int | None) -> HardwareRecommendation:
                 "GPU probe failed — could not determine VRAM. "
                 "Using conservative defaults (qwen3:4b)."
             ),
+            vendor=vendor,
         )
 
     bucket = _classify(vram_mb)
@@ -242,4 +251,5 @@ def recommend_models(vram_mb: int | None) -> HardwareRecommendation:
         bucket=bucket,
         aliases=list(_BUCKET_TABLE[bucket]),
         summary=_BUCKET_SUMMARIES[bucket],
+        vendor=vendor,
     )
