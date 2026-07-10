@@ -15,6 +15,7 @@ for file in \
   services/paper_ingestion/requirements.txt \
   services/paper_ingestion/requirements-optional.txt \
   services/paper_ingestion/constraints.txt \
+  services/paper_ingestion/constraints-cpu.txt \
   services/paper_ingestion/constraints-optional.txt \
   services/learning_engine/requirements.txt \
   services/learning_engine/constraints.txt \

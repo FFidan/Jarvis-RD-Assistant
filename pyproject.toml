@@ -44,7 +44,10 @@ jarvis-common = [
     "structlog>=24.0",
     "urllib3>=2.7.0",
 ]
-paper-ingestion = [
+# Shared dependency set for both paper-ingestion flavors. Kept in its own
+# group because a group must not include-group its declared conflict partner
+# (uv would emit a degenerate self-conflict set that breaks `uv export`).
+paper-ingestion-base = [
     { include-group = "jarvis-common" },
     "apscheduler>=3.10.0",
     "asyncpg-listen>=0.0.9",
@@ -70,6 +73,17 @@ paper-ingestion = [
     "transformers>=5.4.0,<6.0.0",
     "uvicorn[standard]>=0.30.0",
     "uvloop>=0.19,<1",
+]
+paper-ingestion = [
+    { include-group = "paper-ingestion-base" },
+]
+# CPU flavor of paper-ingestion: identical dependency set, but torch resolves
+# from the PyTorch CPU index (no nvidia-*/triton). The direct torch pin is
+# required so the group-scoped [tool.uv.sources] entry validates; ==2.11.0
+# matches the 2.11.0+cpu wheels. Exported to constraints-cpu.txt.
+paper-ingestion-cpu = [
+    { include-group = "paper-ingestion-base" },
+    "torch==2.11.0",
 ]
 paper-ingestion-optional = [
     "networkx>=3.2",
@@ -113,6 +127,25 @@ dev = [
     "ruff>=0.8.0",
     "tach>=0.29.0",
 ]
+
+# The cuda flavor (default PyPI torch, bundled nvidia-* libs) and the cpu
+# flavor cannot share one resolution of torch, so the groups are declared
+# conflicting: uv forks the lockfile and each group exports its own variant.
+[tool.uv]
+conflicts = [
+    [
+        { group = "paper-ingestion" },
+        { group = "paper-ingestion-cpu" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", group = "paper-ingestion-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 target-version = "py312"
