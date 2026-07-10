@@ -69,6 +69,41 @@ die() {
   exit 1
 }
 
+die_enospc_aware() {
+  # $1 = captured command output, $2/$3 = die() message/hint.
+  # Builds and pulls land on the Docker data root — often a different
+  # filesystem from the repo — so disk-exhaustion recovery reports free
+  # space THERE (resolve_docker_data_root, scripts/setup_lib.sh).
+  local log_file="$1" data_root
+  if grep -qi 'no space left on device' "$log_file" 2>/dev/null; then
+    data_root="$(resolve_docker_data_root)"
+    err "Docker ran out of disk space on its data root ($data_root):"
+    df -h "$data_root" >&2 || true
+    cat >&2 <<EOF
+
+Free up space on $data_root, then re-run ./setup.sh:
+  1. Reclaim Docker build cache:  docker builder prune -af
+  2. Still short? Grow the filesystem holding the data root — on LVM hosts:
+     sudo lvextend --resizefs -L +30G <logical-volume-path>
+EOF
+  fi
+  rm -f "$log_file"  # content already streamed to the terminal via tee
+  die "$2" "$3"
+}
+
+compose_or_die() {
+  # $1 = failure message, $2 = failure hint, $3.. = docker compose args.
+  # Output streams to the terminal AND is captured (tee) so failures can
+  # be diagnosed for disk exhaustion by die_enospc_aware.
+  local message="$1" hint="$2" log_file
+  shift 2
+  log_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-compose.XXXXXX")"
+  if ! docker compose "$@" 2>&1 | tee "$log_file"; then
+    die_enospc_aware "$log_file" "$message" "$hint"
+  fi
+  rm -f "$log_file"
+}
+
 os_install_hint() {  # $1 = tool name (informational)
   case "$(uname -s 2>/dev/null)" in
     Darwin) printf 'macOS: install Docker Desktop — https://docs.docker.com/desktop/install/mac-install/' ;;
@@ -691,10 +726,9 @@ if [ -f .env ]; then
           set -a && . ./versions.env && set +a
         fi
         info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} up -d"
-        if ! docker compose ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} up -d; then
-          die "docker compose up failed." \
-              "Inspect logs: docker compose logs --tail=200"
-        fi
+        compose_or_die "docker compose up failed." \
+            "Inspect logs: docker compose logs --tail=200" \
+            ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} up -d
         ok "Stack started with the existing configuration. To regenerate .env, re-run ./setup.sh and answer 'y'."
         exit 0
         ;;
@@ -1200,14 +1234,24 @@ fi
 _has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
 _has_nvidia=0; [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ] && _has_nvidia=1
 upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_has_nvidia" "$_has_override")"
+# Build app images BEFORE anything heavy lands on disk: the parallel builds are
+# a cold install's peak disk consumer, so an ENOSPC surfaces here — with
+# recovery guidance and nothing else half-downloaded — instead of mid-model-pull.
+# Profile-aware and WITHOUT an explicit service list: profile-gated services
+# (telegram_bot, langfuse) error "no such service" by name when their profile
+# is off, and `build` skips image-only services on its own.
+info "Building application images: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} build"
+info "A first run builds several images (minutes); later runs reuse the cache."
+compose_or_die "docker compose build failed." \
+    "Inspect the build output above, then re-run ./setup.sh" \
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} build
 # Start Ollama alone first, then run the model pull as an attached one-off so
 # its progress streams to the terminal — buried inside a bare `up -d` the
 # 7-11 GB first pull looks like a hang.
 info "Starting Ollama: docker compose ${COMPOSE_FILE_ARGS[*]:-} up -d ollama"
-if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama; then
-  die "docker compose up failed." \
-      "Inspect logs: docker compose logs --tail=200"
-fi
+compose_or_die "docker compose up failed." \
+    "Inspect logs: docker compose logs --tail=200" \
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama
 wait_healthy ollama 180 \
   || warn "Ollama is still starting — model inventory unknown; proceeding to the model pull."
 
@@ -1218,7 +1262,7 @@ else
   _FIRST_RUN_PULL=1
   printf '\n'
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s  Downloading models (7-11 GB) — first run can take 20-60 min. %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  Images built — downloading models next (7-11 GB, 20-60 min).%s\n' "$C_YELLOW" "$C_RESET"
   printf '%s  Pull progress streams below. This is not an error.           %s\n' "$C_YELLOW" "$C_RESET"
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
   printf '\n'
@@ -1231,10 +1275,9 @@ if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} run --rm o
 fi
 
 info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
-if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d; then
-  die "docker compose up failed." \
-      "Inspect logs: docker compose logs --tail=200"
-fi
+compose_or_die "docker compose up failed." \
+    "Inspect logs: docker compose logs --tail=200" \
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d
 
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy

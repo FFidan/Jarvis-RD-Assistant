@@ -325,6 +325,7 @@ services:
 
   paper_ingestion:
     image: jarvis/paper_ingestion:${JARVIS_VERSION:-1.0.4}
+    pull_policy: build
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -408,6 +409,7 @@ services:
 
   learning_engine:
     image: jarvis/learning_engine:${JARVIS_VERSION:-1.0.4}
+    pull_policy: build
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -462,6 +464,7 @@ services:
 
   telegram_bot:
     image: jarvis/telegram_bot:${JARVIS_VERSION:-1.0.4}
+    pull_policy: build
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -509,6 +512,7 @@ services:
 
   dashboard:
     image: jarvis/dashboard:${JARVIS_VERSION:-1.0.4}
+    pull_policy: build
     build:
       context: ./frontend
       args:
@@ -670,6 +674,7 @@ services:
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
     image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.0.4}
+    pull_policy: build
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
