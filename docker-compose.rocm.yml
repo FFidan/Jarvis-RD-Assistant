@@ -1,0 +1,17 @@
+# ROCm overlay — added by setup.sh ONLY when an AMD GPU + ROCm runtime is detected.
+# Base docker-compose.yml is CPU-safe; this re-enables GPU access for ollama via
+# ROCm device passthrough (no Docker device-reservation driver needed for ROCm).
+# Order matters with docker-compose.override.yml: apply this BEFORE override so a
+# dev-box override's `deploy: !reset null` on ollama still wins.
+#
+# paper_ingestion stays CPU-only on AMD hosts: torch-ROCm support is deferred
+# (docling#2900; the ROCm torch wheel is 4.47 GB).
+services:
+  ollama:
+    image: ${OLLAMA_ROCM_IMAGE:-ollama/ollama:0.23.1-rocm}
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add: ["video", "render"]
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}
