@@ -3,6 +3,9 @@
 # (setup.sh itself is not cleanly sourceable). Concerns:
 #   - compute_compose_file       : which compose overlays to persist into .env
 #   - compute_ollama_models      : which Ollama tags the bootstrap must pull
+#   - compute_required_disk_gb   : GB a cold install writes to the data root
+#   - resolve_docker_data_root   : where Docker keeps images/volumes/cache
+#   - preflight_disk_lib         : free-vs-required disk measurement core
 #   - upsert_env_var             : idempotent in-place .env key write
 #   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
 #   - _default_model_for_tier    : tier+backend -> default model id
@@ -165,6 +168,92 @@ compute_ollama_models() {
     "$_FAST"|"$_EMBED") printf '%s,%s' "$_FAST" "$_EMBED" ;;
     *)                  printf '%s,%s,%s' "$smart" "$_FAST" "$_EMBED" ;;
   esac
+}
+
+# _image_budget_gb VARIANT -> GB of disk needed to ACQUIRE the app images for
+# one install variant. Measured 2026-07 (build peak + 20% headroom) on the
+# containerd image store — the Docker fresh-install default, which retains
+# compressed blobs on top of the unpacked layers. cpu-pull is a conservative
+# floor for the registry-pull install path.
+_image_budget_gb() {
+  case "$1" in
+    cpu-pull)  printf '6' ;;
+    cpu-build) printf '9' ;;
+    *)         printf '17' ;;  # cuda-build — the largest variant, safe default
+  esac
+}
+
+# compute_required_disk_gb SMART_MODEL [VARIANT] -> echoes the whole-GB disk a
+# cold install writes to the Docker data root: the app-image budget
+# (variant-keyed, see _image_budget_gb) + infra image pulls (postgres/qdrant/
+# ollama/litellm/vector, incl. containerd blob retention) + the Ollama model
+# set compute_ollama_models will pull (per-model disk_gb from the model
+# catalog; tags missing from the catalog assume 18 GB each). Returns 0 when
+# the model sum is catalog-derived; when host python3 or the catalog is
+# unusable it echoes a worst-case-model-set total and returns 3 so callers can
+# soften a fatal check. stdout is ONLY the number — diagnostics go to stderr.
+# JARVIS_MODEL_CATALOG overrides the catalog path (testing); the default is
+# relative because setup.sh cd's to the repo root.
+compute_required_disk_gb() {
+  local smart="${1:-qwen3:8b}" variant="${2:-cuda-build}"
+  local infra_gb=14 worst_models_gb=22
+  local catalog="${JARVIS_MODEL_CATALOG:-libs/jarvis_common/jarvis_common/data/model_catalog.json}"
+  local base_gb models_gb
+  base_gb=$(( $(_image_budget_gb "$variant") + infra_gb ))
+  models_gb="$(python3 - "$catalog" "$(compute_ollama_models "$smart")" 2>/dev/null <<'PY'
+import json
+import math
+import sys
+
+catalog_path, tags_csv = sys.argv[1:3]
+UNKNOWN_MODEL_GB = 18.0
+with open(catalog_path) as f:
+    disk_by_tag = {
+        entry["ollama_tag"]: float(entry.get("disk_gb") or UNKNOWN_MODEL_GB)
+        for entry in json.load(f)
+        if entry.get("ollama_tag")
+    }
+tags = [t for t in tags_csv.split(",") if t]
+print(math.ceil(sum(disk_by_tag.get(t, UNKNOWN_MODEL_GB) for t in tags)))
+PY
+)" || models_gb=""
+  if [ -n "$models_gb" ] && [ "$models_gb" -eq "$models_gb" ] 2>/dev/null; then
+    printf '%s' "$((base_gb + models_gb))"
+    return 0
+  fi
+  printf '[WARN] model catalog unreadable (%s) — assuming a worst-case %s GB model set\n' \
+    "$catalog" "$worst_models_gb" >&2
+  printf '%s' "$((base_gb + worst_models_gb))"
+  return 3
+}
+
+# resolve_docker_data_root -> echoes the Docker data root, where image layers,
+# build cache and named volumes actually land. Falls back to the Linux default
+# when the daemon cannot be queried.
+resolve_docker_data_root() {
+  local root
+  root="$(docker info -f '{{ .DockerRootDir }}' 2>/dev/null || true)"
+  [ -n "$root" ] || root="/var/lib/docker"
+  printf '%s' "$root"
+}
+
+# preflight_disk_lib REQUIRED_GB -> measures free space on the Docker data
+# root (df -Pk there, NOT `df .` — the install dir and the data root are
+# different filesystems on split-mount hosts) and compares it to REQUIRED_GB.
+# stdout: "<free_gb> <data_root>". Returns 0 when free >= required, 1 on a
+# shortfall, 2 when free space cannot be measured. Never hard-fails: setup.sh
+# and the alternate bootstraps compose their own fatal/warn policy around
+# this shared core.
+preflight_disk_lib() {
+  local required_gb="$1" data_root free_kb
+  data_root="$(resolve_docker_data_root)"
+  free_kb="$(df -Pk "$data_root" 2>/dev/null | awk 'NR==2{print $4}' || true)"
+  if [ -z "$free_kb" ] || ! [ "$free_kb" -eq "$free_kb" ] 2>/dev/null; then
+    printf '0 %s' "$data_root"
+    return 2
+  fi
+  printf '%s %s' "$((free_kb / 1048576))" "$data_root"
+  [ "$((free_kb / 1048576))" -ge "$required_gb" ]
 }
 
 # upsert_env_var KEY VALUE — idempotent in-place .env upsert (no duplicate lines).

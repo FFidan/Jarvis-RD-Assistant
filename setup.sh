@@ -26,6 +26,9 @@
 #                             Docker, Docker Compose, or openssl are missing.
 #                             In --non-interactive mode this flag is required for
 #                             host package installation.
+#   --skip-disk-check         Skip the pre-install free-disk check on the Docker
+#                             data root (a first install needs ~35-55 GB there,
+#                             depending on GPU variant and model choice).
 #   --backend ollama|vllm|auto
 #                             Override AI backend selection. Default: auto (inferred
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
@@ -227,6 +230,55 @@ print(recommend_models(${_vram_mb}).summary)
   return "$fail"
 }
 
+# preflight_disk — install-path disk check (run_doctor's --check advisory above
+# stays warn-only). Sizes the whole cold install for the chosen smart model
+# (app-image budget + infra pulls + Ollama model set) and measures free space
+# on the Docker data root via preflight_disk_lib — images, volumes and models
+# all land there, and `df .` lies on split-mount hosts. The shortfall is fatal
+# only on a FIRST install (no app image present yet): a re-run with cached
+# images only warns, as does a catalog-fallback estimate with the 20 GB hard
+# floor still free. --skip-disk-check bypasses the check entirely.
+preflight_disk() {
+  if [ "$SKIP_DISK_CHECK" -eq 1 ]; then
+    info "Skipping disk preflight (--skip-disk-check)."
+    return 0
+  fi
+  local _variant="cpu-build"
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    _variant="cuda-build"
+  fi
+  local _req_gb _req_exact=1
+  _req_gb="$(compute_required_disk_gb "${NI_SMART_MODEL:-qwen3:8b}" "$_variant")" || _req_exact=0
+  local _out _rc=0
+  _out="$(preflight_disk_lib "$_req_gb")" || _rc=$?
+  local _free_gb="${_out%% *}" _data_root="${_out#* }"
+  case "$_rc" in
+    0)
+      ok "Disk preflight: ${_free_gb} GB free on ${_data_root} (~${_req_gb} GB needed)."
+      return 0
+      ;;
+    2)
+      warn "Disk preflight: could not measure free space on ${_data_root} — proceeding."
+      return 0
+      ;;
+  esac
+  # Shortfall. Cached app images mean this is a re-run, not a cold install —
+  # the big layers are already on disk, so never block it.
+  local _img
+  for _img in jarvis/paper_ingestion jarvis/learning_engine jarvis/dashboard; do
+    if [ -n "$(docker images -q "$_img" 2>/dev/null)" ]; then
+      warn "Low disk: ${_free_gb} GB free on ${_data_root} (a full reinstall needs ~${_req_gb} GB) — continuing, app images are already present."
+      return 0
+    fi
+  done
+  if [ "$_req_exact" -eq 0 ] && [ "$_free_gb" -ge 20 ]; then
+    warn "Low disk: ${_free_gb} GB free on ${_data_root}; the ~${_req_gb} GB figure is a worst-case estimate (model catalog unreadable). Proceeding — watch free space during the install."
+    return 0
+  fi
+  die "Not enough free disk for a first install: ${_free_gb} GB free on ${_data_root} (df -Pk), ~${_req_gb} GB needed for images + models." \
+      "Free up space on ${_data_root} (e.g. docker system prune), move the Docker data root to a larger disk, or re-run with --skip-disk-check to proceed anyway."
+}
+
 # require_langfuse_secrets — precondition guard for --profile observability.
 # The Langfuse image does NOT honour the Docker Secrets _FILE convention, so
 # the three secrets are sourced from .env (mirrored to ./secrets/ for parity
@@ -310,6 +362,7 @@ NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
 NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
 INSTALL_PREREQS=0
+SKIP_DISK_CHECK=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -373,6 +426,8 @@ while [ $# -gt 0 ]; do
       RUN_DOCTOR=1; shift ;;
     --install-prereqs)
       INSTALL_PREREQS=1; shift ;;
+    --skip-disk-check)
+      SKIP_DISK_CHECK=1; shift ;;
     --backend)
       case "$2" in
         ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
@@ -389,7 +444,7 @@ while [ $# -gt 0 ]; do
     --smart-model=*)
       NI_SMART_MODEL="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -40
+      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -50
       exit 0
       ;;
     *)
@@ -726,6 +781,10 @@ fi
 if [ "$NON_INTERACTIVE" -eq 0 ] && [ -z "${NI_LLM_BACKEND:-}" ]; then
   prompt_ai_backend
 fi
+
+# Disk preflight — sized to the smart model chosen above, so it must run after
+# the backend/model resolution and before anything pulls or builds.
+preflight_disk
 
 CLOUDFLARE_TUNNEL_TOKEN=""
 USE_TUNNEL_PROFILE=0
