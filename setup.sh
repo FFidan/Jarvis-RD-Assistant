@@ -41,6 +41,12 @@
 #
 # In non-interactive mode every prompt is driven by flags or safe defaults;
 # no stdin reads are attempted.
+#
+# Exit codes:
+#   0  success; 1  failure.
+#   3  Docker was just installed and this shell session is not in the 'docker'
+#      group yet — log out and back in (or run 'newgrp docker'), then re-run
+#      ./setup.sh.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -398,6 +404,7 @@ NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
+DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -479,7 +486,7 @@ while [ $# -gt 0 ]; do
     --smart-model=*)
       NI_SMART_MODEL="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -50
+      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -60
       exit 0
       ;;
     *)
@@ -532,12 +539,13 @@ _host_os_id() {
 }
 
 _prereq_install_plan_for_host() {
-  local os os_id has_apt=0 has_brew=0
+  local os os_id has_apt=0 has_brew=0 has_dnf=0
   os="$(uname -s 2>/dev/null || printf unknown)"
   os_id="$(_host_os_id)"
   command -v apt-get >/dev/null 2>&1 && has_apt=1
   command -v brew >/dev/null 2>&1 && has_brew=1
-  prereq_install_plan "$os" "$os_id" "$has_apt" "$has_brew" "$@"
+  command -v dnf >/dev/null 2>&1 && has_dnf=1
+  prereq_install_plan "$os" "$os_id" "$has_apt" "$has_brew" "$has_dnf" "$@"
 }
 
 _run_prereq_plan() {
@@ -557,7 +565,13 @@ _run_prereq_plan() {
 
 handle_missing_prereqs() {
   local missing=("$@")
-  local plan=""
+  local plan="" docker_in_plan=0
+  case " ${missing[*]} " in
+    *" docker "*) docker_in_plan=1 ;;
+  esac
+  if _gpu_present_for_prereqs; then
+    missing+=(nvidia-toolkit)
+  fi
   printf '%sMissing prerequisites:%s %s\n' "$C_YELLOW" "$C_RESET" "${missing[*]}" >&2
 
   if ! plan="$(_prereq_install_plan_for_host "${missing[@]}")" || [ -z "$plan" ]; then
@@ -569,6 +583,7 @@ handle_missing_prereqs() {
 
   if [ "$INSTALL_PREREQS" -eq 1 ]; then
     _run_prereq_plan "$plan" "$NON_INTERACTIVE"
+    if [ "$docker_in_plan" -eq 1 ]; then DOCKER_JUST_INSTALLED=1; fi
     return
   fi
 
@@ -585,12 +600,22 @@ handle_missing_prereqs() {
   local reply=""
   read -rp "Run these prerequisite installation commands now? [y/N]: " reply
   case "$reply" in
-    [yY]|[yY][eE][sS]) _run_prereq_plan "$plan" 0 ;;
+    [yY]|[yY][eE][sS])
+      _run_prereq_plan "$plan" 0
+      if [ "$docker_in_plan" -eq 1 ]; then DOCKER_JUST_INSTALLED=1; fi
+      ;;
     *) die "Prerequisites are missing." "$(prereq_manual_guidance "${missing[@]}")" ;;
   esac
 }
 
 ensure_prerequisites() {
+  # Snap-packaged Docker is strictly confined: bind mounts outside $HOME and
+  # compose secrets break in ways that only surface mid-install. Refuse early.
+  if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+    die "Snap-packaged Docker detected ('snap list docker') — it is not supported." \
+        "Remove it with 'sudo snap remove docker', then re-run ./setup.sh to install Docker Engine from Docker's official repository."
+  fi
+
   local missing=()
   while IFS= read -r item; do
     [ -n "$item" ] && missing+=("$item")
@@ -630,9 +655,18 @@ esac
 # Fatal daemon probe — must run before the idempotency gate and every prompt,
 # so a dead daemon can never strand a half-answered wizard or persist a stale
 # COMPOSE_FILE. `docker info` (not a socket stat) honours DOCKER_HOST/rootless.
-docker info >/dev/null 2>&1 \
-  || die "Docker daemon is not reachable ('docker info' failed)." \
-         "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
+# Right after a guided docker install the daemon runs but this shell predates
+# the docker-group grant: exit 3 (see the usage header) tells callers
+# "re-login and re-run", distinctly from failure and never as false success.
+if ! _docker_info_err="$(docker info 2>&1 >/dev/null)"; then
+  if [ "$DOCKER_JUST_INSTALLED" -eq 1 ] \
+     && printf '%s' "$_docker_info_err" | grep -qi 'permission denied'; then
+    err "docker installed — log out and back in (or run 'newgrp docker'), then re-run ./setup.sh"
+    exit 3
+  fi
+  die "Docker daemon is not reachable ('docker info' failed)." \
+      "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
+fi
 
 # GPU is informational — not fatal. Resolve nvidia-smi via the WSL2-aware helper
 # (same as detect_hw_tier) so WSL2 hosts — where nvidia-smi is off PATH at

@@ -32,19 +32,28 @@ resolve_nvidia_smi() {
 
 
 
-# prereq_install_plan OS OS_ID HAS_APT HAS_BREW MISSING...
+# prereq_install_plan OS OS_ID HAS_APT HAS_BREW HAS_DNF MISSING...
 # Prints explicit package-manager commands for supported hosts, one command per
-# line. Returns non-zero when the host cannot be installed safely. This function
-# only plans; setup.sh decides whether to prompt and execute the plan.
+# line. Docker comes from Docker's official repository (docker-ce +
+# docker-compose-plugin): stock distro packages miss the compose plugin on
+# Debian/Ubuntu and lag Engine releases. Root-escalation contract (setup.sh
+# prints the plan verbatim for consent and rewrites only LINE-LEADING sudo to
+# `sudo -n` for non-interactive runs): every line is unprivileged or starts
+# with exactly one sudo, and remote content is fetched to a temp file as the
+# user — never piped into a privileged command. `nvidia-toolkit` in MISSING...
+# appends the NVIDIA Container Toolkit + docker runtime wiring. Returns
+# non-zero when the host cannot be installed safely. This function only plans;
+# setup.sh decides whether to prompt and execute the plan.
 prereq_install_plan() {
-  local os="$1" os_id="$2" has_apt="$3" has_brew="$4"
-  shift 4
-  local needs_docker=0 needs_compose=0 needs_openssl=0 item
+  local os="$1" os_id="$2" has_apt="$3" has_brew="$4" has_dnf="$5"
+  shift 5
+  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 item
   for item in "$@"; do
     case "$item" in
       docker) needs_docker=1 ;;
       docker-compose) needs_compose=1 ;;
       openssl) needs_openssl=1 ;;
+      nvidia-toolkit) needs_toolkit=1 ;;
     esac
   done
 
@@ -53,18 +62,11 @@ prereq_install_plan() {
       case "$os_id" in
         debian|ubuntu|linuxmint|pop|popos)
           [ "$has_apt" = "1" ] || return 1
-          local apt_packages=()
-          if [ "$needs_docker" = "1" ]; then
-            apt_packages+=(docker.io docker-compose-plugin)
-          elif [ "$needs_compose" = "1" ]; then
-            apt_packages+=(docker-compose-plugin)
-          fi
-          if [ "$needs_openssl" = "1" ]; then
-            apt_packages+=(openssl)
-          fi
-          [ "${#apt_packages[@]}" -gt 0 ] || return 0
-          printf 'sudo apt-get update\n'
-          printf 'sudo apt-get install -y %s\n' "${apt_packages[*]}"
+          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
+          ;;
+        fedora)
+          [ "$has_dnf" = "1" ] || return 1
+          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
           ;;
         *) return 1 ;;
       esac
@@ -82,18 +84,116 @@ prereq_install_plan() {
   esac
 }
 
+# Docker's apt repo serves UBUNTU codename dists: Mint/Pop set VERSION_CODENAME
+# to their own release name ('wilma' 404s), so the sources line derives
+# ${UBUNTU_CODENAME:-$VERSION_CODENAME} from /etc/os-release when it executes.
+# shellcheck disable=SC2016  # plan lines expand at execution, not planning
+_prereq_plan_apt() {
+  local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5"
+  local repo_base=ubuntu
+  [ "$os_id" = "debian" ] && repo_base=debian
+
+  printf 'sudo apt-get update\n'
+  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
+    printf 'sudo apt-get install -y ca-certificates curl gnupg\n'
+    printf 'curl -fsSL https://download.docker.com/linux/%s/gpg -o /tmp/jarvis-docker.asc\n' "$repo_base"
+    printf 'sudo install -m 0755 -d /etc/apt/keyrings\n'
+    printf 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg /tmp/jarvis-docker.asc\n'
+    printf 'sudo chmod a+r /etc/apt/keyrings/docker.gpg\n'
+    printf 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/%s $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" > /tmp/jarvis-docker.list\n' "$repo_base"
+    printf 'sudo install -m 0644 /tmp/jarvis-docker.list /etc/apt/sources.list.d/docker.list\n'
+    printf 'sudo apt-get update\n'
+  fi
+
+  local packages=()
+  if [ "$needs_docker" = "1" ]; then
+    packages+=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+  elif [ "$needs_compose" = "1" ]; then
+    packages+=(docker-compose-plugin)
+  fi
+  if [ "$needs_openssl" = "1" ]; then
+    packages+=(openssl)
+  fi
+  if [ "${#packages[@]}" -gt 0 ]; then
+    printf 'sudo apt-get install -y %s\n' "${packages[*]}"
+  fi
+  if [ "$needs_docker" = "1" ]; then
+    printf 'sudo systemctl enable --now docker\n'
+    printf 'sudo usermod -aG docker "$USER"\n'
+  fi
+  if [ "$needs_toolkit" = "1" ]; then
+    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey -o /tmp/jarvis-nvidia-toolkit.asc\n'
+    printf 'sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg /tmp/jarvis-nvidia-toolkit.asc\n'
+    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o /tmp/jarvis-nvidia-toolkit.list\n'
+    printf 'sed -i "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g" /tmp/jarvis-nvidia-toolkit.list\n'
+    printf 'sudo install -m 0644 /tmp/jarvis-nvidia-toolkit.list /etc/apt/sources.list.d/nvidia-container-toolkit.list\n'
+    printf 'sudo apt-get update\n'
+    printf 'sudo apt-get install -y nvidia-container-toolkit\n'
+    printf 'sudo nvidia-ctk runtime configure --runtime=docker\n'
+    printf 'sudo systemctl restart docker\n'
+  fi
+}
+
+# Fedora mirror of _prereq_plan_apt. The repo file is fetched unprivileged and
+# installed with one sudo (avoids the dnf4/dnf5 config-manager syntax split).
+# shellcheck disable=SC2016  # plan lines expand at execution, not planning
+_prereq_plan_dnf() {
+  local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4"
+
+  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
+    printf 'curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo -o /tmp/jarvis-docker-ce.repo\n'
+    printf 'sudo install -m 0644 /tmp/jarvis-docker-ce.repo /etc/yum.repos.d/docker-ce.repo\n'
+  fi
+
+  local packages=()
+  if [ "$needs_docker" = "1" ]; then
+    packages+=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+  elif [ "$needs_compose" = "1" ]; then
+    packages+=(docker-compose-plugin)
+  fi
+  if [ "$needs_openssl" = "1" ]; then
+    packages+=(openssl)
+  fi
+  if [ "${#packages[@]}" -gt 0 ]; then
+    printf 'sudo dnf install -y %s\n' "${packages[*]}"
+  fi
+  if [ "$needs_docker" = "1" ]; then
+    printf 'sudo systemctl enable --now docker\n'
+    printf 'sudo usermod -aG docker "$USER"\n'
+  fi
+  if [ "$needs_toolkit" = "1" ]; then
+    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo -o /tmp/jarvis-nvidia-toolkit.repo\n'
+    printf 'sudo install -m 0644 /tmp/jarvis-nvidia-toolkit.repo /etc/yum.repos.d/nvidia-container-toolkit.repo\n'
+    printf 'sudo dnf install -y nvidia-container-toolkit\n'
+    printf 'sudo nvidia-ctk runtime configure --runtime=docker\n'
+    printf 'sudo systemctl restart docker\n'
+  fi
+}
+
 # prereq_manual_guidance MISSING... -> human-readable fallback for unsupported
 # or non-mutating paths. Keep this free of private host paths and secrets.
 prereq_manual_guidance() {
   local item
   for item in "$@"; do
     case "$item" in
-      docker) printf 'Install Docker Engine or Docker Desktop: https://docs.docker.com/engine/install/\n' ;;
+      docker) printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
       docker-compose) printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
       openssl) printf 'Install openssl with your OS package manager.\n' ;;
+      nvidia-toolkit) printf 'Install the NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html\n' ;;
     esac
   done
   printf 'After installing Docker, start the daemon and re-run ./setup.sh --check.\n'
+}
+
+# _gpu_present_for_prereqs -> 0 when the host has a usable NVIDIA GPU but the
+# Docker daemon lacks the nvidia runtime (or is unreachable/not installed yet),
+# i.e. the prereq plan should include the NVIDIA Container Toolkit. Reuses the
+# WSL2-aware nvidia-smi probe; GPU-presence test mirrors detect_hw_tier.
+_gpu_present_for_prereqs() {
+  local smi
+  smi="$(resolve_nvidia_smi)" || return 1
+  "$smi" -L 2>/dev/null | grep -q . || return 1
+  ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'
 }
 
 # _default_model_for_tier TIER BACKEND -> echoes the default model id for the

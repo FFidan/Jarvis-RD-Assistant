@@ -235,6 +235,135 @@ case "${rc}:${out}" in
   *) printf 'FAIL: --skip-disk-check did not bypass (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
+# === prereq_install_plan =====================================================
+# Cold-box contract: Docker comes from Docker's official repository (docker-ce
+# + docker-compose-plugin) — stock docker.io misses the compose plugin on
+# Debian/Ubuntu and skips the daemon/group steps. Root-escalation discipline:
+# every plan line is unprivileged or starts with exactly ONE line-leading sudo
+# (_run_prereq_plan rewrites only line-leading sudo to `sudo -n`, so a
+# mid-pipeline sudo would hang a no-tty non-interactive run), and remote
+# content is never piped into another command.
+
+plan_has() {  # plan_has <description> <plan> <grep -E pattern>
+  if printf '%s\n' "$2" | grep -Eq -e "$3"; then
+    pass "$1"
+  else
+    printf 'FAIL: %s (missing pattern: %s)\n' "$1" "$3" >&2
+    fail=1
+  fi
+}
+plan_lacks() {  # plan_lacks <description> <plan> <grep -E pattern>
+  if printf '%s\n' "$2" | grep -Eq -e "$3"; then
+    printf 'FAIL: %s (unwanted pattern: %s)\n' "$1" "$3" >&2
+    fail=1
+  else
+    pass "$1"
+  fi
+}
+
+plan="$(prereq_install_plan Linux ubuntu 1 0 0 docker docker-compose openssl nvidia-toolkit)" || plan=""
+plan_has   "ubuntu: docker-ce repo from download.docker.com"       "$plan" 'download\.docker\.com/linux/ubuntu'
+plan_has   "ubuntu: installs docker-ce + official compose plugin"  "$plan" 'apt-get install -y docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin'
+plan_lacks "ubuntu: stock docker.io is gone"                       "$plan" 'docker\.io'
+plan_has   "ubuntu: repo key fetched unprivileged to a temp file"  "$plan" '^curl -fsSL https://download\.docker\.com/linux/ubuntu/gpg -o /tmp/'
+plan_has   "ubuntu: single-sudo gpg dearmor into the keyring"      "$plan" '^sudo gpg --dearmor'
+plan_has   "ubuntu: enables + starts the daemon"                   "$plan" '^sudo systemctl enable --now docker$'
+plan_has   "ubuntu: adds the user to the docker group"             "$plan" '^sudo usermod -aG docker'
+plan_has   "ubuntu: installs nvidia-container-toolkit"             "$plan" 'apt-get install -y nvidia-container-toolkit'
+plan_has   "ubuntu: wires the nvidia runtime into docker"          "$plan" '^sudo nvidia-ctk runtime configure --runtime=docker$'
+plan_has   "ubuntu: restarts the daemon after runtime configure"   "$plan" '^sudo systemctl restart docker$'
+plan_lacks "ubuntu: nothing is piped (no curl-into-shell, no mid-pipe sudo)" "$plan" '\|'
+plan_lacks "ubuntu: every sudo is line-leading (exactly one)"      "$plan" '.sudo '
+
+# nvidia-ctk configure edits /etc/docker/daemon.json — the engine must be
+# installed first.
+install_ln="$(printf '%s\n' "$plan" | grep -n 'install -y docker-ce' | head -1 | cut -d: -f1 || true)"
+ctk_ln="$(printf '%s\n' "$plan" | grep -n 'nvidia-ctk runtime configure' | head -1 | cut -d: -f1 || true)"
+if [ -n "$install_ln" ] && [ -n "$ctk_ln" ] && [ "$install_ln" -lt "$ctk_ln" ]; then
+  pass "ubuntu: toolkit configure ordered after docker install"
+else
+  printf 'FAIL: toolkit configure (line %s) not after docker install (line %s)\n' "$ctk_ln" "$install_ln" >&2
+  fail=1
+fi
+
+# Mint/Pop: Docker's apt dists are UBUNTU codenames — a derivative's own
+# VERSION_CODENAME ('wilma', 'jolnir') 404s against download.docker.com.
+mint_plan="$(prereq_install_plan Linux linuxmint 1 0 0 docker)" || mint_plan=""
+# shellcheck disable=SC2016  # the plan must carry the UNEXPANDED derivation
+if printf '%s\n' "$mint_plan" | grep -qF '${UBUNTU_CODENAME:-$VERSION_CODENAME}'; then
+  pass "mint: codename derives from UBUNTU_CODENAME with VERSION_CODENAME fallback"
+else
+  # shellcheck disable=SC2016
+  printf 'FAIL: mint plan lacks the ${UBUNTU_CODENAME:-$VERSION_CODENAME} derivation\n' >&2
+  fail=1
+fi
+plan_has "mint: uses the ubuntu repo path" "$mint_plan" 'download\.docker\.com/linux/ubuntu'
+
+debian_plan="$(prereq_install_plan Linux debian 1 0 0 docker)" || debian_plan=""
+plan_has "debian: uses the debian repo path" "$debian_plan" 'download\.docker\.com/linux/debian'
+
+# Fedora mirrors the apt branch via dnf + Docker's repo file.
+fedora_plan="$(prereq_install_plan Linux fedora 0 0 1 docker openssl nvidia-toolkit)" || fedora_plan=""
+plan_has   "fedora: fetches Docker's repo file unprivileged"  "$fedora_plan" '^curl -fsSL https://download\.docker\.com/linux/fedora/docker-ce\.repo -o /tmp/'
+plan_has   "fedora: installs docker-ce via dnf"               "$fedora_plan" '^sudo dnf install -y docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin openssl$'
+plan_has   "fedora: enables + starts the daemon"              "$fedora_plan" '^sudo systemctl enable --now docker$'
+plan_has   "fedora: adds the user to the docker group"        "$fedora_plan" '^sudo usermod -aG docker'
+plan_has   "fedora: installs nvidia-container-toolkit"        "$fedora_plan" '^sudo dnf install -y nvidia-container-toolkit$'
+plan_lacks "fedora: every sudo is line-leading (exactly one)" "$fedora_plan" '.sudo '
+
+prereq_install_plan Linux fedora 0 0 0 docker >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "fedora without dnf refuses to plan" "$rc" "1"
+
+# openssl-only stays a plain package install (no Docker repo bootstrap).
+ssl_plan="$(prereq_install_plan Linux ubuntu 1 0 0 openssl)" || ssl_plan=""
+plan_has   "openssl-only: plain apt install"    "$ssl_plan" '^sudo apt-get install -y openssl$'
+plan_lacks "openssl-only: no docker repo setup" "$ssl_plan" 'download\.docker\.com'
+
+# === _gpu_present_for_prereqs ================================================
+# NVIDIA GPU visible but docker lacks the nvidia runtime (or is absent) -> the
+# prereq plan must add the container toolkit. Stubs shadow any real
+# nvidia-smi/docker on PATH.
+
+GPU_BIN="$(mktemp -d "${FIXTURES}/bin.XXXXXX")"
+cat > "${GPU_BIN}/nvidia-smi" <<'EOF'
+#!/usr/bin/env bash
+echo "GPU 0: Stub GPU"
+EOF
+cat > "${GPU_BIN}/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "${GPU_BIN}/nvidia-smi" "${GPU_BIN}/docker"
+
+(export PATH="${GPU_BIN}:${PATH}"; _gpu_present_for_prereqs) && rc=0 || rc=$?
+expect_eq "GPU present + docker unreachable -> toolkit needed (rc 0)" "$rc" "0"
+
+cat > "${GPU_BIN}/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"nvidia":{"path":"nvidia-container-runtime"}}'
+EOF
+chmod +x "${GPU_BIN}/docker"
+(export PATH="${GPU_BIN}:${PATH}"; _gpu_present_for_prereqs) && rc=0 || rc=$?
+expect_eq "GPU present + nvidia runtime already wired -> no toolkit (rc 1)" "$rc" "1"
+
+cat > "${GPU_BIN}/nvidia-smi" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "${GPU_BIN}/nvidia-smi"
+(export PATH="${GPU_BIN}:${PATH}"; _gpu_present_for_prereqs) && rc=0 || rc=$?
+expect_eq "no usable GPU -> no toolkit (rc 1)" "$rc" "1"
+
+# === setup.sh prereq wiring (static) =========================================
+
+scheck "setup.sh refuses snap-packaged docker" 'snap list docker'
+scheck "snap refusal names the removal command" 'snap remove docker'
+scheck "setup.sh initialises DOCKER_JUST_INSTALLED" '^DOCKER_JUST_INSTALLED=0'
+scheck "fresh-install permission denial exits 3 (distinct from failure)" '^ +exit 3$'
+scheck "exit-3 path tells the user to re-login or newgrp" 'log out and back in.*newgrp docker'
+scheck "usage text documents exit code 3" '^#   3  Docker was just installed'
+scheck "host probe passes dnf availability to the planner" 'command -v dnf'
+
 # =============================================================================
 
 if [ "$fail" -ne 0 ]; then
