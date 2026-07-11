@@ -1,0 +1,339 @@
+name: GHCR publish
+
+# Builds and publishes the application images to GHCR on release tags.
+#
+# Image mapping (load-bearing for docker-compose.yml's published-image refs):
+#   compose `jarvis/paper_ingestion` -> ghcr.io/ffidan/jarvis-paper-ingestion
+#   compose `jarvis/learning_engine` -> ghcr.io/ffidan/jarvis-learning-engine
+#   compose `jarvis/telegram_bot`    -> ghcr.io/ffidan/jarvis-telegram-bot
+#   compose `jarvis/dashboard`       -> ghcr.io/ffidan/jarvis-dashboard
+#   services/restore_uploader        -> ghcr.io/ffidan/jarvis-restore-uploader
+#   (jarvis/langfuse-hardened stays local-build: observability-profile-only,
+#   and publishing a hardened fork of an upstream image adds supply-chain
+#   surface for no install-time gain.)
+#
+# Tagging: git tags are v-prefixed, image tags are NOT (`v1.1.0` -> `:1.1.0`),
+# matching compose's ${JARVIS_VERSION} interpolation. Release candidates get
+# `:X.Y.Z-rc.N`; `latest` is never moved (flavor latest=false).
+# paper-ingestion ships two flavors: `:X.Y.Z` (TORCH_VARIANT=cpu, multi-arch)
+# and `:X.Y.Z-cuda` (amd64-only).
+#
+# arm64 builds run natively on the free public-repo `ubuntu-24.04-arm` hosted
+# runners (no QEMU); multi-arch manifests are assembled from per-platform
+# digest pushes in the merge job.
+#
+# A workflow_dispatch run from a non-tag ref builds WITHOUT pushing — a manual
+# dispatch must never be able to publish arbitrary-SHA images.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  preflight:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      push: ${{ steps.mode.outputs.push }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Decide publish vs build-only
+        id: mode
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "Not a v* tag ref — building without pushing."
+          fi
+
+      # A writable tag alone must not publish trusted-looking stable images:
+      # non-rc tags must point at a commit that main already contains. (The tag
+      # ruleset + release environment form the second lock.)
+      - name: Require stable tags to be reachable from main
+        if: steps.mode.outputs.push == 'true' && !contains(github.ref_name, '-rc')
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::stable tag ${GITHUB_REF_NAME} is not reachable from origin/main — refusing to publish"
+            exit 1
+          fi
+
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        # NOTE: services/restore_uploader/ lands later on this branch; its legs
+        # stay dormant until the first release tag fires this workflow.
+        include:
+          - slug: paper-ingestion-cpu
+            image: jarvis-paper-ingestion
+            context: .
+            file: services/paper_ingestion/Dockerfile
+            build_args: TORCH_VARIANT=cpu
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: paper-ingestion-cpu
+            image: jarvis-paper-ingestion
+            context: .
+            file: services/paper_ingestion/Dockerfile
+            build_args: TORCH_VARIANT=cpu
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          # CUDA flavor is amd64-only (no arm64 CUDA wheel set).
+          - slug: paper-ingestion-cuda
+            image: jarvis-paper-ingestion
+            context: .
+            file: services/paper_ingestion/Dockerfile
+            build_args: TORCH_VARIANT=cuda
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: learning-engine
+            image: jarvis-learning-engine
+            context: .
+            file: services/learning_engine/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: learning-engine
+            image: jarvis-learning-engine
+            context: .
+            file: services/learning_engine/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - slug: telegram-bot
+            image: jarvis-telegram-bot
+            context: .
+            file: services/telegram_bot/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: telegram-bot
+            image: jarvis-telegram-bot
+            context: .
+            file: services/telegram_bot/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - slug: dashboard
+            image: jarvis-dashboard
+            context: ./frontend
+            file: ./frontend/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: dashboard
+            image: jarvis-dashboard
+            context: ./frontend
+            file: ./frontend/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - slug: restore-uploader
+            image: jarvis-restore-uploader
+            context: ./services/restore_uploader
+            file: ./services/restore_uploader/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - slug: restore-uploader
+            image: jarvis-restore-uploader
+            context: ./services/restore_uploader
+            file: ./services/restore_uploader/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    name: build (${{ matrix.slug }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      # Image builds are the peak disk consumer; never share a runner with
+      # model pulls.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          docker image prune --all --force
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Log in to GHCR
+        if: needs.preflight.outputs.push == 'true'
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags are applied by the merge job; a publish run pushes by digest only,
+      # a build-only run keeps the result in the build cache.
+      - name: Build (and push by digest)
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ matrix.build_args }}
+          # Attestations need an image exporter — skip on the cacheonly
+          # build-only path.
+          sbom: ${{ needs.preflight.outputs.push == 'true' }}
+          outputs: ${{ needs.preflight.outputs.push == 'true' && format('type=image,name=ghcr.io/ffidan/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
+
+      - name: Export the digest
+        if: needs.preflight.outputs.push == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        if: needs.preflight.outputs.push == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: digests-${{ matrix.slug }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [preflight, build]
+    if: needs.preflight.outputs.push == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: paper-ingestion-cpu
+            image: jarvis-paper-ingestion
+            suffix: ""
+          - slug: paper-ingestion-cuda
+            image: jarvis-paper-ingestion
+            suffix: "-cuda"
+          - slug: learning-engine
+            image: jarvis-learning-engine
+            suffix: ""
+          - slug: telegram-bot
+            image: jarvis-telegram-bot
+            suffix: ""
+          - slug: dashboard
+            image: jarvis-dashboard
+            suffix: ""
+          - slug: restore-uploader
+            image: jarvis-restore-uploader
+            suffix: ""
+    name: publish (${{ matrix.slug }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The vulnerability scan pulls full image layers (several GB for the
+      # CUDA flavor).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          docker image prune --all --force
+
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.slug }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ghcr.io/ffidan/${{ matrix.image }}
+          # Emits `1.1.0` / `1.1.0-rc.1` from the v-prefixed git tag; rc tags
+          # never move `latest`.
+          tags: |
+            type=semver,pattern={{version}}
+          flavor: |
+            latest=false
+            suffix=${{ matrix.suffix }}
+
+      - name: Create and push the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/ffidan/${{ matrix.image }}@sha256:%s ' *)
+
+      - name: Resolve the published digest
+        id: digest
+        run: |
+          tag="${GITHUB_REF_NAME#v}${{ matrix.suffix }}"
+          docker buildx imagetools inspect "ghcr.io/ffidan/${{ matrix.image }}:${tag}"
+          digest="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
+            "ghcr.io/ffidan/${{ matrix.image }}:${tag}" | tr -d '"')"
+          echo "ref=ghcr.io/ffidan/${{ matrix.image }}@${digest}" >> "$GITHUB_OUTPUT"
+
+      # SBOM bound to the published digest (BuildKit additionally attached
+      # per-platform SBOM attestations at build time via `sbom: true`).
+      - name: Generate the image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.digest.outputs.ref }}
+          format: cyclonedx
+          output: sbom-${{ matrix.slug }}.cdx.json
+
+      - name: Upload the image SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sbom-image-${{ matrix.slug }}
+          path: sbom-${{ matrix.slug }}.cdx.json
+
+      # Report-only by design: a hard severity gate here could block a release
+      # on an unrelated base-image CVE; the scheduled security workflow owns
+      # the hard vulnerability bar.
+      - name: Vulnerability report (informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.digest.outputs.ref }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          output: trivy-${{ matrix.slug }}.txt
+
+      - name: Publish the vulnerability report to the job summary
+        run: |
+          {
+            echo "### Trivy report — ${{ steps.digest.outputs.ref }}"
+            echo '```'
+            cat trivy-${{ matrix.slug }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
