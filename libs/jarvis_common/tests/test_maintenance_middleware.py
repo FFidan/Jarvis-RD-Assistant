@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import app_factory
+from jarvis_common import maintenance as maintenance_mod
 from jarvis_common.app_factory import (
     make_maintenance_watcher_hook,
     shutdown_maintenance_watcher,
@@ -26,6 +27,7 @@ from jarvis_common.app_factory import (
 from jarvis_common.maintenance import (
     MaintenanceMiddleware,
     maintenance_active,
+    secrets_rotated_since,
     skip_for_maintenance,
 )
 
@@ -293,7 +295,7 @@ async def test_watcher_loop_survives_a_tick_exception(tmp_path, monkeypatch):
     app, _ = _make_worker_app()
     calls: list[int] = []
 
-    async def _flaky_step(app, queues, *, was_active):
+    async def _flaky_step(app, queues, *, was_active, started_at=None):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("boom")
@@ -339,3 +341,91 @@ async def test_watcher_hook_starts_task_and_shutdown_cancels_it(tmp_path, monkey
     await shutdown_maintenance_watcher(app)
     assert app.state.maintenance_watcher_task is None
     assert watcher.done()
+
+
+# ---------------------------------------------------------------------------
+# Secrets-rotation self-restart (off-host restore) — decision path only
+# ---------------------------------------------------------------------------
+
+
+def test_secrets_rotated_since_marker_lifecycle(tmp_path, monkeypatch):
+    marker = tmp_path / ".secrets_rotated"
+    monkeypatch.setattr(maintenance_mod, "SECRETS_ROTATED_MARKER", marker)
+    started = 1000.0
+
+    assert secrets_rotated_since(started) is False  # marker absent
+    marker.write_text("999\n")
+    assert secrets_rotated_since(started) is False  # older than start
+    marker.write_text("1001\n")
+    assert secrets_rotated_since(started) is True  # newer than start
+    marker.write_text("not-an-int")
+    assert secrets_rotated_since(started) is False  # malformed never raises
+
+
+async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeypatch):
+    """active→inactive with a marker newer than started_at fires exactly one restart."""
+    _point_sentinels(tmp_path, monkeypatch)  # both absent → inactive
+    migrate = AsyncMock()
+    monkeypatch.setattr(app_factory, "run_migrations", migrate)
+    monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
+    monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
+    restart = MagicMock()
+    monkeypatch.setattr(app_factory, "_trigger_secrets_rotation_restart", restart)
+    marker = tmp_path / ".secrets_rotated"
+    monkeypatch.setattr(maintenance_mod, "SECRETS_ROTATED_MARKER", marker)
+    started = 1000.0
+
+    marker.write_text("2000\n")  # newer than start → restart
+    app, _ = _make_worker_app()
+    await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True, started_at=started)
+    restart.assert_called_once_with()
+    migrate.assert_not_awaited()  # rotation path self-restarts BEFORE the DB-touching resume
+    assert app.state.procrastinate_worker_task is None  # resume + worker-start were skipped
+
+    restart.reset_mock()
+    marker.write_text("500\n")  # older than start → no restart
+    app2, _ = _make_worker_app()
+    await app_factory._maintenance_watcher_step(app2, _QUEUES, was_active=True, started_at=started)
+    restart.assert_not_called()
+    await _cancel(app2.state.procrastinate_worker_task)
+
+
+async def test_watcher_step_self_restarts_even_when_migrations_would_fail(tmp_path, monkeypatch):
+    """Cross-host regression: the app pool still holds the pre-rotation password, so
+    ``run_migrations``' acquire auth-fails until we restart. The restart must fire
+    regardless — it used to be sequenced AFTER the failing resume and so never ran."""
+    _point_sentinels(tmp_path, monkeypatch)
+    migrate = AsyncMock(side_effect=RuntimeError("password authentication failed"))
+    monkeypatch.setattr(app_factory, "run_migrations", migrate)
+    monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
+    monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
+    restart = MagicMock()
+    monkeypatch.setattr(app_factory, "_trigger_secrets_rotation_restart", restart)
+    marker = tmp_path / ".secrets_rotated"
+    monkeypatch.setattr(maintenance_mod, "SECRETS_ROTATED_MARKER", marker)
+    marker.write_text("2000\n")  # newer than start
+    started = 1000.0
+
+    app, _ = _make_worker_app()
+    await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True, started_at=started)
+    restart.assert_called_once_with()
+    migrate.assert_not_awaited()  # never reached the DB op — restart short-circuits it
+    assert app.state.procrastinate_worker_task is None
+
+
+async def test_watcher_step_no_restart_when_started_at_absent(tmp_path, monkeypatch):
+    """The legacy call shape (no started_at) never self-restarts, marker or not."""
+    _point_sentinels(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_factory, "run_migrations", AsyncMock())
+    monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
+    monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
+    restart = MagicMock()
+    monkeypatch.setattr(app_factory, "_trigger_secrets_rotation_restart", restart)
+    marker = tmp_path / ".secrets_rotated"
+    marker.write_text("9999999999\n")
+    monkeypatch.setattr(maintenance_mod, "SECRETS_ROTATED_MARKER", marker)
+
+    app, _ = _make_worker_app()
+    await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True)
+    restart.assert_not_called()
+    await _cancel(app.state.procrastinate_worker_task)

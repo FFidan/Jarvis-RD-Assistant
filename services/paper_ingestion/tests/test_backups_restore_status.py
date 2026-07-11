@@ -290,3 +290,62 @@ def test_bearer_valid_never_raises_on_malformed_token_file(tmp_path, monkeypatch
     request = SimpleNamespace(headers={"Authorization": "Bearer anything"})
 
     assert restore_status_bearer_valid(request) is False
+
+
+# ---------------------------------------------------------------------------
+# Off-host upload grant — control-plane token the restore-uploader authorizes.
+# ---------------------------------------------------------------------------
+
+
+def test_write_upload_grant_persists_only_hash_0644(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(bk, "_UPLOAD_GRANT", tmp_path / ".upload_grant.json")
+    token = "upload-grant-token-value"
+
+    assert bk._write_upload_grant(token) is True
+
+    f = bk._UPLOAD_GRANT
+    persisted = json.loads(f.read_text())
+    # Only the hash + expiry are persisted — never the raw token.
+    assert set(persisted) == {"sha256", "expires_at"}
+    assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert token not in f.read_text()
+    # 0644 (NOT 0600): the SEPARATE uploader container reads it over backup_trigger:ro.
+    assert (f.stat().st_mode & 0o777) == 0o644
+    expires = datetime.fromisoformat(persisted["expires_at"])
+    assert timedelta(minutes=25) < expires - datetime.now(UTC) <= timedelta(minutes=30)
+
+
+@pytest.mark.asyncio
+async def test_upload_grant_endpoint_returns_token_once_and_audits(tmp_path, monkeypatch) -> None:
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    grant_file = tmp_path / ".upload_grant.json"
+    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant_file)
+    audit = AsyncMock()
+    monkeypatch.setattr(bk, "log_audit", audit)
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/api/admin/backups/upload-grant")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    token = body["grant_token"]
+    assert token and body["expires_in_seconds"] == 1800
+    # The raw token is returned ONCE; only its hash + expiry touch disk.
+    persisted = json.loads(grant_file.read_text())
+    assert set(persisted) == {"sha256", "expires_at"}
+    assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert token not in grant_file.read_text()
+    audit.assert_awaited_once()
+    assert audit.await_args.kwargs["action"] == "backup.upload_grant"

@@ -83,6 +83,11 @@ _RETENTION_CONFIG = (
 _INBOX_MANIFEST = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".inbox_manifest.json"
 )
+# Upload grant the dedicated restore-uploader reads to authorize a browser off-host
+# upload. Written here (app), read by the SEPARATE uploader container over its
+# backup_trigger:ro mount — so the app mints only a control-plane grant and the
+# encrypted archive bytes + operator key never transit this process.
+_UPLOAD_GRANT = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".upload_grant.json"
 
 # Strict allowlist for the four archive shapes scripts/backup.sh emits:
 #   jarvis_<ts>.sql.gz[.enc] · litellm_<ts>.sql.gz[.enc]
@@ -451,6 +456,34 @@ def _write_status_token(token: str) -> bool:
     return True
 
 
+def _write_upload_grant(token: str) -> bool:
+    """Persist ONLY the sha256 + 30-min expiry of a one-time off-host upload grant.
+
+    Modeled on ``_write_status_token``: the raw token is returned to the caller ONCE
+    and never stored; the restore-uploader authorizes a presented ``X-Upload-Grant``
+    by hashing it and matching this file (never the archive bytes or operator key).
+    Written 0644 — NOT 0600 like the status token — because the uploader is a SEPARATE
+    container running under a different uid and reads this over its backup_trigger:ro
+    mount; the file holds only a hash + expiry (no secret), so world-read leaks nothing.
+    Atomic tmp->replace; best-effort — an I/O failure logs and returns False.
+    """
+    payload = {
+        "sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+    }
+    tmp = _UPLOAD_GRANT.parent / f"{_UPLOAD_GRANT.name}.tmp"
+    try:
+        _UPLOAD_GRANT.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload))
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, _UPLOAD_GRANT)
+    except OSError as exc:
+        logger.error("upload grant write failed: %r", exc)
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
 async def restore_status_auth(request: Request) -> None:
     """Authorize the restore-status poll: DB-free bearer token, or the existing gate.
 
@@ -746,6 +779,33 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
     if _write_status_token(status_token):
         return {"status": "scheduled", "status_token": status_token}
     return {"status": "scheduled"}
+
+
+@router.post("/upload-grant", dependencies=[Depends(require_admin)])
+@limiter.limit("5/minute")
+async def create_upload_grant(request: Request) -> dict[str, str | int]:
+    """Mint a time-boxed grant authorizing a browser off-host archive upload.
+
+    Returns the raw grant token ONCE; only its sha256 + a 30-min expiry are persisted
+    (``.upload_grant.json``) for the dedicated restore-uploader to check. The app never
+    sees the uploaded archive bytes or the operator key — Caddy routes
+    ``/restore-upload/*`` straight to that container — so this endpoint is purely
+    control-plane. First-admin (setup token -> admin session) can mint it on a fresh
+    host, the same trust anchor as today's runbook.
+    """
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.upload_grant",
+        resource="restore-uploader",
+        user_id=_caller_id(request),
+    )
+    token = secrets.token_urlsafe(32)
+    if not _write_upload_grant(token):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Upload grant is unavailable. Ensure the postgres-backup service is running.",
+        )
+    return {"grant_token": token, "expires_in_seconds": 1800}
 
 
 @router.get(

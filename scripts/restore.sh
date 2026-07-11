@@ -41,6 +41,11 @@ BACKUP_DIR="${BACKUP_DIR:-/backups}"
 INBOX_DIR="${RESTORE_INBOX_DIR:-/restore-inbox}"
 OPERATOR_KEYFILE="${INBOX_DIR}/operator_key"
 SECRETS_STAGING="${INBOX_DIR}/.secrets-staging"
+# Off-host restore materializes the restored ./secrets/*.txt here (the sidecar's rw
+# bind mount of the host ./secrets) so the app containers self-restart onto the
+# rotated secrets — a fresh host recovers with zero terminal steps. Only the inbox
+# path mounts this; a local restore never does.
+HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
 
 PGHOST="${PGHOST:-postgres}"
 PGUSER="${PGUSER:-jarvis}"
@@ -531,20 +536,18 @@ _cleanup() {
   fi
   [ -n "$FINISHED_AT" ] || FINISHED_AT="$(date -Iseconds)"
   write_status
-  # Lift maintenance on a clean SAME-HOST restore OR any failure BEFORE the first
-  # DROP (DROP_STARTED=0 => nothing was destroyed => safe to serve, true on a fresh
-  # host too). A clean INBOX restore is deliberately NOT lifted here: on a fresh
-  # host the app containers still hold the NEW-host postgres password while ALTER
-  # ROLE rebound the live role to the OLD one, so the stack is not servable until
-  # the operator materializes ./secrets and recreates the app containers — the
-  # runbook clears BOTH sentinels as its final step. The clean inbox path enters the
-  # destructive window (DROP_STARTED=1), so the durable .destructive sentinel is held
-  # and does NOT auto-expire (the MAINTENANCE_MAX_AGE_S soft-expiry covers .maintenance
-  # only) — the operator MUST clear it explicitly. Only a failure AFTER the first DROP
-  # otherwise holds the sentinel (the DB is inconsistent). This can't race a
-  # concurrent restore: the restore-request POST is itself 503'd while the sentinel
-  # is up, so a post-DROP hold is never lifted by a later run.
-  if { [ "$RESTORE_CLEAN" = "1" ] && [ "$SOURCE" != "inbox" ]; } || [ "$DROP_STARTED" = "0" ]; then
+  # Lift maintenance on ANY clean restore (same-host OR off-host) OR any failure
+  # BEFORE the first DROP (DROP_STARTED=0 => nothing was destroyed => safe to serve,
+  # true on a fresh host too). A clean INBOX restore is now safe to lift: STEP 8
+  # materialized the restored ./secrets and wrote the .secrets_rotated marker, and
+  # the app_factory/telegram/litellm watchers self-restart to pick up the rotated
+  # secrets + rebound role — so the stack returns to service with no operator steps.
+  # A failure AFTER the first DROP still holds the durable .destructive sentinel (the
+  # DB is inconsistent; it does NOT auto-expire — the MAINTENANCE_MAX_AGE_S soft-expiry
+  # covers .maintenance only — so the operator MUST clear it explicitly). This can't
+  # race a concurrent restore: the restore-request POST is itself 503'd while the
+  # sentinel is up, so a post-DROP hold is never lifted by a later run.
+  if [ "$RESTORE_CLEAN" = "1" ] || [ "$DROP_STARTED" = "0" ]; then
     rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null
     rm -f "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null
   fi
@@ -951,6 +954,14 @@ if [ "$SOURCE" = "inbox" ]; then
   if grep -Eq '^/|\.\.|^[A-Za-z]:' <<<"$SECRETS_TAR_MEMBERS"; then
     fail_after_restore "off-host restore: the secrets archive contains an unsafe member path (absolute or '..' traversal); refusing to extract — see the runbook"
   fi
+  # Reject symlink/hardlink members too (verbose listing: type char 'l'/'h'). A
+  # legitimate secrets archive is flat regular *.txt files; a crafted symlink member
+  # (e.g. d -> /host-secrets, now a rw mount) could otherwise redirect a subsequent
+  # member's write outside the staging dir during extraction.
+  SECRETS_TAR_TYPES="$(tar -tvzf "$SECRETS_TAR_TMP" 2>/dev/null || true)"
+  if grep -Eq '^[lh]' <<<"$SECRETS_TAR_TYPES"; then
+    fail_after_restore "off-host restore: the secrets archive contains a symlink or hardlink member; refusing to extract — see the runbook"
+  fi
   if ! tar --no-same-owner --no-same-permissions -xzf "$SECRETS_TAR_TMP" -C "$SECRETS_STAGING" 2>/dev/null; then
     fail_after_restore "off-host restore: could not extract the secrets archive (corrupt); databases were restored — see the runbook"
   fi
@@ -971,16 +982,51 @@ if [ "$SOURCE" = "inbox" ]; then
   if ! psql_admin "ALTER ROLE \"${PGUSER}\" WITH PASSWORD '${OLD_PG_PW_ESC}';" >/dev/null; then
     fail_after_restore "off-host restore: ALTER ROLE password rebind failed; databases were restored — rebind the postgres role manually per the runbook"
   fi
+  # Materialize the restored secrets into the host ./secrets (bind-mounted here rw as
+  # HOST_SECRETS_DIR) so the app containers self-restart onto them — a fresh host now
+  # recovers with ZERO terminal steps. Runs BEFORE the EXIT trap purges the staging
+  # tree. The tar was traversal-checked at extraction (:951); re-assert a strict flat
+  # basename (defense-in-depth) and skip backup_encrypt_key.txt (the new host keeps
+  # its own backup key; it is already excluded from the archive). Per-file atomic
+  # tmp->mv. Mode 0644 matches setup.sh's convention (files 0644 inside a 0700 dir):
+  # the sidecar writes as root but the app containers read /run/secrets/* as a
+  # DIFFERENT non-root uid via bind mount, so a 0600 file would be unreadable and the
+  # self-restart would fail to reconnect. Any failure holds maintenance.
+  if [ ! -d "$HOST_SECRETS_DIR" ]; then
+    fail_after_restore "off-host restore: ${HOST_SECRETS_DIR} is not mounted; cannot materialize the restored secrets — recreate the app containers manually per the runbook"
+  fi
+  shopt -s nullglob
+  for sfile in "${SECRETS_STAGING}"/*.txt; do
+    sbase="$(basename "$sfile")"
+    [ "$sbase" = "backup_encrypt_key.txt" ] && continue
+    printf '%s' "$sbase" | grep -Eq '^[a-z0-9_]+\.txt$' || continue
+    if ! cp -- "$sfile" "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \
+       || ! chmod 644 "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \
+       || ! mv -f "${HOST_SECRETS_DIR}/${sbase}.tmp" "${HOST_SECRETS_DIR}/${sbase}" 2>/dev/null; then
+      rm -f "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null || true
+      shopt -u nullglob
+      fail_after_restore "off-host restore: could not materialize secret ${sbase} into ${HOST_SECRETS_DIR}; databases were restored — recreate the app containers manually per the runbook"
+    fi
+  done
+  shopt -u nullglob
+  # Rotation marker (integer epoch): each postgres-connecting service restarts iff
+  # this marker is newer than ITS process start, so they come back reading the rotated
+  # secrets + rebound role (self-limiting — no restart loop). Atomic tmp->mv.
+  if ! { printf '%s\n' "$(date +%s)" > "${TRIGGER_DIR}/.secrets_rotated.tmp" \
+         && mv -f "${TRIGGER_DIR}/.secrets_rotated.tmp" "${TRIGGER_DIR}/.secrets_rotated"; }; then
+    rm -f "${TRIGGER_DIR}/.secrets_rotated.tmp" 2>/dev/null || true
+    fail_after_restore "off-host restore: could not write the secrets-rotation marker; databases were restored — recreate the app containers manually per the runbook"
+  fi
   write_status
 fi
 
 # === STEP 9: finishing up ====================================================
-# A clean SAME-HOST restore lifts maintenance via the EXIT trap. A clean INBOX
-# restore does NOT: the stack stays 503 until the operator materializes ./secrets
-# and recreates the app containers (the runbook clears BOTH .maintenance and the
-# durable .destructive sentinel as its final step — .destructive never auto-expires,
-# so this clear is mandatory) — otherwise the app would serve 5xx auth errors
-# instead of an honest 503.
+# A clean restore — same-host OR off-host — lifts maintenance via the EXIT trap.
+# The off-host path now materializes the restored ./secrets and writes the rotation
+# marker in STEP 8, and the app_factory/telegram/litellm watchers self-restart to
+# read the rotated secrets + rebound role, so the stack returns to service with no
+# terminal steps. MANUAL_STEPS_REQUIRED stays 0 (reserved for genuinely
+# unrecoverable states) so write_status reports honestly.
 CURRENT_STEP="Finishing up"
 PHASE="finalize"
 STEP_FINISH="running"
@@ -988,17 +1034,12 @@ write_status
 RESTORE_CLEAN=1
 STATE="done"
 # An older-than-code backup is no longer held here: it self-heals on the next app
-# recreate (the migration runner forward-migrates it). Only an off-host (inbox)
-# restore still needs operator follow-up before the stack can serve.
-if [ "$SOURCE" = "inbox" ]; then
-  MANUAL_STEPS_REQUIRED=1
-  PHASE="maintenance-held"
-fi
+# recreate (the migration runner forward-migrates it).
 STEP_FINISH="done"
 FINISHED_AT="$(date -Iseconds)"
 write_status
 if [ "$SOURCE" = "inbox" ]; then
-  echo "[restore] off-host restore complete: databases + vectors restored and the postgres role rebound. The stack stays in MAINTENANCE until you materialize the host ./secrets and recreate the app containers, then clear /backup-trigger/.maintenance and /backup-trigger/.destructive — see DEPLOYMENT.md." >&2
+  echo "[restore] off-host restore complete: databases + vectors + secrets restored, the postgres role rebound, and the app services self-restarting to reload the rotated secrets. The stack returns to service automatically." >&2
 fi
-# The EXIT trap clears both .maintenance and .destructive on the clean same-host path
+# The EXIT trap clears both .maintenance and .destructive on any clean restore
 # + kills the heartbeat.
