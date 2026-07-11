@@ -246,6 +246,16 @@ export const QUERY_KEYS = {
     nudges: () => ["nudges"] as const,
   },
 
+  // ── Passkeys (WebAuthn sign-in + device management) ────────────────────────
+  passkeys: {
+    /** Server-side capability probe (origin allowlist) — drives the login button. */
+    capability: () => ["passkeys", "capability"] as const,
+    /** The current user's registered passkeys (Settings → Passkeys). */
+    list: () => ["passkeys", "list"] as const,
+    /** Admin: a single user's passkey count (per-row on the users page). */
+    adminCount: (userId: number) => ["passkeys", "admin-count", userId] as const,
+  },
+
   // ── Telegram pairing ──────────────────────────────────────────────────────
   pairing: {
     userTelegram: () => ["user-telegram-pairing"] as const,
