@@ -138,6 +138,21 @@ def test_disallowed_name_rejected(monkeypatch, tmp_path, name):
     assert list(inbox.iterdir()) == []
 
 
+def test_operator_key_trailing_newline_rejected(monkeypatch, tmp_path):
+    # A %0A-encoded trailing newline must be rejected: re `$` matches before a
+    # terminal newline, so the old `.match` accepted "operator_key\n"; `.fullmatch`
+    # rejects it. The plain literal still succeeds (fullmatch did not over-tighten).
+    with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
+        _write_grant(trigger)
+        bad = _put(port, "/restore-upload/operator_key%0A", b"x", _grant_headers())
+        good = _put(port, "/restore-upload/operator_key", b"keybytes", _grant_headers())
+    assert bad == 400
+    assert good == 201
+    assert not (inbox / "operator_key\n").exists()
+    assert (inbox / "operator_key").read_bytes() == b"keybytes"
+    assert [p.name for p in inbox.iterdir()] == ["operator_key"]
+
+
 def test_oversize_content_length_rejected(monkeypatch, tmp_path):
     # cap ~1 KiB; declare a larger Content-Length.
     with _server(monkeypatch, tmp_path, max_gb="0.000001") as (port, inbox, trigger):

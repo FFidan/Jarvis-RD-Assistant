@@ -256,9 +256,18 @@ clear_swap_state() {
 
 read_swap_db() {
   # Emit the db name recorded in the swap-state file, or nothing if absent.
+  # The swap-state file lives on the rw backup_trigger volume, which an app
+  # container can write, so its `db` value is attacker-controllable. It flows into
+  # single-quoted psql literals downstream (db_exists / revert_swap), so a raw value
+  # like x'; DROP DATABASE ... could inject SQL: allowlist it to the two known DB
+  # names here, emitting nothing otherwise (the caller's -z guard then no-ops).
+  local db
   [ -r "$SWAP_STATE_FILE" ] || return 0
-  grep -oE '"db"[[:space:]]*:[[:space:]]*"[^"]*"' "$SWAP_STATE_FILE" 2>/dev/null \
-    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true
+  db="$(grep -oE '"db"[[:space:]]*:[[:space:]]*"[^"]*"' "$SWAP_STATE_FILE" 2>/dev/null \
+    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true)"
+  case "$db" in
+    "$JARVIS_DB"|"$LITELLM_DB") printf '%s' "$db" ;;
+  esac
 }
 
 # db_exists <name> — true iff a database with that exact name is in pg_database.
@@ -300,26 +309,26 @@ verify_db_structural() {
 }
 
 # preflight_disk_or_fail — refuse a restore that could exhaust the database volume
-# BEFORE creating any tmp db. The swap keeps BOTH live dbs while it reloads a
-# transient <db>_restore_tmp per db, so the volume must hold the live dbs + both
-# tmp dbs + headroom. The tmp estimate is ADDITIVE per db (FRESH_DB_FLOOR + gz x
-# CONTENT_FACTOR): a single multiplier is unsafe because a tiny db is dominated by
-# the fixed base-db overhead (measured on pg16.8: jarvis 18.8x, litellm 266x). It
-# is deliberately conservative — it covers reload WAL amplification + FSM/VM/temp
-# overhead, and a cluster-wide ENOSPC mid-reload would stall WAL for the LIVE db
-# too, so fail-fast is safer than try-and-see.
+# BEFORE creating any tmp db. The swap keeps BOTH live dbs in place and reloads a
+# transient <db>_restore_tmp per db, then swaps by rename (catalog-only, no new
+# space); the <db>_pre_restore snapshot reuses the live db's existing space. So the
+# NEW space a restore consumes is just the two tmp dbs + headroom, and the check is
+# free space > both tmp dbs + headroom — the live dbs are already resident, not
+# free, so counting them again would demand ~2x the live size and false-FAIL a
+# legitimate restore on a >50%-full volume. The tmp estimate is ADDITIVE per db
+# (FRESH_DB_FLOOR + gz x CONTENT_FACTOR): a single multiplier is unsafe because a
+# tiny db is dominated by the fixed base-db overhead (measured on pg16.8: jarvis
+# 18.8x, litellm 266x). It is deliberately conservative — it covers reload WAL
+# amplification + FSM/VM/temp overhead, and a cluster-wide ENOSPC mid-reload would
+# stall WAL for the LIVE db too, so fail-fast is safer than try-and-see.
 preflight_disk_or_fail() {
   local fresh_floor_kb=$((100 * 1024)) content_factor=30 headroom_kb=$((2 * 1024 * 1024))
-  local existing_kb tmp_est_kb req_kb avail_kb jarvis_gz litellm_gz
-  existing_kb="$(psql -h "$PGHOST" -U "$PGUSER" -d postgres -tAc \
-    "SELECT (pg_database_size('${JARVIS_DB}') + pg_database_size('${LITELLM_DB}')) / 1024;" \
-    2>/dev/null || true)"
-  case "$existing_kb" in ''|*[!0-9]*) existing_kb=0 ;; esac
+  local tmp_est_kb req_kb avail_kb jarvis_gz litellm_gz
   jarvis_gz="$(stat -c%s "$JARVIS_ARCHIVE" 2>/dev/null || echo 0)"
   litellm_gz="$(stat -c%s "$LITELLM_ARCHIVE" 2>/dev/null || echo 0)"
   tmp_est_kb=$(( fresh_floor_kb + jarvis_gz * content_factor / 1024 \
               + fresh_floor_kb + litellm_gz * content_factor / 1024 ))
-  req_kb=$(( existing_kb + tmp_est_kb + headroom_kb ))
+  req_kb=$(( tmp_est_kb + headroom_kb ))
   avail_kb="$(df -Pk "$POSTGRES_DATA_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
   # A non-numeric result means df could not read the volume — almost always the
   # read-only postgres_data mount is missing. Fail with a diagnosable message
@@ -362,6 +371,11 @@ revert_swap() {
 # durable .destructive sentinel read at --recover startup.
 reconcile_leftover() {
   local db="$1"
+  # Defensive allowlist: every in-tree caller passes a trusted constant
+  # (JARVIS_DB/LITELLM_DB), but this guards the single-quoted SQL sinks below
+  # against any future caller — or the --recover path — passing an unvalidated name
+  # from the attacker-writable swap-state file into a DROP/RENAME.
+  case "$db" in "$JARVIS_DB"|"$LITELLM_DB") ;; *) return 1 ;; esac
   local tmp="${db}_restore_tmp" pre="${db}_pre_restore" is_jarvis=0
   [ "$db" = "$JARVIS_DB" ] && is_jarvis=1
   if ! db_exists "$pre"; then
@@ -415,10 +429,16 @@ restore_one_db_swap() {
   # (2) structural verify on the tmp BEFORE any destruction.
   verify_db_structural "$tmp" "$is_jarvis" || return 1
   # ---- destructive window opens HERE (not before): disallow -> terminate -> rename.
-  #      Mark it so ANY later failure holds maintenance (never lift the 503 over a
-  #      half-swapped db). The FE reads drop_started from the status JSON.
+  #      Write the DURABLE maintenance marker FIRST and fail-closed: it is the hold
+  #      that keeps the stack 503 across a crash mid-swap (.maintenance soft-expires
+  #      when the heartbeat dies; .destructive never does). If it cannot be written
+  #      we abort before touching anything — the disallow is still below, so nothing
+  #      destructive has run and fail_before_destruction lifts maintenance cleanly.
+  #      Only after the durable hold is in place do we mark DROP_STARTED (the FE
+  #      reads drop_started from the status JSON) and open the window.
+  touch "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null \
+    || fail_before_destruction "cannot write the durable maintenance marker; refusing to start the destructive swap"
   DROP_STARTED=1
-  touch "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null || true   # durable, never heartbeated
   write_status
   write_swap_state "$db" "swapping_out"
   psql_admin "ALTER DATABASE \"${db}\" WITH ALLOW_CONNECTIONS false;" >/dev/null || return 1
@@ -986,8 +1006,9 @@ if [ "$SOURCE" = "inbox" ]; then
   # HOST_SECRETS_DIR) so the app containers self-restart onto them — a fresh host now
   # recovers with ZERO terminal steps. Runs BEFORE the EXIT trap purges the staging
   # tree. The tar was traversal-checked at extraction (:951); re-assert a strict flat
-  # basename (defense-in-depth) and skip backup_encrypt_key.txt (the new host keeps
-  # its own backup key; it is already excluded from the archive). Per-file atomic
+  # basename (defense-in-depth) and skip credentials the TARGET host is authoritative
+  # for — backup_encrypt_key.txt (already excluded from the archive) plus the local-
+  # service keys handled in the loop below. Per-file atomic
   # tmp->mv. Mode 0644 matches setup.sh's convention (files 0644 inside a 0700 dir):
   # the sidecar writes as root but the app containers read /run/secrets/* as a
   # DIFFERENT non-root uid via bind mount, so a 0600 file would be unreadable and the
@@ -999,6 +1020,15 @@ if [ "$SOURCE" = "inbox" ]; then
   for sfile in "${SECRETS_STAGING}"/*.txt; do
     sbase="$(basename "$sfile")"
     [ "$sbase" = "backup_encrypt_key.txt" ] && continue
+    # qdrant_api_key / langfuse_pg_password are LOCAL access credentials to LOCAL
+    # services (qdrant; the langfuse-postgres backing store), not restored user data.
+    # Those services fixed their own key at first-init on the target host and are NOT
+    # restarted by a restore (no backup_trigger mount, no .secrets_rotated watcher,
+    # and unlike PGUSER no ALTER ROLE rebind), so the app must keep the TARGET host's
+    # copy to stay authenticated — materializing the OLD key would break app<->qdrant
+    # and langfuse<->langfuse-postgres auth on the next restart of those services.
+    [ "$sbase" = "qdrant_api_key.txt" ] && continue
+    [ "$sbase" = "langfuse_pg_password.txt" ] && continue
     printf '%s' "$sbase" | grep -Eq '^[a-z0-9_]+\.txt$' || continue
     if ! cp -- "$sfile" "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \
        || ! chmod 644 "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \

@@ -19,6 +19,18 @@
 #     exact primitive the app_factory watcher runs on maintenance-clear), loaded
 #     standalone in a throwaway python:3.12-slim on the fixture network. This is
 #     the real function, not a reimplementation.
+#   * OFF-HOST (inbox) STEP-8 restore against a fresh-host stand-in: the operator-
+#     supplied archive set + one-time key are consumed from the rw restore_inbox, the
+#     postgres role is REBOUND to the restored password via ALTER ROLE (single-quote-
+#     safe — the restored password contains a quote), the restored ./secrets are
+#     materialized into HOST_SECRETS_DIR EXCEPT the local-service keys the target host
+#     is authoritative for (qdrant_api_key / langfuse_pg_password / backup_encrypt_key
+#     are NOT materialized), the .secrets_rotated marker is written, and both sentinels
+#     self-clear. Negative guards prove an unsafe secrets-tar member (absolute/'..'
+#     path, or a symlink) fails closed with no materialization.
+#   * --recover rejects a SQL-injection payload planted in .restore_swap_state.json's
+#     db field (the trigger volume is app-writable): the allowlist makes the run a
+#     no-op and the live jarvis DB is untouched (on unfixed code the payload DROPs it).
 #
 # WHAT IS PROVEN ELSEWHERE (NOT re-proven here — do not overstate):
 #   * the full app /health 503->200 transition and background-worker resume are
@@ -26,6 +38,10 @@
 #     and services/paper_ingestion/tests/test_main_lifespan.py, which the W4 gate runs.
 #     This test proves the watcher's core reconcile ACTION (forward-migration), not
 #     the FastAPI lifecycle around it.
+#   * the app self-restart onto the rotated secrets + rebound role after an inbox
+#     restore (no app image is built here) — covered by the app_factory unit tests.
+#     PHASE 4 asserts only the SIDECAR-side STEP-8 outcomes (rebind + materialize +
+#     rotation marker + sentinel self-clear).
 #
 # ENCRYPTION: postgres:16.8 ships openssl, so archives are written encrypted and the
 # real encrypt->decrypt DR path is exercised. If openssl were absent the fixture
@@ -146,7 +162,7 @@ services:
       - ${REPO_ROOT}/db/migrations:/app/db/migrations:ro
       - ${REPO_ROOT}/db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro
       - ./secrets:/secrets:ro
-      - ./secrets:/host-secrets:rw
+      - host_secrets:/host-secrets:rw
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger
       - restore_inbox:/restore-inbox
@@ -178,6 +194,7 @@ volumes:
   postgres_backups:
   backup_trigger:
   restore_inbox:
+  host_secrets:
 YAML
 
 # --- The REAL run_migrations, loaded standalone (skips the jarvis_common package
@@ -309,6 +326,80 @@ write_restore_request() { # <timestamp> — mirror the sentinel backups.py:reque
   sc 'rm -f /backup-trigger/.restore_status.json'
   printf '%s' "$json" | dc exec -T postgres-backup sh -c \
     'cat > /backup-trigger/.restore_request.json.tmp && mv -f /backup-trigger/.restore_request.json.tmp /backup-trigger/.restore_request.json'
+}
+
+write_inbox_restore_request() { # <timestamp> — request an off-host (inbox) restore
+  local ts="$1" json
+  json="{\"timestamp\":\"${ts}\",\"confirm\":\"RESTORE\",\"source\":\"inbox\",\"requested_at\":\"$(date -Iseconds)\"}"
+  sc 'rm -f /backup-trigger/.restore_status.json'
+  printf '%s' "$json" | dc exec -T postgres-backup sh -c \
+    'cat > /backup-trigger/.restore_request.json.tmp && mv -f /backup-trigger/.restore_request.json.tmp /backup-trigger/.restore_request.json'
+}
+host_secrets_has() { sc "[ -f /host-secrets/$1 ]"; }
+# No STEP-8 materialization happened iff neither the rebindable postgres secret nor a
+# normal restored secret was written into host-secrets.
+host_secrets_unmaterialized() { ! host_secrets_has postgres_password.txt && ! host_secrets_has app_alpha.txt; }
+# A recorded terminal failure that HELD the destructive maintenance sentinel — the
+# fail-closed outcome for a STEP-8 rejection AFTER the DBs were already restored.
+restore_failed_held() {
+  sc 'cat /backup-trigger/.restore_status.json 2>/dev/null' | grep -q '"state":"failed"' || return 1
+  sentinel_present .destructive
+}
+reset_maint() { sc 'rm -f /backup-trigger/.maintenance /backup-trigger/.destructive /backup-trigger/.restore_swap_state.json /backup-trigger/.restore_status.json'; }
+
+# Copy the real DB archives + a fresh one-time operator key into a cleaned inbox
+# (each restore shreds the key on exit, so it is re-staged per case). TS4/SUF from env.
+stage_inbox_dbset() {
+  sc "rm -f /restore-inbox/*_${TS4}.* /restore-inbox/operator_key /restore-inbox/.inbox_manifest.json 2>/dev/null || true; \
+      cp /backups/jarvis_${TS4}.sql.gz${SUF} /backups/litellm_${TS4}.sql.gz${SUF} /restore-inbox/ \
+      && cp /secrets/backup_encrypt_key /restore-inbox/operator_key"
+}
+
+# Write /restore-inbox/secrets_<ts>.tar.gz[.enc] with a single UNSAFE member so the
+# STEP-8 guard must reject it: <abs> = an absolute-path member, <sym> = a symlink.
+build_bad_secrets() {
+  local kind="$1" mk
+  if [ "$kind" = "abs" ]; then
+    mk='tar -P -czf /tmp/bad.tgz /etc/hostname'
+  else
+    mk='rm -rf /tmp/sd; mkdir -p /tmp/sd; ln -sf /host-secrets /tmp/sd/evil; tar -czf /tmp/bad.tgz -C /tmp/sd evil'
+  fi
+  if [ -n "$SUF" ]; then
+    sc "$mk && openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -kfile /restore-inbox/operator_key \
+        -in /tmp/bad.tgz -out /restore-inbox/secrets_${TS4}.tar.gz.enc && rm -f /tmp/bad.tgz"
+  else
+    sc "$mk && mv /tmp/bad.tgz /restore-inbox/secrets_${TS4}.tar.gz"
+  fi
+}
+
+# A manifest listing ONLY the two DB archives (their real sha256s) so STEP-2 integrity
+# passes without pinning the bad secrets tar (which is not listed, so not sha-checked).
+write_trimmed_manifest() {
+  local real je le
+  real="$(sc "cat /backups/manifest_${TS4}.json")"
+  je="$(printf '%s' "$real" | grep -oE "\{\"filename\":\"jarvis_${TS4}[^}]*\}")"
+  le="$(printf '%s' "$real" | grep -oE "\{\"filename\":\"litellm_${TS4}[^}]*\}")"
+  printf '{"timestamp":"%s","schema_version":102,"archives":[%s,%s]}' "$TS4" "$je" "$le" \
+    | dc exec -T postgres-backup sh -c "cat > /restore-inbox/manifest_${TS4}.json"
+}
+
+# Drive a full inbox restore whose secrets tar has an unsafe member; assert it fails
+# closed (DBs restored, then STEP-8 rejects the member -> maintenance HELD, nothing
+# materialized), then clear the held sentinels so the next case starts clean.
+run_bad_secrets_case() { # <abs|sym> <label>
+  local kind="$1" label="$2" clean=1
+  stage_inbox_dbset
+  build_bad_secrets "$kind"
+  write_trimmed_manifest
+  write_inbox_restore_request "$TS4"
+  if wait_for 180 "inbox restore to fail closed on the ${label} member" restore_failed_held; then
+    host_secrets_unmaterialized || { no "${label}: STEP-8 materialized host-secrets despite a rejected member"; clean=0; }
+    no_swap_dbs                 || { no "${label}: left a _restore_tmp/_pre_restore database"; clean=0; }
+    [ "$clean" = "1" ] && ok "inbox restore rejects a ${label} secrets-tar member, holds maintenance, writes no host-secrets"
+  else
+    no "inbox restore did not fail-closed on the ${label} member"
+  fi
+  reset_maint
 }
 
 run_real_migrations() { # run the REAL run_migrations against the live fixture jarvis DB
@@ -465,6 +556,104 @@ if svc_bt_line learning_engine | grep -q ':ro'; then
   ok "learning_engine mounts backup_trigger read-only (its watcher reads the same sentinels)"
 else
   no "learning_engine does not mount backup_trigger :ro in the repo compose"
+fi
+
+# =============================================================================
+# PHASE 4 — off-host (inbox) STEP-8 restore: role rebind + F2 exclusions + self-clear
+#           (the app self-restart onto the rotated secrets is covered by the
+#           app_factory unit tests; here only the SIDECAR-side outcomes are asserted).
+# =============================================================================
+sec "PHASE 4: off-host (inbox) STEP-8 restore — role rebind, F2 exclusions, self-clear"
+# The real backup tars the whole /secrets dir, so drop the .txt-named secrets STEP 8
+# consumes into it (the fixture's Docker-secret files are un-suffixed). postgres_password
+# carries a single quote to exercise the ALTER ROLE single-quote doubling on a REAL role.
+NEWPW="p'w"
+printf '%s' "$NEWPW"    > "$WORK/secrets/postgres_password.txt"
+printf 'benign-qdrant'  > "$WORK/secrets/qdrant_api_key.txt"
+printf 'benign-lfpg'    > "$WORK/secrets/langfuse_pg_password.txt"
+if [ -n "$BK_ENC_KEYFILE" ]; then SUF=".enc"; else SUF=""; fi
+
+seed_jarvis 102 "inbox-restore-point"
+clear_backups
+sc 'touch /backup-trigger/.backup_now'
+if wait_for 120 "consistent backup for the inbox round trip" backup_ready; then
+  TS4="$(last_run_ts)"
+  ok "backup for the inbox round trip produced archives at ${TS4}"
+else
+  no "inbox round-trip backup never reported success"; TS4=""
+fi
+
+if [ -n "${TS4:-}" ]; then
+  # Negative guards first (the role is still at PG_PASSWORD; these fail at the STEP-8
+  # member check, before the ALTER ROLE rebind, so they never poison the live role).
+  run_bad_secrets_case abs "absolute/'..' path"
+  run_bad_secrets_case sym "symlink/hardlink"
+
+  # Happy path: real secrets archive + real manifest; mutate live data first so the
+  # revert is observable.
+  stage_inbox_dbset
+  sc "cp /backups/secrets_${TS4}.tar.gz${SUF} /backups/manifest_${TS4}.json /restore-inbox/"
+  dc exec -T postgres psql -U jarvis -d jarvis -v ON_ERROR_STOP=1 -q <<'SQL' >/dev/null
+DELETE FROM roundtrip_marker;
+INSERT INTO roundtrip_marker(tag) VALUES ('MUTATED-should-not-survive');
+SQL
+  write_inbox_restore_request "$TS4"
+  if wait_for 180 "off-host inbox restore to complete cleanly" restore_done_clean; then
+    fails_before=$fail
+    [ "$(marker_tags)" = "inbox-restore-point" ] || no "inbox restore did not revert data (marker='$(marker_tags)')"
+    # Role rebound to the restored p'w password (single quote handled): the NEW
+    # password authenticates over TCP and the OLD one no longer does.
+    rebind_ok=1
+    new_auth="$(dc exec -T -e PGPASSWORD="$NEWPW" postgres-backup \
+      psql -h postgres -U jarvis -d jarvis -tAc 'SELECT 1' 2>/dev/null | tr -d ' \r\n')"
+    [ "$new_auth" = "1" ] || { no "the rebound (p'w) password does not authenticate"; rebind_ok=0; }
+    if dc exec -T -e PGPASSWORD="$PG_PASSWORD" postgres-backup \
+         psql -h postgres -U jarvis -d jarvis -tAc 'SELECT 1' >/dev/null 2>&1; then
+      no "the OLD postgres password still authenticates (ALTER ROLE did not rebind)"; rebind_ok=0
+    fi
+    [ "$rebind_ok" = "1" ] && ok "ALTER ROLE rebound the role to the restored password (single quote handled; old rejected)"
+    # F2: the target host's own local-service keys are NOT overwritten; a normal
+    # restored secret IS materialized; the backup key is never materialized.
+    host_secrets_has postgres_password.txt || no "postgres_password.txt was not materialized into host-secrets"
+    host_secrets_has app_alpha.txt         || no "a normal restored secret (app_alpha.txt) was not materialized"
+    ! host_secrets_has qdrant_api_key.txt      || no "qdrant_api_key.txt was materialized (F2: excluded — qdrant is not restarted)"
+    ! host_secrets_has langfuse_pg_password.txt || no "langfuse_pg_password.txt was materialized (F2: excluded — langfuse-postgres is not restarted)"
+    ! host_secrets_has backup_encrypt_key.txt   || no "backup_encrypt_key.txt was materialized (the target keeps its own backup key)"
+    [ "$(sc 'cat /host-secrets/postgres_password.txt 2>/dev/null' | tr -d '\r\n')" = "$NEWPW" ] \
+      || no "materialized postgres_password.txt content is wrong (single quote mangled)"
+    sc 'cat /backup-trigger/.secrets_rotated 2>/dev/null' | grep -qE '^[0-9]+$' \
+      || no ".secrets_rotated is missing or not an integer epoch"
+    [ "$fail" = "$fails_before" ] \
+      && ok "inbox STEP-8: DBs reverted, role rebound, F2 keys excluded, secrets rotated, sentinels self-cleared"
+  else
+    no "off-host inbox restore did not complete cleanly"
+  fi
+  # Un-poison the live role (rebound to p'w above) so PHASE 5's password-auth path works
+  # and the sidecar loop can resume — via the trust socket, no password needed.
+  dc exec -T postgres psql -U jarvis -d postgres -v ON_ERROR_STOP=1 -q \
+    -c "ALTER ROLE jarvis WITH PASSWORD '${PG_PASSWORD}';" >/dev/null 2>&1 || true
+fi
+
+# =============================================================================
+# PHASE 5 — --recover rejects a SQL-injection payload in the swap-state file (F1).
+# =============================================================================
+sec "PHASE 5: --recover rejects an injected swap-state db name (no DROP)"
+if [ -n "${TS4:-}" ]; then
+  # Plant a hostile .restore_swap_state.json (the trigger volume is app-writable) whose
+  # db field is a SQL-injection payload targeting the live jarvis DB. read_swap_db's
+  # allowlist must reject it so --recover runs NO SQL; on unfixed code the injected
+  # '; DROP DATABASE jarvis; --' would execute against the maintenance DB and drop it.
+  inj='{"db":"x'"'"'; DROP DATABASE jarvis; --","phase":"swapping_out"}'
+  printf '%s' "$inj" | dc exec -T postgres-backup sh -c 'cat > /backup-trigger/.restore_swap_state.json'
+  before_marker="$(marker_tags)"
+  dc exec -T postgres-backup /usr/local/bin/restore.sh --recover >/dev/null 2>&1 || true
+  jarvis_ok=1
+  q jarvis "SELECT 1" >/dev/null 2>&1 || { no "jarvis DB no longer exists after --recover (injection dropped it)"; jarvis_ok=0; }
+  [ "$(marker_tags)" = "$before_marker" ] || { no "jarvis data changed after --recover (marker='$(marker_tags)')"; jarvis_ok=0; }
+  [ "$jarvis_ok" = "1" ] && ok "--recover allowlist rejected the injected db name — jarvis intact, no DROP, clean no-op"
+  ! sentinel_present .restore_swap_state.json || no "--recover left the hostile swap-state file in place (could wedge future recovers)"
+else
+  no "PHASE 5 skipped: no backup timestamp from PHASE 4"
 fi
 
 # =============================================================================

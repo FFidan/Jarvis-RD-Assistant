@@ -116,7 +116,9 @@ class UploadHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # One structured line per request to stdout; NEVER the grant token or body bytes.
-    def log_message(self, fmt: str, *args: object) -> None:  # silence default logging
+    def log_message(
+        self, _fmt: str, *_args: object
+    ) -> None:  # silence default logging (override args unused by design)
         return
 
     def _emit(self, code: int, filename: str) -> None:
@@ -184,7 +186,11 @@ class UploadHandler(BaseHTTPRequestHandler):
             or "\x00" in filename
         ):
             raise _RejectError(400, "invalid filename")
-        if not _FILENAME_RE.match(filename):
+        # fullmatch (not match): the pattern is $-anchored, but re `$` also matches
+        # just before a terminal newline, so `.match` would accept "operator_key\n"
+        # (from a %0A-encoded path). fullmatch requires the whole string to be
+        # consumed, rejecting a trailing newline on this security boundary.
+        if not _FILENAME_RE.fullmatch(filename):
             raise _RejectError(400, "disallowed name")
         return filename
 

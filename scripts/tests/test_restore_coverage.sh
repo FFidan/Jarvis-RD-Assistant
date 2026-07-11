@@ -199,18 +199,30 @@ else
   fail=1
 fi
 
-# 6b. durable .destructive sentinel: never-heartbeated, touched at the destructive-
-#     window boundary (after DROP_STARTED=1, before the disallow-ALTER) and removed
-#     ONLY inside the clean lift block, so a SIGKILLed mid-swap restore stays 503 with
-#     no age gate (the heartbeat never re-touches it, so it survives the heartbeat).
+# 6b. durable .destructive sentinel: never-heartbeated, written fail-closed BEFORE
+#     DROP_STARTED=1 (a marker-write failure aborts before any destruction — nothing
+#     is dropped, the disallow is still below) and before the disallow-ALTER, and
+#     removed ONLY inside the clean lift block, so a SIGKILLed mid-swap restore stays
+#     503 with no age gate (the heartbeat never re-touches it, so it survives it).
 sf_destr_touch="$(sf_line 'touch "\$MAINTENANCE_DESTRUCTIVE"')"
 if [ -n "$sf_dropstart" ] && [ -n "$sf_destr_touch" ] && [ -n "$sf_disallow" ] \
-   && [ "$sf_dropstart" -le "$sf_destr_touch" ] && [ "$sf_destr_touch" -lt "$sf_disallow" ]; then
-  pass "the .destructive sentinel is touched at the destructive window (after DROP_STARTED, before the disallow)"
+   && [ "$sf_destr_touch" -lt "$sf_dropstart" ] && [ "$sf_dropstart" -lt "$sf_disallow" ]; then
+  pass "the .destructive sentinel is touched before DROP_STARTED and before the disallow"
 else
-  printf 'FAIL: destructive touch (%s) is not between DROP_STARTED (%s) and the disallow (%s)\n' \
+  printf 'FAIL: destructive touch (%s) is not before DROP_STARTED (%s) and the disallow (%s)\n' \
     "$sf_destr_touch" "$sf_dropstart" "$sf_disallow" >&2
   fail=1
+fi
+# The durable marker is fail-closed: a write failure aborts via fail_before_destruction
+# (nothing dropped yet — the disallow is below) rather than the old best-effort || true.
+check "the durable .destructive marker is fail-closed on a write failure" \
+  'fail_before_destruction "cannot write the durable maintenance marker'
+if sed -n '/^restore_one_db_swap()/,/^}/p' "$RESTORE_SCRIPT" \
+     | grep -qE 'touch "\$MAINTENANCE_DESTRUCTIVE" 2>/dev/null \|\| true'; then
+  printf 'FAIL: the .destructive marker is still best-effort (|| true) — it must fail-closed before the swap\n' >&2
+  fail=1
+else
+  pass "the .destructive marker is not the best-effort || true form"
 fi
 destr_rm_line="$(line_of 'rm -f "\$MAINTENANCE_DESTRUCTIVE"')"
 if [ -n "$destr_rm_line" ] && [ -n "$guard_line" ] \
@@ -266,8 +278,10 @@ check "still refuses a newer-than-code backup before destruction" \
 # === Rename-swap: preflight, swap-state file, sole gate, deterministic recovery =
 
 # S1. Disk preflight runs BEFORE the first tmp CREATE (the destructive STEP-5 swap
-#     call), sizing the volume additively per DB (fresh-DB floor + gz x factor) via
-#     df on the RO postgres_data mount + pg_database_size of the live DBs.
+#     call), sizing only the NEW space a restore consumes — both tmp DBs (fresh-DB
+#     floor + gz x factor) + headroom — via df on the RO postgres_data mount. The
+#     live DBs stay in place (renames are catalog-only), so their size is NOT added
+#     to the free-space requirement (doing so would demand ~2x the live size free).
 preflight_call_line="$(line_of '^preflight_disk_or_fail$')"
 if [ -n "$preflight_call_line" ] && [ -n "$drop_call_line" ] && [ "$preflight_call_line" -lt "$drop_call_line" ]; then
   pass "disk preflight runs before the first tmp CREATE (the STEP-5 swap)"
@@ -276,7 +290,14 @@ else
     "$preflight_call_line" "$drop_call_line" >&2
   fail=1
 fi
-check "preflight sizes the live DBs via pg_database_size" 'pg_database_size'
+check "preflight requires only the two tmp DBs + headroom" \
+  'req_kb=\$\(\( tmp_est_kb \+ headroom_kb \)\)'
+if grep -Eq 'pg_database_size' "$RESTORE_SCRIPT"; then
+  printf 'FAIL: preflight still queries pg_database_size (the live DB size must not be double-counted against free space)\n' >&2
+  fail=1
+else
+  pass "preflight does not double-count the live DB size (free > tmp DBs + headroom only)"
+fi
 check "preflight reads free space via df on the postgres_data mount" \
   'df -Pk "\$POSTGRES_DATA_DIR"'
 check "preflight is additive per-DB (fresh-DB floor + content factor)" 'content_factor=30'
