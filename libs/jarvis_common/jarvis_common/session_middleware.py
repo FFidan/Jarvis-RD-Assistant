@@ -16,6 +16,7 @@ present the session cookie takes priority for ``request.state.user_id``
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -87,6 +88,37 @@ def session_cookie_kwargs(max_age: int, *, now: datetime) -> dict[str, Any]:
         "samesite": "strict",
         "path": "/",
     }
+
+
+async def mint_session(
+    conn: Any,
+    response: Response,
+    user_id: int,
+    *,
+    now: datetime,
+    credential_id: uuid.UUID | None = None,
+) -> str:
+    """Insert a ``sessions`` row and set the ``jarvis_session`` cookie; return its id.
+
+    The single mint path shared by magic-link verify, API-key session exchange,
+    first-admin bootstrap, and passkey login. ``credential_id`` links the session
+    to the passkey it was minted from (NULL for the passwordless flows). Cookie
+    attributes come from :func:`session_cookie_kwargs`, so every mint site emits a
+    byte-identical Set-Cookie (both ``max_age`` and the absolute ``expires``).
+    """
+    session_id = await conn.fetchval(
+        "INSERT INTO sessions (user_id, expires_at, credential_id) "
+        "VALUES ($1, $2, $3) RETURNING id",
+        user_id,
+        now + SESSION_TTL,
+        credential_id,
+    )
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        str(session_id),
+        **session_cookie_kwargs(int(SESSION_TTL.total_seconds()), now=now),
+    )
+    return str(session_id)
 
 
 class SessionMiddleware(BaseHTTPMiddleware):
@@ -184,4 +216,5 @@ __all__ = [
     "SESSION_TTL",
     "SESSION_RENEW_AFTER",
     "session_cookie_kwargs",
+    "mint_session",
 ]

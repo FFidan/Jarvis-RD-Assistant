@@ -33,7 +33,7 @@ from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
 from jarvis_common.event_log import log_event
 from jarvis_common.owner import resolve_owner_user_id
-from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SESSION_TTL
+from jarvis_common.session_middleware import SESSION_COOKIE_NAME, mint_session
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
@@ -283,15 +283,7 @@ async def verify(
                     user_id,
                 )
 
-                session_id = await conn.fetchval(
-                    """
-                    INSERT INTO sessions (user_id, expires_at)
-                    VALUES ($1, $2)
-                    RETURNING id
-                    """,
-                    user_id,
-                    now + SESSION_TTL,
-                )
+                await mint_session(conn, response, user_id, now=now)
     except HTTPException:
         if _audit is not None:
             ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
@@ -313,17 +305,6 @@ async def verify(
             resource="magic_link_token",
             user_id=str(user_id),
         )
-
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=str(session_id),
-        max_age=int(SESSION_TTL.total_seconds()),
-        expires=int((now + SESSION_TTL).timestamp()),
-        httponly=True,
-        secure=_cookie_secure(),
-        samesite="strict",
-        path="/",
-    )
 
     return UserResponse(
         id=user_id,
@@ -499,15 +480,7 @@ async def api_key_session(
                 )
 
         owner_id = int(owner["id"])
-        session_id = await conn.fetchval(
-            """
-            INSERT INTO sessions (user_id, expires_at)
-            VALUES ($1, $2)
-            RETURNING id
-            """,
-            owner_id,
-            now + SESSION_TTL,
-        )
+        await mint_session(conn, response, owner_id, now=now)
 
     if _audit is not None:
         await log_audit(
@@ -519,17 +492,6 @@ async def api_key_session(
                 "ip": request.client.host if request.client else None,
             },
         )
-
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=str(session_id),
-        max_age=int(SESSION_TTL.total_seconds()),
-        expires=int((now + SESSION_TTL).timestamp()),
-        httponly=True,
-        secure=_cookie_secure(),
-        samesite="strict",
-        path="/",
-    )
 
     return UserResponse(
         id=owner_id,

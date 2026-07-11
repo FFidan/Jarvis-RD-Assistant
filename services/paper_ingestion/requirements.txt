@@ -37,3 +37,4 @@ tiktoken>=0.7.0
 transformers>=5.4.0,<6.0.0
 uvicorn[standard]>=0.30.0
 uvloop>=0.19,<1
+webauthn>=3.0.0,<4.0.0

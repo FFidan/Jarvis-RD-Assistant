@@ -68,3 +68,39 @@ async def test_a269_run_migrations_no_exception_on_already_applied_schema(_contr
 
     # Should not raise any exception
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
+
+
+async def test_0102_webauthn_schema_applied(_contract_pool):
+    """0102 created the passkey tables + sessions.credential_id and lifted the floor to 102.
+
+    The session fixture applies db/init.sql (baseline 1..101) then run_migrations(),
+    which globs db/migrations/0102_webauthn_credentials.sql. This proves the DDL
+    actually PREPARES and executes on a real pg16.8 — a mock cannot catch a bad
+    column type or a malformed foreign key.
+
+    Verified: db/migrations/0102_webauthn_credentials.sql; db/SCHEMA_VERSION == 102.
+    """
+    async with _contract_pool.acquire() as conn:
+        tables = {
+            r["table_name"]
+            for r in await conn.fetch(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' "
+                "AND table_name IN ('webauthn_credentials', 'webauthn_challenges')"
+            )
+        }
+        assert tables == {"webauthn_credentials", "webauthn_challenges"}, (
+            f"0102 did not create both passkey tables; found {tables}"
+        )
+
+        credential_col = await conn.fetchval(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'sessions' "
+            "AND column_name = 'credential_id'"
+        )
+        assert credential_col == "uuid", (
+            f"sessions.credential_id missing or wrong type: {credential_col!r}"
+        )
+
+        max_version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
+        assert max_version >= 102, f"schema floor not lifted to 102; max applied = {max_version}"

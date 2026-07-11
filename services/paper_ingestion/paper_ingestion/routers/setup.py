@@ -38,7 +38,7 @@ import logging
 import os
 import re
 import socket
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Annotated, Any, Literal
@@ -56,7 +56,7 @@ from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
 from jarvis_common.serialization import _coerce_bool
-from jarvis_common.session_middleware import SESSION_COOKIE_NAME
+from jarvis_common.session_middleware import mint_session
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -71,7 +71,6 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 # Marker — exempted from global verify_api_key at include time (see main.py).
 router.auth_exempt = True  # type: ignore[attr-defined]
 
-SESSION_TTL = timedelta(days=30)
 MAX_EMAIL_LEN = 320  # RFC 5321
 SMTP_TEST_TIMEOUT_SECONDS = 10.0
 
@@ -287,11 +286,6 @@ async def _admin_count(pool: Any) -> int:
                 "SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL"
             )
         )
-
-
-def _cookie_secure() -> bool:
-    """Match Secure flag to runtime mode (mirrors auth.py)."""
-    return not get_core_settings().dev_mode
 
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -824,26 +818,7 @@ async def create_first_admin(
                 user_id,
             )
 
-            session_id = await conn.fetchval(
-                """
-                INSERT INTO sessions (user_id, expires_at)
-                VALUES ($1, $2)
-                RETURNING id
-                """,
-                user_id,
-                now + SESSION_TTL,
-            )
-
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=str(session_id),
-        max_age=int(SESSION_TTL.total_seconds()),
-        expires=int((now + SESSION_TTL).timestamp()),
-        httponly=True,
-        secure=_cookie_secure(),
-        samesite="strict",
-        path="/",
-    )
+            await mint_session(conn, response, user_id, now=now)
 
     logger.info("setup: first admin created id=%s email_hash=%s", user_id, _hash_email(email_norm))
     return AdminResponse(id=user_id, email=user_row["email"], role=user_row["role"])
