@@ -112,7 +112,9 @@ export function LoginPage() {
     try {
       await requestMagicLink(email.trim());
       setInfo(
-        'If an account exists for that address, a sign-in link will be delivered when email is configured.',
+        smtpConfigured === false
+          ? 'If an account exists for that address, a sign-in link has been created. Email is not set up on this server, so ask your admin to share your sign-in link with you.'
+          : 'If an account exists for that address, a sign-in link is on its way.',
       );
       setEmail('');
     } catch (err) {
@@ -153,10 +155,10 @@ export function LoginPage() {
     smtpConfigured === false ? (
       isMultiMode ? (
         <p className="text-sm text-amber-600" role="status">
-          Email is not configured on this server — magic links cannot be delivered.
-          Ask your admin to configure SMTP so sign-in links can be sent.
-          API-key sign-in is limited to the configured owner/admin or to
-          deployments where the operator explicitly enables it.
+          Email is not configured on this server, so magic links can&apos;t be
+          delivered automatically. Ask your admin to create a sign-in link for you
+          and share it directly — no email required. (An admin can also set up
+          email later so links arrive on their own.)
         </p>
       ) : (
         <p className="text-sm text-amber-600" role="status">

@@ -202,7 +202,24 @@ describe('LoginPage', () => {
     await waitFor(() => {
       expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
     });
-    expect(await screen.findByText(/will be delivered when email is configured/i)).toBeInTheDocument();
+    expect(await screen.findByText(/a sign-in link is on its way/i)).toBeInTheDocument();
+  });
+
+  it('points at the admin sign-in link when SMTP is off', async () => {
+    const user = userEvent.setup();
+    renderLoginPage({ configured: true, smtp_configured: false, setup_mode: 'multi' });
+    const input = await screen.findByPlaceholderText(/you@example\.com/i);
+    await user.type(input, 'ferhat@example.com');
+    await user.click(screen.getByRole('button', { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
+    });
+    // Honest when email can't deliver: the link exists; the admin can share it —
+    // still enumeration-safe ("If an account exists…"), never "email is configured".
+    const confirmation = await screen.findByText(/ask your admin to share your sign-in link/i);
+    expect(confirmation).toBeInTheDocument();
+    expect(confirmation).toHaveTextContent(/if an account exists/i);
   });
 
   it('shows the static cooldown hint on the magic-link tab', async () => {
