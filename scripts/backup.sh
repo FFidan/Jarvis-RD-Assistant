@@ -88,6 +88,11 @@ RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 # tail is skipped, so a pre-restore safety backup can never delete the very
 # archive being restored (a `local` archive older than RETENTION_DAYS).
 BACKUP_SKIP_PRUNE="${BACKUP_SKIP_PRUNE:-}"
+# When set (by restore.sh's safety pre-backup) the maintenance skip-guard and the
+# flock mutex below are BYPASSED: the restore itself holds .maintenance, so its own
+# safety snapshot must run rather than treat that sentinel as "another restore is
+# mid-flight" and abort the very backup the restore depends on.
+BACKUP_FORCE="${BACKUP_FORCE:-}"
 ENC_KEYFILE="${BACKUP_ENCRYPT_KEYFILE:-}"
 LITELLM_DATABASE="${LITELLM_DATABASE:-litellm}"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
@@ -141,13 +146,65 @@ write_last_run() {
   [ "$JARVIS_STATE" = "ok" ] && [ "$LITELLM_STATE" = "ok" ] && succeeded="true"
   local enc="false"
   [ "$ENCRYPT" -eq 1 ] && enc="true"
+  # skipped_maintenance distinguishes a run that intentionally stood down for an
+  # in-flight restore (succeeded stays false, but it is NOT a failure) from a real
+  # backup failure, so /status can word the two differently.
+  local skipped="false"
+  [ "${SKIPPED_MAINTENANCE:-0}" = "1" ] && skipped="true"
   local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
   cat > "$lr_tmp" <<JSON
-{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","succeeded":${succeeded},"encrypted":${enc},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}"}}
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}"}}
 JSON
   mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
 }
 trap write_last_run EXIT
+
+# --- Maintenance skip-guard + single-run mutex -------------------------------
+# A restore (restore.sh) raises the .maintenance / .destructive sentinels for its
+# whole run. A SCHEDULED or on-demand backup that fires in that window must NOT run
+# — dumping mid drop-swap would capture an inconsistent DB — so it SKIPS and tags
+# the skip in .last_run.json (the EXIT trap still writes it, so /status can show
+# "skipped for restore", distinct from a real failure). The restore's OWN safety
+# pre-backup sets BACKUP_FORCE=1 to bypass this: it needs a snapshot BEFORE the
+# destruction and must never treat the restore's own sentinel as a reason to skip.
+# Sentinel paths + max-age mirror jarvis_common.maintenance.maintenance_active so
+# both gates agree; keying on LIVE sentinel presence means a cleared sentinel
+# resumes scheduled backups immediately (no stale-status wedge).
+TRIGGER_DIR="${BACKUP_TRIGGER_DIR:-/backup-trigger}"
+MAINTENANCE_SENTINEL="${MAINTENANCE_SENTINEL:-${TRIGGER_DIR}/.maintenance}"
+MAINTENANCE_DESTRUCTIVE="${MAINTENANCE_DESTRUCTIVE_SENTINEL:-${TRIGGER_DIR}/.destructive}"
+MAINTENANCE_MAX_AGE_S="${MAINTENANCE_MAX_AGE_S:-1800}"
+SKIPPED_MAINTENANCE=0
+
+# maintenance_active — mirror of jarvis_common.maintenance.maintenance_active:
+# .destructive is active regardless of age; .maintenance is active only while
+# fresher than MAINTENANCE_MAX_AGE_S, so a crashed restore's stale soft sentinel
+# cannot wedge scheduled backups off forever. Never fatal under set -e.
+maintenance_active() {
+  [ -e "$MAINTENANCE_DESTRUCTIVE" ] && return 0
+  [ -e "$MAINTENANCE_SENTINEL" ] || return 1
+  local now mtime
+  now="$(date +%s)"
+  mtime="$(stat -c %Y "$MAINTENANCE_SENTINEL" 2>/dev/null || echo 0)"
+  [ "$(( now - mtime ))" -le "$MAINTENANCE_MAX_AGE_S" ]
+}
+
+if [ -z "$BACKUP_FORCE" ] && maintenance_active; then
+  SKIPPED_MAINTENANCE=1
+  echo "[backup] skipped: a restore holds the maintenance sentinel" >&2
+  exit 0
+fi
+
+# flock single-run mutex (belt-and-braces against a manual invocation racing a
+# restore or a second scheduled run). The forced safety backup never takes this
+# lock: restore.sh does not hold it and the safety backup must never block on it.
+if [ -z "$BACKUP_FORCE" ] && [ -d "$TRIGGER_DIR" ]; then
+  exec 9>"${TRIGGER_DIR}/.backup.lock"
+  if ! flock -n 9; then
+    echo "[backup] another backup is already running; skipping" >&2
+    exit 0
+  fi
+fi
 
 # dump_db <db-name> <archive-prefix>
 #   pg_dump <db> | gzip [| openssl] → /backups/<prefix>_<ts>.sql.gz[.enc]
@@ -398,7 +455,7 @@ fi
 # window and `keep_last_n` caps the number of restore points kept. Both may be
 # absent/null -> env fallback only. The helpers below share their shape with
 # scripts/prune.sh (in-flight refusal) — kept inline to avoid a second mount.
-TRIGGER_DIR="${BACKUP_TRIGGER_DIR:-/backup-trigger}"
+# TRIGGER_DIR is defined once near the maintenance skip-guard above.
 RETENTION_FILE="${TRIGGER_DIR}/.retention.json"
 RESTORE_REQUEST_FILE="${TRIGGER_DIR}/.restore_request.json"
 RESTORE_STATUS_FILE="${TRIGGER_DIR}/.restore_status.json"
@@ -461,7 +518,8 @@ retention_keep_last_n() {
         -o -name "qdrant_*_${ts}.snapshot" -o -name "qdrant_*_${ts}.snapshot.enc" \
         -o -name "manifest_${ts}.json" \
       \) -delete
-  done < <(ls -1 "$dir" 2>/dev/null \
+  done < <(find "$dir" -maxdepth 1 -type f \
+        \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) -printf '%f\n' 2>/dev/null \
       | grep -oE '^jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?$' \
       | grep -oE '[0-9]{8}_[0-9]{6}' | sort -ru)
 }

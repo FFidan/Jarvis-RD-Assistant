@@ -19,18 +19,26 @@ Registered in main.py with ``dependencies=[]`` + ``router.auth_exempt=True``
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from jarvis_common.audit import log_audit
-from jarvis_common.auth import require_admin, require_admin_or_api_key, verify_api_key
+from jarvis_common.auth import (
+    require_admin,
+    require_admin_or_api_key,
+    restore_status_bearer_valid,
+    restore_status_token_file,
+    verify_api_key,
+)
 from jarvis_common.event_log import log_event
 from jarvis_common.migrations import required_code_schema
 from jarvis_common.paths import secure_path
@@ -363,6 +371,51 @@ def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
     return points
 
 
+def _write_status_token(token: str) -> bool:
+    """Persist ONLY the sha256 + 2h expiry of a one-time restore-status token.
+
+    The raw token is returned to the caller ONCE and never stored: ``restore_status``
+    authorizes a presented token by hashing it and matching this file, DB-free (see
+    ``jarvis_common.auth.restore_status_bearer_valid``). It lives in its OWN sentinel
+    file — not ``.restore_request.json``, which ``restore.sh`` consumes before any
+    status is written. Atomic tmp->replace at mode 0600; a new request overwrites it.
+    Best-effort: an I/O failure logs and returns False (the restore is already queued;
+    the poll simply falls back to the session/API-key gate).
+    """
+    path = restore_status_token_file()
+    payload = {
+        "sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        "expires_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+    }
+    tmp = path.parent / f"{path.name}.tmp"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.error("restore status-token write failed: %r", exc)
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
+async def restore_status_auth(request: Request) -> None:
+    """Authorize the restore-status poll: DB-free bearer token, or the existing gate.
+
+    Three accepted credentials: (a) a valid one-time bearer token minted by
+    ``request_restore`` — authorized with ZERO DB access, the only credential that
+    survives after an in-flight restore has torn down the admin's session (the same
+    token is validated at the global front door in ``jarvis_common.auth``); otherwise
+    (b) the ops X-API-Key or (c) an admin browser session, via the existing
+    ``verify_api_key`` + ``require_admin_or_api_key`` gate, unchanged.
+    """
+    if restore_status_bearer_valid(request):
+        return
+    await verify_api_key(request, request.headers.get("X-API-Key"))
+    await require_admin_or_api_key(request)
+
+
 @router.get("", response_model=list[BackupEntry], dependencies=[Depends(require_admin)])
 @limiter.limit("30/minute")
 async def list_backups(request: Request) -> list[BackupEntry]:
@@ -574,13 +627,21 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
                 "Ensure the postgres-backup service is running."
             ),
         ) from exc
+    # Mint a one-time status token AFTER the request sentinel is committed: the
+    # initiating admin's browser session dies when the restore rewrites the sessions
+    # table, so this token is what keeps their progress poll (GET .../restore/status)
+    # authorized DB-free. Only its hash + expiry are persisted; the raw token is
+    # handed back ONCE here and never stored or logged.
+    status_token = secrets.token_urlsafe(32)
+    if _write_status_token(status_token):
+        return {"status": "scheduled", "status_token": status_token}
     return {"status": "scheduled"}
 
 
 @router.get(
     "/restore/status",
     response_model=RestoreStatus,
-    dependencies=[Depends(verify_api_key), Depends(require_admin_or_api_key)],
+    dependencies=[Depends(restore_status_auth)],
 )
 @limiter.limit("60/minute")
 async def restore_status(request: Request) -> RestoreStatus:
@@ -588,12 +649,13 @@ async def restore_status(request: Request) -> RestoreStatus:
 
     Polled every few seconds AND must keep answering during the brief window in
     a restore where ``restore.sh`` drops/recreates the jarvis DB — exactly when a
-    session lookup against that DB fails. So this route does NOT use the
-    session-only ``require_admin`` (which would 403 once the session store is
-    gone); it accepts an admin session OR the ops X-API-Key, whose check
-    (``verify_api_key``) is DB-free and survives the window. It exposes only
-    progress (step names + state), never archive contents, so the wider gate is
-    safe here; the destructive ``POST /restore`` stays session-admin-only.
+    session lookup against that DB fails. So this route is gated by
+    ``restore_status_auth``: an admin session, the ops X-API-Key, OR the one-time
+    bearer token minted by ``request_restore`` — the last validated DB-free
+    (``restore_status_bearer_valid``) so the initiating admin's poll survives even
+    after the restore has dropped the session store. It exposes only progress (step
+    names + state), never archive contents, so the wider gate is safe here; the
+    destructive ``POST /restore`` stays session-admin-only.
 
     When a restore is queued but the sidecar (a few-second poll loop) has not yet
     written the first status, the request sentinel still exists — report
