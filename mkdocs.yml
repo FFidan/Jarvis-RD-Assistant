@@ -118,6 +118,7 @@ nav:
       - Analytics: manual/analytics.md
       - Settings: manual/settings.md
       - What your hardware gets you: manual/hardware-and-models.md
+      - Hardware support matrix: manual/hardware-support-matrix.md
       - Context window: manual/context-window.md
       - Telegram: manual/telegram.md
       - Admin & Multi-tenant: manual/admin.md

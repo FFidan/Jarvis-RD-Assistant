@@ -54,6 +54,8 @@ cd Jarvis-RD-Assistant
 
 `setup.sh` generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens **http://localhost:3001** — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off.
 
+Prefer not to open a terminal? Double-click a launcher in `launchers/` — `Start JARVIS.command` (macOS), `jarvis.desktop` (Linux), or `Start JARVIS.bat` (Windows) — each runs the same `setup.sh` and keeps the window open so you can read its output.
+
 Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see [Disk budget](docs/REQUIREMENTS.md#disk-budget)) streams its progress directly to your terminal after the application images are built, so the initial pull shows visible progress instead of a silent wait.
 
 In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
