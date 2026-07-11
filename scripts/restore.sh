@@ -28,6 +28,10 @@ REQUEST_FILE="${TRIGGER_DIR}/.restore_request.json"
 STATUS_FILE="${TRIGGER_DIR}/.restore_status.json"
 MAINTENANCE_SENTINEL="${MAINTENANCE_SENTINEL:-${TRIGGER_DIR}/.maintenance}"
 MAINTENANCE_DESTRUCTIVE="${MAINTENANCE_DESTRUCTIVE_SENTINEL:-${TRIGGER_DIR}/.destructive}"
+# Durable crash-recovery marker for the rename-swap: names the db + phase of the
+# in-flight swap so a sidecar restart (via `restore.sh --recover`) can reconcile a
+# stranded half-swap deterministically. Cleared when a db's swap fully completes.
+SWAP_STATE_FILE="${TRIGGER_DIR}/.restore_swap_state.json"
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 # Off-host (cross-host) disaster recovery: the operator drops the archive set +
 # a one-time operator key into the rw restore_inbox volume mounted here. This is
@@ -42,6 +46,10 @@ PGHOST="${PGHOST:-postgres}"
 PGUSER="${PGUSER:-jarvis}"
 JARVIS_DB="${PGDATABASE:-jarvis}"
 LITELLM_DB="${LITELLM_DATABASE:-litellm}"
+# The postgres data volume is mounted here read-only (compose: postgres_data:ro) so
+# the disk preflight can size the free space the reload will consume. Overridable
+# only to keep the path in one place; users never set it.
+POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/postgres-data}"
 ENC_KEYFILE="${BACKUP_ENCRYPT_KEYFILE:-}"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 QDRANT_API_KEYFILE="${QDRANT_API_KEYFILE:-/run/secrets/qdrant_api_key}"
@@ -64,9 +72,11 @@ STEP_QDRANT="pending"
 STEP_FINISH="pending"
 DROP_STARTED=0
 RESTORE_CLEAN=0
-RESTORE_OLDER=0
 HEARTBEAT_PID=""
 MANUAL_STEPS_REQUIRED=0
+# Set only by the --recover entrypoint branch: skips the request re-consume in the
+# EXIT trap so a crash-recovery run never eats a legitimately pending restore.
+RECOVER_MODE=0
 PHASE=""
 # Restore source: "local" (same-host WebUI restore, the default) reads the
 # archive set + key exactly as before; "inbox" (off-host DR) reads them from the
@@ -167,32 +177,201 @@ psql_admin() {
   psql -h "$PGHOST" -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 -tAc "$1"
 }
 
-# restore_one_db <db> <archive> — quiesce-by-revoke, drop+recreate, reload.
-restore_one_db() {
-  local db="$1" archive="$2" st
-  # (a) revoke CONNECT so litellm/app pools cannot re-grab the DB mid-window.
-  #     A FAILED ALTER leaves the DB fully servable (untouched), so it returns
-  #     WITHOUT marking the destructive window -> the lift gate clears maintenance.
-  psql_admin "ALTER DATABASE \"${db}\" WITH ALLOW_CONNECTIONS false;" || return 1
-  # The ALTER succeeded -> the DB is now NON-SERVABLE (rejects all connections), so
-  # the destructive window has begun. Mark it BEFORE the terminate/DROP so ANY
-  # later failure (even pg_terminate_backend) holds maintenance — never lift the
-  # 503 over a DB left ALLOW_CONNECTIONS=false or already dropped.
+# --- rename-swap state file (durable, drives --recover) ----------------------
+write_swap_state() {
+  # $1 = db, $2 = phase (reload_tmp|swapping_out|swapping_in|verified). Written
+  # BEFORE each transition so a crash leaves a durable record of the db + step.
+  printf '{"db":"%s","phase":"%s"}' "$(_json_escape "$1")" "$(_json_escape "$2")" \
+    > "${SWAP_STATE_FILE}.tmp" 2>/dev/null || return 0
+  mv -f "${SWAP_STATE_FILE}.tmp" "$SWAP_STATE_FILE" 2>/dev/null || return 0
+}
+
+clear_swap_state() {
+  rm -f "$SWAP_STATE_FILE" 2>/dev/null || true
+}
+
+read_swap_db() {
+  # Emit the db name recorded in the swap-state file, or nothing if absent.
+  [ -r "$SWAP_STATE_FILE" ] || return 0
+  grep -oE '"db"[[:space:]]*:[[:space:]]*"[^"]*"' "$SWAP_STATE_FILE" 2>/dev/null \
+    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true
+}
+
+# db_exists <name> — true iff a database with that exact name is in pg_database.
+# Uses its own non-ON_ERROR_STOP connection so it never aborts the script.
+db_exists() {
+  local out
+  out="$(psql -h "$PGHOST" -U "$PGUSER" -d postgres -tAc \
+    "SELECT 1 FROM pg_database WHERE datname = '${1}'" 2>/dev/null || true)"
+  [ "$out" = "1" ]
+}
+
+# verify_db_structural <db> <is_jarvis> — the SOLE post-swap gate. Proves the
+# reload populated a real schema (not an empty/partial db) using db-appropriate
+# tables: jarvis has OUR schema_migrations + auth tables; litellm is a THIRD-PARTY
+# (Prisma) schema with LiteLLM_* tables and NO schema_migrations. Returns non-zero
+# on any failure, which drives the revert. NEVER polls the app /health: /health
+# aggregates every dependency (incl. a mid-restore litellm) and 503s under
+# maintenance, so polling it would revert successful restores.
+verify_db_structural() {
+  local db="$1" is_jarvis="$2" regs
+  if [ "$is_jarvis" = "1" ]; then
+    psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -tAc \
+      "SELECT 1 FROM schema_migrations LIMIT 1;" >/dev/null 2>&1 || return 1
+    regs="$(psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -tAc \
+      "SELECT (to_regclass('public.users') IS NOT NULL AND to_regclass('public.sessions') IS NOT NULL);" \
+      2>/dev/null || true)"
+    [ "$regs" = "t" ] || return 1
+  else
+    # litellm keyed on schema_migrations would fail EVERY restore (that table does
+    # not exist there — verified against the live db). Assert its table set exists
+    # instead; version-robust (any LiteLLM_* table, not a name a litellm upgrade
+    # might rename).
+    regs="$(psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -tAc \
+      "SELECT (count(*) > 0) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'LiteLLM%';" \
+      2>/dev/null || true)"
+    [ "$regs" = "t" ] || return 1
+  fi
+  return 0
+}
+
+# preflight_disk_or_fail — refuse a restore that could exhaust the database volume
+# BEFORE creating any tmp db. The swap keeps BOTH live dbs while it reloads a
+# transient <db>_restore_tmp per db, so the volume must hold the live dbs + both
+# tmp dbs + headroom. The tmp estimate is ADDITIVE per db (FRESH_DB_FLOOR + gz x
+# CONTENT_FACTOR): a single multiplier is unsafe because a tiny db is dominated by
+# the fixed base-db overhead (measured on pg16.8: jarvis 18.8x, litellm 266x). It
+# is deliberately conservative — it covers reload WAL amplification + FSM/VM/temp
+# overhead, and a cluster-wide ENOSPC mid-reload would stall WAL for the LIVE db
+# too, so fail-fast is safer than try-and-see.
+preflight_disk_or_fail() {
+  local fresh_floor_kb=$((100 * 1024)) content_factor=30 headroom_kb=$((2 * 1024 * 1024))
+  local existing_kb tmp_est_kb req_kb avail_kb jarvis_gz litellm_gz
+  existing_kb="$(psql -h "$PGHOST" -U "$PGUSER" -d postgres -tAc \
+    "SELECT (pg_database_size('${JARVIS_DB}') + pg_database_size('${LITELLM_DB}')) / 1024;" \
+    2>/dev/null || true)"
+  case "$existing_kb" in ''|*[!0-9]*) existing_kb=0 ;; esac
+  jarvis_gz="$(stat -c%s "$JARVIS_ARCHIVE" 2>/dev/null || echo 0)"
+  litellm_gz="$(stat -c%s "$LITELLM_ARCHIVE" 2>/dev/null || echo 0)"
+  tmp_est_kb=$(( fresh_floor_kb + jarvis_gz * content_factor / 1024 \
+              + fresh_floor_kb + litellm_gz * content_factor / 1024 ))
+  req_kb=$(( existing_kb + tmp_est_kb + headroom_kb ))
+  avail_kb="$(df -Pk "$POSTGRES_DATA_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
+  # A non-numeric result means df could not read the volume — almost always the
+  # read-only postgres_data mount is missing. Fail with a diagnosable message
+  # rather than a misleading "0 GB free" (fail-closed is correct for a destructive
+  # op; an ENOSPC mid-reload is non-destructive but stalls the live DB's WAL).
+  case "$avail_kb" in
+    ''|*[!0-9]*)
+      fail_before_destruction "cannot read free space on the database volume ${POSTGRES_DATA_DIR} (is the postgres_data read-only mount present?); refusing the restore" ;;
+  esac
+  if [ "$avail_kb" -le "$req_kb" ]; then
+    fail_before_destruction "insufficient disk for a safe restore: need ~$(( req_kb / 1024 / 1024 )) GB free on the database volume, have ~$(( avail_kb / 1024 / 1024 )) GB"
+  fi
+}
+
+# revert_swap <db> — roll production back to the untouched <db>_pre_restore after a
+# post-swap verify failure. The renamed-out snapshot inherited ALLOW_CONNECTIONS
+# false from the disallow step (proven on pg16.8), so it MUST be re-enabled BEFORE
+# the rename-back or the restored-to-original db stays non-servable. Best-effort
+# throughout (the caller already holds maintenance via DROP_STARTED=1).
+revert_swap() {
+  local db="$1"
+  local tmp="${db}_restore_tmp" pre="${db}_pre_restore"
+  if db_exists "$db"; then
+    psql_admin "ALTER DATABASE \"${db}\" WITH ALLOW_CONNECTIONS false;" >/dev/null 2>&1 || true
+    psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db}' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+    psql_admin "ALTER DATABASE \"${db}\" RENAME TO \"${tmp}\";" >/dev/null 2>&1 || true
+  fi
+  psql_admin "ALTER DATABASE \"${pre}\" WITH ALLOW_CONNECTIONS true;" >/dev/null 2>&1 || true
+  psql_admin "ALTER DATABASE \"${pre}\" RENAME TO \"${db}\";" >/dev/null 2>&1 || true
+  if db_exists "$tmp"; then psql_admin "DROP DATABASE \"${tmp}\";" >/dev/null 2>&1 || true; fi
+}
+
+# reconcile_leftover <db> — idempotent crash-recovery for one db, keyed off the
+# (<db>, <db>_restore_tmp, <db>_pre_restore) existence triple (the catalog is the
+# ground truth; the recorded phase can lag reality). Brings any stranded mid-swap
+# state to untouched-original OR completed-restore — never a reachable half-swap.
+# Called at the top of restore_one_db_swap (its own db) and as the whole body of
+# --recover (the recorded db). It does NOT touch DROP_STARTED/.destructive: the
+# maintenance-hold decision is owned by the destructive window (main flow) or the
+# durable .destructive sentinel read at --recover startup.
+reconcile_leftover() {
+  local db="$1"
+  local tmp="${db}_restore_tmp" pre="${db}_pre_restore" is_jarvis=0
+  [ "$db" = "$JARVIS_DB" ] && is_jarvis=1
+  if ! db_exists "$pre"; then
+    # No rollback snapshot -> nothing was renamed for this db; the ORIGINAL <db> is
+    # the live data. A stale tmp can exist (aborted reload, or the disallow-before-
+    # rename window). Re-enable connections on <db> (no-op if already allowed, but
+    # heals the disallow-before-rename crash) and drop the tmp.
+    if db_exists "$db"; then psql_admin "ALTER DATABASE \"${db}\" WITH ALLOW_CONNECTIONS true;" >/dev/null 2>&1 || true; fi
+    if db_exists "$tmp"; then psql_admin "DROP DATABASE \"${tmp}\";" >/dev/null 2>&1 || true; fi
+    clear_swap_state
+    return 0
+  fi
+  # pre_restore EXISTS -> a swap was mid-flight. If <db> is absent but the (already
+  # verified) tmp is still there, complete forward by renaming it in.
+  if ! db_exists "$db" && db_exists "$tmp"; then
+    psql_admin "ALTER DATABASE \"${tmp}\" RENAME TO \"${db}\";" >/dev/null || return 1
+  fi
+  if db_exists "$db" && verify_db_structural "$db" "$is_jarvis"; then
+    psql_admin "DROP DATABASE \"${pre}\";" >/dev/null 2>&1 || true
+    if db_exists "$tmp"; then psql_admin "DROP DATABASE \"${tmp}\";" >/dev/null 2>&1 || true; fi
+    clear_swap_state
+    return 0
+  fi
+  # <db> missing with no tmp to complete, OR the post-swap verify failed -> REVERT
+  # to the untouched pre_restore. The half-swap is resolved either way; clear state.
+  revert_swap "$db"
+  clear_swap_state
+  return 1
+}
+
+# restore_one_db_swap <db> <archive> <is_jarvis> — reload the plain-SQL dump into a
+# fresh <db>_restore_tmp while the OLD <db> stays LIVE, structurally verify the tmp,
+# then atomically swap by rename (disallow -> terminate -> rename-out -> rename-in),
+# gate the swapped-in db on a post-swap structural verify, and drop the rollback
+# snapshot. The ONLY destructive window is disallow->terminate->rename; a failure
+# anywhere before the first rename (bad archive, ENOSPC, timeout, tmp-verify fail)
+# leaves production untouched (DROP_STARTED stays 0 -> the EXIT trap lifts the 503).
+restore_one_db_swap() {
+  local db="$1" archive="$2" is_jarvis="$3"
+  local tmp="${db}_restore_tmp" pre="${db}_pre_restore" st
+  reconcile_leftover "$db" || return 1
+  # (1) reload into a fresh tmp db — writers cannot reach it (unknown name), so the
+  #     reload minutes are harmless while OLD <db> keeps serving.
+  psql_admin "CREATE DATABASE \"${tmp}\";" >/dev/null || return 1
+  write_swap_state "$db" "reload_tmp"
+  set +e
+  decrypt_or_passthrough "$archive" | gunzip | psql -h "$PGHOST" -U "$PGUSER" -d "$tmp" -v ON_ERROR_STOP=1 -q >/dev/null
+  st=("${PIPESTATUS[@]}")
+  set -e
+  { [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ] && [ "${st[2]}" -eq 0 ]; } || return 1
+  # (2) structural verify on the tmp BEFORE any destruction.
+  verify_db_structural "$tmp" "$is_jarvis" || return 1
+  # ---- destructive window opens HERE (not before): disallow -> terminate -> rename.
+  #      Mark it so ANY later failure holds maintenance (never lift the 503 over a
+  #      half-swapped db). The FE reads drop_started from the status JSON.
   DROP_STARTED=1
   touch "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null || true   # durable, never heartbeated
   write_status
-  # (b) terminate the backends that were already connected.
+  write_swap_state "$db" "swapping_out"
+  psql_admin "ALTER DATABASE \"${db}\" WITH ALLOW_CONNECTIONS false;" >/dev/null || return 1
   psql_admin "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db}' AND pid <> pg_backend_pid();" >/dev/null || return 1
-  # (c) DROP + CREATE (CREATE defaults ALLOW_CONNECTIONS true -> reachable for the
-  #     reload; owner = the connecting jarvis role, matching --no-owner dumps).
-  psql_admin "DROP DATABASE \"${db}\";" >/dev/null || return 1
-  psql_admin "CREATE DATABASE \"${db}\";" >/dev/null || return 1
-  # (d) reload the PLAIN-SQL dump (decrypt | gunzip | psql — NOT pg_restore).
-  set +e
-  decrypt_or_passthrough "$archive" | gunzip | psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -q >/dev/null
-  st=("${PIPESTATUS[@]}")
-  set -e
-  [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ] && [ "${st[2]}" -eq 0 ]
+  psql_admin "ALTER DATABASE \"${db}\" RENAME TO \"${pre}\";" >/dev/null || return 1
+  write_swap_state "$db" "swapping_in"
+  psql_admin "ALTER DATABASE \"${tmp}\" RENAME TO \"${db}\";" >/dev/null || return 1
+  write_swap_state "$db" "verified"
+  # (3) post-swap structural verify — THE SOLE GATE. On pass, drop the rollback
+  #     snapshot; on fail, REVERT to the untouched pre_restore and hold maintenance.
+  if verify_db_structural "$db" "$is_jarvis"; then
+    psql_admin "DROP DATABASE \"${pre}\";" >/dev/null || return 1
+    clear_swap_state
+    return 0
+  fi
+  revert_swap "$db"
+  return 1
 }
 
 # Terminal failure BEFORE any destruction: record + exit 0 (nothing dropped).
@@ -248,8 +427,10 @@ purge_secrets_staging() {
 _cleanup() {
   set +e
   [ -n "$HEARTBEAT_PID" ] && kill "$HEARTBEAT_PID" 2>/dev/null
-  # belt-and-braces: re-consume the request so it can never re-fire.
-  rm -f "$REQUEST_FILE" 2>/dev/null
+  # belt-and-braces: re-consume the request so it can never re-fire. A --recover run
+  # never consumes a request (it did not claim one) so a legitimately pending
+  # restore that arrives while a crash-recovery is running is not silently eaten.
+  [ "$RECOVER_MODE" = "1" ] || rm -f "$REQUEST_FILE" 2>/dev/null
   # Off-host DR hygiene: shred the one-time operator key + the plaintext secrets
   # staging on every clean or recorded-failure exit, so a failed restore never
   # leaves them on the rw restore_inbox volume. A SIGKILL cannot run this trap, so
@@ -300,7 +481,7 @@ _cleanup() {
   # otherwise holds the sentinel (the DB is inconsistent). This can't race a
   # concurrent restore: the restore-request POST is itself 503'd while the sentinel
   # is up, so a post-DROP hold is never lifted by a later run.
-  if { [ "$RESTORE_CLEAN" = "1" ] && [ "$SOURCE" != "inbox" ] && [ "$RESTORE_OLDER" != "1" ]; } || [ "$DROP_STARTED" = "0" ]; then
+  if { [ "$RESTORE_CLEAN" = "1" ] && [ "$SOURCE" != "inbox" ]; } || [ "$DROP_STARTED" = "0" ]; then
     rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null
     rm -f "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null
   fi
@@ -311,6 +492,46 @@ _cleanup() {
 trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+
+# === RECOVERY MODE (--recover): reconcile a stranded mid-swap state, then exit ==
+# The sidecar entrypoint invokes this on startup when .restore_swap_state.json is
+# present (a crash mid-swap). It runs ONLY the leftover-handler for the recorded db
+# — it never consumes a .restore_request.json or runs the full restore flow. A
+# durable .destructive sentinel means the crash happened AFTER the destructive
+# window opened, so maintenance is held (DROP_STARTED=1) even when the reconcile
+# completes the swap: the rest of the restore (Qdrant, the other db) did not run,
+# so the operator must re-trigger or clear the sentinels. When nothing was ever
+# destroyed (.destructive absent, e.g. a crash during the first reload) the
+# reconcile only drops a stale tmp and the EXIT trap lifts the 503.
+if [ "${1:-}" = "--recover" ]; then
+  RECOVER_MODE=1
+  CURRENT_STEP="Recovering an interrupted restore"
+  PHASE="recover"
+  if [ -f "$MAINTENANCE_DESTRUCTIVE" ]; then DROP_STARTED=1; fi
+  RECOVER_DB="$(read_swap_db)"
+  if [ -z "$RECOVER_DB" ]; then
+    clear_swap_state
+    STATE="done"
+    FINISHED_AT="$(date -Iseconds)"
+    exit 0
+  fi
+  if [ ! -r /run/secrets/postgres_password ]; then
+    STATE="failed"
+    ERROR="recovery: cannot read the postgres password secret"
+    FINISHED_AT="$(date -Iseconds)"
+    exit 0
+  fi
+  PGPASSWORD="$(cat /run/secrets/postgres_password)"
+  export PGPASSWORD
+  if reconcile_leftover "$RECOVER_DB"; then
+    STATE="done"
+  else
+    STATE="failed"
+    ERROR="could not finish the interrupted restore of ${RECOVER_DB}; the database is consistent (restored or original) but the stack stays in maintenance — re-run the restore or clear the maintenance sentinels per the runbook"
+  fi
+  FINISHED_AT="$(date -Iseconds)"
+  exit 0
+fi
 
 # === STEP 1: consume the request FIRST (at-most-once) + validate =============
 REQ_CONTENT="$(cat "$REQUEST_FILE" 2>/dev/null || true)"
@@ -417,18 +638,30 @@ if [ -r "$MANIFEST" ]; then
   # the baseline floor — so this gate stays ARMED rather than failing open.
   if [ -n "$MANIFEST_SCHEMA" ]; then
     MIG_DIR="${MIGRATIONS_DIR:-/app/db/migrations}"
-    CODE_MAX="$(ls "$MIG_DIR"/*.sql 2>/dev/null \
-      | sed -E 's#.*/0*([0-9]+)_.*#\1#' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)"
+    # Highest NNN_*.sql migration number, via a glob (not `ls`) so filenames are
+    # handled safely; 10# forces base-10 so a leading-zero prefix is not read as
+    # octal. After a schema squash db/migrations/ is empty (the baseline lives in
+    # init.sql), so the glob yields nothing; fall back to db/SCHEMA_VERSION — the
+    # single source of the baseline floor — so this gate stays ARMED, not open.
+    # An older-than-code backup is NOT held here: it self-heals on the next app
+    # recreate (the migration runner forward-migrates it), so only newer-than-code
+    # is refused.
+    CODE_MAX=""
+    for _mig in "$MIG_DIR"/*.sql; do
+      [ -e "$_mig" ] || continue
+      _num="${_mig##*/}"
+      _num="${_num%%_*}"
+      case "$_num" in ''|*[!0-9]*) continue ;; esac
+      _num=$((10#$_num))
+      if [ -z "$CODE_MAX" ] || [ "$_num" -gt "$CODE_MAX" ]; then CODE_MAX="$_num"; fi
+    done
     if [ -z "$CODE_MAX" ]; then
-      CODE_MAX="$(cat "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null \
-        | tr -dc '0-9' || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX="$(cat /app/db/SCHEMA_VERSION 2>/dev/null | tr -dc '0-9' || true)"
+      CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
+      [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX=101
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"
-    elif [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -lt "$CODE_MAX" ]; then
-      RESTORE_OLDER=1
     fi
   fi
 else
@@ -482,8 +715,13 @@ STEP_SAFETY="running"
 write_status
 # Skip the retention prune in the safety pre-backup: it would otherwise delete the
 # very archive being restored when that archive is a `local` target older than
-# RETENTION_DAYS, leaving STEP 5 to DROP the DB and then fail to reload it.
+# RETENTION_DAYS, and the STEP-5 reload reads that archive.
 export BACKUP_SKIP_PRUNE=1
+# Force the safety backup to run even though .maintenance is already up: the backup
+# script's own maintenance skip-guard would otherwise treat the restore's own
+# maintenance sentinel as "someone else is mid-restore" and abort the very safety
+# snapshot the restore depends on.
+export BACKUP_FORCE=1
 if /usr/local/bin/backup.sh; then :; else echo "[restore] WARN: safety backup.sh exited non-zero" >&2; fi
 LAST_RUN="$(cat "${BACKUP_DIR}/.last_run.json" 2>/dev/null || true)"
 SAFETY_SUCCEEDED="$(printf '%s' "$LAST_RUN" \
@@ -509,12 +747,21 @@ for _arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
   fi
 done
 
-# === STEP 5: restore the DBs — the ONLY destructive step =====================
+# === STEP 4.5: disk preflight (before the first tmp CREATE) ==================
+# The rename-swap keeps both live DBs while it reloads a transient tmp DB per DB,
+# so refuse fast if the volume cannot hold live + tmp + headroom (fail_before_-
+# destruction lifts maintenance; nothing was touched).
+preflight_disk_or_fail
+
+# === STEP 5: restore the DBs — the rename-swap holds the ONLY destructive window
+# Each DB is reloaded into <db>_restore_tmp (non-destructive; OLD <db> stays live),
+# then swapped in by rename; the destructive window is only disallow->terminate->
+# rename. A failure before the first rename leaves production untouched.
 CURRENT_STEP="Restoring database"
 PHASE="reload-db"
 STEP_DB="running"
 write_status
-if restore_one_db "$JARVIS_DB" "$JARVIS_ARCHIVE"; then
+if restore_one_db_swap "$JARVIS_DB" "$JARVIS_ARCHIVE" 1; then
   STEP_DB="done"
 else
   STEP_DB="failed"
@@ -526,7 +773,7 @@ CURRENT_STEP="Restoring API-key store"
 PHASE="reload-litellm"
 STEP_LITELLM="running"
 write_status
-if restore_one_db "$LITELLM_DB" "$LITELLM_ARCHIVE"; then
+if restore_one_db_swap "$LITELLM_DB" "$LITELLM_ARCHIVE" 0; then
   STEP_LITELLM="done"
 else
   STEP_LITELLM="failed"
@@ -657,7 +904,10 @@ STEP_FINISH="running"
 write_status
 RESTORE_CLEAN=1
 STATE="done"
-if [ "$SOURCE" = "inbox" ] || [ "$RESTORE_OLDER" = "1" ]; then
+# An older-than-code backup is no longer held here: it self-heals on the next app
+# recreate (the migration runner forward-migrates it). Only an off-host (inbox)
+# restore still needs operator follow-up before the stack can serve.
+if [ "$SOURCE" = "inbox" ]; then
   MANUAL_STEPS_REQUIRED=1
   PHASE="maintenance-held"
 fi
@@ -666,8 +916,6 @@ FINISHED_AT="$(date -Iseconds)"
 write_status
 if [ "$SOURCE" = "inbox" ]; then
   echo "[restore] off-host restore complete: databases + vectors restored and the postgres role rebound. The stack stays in MAINTENANCE until you materialize the host ./secrets and recreate the app containers, then clear /backup-trigger/.maintenance and /backup-trigger/.destructive — see DEPLOYMENT.md." >&2
-elif [ "$RESTORE_OLDER" = "1" ]; then
-  echo "[restore] OLDER backup restored (schema ${MANIFEST_SCHEMA} < code ${CODE_MAX}). The stack stays in MAINTENANCE: recreate the app containers to run forward migrations, then clear /backup-trigger/.maintenance and /backup-trigger/.destructive — see DEPLOYMENT.md." >&2
 fi
 # The EXIT trap clears both .maintenance and .destructive on the clean same-host path
 # + kills the heartbeat.

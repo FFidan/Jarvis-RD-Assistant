@@ -616,16 +616,21 @@ services:
       - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
       - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
       - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
-    # Loop dispatch by sentinel: a restore request runs restore.sh (drop+reload
-    # both DBs + recover Qdrant behind the maintenance gate); a delete request runs
+      - postgres_data:/postgres-data:ro  # ro: restore.sh's disk preflight sizes the free space on the live DB volume to refuse a restore that would exhaust it (rename-swap keeps both live DBs while it reloads a transient tmp DB)
+    # Loop dispatch by sentinel: a restore request runs restore.sh (rename-swap both
+    # DBs + recover Qdrant behind the maintenance gate); a delete request runs
     # prune.sh (delete named restore points); otherwise take the scheduled backup.
+    # On startup, a leftover .restore_swap_state.json means a prior restore crashed
+    # mid-swap: run restore.sh --recover ONCE first to reconcile the stranded db to
+    # untouched-or-completed (it never consumes a request or runs the full flow).
     # `sh -uc` deliberately drops -e so ONE failed run cannot kill the loop (a
     # non-zero exit would restart:unless-stopped into a fresh-archive-set-per-restart
     # loop); each branch logs its failure via `|| echo ... rc=$?` and continues. The
     # inner poll breaks early on ANY of the three sentinels so an on-demand backup,
     # restore, or delete fires within ~5s rather than after the full interval.
     entrypoint: >
-      sh -uc "while true;
+      sh -uc "[ -f /backup-trigger/.restore_swap_state.json ] && /usr/local/bin/restore.sh --recover || true;
+      while true;
       do if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
       elif [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
       else /usr/local/bin/backup.sh || echo \"[sidecar] backup failed rc=$$?\" >&2; fi;

@@ -52,32 +52,53 @@ fi
 #    destruction — proven by execution order: the step-1 consume (main flow)
 #    precedes the step-5 restore_one_db call (main flow).
 check "consumes the .restore_request.json sentinel" '\.restore_request\.json'
-rm_line="$(line_of 'REQUEST_FILE.*\|\| true')"
-drop_call_line="$(line_of 'restore_one_db "\$JARVIS_DB"')"
-if [ -n "$rm_line" ] && [ -n "$drop_call_line" ] && [ "$rm_line" -lt "$drop_call_line" ]; then
-  pass "request sentinel is rm -f'd BEFORE the destructive restore_one_db call"
+# The STEP-5 restore_one_db_swap call is the destructive step (it opens the
+# disallow->terminate->rename window); anchor all "before any destruction" checks
+# on it. (The swap's own reload into a tmp db is non-destructive, so this anchor is
+# strictly conservative — every pre-destruction guard genuinely runs before it.)
+drop_call_line="$(line_of 'restore_one_db_swap "\$JARVIS_DB"')"
+consume_line="$(line_of '^rm -f "\$REQUEST_FILE"')"
+if [ -n "$consume_line" ] && [ -n "$drop_call_line" ] && [ "$consume_line" -lt "$drop_call_line" ]; then
+  pass "request sentinel is rm -f'd BEFORE the destructive restore_one_db_swap call"
 else
-  printf 'FAIL: request consume (%s) is not before the restore_one_db call (%s)\n' \
-    "$rm_line" "$drop_call_line" >&2
+  printf 'FAIL: request consume (%s) is not before the restore_one_db_swap call (%s)\n' \
+    "$consume_line" "$drop_call_line" >&2
   fail=1
 fi
 
-# 3. QUIESCE-BY-REVOKE: every DROP DATABASE is preceded by ALTER ... ALLOW_CONNECTIONS
-#    false + pg_terminate_backend (revoke CONNECT so pools cannot re-grab the DB).
-check "revokes connections before dropping (ALLOW_CONNECTIONS false)" \
+# 3. RENAME-SWAP SEQUENCE (the load-bearing invariant): inside restore_one_db_swap
+#    the plain-SQL dump is reloaded into a fresh <db>_restore_tmp and structurally
+#    verified BEFORE any destruction; only then does the destructive window open
+#    (DROP_STARTED=1 -> disallow -> terminate -> rename-out -> rename-in), gated by a
+#    post-swap structural verify that guards the DROP of the <db>_pre_restore
+#    rollback snapshot. Proven by strict line-ordering WITHIN the function body.
+check "revokes connections before the swap (ALLOW_CONNECTIONS false)" \
   'ALTER DATABASE .* ALLOW_CONNECTIONS false'
-check "terminates existing backends before dropping" 'pg_terminate_backend'
-# Anchor on the executable psql_admin calls (not the explanatory comments, which
-# also name DROP DATABASE / ALLOW_CONNECTIONS).
-alter_line="$(line_of 'psql_admin "ALTER DATABASE')"
-drop_db_line="$(line_of 'psql_admin "DROP DATABASE')"
-if [ -n "$alter_line" ] && [ -n "$drop_db_line" ] && [ "$alter_line" -lt "$drop_db_line" ]; then
-  pass "ALTER ... ALLOW_CONNECTIONS false precedes the first DROP DATABASE"
-else
-  printf 'FAIL: ALLOW_CONNECTIONS false (%s) does not precede DROP DATABASE (%s)\n' \
-    "$alter_line" "$drop_db_line" >&2
-  fail=1
-fi
+check "terminates existing backends before the rename" 'pg_terminate_backend'
+swap_fn="$(sed -n '/^restore_one_db_swap()/,/^}/p' "$RESTORE_SCRIPT")"
+sf_line() { printf '%s\n' "$swap_fn" | grep -nE "$1" | head -1 | cut -d: -f1; }
+# strictly-increasing sequence of the swap's load-bearing steps
+swap_seq_ok=1
+prev=0; prev_desc="start"
+for step in \
+  'reload into tmp|psql -h "\$PGHOST".*-d "\$tmp"' \
+  'verify tmp|verify_db_structural "\$tmp"' \
+  'mark destructive window|DROP_STARTED=1' \
+  'disallow connections|ALLOW_CONNECTIONS false' \
+  'rename out to pre_restore|RENAME TO .*pre' \
+  'rename tmp in|RENAME TO .*db' \
+  'post-swap verify (sole gate)|verify_db_structural "\$db"' \
+  'drop pre_restore|DROP DATABASE .*pre'; do
+  desc="${step%%|*}"; pat="${step#*|}"
+  n="$(sf_line "$pat")"
+  if [ -z "$n" ] || [ "$n" -le "$prev" ]; then
+    printf 'FAIL: swap sequence out of order: "%s" (line %s) not after "%s" (line %s)\n' \
+      "$desc" "${n:-none}" "$prev_desc" "$prev" >&2
+    swap_seq_ok=0; fail=1; break
+  fi
+  prev="$n"; prev_desc="$desc"
+done
+[ "$swap_seq_ok" = "1" ] && pass "restore_one_db_swap: reload+verify-tmp precede the disallow/rename; post-swap verify gates the pre_restore drop"
 
 # 4. Safety pre-backup runs BEFORE the first destructive DROP.
 safety_line="$(line_of '^if /usr/local/bin/backup.sh')"
@@ -117,29 +138,35 @@ else
   pass "does NOT use pg_restore (plain-SQL reload only)"
 fi
 
-# 5b. The destructive window is marked at the connection-revoke: DROP_STARTED=1 is
-#     set AFTER the successful ALTER and BEFORE the DROP, so a terminate/DROP
-#     failure holds maintenance (never lifts the 503 over a non-servable DB).
-dropstart_line="$(line_of 'DROP_STARTED=1')"
-if [ -n "$alter_line" ] && [ -n "$dropstart_line" ] && [ -n "$drop_db_line" ] \
-   && [ "$alter_line" -lt "$dropstart_line" ] && [ "$dropstart_line" -lt "$drop_db_line" ]; then
-  pass "DROP_STARTED is marked between the ALTER and the DROP (destructive-window boundary)"
+# 5b. The destructive window is marked only AFTER the tmp reload passes structural
+#     verify: DROP_STARTED=1 sits between the tmp verify and the disallow-ALTER, so
+#     a bad archive / ENOSPC / tmp-verify failure leaves DROP_STARTED=0 (production
+#     untouched -> the lift gate clears maintenance).
+sf_verify_tmp="$(sf_line 'verify_db_structural "\$tmp"')"
+sf_dropstart="$(sf_line 'DROP_STARTED=1')"
+sf_disallow="$(sf_line 'ALLOW_CONNECTIONS false')"
+if [ -n "$sf_verify_tmp" ] && [ -n "$sf_dropstart" ] && [ -n "$sf_disallow" ] \
+   && [ "$sf_verify_tmp" -lt "$sf_dropstart" ] && [ "$sf_dropstart" -lt "$sf_disallow" ]; then
+  pass "DROP_STARTED is marked after the tmp verify and before the disallow (non-destructive reload)"
 else
-  printf 'FAIL: DROP_STARTED (%s) is not between ALTER (%s) and DROP (%s)\n' \
-    "$dropstart_line" "$alter_line" "$drop_db_line" >&2
+  printf 'FAIL: DROP_STARTED (%s) is not between the tmp verify (%s) and the disallow (%s)\n' \
+    "$sf_dropstart" "$sf_verify_tmp" "$sf_disallow" >&2
   fail=1
 fi
 
-# 5c. Compat gate bounds the backup against the CODE's max migration (stable even
-#     when the live DB is gone mid-recovery), NOT a live schema_migrations query
-#     (which would refuse every backup during the safety-backup recovery).
+# 5c. Compat gate bounds the backup against the CODE's max migration via a glob (not
+#     `ls`, which SC2012-warns), stable even when the live DB is gone mid-recovery,
+#     and it performs NO live query (no psql / schema_migrations in STEP 2) — a
+#     live-schema query would refuse every backup during the safety-backup recovery.
 check "compat gate reads the code's max migration" 'CODE_MAX='
 check "compat gate uses the migrations dir (not the live DB)" 'db/migrations'
-if grep -vE '^[[:space:]]*#' "$RESTORE_SCRIPT" | grep -q 'schema_migrations'; then
-  printf 'FAIL: compat gate still queries the live schema_migrations (blocks recovery when the DB is gone)\n' >&2
+check "compat gate globs the migrations dir (no ls; SC2012-clean)" 'for _mig in "\$MIG_DIR"'
+step2_block="$(sed -n '/=== STEP 2:/,/=== STEP 3:/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$step2_block" | grep -qE 'psql|schema_migrations'; then
+  printf 'FAIL: compat gate (STEP 2) queries the live DB (blocks recovery when the DB is gone)\n' >&2
   fail=1
 else
-  pass "compat gate does NOT query the live schema_migrations table"
+  pass "compat gate does NOT query the live DB (file-based CODE_MAX only)"
 fi
 
 # 5d. A wrong/rotated encryption key (or corrupt archive) is caught by a gzip-magic
@@ -172,17 +199,17 @@ else
   fail=1
 fi
 
-# 6b. durable .destructive sentinel: never-heartbeated, touched at the
-#     DROP-window boundary (after DROP_STARTED=1, before the DROP) and removed ONLY
-#     inside the clean lift block, so a SIGKILLed post-DROP restore stays 503 with no
-#     age gate (the heartbeat never re-touches it, so it survives the heartbeat dying).
-destr_touch_line="$(line_of 'touch "\$MAINTENANCE_DESTRUCTIVE"')"
-if [ -n "$dropstart_line" ] && [ -n "$destr_touch_line" ] && [ -n "$drop_db_line" ] \
-   && [ "$dropstart_line" -le "$destr_touch_line" ] && [ "$destr_touch_line" -lt "$drop_db_line" ]; then
-  pass "the .destructive sentinel is touched at the DROP window (after DROP_STARTED, before the DROP)"
+# 6b. durable .destructive sentinel: never-heartbeated, touched at the destructive-
+#     window boundary (after DROP_STARTED=1, before the disallow-ALTER) and removed
+#     ONLY inside the clean lift block, so a SIGKILLed mid-swap restore stays 503 with
+#     no age gate (the heartbeat never re-touches it, so it survives the heartbeat).
+sf_destr_touch="$(sf_line 'touch "\$MAINTENANCE_DESTRUCTIVE"')"
+if [ -n "$sf_dropstart" ] && [ -n "$sf_destr_touch" ] && [ -n "$sf_disallow" ] \
+   && [ "$sf_dropstart" -le "$sf_destr_touch" ] && [ "$sf_destr_touch" -lt "$sf_disallow" ]; then
+  pass "the .destructive sentinel is touched at the destructive window (after DROP_STARTED, before the disallow)"
 else
-  printf 'FAIL: destructive touch (%s) is not between DROP_STARTED (%s) and DROP (%s)\n' \
-    "$destr_touch_line" "$dropstart_line" "$drop_db_line" >&2
+  printf 'FAIL: destructive touch (%s) is not between DROP_STARTED (%s) and the disallow (%s)\n' \
+    "$sf_destr_touch" "$sf_dropstart" "$sf_disallow" >&2
   fail=1
 fi
 destr_rm_line="$(line_of 'rm -f "\$MAINTENANCE_DESTRUCTIVE"')"
@@ -223,12 +250,93 @@ else
 fi
 check "keeps the absent-manifest WARN+proceed back-compat path" 'manifest .* absent; proceeding'
 
-# 6d. older backup restore holds maintenance (it needs forward
-#     migrations only an app-container recreate can run), so the lift gate excludes
-#     RESTORE_OLDER and STEP 9 prints the operator runbook line.
-check "flags an older-than-code backup (RESTORE_OLDER)" 'RESTORE_OLDER=1'
-check "lift gate excludes a clean older restore" '\[ "\$RESTORE_OLDER" != "1" \]'
-check "STEP 9 prints the older-restore operator runbook line" 'OLDER backup restored'
+# 6d. older-than-code backups now SELF-HEAL (the migration runner forward-migrates
+#     them on the next app recreate), so RESTORE_OLDER is gone entirely — it no
+#     longer holds maintenance, gates the lift, or prints a runbook line. Only a
+#     newer-than-code backup is still refused before destruction.
+if grep -q 'RESTORE_OLDER' "$RESTORE_SCRIPT"; then
+  printf 'FAIL: RESTORE_OLDER still present (older backups must self-heal, not hold maintenance)\n' >&2
+  fail=1
+else
+  pass "older backups self-heal (no RESTORE_OLDER hold/gate/message)"
+fi
+check "still refuses a newer-than-code backup before destruction" \
+  'backup is newer than this deployment'
+
+# === Rename-swap: preflight, swap-state file, sole gate, deterministic recovery =
+
+# S1. Disk preflight runs BEFORE the first tmp CREATE (the destructive STEP-5 swap
+#     call), sizing the volume additively per DB (fresh-DB floor + gz x factor) via
+#     df on the RO postgres_data mount + pg_database_size of the live DBs.
+preflight_call_line="$(line_of '^preflight_disk_or_fail$')"
+if [ -n "$preflight_call_line" ] && [ -n "$drop_call_line" ] && [ "$preflight_call_line" -lt "$drop_call_line" ]; then
+  pass "disk preflight runs before the first tmp CREATE (the STEP-5 swap)"
+else
+  printf 'FAIL: preflight (%s) does not precede the destructive swap (%s)\n' \
+    "$preflight_call_line" "$drop_call_line" >&2
+  fail=1
+fi
+check "preflight sizes the live DBs via pg_database_size" 'pg_database_size'
+check "preflight reads free space via df on the postgres_data mount" \
+  'df -Pk "\$POSTGRES_DATA_DIR"'
+check "preflight is additive per-DB (fresh-DB floor + content factor)" 'content_factor=30'
+check "preflight fails before destruction on a tight disk" \
+  'insufficient disk for a safe restore'
+
+# S2. Swap-state file: written BEFORE each of the four transitions and read by
+#     --recover to know which db to reconcile.
+check "records the swap state in .restore_swap_state.json" '\.restore_swap_state\.json'
+for ph in reload_tmp swapping_out swapping_in verified; do
+  check "swap-state records the '$ph' phase" "write_swap_state \"\\\$db\" \"$ph\""
+done
+
+# S3. The SOLE post-swap gate is the SQL structural verify (schema_migrations
+#     readable + jarvis auth tables), NEVER the app /health (which 503s under
+#     maintenance and would revert a successful restore).
+check "structural verify reads the migrations bookkeeping table" 'FROM schema_migrations'
+check "structural verify asserts the jarvis auth tables exist" \
+  "to_regclass\\('public.users'\\)"
+if grep -vE '^[[:space:]]*#' "$RESTORE_SCRIPT" | grep -qE '/health|/livez|/readyz'; then
+  printf 'FAIL: restore.sh polls an app health endpoint (the sole post-swap gate must be the SQL verify)\n' >&2
+  fail=1
+else
+  pass "nothing polls the app /health (the SQL structural verify is the sole gate)"
+fi
+
+# S4. --recover runs ONLY the leftover-handler: it reconciles the recorded db and
+#     exits WITHOUT consuming a request or running the full swap flow.
+recover_block="$(sed -n '/= "--recover"/,/^fi/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$recover_block" | grep -q 'reconcile_leftover' \
+   && ! printf '%s' "$recover_block" | grep -q 'restore_one_db_swap' \
+   && ! printf '%s' "$recover_block" | grep -q 'REQUEST_FILE'; then
+  pass "--recover only reconciles the recorded db (no full-flow, no request consume)"
+else
+  printf 'FAIL: the --recover branch runs more than the leftover-handler\n' >&2
+  fail=1
+fi
+check "--recover marks RECOVER_MODE so the EXIT trap skips the request re-consume" \
+  'RECOVER_MODE=1'
+check "the EXIT trap skips the request re-consume in --recover mode" \
+  '\[ "\$RECOVER_MODE" = "1" \] \|\| rm -f "\$REQUEST_FILE"'
+check "--recover holds maintenance when the durable .destructive sentinel is present" \
+  'if \[ -f "\$MAINTENANCE_DESTRUCTIVE" \]; then DROP_STARTED=1'
+
+# S5. The revert path re-enables ALLOW_CONNECTIONS on the renamed-out pre_restore
+#     BEFORE renaming it back (it inherited ALLOW_CONNECTIONS=false from the swap).
+revert_fn="$(sed -n '/^revert_swap()/,/^}/p' "$RESTORE_SCRIPT")"
+rv_enable="$(printf '%s\n' "$revert_fn" | grep -nE 'pre.*ALLOW_CONNECTIONS true' | head -1 | cut -d: -f1)"
+rv_rename="$(printf '%s\n' "$revert_fn" | grep -nE 'RENAME TO .*db' | head -1 | cut -d: -f1)"
+if [ -n "$rv_enable" ] && [ -n "$rv_rename" ] && [ "$rv_enable" -lt "$rv_rename" ]; then
+  pass "revert re-enables ALLOW_CONNECTIONS on pre_restore before renaming it back"
+else
+  printf 'FAIL: revert does not re-enable connections before the rename-back (enable=%s rename=%s)\n' \
+    "$rv_enable" "$rv_rename" >&2
+  fail=1
+fi
+
+# S6. The safety pre-backup is forced past the (4.3) maintenance skip-guard: the
+#     restore's own .maintenance is already up, so the backup must be told to run.
+check "safety pre-backup is forced past the maintenance skip-guard" 'export BACKUP_FORCE=1'
 
 # 7. The maintenance sentinel is heartbeated for the whole run (re-touch loop) so
 #    a long restore does not auto-expire mid-flight.
@@ -559,6 +667,10 @@ cmp_check "entrypoint runs restore.sh on a restore request" \
   'restore_request\.json.*restore\.sh|if \[ -f /backup-trigger/\.restore_request\.json'
 cmp_check "named volume restore_staging is declared" '^  restore_staging:'
 cmp_check "sidecar mounts the migrations dir (ro) for the compat code-max read" 'db/migrations:/app/db/migrations:ro'
+cmp_check "sidecar mounts postgres_data (ro) so the disk preflight can size free space" \
+  'postgres_data:/postgres-data:ro'
+cmp_check "entrypoint reconciles a stranded swap on startup (restore.sh --recover)" \
+  'restore_swap_state\.json.*restore\.sh --recover'
 
 # Off-host DR drop zone: a rw restore_inbox volume the operator fills with the
 # archive set + one-time key for a cross-host (inbox) restore.
