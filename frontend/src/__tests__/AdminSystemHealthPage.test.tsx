@@ -29,6 +29,7 @@ import type { StackHealthSummary } from '@/lib/api';
 
 const getSystemReadinessMock = vi.fn();
 const fetchStackHealthMock = vi.fn();
+const getSystemStorageMock = vi.fn();
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -36,6 +37,7 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     getSystemReadiness: () => getSystemReadinessMock(),
     fetchStackHealth: () => fetchStackHealthMock(),
+    getSystemStorage: () => getSystemStorageMock(),
     // ModelDiagnosticsCard is mounted on this page; give it controlled data so
     // it renders without hitting the network.
     getAISettings: () =>
@@ -103,6 +105,19 @@ function makeAllUnknownStackHealth(): StackHealthSummary {
       { name: 'litellm', label: 'LiteLLM', status: 'unknown' },
       { name: 'vector', label: 'Vector', status: 'unknown' },
     ],
+  };
+}
+
+/** Default storage snapshot — every backend reachable, no pressure. */
+function makeStorageResponse(overrides: Partial<import('@/lib/api').SystemStorageResponse> = {}) {
+  return {
+    ollama_models: { bytes_used: 9_200_000_000, error: null },
+    postgres: { bytes_used: 512_000_000, error: null },
+    qdrant: { bytes_used: null, error: null },
+    qdrant_collections: [{ name: 'papers', points_count: 1200 }],
+    hf_cache: { bytes_used: 1_500_000_000, error: null },
+    pressure: false,
+    ...overrides,
   };
 }
 
@@ -269,6 +284,7 @@ describe('AdminSystemHealthPage', () => {
     vi.clearAllMocks();
     // Default stack health mock — vector unknown (normal)
     fetchStackHealthMock.mockResolvedValue(makeStackHealth());
+    getSystemStorageMock.mockResolvedValue(makeStorageResponse());
   });
 
   it('renders all checks from the API in the table using display labels', async () => {
@@ -563,6 +579,48 @@ describe('AdminSystemHealthPage', () => {
 
     const vectorRow = screen.getByTestId('live-svc-row-vector');
     expect(vectorRow).not.toHaveTextContent(/Optional log shipper/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Storage card
+  // -------------------------------------------------------------------------
+
+  it('renders the storage card with per-store disk usage', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('storage-card')).toHaveTextContent('9.2 GB');
+    });
+    expect(screen.getByTestId('storage-card')).toHaveTextContent('1,200 points across 1 collection');
+  });
+
+  it('shows a low-disk notice when the storage endpoint reports pressure', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    getSystemStorageMock.mockResolvedValue(makeStorageResponse({ pressure: true }));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/running low/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows an unavailable state for a backing store that could not be measured, without failing the others', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    getSystemStorageMock.mockResolvedValue(
+      makeStorageResponse({
+        ollama_models: { bytes_used: null, error: 'ConnectError' },
+        qdrant: { bytes_used: null, error: 'ConnectError' },
+        qdrant_collections: [],
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('storage-card')).toHaveTextContent('Unavailable (ConnectError)');
+    });
+    // The reachable sections still render their figures.
+    expect(screen.getByTestId('storage-card')).toHaveTextContent('512 MB');
   });
 
   // -------------------------------------------------------------------------
