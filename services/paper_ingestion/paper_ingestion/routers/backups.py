@@ -75,6 +75,14 @@ _DELETE_SENTINEL = (
 _RETENTION_CONFIG = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".retention.json"
 )
+# Off-host (inbox) restore inventory: the postgres-backup sidecar's
+# ``restore.sh --inbox-manifest`` writes this sanitized listing (names + booleans
+# only, never paths or key contents) each loop iteration. The app READS it from the
+# already-mounted backup_trigger volume — it never mounts /restore-inbox and gains
+# no new privilege.
+_INBOX_MANIFEST = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".inbox_manifest.json"
+)
 
 # Strict allowlist for the four archive shapes scripts/backup.sh emits:
 #   jarvis_<ts>.sql.gz[.enc] · litellm_<ts>.sql.gz[.enc]
@@ -164,6 +172,25 @@ class RestoreStep(BaseModel):
 class RestoreRequest(BaseModel):
     timestamp: str
     confirm: str
+    # "local" (default) restores from the read-only /backups mount; "inbox" restores
+    # an operator-staged archive set from the sidecar's restore_inbox (off-host DR).
+    # The default keeps every existing caller/test valid.
+    source: Literal["local", "inbox"] = "local"
+
+
+class InboxRestorePoint(BaseModel):
+    """One off-host restore point staged in the restore_inbox, per the sidecar manifest.
+
+    Names + booleans only — no paths, no key contents. ``complete`` mirrors
+    restore.sh's own completeness gate (jarvis + litellm DB archives present);
+    ``has_secrets`` flags a bundled ``secrets_<ts>`` archive; ``has_key`` flags the
+    one-time operator key the off-host restore requires.
+    """
+
+    timestamp: str
+    complete: bool
+    has_secrets: bool
+    has_key: bool
 
 
 class RestoreStatus(BaseModel):
@@ -264,6 +291,30 @@ def _read_manifest(ts: str) -> dict | None:
         return json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         return None
+
+
+def _read_inbox_manifest() -> list[InboxRestorePoint]:
+    """Read the sidecar-authored .inbox_manifest.json; [] if absent/unreadable/malformed.
+
+    Mirrors ``_read_manifest``'s degrade-to-safe contract. Each entry is re-validated
+    through ``InboxRestorePoint`` so a corrupt/tampered manifest can never inject
+    arbitrary fields — a bad entry is dropped, never surfaced. The manifest is written
+    by ``restore.sh --inbox-manifest`` in the postgres-backup sidecar; the app only
+    reads it (it never mounts /restore-inbox).
+    """
+    try:
+        data = json.loads(_INBOX_MANIFEST.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    points: list[InboxRestorePoint] = []
+    for item in data:
+        try:
+            points.append(InboxRestorePoint.model_validate(item))
+        except ValidationError:
+            continue
+    return points
 
 
 def _code_max_migration() -> int | None:
@@ -484,6 +535,27 @@ async def list_restore_points(request: Request) -> RestorePointsResponse:
     )
 
 
+@router.get("/inbox", response_model=list[InboxRestorePoint], dependencies=[Depends(require_admin)])
+@limiter.limit("30/minute")
+async def list_inbox_restore_points(request: Request) -> list[InboxRestorePoint]:
+    """List off-host restore points staged in the restore_inbox (sidecar-authored).
+
+    The app never mounts /restore-inbox; it reads only the sanitized
+    ``.inbox_manifest.json`` (names + booleans) the postgres-backup sidecar refreshes
+    each loop iteration, so it gains no new destructive privilege. A missing or
+    malformed manifest degrades to ``[]`` (e.g. the operator has not dropped an
+    archive set yet) rather than erroring.
+    """
+    points = _read_inbox_manifest()
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.inbox_list",
+        resource="backups/inbox",
+        user_id=_caller_id(request),
+    )
+    return points
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_admin)])
 @limiter.limit("3/minute")
 async def trigger_backup(request: Request) -> dict[str, str]:
@@ -521,6 +593,64 @@ async def trigger_backup(request: Request) -> dict[str, str]:
     return {"status": "scheduled"}
 
 
+def _validate_local_restore(timestamp: str) -> None:
+    """Validate a LOCAL restore target against the read-only /backups listing.
+
+    The point must exist and be complete, must not be newer than this deployment, and
+    a present-but-unreadable manifest is rejected. Raises the matching HTTPException;
+    returns None when the target is valid. (Extracted verbatim from ``request_restore``
+    so the source branch stays flat.)
+    """
+    pt = next(
+        (p for p in _group_restore_points(_list_entries()) if p.timestamp == timestamp),
+        None,
+    )
+    if pt is None or not pt.complete:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No complete backup at that time",
+        )
+    if pt.compat == "newer":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That backup is newer than this deployment",
+        )
+    # Reject a manifest that is present but unparseable: _read_manifest returns None
+    # only on OSError/ValueError, so a present valid-but-no-schema_version manifest
+    # still restores — only a structurally broken one is blocked. A path that escapes
+    # _BACKUP_DIR is treated exactly like an absent manifest.
+    try:
+        manifest_present = secure_path(_BACKUP_DIR, f"manifest_{timestamp}.json").exists()
+    except ValueError:
+        manifest_present = False
+    if manifest_present and _read_manifest(timestamp) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That backup's manifest is present but unreadable or incomplete",
+        )
+
+
+def _validate_inbox_restore(timestamp: str) -> None:
+    """Validate an INBOX (off-host) restore target against the sidecar's inbox manifest.
+
+    The point must be present in the manifest and complete (jarvis + litellm archives),
+    and the one-time operator key must be staged. The local group/compat/manifest checks
+    do not apply — restore.sh STEP 2 compat-gates the off-host archive itself before any
+    destruction. Raises 404 (absent/incomplete) or 409 (no key); returns None when valid.
+    """
+    pt = next((p for p in _read_inbox_manifest() if p.timestamp == timestamp), None)
+    if pt is None or not pt.complete:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No complete backup at that time",
+        )
+    if not pt.has_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Upload or drop the one-time operator key before restoring from the inbox.",
+        )
+
+
 @router.post(
     "/restore",
     status_code=status.HTTP_202_ACCEPTED,
@@ -540,33 +670,12 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Type RESTORE to confirm",
         )
-    pt = next(
-        (p for p in _group_restore_points(_list_entries()) if p.timestamp == req.timestamp),
-        None,
-    )
-    if pt is None or not pt.complete:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No complete backup at that time",
-        )
-    if pt.compat == "newer":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="That backup is newer than this deployment",
-        )
-    # Reject a manifest that is present but unparseable: _read_manifest returns
-    # None only on OSError/ValueError, so a present valid-but-no-schema_version
-    # manifest still restores — only a structurally broken one is blocked. A path
-    # that escapes _BACKUP_DIR is treated exactly like an absent manifest.
-    try:
-        manifest_present = secure_path(_BACKUP_DIR, f"manifest_{req.timestamp}.json").exists()
-    except ValueError:
-        manifest_present = False
-    if manifest_present and _read_manifest(req.timestamp) is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="That backup's manifest is present but unreadable or incomplete",
-        )
+    # Source-specific target validation (both raise on a bad target, return on valid).
+    # local → the read-only /backups listing; inbox → the sidecar's inbox manifest.
+    if req.source == "inbox":
+        _validate_inbox_restore(req.timestamp)
+    else:
+        _validate_local_restore(req.timestamp)
     # Reject a duplicate request BEFORE auditing: an already-pending sentinel means
     # a restore is queued or running; no audit row should be produced for a no-op.
     if _RESTORE_SENTINEL.exists():
@@ -606,6 +715,7 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
                     {
                         "timestamp": req.timestamp,
                         "confirm": "RESTORE",
+                        "source": req.source,
                         "requested_at": datetime.now(UTC).isoformat(),
                     }
                 )

@@ -40,9 +40,20 @@ export interface RestorePoint {
   compat: 'same' | 'older' | 'newer' | 'unknown';
 }
 
+export type RestoreSource = 'local' | 'inbox';
+
 export interface RestoreRequest {
   timestamp: string;
   confirm: string;
+  source: RestoreSource;
+}
+
+/** One off-host restore point staged in the restore_inbox (sidecar-authored manifest). */
+export interface InboxRestorePoint {
+  timestamp: string;
+  complete: boolean;
+  has_secrets: boolean;
+  has_key: boolean;
 }
 
 export interface RestoreStatus {
@@ -94,16 +105,37 @@ export async function downloadBackup(name: string): Promise<void> {
   triggerBlobDownload(await res.blob(), name);
 }
 
-/** Start a one-click restore from the named restore point. `confirm` gates the destructive op. */
-export const requestRestore = (timestamp: string, confirm: string) =>
-  apiFetch<{ status: string }>('/api/admin/backups/restore', {
+/**
+ * Start a one-click restore from the named restore point. `confirm` gates the
+ * destructive op; `source` selects the local /backups set (default) or the off-host
+ * inbox. Returns the one-time status bearer token so the progress poll can survive
+ * the restore tearing down the admin session (pass it to {@link getRestoreStatus}).
+ */
+export const requestRestore = (
+  timestamp: string,
+  confirm: string,
+  source: RestoreSource = 'local',
+) =>
+  apiFetch<{ status: string; status_token?: string }>('/api/admin/backups/restore', {
     method: 'POST',
-    body: JSON.stringify({ timestamp, confirm } satisfies RestoreRequest),
+    body: JSON.stringify({ timestamp, confirm, source } satisfies RestoreRequest),
   });
 
-/** Poll the live restore progress (state machine + per-step status). */
-export const getRestoreStatus = () =>
-  apiFetch<RestoreStatus>('/api/admin/backups/restore/status');
+/**
+ * Poll the live restore progress (state machine + per-step status). When a one-time
+ * bearer `token` is supplied it authorizes the poll DB-free, so it keeps returning
+ * progress through the DB swap that drops the admin's session; without a token it
+ * falls back to the cookie/API-key path (which dies mid-swap).
+ */
+export const getRestoreStatus = (token?: string) =>
+  apiFetch<RestoreStatus>(
+    '/api/admin/backups/restore/status',
+    token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+  );
+
+/** List off-host restore points staged in the restore_inbox (sidecar-authored). */
+export const getInboxRestorePoints = () =>
+  apiFetch<InboxRestorePoint[]>('/api/admin/backups/inbox');
 
 /**
  * Request deletion of a restore point. `confirm` ('DELETE') gates the destructive

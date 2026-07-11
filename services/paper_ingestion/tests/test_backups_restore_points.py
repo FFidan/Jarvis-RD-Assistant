@@ -265,6 +265,70 @@ def test_restore_point_phantom_manifest_rejected(backup_dir, code_max_50):
     assert point.schema_version is None
 
 
+def test_read_inbox_manifest_absent_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(bk, "_INBOX_MANIFEST", tmp_path / ".inbox_manifest.json")
+    assert bk._read_inbox_manifest() == []
+
+
+def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
+    manifest = tmp_path / ".inbox_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "timestamp": "20260701_030000",
+                    "complete": True,
+                    "has_secrets": True,
+                    "has_key": True,
+                },
+                {
+                    "timestamp": "20260630_020000",
+                    "complete": False,
+                    "has_secrets": False,
+                    "has_key": False,
+                },
+            ]
+        )
+    )
+    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    points = bk._read_inbox_manifest()
+    assert [p.timestamp for p in points] == ["20260701_030000", "20260630_020000"]
+    assert points[0].complete is True
+    assert points[0].has_key is True
+    assert points[1].complete is False
+
+
+def test_read_inbox_manifest_degrades_on_malformed(tmp_path, monkeypatch):
+    manifest = tmp_path / ".inbox_manifest.json"
+    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    manifest.write_text("{ not json")
+    assert bk._read_inbox_manifest() == []  # malformed → never raises
+    manifest.write_text(json.dumps({"not": "a list"}))
+    assert bk._read_inbox_manifest() == []  # a non-list JSON value → []
+
+
+def test_read_inbox_manifest_drops_corrupt_entries(tmp_path, monkeypatch):
+    """A corrupt/partial entry can't inject arbitrary fields — it is dropped, not surfaced."""
+    manifest = tmp_path / ".inbox_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "timestamp": "20260701_030000",
+                    "complete": True,
+                    "has_secrets": True,
+                    "has_key": True,
+                },
+                {"timestamp": "20260630_020000"},  # missing required booleans
+                "not-an-object",
+            ]
+        )
+    )
+    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    points = bk._read_inbox_manifest()
+    assert [p.timestamp for p in points] == ["20260701_030000"]
+
+
 def test_code_max_migration_returns_floor_when_dir_missing(monkeypatch, tmp_path):
     # An absent/empty migrations dir falls back to the code's schema floor (the
     # db/SCHEMA_VERSION baseline) so restore-point compatibility stays armed

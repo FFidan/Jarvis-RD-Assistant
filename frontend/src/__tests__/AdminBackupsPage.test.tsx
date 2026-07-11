@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminBackupsPage } from '@/pages/AdminBackupsPage';
 import { toast } from 'sonner';
 
+import { useMaintenanceStore } from '@/stores/maintenance-store';
+
 const getRestorePointsMock = vi.fn();
+const getInboxRestorePointsMock = vi.fn();
 const getBackupStatusMock = vi.fn();
 const triggerBackupMock = vi.fn();
 const downloadBackupMock = vi.fn();
@@ -20,11 +23,13 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('@/lib/api/backups', () => ({
   getRestorePoints: () => getRestorePointsMock(),
+  getInboxRestorePoints: () => getInboxRestorePointsMock(),
   getBackupStatus: () => getBackupStatusMock(),
   triggerBackup: () => triggerBackupMock(),
   downloadBackup: (name: string) => downloadBackupMock(name),
-  requestRestore: (timestamp: string, confirm: string) => requestRestoreMock(timestamp, confirm),
-  getRestoreStatus: () => getRestoreStatusMock(),
+  requestRestore: (timestamp: string, confirm: string, source?: string) =>
+    requestRestoreMock(timestamp, confirm, source),
+  getRestoreStatus: (token?: string) => getRestoreStatusMock(token),
   deleteRestorePoint: (timestamp: string, confirm: string) =>
     deleteRestorePointMock(timestamp, confirm),
   getRetention: () => getRetentionMock(),
@@ -119,10 +124,12 @@ function renderPage() {
 describe('AdminBackupsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useMaintenanceStore.getState().clear();
     _mockRole = 'admin';
     getRestorePointsMock.mockResolvedValue(_restorePoints);
+    getInboxRestorePointsMock.mockResolvedValue([]);
     getBackupStatusMock.mockResolvedValue(_okStatus);
-    requestRestoreMock.mockResolvedValue({ status: 'started' });
+    requestRestoreMock.mockResolvedValue({ status: 'started', status_token: 'test-bearer-token' });
     getRestoreStatusMock.mockResolvedValue(_runningRestore);
     deleteRestorePointMock.mockResolvedValue({ status: 'scheduled' });
     getRetentionMock.mockResolvedValue({ keep_last_n: null, max_age_days: 14 });
@@ -241,7 +248,7 @@ describe('AdminBackupsPage', () => {
     await user.click(screen.getByRole('button', { name: /^restore$/i }));
 
     await waitFor(() =>
-      expect(requestRestoreMock).toHaveBeenCalledWith('20260617_120000', 'RESTORE'),
+      expect(requestRestoreMock).toHaveBeenCalledWith('20260617_120000', 'RESTORE', 'local'),
     );
   });
 
@@ -257,6 +264,72 @@ describe('AdminBackupsPage', () => {
     expect(await screen.findByText('Safety backup')).toBeInTheDocument();
     expect(screen.getByText('Finishing up')).toBeInTheDocument();
     await waitFor(() => expect(getRestoreStatusMock).toHaveBeenCalled());
+  });
+
+  it('shows an explanatory empty state (not an error) when no inbox backups are staged', async () => {
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    expect(within(section).getByText(/restore from another jarvis/i)).toBeInTheDocument();
+    expect(screen.getByTestId('inbox-empty')).toHaveTextContent(/no off-host backups staged/i);
+  });
+
+  it('lists inbox restore points and triggers an inbox restore through the RESTORE confirm', async () => {
+    getInboxRestorePointsMock.mockResolvedValue([
+      { timestamp: '20260701_030000', complete: true, has_secrets: true, has_key: true },
+      { timestamp: '20260630_020000', complete: false, has_secrets: false, has_key: false },
+    ]);
+    const user = userEvent.setup();
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    const items = within(section).getAllByTestId('inbox-restore-point');
+    expect(items).toHaveLength(2);
+    // The incomplete/keyless point cannot be triggered; its hint explains why.
+    const incomplete = items[1]!;
+    expect(within(incomplete).getByText('Incomplete')).toBeInTheDocument();
+    expect(within(incomplete).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(incomplete).getByText(/missing a required database archive/i)).toBeInTheDocument();
+
+    // The complete + keyed point restores through the shared typed-RESTORE confirm.
+    const ready = items[0]!;
+    await user.click(within(ready).getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(requestRestoreMock).toHaveBeenCalledWith('20260701_030000', 'RESTORE', 'inbox'),
+    );
+  });
+
+  it('authenticates the restore-status poll with the captured one-time bearer token', async () => {
+    requestRestoreMock.mockResolvedValue({ status: 'scheduled', status_token: 'poll-bearer-42' });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    // The poll must present the bearer token so it survives the DB swap.
+    await waitFor(() => expect(getRestoreStatusMock).toHaveBeenCalledWith('poll-bearer-42'));
+  });
+
+  it('drives the guided recovery view (live step, aria-live) while maintenance is active', async () => {
+    getRestoreStatusMock.mockResolvedValue(_runningRestore);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    // The mid-restore 503 interceptor flips the app into maintenance.
+    act(() => useMaintenanceStore.getState().setMaintenance(true, 30));
+
+    const panel = await screen.findByTestId('restore-progress');
+    // Never a blank 503: the guided view shows the live step + list, announced live.
+    expect(panel).toHaveAttribute('aria-live', 'polite');
+    expect(within(panel).getByText('Safety backup')).toBeInTheDocument();
+    expect(within(panel).getAllByText('Restoring database').length).toBeGreaterThan(0);
   });
 
   it('shows a degraded restoring panel (not empty, no logout) when status errors mid-restore', async () => {

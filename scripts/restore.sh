@@ -77,6 +77,10 @@ MANUAL_STEPS_REQUIRED=0
 # Set only by the --recover entrypoint branch: skips the request re-consume in the
 # EXIT trap so a crash-recovery run never eats a legitimately pending restore.
 RECOVER_MODE=0
+# Set only by the --inbox-manifest entrypoint branch: a read-only inventory pass that
+# short-circuits the EXIT trap entirely (no request consume, no status write, no key
+# shred, no maintenance change) — it runs every sidecar loop and must touch nothing.
+MANIFEST_MODE=0
 PHASE=""
 # Restore source: "local" (same-host WebUI restore, the default) reads the
 # archive set + key exactly as before; "inbox" (off-host DR) reads them from the
@@ -145,6 +149,61 @@ valid_archive_name() {
   esac
   printf '%s' "$n" | grep -Eq \
     '^(jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|litellm_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|secrets_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?|qdrant_[A-Za-z0-9_-]+_[0-9]{8}_[0-9]{6}\.snapshot(\.enc)?)$'
+}
+
+# --- write_inbox_manifest — inventory ${INBOX_DIR} into a SANITIZED
+#     ${TRIGGER_DIR}/.inbox_manifest.json (names/booleans ONLY — never a path or a key
+#     byte) that the admin app's GET /inbox lists. Groups valid_archive_name-accepted
+#     files by their %Y%m%d_%H%M%S timestamp; per group emits
+#     {timestamp, complete, has_secrets, has_key} where complete = the jarvis + litellm
+#     DB archives are BOTH present (mirrors restore.sh's own STEP-1 completeness gate),
+#     has_secrets = a secrets_<ts> archive is present, has_key = the one-time operator
+#     key is present (a single inbox-wide fact). Atomic tmp->mv; writes [] on an empty
+#     inbox. Never touches the DB, never consumes the restore request, never emits a
+#     path or key content. Called ONLY from the --inbox-manifest branch (MANIFEST_MODE).
+write_inbox_manifest() {
+  local out="${TRIGGER_DIR}/.inbox_manifest.json"
+  local tmp="${out}.tmp"
+  local has_key="false"
+  [ -s "$OPERATOR_KEYFILE" ] && has_key="true"
+
+  # Distinct, sorted timestamps of every allow-listed archive in the inbox. The ts is
+  # extracted immediately before the known extension (mirrors backups.py:_TS_RE) so a
+  # collection name that itself contains digits cannot be misread as the timestamp.
+  local timestamps="" f base ts
+  shopt -s nullglob
+  for f in "${INBOX_DIR}"/*; do
+    base="$(basename "$f")"
+    valid_archive_name "$base" || continue
+    ts="$(printf '%s' "$base" \
+      | sed -nE 's/.*_([0-9]{8}_[0-9]{6})\.(sql\.gz|tar\.gz|snapshot)(\.enc)?$/\1/p')"
+    [ -n "$ts" ] && timestamps="${timestamps}${ts}"$'\n'
+  done
+  shopt -u nullglob
+  timestamps="$(printf '%s' "$timestamps" | sort -u)"
+
+  {
+    printf '['
+    local first=1 t complete has_secrets
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      complete="false"
+      has_secrets="false"
+      if { [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz.enc" ]; } \
+         && { [ -f "${INBOX_DIR}/litellm_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ]; }; then
+        complete="true"
+      fi
+      if [ -f "${INBOX_DIR}/secrets_${t}.tar.gz" ] || [ -f "${INBOX_DIR}/secrets_${t}.tar.gz.enc" ]; then
+        has_secrets="true"
+      fi
+      [ "$first" = "1" ] || printf ','
+      first=0
+      printf '{"timestamp":"%s","complete":%s,"has_secrets":%s,"has_key":%s}' \
+        "$t" "$complete" "$has_secrets" "$has_key"
+    done <<< "$timestamps"
+    printf ']'
+  } > "$tmp" 2>/dev/null || return 0
+  mv -f "$tmp" "$out" 2>/dev/null || return 0
 }
 
 # --- qdrant_http_body — an EXTENDED copy of backup.sh:qdrant_http (the image has
@@ -426,6 +485,10 @@ purge_secrets_staging() {
 # --- EXIT trap: single terminal-status writer + maintenance lift gate ---------
 _cleanup() {
   set +e
+  # --inbox-manifest is a read-only inventory pass: it must NOT consume the restore
+  # request, write .restore_status.json, shred the operator key, or touch maintenance.
+  # Short-circuit before any of that (it wrote its own manifest and is exiting 0).
+  [ "$MANIFEST_MODE" = "1" ] && exit 0
   [ -n "$HEARTBEAT_PID" ] && kill "$HEARTBEAT_PID" 2>/dev/null
   # belt-and-braces: re-consume the request so it can never re-fire. A --recover run
   # never consumes a request (it did not claim one) so a legitimately pending
@@ -530,6 +593,19 @@ if [ "${1:-}" = "--recover" ]; then
     ERROR="could not finish the interrupted restore of ${RECOVER_DB}; the database is consistent (restored or original) but the stack stays in maintenance — re-run the restore or clear the maintenance sentinels per the runbook"
   fi
   FINISHED_AT="$(date -Iseconds)"
+  exit 0
+fi
+
+# === INVENTORY MODE (--inbox-manifest): refresh the sanitized inbox listing, exit ==
+# The sidecar loop invokes this every iteration so the admin app's GET /inbox reflects
+# whatever the operator has dropped into the rw restore_inbox. It is READ-ONLY: it
+# writes only ${TRIGGER_DIR}/.inbox_manifest.json (names/booleans), never consumes the
+# restore request, never touches the DB, and MANIFEST_MODE short-circuits the EXIT trap
+# so it cannot shred the operator key or write a restore status. It must never abort the
+# loop, so it exits 0 unconditionally.
+if [ "${1:-}" = "--inbox-manifest" ]; then
+  MANIFEST_MODE=1
+  write_inbox_manifest
   exit 0
 fi
 
@@ -664,8 +740,15 @@ if [ -r "$MANIFEST" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"
     fi
   fi
+elif [ "$SOURCE" = "inbox" ]; then
+  # Off-host archives are operator-supplied and less trusted, and the admin endpoint
+  # canNOT pre-check their compatibility (the inbox listing carries no schema version).
+  # So the manifest is REQUIRED for an inbox restore: without it neither the sha256
+  # integrity check above nor the newer-than-code gate can arm. Refuse before any
+  # destruction rather than reload an unverified / newer archive set.
+  fail_before_destruction "off-host restore requires manifest_${TIMESTAMP}.json (copy the full backup set, including its manifest, into the restore_inbox); nothing was changed"
 else
-  echo "[restore] WARN: manifest ${MANIFEST} absent; proceeding (the admin endpoint pre-checks compatibility)" >&2
+  echo "[restore] WARN: manifest ${MANIFEST} absent; proceeding (local restore — the admin endpoint pre-checks compatibility)" >&2
 fi
 
 # Pre-destruction decrypt probe: verify each DB archive decrypts to a valid gzip
