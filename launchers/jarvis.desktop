@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Start JARVIS
+Comment=Run the JARVIS RD Assistant bootstrap (setup.sh) in a terminal
+Exec=bash -c "DIR=\$(cd \"\$(dirname \"\$0\")/..\" 2>/dev/null && pwd); if [ -z \"\$DIR\" ] || [ ! -x \"\$DIR/setup.sh\" ]; then echo \"Could not find setup.sh next to this launcher.\"; echo \"Run it manually from the repository root: ./setup.sh\"; read -n 1 -s -r -p \"Press any key to close...\"; exit 1; fi; cd \"\$DIR\"; ./setup.sh; STATUS=\$?; echo; if [ \"\$STATUS\" -eq 3 ]; then echo \"Docker was just installed. Log out and back in, or run newgrp docker, then double-click this launcher again.\"; elif [ \"\$STATUS\" -ne 0 ]; then echo \"setup.sh exited with status \$STATUS. See the output above for details.\"; else echo \"Setup finished.\"; fi; read -n 1 -s -r -p \"Press any key to close this window...\"; exit \"\$STATUS\"" %k
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
