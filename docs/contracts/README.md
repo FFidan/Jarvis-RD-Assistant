@@ -16,6 +16,8 @@ goes stale is worse than no contract.
 | 05 | [Models and Hardware](05-models-and-hardware.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, active defaults, and per-machine VRAM-fit / context controls. |
 | 07 | [Testing](07-testing.md) | The four legitimate test shapes, the four prohibited anti-patterns, the carve-out registry, and the rot-on-touch policy. |
 
+Numbering has a gap: contract 06 (hardware-aware settings) was consolidated into 05 and 07.
+
 ## How to read a contract
 
 Each contract follows roughly the same skeleton: scope boundary → storage / data
