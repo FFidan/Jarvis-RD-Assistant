@@ -302,3 +302,33 @@ async def test_model_recommendations_helper_not_publicly_callable_unauth(_base_a
     import inspect
 
     assert inspect.iscoroutinefunction(_get_system_models_data)
+
+
+# ---------------------------------------------------------------------------
+# 6. GET /api/system/storage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_storage_admin_only(_base_app):
+    """Non-admin → 403; admin → call proceeds (backends degrade, never 500)."""
+    app, _pool, conn = _base_app
+
+    # Non-admin rejected.
+    async with _client_with_role(app, "user") as client:
+        resp = await client.get("/api/system/storage")
+
+    assert resp.status_code == 403, resp.text
+
+    # Admin accepted — Ollama HTTP client stubbed; Postgres/Qdrant degrade
+    # gracefully (no qdrant_client wired on app.state in this fixture).
+    conn.fetchval = AsyncMock(return_value=0)
+    app.state.http_client = _make_fake_http_client()
+
+    async with _client_with_role(app, "admin") as client:
+        resp = await client.get("/api/system/storage")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ollama_models"] == {"bytes_used": 0, "error": None}
+    assert body["qdrant"]["error"] == "Qdrant client not available"

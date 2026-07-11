@@ -24,6 +24,40 @@ export interface ReadinessResponse {
 export const getSystemReadiness = () =>
   apiFetch<ReadinessResponse>('/api/system/readiness');
 
+// --- System storage (GET /api/system/storage) ---
+
+/**
+ * One storage backend's usage. `bytes_used` is null when the size is
+ * unknown: either the backend was unreachable (`error` set) or it has no
+ * byte-level size API (Qdrant — see `qdrant_collections` for its proxy).
+ */
+export interface StorageSection {
+  bytes_used: number | null;
+  error: string | null;
+}
+
+/**
+ * Per-Qdrant-collection point count — the closest usage signal the backend
+ * can report; Qdrant has no per-collection byte-size API.
+ */
+export interface QdrantCollectionUsage {
+  name: string;
+  points_count: number | null;
+}
+
+export interface SystemStorageResponse {
+  ollama_models: StorageSection;
+  postgres: StorageSection;
+  qdrant: StorageSection;
+  qdrant_collections: QdrantCollectionUsage[];
+  hf_cache: StorageSection;
+  pressure: boolean;
+}
+
+/** Disk-usage snapshot across backing stores. Requires admin role (or API key). */
+export const getSystemStorage = () =>
+  apiFetch<SystemStorageResponse>('/api/system/storage');
+
 // --- System models (GET /api/system/models) ---
 /** Per-alias recommendation entry returned by GET /api/system/models hardware_recommendation. */
 export interface HardwareRecommendationAlias {

@@ -560,7 +560,9 @@ describe('ModelSelector', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }));
     expect(screen.getByText('Delete Model')).toBeInTheDocument();
-    expect(screen.getByText(/This will remove Qwen3 Embedding 0.6B from Ollama/)).toBeInTheDocument();
+    expect(
+      screen.getByText('This removes Qwen3 Embedding 0.6B from Ollama and frees approximately 0.6 GB. You can pull it again later.'),
+    ).toBeInTheDocument();
     expect(
       vi.mocked(apiFetch).mock.calls.some(
         ([path, init]) =>

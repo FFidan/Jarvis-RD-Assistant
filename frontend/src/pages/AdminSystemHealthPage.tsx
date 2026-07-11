@@ -26,6 +26,7 @@ import {
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
+import { StorageCard } from '@/components/admin/StorageCard';
 
 type StatusLevel = ReadinessCheck['status'];
 
@@ -262,6 +263,11 @@ export function AdminSystemHealthPage() {
           </>
         )}
       </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Disk usage                                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <StorageCard />
 
       {/* ------------------------------------------------------------------ */}
       {/* Model runtime diagnostics                                           */}
