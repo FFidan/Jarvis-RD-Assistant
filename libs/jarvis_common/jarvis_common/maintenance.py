@@ -25,11 +25,14 @@ SSE/streaming routes are never buffered.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+logger = logging.getLogger(__name__)
 
 # Paths a mid-restore browser reload must still reach: the health probe, the
 # restore-progress poll, the pre-auth setup-status read that drives the app
@@ -77,6 +80,21 @@ def maintenance_active() -> bool:
     except OSError:
         return False
     return time.time() - mtime <= max_age_s
+
+
+def skip_for_maintenance(job_label: str) -> bool:
+    """Entry guard for background writers: log-and-signal a skip during a restore.
+
+    Schedulers, the procrastinate worker loop, and the telegram bot bypass
+    :class:`MaintenanceMiddleware` (HTTP-only), so each background writer calls
+    this at entry and returns early when it is ``True`` — performing no DB write
+    while a restore holds a sentinel. Reads :func:`maintenance_active` directly
+    (cheap ``os.stat``; never raises).
+    """
+    if maintenance_active():
+        logger.info("skip %s: maintenance in progress", job_label)
+        return True
+    return False
 
 
 class MaintenanceMiddleware:

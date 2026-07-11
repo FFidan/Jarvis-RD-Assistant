@@ -441,6 +441,10 @@ services:
       - langfuse_init_pk
       - langfuse_init_sk
     volumes:
+      # Read-only migrations so the maintenance watcher can forward-migrate a
+      # restored (possibly older) schema on resume — lock-42-serialized with
+      # paper_ingestion; this service gains no destructive privilege.
+      - ./db/migrations:/app/db/migrations:ro
       # Read-only: this service only os.stat()s the maintenance sentinel (so the
       # P6 maintenance middleware can 503 it too during a restore). Read-only
       # prevents it from writing a restore-request/backup sentinel — only
@@ -497,6 +501,11 @@ services:
       - litellm_master_key
       - postgres_password
       - telegram_bot_token
+    volumes:
+      # Read-only: the bot only os.stat()s the maintenance sentinel so its
+      # command/callback maintenance gate can pause handling during a restore.
+      # Read-only prevents it from writing a restore-request/backup sentinel.
+      - backup_trigger:/backup-trigger:ro
     mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health\", timeout=5).read()'"]

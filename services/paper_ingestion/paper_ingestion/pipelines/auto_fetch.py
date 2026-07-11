@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis_common.library import fan_out_to_topic_users
+from jarvis_common.maintenance import skip_for_maintenance
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import PaperSourceConfig
@@ -236,6 +237,8 @@ async def run_auto_pipeline(app) -> None:
     Self-gates when ``AUTO_FETCH_INTERVAL_HOURS`` is 0 (or unset), which
     happens when the scheduler is running but the user has disabled auto-fetch.
     """
+    if skip_for_maintenance("auto pipeline"):
+        return
     _interval = get_paper_ingestion_settings().auto_fetch_interval_hours
     if _interval <= 0:
         logger.debug("auto_pipeline: interval_hours=0, skipping run")

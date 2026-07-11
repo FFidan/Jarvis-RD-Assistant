@@ -5,15 +5,17 @@ task management, and paper interactions via inline keyboards.
 """
 
 import asyncio
+import contextlib
 import logging
 import sys
 
 import httpx
 from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
+from jarvis_common.maintenance import maintenance_active
 from jarvis_common.settings import get_core_settings
-from telegram import BotCommand
-from telegram.ext import Application
+from telegram import BotCommand, Update
+from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
 
 from telegram_bot.config import BotConfig, create_db_pool
 from telegram_bot.handlers import (
@@ -134,6 +136,26 @@ async def post_shutdown(application: Application) -> None:
     logger.info("Bot shutdown: resources released")
 
 
+async def _maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Short-circuit every update while a restore holds a maintenance sentinel.
+
+    The bot bypasses the HTTP :class:`MaintenanceMiddleware`, so this handler is
+    registered in group ``-1`` to run before every command/callback handler:
+    during a restore it replies once and raises ``ApplicationHandlerStop`` so no
+    downstream handler writes to the (being-restored) database.
+    """
+    if not maintenance_active():
+        return
+    notice = "⏳ Restore in progress — please try again shortly."
+    if update.callback_query is not None:
+        with contextlib.suppress(Exception):
+            await update.callback_query.answer(notice, show_alert=True)
+    elif update.effective_message is not None:
+        with contextlib.suppress(Exception):
+            await update.effective_message.reply_text(notice)
+    raise ApplicationHandlerStop
+
+
 def main() -> None:
     """Build the bot application and start polling for updates.
 
@@ -158,6 +180,10 @@ def main() -> None:
     )
 
     application.bot_data["config"] = config
+
+    # Maintenance gate runs before every other handler (group -1): the bot
+    # bypasses the HTTP MaintenanceMiddleware, so this is its restore guard.
+    application.add_handler(TypeHandler(Update, _maintenance_gate), group=-1)
 
     # Register handlers
     register_command_handlers(application)

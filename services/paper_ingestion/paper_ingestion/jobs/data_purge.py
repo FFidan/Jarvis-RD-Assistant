@@ -18,6 +18,7 @@ from typing import Any
 
 from apscheduler.triggers.cron import CronTrigger
 from jarvis_common.audit import log_audit
+from jarvis_common.maintenance import skip_for_maintenance
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,8 @@ async def data_purge_task(app: Any) -> None:
     3. SQL DELETE FROM users (ON DELETE CASCADE collapses owned rows).
     4. Audit-log the destructive event via log_audit (best-effort, never raises).
     """
+    if skip_for_maintenance("data purge"):
+        return
     pool = app.state.db_pool
     qdrant = getattr(app.state, "qdrant_client", None)
 

@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from apscheduler.triggers.cron import CronTrigger
+from jarvis_common.maintenance import skip_for_maintenance
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ async def purge_expired_magic_link_tokens(pool: Any) -> None:
 
 async def purge_expired_magic_link_tokens_task(app: Any) -> None:
     """APScheduler entrypoint — extracts pool from ``app.state`` and delegates."""
+    if skip_for_maintenance("purge magic_link_tokens"):
+        return
     pool = app.state.db_pool
     await purge_expired_magic_link_tokens(pool)
 
