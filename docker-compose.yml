@@ -43,6 +43,11 @@ x-shared-env: &shared-env
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+  # Canonical public app URL and access mode, both written by setup.sh. APP_BASE_URL
+  # is the one server-known origin magic-link emails and passkey ceremonies use;
+  # empty for local/LAN installs where the origin is implicit.
+  APP_BASE_URL: ${APP_BASE_URL:-}
+  JARVIS_ACCESS_MODE: ${JARVIS_ACCESS_MODE:-localhost}
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}

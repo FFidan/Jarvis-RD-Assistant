@@ -16,6 +16,10 @@
 #                             dev          — ENVIRONMENT=development, localhost binding
 #                             local-https  — self-signed cert, access mode 1
 #                             letsencrypt  — Caddy + ACME; requires --domain + --admin-email
+#   --tunnel-ack              Acknowledge that the Cloudflare tunnel access mode
+#                             exposes this instance to the internet. Zero-Trust
+#                             access policies must be configured first. Required to
+#                             select the tunnel access mode non-interactively.
 #   --mode <single|multi>     Install mode written to JARVIS_SETUP_MODE in .env.
 #                             single (default) — personal instance, API-key login.
 #                             multi            — team instance, email/magic-link login.
@@ -407,6 +411,7 @@ NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
 NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
+TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI consent)
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
 
 while [ $# -gt 0 ]; do
@@ -473,6 +478,8 @@ while [ $# -gt 0 ]; do
       INSTALL_PREREQS=1; shift ;;
     --skip-disk-check)
       SKIP_DISK_CHECK=1; shift ;;
+    --tunnel-ack)
+      TUNNEL_ACK=1; shift ;;
     --backend)
       case "$2" in
         ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
@@ -840,11 +847,21 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
       ;;
   esac
 else
-  printf '\n%sHow do you want to access the dashboard?%s\n' "$C_BOLD" "$C_RESET"
+  printf '\n%sHow will you access JARVIS?%s\n' "$C_BOLD" "$C_RESET"
   cat <<'EOF'
-  1) Localhost only (default, safest)
-  2) LAN — reachable from other devices on your network
-  3) Global — access from anywhere via Cloudflare Tunnel (free, no ports opened)
+  1) On this computer only (recommended to start)
+     Everything works here: sign-in links, passkeys (fingerprint/face/PIN).
+  2) From devices on your home or lab network
+     Sign-in links work on every device. Passkeys work on this computer
+     (add option 3 or 4 later for passkeys everywhere). Your browser will
+     show a one-time certificate warning per device — expected for a
+     private setup.
+  3) From anywhere — Cloudflare Tunnel (free, no router changes)
+     Full features everywhere incl. passkeys. Needs a free Cloudflare
+     account and a tunnel token (guided).
+  4) From anywhere — your own domain with Let's Encrypt
+     Full features everywhere incl. passkeys. Needs a domain pointing at
+     this machine and port 443 reachable.
 EOF
   read -rp "Choice [1]: " access_mode
   access_mode="${access_mode:-1}"
@@ -878,6 +895,7 @@ preflight_disk
 CLOUDFLARE_TUNNEL_TOKEN=""
 USE_TUNNEL_PROFILE=0
 ACCESS_MODE_LABEL="localhost"
+APP_BASE_URL_VALUE=""   # canonical public origin; derived per mode below, written to .env
 CORS_ORIGINS_OVERRIDE=""
 CF_TRUST_OVERRIDE=""
 LAN_IP=""
@@ -932,13 +950,18 @@ case "$access_mode" in
   3)
     ACCESS_MODE_LABEL="tunnel"
     DASHBOARD_BIND_HOST="127.0.0.1"
-    # Zero-Trust gate — must be acknowledged before proceeding.
-    if [ -z "${JARVIS_TUNNEL_ACK_ZT_CONFIGURED:-}" ] || [ "$JARVIS_TUNNEL_ACK_ZT_CONFIGURED" != "1" ]; then
-      printf '\n'
-      printf '\033[0;31m[WARNING] Cloudflare tunnel exposes your services to the internet!\033[0m\n'
-      printf 'You MUST configure Zero-Trust access policies at https://one.dash.cloudflare.com/\n'
-      printf 'Once configured, set JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1 in your .env to proceed.\n'
-      exit 1
+    # Zero-Trust consent — a tunnel exposes this instance to the internet, so
+    # require an explicit acknowledgement in-flow (no hand-edited .env values):
+    # a typed confirmation interactively, or --tunnel-ack non-interactively.
+    printf '\n'
+    warn "A Cloudflare tunnel exposes your services to the internet. You MUST configure Zero-Trust access policies at https://one.dash.cloudflare.com/ first."
+    if [ "$NON_INTERACTIVE" -eq 1 ]; then
+      [ "$TUNNEL_ACK" -eq 1 ] || die "Tunnel access requires acknowledging the internet exposure." \
+        "Configure Zero-Trust access policies, then re-run with --tunnel-ack."
+    else
+      read -rp 'Type "I understand" to continue (anything else aborts): ' _tunnel_ack
+      [ "$_tunnel_ack" = "I understand" ] || die "Tunnel setup aborted — acknowledgement not given." \
+        "Configure Zero-Trust access policies, then re-run ./setup.sh and choose the tunnel option."
     fi
     printf '\n'
     cat <<'EOF'
@@ -972,11 +995,61 @@ EOF
     ok "Tunnel hostname: ${TUNNEL_HOSTNAME} (added to CORS_ORIGINS and cert SAN)."
     ok "JARVIS_TRUST_CF_CONNECTING_IP=true — rate limiting will key off the real CF-Connecting-IP header rather than the tunnel origin."
     ;;
+  4)
+    # Interactive Let's Encrypt: drive the SAME machinery as --profile=letsencrypt
+    # (no parallel cert/Caddy path). Setting NI_PROFILE/NI_DOMAIN/NI_ADMIN_EMAIL makes
+    # the existing LETSENCRYPT_*, ENVIRONMENT, and summary logic fire from these prompts.
+    ACCESS_MODE_LABEL="letsencrypt"
+    DASHBOARD_BIND_HOST="127.0.0.1"   # dashboard stays local; Caddy terminates public TLS
+    NI_PROFILE="letsencrypt"
+    printf '\n'
+    info "Let's Encrypt issues a real TLS certificate for a public domain that resolves to this machine (port 443 must be reachable)."
+    while true; do
+      read -r -p "Public domain (e.g. jarvis.example.com): " NI_DOMAIN
+      if printf '%s' "$NI_DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'; then
+        break
+      fi
+      echo "Invalid domain. Use lowercase letters, digits, hyphens, and dots only."
+    done
+    while true; do
+      read -r -p "Admin email (Let's Encrypt expiry notices): " NI_ADMIN_EMAIL
+      if printf '%s' "$NI_ADMIN_EMAIL" | grep -qE '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; then
+        break
+      fi
+      echo "Invalid email address. Enter a valid address, e.g. you@example.com."
+    done
+    ok "Let's Encrypt configured for ${NI_DOMAIN}. After setup, start public TLS: docker compose --profile letsencrypt up -d caddy"
+    ;;
   *)
-    die "Invalid choice '$access_mode'. Expected 1, 2, or 3." \
+    die "Invalid choice '$access_mode'. Expected 1, 2, 3, or 4." \
         "Re-run ./setup.sh and pick a listed option."
     ;;
 esac
+
+# ---------------------------------------------------------------------------
+# Canonical access-mode identity, written to .env below. JARVIS_ACCESS_MODE
+# names the mode; APP_BASE_URL is the single server-known public origin the
+# passkey ceremony validates against (empty for localhost/LAN, where the origin
+# is implicit — a raw LAN IP is not a valid WebAuthn origin). Both are derived
+# here and never hand-edited. NI --profile=letsencrypt lands on access_mode 1
+# above, so re-label it here from the profile.
+# ---------------------------------------------------------------------------
+if [ "$NI_PROFILE" = "letsencrypt" ]; then
+  ACCESS_MODE_LABEL="letsencrypt"
+fi
+case "$ACCESS_MODE_LABEL" in
+  tunnel)      APP_BASE_URL_VALUE="https://${TUNNEL_HOSTNAME}" ;;
+  letsencrypt) APP_BASE_URL_VALUE="https://${NI_DOMAIN}" ;;
+  *)           APP_BASE_URL_VALUE="" ;;
+esac
+if [ "$NON_INTERACTIVE" -eq 0 ]; then
+  case "$ACCESS_MODE_LABEL" in
+    localhost)   info "Access mode: on this computer only — sign-in links and passkeys all work here." ;;
+    lan)         info "Access mode: home/lab network — sign-in links on every device; passkeys on this computer." ;;
+    tunnel)      info "Access mode: anywhere via Cloudflare Tunnel — full features including passkeys." ;;
+    letsencrypt) info "Access mode: anywhere via your own domain — full features including passkeys." ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # Detect SAN change — cert volume must be wiped when the access mode changes
@@ -1108,6 +1181,8 @@ sub_value() {
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;
     DASHBOARD_BIND_HOST)      printf '%s' "$DASHBOARD_BIND_HOST" ;;
     JARVIS_CERT_SAN)          printf '%s' "$JARVIS_CERT_SAN" ;;
+    APP_BASE_URL)             printf '%s' "$APP_BASE_URL_VALUE" ;;
+    JARVIS_ACCESS_MODE)       printf '%s' "$ACCESS_MODE_LABEL" ;;
     JARVIS_TRUST_CF_CONNECTING_IP) [ -n "$CF_TRUST_OVERRIDE" ] && printf '%s' "$CF_TRUST_OVERRIDE" || return 1 ;;
     CORS_ORIGINS)
       if [ -n "$CORS_ORIGINS_OVERRIDE" ]; then
@@ -1128,9 +1203,10 @@ sub_value() {
       [ -n "$NI_DOMAIN" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_DOMAIN" || return 1 ;;
     LETSENCRYPT_EMAIL)
       [ -n "$NI_ADMIN_EMAIL" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_ADMIN_EMAIL" || return 1 ;;
-    # Non-interactive: ENVIRONMENT based on --profile
+    # ENVIRONMENT from --profile (also the interactive Let's Encrypt mode, which
+    # sets NI_PROFILE=letsencrypt): a public deployment must run in production.
     ENVIRONMENT)
-      if [ "$NON_INTERACTIVE" -eq 1 ]; then
+      if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$NI_PROFILE" = "letsencrypt" ]; then
         case "$NI_PROFILE" in
           dev)           printf 'development' ;;
           local-https)   printf 'development' ;;
