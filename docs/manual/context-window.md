@@ -1,3 +1,5 @@
+<!-- verified-against-UI: 2026-07-11 | routes: /settings?section=models -->
+
 # Context window (reading window)
 
 The **reading window** — technically `num_ctx` — is how much of a paper the AI reads in a single pass, measured in tokens. There is one such number per model role (main model, quick model). You set it on the **Settings → Models** page using the slider next to each model; no environment-variable editing is needed.

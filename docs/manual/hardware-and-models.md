@@ -41,6 +41,16 @@ your Qdrant collection and changing it requires re-indexing your library.
 
 ---
 
+## GPU vendor support
+
+The tiers and models above apply regardless of GPU vendor — JARVIS auto-detects your GPU and VRAM at first boot. NVIDIA (CUDA) is the fully **supported** path. AMD (ROCm or Vulkan) and Intel (Vulkan) acceleration for Ollama are also auto-detected and available, labeled **[Experimental]**: same tier-based model selection, lower validation confidence. See the [hardware support matrix](hardware-support-matrix.md) for what "Experimental" means, known caveats, and how to report your results.
+
+**Windows + AMD GPU currently falls back to CPU** — Docker on WSL2 does not expose the AMD kernel driver the ROCm overlay needs. NVIDIA GPUs are unaffected under WSL2.
+
+`paper_ingestion` (PDF parsing, reranking) stays CPU-only on AMD and Intel hosts regardless of which overlay Ollama uses — only Ollama inference is GPU-accelerated on those vendors today.
+
+---
+
 ## Two tier systems — not the same scale
 
 You may notice two different ways JARVIS numbers hardware tiers. They are two views

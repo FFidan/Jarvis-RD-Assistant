@@ -38,8 +38,8 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 **Before you start:**
 
 - Docker Engine 24+ with Compose v2, `openssl`, `git`
-- ~20 GB free disk space
-- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. The first run pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection.
+- **~25–53 GB free disk space** for the first install — a one-time peak, not the ongoing footprint. The exact figure depends on your GPU tier and whether images are pulled prebuilt or built locally; see [Disk budget](docs/REQUIREMENTS.md#disk-budget).
+- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. `setup.sh` builds/pulls the application images first, then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers.
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 - `./setup.sh --check` verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or `openssl` are missing, `./setup.sh --install-prereqs` can run the guided installer after showing the exact commands.
 - **Windows:** use WSL2 + Docker Desktop
@@ -54,7 +54,7 @@ cd Jarvis-RD-Assistant
 
 `setup.sh` generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens **http://localhost:3001** — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off.
 
-Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (7–11 GB; 20–60 min on a typical connection) streams its progress directly to your terminal before the services start, so the initial pull shows visible progress instead of a silent wait.
+Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see [Disk budget](docs/REQUIREMENTS.md#disk-budget)) streams its progress directly to your terminal after the application images are built, so the initial pull shows visible progress instead of a silent wait.
 
 In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
 
@@ -109,6 +109,15 @@ flowchart TD
 ## Deployment
 
 Solo install: the **Quickstart** above is all you need. For team/multi-user setup, SMTP configuration, reverse-proxy / TLS (Caddy + Let's Encrypt or Cloudflare Tunnel), backups, upgrades, rollback, and remote access → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. End-user help (joining an existing instance) → **[User Guide](https://ffidan.github.io/Jarvis-RD-Assistant/manual/)**.
+
+## Updating JARVIS
+
+```bash
+git pull
+./update.sh
+```
+
+`update.sh` diffs your running containers against the versions pinned in `versions.env`, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
 
 ## Security
 
