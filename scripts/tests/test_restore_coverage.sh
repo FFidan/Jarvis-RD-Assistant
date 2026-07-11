@@ -620,17 +620,35 @@ else
   pass "secrets staging is never under the RO /secrets"
 fi
 
-# I9. A clean INBOX restore does NOT lift maintenance (the app holds the new-host
-#     password until the operator recreates it); only same-host clean lifts.
-check "holds maintenance on a clean inbox restore (lift gate excludes inbox)" \
-  '\[ "\$SOURCE" != "inbox" \]'
+# I8b. The operator-supplied secrets archive is untrusted: reject symlink/hardlink
+#      members before extraction (a symlink could redirect a write into the now-rw
+#      /host-secrets mount), in addition to the absolute/'..' path check.
+check "rejects symlink/hardlink members in the secrets archive" \
+  'contains a symlink or hardlink member'
 
-# I9b. The clean inbox path enters the destructive window, so it holds the durable
-#      .destructive sentinel (never auto-expires). The STEP-9 inbox echo MUST name
-#      it, or an operator clearing only .maintenance bricks the recovered stack at
-#      HTTP 503 (mirrors the OLDER echo, 6d).
-check "the inbox STEP-9 echo tells the operator to clear .destructive too" \
-  'off-host restore complete.*/backup-trigger/\.destructive'
+# I9. A clean restore now lifts maintenance regardless of source: the inbox path
+#     materializes the restored ./secrets into HOST_SECRETS_DIR and writes the
+#     rotation marker, so the app containers self-restart onto the rebound role —
+#     no operator step, no hold. The lift gate no longer excludes inbox.
+check "lifts maintenance on any clean restore (inbox self-recovers)" \
+  '\[ "\$RESTORE_CLEAN" = "1" \] \|\| \[ "\$DROP_STARTED" = "0" \]'
+if grep -Eq '!= "inbox"' "$RESTORE_SCRIPT"; then
+  printf 'FAIL: the lift gate still excludes inbox (the self-restart contract removed that hold)\n' >&2
+  fail=1
+else
+  pass "the lift gate no longer excludes inbox (old operator hold removed)"
+fi
+
+# I9b. Zero-touch off-host recovery: STEP 8 materializes the restored secrets into
+#      HOST_SECRETS_DIR and writes the .secrets_rotated marker that drives each
+#      postgres-connecting service's self-restart, replacing the old "recreate the
+#      containers / clear .destructive" operator step.
+check "inbox restore materializes the restored secrets into the host secrets dir" \
+  'cp -- "\$sfile" "\$\{HOST_SECRETS_DIR\}'
+check "inbox restore writes the .secrets_rotated marker for self-restart" \
+  'mv -f "\$\{TRIGGER_DIR\}/\.secrets_rotated\.tmp" "\$\{TRIGGER_DIR\}/\.secrets_rotated"'
+check "the STEP-9 inbox echo reports automatic self-restart (no manual recreate)" \
+  'off-host restore complete.*self-restarting'
 
 # I10. An empty restored postgres_password fails safe instead of setting a blank
 #      role password (the [ ! -s ] file-size guard alone would pass a newline-only file).

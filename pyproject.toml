@@ -165,8 +165,13 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # Both service test dirs share the `tests` namespace on sys.path, so `_make_pool_and_conn`/`FakeRecord` must remain identical in both conftest.py files.
 "services/paper_ingestion/tests/*" = ["E402", "E501", "I001"]
 "services/learning_engine/tests/*" = ["E501", "I001"]
+"services/restore_uploader/tests/*" = ["E501", "I001"]
 "libs/jarvis_common/tests/*" = ["E501"]
 "scripts/*" = ["E402", "N999"]
+# http.server dispatches on the handler method name (do_PUT); N802 flags it as
+# non-lowercase and N815 as class-scope mixedCase — both are framework-mandated,
+# not style bugs.
+"services/restore_uploader/uploader.py" = ["N802", "N815"]
 # Long SQL / prompt template strings in app code.
 "libs/jarvis_common/jarvis_common/jobs.py" = ["E501"]
 "services/paper_ingestion/paper_ingestion/extraction.py" = ["E501"]
@@ -211,6 +216,7 @@ pythonpath = [
     "services/paper_ingestion",
     "services/learning_engine",
     "services/telegram_bot",
+    "services/restore_uploader",
     "libs/jarvis_common",
 ]
 # importlib import mode gives each test module a unique synthetic name,
@@ -223,6 +229,7 @@ testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",
     "services/telegram_bot/tests",
+    "services/restore_uploader/tests",
     "libs/jarvis_common/tests",
     "scripts/tests",
     "tests",

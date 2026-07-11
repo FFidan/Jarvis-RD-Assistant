@@ -25,6 +25,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import signal
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -58,7 +61,11 @@ from jarvis_common.error_handlers import (
     validation_exception_handler,
 )
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
-from jarvis_common.maintenance import configure_maintenance, maintenance_active
+from jarvis_common.maintenance import (
+    configure_maintenance,
+    maintenance_active,
+    secrets_rotated_since,
+)
 from jarvis_common.migrations import run_migrations
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
@@ -602,8 +609,10 @@ async def _resume_after_maintenance(app: FastAPI, queues: list[str]) -> None:
     Ordered so writers never observe a stale schema or stale DB-derived cache:
     forward-migrate first (lock-42-serialized, idempotent), drop the in-process
     caches whose backing ``user_config`` rows a restore may have rolled back, then
-    restart the worker loop. Task 4.6 will extend this branch with a
-    secrets-rotated self-exit; keeping it a discrete function preserves that seam.
+    restart the worker loop. Only reached when the secrets were NOT rotated — the
+    watcher step self-restarts BEFORE calling this on a rotation, because the DB
+    ops here would auth-fail against the rebound role until that restart. Kept a
+    discrete function so the watcher can gate it cleanly.
     """
     await run_migrations(app.state.db_pool)
     invalidate_api_key_login_cache()
@@ -612,23 +621,50 @@ async def _resume_after_maintenance(app: FastAPI, queues: list[str]) -> None:
     logger.info("maintenance: reconciled schema and resumed writers")
 
 
-async def _maintenance_watcher_step(app: FastAPI, queues: list[str], *, was_active: bool) -> bool:
+def _trigger_secrets_rotation_restart() -> None:
+    """Signal our own process to exit so ``restart: unless-stopped`` reloads secrets.
+
+    Compose file-secrets are per-inode bind mounts read once at process start, so an
+    off-host restore's role rebind + ./secrets rotation is only picked up by a full
+    container exit + revive. SIGTERM lets uvicorn drain cleanly (exit 143 still
+    restarts). Isolated so the watcher's decision path stays unit-testable without
+    killing the test process.
+    """
+    logger.warning("maintenance: secrets rotated; restarting to reload updated secrets")
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+async def _maintenance_watcher_step(
+    app: FastAPI, queues: list[str], *, was_active: bool, started_at: float | None = None
+) -> bool:
     """Run one watcher poll; return the current maintenance-active state.
 
     ``inactive→active`` cancels the worker loop (queue hygiene during a restore);
-    ``active→inactive`` reconciles the schema and resumes writers.
+    ``active→inactive`` self-restarts FIRST when a restore rotated the secrets after
+    this process started (see below), else reconciles the schema and resumes writers.
     """
     now_active = maintenance_active()
     if now_active and not was_active:
         await _pause_worker_task(app)
         logger.info("maintenance: paused background writers")
     elif was_active and not now_active:
+        # A cross-host (inbox) restore rebinds the postgres role and rotates
+        # ./secrets while this process still holds the pre-rotation password in
+        # its pool, so any DB op here (``run_migrations``' ``pool.acquire``) would
+        # auth-fail until we restart. Signal the restart BEFORE reconciling — the
+        # revived process reloads the rotated secret and runs migrations at boot;
+        # sequencing it after the resume would deadlock (the failing acquire raises
+        # before the restart could fire). A same-host restore (no rotation) has a
+        # still-valid pool, so it falls through to the in-place resume.
+        if started_at is not None and secrets_rotated_since(started_at):
+            _trigger_secrets_rotation_restart()
+            return now_active
         await _resume_after_maintenance(app, queues)
     return now_active
 
 
 async def _maintenance_watcher_loop(
-    app: FastAPI, queues: list[str], poll_interval_s: float
+    app: FastAPI, queues: list[str], poll_interval_s: float, started_at: float | None = None
 ) -> None:
     """Poll the maintenance sentinel, pausing/resuming the worker loop across it.
 
@@ -643,7 +679,9 @@ async def _maintenance_watcher_loop(
     while True:
         try:
             await asyncio.sleep(poll_interval_s)
-            was_active = await _maintenance_watcher_step(app, queues, was_active=was_active)
+            was_active = await _maintenance_watcher_step(
+                app, queues, was_active=was_active, started_at=started_at
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -658,11 +696,16 @@ def make_maintenance_watcher_hook(
     Wire it into ``custom_init_tasks`` immediately AFTER the procrastinate worker
     hook, with :func:`shutdown_maintenance_watcher` at the index-aligned teardown
     slot so LIFO cleanup stops the watcher BEFORE the worker's connector closes.
+
+    ``started_at`` is captured here (module-import time for each service) so a
+    secrets-rotation marker newer than this boot triggers exactly one self-restart;
+    the restarted process captures a fresh ``started_at`` and does not re-exit.
     """
+    started_at = time.time()
 
     async def _hook(app: FastAPI) -> None:
         app.state.maintenance_watcher_task = asyncio.create_task(
-            _maintenance_watcher_loop(app, queues, poll_interval_s),
+            _maintenance_watcher_loop(app, queues, poll_interval_s, started_at),
             name="maintenance_watcher",
         )
 

@@ -14,21 +14,37 @@
 # without buying anything for a single-machine compose stack. A future
 # multi-host deployment could add inner mTLS if needed.
 {$LETSENCRYPT_DOMAIN:localhost} {
-	request_body {
-		max_size 50MB
-	}
 	# Rate limiting: not in scope for single-user pre-launch.
 	# HSTS belongs at the TLS terminator only, not at the inner nginx listener.
 	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 	header >X-Frame-Options "DENY"
 	header >X-Content-Type-Options "nosniff"
 	header >Referrer-Policy "strict-origin-when-cross-origin"
-	reverse_proxy http://dashboard:3000 {
-		header_up Host localhost
-		# Stamp the real client IP so nginx can bucket rate-limits per client
-		# instead of collapsing all requests into the Caddy→bridge IP.
-		# {http.request.remote.host} is the Caddy v2 placeholder for the
-		# connecting peer IP (i.e. the TLS-terminated client address).
-		header_up X-Real-IP {http.request.remote.host}
+
+	# Off-host disaster-recovery upload goes STRAIGHT to the dedicated uploader so
+	# the encrypted archive bytes + operator key never transit the app. A raised
+	# body cap applies to THIS path only; kept in its own handle (mutually exclusive
+	# with the dashboard route) so the 50MB dashboard cap never wraps — and thus
+	# clamps — the multi-GB archive stream. The uploader matches the full
+	# /restore-upload/<filename> path (handle, not handle_path — prefix preserved).
+	handle /restore-upload/* {
+		request_body {
+			max_size {$UPLOAD_MAX_BODY:21GB}
+		}
+		reverse_proxy http://restore-uploader:8090
+	}
+
+	handle {
+		request_body {
+			max_size 50MB
+		}
+		reverse_proxy http://dashboard:3000 {
+			header_up Host localhost
+			# Stamp the real client IP so nginx can bucket rate-limits per client
+			# instead of collapsing all requests into the Caddy→bridge IP.
+			# {http.request.remote.host} is the Caddy v2 placeholder for the
+			# connecting peer IP (i.e. the TLS-terminated client address).
+			header_up X-Real-IP {http.request.remote.host}
+		}
 	}
 }

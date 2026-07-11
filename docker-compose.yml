@@ -245,6 +245,7 @@ services:
       - "127.0.0.1:${LITELLM_HOST_PORT:-4000}:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+      - backup_trigger:/backup-trigger:ro  # ro: the shim watches .secrets_rotated so an off-host restore's rotated litellm/postgres secrets are picked up by a self-restart
     # OPENAI_API_KEY and ANTHROPIC_API_KEY are intentionally omitted here.
     # Cloud-key injection happens via Fernet user_config + the LiteLLM admin DB
     # (/model/new payloads, encrypted at rest under LITELLM_SALT_KEY).
@@ -304,6 +305,19 @@ services:
         PG_USER_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "${POSTGRES_USER:-jarvis}")"
         PG_PASS_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "$(cat /run/secrets/postgres_password)")"
         export DATABASE_URL="postgresql://$${PG_USER_ENC}:$${PG_PASS_ENC}@postgres:5432/litellm"
+        # Defensive self-restart on off-host secrets rotation: an inbox restore
+        # rebinds the postgres role and rotates the litellm master/salt secrets,
+        # which this process reads once at start. A background watcher polls the
+        # shared marker and, when it is newer than this boot, kills PID 1 (the
+        # exec'd litellm below) so restart:unless-stopped revives it against the
+        # rotated /run/secrets/* inodes. It never interferes with normal boot: it
+        # backgrounds immediately and no-ops until a newer integer marker appears.
+        LSTART=$(date +%s)
+        ( while sleep 5; do
+            m=$(cat /backup-trigger/.secrets_rotated 2>/dev/null || echo 0)
+            case "$$m" in ''|*[!0-9]*) continue ;; esac
+            [ "$$m" -gt "$$LSTART" ] && { echo '[litellm] secrets rotated; exiting to reload' >&2; kill 1; }
+          done ) &
         exec litellm --config /app/config.yaml
     # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
     mem_limit: 4g
@@ -611,6 +625,7 @@ services:
       - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro  # one-click DR restore (runs in this already-privileged sidecar; the app gains zero new privilege)
       - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
       - ./secrets:/secrets:ro
+      - ./secrets:/host-secrets:rw  # rw: an off-host (inbox) restore materializes the restored ./secrets/*.txt here so the app containers self-restart onto the rotated secrets (the sidecar is the trusted DR component; the app's zero-privilege invariant is untouched)
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears
       - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
@@ -651,6 +666,28 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - jarvis
+
+  # Off-host disaster-recovery upload ingress. Caddy routes /restore-upload/* here
+  # so the encrypted archive set + one-time backup key never transit the app; this
+  # container holds NO DB, NO secret mount, and NO docker.sock — it only streams an
+  # allowlisted, grant-authorized file into the restore_inbox for restore.sh to read
+  # (a drop-in for the previous manual scp step). See services/restore_uploader.
+  restore-uploader:
+    build: ./services/restore_uploader
+    image: ghcr.io/ffidan/jarvis-restore-uploader:${JARVIS_VERSION:-1.1.0}
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    mem_limit: 128m
+    environment:
+      # Per-request upload ceiling; Caddy's /restore-upload body cap must be ≥ this.
+      UPLOAD_MAX_GB: ${UPLOAD_MAX_GB:-20}
+    volumes:
+      - restore_inbox:/restore-inbox:rw  # the ONLY writable surface: streams the uploaded archive set + operator key here for restore.sh
+      - backup_trigger:/backup-trigger:ro  # reads only .upload_grant.json (sha256 + expiry, never a secret) to authorize an upload
     networks:
       - jarvis
 
