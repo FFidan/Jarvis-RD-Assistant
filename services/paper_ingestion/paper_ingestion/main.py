@@ -621,6 +621,7 @@ from paper_ingestion.routers import (  # noqa: E402
 )
 from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
+from paper_ingestion.routers import auth_passkeys as auth_passkeys_router  # noqa: E402
 from paper_ingestion.routers import backups as backups_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import settings_ai as settings_ai_router  # noqa: E402
@@ -629,6 +630,10 @@ from paper_ingestion.routers import source_config as source_config_router  # noq
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
+# Passkey ceremonies. Under /api/auth/* so verify_api_key exempts the front door;
+# login/* + capability are unauthenticated, register/list/delete enforce the
+# session in-handler via current_user_id_strict.
+app.include_router(auth_passkeys_router.router)
 # Admin router uses session-only auth (no X-API-Key required for browser
 # sessions). Exempt from the global verify_api_key dep via dependencies=[].
 app.include_router(admin_router.router, dependencies=[])

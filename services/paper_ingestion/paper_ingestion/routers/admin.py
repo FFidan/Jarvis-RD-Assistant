@@ -502,4 +502,77 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
     return SendLinkResponse(sent=True, sent_link=None if delivered else link)
 
 
+# ---------------------------------------------------------------------------
+# Passkey administration
+# ---------------------------------------------------------------------------
+
+
+class PasskeyCountResponse(BaseModel):
+    count: int
+
+
+class PasskeyRevokeAllResponse(BaseModel):
+    revoked_credentials: int
+    revoked_sessions: int
+
+
+@router.get(
+    "/users/{user_id}/passkeys",
+    response_model=PasskeyCountResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def get_user_passkey_count(user_id: int, request: Request) -> PasskeyCountResponse:
+    """Return how many passkeys a user has registered (read-only support signal)."""
+    pool = request.app.state.db_pool
+    count = await pool.fetchval(
+        "SELECT count(*) FROM webauthn_credentials WHERE user_id = $1", user_id
+    )
+    return PasskeyCountResponse(count=int(count or 0))
+
+
+@router.post(
+    "/users/{user_id}/passkeys/revoke-all",
+    response_model=PasskeyRevokeAllResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def revoke_user_passkeys(user_id: int, request: Request) -> PasskeyRevokeAllResponse:
+    """Delete all of a user's passkeys and revoke the sessions those passkeys minted.
+
+    Recovery channel for a lost/compromised authenticator. Magic-link and api-key
+    sessions (``credential_id IS NULL``) are left intact so the admin sign-in-link
+    path stays usable. Sessions are revoked BEFORE the credentials are deleted so
+    the ``credential_id`` FK link still resolves.
+    """
+    pool = request.app.state.db_pool
+    caller_id = getattr(request.state, "user_id", None)
+    revoked_sessions = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            cred_ids = [
+                row["id"]
+                for row in await conn.fetch(
+                    "SELECT id FROM webauthn_credentials WHERE user_id = $1 FOR UPDATE", user_id
+                )
+            ]
+            if cred_ids:
+                result = await conn.execute(
+                    "UPDATE sessions SET revoked_at = now() "
+                    "WHERE credential_id = ANY($1::uuid[]) AND revoked_at IS NULL",
+                    cred_ids,
+                )
+                revoked_sessions = int(result.split()[-1])
+                await conn.execute("DELETE FROM webauthn_credentials WHERE user_id = $1", user_id)
+
+    await log_audit(
+        pool,
+        action="admin.user.passkey.revoke_all",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+        metadata={"revoked_credentials": len(cred_ids), "revoked_sessions": revoked_sessions},
+    )
+    return PasskeyRevokeAllResponse(
+        revoked_credentials=len(cred_ids), revoked_sessions=revoked_sessions
+    )
+
+
 __all__ = ["router"]
