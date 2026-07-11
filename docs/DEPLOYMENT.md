@@ -79,7 +79,7 @@ OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a
 
 ## GPU acceleration (optional)
 
-The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
+The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also downloads the Ollama model set for your hardware tier — roughly 5–22 GB depending on tier, after the application images are built; see [Disk budget](REQUIREMENTS.md#disk-budget). On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 
 ### Standard GPU overlay (auto-engaged by `setup.sh`)
 
@@ -474,6 +474,8 @@ git pull
 
 `update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, prompts to pull stale services and rebuild local containers, and waits up to 180 s per service. On failure it prints: `git checkout HEAD~1 -- versions.env && ./update.sh`.
 
+From v1.1.0, the application images are also published to GitHub Container Registry — pulling a prebuilt image is smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)).
+
 ### Upgrade notes
 
 **Telegram pairing (breaking change).** The Telegram bot now identifies chats
@@ -747,6 +749,8 @@ bash scripts/production-readiness-check.sh
 | Embedding dimension mismatch on startup | Qdrant collection dimension doesn't match the active embedding model | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560`, pull the model, then run `REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed` if the collection dimension is still wrong. |
 | Re-embedding too slow | `scripts/reembed.py` defaults to the HTTP-bound LiteLLM path | Switch to local backend: `REEMBED_BACKEND=local python -m scripts.reembed` (requires sentence-transformers). Benchmark first with `REEMBED_BENCHMARK=true`. |
 | `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | Postgres bakes the password into its data volume on first init; a later `.env` change is not applied to an existing volume | Reset the volume: `docker compose down && docker volume rm <project>_postgres_data && docker compose up -d` — this destroys local DB data. The `<project>` prefix is your compose project name (the repo directory name by default; visible in `docker compose ps`). Run `setup.sh` afterwards if you need the GPU overlay re-engaged. |
+| `docker compose build`/`up` fails with "no space left on device" during install | Docker's data root ran out of space — the cold-install peak can reach several tens of GB depending on hardware tier; see [Disk budget](REQUIREMENTS.md#disk-budget) | Check free space on the data root (not `/`): `df -h $(docker info -f '{{ .DockerRootDir }}')`. Reclaim the local build cache: `docker builder prune -af`. If the data root lives on an LVM volume with spare space in the volume group, grow it: `sudo lvextend -r -L +20G <lv-path>`. Re-run `./setup.sh` — cached images are kept, so a re-run only needs the remaining gap. |
+| `docker compose build` prints `pull access denied for jarvis/paper_ingestion` (or a sibling service) before building | Cosmetic — Compose probes the registry for the pinned tag before falling back to a local build | Harmless; ignore it. From v1.1.0, `docker-compose.yml` sets `pull_policy: build` on the locally-built services, so this message no longer appears — it is only seen on pre-1.1.0 installs. |
 
 ---
 
