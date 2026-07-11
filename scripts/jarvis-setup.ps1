@@ -146,10 +146,14 @@ if (-not $SkipMkcert -and (Get-Command mkcert -ErrorAction SilentlyContinue)) {
     Write-Info "mkcert detected - installing local CA + minting localhost cert"
     try {
         & mkcert -install | Out-Null
-        $caddyDir = Join-Path $RepoRoot 'caddy/data'
-        New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
-        Push-Location $caddyDir
-        try { & mkcert localhost 127.0.0.1 | Out-Null } finally { Pop-Location }
+        # Certs must land in ./certs as cert.pem/key.pem -- that is the mount
+        # Caddy's local profile and the dashboard expect (docker-compose.yml,
+        # caddy/Caddyfile.local), not caddy/data.
+        $certsDir = Join-Path $RepoRoot 'certs'
+        New-Item -ItemType Directory -Force -Path $certsDir | Out-Null
+        $certFile = Join-Path $certsDir 'cert.pem'
+        $keyFile  = Join-Path $certsDir 'key.pem'
+        & mkcert -cert-file $certFile -key-file $keyFile jarvis.localhost localhost 127.0.0.1 '::1' | Out-Null
         Write-Ok "Local TLS via mkcert ready"
     } catch {
         Write-Warn2 "mkcert step failed (non-fatal): $_"
@@ -158,6 +162,34 @@ if (-not $SkipMkcert -and (Get-Command mkcert -ErrorAction SilentlyContinue)) {
     Write-Warn2 "mkcert not configured - HTTPS will use the self-signed cert."
     Write-Warn2 "Browsers will warn on first visit. Install mkcert for trusted local TLS:"
     Write-Warn2 "  https://github.com/FiloSottile/mkcert#installation"
+}
+
+# ---------------------------------------------------------------------------
+# Disk preflight (host-side, best-effort)
+# ---------------------------------------------------------------------------
+# Deliberately lighter than the Linux script's data-root check
+# (resolve_docker_data_root, scripts/setup_lib.sh): Docker Desktop on Windows
+# stores images/volumes/models inside its own WSL2 or Hyper-V virtual disk,
+# not on the Windows drive this repo lives on, and there is no reliable
+# host-side PowerShell call to query that VM's free space. A Get-PSDrive
+# reading of $RepoRoot's drive is only a rough proxy, so this check is
+# warn-only against the same worst-case figure setup.sh documents for
+# --skip-disk-check (~35-55 GB depending on GPU variant and model choice) --
+# never fatal, since a false positive here would block installs that would
+# actually succeed. Untested in CI: this repository's CI runners are Linux,
+# so this block has no automated Windows/PowerShell coverage.
+$RequiredGb = 35
+try {
+    $driveLetter = (Get-Item $RepoRoot).PSDrive.Name
+    $drive = Get-PSDrive -Name $driveLetter -ErrorAction Stop
+    $freeGb = [math]::Floor($drive.Free / 1GB)
+    if ($freeGb -lt $RequiredGb) {
+        Write-Warn2 "Low disk on drive ${driveLetter}: ${freeGb} GB free (a first install can need ~$RequiredGb-55 GB). Docker Desktop's actual data lives in its own WSL2/VM disk, not on this drive, so this is only a rough estimate. Continuing."
+    } else {
+        Write-Ok "Disk check: ${freeGb} GB free on drive ${driveLetter}: (host-side estimate only -- Docker Desktop's real data root is a separate VM disk)."
+    }
+} catch {
+    Write-Warn2 "Could not determine free disk space (non-fatal): $_"
 }
 
 # ---------------------------------------------------------------------------
