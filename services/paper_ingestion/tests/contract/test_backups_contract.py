@@ -119,12 +119,15 @@ async def plain_client(contract_conn, backups_dir):
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def restore_paths(tmp_path_factory, monkeypatch):
-    """Point the restore request/status sentinels at a tmp trigger dir."""
+    """Point the restore request/status sentinels + trigger dir at a tmp dir."""
     from paper_ingestion.routers import backups as backups_router
 
     trig = tmp_path_factory.mktemp("restore_trigger")
     monkeypatch.setattr(backups_router, "_RESTORE_SENTINEL", trig / ".restore_request.json")
     monkeypatch.setattr(backups_router, "_RESTORE_STATUS", trig / ".restore_status.json")
+    # The restore-status token file resolves from BACKUP_TRIGGER_DIR at call time
+    # (jarvis_common.auth.restore_status_token_file), so point it at the tmp dir too.
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trig))
     return trig
 
 
@@ -294,18 +297,32 @@ async def test_trigger_emits_job_event(admin_client, backups_dir, monkeypatch):
 
 
 async def test_restore_request_writes_sentinel(admin_client, restore_paths, restore_ready):
+    import hashlib
+
     resp = await admin_client.post(
         "/api/admin/backups/restore",
         json={"timestamp": restore_ready, "confirm": "RESTORE"},
     )
     assert resp.status_code == 202, resp.text
-    assert resp.json() == {"status": "scheduled"}
+    body = resp.json()
+    assert body["status"] == "scheduled"
+    # A one-time restore-status bearer token is minted and returned exactly once.
+    token = body["status_token"]
+    assert token
     sentinel = restore_paths / ".restore_request.json"
     assert sentinel.exists()
     written = json.loads(sentinel.read_text())
     assert written["timestamp"] == "20260617_120000"
     assert written["confirm"] == "RESTORE"
     assert "requested_at" in written
+    # The token HASH lives in its own file — never in the request sentinel restore.sh
+    # consumes — and the raw token is never persisted.
+    token_file = restore_paths / ".restore_status_token.json"
+    persisted = json.loads(token_file.read_text())
+    assert set(persisted) == {"sha256", "expires_at"}
+    assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert token not in token_file.read_text()
+    assert token not in sentinel.read_text()
 
 
 async def test_restore_request_emits_job_event(
