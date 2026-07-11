@@ -24,6 +24,8 @@ import {
   deleteUser,
   restoreUser,
   sendSignInLink,
+  getUserPasskeyCount,
+  revokeAllUserPasskeys,
   type AdminUser,
   type FirstRunStatus,
 } from '@/lib/api';
@@ -57,7 +59,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, Trash2, Shield, User, Send, RotateCcw } from 'lucide-react';
+import { UserPlus, Trash2, Shield, User, Send, RotateCcw, KeyRound } from 'lucide-react';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string | null): string {
@@ -232,7 +234,7 @@ interface DeleteConfirmProps {
 
 function DeleteConfirm({ user, onConfirm, onCancel }: DeleteConfirmProps) {
   return (
-    <AlertDialog open={user !== null}>
+    <AlertDialog open={user !== null} onOpenChange={(open) => !open && onCancel()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove user</AlertDialogTitle>
@@ -249,6 +251,85 @@ function DeleteConfirm({ user, onConfirm, onCancel }: DeleteConfirmProps) {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Passkey count + revoke-all (per row)
+// ---------------------------------------------------------------------------
+
+function PasskeyCell({ user }: { user: AdminUser }) {
+  const queryClient = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const isDeleted = Boolean(user.deleted_at);
+
+  const { data, isLoading } = useQuery({
+    queryKey: QUERY_KEYS.passkeys.adminCount(user.id),
+    queryFn: () => getUserPasskeyCount(user.id),
+    enabled: !isDeleted,
+  });
+  const count = data?.count ?? 0;
+
+  const revokeMutation = useMutation({
+    mutationFn: () => revokeAllUserPasskeys(user.id),
+    onSuccess: () => {
+      queryClient.setQueryData(QUERY_KEYS.passkeys.adminCount(user.id), { count: 0 });
+      void queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.passkeys.adminCount(user.id),
+      });
+      setConfirmOpen(false);
+      toast.success(`Revoked all passkeys for ${user.email}`);
+    },
+    onError: (err) => {
+      setConfirmOpen(false);
+      toast.error(err instanceof ApiError ? err.detail : 'Failed to revoke passkeys.');
+    },
+  });
+
+  if (isDeleted) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-muted-foreground tabular-nums">
+        {isLoading ? '…' : count}
+      </span>
+      {count > 0 && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+          disabled={revokeMutation.isPending}
+          onClick={() => setConfirmOpen(true)}
+          aria-label={`Revoke all passkeys for ${user.email}`}
+          title={`Revoke all passkeys for ${user.email}`}
+        >
+          <KeyRound className="h-4 w-4" />
+        </Button>
+      )}
+      <AlertDialog open={confirmOpen} onOpenChange={(open) => !open && setConfirmOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke all passkeys</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove every passkey for <strong>{user.email}</strong>? They&apos;ll need to
+              sign in with a magic link or API key and re-register a passkey. Use the
+              &ldquo;Send sign-in link&rdquo; action afterwards to get them back in.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmOpen(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => revokeMutation.mutate()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Revoke all
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }
 
@@ -384,6 +465,7 @@ export function AdminUsersPage() {
               <th className="px-4 py-3 text-left font-medium">Role</th>
               <th className="px-4 py-3 text-left font-medium">Joined</th>
               <th className="px-4 py-3 text-left font-medium">Last login</th>
+              <th className="px-4 py-3 text-left font-medium">Passkeys</th>
               <th className="px-4 py-3 text-left font-medium">Actions</th>
             </tr>
           </thead>
@@ -435,6 +517,9 @@ export function AdminUsersPage() {
                     {formatDate(user.last_login_at)}
                   </td>
                   <td className="px-4 py-3">
+                    <PasskeyCell user={user} />
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       {isDeleted ? (
                         <Button
@@ -483,7 +568,7 @@ export function AdminUsersPage() {
             })}
             {users?.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                   No users yet. Invite someone to get started.
                 </td>
               </tr>

@@ -1,13 +1,18 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { Fingerprint, X } from 'lucide-react';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePasskeys } from '@/hooks/usePasskeys';
+import { LoginPasskeyButton } from '@/components/auth/LoginPasskeyButton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requestMagicLink, ApiError, getFirstRunStatus } from '@/lib/api';
+
+const PASSKEY_PROMO_DISMISS_KEY = 'jarvis-passkey-promo-dismissed';
 
 /**
  * Magic-link login surface — SMTP-aware.
@@ -76,6 +81,24 @@ export function LoginPage() {
   const [error, setError] = useState(initialError ?? '');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const { capable: passkeysCapable } = usePasskeys();
+  const [passkeyPromoDismissed, setPasskeyPromoDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(PASSKEY_PROMO_DISMISS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  function dismissPasskeyPromo() {
+    setPasskeyPromoDismissed(true);
+    try {
+      localStorage.setItem(PASSKEY_PROMO_DISMISS_KEY, '1');
+    } catch {
+      // Private-mode / storage-disabled: dismissal just won't persist.
+    }
+  }
 
   async function handleMagicLinkSubmit(e: FormEvent) {
     e.preventDefault();
@@ -244,6 +267,48 @@ export function LoginPage() {
                 Use magic link instead
               </button>
             </form>
+          )}
+
+          {/* Passkey sign-in — progressive enhancement. The button renders only
+              where passkeys are usable; otherwise a short, mode-aware note. */}
+          <div className="mt-6 space-y-3">
+            {passkeysCapable && (
+              <div className="relative" aria-hidden>
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-hair" />
+                </div>
+                <div className="relative flex justify-center">
+                  <span className="bg-card px-2 text-xs text-muted-foreground">or</span>
+                </div>
+              </div>
+            )}
+            <LoginPasskeyButton />
+          </div>
+
+          {/* One-time nudge after requesting a magic link: offer the faster path
+              for next time. Only where passkeys work; dismissal persists. */}
+          {passkeysCapable && info && !passkeyPromoDismissed && (
+            <div
+              className="mt-4 flex items-start gap-2 rounded-md border border-hair bg-muted/40 p-3"
+              role="note"
+            >
+              <Fingerprint className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
+              <div className="flex-1 text-xs">
+                <p className="font-medium text-foreground">Make sign-in easier on this device</p>
+                <p className="mt-1 text-muted-foreground">
+                  Once you&apos;re signed in, add a passkey from Settings so next time you
+                  can sign in with your fingerprint, face, or device PIN.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss passkey suggestion"
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                onClick={dismissPasskeyPromo}
+              >
+                <X className="h-4 w-4" aria-hidden />
+              </button>
+            </div>
           )}
         </CardContent>
       </Card>
