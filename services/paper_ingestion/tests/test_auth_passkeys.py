@@ -129,10 +129,18 @@ def test_match_origin_public_default_port_normalized(monkeypatch, app_base_url):
     assert match.rp_id == "jarvis.example.com"
 
 
-def test_app_base_origin_bad_port_is_unusable(monkeypatch):
-    """A malformed port in APP_BASE_URL yields no public origin (fail-closed, no crash)."""
+@pytest.mark.parametrize(
+    "app_base_url",
+    [
+        "https://h:99999",  # malformed port (fail-closed, no crash)
+        "http://jarvis.example.com",  # non-secure scheme: a public passkey origin must be https
+        "ftp://jarvis.example.com",
+    ],
+)
+def test_app_base_origin_unusable_values(monkeypatch, app_base_url):
+    """A malformed or non-https APP_BASE_URL yields no public origin (fail-closed)."""
     monkeypatch.setattr(
-        pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url="https://h:99999")
+        pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
     )
     assert pk._app_base_origin() is None
 

@@ -148,7 +148,9 @@ def _app_base_origin() -> str | None:
         parsed_port = parsed.port
     except ValueError:
         return None
-    if not (parsed.scheme and parsed.hostname):
+    # A public (non-loopback) WebAuthn origin MUST be a secure context — reject a
+    # misconfigured http:// APP_BASE_URL rather than advertise an origin browsers block.
+    if parsed.scheme != "https" or not parsed.hostname:
         return None
     port = (
         f":{parsed_port}"
