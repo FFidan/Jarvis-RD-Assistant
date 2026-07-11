@@ -29,7 +29,8 @@
 #     residue (intended for an ephemeral CI checkout).
 #
 # Usage:
-#   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS] [--help]
+#   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS]
+#                                   [--integration] [--rerun] [--wrapper] [--help]
 #
 #   --force            Tear down a pre-existing smoke project before starting,
 #                      instead of refusing. (Never affects the real deployment;
@@ -37,6 +38,12 @@
 #   --timeout SECONDS  Overall budget for `setup.sh` to finish (default 3600).
 #                      The first run pulls 7-11 GB of model data, so a clean
 #                      machine legitimately needs 20-60 min.
+#   --integration      After the stack is healthy, run the gated integration
+#                      suite against it (sets SMOKE_INTEGRATION=1; requires uv).
+#   --rerun            After the first bootstrap succeeds, run it again with
+#                      the kept .env and assert the re-run also succeeds.
+#   --wrapper          Bootstrap via scripts/jarvis-setup.sh instead of
+#                      ./setup.sh --non-interactive --profile=dev.
 #   --help             Show this help and exit.
 set -euo pipefail
 
@@ -63,8 +70,17 @@ export PAPER_INGESTION_HOST_PORT LEARNING_ENGINE_HOST_PORT QDRANT_HOST_PORT OLLA
 
 readonly DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}"
 
+# Disk-budget ratchet for the CPU build path: app images plus build cache this
+# run may add, in SI GB. Mirrors the "cpu-build" figure in scripts/setup_lib.sh
+# _image_budget_gb (measured build peak + headroom). Lower it to the pull-path
+# figure once the default install pulls prebuilt images instead of building.
+readonly DISK_BUDGET_GB=9
+
 FORCE=0
 TIMEOUT_SECONDS=3600
+INTEGRATION=0
+RERUN=0
+WRAPPER=0
 
 # -----------------------------------------------------------------------------
 # Output helpers
@@ -93,6 +109,9 @@ while [ $# -gt 0 ]; do
     --force)   FORCE=1; shift ;;
     --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --timeout=*) TIMEOUT_SECONDS="${1#*=}"; shift ;;
+    --integration) INTEGRATION=1; shift ;;
+    --rerun)   RERUN=1; shift ;;
+    --wrapper) WRAPPER=1; shift ;;
     -h|--help) show_help; exit 0 ;;
     *) err "Unknown argument: $1"; echo; show_help; exit 2 ;;
   esac
@@ -154,6 +173,14 @@ docker info >/dev/null 2>&1 \
   || { err "Docker daemon unreachable ('docker info' failed)."; exit 1; }
 [ -x "$REPO_ROOT/setup.sh" ] \
   || { err "setup.sh not found or not executable at repo root ($REPO_ROOT)."; exit 1; }
+if [ "$WRAPPER" -eq 1 ]; then
+  [ -f "$REPO_ROOT/scripts/jarvis-setup.sh" ] \
+    || { err "--wrapper: scripts/jarvis-setup.sh not found."; exit 1; }
+fi
+if [ "$INTEGRATION" -eq 1 ]; then
+  command -v uv >/dev/null 2>&1 \
+    || { err "--integration requires uv (https://docs.astral.sh/uv/)."; exit 1; }
+fi
 ok "docker + compose present; setup.sh found."
 
 # Guard: never silently clobber a real deployment. Refuse if the SMOKE project
@@ -182,21 +209,46 @@ ok "Preconditions met — clean checkout, no conflicting deployment."
 
 # -----------------------------------------------------------------------------
 # Run the documented first-run bootstrap (README: "Non-interactive (CI/cloud-init)")
-#   ./setup.sh --non-interactive --profile=dev
+#   ./setup.sh --non-interactive --profile=dev   (or scripts/jarvis-setup.sh
+#   with --wrapper)
 # Under COMPOSE_PROJECT_NAME=jarvis-firstrun-smoke, so every container/volume
-# setup.sh creates lands in the isolated project.
+# the bootstrap creates lands in the isolated project.
 # -----------------------------------------------------------------------------
+BOOTSTRAP_CMD=(./setup.sh --non-interactive --profile=dev)
+[ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
+
+# App images (jarvis/*) plus Docker build cache, in bytes — the disk the build
+# path acquires. Measured as a delta against this pre-run baseline so the
+# ratchet stays honest on machines with unrelated images or cache.
+smoke_footprint_bytes() {
+  local images cache
+  images="$(docker images --filter 'reference=jarvis/*' --format '{{.ID}}' \
+    | sort -u \
+    | xargs -r docker image inspect --format '{{.Size}}' \
+    | awk '{s+=$1} END {printf "%.0f", s}')"
+  cache="$(docker system df --format '{{.Type}}\t{{.Size}}' 2>/dev/null \
+    | awk -F'\t' '$1 == "Build Cache" {print $2}' \
+    | awk '/TB$/ {printf "%.0f", $1 * 1e12; next}
+           /GB$/ {printf "%.0f", $1 * 1e9;  next}
+           /MB$/ {printf "%.0f", $1 * 1e6;  next}
+           /kB$/ {printf "%.0f", $1 * 1e3;  next}
+                 {printf "%.0f", $1 + 0}')"
+  echo $(( ${images:-0} + ${cache:-0} ))
+}
+
 info "Running documented first-run bootstrap (project: ${SMOKE_PROJECT}):"
-info "  ./setup.sh --non-interactive --profile=dev"
+info "  ${BOOTSTRAP_CMD[*]}"
 info "First run pulls 7-11 GB of model data — this can take 20-60 minutes."
 
+disk_baseline_bytes="$(smoke_footprint_bytes)"
+
 setup_rc=0
-timeout "$TIMEOUT_SECONDS" ./setup.sh --non-interactive --profile=dev || setup_rc=$?
+timeout "$TIMEOUT_SECONDS" "${BOOTSTRAP_CMD[@]}" || setup_rc=$?
 
 if [ "$setup_rc" -eq 124 ]; then
-  err "setup.sh exceeded the ${TIMEOUT_SECONDS}s budget (timed out)."
+  err "Bootstrap exceeded the ${TIMEOUT_SECONDS}s budget (timed out)."
 elif [ "$setup_rc" -ne 0 ]; then
-  err "setup.sh exited non-zero (rc=${setup_rc}) — stack did not come up cleanly."
+  err "Bootstrap exited non-zero (rc=${setup_rc}) — stack did not come up cleanly."
 fi
 
 if [ "$setup_rc" -ne 0 ]; then
@@ -205,7 +257,44 @@ if [ "$setup_rc" -ne 0 ]; then
   docker compose -p "$SMOKE_PROJECT" logs --tail 80 >&2 || true
   exit 1
 fi
-ok "setup.sh completed — all mandatory services reported healthy."
+ok "Bootstrap completed: ${BOOTSTRAP_CMD[*]}"
+
+# -----------------------------------------------------------------------------
+# Disk-budget ratchet: what this run added in app images + build cache must fit
+# the measured CPU-path budget. Catches image-bloat regressions (e.g. the CUDA
+# torch stack sneaking back into the default build).
+# -----------------------------------------------------------------------------
+docker system df || true
+disk_after_bytes="$(smoke_footprint_bytes)"
+disk_added_centi_gb=$(( (disk_after_bytes - disk_baseline_bytes) / 10000000 ))
+[ "$disk_added_centi_gb" -lt 0 ] && disk_added_centi_gb=0
+disk_added_human="$((disk_added_centi_gb / 100)).$(printf '%02d' $((disk_added_centi_gb % 100)))"
+info "Disk added by this run (app images + build cache): ${disk_added_human} GB (budget: ${DISK_BUDGET_GB} GB)"
+if [ "$disk_added_centi_gb" -gt $((DISK_BUDGET_GB * 100)) ]; then
+  err "Disk budget exceeded: ${disk_added_human} GB > ${DISK_BUDGET_GB} GB (DISK_BUDGET_GB)."
+  err "An image or build-cache regression made the install heavier — inspect 'docker system df -v'."
+  exit 1
+fi
+ok "Disk footprint within budget (${disk_added_human} GB <= ${DISK_BUDGET_GB} GB)."
+
+# -----------------------------------------------------------------------------
+# Optional idempotency check (--rerun): the bootstrap must also succeed against
+# the .env it just generated.
+# -----------------------------------------------------------------------------
+if [ "$RERUN" -eq 1 ]; then
+  info "Re-running the bootstrap against the kept .env (idempotency check)..."
+  env_sha_before="$(sha256sum "$REPO_ROOT/.env" | cut -d' ' -f1)"
+  rerun_rc=0
+  timeout "$TIMEOUT_SECONDS" "${BOOTSTRAP_CMD[@]}" || rerun_rc=$?
+  if [ "$rerun_rc" -ne 0 ]; then
+    err "Bootstrap re-run with an existing .env failed (rc=${rerun_rc})."
+    exit 1
+  fi
+  if [ "$(sha256sum "$REPO_ROOT/.env" | cut -d' ' -f1)" != "$env_sha_before" ]; then
+    warn "The re-run modified .env — review whether that mutation is intentional."
+  fi
+  ok "Bootstrap re-run with the kept .env succeeded."
+fi
 
 # -----------------------------------------------------------------------------
 # Belt-and-suspenders: confirm the dashboard actually serves HTTP on :3001
@@ -227,6 +316,22 @@ if [ "$dash_ok" -ne 1 ]; then
   exit 1
 fi
 ok "Dashboard is serving HTTP at ${DASHBOARD_URL}."
+
+# -----------------------------------------------------------------------------
+# Optional gated integration suite (--integration): tests/integration is NOT in
+# testpaths and skipif-passes without SMOKE_INTEGRATION=1 — set the gate so the
+# suite genuinely runs against the live smoke stack.
+# -----------------------------------------------------------------------------
+if [ "$INTEGRATION" -eq 1 ]; then
+  info "Running the gated integration suite against the live stack..."
+  if ! SMOKE_INTEGRATION=1 \
+       PAPER_INGESTION_BASE="http://localhost:${PAPER_INGESTION_HOST_PORT}" \
+       uv run pytest tests/integration -q; then
+    err "Integration tests failed against the live stack."
+    exit 1
+  fi
+  ok "Integration tests passed."
+fi
 
 # Final compose state for the log record (informational).
 docker compose -p "$SMOKE_PROJECT" ps || true
