@@ -1,4 +1,4 @@
-"""Daily purge of stale ``sessions`` rows.
+"""Daily purge of stale ``sessions`` rows and expired WebAuthn challenges.
 
 A session row is dead once it can no longer authenticate anyone: either its
 ``expires_at`` is well past the offline grace window, or it has been revoked.
@@ -6,6 +6,10 @@ A session row is dead once it can no longer authenticate anyone: either its
 and a needless retention surface. Delete sessions expired more than 30 days ago,
 and revoked ones more than 7 days ago — a short window is kept beyond each event
 for server-clock skew and diagnostic inspection.
+
+``webauthn_challenges`` rows are single-use nonces for in-flight passkey
+ceremonies; each carries its own hard ``expires_at``. Any row past that instant
+is spent and safe to delete outright — no grace window applies.
 """
 
 from __future__ import annotations
@@ -27,17 +31,18 @@ _DELETE_STALE_SESSIONS = (
     "OR (revoked_at IS NOT NULL AND revoked_at < now() - INTERVAL '7 days')"
 )
 
+_DELETE_EXPIRED_CHALLENGES = "DELETE FROM webauthn_challenges WHERE expires_at < now()"
 
-async def purge_stale_sessions(pool: Any) -> None:
-    """Delete stale ``sessions`` rows (long-expired or long-revoked).
+
+async def _run_purge(pool: Any, sql: str, noun: str) -> None:
+    """Run one purge DELETE, log the deleted-row count, and swallow any DB error.
 
     Calls ``pool.execute`` directly (single statement, no ``acquire`` needed —
-    consistent with ``purge_expired_magic_link_tokens``). Logs the number of
-    deleted rows at INFO level and swallows any exception so a transient DB
-    failure does not crash the scheduler.
+    consistent with ``purge_expired_magic_link_tokens``). A transient DB failure
+    is logged and swallowed so it never crashes the scheduler.
     """
     try:
-        result = await pool.execute(_DELETE_STALE_SESSIONS)
+        result = await pool.execute(sql)
         try:
             deleted = int(result.split()[-1])
         except Exception:
@@ -45,9 +50,19 @@ async def purge_stale_sessions(pool: Any) -> None:
                 "purge_sessions: could not parse delete-count from %r", result, exc_info=True
             )
             deleted = -1
-        logger.info("purge_sessions: deleted %d stale session(s)", deleted)
+        logger.info("purge_sessions: deleted %d stale %s", deleted, noun)
     except Exception:
-        logger.exception("purge_sessions: failed to purge stale sessions")
+        logger.exception("purge_sessions: failed to purge stale %s", noun)
+
+
+async def purge_stale_sessions(pool: Any) -> None:
+    """Delete stale ``sessions`` rows and expired ``webauthn_challenges`` rows.
+
+    Each DELETE is issued and error-handled independently so a failure of one
+    does not skip the other.
+    """
+    await _run_purge(pool, _DELETE_STALE_SESSIONS, "session(s)")
+    await _run_purge(pool, _DELETE_EXPIRED_CHALLENGES, "webauthn challenge(s)")
 
 
 async def purge_stale_sessions_task(app: Any) -> None:

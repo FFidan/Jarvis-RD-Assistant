@@ -685,13 +685,13 @@ async def test_first_admin_owner_row_rolls_back_with_session_failure(
     """
     import contextlib
 
-    import paper_ingestion.routers.setup as setup_router
+    import jarvis_common.session_middleware as session_middleware
     from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
 
-    # ``now + SESSION_TTL`` (the session INSERT) raises a TypeError when
-    # SESSION_TTL is not a timedelta — a deterministic failure after the owner
-    # UPSERT but before the transaction commits.
-    monkeypatch.setattr(setup_router, "SESSION_TTL", "not-a-timedelta")
+    # first-admin mints via mint_session, whose ``now + SESSION_TTL`` raises a
+    # TypeError when SESSION_TTL is not a timedelta — a deterministic failure
+    # after the owner UPSERT but before the transaction commits.
+    monkeypatch.setattr(session_middleware, "SESSION_TTL", "not-a-timedelta")
 
     with contextlib.suppress(Exception):
         await setup_client.post(
