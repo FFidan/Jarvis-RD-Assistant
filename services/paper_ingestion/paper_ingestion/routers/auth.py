@@ -33,7 +33,7 @@ from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
 from jarvis_common.event_log import log_event
 from jarvis_common.owner import resolve_owner_user_id
-from jarvis_common.session_middleware import SESSION_COOKIE_NAME
+from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SESSION_TTL
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
@@ -50,7 +50,6 @@ router.auth_exempt = True  # type: ignore[attr-defined]
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
 MAGIC_LINK_COOLDOWN = timedelta(minutes=2)
-SESSION_TTL = timedelta(days=30)
 MAX_EMAIL_LEN = 320  # RFC 5321 cap
 
 
