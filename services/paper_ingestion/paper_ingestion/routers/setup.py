@@ -110,6 +110,9 @@ class SetupStatusResponse(BaseModel):
     # GPU vendor: the setup-written JARVIS_GPU_VENDOR (host truth) when
     # present, else inferred in-container (nvidia | amd | intel | none).
     gpu_vendor: str = "none"
+    # Access mode written by setup.sh (localhost | lan | tunnel | letsencrypt).
+    # Lets the frontend explain in-product which sign-in capabilities work here.
+    access_mode: str = "localhost"
     recommended_backend: str | None = None
     current_backend: str | None = None
     observed_backend: str | None = None
@@ -366,6 +369,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
     baseline = os.getenv("JARVIS_HW_TIER") or None
     current = detect_tier()
     vendor = detect_vendor()
+    access_mode = os.getenv("JARVIS_ACCESS_MODE") or "localhost"
     # Effective backend = explicit override, else the runtime default the LLM
     # router actually uses (rag.py: os.getenv("JARVIS_LLM_BACKEND", "ollama")).
     # recommended_backend (the tier suggestion) is reported separately — don't conflate.
@@ -420,6 +424,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
         hw_tier_current=current,
         hw_tier_changed=changed,
         gpu_vendor=vendor,
+        access_mode=access_mode,
         recommended_backend=recommended,
         current_backend=backend,
         observed_backend=served,

@@ -117,6 +117,36 @@ async def test_setup_status_gpu_vendor_defaults_without_env(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_setup_status_reports_access_mode(monkeypatch) -> None:
+    """The setup-written JARVIS_ACCESS_MODE reaches /status verbatim."""
+    monkeypatch.setenv("JARVIS_ACCESS_MODE", "tunnel")
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.access_mode == "tunnel"
+
+
+@pytest.mark.asyncio
+async def test_setup_status_access_mode_defaults_to_localhost(monkeypatch) -> None:
+    """Without the env conduit, access_mode defaults to localhost."""
+    monkeypatch.delenv("JARVIS_ACCESS_MODE", raising=False)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.access_mode == "localhost"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_includes_smtp_reachable(monkeypatch) -> None:
     """get_status surfaces smtp_reachable; False (and no network) when SMTP is unconfigured."""
     monkeypatch.delenv("SMTP_HOST", raising=False)
