@@ -143,6 +143,35 @@ def restore_status_token_file() -> Path:
     return Path(trigger_dir) / _RESTORE_STATUS_TOKEN_FILENAME
 
 
+def _valid_restore_status_hash() -> str | None:
+    """Return the stored, unexpired restore-status token hash, or None.
+
+    DB-FREE: reads only the sentinel-plane hash file. Returns None on a missing /
+    malformed / non-object / expired token file — and never raises — so the caller
+    degrades to the normal session / API-key checks.
+    """
+    try:
+        data = json.loads(restore_status_token_file().read_text())
+    except (OSError, ValueError):
+        return None
+    # Non-object JSON (a list/number/string/null) has no ``.get`` — treat any
+    # shape other than an object as an invalid token file rather than raising.
+    if not isinstance(data, dict):
+        return None
+    stored_hash = data.get("sha256")
+    expires_at = data.get("expires_at")
+    if not isinstance(stored_hash, str) or not isinstance(expires_at, str):
+        return None
+    try:
+        if datetime.now(UTC) > datetime.fromisoformat(expires_at):
+            return None
+    except (ValueError, TypeError):
+        # ValueError: malformed ISO string. TypeError: a naive timestamp is not
+        # comparable to the aware ``now(UTC)``. Either way the token is unusable.
+        return None
+    return stored_hash
+
+
 def restore_status_bearer_valid(request: Request) -> bool:
     """Return True iff the request carries a valid, unexpired restore-status token.
 
@@ -156,24 +185,8 @@ def restore_status_bearer_valid(request: Request) -> bool:
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:
         return False
-    try:
-        data = json.loads(restore_status_token_file().read_text())
-    except (OSError, ValueError):
-        return False
-    # Non-object JSON (a list/number/string/null) has no ``.get`` — treat any
-    # shape other than an object as an invalid token file rather than raising.
-    if not isinstance(data, dict):
-        return False
-    stored_hash = data.get("sha256")
-    expires_at = data.get("expires_at")
-    if not isinstance(stored_hash, str) or not isinstance(expires_at, str):
-        return False
-    try:
-        if datetime.now(UTC) > datetime.fromisoformat(expires_at):
-            return False
-    except (ValueError, TypeError):
-        # ValueError: malformed ISO string. TypeError: a naive timestamp is not
-        # comparable to the aware ``now(UTC)``. Either way the token is unusable.
+    stored_hash = _valid_restore_status_hash()
+    if stored_hash is None:
         return False
     presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
     return hmac.compare_digest(presented, stored_hash)
