@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from jarvis_common.db_helpers import _ALIAS_MODELS
+from jarvis_common.maintenance import skip_for_maintenance
 
 from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL_NAME
@@ -237,7 +238,13 @@ async def _litellm_model_reconciler_loop(pool: Any) -> None:
     reconciled_logged = False
     while True:
         try:
-            if await _reconcile_litellm_models_once(pool):
+            # A restore rewrites this DB out from under the loop (its own asyncio
+            # task, not the procrastinate worker the watcher pauses). Skip the pass
+            # so it performs no user_config/model writes against the being-restored
+            # DB; the next post-restore tick reconciles the forward-migrated rows.
+            if skip_for_maintenance("litellm reconciler"):
+                reconciled_logged = False
+            elif await _reconcile_litellm_models_once(pool):
                 if not reconciled_logged:
                     logger.info("LiteLLM model reconciler: all deployments reconciled")
                     reconciled_logged = True

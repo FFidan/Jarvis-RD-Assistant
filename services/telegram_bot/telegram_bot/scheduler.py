@@ -13,6 +13,7 @@ import asyncpg
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from jarvis_common.maintenance import skip_for_maintenance
 from telegram import Bot
 
 from telegram_bot import formatters
@@ -222,6 +223,8 @@ class JarvisScheduler:
         nudge_id : int
             Database ID of the nudge.
         """
+        if skip_for_maintenance(f"telegram nudge {nudge_type}"):
+            return
         logger.info("Running scheduled job: %s (id=%d)", nudge_type, nudge_id)
         try:
             # Import and run the appropriate orchestration function

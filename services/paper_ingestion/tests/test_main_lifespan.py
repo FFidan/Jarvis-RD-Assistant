@@ -1124,6 +1124,44 @@ async def test_reconciler_loop_is_persistent_across_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconciler_loop_skips_write_pass_during_restore(tmp_path, monkeypatch) -> None:
+    """A restore sentinel makes the loop skip the reconcile pass (no DB writes), and
+    the pass resumes once the sentinel clears — the reconciler is its OWN asyncio task,
+    so the maintenance watcher's worker-pause does not cover it; this guard does.
+    """
+    from paper_ingestion.main import _litellm_model_reconciler_loop
+
+    sentinel = tmp_path / ".maintenance"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(sentinel))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    sentinel.touch()  # restore in progress at the first tick
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            sentinel.unlink()  # restore clears between tick 1 (skipped) and tick 2
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError
+
+    mock_reconcile = AsyncMock(return_value=True)
+    with (
+        patch(
+            "paper_ingestion.litellm_reconciler._reconcile_litellm_models_once",
+            new=mock_reconcile,
+        ),
+        patch("paper_ingestion.litellm_reconciler.asyncio.sleep", new=_fake_sleep),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _litellm_model_reconciler_loop(MagicMock())
+
+    # Tick 1 (sentinel present) performed NO write pass; tick 2 (cleared) ran exactly one.
+    assert mock_reconcile.await_count == 1
+    assert len(sleeps) == 2  # loop kept polling across the restore, just skipped the write
+
+
+@pytest.mark.asyncio
 async def test_start_litellm_reconciler_can_be_disabled_for_maintenance(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

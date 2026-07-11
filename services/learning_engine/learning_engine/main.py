@@ -26,7 +26,9 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
+    make_maintenance_watcher_hook,
     make_procrastinate_worker_hook,
+    shutdown_maintenance_watcher,
 )
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
@@ -95,10 +97,11 @@ def _register_tasks(procrastinate_app: Any) -> None:
 
 
 # B.4 Step 4 — start the procrastinate worker polling learning_engine + builtin
-# Hook body is shared via jarvis_common.app_factory.
-_start_procrastinate_worker = make_procrastinate_worker_hook(
-    _register_tasks, queues=["learning_engine", "builtin"]
-)
+# Hook body is shared via jarvis_common.app_factory. The maintenance watcher must
+# pause/resume the SAME queues, so both hooks read one constant to prevent drift.
+_WORKER_QUEUES = ["learning_engine", "builtin"]
+_start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, queues=_WORKER_QUEUES)
+_maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 
 
 async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
@@ -121,6 +124,7 @@ _lifespan_config = ServiceLifespanConfig(
         make_init_langfuse_hook(_set_openai_client),
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
+        _maintenance_watcher,
         make_warmup_hook(lambda app: [lambda: warm_chat_model(app.state.http_client)]),
         _log_le_started,
     ],
@@ -130,6 +134,9 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # init_langfuse_hook
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        # LIFO: watcher inits after the worker, so it is torn down BEFORE the
+        # worker's connector closes — the watcher never resumes onto a closed app.
+        shutdown_maintenance_watcher,  # _maintenance_watcher
         None,  # make_warmup_hook (fire-and-forget; cancelled at process exit)
         None,  # _log_le_started
     ],

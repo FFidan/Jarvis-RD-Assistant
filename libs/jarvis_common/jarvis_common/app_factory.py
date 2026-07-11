@@ -43,6 +43,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from jarvis_common.auth import (
     RAW_CLIENT_SCOPE_KEY,
+    invalidate_api_key_login_cache,
     refresh_allowed_networks_cache,
     refresh_api_key_cache,
     validate_production_config,
@@ -50,14 +51,15 @@ from jarvis_common.auth import (
 from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.correlation_middleware import CorrelationIdMiddleware
 from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
-from jarvis_common.db_helpers import init_pg_connection
+from jarvis_common.db_helpers import init_pg_connection, invalidate_effective_num_ctx_cache
 from jarvis_common.error_handlers import (
     generic_exception_handler,
     http_exception_handler,
     validation_exception_handler,
 )
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
-from jarvis_common.maintenance import configure_maintenance
+from jarvis_common.maintenance import configure_maintenance, maintenance_active
+from jarvis_common.migrations import run_migrations
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
@@ -127,6 +129,38 @@ _DB_POOL_DEFAULTS: dict[str, Any] = {
 
 
 LifespanHook = Callable[[FastAPI], Awaitable[None]]
+
+
+def _start_worker_task(app: FastAPI, queues: list[str]) -> None:
+    """Spawn the procrastinate worker loop as a background task on ``app.state``.
+
+    Shared by the initial worker hook and the maintenance watcher's resume path
+    so the ``create_task`` invariant (name, ``install_signal_handlers=False``)
+    lives in one place. ``app.state.procrastinate_app`` must already be open.
+    """
+    procrastinate_app = app.state.procrastinate_app
+    app.state.procrastinate_worker_task = asyncio.create_task(
+        procrastinate_app.run_worker_async(
+            queues=queues,
+            install_signal_handlers=False,
+        ),
+        name="procrastinate_worker",
+    )
+
+
+async def _pause_worker_task(app: FastAPI) -> None:
+    """Cancel the worker loop but KEEP the connector open (distinct from shutdown).
+
+    A restore must stop the loop's ``UPDATE procrastinate_jobs`` fetch/lock writes
+    without closing the connector, so :func:`_start_worker_task` can restart the
+    loop on the same open ``procrastinate_app`` once the restore clears.
+    """
+    task = getattr(app.state, "procrastinate_worker_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    app.state.procrastinate_worker_task = None
 
 
 async def shutdown_procrastinate_worker(app: FastAPI) -> None:
@@ -557,15 +591,92 @@ def make_procrastinate_worker_hook(
         set_dependencies(app.state.db_pool, app.state.http_client)
 
         app.state.procrastinate_app = procrastinate_app
-        app.state.procrastinate_worker_task = asyncio.create_task(
-            procrastinate_app.run_worker_async(
-                queues=queues,
-                install_signal_handlers=False,
-            ),
-            name="procrastinate_worker",
+        _start_worker_task(app, queues)
+
+    return _hook
+
+
+async def _resume_after_maintenance(app: FastAPI, queues: list[str]) -> None:
+    """Reconcile a restored (possibly older) schema, then resume background writers.
+
+    Ordered so writers never observe a stale schema or stale DB-derived cache:
+    forward-migrate first (lock-42-serialized, idempotent), drop the in-process
+    caches whose backing ``user_config`` rows a restore may have rolled back, then
+    restart the worker loop. Task 4.6 will extend this branch with a
+    secrets-rotated self-exit; keeping it a discrete function preserves that seam.
+    """
+    await run_migrations(app.state.db_pool)
+    invalidate_api_key_login_cache()
+    invalidate_effective_num_ctx_cache()
+    _start_worker_task(app, queues)
+    logger.info("maintenance: reconciled schema and resumed writers")
+
+
+async def _maintenance_watcher_step(app: FastAPI, queues: list[str], *, was_active: bool) -> bool:
+    """Run one watcher poll; return the current maintenance-active state.
+
+    ``inactive→active`` cancels the worker loop (queue hygiene during a restore);
+    ``active→inactive`` reconciles the schema and resumes writers.
+    """
+    now_active = maintenance_active()
+    if now_active and not was_active:
+        await _pause_worker_task(app)
+        logger.info("maintenance: paused background writers")
+    elif was_active and not now_active:
+        await _resume_after_maintenance(app, queues)
+    return now_active
+
+
+async def _maintenance_watcher_loop(
+    app: FastAPI, queues: list[str], poll_interval_s: float
+) -> None:
+    """Poll the maintenance sentinel, pausing/resuming the worker loop across it.
+
+    Pauses immediately when maintenance is already active at start (covers a
+    service restart that lands mid-restore, e.g. 4.6's self-restart). Never dies:
+    a failed tick is logged and retried on the next poll.
+    """
+    was_active = maintenance_active()
+    if was_active:
+        await _pause_worker_task(app)
+        logger.info("maintenance: paused background writers")
+    while True:
+        try:
+            await asyncio.sleep(poll_interval_s)
+            was_active = await _maintenance_watcher_step(app, queues, was_active=was_active)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("maintenance watcher tick failed", exc_info=True)
+
+
+def make_maintenance_watcher_hook(
+    queues: list[str], *, poll_interval_s: float = 5.0
+) -> LifespanHook:
+    """Return an init hook that starts the maintenance watcher background task.
+
+    Wire it into ``custom_init_tasks`` immediately AFTER the procrastinate worker
+    hook, with :func:`shutdown_maintenance_watcher` at the index-aligned teardown
+    slot so LIFO cleanup stops the watcher BEFORE the worker's connector closes.
+    """
+
+    async def _hook(app: FastAPI) -> None:
+        app.state.maintenance_watcher_task = asyncio.create_task(
+            _maintenance_watcher_loop(app, queues, poll_interval_s),
+            name="maintenance_watcher",
         )
 
     return _hook
+
+
+async def shutdown_maintenance_watcher(app: FastAPI) -> None:
+    """Cancel the maintenance watcher task (teardown counterpart of its hook)."""
+    task = getattr(app.state, "maintenance_watcher_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    app.state.maintenance_watcher_task = None
 
 
 __all__ = [
@@ -574,5 +685,7 @@ __all__ = [
     "configure_middleware_and_errors",
     "init_langfuse_hook",
     "make_init_langfuse_hook",
+    "make_maintenance_watcher_hook",
     "make_procrastinate_worker_hook",
+    "shutdown_maintenance_watcher",
 ]
