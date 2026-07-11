@@ -199,6 +199,25 @@ async def restore_no_schema_version(backups_dir, restore_ready):
     return ts
 
 
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def inbox_manifest(restore_paths, monkeypatch):
+    """Point _INBOX_MANIFEST at a tmp file; return a writer for the manifest list.
+
+    The manifest is authored by ``restore.sh --inbox-manifest`` in production; here we
+    write it directly so the inbox-source restore/listing paths can be exercised without
+    a real /restore-inbox mount (the app never mounts it).
+    """
+    from paper_ingestion.routers import backups as backups_router
+
+    path = restore_paths / ".inbox_manifest.json"
+    monkeypatch.setattr(backups_router, "_INBOX_MANIFEST", path)
+
+    def _write(entries: list[dict]) -> None:
+        path.write_text(json.dumps(entries))
+
+    return _write
+
+
 async def test_list_returns_archive_metadata(admin_client):
     resp = await admin_client.get("/api/admin/backups")
     assert resp.status_code == 200, resp.text
@@ -314,6 +333,8 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     written = json.loads(sentinel.read_text())
     assert written["timestamp"] == "20260617_120000"
     assert written["confirm"] == "RESTORE"
+    # The sentinel carries the source restore.sh keys its archive lookup on.
+    assert written["source"] == "local"
     assert "requested_at" in written
     # The token HASH lives in its own file — never in the request sentinel restore.sh
     # consumes — and the raw token is never persisted.
@@ -409,6 +430,85 @@ async def test_restore_non_admin_gets_403(plain_client, restore_paths, restore_r
         json={"timestamp": restore_ready, "confirm": "RESTORE"},
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_inbox_list_returns_manifest(admin_client, inbox_manifest):
+    inbox_manifest(
+        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}]
+    )
+    resp = await admin_client.get("/api/admin/backups/inbox")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [
+        {"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}
+    ]
+
+
+async def test_inbox_list_empty_when_absent(admin_client, restore_paths, monkeypatch):
+    from paper_ingestion.routers import backups as backups_router
+
+    monkeypatch.setattr(backups_router, "_INBOX_MANIFEST", restore_paths / ".inbox_manifest.json")
+    resp = await admin_client.get("/api/admin/backups/inbox")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+async def test_inbox_list_degrades_on_malformed(admin_client, inbox_manifest, restore_paths):
+    (restore_paths / ".inbox_manifest.json").write_text("{ not json")
+    resp = await admin_client.get("/api/admin/backups/inbox")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+async def test_inbox_list_non_admin_gets_403(plain_client):
+    resp = await plain_client.get("/api/admin/backups/inbox")
+    assert resp.status_code == 403, resp.text
+
+
+async def test_restore_inbox_source_writes_sentinel(admin_client, restore_paths, inbox_manifest):
+    inbox_manifest(
+        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}]
+    )
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260701_030000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert resp.status_code == 202, resp.text
+    written = json.loads((restore_paths / ".restore_request.json").read_text())
+    # restore.sh keys its inbox archive lookup on this source field.
+    assert written["source"] == "inbox"
+    assert written["timestamp"] == "20260701_030000"
+
+
+async def test_restore_inbox_incomplete_or_absent_404(admin_client, restore_paths, inbox_manifest):
+    inbox_manifest(
+        [{"timestamp": "20260701_030000", "complete": False, "has_secrets": True, "has_key": True}]
+    )
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260701_030000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert resp.status_code == 404, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20990101_000000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert resp.status_code == 404, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_inbox_missing_key_409(admin_client, restore_paths, inbox_manifest):
+    inbox_manifest(
+        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": False}]
+    )
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260701_030000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "operator key" in resp.json()["detail"].lower()
+    assert not (restore_paths / ".restore_request.json").exists()
 
 
 async def test_restore_status_idle_when_absent(admin_client, restore_paths):

@@ -565,6 +565,8 @@ BACKUP_SCRIPT="${SCRIPT_DIR}/../backup.sh"
 check "parses the request source field" '"source"'
 check "defaults the restore source to local when absent" 'SOURCE="\$\{SOURCE_RAW:-local\}"'
 check "rejects an unsupported source (fail-safe, not silent-local)" 'expected local or inbox'
+check "off-host (inbox) restore requires a manifest so compat + integrity are armed" \
+  'off-host restore requires manifest_'
 
 # I2. A separate ARCHIVE_DIR drives the archive lookup for inbox; BACKUP_DIR (the
 #     STEP-4 safety pre-backup + .last_run.json target) is NOT clobbered.
@@ -644,6 +646,81 @@ check "shreds the staged plaintext secret files (not a bare rm)" \
 check "shreds the operator key even if the source field was malformed" \
   '\[ -e "\$OPERATOR_KEYFILE" \]'
 
+# I13. --inbox-manifest is a READ-ONLY inventory pass: it writes a SANITIZED manifest
+#      (names/booleans only) the app's GET /inbox lists, and MANIFEST_MODE short-circuits
+#      the EXIT trap so it never consumes the restore request, writes a status, or shreds
+#      the operator key. Static structure + a behavioral run against a seeded fake inbox.
+check "defines the --inbox-manifest inventory branch" '\[ "\$\{1:-\}" = "--inbox-manifest" \]'
+check "the inbox-manifest branch sets MANIFEST_MODE" 'MANIFEST_MODE=1'
+check "the EXIT trap short-circuits in MANIFEST_MODE (no consume/status/shred)" \
+  '\[ "\$MANIFEST_MODE" = "1" \] && exit 0'
+check "the manifest emits only names/booleans (no path/key fields)" \
+  '"timestamp":"%s","complete":%s,"has_secrets":%s,"has_key":%s'
+
+if command -v python3 >/dev/null 2>&1; then
+  im_dir="$(mktemp -d)"
+  im_inbox="${im_dir}/inbox"
+  im_trig="${im_dir}/trig"
+  mkdir -p "$im_inbox" "$im_trig"
+  # complete + secrets + key at ts A; jarvis-only (incomplete) at ts B; junk ignored.
+  : > "${im_inbox}/jarvis_20260701_030000.sql.gz"
+  : > "${im_inbox}/litellm_20260701_030000.sql.gz.enc"
+  : > "${im_inbox}/secrets_20260701_030000.tar.gz.enc"
+  : > "${im_inbox}/jarvis_20260630_020000.sql.gz"
+  : > "${im_inbox}/not-an-archive.txt"
+  printf 'SECRETKEYBYTES' > "${im_inbox}/operator_key"
+  # A pending restore request the inventory pass must NOT consume.
+  printf '{"timestamp":"20260701_030000","confirm":"RESTORE"}' > "${im_trig}/.restore_request.json"
+  im_rc=0
+  RESTORE_INBOX_DIR="$im_inbox" BACKUP_TRIGGER_DIR="$im_trig" \
+    bash "$RESTORE_SCRIPT" --inbox-manifest >/dev/null 2>&1 || im_rc=$?
+  if python3 - "${im_trig}/.inbox_manifest.json" <<'PY'
+import json, sys
+raw = open(sys.argv[1]).read()
+d = json.loads(raw)
+by = {e["timestamp"]: e for e in d}
+assert set(by) == {"20260701_030000", "20260630_020000"}, by
+assert by["20260701_030000"] == {
+    "timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}, by
+assert by["20260630_020000"]["complete"] is False, by
+assert by["20260630_020000"]["has_secrets"] is False, by
+# Sanitized: no path or key material anywhere in the JSON.
+assert "operator_key" not in raw and "SECRETKEYBYTES" not in raw and "/" not in raw, raw
+PY
+  then
+    pass "--inbox-manifest writes a correct SANITIZED manifest (complete/has_secrets/has_key)"
+  else
+    printf 'FAIL: --inbox-manifest manifest wrong or leaked a path/key\n' >&2
+    fail=1
+  fi
+  if [ "$im_rc" -ne 0 ]; then
+    printf 'FAIL: --inbox-manifest exited non-zero (%s)\n' "$im_rc" >&2; fail=1
+  fi
+  if [ ! -f "${im_trig}/.restore_request.json" ]; then
+    printf 'FAIL: --inbox-manifest consumed the restore request sentinel\n' >&2; fail=1
+  fi
+  if [ ! -f "${im_inbox}/operator_key" ]; then
+    printf 'FAIL: --inbox-manifest shredded the operator key\n' >&2; fail=1
+  fi
+  if [ -f "${im_trig}/.restore_status.json" ]; then
+    printf 'FAIL: --inbox-manifest wrote a restore status file\n' >&2; fail=1
+  fi
+  # Empty inbox -> [] (exit 0).
+  rm -f "${im_inbox:?}"/*
+  RESTORE_INBOX_DIR="$im_inbox" BACKUP_TRIGGER_DIR="$im_trig" \
+    bash "$RESTORE_SCRIPT" --inbox-manifest >/dev/null 2>&1 || true
+  if [ "$(cat "${im_trig}/.inbox_manifest.json")" = "[]" ]; then
+    pass "--inbox-manifest writes [] for an empty inbox"
+  else
+    printf 'FAIL: --inbox-manifest did not write [] for an empty inbox (got: %s)\n' \
+      "$(cat "${im_trig}/.inbox_manifest.json")" >&2
+    fail=1
+  fi
+  rm -rf "$im_dir"
+else
+  printf 'SKIP: python3 unavailable; skipping --inbox-manifest behavioral test\n' >&2
+fi
+
 # I8. backup.sh has an aws-guarded S3 pull helper that the default scheduled
 #     backup never triggers (gated on BACKUP_PULL_TS).
 bcheck() {
@@ -671,6 +748,8 @@ cmp_check "sidecar mounts postgres_data (ro) so the disk preflight can size free
   'postgres_data:/postgres-data:ro'
 cmp_check "entrypoint reconciles a stranded swap on startup (restore.sh --recover)" \
   'restore_swap_state\.json.*restore\.sh --recover'
+cmp_check "entrypoint refreshes the inbox manifest each loop (restore.sh --inbox-manifest)" \
+  'restore\.sh --inbox-manifest'
 
 # Off-host DR drop zone: a rw restore_inbox volume the operator fills with the
 # archive set + one-time key for a cross-host (inbox) restore.
