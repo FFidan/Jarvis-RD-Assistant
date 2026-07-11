@@ -73,7 +73,14 @@ const pulseApi = await import('@/lib/api/pulse');
 const { OnboardingWizard } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
 
-type FirstRun = { configured: boolean; setup_completed: boolean; setup_mode?: 'single' | 'multi' };
+type FirstRun = {
+  configured: boolean;
+  setup_completed: boolean;
+  setup_mode?: 'single' | 'multi';
+  hw_tier_current?: string | null;
+  recommended_backend?: string | null;
+  gpu_vendor?: string;
+};
 
 function renderWizard(
   firstRun: FirstRun = { configured: false, setup_completed: false },
@@ -233,6 +240,33 @@ describe('OnboardingWizard', () => {
     await waitFor(() => {
       expect(api.runFirstRunSystemCheck).toHaveBeenCalled();
     });
+  });
+
+  // 2B.1: the welcome step renders the already-fetched firstRun hardware
+  // fields (tier/backend/vendor) with zero new fetches.
+  it('welcome step shows the detected hardware tier, backend, and GPU vendor from firstRun', async () => {
+    renderWizard(
+      {
+        configured: false,
+        setup_completed: false,
+        hw_tier_current: 'tier-2',
+        recommended_backend: 'ollama',
+        gpu_vendor: 'nvidia',
+      },
+      false,
+      '/?step=1',
+    );
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    const hardware = screen.getByTestId('detected-hardware');
+    expect(hardware).toHaveTextContent('tier-2');
+    expect(hardware).toHaveTextContent('ollama');
+    expect(hardware).toHaveTextContent('nvidia');
+  });
+
+  it('welcome step omits the detected-hardware block when firstRun has no hw_tier_current', async () => {
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=1');
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    expect(screen.queryByTestId('detected-hardware')).not.toBeInTheDocument();
   });
 
   // (b) admin-create flips authed and advances past the admin step.

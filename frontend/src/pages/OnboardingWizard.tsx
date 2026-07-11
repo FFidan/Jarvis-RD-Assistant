@@ -97,6 +97,7 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
           onSkip={handleSkipAll}
           skipError={markCompletedMut.isError ? markCompletedMut.error : null}
           setupToken={setupTokenRef.current}
+          firstRun={firstRun}
         />
       )}
       {kind === 'smtp' && (
