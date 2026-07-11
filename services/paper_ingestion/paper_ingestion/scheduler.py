@@ -601,6 +601,11 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     register_purge_tokens(scheduler, app)
 
+    # Daily purge of stale (long-expired / long-revoked) session rows.
+    from paper_ingestion.jobs.purge_sessions import register_purge_sessions  # noqa: PLC0415
+
+    register_purge_sessions(scheduler, app)
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
     return scheduler
