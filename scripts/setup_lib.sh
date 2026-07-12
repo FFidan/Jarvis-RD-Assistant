@@ -443,6 +443,30 @@ preflight_disk_lib() {
   [ "$((free_kb / 1048576))" -ge "$required_gb" ]
 }
 
+# backfill_torch_variant_from_env — give a pre-1.1 .env the TORCH_VARIANT pair it
+# never had, echoing the variant when it writes one (nothing when there is already
+# a value, or no .env).
+#
+# The published paper_ingestion image ships in a CUDA and a CPU flavour and the
+# image tag is selected by TORCH_VARIANT_SUFFIX. Without it, `${TORCH_VARIANT_SUFFIX:-}`
+# resolves empty and a CUDA host would silently pull — or build — the CPU image
+# while its GPU overlay still reserves the NVIDIA device. The installer already
+# recorded its effective GPU decision in COMPOSE_FILE (the gpu overlay is listed
+# exactly when it resolved to CUDA), so derive the flavour from that rather than
+# re-probing hardware. Anything else, a missing COMPOSE_FILE included, means cpu —
+# correct on every host, merely slower.
+backfill_torch_variant_from_env() {
+  [ -f .env ] || return 0
+  grep -q '^TORCH_VARIANT=' .env && return 0
+  local variant="cpu" suffix=""
+  if grep -E '^COMPOSE_FILE=' .env | grep -q 'docker-compose\.gpu\.yml'; then
+    variant="cuda"; suffix="-cuda"
+  fi
+  upsert_env_var TORCH_VARIANT "$variant" || return 1
+  upsert_env_var TORCH_VARIANT_SUFFIX "$suffix" || return 1
+  printf '%s' "$variant"
+}
+
 # upsert_env_var KEY VALUE — idempotent in-place .env upsert (no duplicate lines).
 # Mirrors scripts/init-secrets.sh::upsert_env_var (bash 3.2-portable awk).
 upsert_env_var() {

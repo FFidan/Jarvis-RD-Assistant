@@ -217,12 +217,18 @@ ok "Preconditions met — clean checkout, no conflicting deployment."
 BOOTSTRAP_CMD=(./setup.sh --non-interactive --profile=dev)
 [ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
 
-# App images (jarvis/*) plus Docker build cache, in bytes — the disk the build
-# path acquires. Measured as a delta against this pre-run baseline so the
-# ratchet stays honest on machines with unrelated images or cache.
+# App images plus Docker build cache, in bytes — the disk the install acquires.
+# Measured as a delta against this pre-run baseline so the ratchet stays honest on
+# machines with unrelated images or cache. BOTH namespaces are counted: the
+# published images now land under ghcr.io/limitcycle-oss/jarvis-*, and matching only
+# the pre-1.1 `jarvis/*` names would silently measure zero app-image growth (the
+# unpublished langfuse fork still uses `jarvis/*`).
 smoke_footprint_bytes() {
   local images cache
-  images="$(docker images --filter 'reference=jarvis/*' --format '{{.ID}}' \
+  images="$(docker images \
+      --filter 'reference=ghcr.io/limitcycle-oss/jarvis-*' \
+      --filter 'reference=jarvis/*' \
+      --format '{{.ID}}' \
     | sort -u \
     | xargs -r docker image inspect --format '{{.Size}}' \
     | awk '{s+=$1} END {printf "%.0f", s}')"

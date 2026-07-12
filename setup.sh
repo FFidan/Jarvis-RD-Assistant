@@ -33,6 +33,11 @@
 #   --skip-disk-check         Skip the pre-install free-disk check on the Docker
 #                             data root (a first install needs ~35-55 GB there,
 #                             depending on GPU variant and model choice).
+#   --build-local             Build the application images from source instead of
+#                             pulling the prebuilt ones published to GHCR. Much
+#                             slower and needs considerably more disk. Use it for
+#                             development, for an air-gapped host, or if a pull
+#                             is unavailable.
 #   --backend ollama|vllm|auto
 #                             Override AI backend selection. Default: auto (inferred
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
@@ -116,6 +121,25 @@ compose_or_die() {
   fi
   rm -f "$log_file"
 }
+
+# -----------------------------------------------------------------------------
+# The application images published to GHCR — single source of truth.
+# -----------------------------------------------------------------------------
+# Every one of these keeps a `build:` block so contributors can still build from
+# source, and that is precisely why they must be pulled BY NAME:
+# `docker compose pull --ignore-buildable` skips every buildable service and so
+# would pull none of them. telegram_bot is profile-gated, so callers append it
+# only when that profile is active; langfuse is never published (local build
+# only). tests/test_docker_compose_invariants.py asserts this list still matches
+# the published set declared in docker-compose.yml.
+PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+PUBLISHED_SERVICE_TELEGRAM=telegram_bot
+# The image repositories behind that set, used to recognise a warm re-run on disk.
+PUBLISHED_IMAGE_REPOS=(
+  ghcr.io/limitcycle-oss/jarvis-paper-ingestion
+  ghcr.io/limitcycle-oss/jarvis-learning-engine
+  ghcr.io/limitcycle-oss/jarvis-dashboard
+)
 
 os_install_hint() {  # $1 = tool name (informational)
   case "$(uname -s 2>/dev/null)" in
@@ -309,9 +333,11 @@ preflight_disk() {
       ;;
   esac
   # Shortfall. Cached app images mean this is a re-run, not a cold install —
-  # the big layers are already on disk, so never block it.
+  # the big layers are already on disk, so never block it. Keyed off the published
+  # repositories: the pre-1.1 `jarvis/*` names no longer exist once the install
+  # pulls from GHCR, and grepping them would leave this escape hatch dead.
   local _img
-  for _img in jarvis/paper_ingestion jarvis/learning_engine jarvis/dashboard; do
+  for _img in "${PUBLISHED_IMAGE_REPOS[@]}"; do
     if [ -n "$(docker images -q "$_img" 2>/dev/null)" ]; then
       warn "Low disk: ${_free_gb} GB free on ${_data_root} (a full reinstall needs ~${_req_gb} GB) — continuing, app images are already present."
       return 0
@@ -411,6 +437,7 @@ NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
 NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
+BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
 TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI consent)
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
 
@@ -478,6 +505,8 @@ while [ $# -gt 0 ]; do
       INSTALL_PREREQS=1; shift ;;
     --skip-disk-check)
       SKIP_DISK_CHECK=1; shift ;;
+    --build-local)
+      BUILD_LOCAL=1; shift ;;
     --tunnel-ack)
       TUNNEL_ACK=1; shift ;;
     --backend)
@@ -507,7 +536,7 @@ while [ $# -gt 0 ]; do
         *) die "Invalid --gpu '$_v'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
       esac ;;
     -h|--help)
-      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -60
+      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -80
       exit 0
       ;;
     *)
@@ -774,12 +803,20 @@ if [ -f .env ]; then
       *)
         ok "Keeping existing .env — starting the stack with it."
         KEEP_PROFILE_ARGS=()
+        _keep_telegram=0
         if ! existing_env_value COMPOSE_PROFILES >/dev/null; then
           # Pre-v0.8 .env files never persisted the profile selection.
           if existing_env_value TELEGRAM_BOT_TOKEN >/dev/null; then
             KEEP_PROFILE_ARGS+=(--profile telegram)
+            _keep_telegram=1
             info "No COMPOSE_PROFILES in .env — enabling the telegram profile (TELEGRAM_BOT_TOKEN is set)."
           fi
+        else
+          # COMPOSE_PROFILES is honoured natively by compose; we only need to know
+          # whether telegram is among them so its image is materialised too.
+          case ",$(existing_env_value COMPOSE_PROFILES)," in
+            *,telegram,*) _keep_telegram=1 ;;
+          esac
         fi
         # Source versions.env so the postgres SHA-digest pin and image tags
         # are available on the keep-path the same as on the normal install path.
@@ -787,10 +824,39 @@ if [ -f .env ]; then
           # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
           set -a && . ./versions.env && set +a
         fi
-        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} up -d"
+        # An .env written before 1.1 carries no TORCH_VARIANT, so the image tag
+        # would resolve to the CPU flavour even on a CUDA host whose GPU overlay is
+        # still recorded in COMPOSE_FILE. Backfill before anything resolves an image.
+        if _keep_variant="$(backfill_torch_variant_from_env)" && [ -n "$_keep_variant" ]; then
+          info "Recorded this host's torch image variant in .env: ${_keep_variant}"
+        fi
+        # This path bypasses the install flow below, so it needs the same
+        # materialise-then-guard sequence. Without it a `up -d` here would find the
+        # published images missing and SILENTLY BUILD them — `pull_policy: missing`
+        # plus a `build:` block — which is the multi-GB torch build (and the ENOSPC)
+        # that installing from prebuilt images exists to eliminate.
+        # Only tunnel/telegram are ever persisted to COMPOSE_PROFILES, so the
+        # observability profile (langfuse, the one unpublished image) cannot be
+        # active here and needs no local build.
+        KEEP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+        [ "$_keep_telegram" -eq 1 ] && KEEP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+        KEEP_UP_ARGS=(up -d)
+        if [ "$BUILD_LOCAL" -eq 1 ]; then
+          info "Building application images from source (--build-local): ${KEEP_SERVICES[*]}"
+          compose_or_die "docker compose build failed." \
+              "Inspect the build output above, then re-run ./setup.sh" \
+              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} build "${KEEP_SERVICES[@]}"
+        else
+          info "Pulling prebuilt images: ${KEEP_SERVICES[*]}"
+          compose_or_die "Image pull failed." \
+              "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
+              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} pull "${KEEP_SERVICES[@]}"
+          KEEP_UP_ARGS+=(--no-build)
+        fi
+        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} ${KEEP_UP_ARGS[*]}"
         compose_or_die "docker compose up failed." \
             "Inspect logs: docker compose logs --tail=200" \
-            ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} up -d
+            ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} "${KEEP_UP_ARGS[@]}"
         ok "Stack started with the existing configuration. To regenerate .env, re-run ./setup.sh and answer 'y'."
         exit 0
         ;;
@@ -1389,6 +1455,20 @@ case "$_gpu_choice" in
   vulkan) _overlay_name="vulkan"; COMPOSE_OVERLAY=(-f docker-compose.vulkan.yml) ;;
   *)      _overlay_name="";       COMPOSE_OVERLAY=() ;;
 esac
+
+# paper_ingestion is published in two torch flavours: a CUDA build (image tag
+# suffix `-cuda`, several GB larger) and a CPU build (no suffix). Key the choice
+# off the SAME effective-GPU decision the overlay just made, so the torch wheel
+# and the Ollama overlay can never disagree. In particular an NVIDIA card WITHOUT
+# the Docker nvidia runtime already resolved to the CPU overlay above, and must
+# likewise take the CPU image — a CUDA image it cannot reach the GPU from would
+# be multiple wasted GB. AMD/Intel accelerate Ollama through their own overlay
+# while paper_ingestion's torch stays CPU either way.
+if [ "$_gpu_choice" = "cuda" ]; then
+  TORCH_VARIANT="cuda"; TORCH_VARIANT_SUFFIX="-cuda"
+else
+  TORCH_VARIANT="cpu";  TORCH_VARIANT_SUFFIX=""
+fi
 # An explicit -f list suppresses Compose's implicit docker-compose.override.yml
 # auto-load, so when that file exists we must list it back explicitly. gpu BEFORE
 # override so a dev override's `deploy: !reset null` on ollama still wins.
@@ -1406,17 +1486,45 @@ fi
 # GPU overlay on a now-CPU host fails the device reservation.
 _has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
 upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_overlay_name" "$_has_override")"
-# Build app images BEFORE anything heavy lands on disk: the parallel builds are
-# a cold install's peak disk consumer, so an ENOSPC surfaces here — with
-# recovery guidance and nothing else half-downloaded — instead of mid-model-pull.
-# Profile-aware and WITHOUT an explicit service list: profile-gated services
-# (telegram_bot, langfuse) error "no such service" by name when their profile
-# is off, and `build` skips image-only services on its own.
-info "Building application images: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} build"
-info "A first run builds several images (minutes); later runs reuse the cache."
-compose_or_die "docker compose build failed." \
-    "Inspect the build output above, then re-run ./setup.sh" \
-    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} build
+# Persist the torch flavour for the same reason: TORCH_VARIANT_SUFFIX picks the
+# image tag that a later bare `docker compose pull`/`up` resolves, and
+# TORCH_VARIANT is the build arg the --build-local path hands the Dockerfile.
+upsert_env_var TORCH_VARIANT "$TORCH_VARIANT"
+upsert_env_var TORCH_VARIANT_SUFFIX "$TORCH_VARIANT_SUFFIX"
+# Materialise the application images BEFORE anything heavy lands on disk: this is
+# a cold install's peak disk consumer, so an ENOSPC surfaces here — with recovery
+# guidance and nothing else half-downloaded — instead of mid-model-pull.
+#
+# The published services are pulled BY NAME (see PUBLISHED_SERVICES_BASE above for
+# why `--ignore-buildable` cannot be used). telegram_bot is profile-gated, hence
+# only named when its profile is active; langfuse is never published (local-build
+# only) and is handled below.
+PUBLISHED_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
+  PUBLISHED_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+fi
+
+if [ "$BUILD_LOCAL" -eq 1 ]; then
+  info "Building application images from source (--build-local)."
+  info "This takes minutes and needs considerably more disk than a pull; later runs reuse the cache."
+  compose_or_die "docker compose build failed." \
+      "Inspect the build output above, then re-run ./setup.sh" \
+      ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} build
+else
+  info "Pulling prebuilt images (${TORCH_VARIANT} build): ${PUBLISHED_SERVICES[*]}"
+  compose_or_die "Image pull failed." \
+      "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
+      ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} pull "${PUBLISHED_SERVICES[@]}"
+  # langfuse is not published, so the observability profile still needs a local
+  # build — and the bring-up below runs --no-build, which would otherwise fail on
+  # its missing image. Small hardened image, not a torch build.
+  if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
+    info "Building the observability image (langfuse) locally — it is not published."
+    compose_or_die "docker compose build langfuse failed." \
+        "Inspect the build output above, then re-run ./setup.sh" \
+        ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} --profile observability build langfuse
+  fi
+fi
 # Start Ollama alone first, then run the model pull as an attached one-off so
 # its progress streams to the terminal — buried inside a bare `up -d` the
 # 7-11 GB first pull looks like a hang.
@@ -1446,10 +1554,18 @@ if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} run --rm o
       "Check network/disk space and re-run ./setup.sh — or pull manually: docker compose exec ollama ollama pull <model>"
 fi
 
-info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
+# --no-build is a guard, not a nicety: every published service pairs
+# `pull_policy: missing` with a `build:` block, so if an image were somehow
+# missing here Compose would silently BUILD it — resurrecting the very multi-GB
+# torch build (and its ENOSPC) that installing from prebuilt images exists to
+# avoid. Failing loudly is the correct outcome. On --build-local the images were
+# just built from source, so no guard applies.
+UP_ARGS=(up -d)
+[ "$BUILD_LOCAL" -eq 1 ] || UP_ARGS+=(--no-build)
+info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} ${UP_ARGS[*]}"
 compose_or_die "docker compose up failed." \
     "Inspect logs: docker compose logs --tail=200" \
-    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "${UP_ARGS[@]}"
 
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy

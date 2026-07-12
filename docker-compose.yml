@@ -346,8 +346,8 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-1.0.4}
-    pull_policy: build
+    image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_VERSION:-1.1.0}${TORCH_VARIANT_SUFFIX:-}
+    pull_policy: missing
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -431,8 +431,8 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-1.0.4}
-    pull_policy: build
+    image: ghcr.io/limitcycle-oss/jarvis-learning-engine:${JARVIS_VERSION:-1.1.0}
+    pull_policy: missing
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -490,8 +490,8 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-1.0.4}
-    pull_policy: build
+    image: ghcr.io/limitcycle-oss/jarvis-telegram-bot:${JARVIS_VERSION:-1.1.0}
+    pull_policy: missing
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -543,8 +543,8 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-1.0.4}
-    pull_policy: build
+    image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_VERSION:-1.1.0}
+    pull_policy: missing
     build:
       context: ./frontend
       args:
@@ -677,6 +677,7 @@ services:
   restore-uploader:
     build: ./services/restore_uploader
     image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_VERSION:-1.1.0}
+    pull_policy: missing
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
