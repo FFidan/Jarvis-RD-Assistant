@@ -4,7 +4,7 @@
 
 Please **do not** open a public GitHub issue for security reports.
 
-Use [GitHub Security Advisories](https://github.com/FFidan/Jarvis-RD-Assistant/security/advisories/new) to report privately. You will receive an acknowledgement within 5 business days.
+Use [GitHub Security Advisories](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/security/advisories/new) to report privately. You will receive an acknowledgement within 5 business days.
 
 ## Supported versions
 

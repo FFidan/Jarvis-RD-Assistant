@@ -8,6 +8,6 @@ authors:
     email: "jarvis-rd@limitcycle.dev"
 version: 1.0.4
 date-released: 2026-07-08
-repository-code: "https://github.com/FFidan/Jarvis-RD-Assistant"
-url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
+repository-code: "https://github.com/limitcycle-oss/Jarvis-RD-Assistant"
+url: "https://limitcycle-oss.github.io/Jarvis-RD-Assistant/"
 license: Apache-2.0

@@ -8,7 +8,7 @@ Related docs:
 
 - [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) - coding, API, DB, anti-hallucination, and testing
   standards.
-- [PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) - product requirements and durable Pulse design.
+- [PRD.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/PRD.md) - product requirements and durable Pulse design.
 - [known-residual-risks.md](known-residual-risks.md) - accepted risks and reopen criteria.
 
 ## Runtime Topology
@@ -67,7 +67,7 @@ that enforces an equal-length init/teardown hook contract across services.
 ## Pulse
 
 Pulse is proactive overnight paper discovery. Durable product design lives in
-[PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) sections 3.1.1 and 8.5.
+[PRD.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/PRD.md) sections 3.1.1 and 8.5.
 
 Rules:
 
@@ -204,7 +204,7 @@ isolation.
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
 `paper_ingestion` startup. The current migration count and range are documented in
-[`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
+[`db/migrations/README.md`](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 

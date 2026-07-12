@@ -4,11 +4,11 @@
 
 JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.
 
-📖 **Docs:** https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md)
+📖 **Docs:** https://limitcycle-oss.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/limitcycle-oss/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/SECURITY.md)
 
-[![CI](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml)
-[![Docs](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/LICENSE)
+[![CI](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/actions/workflows/ci.yml)
+[![Docs](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/actions/workflows/docs.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 ![My Day — JARVIS RD Assistant](docs/screenshots/02-my-day.png)
@@ -46,7 +46,7 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 - **Non-interactive installs:** use `scripts/jarvis-setup.sh` for CI / cloud-init
 
 ```bash
-git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
+git clone https://github.com/limitcycle-oss/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
 ./setup.sh --check   # preflight (read-only, exits 0 on pass)
 ./setup.sh             # add --install-prereqs only if you want setup to install missing host packages
@@ -106,11 +106,11 @@ flowchart TD
     LL --> OL["Ollama · :11434"]
 ```
 
-**Optional services:** Telegram bot (`--profile telegram`), Langfuse LLM-trace observability (off by default — `make observability-up`; see [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md)).
+**Optional services:** Telegram bot (`--profile telegram`), Langfuse LLM-trace observability (off by default — `make observability-up`; see [docs/contracts/04-observability.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md)).
 
 ## Deployment
 
-Solo install: the **Quickstart** above is all you need. For team/multi-user setup, SMTP configuration, reverse-proxy / TLS (Caddy + Let's Encrypt or Cloudflare Tunnel), backups, upgrades, rollback, and remote access → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. End-user help (joining an existing instance) → **[User Guide](https://ffidan.github.io/Jarvis-RD-Assistant/manual/)**.
+Solo install: the **Quickstart** above is all you need. For team/multi-user setup, SMTP configuration, reverse-proxy / TLS (Caddy + Let's Encrypt or Cloudflare Tunnel), backups, upgrades, rollback, and remote access → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. End-user help (joining an existing instance) → **[User Guide](https://limitcycle-oss.github.io/Jarvis-RD-Assistant/manual/)**.
 
 ## Updating JARVIS
 
@@ -125,7 +125,7 @@ git pull
 
 JARVIS applies user scoping at the application and query layers. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.
 
-See [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
+See [SECURITY.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
 
 ## Development
 
@@ -170,7 +170,7 @@ The canonical pre-push gate is **`make check`** — the same set CI runs. The `d
 | `EMBEDDING_MODEL_NAME` | Human-readable embedding model stored on chunk metadata (default: `qwen3-embedding:4b`). |
 | `EMBEDDING_DIMENSION` | Must match the embedding model (default: `2560`). |
 
-See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.env.example) for the full annotated list. For production deployments using Docker Secrets (`_FILE` variants), see [`secrets/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/secrets/README.md).
+See [`.env.example`](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/.env.example) for the full annotated list. For production deployments using Docker Secrets (`_FILE` variants), see [`secrets/README.md`](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/secrets/README.md).
 
 ### Adding a paper source
 
@@ -199,13 +199,13 @@ See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.en
 
 ### Optional integrations
 
-**Telegram bot** — daily digests, Pulse rating buttons, RAG Q&A from your phone, FSRS review in chat. Enable with `docker compose --profile telegram up -d`; full setup + command list in the **[User Guide → Telegram](https://ffidan.github.io/Jarvis-RD-Assistant/manual/telegram/)**.
+**Telegram bot** — daily digests, Pulse rating buttons, RAG Q&A from your phone, FSRS review in chat. Enable with `docker compose --profile telegram up -d`; full setup + command list in the **[User Guide → Telegram](https://limitcycle-oss.github.io/Jarvis-RD-Assistant/manual/telegram/)**.
 
-**Zotero** — sync papers between JARVIS and your citation manager (push on star+project-link, pull via browser extension). Configure in **Settings → Integrations**; full setup in the **[User Guide → Settings](https://ffidan.github.io/Jarvis-RD-Assistant/manual/settings/)**.
+**Zotero** — sync papers between JARVIS and your citation manager (push on star+project-link, pull via browser extension). Configure in **Settings → Integrations**; full setup in the **[User Guide → Settings](https://limitcycle-oss.github.io/Jarvis-RD-Assistant/manual/settings/)**.
 
 ### Contributing
 
-See [CONTRIBUTING.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CONTRIBUTING.md) for branching, commit-message style, and the pull-request checklist. Issues filed via the [bug report](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/bug_report.md) and [feature request](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/feature_request.md) templates get triaged fastest. Security reports: see [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md).
+See [CONTRIBUTING.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/CONTRIBUTING.md) for branching, commit-message style, and the pull-request checklist. Issues filed via the [bug report](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/bug_report.md) and [feature request](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/feature_request.md) templates get triaged fastest. Security reports: see [SECURITY.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/SECURITY.md).
 
 ## Tech stack
 
@@ -246,10 +246,10 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 ## Further reading
 
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.
-- [docs/PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) — product requirements and feature-level spec, including the Discovery & Pulse design.
+- [docs/PRD.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/PRD.md) — product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — non-functional requirements and technical constraints.
 - [docs/METHODS_AND_LIMITATIONS.md](docs/METHODS_AND_LIMITATIONS.md) — verification meaning, privacy boundaries, and evaluation limits.
-- [CHANGELOG.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CHANGELOG.md) — release notes per version.
+- [CHANGELOG.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/CHANGELOG.md) — release notes per version.
 
 ## Methods and limitations
 
@@ -277,7 +277,7 @@ model-pipeline smoke tests provide additional, non-equivalent coverage.
 
 ## License
 
-[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/LICENSE).
+[Apache 2.0](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/LICENSE).
 The root LICENSE file is the canonical Apache-2.0 text; project copyright,
 contact, authorship, and third-party notices are recorded in [NOTICE](NOTICE)
 and [AUTHORS.md](AUTHORS.md).

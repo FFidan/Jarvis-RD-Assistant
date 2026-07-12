@@ -104,7 +104,7 @@ jobs:
       - name: Failure guidance
         if: failure()
         run: |
-          echo "::warning::CPU fallback of the ROCm ollama image failed. If AMD hardware misbehaves for you, please file a hardware report: https://github.com/FFidan/Jarvis-RD-Assistant/issues/new?template=hardware-report.yml"
+          echo "::warning::CPU fallback of the ROCm ollama image failed. If AMD hardware misbehaves for you, please file a hardware report: https://github.com/limitcycle-oss/Jarvis-RD-Assistant/issues/new?template=hardware-report.yml"
 
       - name: Teardown
         if: always()

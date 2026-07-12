@@ -209,7 +209,7 @@ auto-populated author watchlist from starred papers.
 ### 6.4 Conversational Agent Layer (planning, conditional)
 Natural-language control plane over the JARVIS REST API. Agent-as-client pattern — services
 stay authoritative; the agent is never the system of record. Every claim must pass
-`QuoteVerifier` (§5). Gated behind a perf-profiling pass; see the [project roadmap](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/ROADMAP.md).
+`QuoteVerifier` (§5). Gated behind a perf-profiling pass; see the [project roadmap](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/ROADMAP.md).
 
 ### 6.5 Inspiration and Prior Art
 Discovery & Pulse design borrows ideas from (no code copied; all MIT/Apache-licensed):
