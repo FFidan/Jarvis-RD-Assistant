@@ -49,10 +49,10 @@ def test_infra_host_ports_are_overridable_for_isolated_smoke() -> None:
     assert 'DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"' in setup
 
 
-def _compute(nvidia: str, override: str) -> str:
+def _compute(overlay: str, override: str) -> str:
     """Source the lib and echo compute_compose_file's output."""
     proc = subprocess.run(
-        ["bash", "-c", f'source "{LIB}"; compute_compose_file {nvidia} {override}'],
+        ["bash", "-c", f'source "{LIB}"; compute_compose_file "{overlay}" "{override}"'],
         capture_output=True,
         text=True,
         check=True,
@@ -60,17 +60,18 @@ def _compute(nvidia: str, override: str) -> str:
     return proc.stdout
 
 
-def test_compute_gpu_no_override() -> None:
-    assert _compute("1", "0") == "docker-compose.yml:docker-compose.gpu.yml"
+def test_compute_cpu_base_no_overlay() -> None:
+    assert _compute("", "0") == "docker-compose.yml"
 
 
-def test_compute_cpu_no_override() -> None:
-    assert _compute("0", "0") == "docker-compose.yml"
+@pytest.mark.parametrize("overlay", ["gpu", "rocm", "vulkan"])
+def test_compute_accelerator_overlay_no_override(overlay: str) -> None:
+    assert _compute(overlay, "0") == f"docker-compose.yml:docker-compose.{overlay}.yml"
 
 
-def test_compute_gpu_with_override_appended_last() -> None:
+def test_compute_overlay_with_override_appended_last() -> None:
     assert (
-        _compute("1", "1")
+        _compute("gpu", "1")
         == "docker-compose.yml:docker-compose.gpu.yml:docker-compose.override.yml"
     )
 
@@ -185,10 +186,10 @@ def test_resolve_nvidia_smi_returns_nonzero_when_absent(tmp_path: Path) -> None:
 
 
 def _prereq_plan(
-    os_name: str, os_id: str, has_apt: str, has_brew: str, *missing: str
+    os_name: str, os_id: str, has_apt: str, has_brew: str, has_dnf: str, *missing: str
 ) -> subprocess.CompletedProcess[str]:
     """Return the setup_lib prerequisite install plan for a synthetic host."""
-    args = " ".join([os_name, os_id, has_apt, has_brew, *missing])
+    args = " ".join([os_name, os_id, has_apt, has_brew, has_dnf, *missing])
     return subprocess.run(
         ["bash", "-c", f'source "{LIB}"; prereq_install_plan {args}'],
         capture_output=True,
@@ -198,16 +199,44 @@ def _prereq_plan(
 
 
 def test_prereq_plan_for_ubuntu_apt_host() -> None:
-    result = _prereq_plan("Linux", "ubuntu", "1", "0", "docker", "docker-compose", "openssl")
+    """The apt plan installs Docker Engine from Docker's own signed repository.
+
+    Asserts the security-relevant shape: signing key pinned to an apt keyring,
+    the repo bound to that key via signed-by, official docker-ce packages (not
+    the stock docker.io), remote content never piped into a shell, and sudo
+    only ever line-leading (setup.sh rewrites leading sudo for consent runs).
+    """
+    result = _prereq_plan("Linux", "ubuntu", "1", "0", "0", "docker", "docker-compose", "openssl")
     assert result.returncode == 0
-    assert result.stdout.splitlines() == [
-        "sudo apt-get update",
-        "sudo apt-get install -y docker.io docker-compose-plugin openssl",
-    ]
+    lines = result.stdout.splitlines()
+    keyring = "/etc/apt/keyrings/docker.gpg"
+
+    assert any(
+        ln.startswith("curl -fsSL https://download.docker.com/linux/ubuntu/gpg") for ln in lines
+    )
+    assert any(ln.startswith("sudo gpg --dearmor") and keyring in ln for ln in lines)
+    repo = next(ln for ln in lines if ln.startswith('echo "deb '))
+    assert f"signed-by={keyring}" in repo
+    assert "https://download.docker.com/linux/ubuntu" in repo
+
+    install = next(ln for ln in lines if ln.startswith("sudo apt-get install -y docker-ce"))
+    for pkg in ("docker-ce-cli", "containerd.io", "docker-compose-plugin", "openssl"):
+        assert pkg in install
+    assert "docker.io" not in result.stdout
+
+    # repo goes live (with a fresh apt update) before the engine install
+    assert "sudo apt-get update" in lines[lines.index(repo) : lines.index(install)]
+    assert "sudo systemctl enable --now docker" in lines
+    assert 'sudo usermod -aG docker "$USER"' in lines
+
+    for ln in lines:
+        assert "sudo" not in ln.removeprefix("sudo ")
+        if ln.startswith("curl"):
+            assert "|" not in ln
 
 
 def test_prereq_plan_for_macos_homebrew_host() -> None:
-    result = _prereq_plan("Darwin", "unknown", "0", "1", "docker", "docker-compose", "openssl")
+    result = _prereq_plan("Darwin", "unknown", "0", "1", "0", "docker", "docker-compose", "openssl")
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "brew install --cask docker",
@@ -216,7 +245,7 @@ def test_prereq_plan_for_macos_homebrew_host() -> None:
 
 
 def test_prereq_plan_rejects_unsupported_host() -> None:
-    result = _prereq_plan("Linux", "arch", "0", "0", "docker")
+    result = _prereq_plan("Linux", "arch", "0", "0", "0", "docker")
     assert result.returncode != 0
     assert result.stdout == ""
 
@@ -228,7 +257,10 @@ def test_prereq_manual_guidance_is_actionable() -> None:
         text=True,
         check=True,
     )
-    assert "Install Docker Engine or Docker Desktop" in proc.stdout
+    assert "Install Docker Engine" in proc.stdout
+    assert "https://docs.docker.com/engine/install/" in proc.stdout
+    assert "https://get.docker.com" in proc.stdout
     assert "Docker Compose v2 plugin" in proc.stdout
+    assert "https://docs.docker.com/compose/install/linux/" in proc.stdout
     assert "Install openssl" in proc.stdout
     assert "re-run ./setup.sh --check" in proc.stdout

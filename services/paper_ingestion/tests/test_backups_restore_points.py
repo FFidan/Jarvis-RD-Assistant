@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -334,7 +335,11 @@ def test_code_max_migration_returns_floor_when_dir_missing(monkeypatch, tmp_path
     # db/SCHEMA_VERSION baseline) so restore-point compatibility stays armed
     # instead of degrading to "unknown".
     monkeypatch.setenv("DB_MIGRATIONS_DIR", str(tmp_path / "does_not_exist"))
-    assert bk._code_max_migration() == 101
+    baseline = int(
+        (Path(__file__).resolve().parents[3] / "db" / "SCHEMA_VERSION").read_text().strip()
+    )
+    assert baseline >= 102
+    assert bk._code_max_migration() == baseline
 
 
 @pytest.mark.asyncio

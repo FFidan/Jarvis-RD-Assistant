@@ -178,8 +178,13 @@ fi
 pf_src="$(sed -n '/^preflight_disk()/,/^}/p' "$SETUP_SCRIPT")"
 
 run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out>
-  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" bash -c '
+  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" \
+  LIB_SRC="${SCRIPT_DIR}/../setup_lib.sh" bash -c '
     set -euo pipefail
+    # The real lib provides PUBLISHED_IMAGE_REPOS (the wrapper iterates it, and
+    # a private copy here would drift). Source it FIRST: the stubs below must
+    # clobber its real compute_required_disk_gb/preflight_disk_lib.
+    source "$LIB_SRC"
     info() { printf "INFO %s\n" "$*"; }
     ok()   { printf "OK %s\n" "$*"; }
     warn() { printf "WARN %s\n" "$*"; }

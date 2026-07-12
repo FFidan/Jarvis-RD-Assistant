@@ -303,13 +303,16 @@ cmp_check() {
     printf 'FAIL: %s (pattern: %s)\n' "$1" "$2" >&2; fail=1; fi
 }
 cmp_check "sidecar mounts prune.sh (ro)" 'prune\.sh:/usr/local/bin/prune\.sh:ro'
-cmp_check "loop drops -e so one failed run cannot kill it (sh -uc)" 'sh -uc "while true'
+# The entrypoint is a folded scalar, so the shell invocation and the loop keyword
+# sit on separate lines; match them independently rather than as one line.
+cmp_check "loop drops -e so one failed run cannot kill it (sh -uc)" 'sh -uc "'
+cmp_check "sidecar polls in a forever loop" 'while true;'
 cmp_check "loop has the delete branch (prune.sh on .delete_request.json)" \
   '\.delete_request\.json.*prune\.sh'
 cmp_check "each branch logs its failure and continues (|| echo ... rc=)" \
   '\|\| echo .*\[sidecar\].*rc=\$\$\?'
 # the -e flag must be gone from the entrypoint (sh -euc -> sh -uc).
-if grep -q 'sh -euc "while true' "$COMPOSE"; then
+if grep -q 'sh -euc' "$COMPOSE"; then
   printf 'FAIL: the sidecar entrypoint still uses sh -euc (a failed run crash-restarts the loop)\n' >&2; fail=1
 else
   pass "the sidecar entrypoint no longer uses sh -euc"

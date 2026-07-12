@@ -12,6 +12,14 @@ from __future__ import annotations
 
 import pytest
 from fastapi.routing import APIRoute
+
+try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
+    from fastapi.routing import (
+        iter_route_contexts as _iter_route_contexts,  # type: ignore[attr-defined]
+    )
+except ImportError:  # FastAPI <0.137 keeps app.routes a flat APIRoute list.
+    _iter_route_contexts = None
+
 from jarvis_common.auth import (
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
@@ -52,10 +60,26 @@ def _dependency_calls(dependant) -> set:
     return calls
 
 
-def _route_for(app, method: str, path: str) -> APIRoute:
-    for route in app.routes:
-        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
-            return route
+def _effective_dependant_for(app, method: str, path: str):
+    """The dependant actually resolved for a request, including router/app-level deps.
+
+    ``context.dependant`` is the effective tree — an endpoint's own ``Depends`` plus
+    anything attached via ``include_router(dependencies=...)`` or on the app itself.
+    ``context.route.dependant`` would only carry the endpoint's own, so a session-only
+    resolver bound one layer up would 401 the bot while the contract still looked green.
+    """
+    if _iter_route_contexts is not None:
+        for context in _iter_route_contexts(app.routes):
+            if (
+                isinstance(context.route, APIRoute)
+                and context.path == path
+                and method in context.methods
+            ):
+                return context.dependant
+    else:
+        for route in app.routes:
+            if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+                return route.dependant
     raise AssertionError(f"No {method} {path} route found in {app.title!r}")
 
 
@@ -75,8 +99,7 @@ def test_bot_target_endpoint_uses_owner_override(method: str, path: str) -> None
     for app, targets in _app_targets():
         if (method, path) not in targets:
             continue
-        route = _route_for(app, method, path)
-        calls = _dependency_calls(route.dependant)
+        calls = _dependency_calls(_effective_dependant_for(app, method, path))
         assert calls & _OVERRIDE_RESOLVERS, (
             f"{method} {path} does not resolve identity via an owner-override dep "
             f"— the Telegram bot (X-Owner-User-Id, no session) would 401"

@@ -393,6 +393,30 @@ def _write_sudo_logger(tmp: Path) -> tuple[Path, Path]:
     return bin_dir, log
 
 
+def _write_curl_logger(tmp: Path) -> tuple[Path, Path]:
+    """Return a PATH dir with curl that logs fetches and creates the -o target.
+
+    The plan's unprivileged fetch lines run for real during the guided install,
+    so a curl shim keeps the test offline; it creates the ``-o`` target so the
+    plan's later steps (sed -i on the fetched file) still succeed.
+    """
+    bin_dir = tmp / "curl-bin"
+    bin_dir.mkdir()
+    log = tmp / "curl-invocations.log"
+    log.touch()
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> '{log}'\n"
+        'prev=""; out=""\n'
+        'for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done\n'
+        '[ -n "$out" ] && : > "$out"\n'
+        "exit 0\n"
+    )
+    curl.chmod(0o755)
+    return bin_dir, log
+
+
 @_requires_bash
 def test_setup_noninteractive_missing_prereqs_requires_explicit_install_flag(tmp_path):
     """Noninteractive setup must not install host packages without opt-in."""
@@ -447,29 +471,78 @@ def test_setup_check_install_prereqs_stays_read_only(tmp_path):
 
 @_requires_bash
 def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
-    """--install-prereqs runs explicit package-manager commands via the reviewed plan."""
+    """--install-prereqs executes exactly the reviewed plan, printed first.
+
+    The plan installs Docker from Docker's official apt repository (the stock
+    distro packages miss the compose plugin), so its exact line count varies by
+    host (a GPU host appends the NVIDIA Container Toolkit steps).  Instead of a
+    literal list, this asserts the root-escalation contract from setup_lib.sh:
+    the plan is echoed for review BEFORE anything runs, every privileged command
+    executed is a plan line rewritten to ``sudo -n`` (non-interactive runs must
+    never hang on a password prompt) in plan order with nothing extra, every
+    fetch is a plan line downloading to a file — never piped to a shell — and
+    the repo is pinned to the fetched signing key.  stderr is merged into stdout
+    so the print-before-run ordering is observable.
+    """
     _stage_hw_tmpdir(tmp_path)
     docker_bin = _write_missing_compose_docker_shim(tmp_path)
     sudo_bin, sudo_log = _write_sudo_logger(tmp_path)
+    curl_bin, curl_log = _write_curl_logger(tmp_path)
     env = dict(os.environ)
-    env["PATH"] = f"{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+    env["PATH"] = (
+        f"{curl_bin}{os.pathsep}{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+    )
 
     result = subprocess.run(
         ["bash", "setup.sh", "--non-interactive", "--install-prereqs", "--mode", "single"],
         cwd=str(tmp_path),
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         timeout=60,
         check=False,
     )
 
-    combined = result.stdout + result.stderr
-    assert "Guided prerequisite installer would run" in combined
-    assert "Running: sudo -n apt-get update" in combined
-    assert sudo_log.read_text().splitlines() == [
-        "-n apt-get update",
-        "-n apt-get install -y docker-compose-plugin",
+    lines = result.stdout.splitlines()
+    assert "Guided prerequisite installer would run:" in lines, result.stdout
+    marker = lines.index("Guided prerequisite installer would run:")
+    # Plan lines follow the marker until the next [INFO]/[ERROR]-prefixed line.
+    plan: list[str] = []
+    for line in lines[marker + 1 :]:
+        if line.startswith("["):
+            break
+        plan.append(line)
+    run_indices = [i for i, line in enumerate(lines) if line.startswith("[INFO]  Running: ")]
+    assert run_indices and marker < run_indices[0], (
+        f"plan must be printed for review before anything runs:\n{result.stdout}"
+    )
+
+    assert "sudo apt-get update" in plan
+    assert any(
+        line.startswith("sudo apt-get install") and "docker-compose-plugin" in line for line in plan
+    ), f"plan must install the compose plugin: {plan}"
+    keyring = "/etc/apt/keyrings/docker.gpg"
+    assert any(line.startswith("sudo gpg --dearmor") and keyring in line for line in plan), (
+        f"signing key must land in a keyring file: {plan}"
+    )
+    assert any(f"signed-by={keyring}" in line and "download.docker.com" in line for line in plan), (
+        f"apt repo must be pinned to the fetched key: {plan}"
+    )
+    for line in plan:
+        assert not ("curl" in line and "|" in line), f"piped curl-to-shell in plan: {line}"
+
+    expected_sudo = [
+        f"-n {line.removeprefix('sudo ')}" for line in plan if line.startswith("sudo ")
     ]
+    assert expected_sudo, f"plan has no privileged steps: {plan}"
+    assert sudo_log.read_text().splitlines() == expected_sudo, (
+        "executed privileged commands must be exactly the reviewed plan's sudo "
+        f"lines under sudo -n, in order; plan: {plan}"
+    )
+    expected_curl = [line.removeprefix("curl ") for line in plan if line.startswith("curl ")]
+    assert curl_log.read_text().splitlines() == expected_curl, (
+        f"executed fetches must be exactly the reviewed plan's curl lines; plan: {plan}"
+    )
     assert result.returncode != 0  # docker shim still lacks compose after the fake install.
     assert not (tmp_path / ".env").exists()
