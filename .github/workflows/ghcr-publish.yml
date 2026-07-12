@@ -3,11 +3,11 @@ name: GHCR publish
 # Builds and publishes the application images to GHCR on release tags.
 #
 # Image mapping (load-bearing for docker-compose.yml's published-image refs):
-#   compose `jarvis/paper_ingestion` -> ghcr.io/ffidan/jarvis-paper-ingestion
-#   compose `jarvis/learning_engine` -> ghcr.io/ffidan/jarvis-learning-engine
-#   compose `jarvis/telegram_bot`    -> ghcr.io/ffidan/jarvis-telegram-bot
-#   compose `jarvis/dashboard`       -> ghcr.io/ffidan/jarvis-dashboard
-#   services/restore_uploader        -> ghcr.io/ffidan/jarvis-restore-uploader
+#   compose `jarvis/paper_ingestion` -> ghcr.io/limitcycle-oss/jarvis-paper-ingestion
+#   compose `jarvis/learning_engine` -> ghcr.io/limitcycle-oss/jarvis-learning-engine
+#   compose `jarvis/telegram_bot`    -> ghcr.io/limitcycle-oss/jarvis-telegram-bot
+#   compose `jarvis/dashboard`       -> ghcr.io/limitcycle-oss/jarvis-dashboard
+#   services/restore_uploader        -> ghcr.io/limitcycle-oss/jarvis-restore-uploader
 #   (jarvis/langfuse-hardened stays local-build: observability-profile-only,
 #   and publishing a hardened fork of an upstream image adds supply-chain
 #   surface for no install-time gain.)
@@ -197,7 +197,7 @@ jobs:
           # Attestations need an image exporter — skip on the cacheonly
           # build-only path.
           sbom: ${{ needs.preflight.outputs.push == 'true' }}
-          outputs: ${{ needs.preflight.outputs.push == 'true' && format('type=image,name=ghcr.io/ffidan/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
+          outputs: ${{ needs.preflight.outputs.push == 'true' && format('type=image,name=ghcr.io/limitcycle-oss/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
 
       - name: Export the digest
         if: needs.preflight.outputs.push == 'true'
@@ -275,7 +275,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
-          images: ghcr.io/ffidan/${{ matrix.image }}
+          images: ghcr.io/limitcycle-oss/${{ matrix.image }}
           # Emits `1.1.0` / `1.1.0-rc.1` from the v-prefixed git tag; rc tags
           # never move `latest`.
           tags: |
@@ -289,16 +289,16 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/ffidan/${{ matrix.image }}@sha256:%s ' *)
+            $(printf 'ghcr.io/limitcycle-oss/${{ matrix.image }}@sha256:%s ' *)
 
       - name: Resolve the published digest
         id: digest
         run: |
           tag="${GITHUB_REF_NAME#v}${{ matrix.suffix }}"
-          docker buildx imagetools inspect "ghcr.io/ffidan/${{ matrix.image }}:${tag}"
+          docker buildx imagetools inspect "ghcr.io/limitcycle-oss/${{ matrix.image }}:${tag}"
           digest="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
-            "ghcr.io/ffidan/${{ matrix.image }}:${tag}" | tr -d '"')"
-          echo "ref=ghcr.io/ffidan/${{ matrix.image }}@${digest}" >> "$GITHUB_OUTPUT"
+            "ghcr.io/limitcycle-oss/${{ matrix.image }}:${tag}" | tr -d '"')"
+          echo "ref=ghcr.io/limitcycle-oss/${{ matrix.image }}@${digest}" >> "$GITHUB_OUTPUT"
 
       # SBOM bound to the published digest (BuildKit additionally attached
       # per-platform SBOM attestations at build time via `sbom: true`).

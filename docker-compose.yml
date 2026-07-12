@@ -676,7 +676,7 @@ services:
   # (a drop-in for the previous manual scp step). See services/restore_uploader.
   restore-uploader:
     build: ./services/restore_uploader
-    image: ghcr.io/ffidan/jarvis-restore-uploader:${JARVIS_VERSION:-1.1.0}
+    image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_VERSION:-1.1.0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
