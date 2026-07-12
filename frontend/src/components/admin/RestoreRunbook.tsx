@@ -71,7 +71,7 @@ export function RestoreRunbook() {
           documented fallback: it is destructive and runs on the host, not in the app. Download the
           archives above, then run these commands on the deployment host. See the{' '}
           <a
-            href="https://limitcycle-oss.github.io/Jarvis-RD-Assistant/DEPLOYMENT/#restore"
+            href="https://limitcycle-oss.github.io/jarvis-rd-assistant/DEPLOYMENT/#restore"
             className="underline"
             target="_blank"
             rel="noopener noreferrer"

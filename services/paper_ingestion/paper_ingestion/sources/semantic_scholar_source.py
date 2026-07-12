@@ -30,7 +30,7 @@ S2_API_URL = "https://api.semanticscholar.org/graph/v1"
 RATE_LIMIT_DELAY = 1.05  # seconds between requests (free tier: 1 req/sec)
 # Descriptive User-Agent for S2 abuse attribution; no API key / higher tier exists.
 _S2_USER_AGENT = (
-    "JARVIS-RD/0 (research paper assistant; +https://github.com/limitcycle-oss/Jarvis-RD-Assistant)"
+    "JARVIS-RD/0 (research paper assistant; +https://github.com/limitcycle-oss/jarvis-rd-assistant)"
 )
 S2_FIELDS = (
     "paperId,externalIds,title,authors,authors.authorId,abstract,year,"

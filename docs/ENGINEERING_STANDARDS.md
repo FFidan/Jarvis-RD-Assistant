@@ -5,7 +5,7 @@ This document is the durable engineering standard for JARVIS RD Assistant.
 Related docs:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - where these standards apply across services.
-- [PRD.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/PRD.md) - product requirements behind user-facing behavior.
+- [PRD.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/PRD.md) - product requirements behind user-facing behavior.
 
 ## Python
 
@@ -104,7 +104,7 @@ LLM-generated scientific content must remain evidence-backed:
 ## Testing
 
 Python test shape, mock policy, the carve-out registry, and the four prohibited
-anti-patterns are governed by [docs/contracts/07-testing.md](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/docs/contracts/07-testing.md)
+anti-patterns are governed by [docs/contracts/07-testing.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/07-testing.md)
 — treat that contract as the single source of truth. The mechanics below are
 deliberately thin; the contract carries the load-bearing rules.
 
@@ -124,7 +124,7 @@ deliberately thin; the contract carries the load-bearing rules.
   unit / contract / boundary-adapter / E2E) per the testing contract; the four
   anti-patterns documented there (handler-bypass, mock-the-mock, SQL-substring,
   deep orchestration mock) are prohibited and enforced by
-  [scripts/check-test-shape.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/scripts/check-test-shape.py) on every commit.
+  [scripts/check-test-shape.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-test-shape.py) on every commit.
 
 ## LLM Prompt Shape
 

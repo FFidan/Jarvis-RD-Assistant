@@ -6,5 +6,5 @@ This URL serves an authentication-gated single-page application shell; there is
 no public content to crawl here. Project documentation and source are below.
 
 ## Links
-- Documentation: https://limitcycle-oss.github.io/Jarvis-RD-Assistant/
-- Source: https://github.com/limitcycle-oss/Jarvis-RD-Assistant
+- Documentation: https://limitcycle-oss.github.io/jarvis-rd-assistant/
+- Source: https://github.com/limitcycle-oss/jarvis-rd-assistant

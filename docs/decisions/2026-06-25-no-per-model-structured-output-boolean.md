@@ -30,7 +30,7 @@ Root-cause enforcement at the choke point via `Mode.JSON_SCHEMA` + `ollama_chat/
 rather than a per-model capability boolean, a boot fail-fast, or an empirical canary per model.
 
 The instructor client is built once per service lifespan with `instructor.Mode.JSON_SCHEMA`
-([app_factory.py:467-473](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473)).
+([app_factory.py:467-473](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473)).
 All chat-based local aliases route via the `ollama_chat/` prefix, which carries the schema as the
 `format` field to Ollama's `/api/chat` endpoint (grammar-constrained token sampling). Schema-echo
 is structurally impossible: the decoding layer must produce a JSON value that conforms to the
@@ -49,11 +49,11 @@ We explicitly decided **NOT** to add `supports_structured_output` to the model c
 | Fact | Source |
 |---|---|
 | Same `qwen3:4b` echoed `PulseScoringOutput` under `Mode.JSON`, produced valid `KGExtractionOutput` under `Mode.JSON_SCHEMA` | v0.9.1 live regression + root-cause analysis |
-| `KGExtractionOutput` schema: nested arrays, constrained Literal enums, `min_length`, up to 25 objects | [kg_models.py:58-70](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/kg_models.py#L58-L70) |
-| `PulseScoringOutput` schema: 3 flat fields (`relevance`, `novelty`, `reasoning`) | [pulse/models.py:6-11](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/models.py#L6-L11) |
+| `KGExtractionOutput` schema: nested arrays, constrained Literal enums, `min_length`, up to 25 objects | [kg_models.py:58-70](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/kg_models.py#L58-L70) |
+| `PulseScoringOutput` schema: 3 flat fields (`relevance`, `novelty`, `reasoning`) | [pulse/models.py:6-11](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/models.py#L6-L11) |
 | `Mode.JSON_SCHEMA` emits native `response_format: {type: json_schema, …}` — no prompt injection | instructor 1.15.1 source (`providers/openai/utils.py`) |
-| `ollama_chat/` prefix → Ollama `/api/chat`, where `format:<schema>` enforces grammar constraints | [model_prefixes.py:13](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/model_prefixes.py#L13) |
-| VRAM-tiered empirical bench data | [config/llm-tier-candidates.yaml](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/config/llm-tier-candidates.yaml) |
+| `ollama_chat/` prefix → Ollama `/api/chat`, where `format:<schema>` enforces grammar constraints | [model_prefixes.py:13](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/model_prefixes.py#L13) |
+| VRAM-tiered empirical bench data | [config/llm-tier-candidates.yaml](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/config/llm-tier-candidates.yaml) |
 
 ---
 
@@ -68,7 +68,7 @@ We explicitly decided **NOT** to add `supports_structured_output` to the model c
 - **Degrade is the default.** When a structured call fails (Pydantic `ValidationError` after
   retries), each site degrades gracefully per the fallback table in
   [03-llm.md §3.3](03-llm.md#33-fallback-per-site). Pulse logs a warning and degrades to Stage 1
-  ranking ([pulse/job.py:337-345](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L337-L345)).
+  ranking ([pulse/job.py:337-345](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L337-L345)).
 - **Opt-in hard-gate via `JARVIS_STRICT_MODELS`.** Operators who cannot tolerate graceful
   degradation set this flag; a real probe runs at startup and hard-blocks the affected feature on
   failure. This is not a boot fail-fast — the service starts; only the affected structured-output

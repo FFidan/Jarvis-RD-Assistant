@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/limitcycle-oss/Jarvis-RD-Assistant/security/advisories/new
+    url: https://github.com/limitcycle-oss/jarvis-rd-assistant/security/advisories/new
     about: Report security issues privately via GitHub Security Advisories. Do NOT open a public issue for security reports.
   - name: Documentation
-    url: https://limitcycle-oss.github.io/Jarvis-RD-Assistant/
+    url: https://limitcycle-oss.github.io/jarvis-rd-assistant/
     about: Browse the live documentation site before filing an issue.

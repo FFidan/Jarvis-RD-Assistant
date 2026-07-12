@@ -27,10 +27,10 @@ We label each cell above using three honest tiers instead of a single "works/doe
 
 - **Supported** — the default, actively used path; validated on real hardware.
 - **[Experimental]** — the overlay and vendor-detection logic exist and are exercised by automated CI (compose config validation and a no-GPU boot-fallback smoke test on every release). This proves the plumbing is correct; it does not prove inference is fast or correct on your specific card — no CI runner has a real AMD or Intel GPU attached.
-- **Community-reported** — a JARVIS user with matching hardware confirmed it works, via a [hardware compatibility report](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/issues/new?template=hardware-report.yml).
+- **Community-reported** — a JARVIS user with matching hardware confirmed it works, via a [hardware compatibility report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml).
 - **Untested** — neither CI wiring nor a community report exists yet for that specific card.
 
-We do not run paid cloud-GPU validation for AMD or Intel hardware. CI-wiring validation plus community reports are the honest, sustainable alternative — please [file a report](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/issues/new?template=hardware-report.yml) if you run JARVIS on AMD or Intel silicon; it directly improves this page for the next person.
+We do not run paid cloud-GPU validation for AMD or Intel hardware. CI-wiring validation plus community reports are the honest, sustainable alternative — please [file a report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml) if you run JARVIS on AMD or Intel silicon; it directly improves this page for the next person.
 
 ---
 
@@ -52,7 +52,7 @@ We do not run paid cloud-GPU validation for AMD or Intel hardware. CI-wiring val
 
 ## Reporting your hardware
 
-If you run JARVIS on AMD or Intel hardware, [file a hardware compatibility report](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/issues/new?template=hardware-report.yml) — GPU model, driver/ROCm version, the overlay that engaged, and the outcome. Reports feed directly into this page.
+If you run JARVIS on AMD or Intel hardware, [file a hardware compatibility report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml) — GPU model, driver/ROCm version, the overlay that engaged, and the outcome. Reports feed directly into this page.
 
 ---
 

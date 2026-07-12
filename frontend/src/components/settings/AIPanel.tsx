@@ -56,7 +56,7 @@ export function AIPanel() {
           or set <code>COMPOSE_FILE</code> to include <code>docker-compose.gpu.yml</code>, then
           confirm the NVIDIA container runtime is installed.{' '}
           <a
-            href="https://limitcycle-oss.github.io/Jarvis-RD-Assistant/manual/hardware-and-models/"
+            href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-and-models/"
             target="_blank"
             rel="noopener noreferrer"
             className="underline whitespace-nowrap"

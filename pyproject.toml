@@ -16,10 +16,10 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://limitcycle-oss.github.io/Jarvis-RD-Assistant/"
-Repository = "https://github.com/limitcycle-oss/Jarvis-RD-Assistant"
-Issues = "https://github.com/limitcycle-oss/Jarvis-RD-Assistant/issues"
-Authors = "https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/AUTHORS.md"
+Documentation = "https://limitcycle-oss.github.io/jarvis-rd-assistant/"
+Repository = "https://github.com/limitcycle-oss/jarvis-rd-assistant"
+Issues = "https://github.com/limitcycle-oss/jarvis-rd-assistant/issues"
+Authors = "https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/AUTHORS.md"
 
 [dependency-groups]
 jarvis-common = [

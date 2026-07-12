@@ -80,20 +80,20 @@ calls automatically nest as child spans of the active trace.
 
 | Trace | Outer function | File:line | One trace produced when |
 |---|---|---|---|
-| **Pulse run** | `run_pulse` | [pulse/job.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py) | Cron fires OR `pulse.generate` job dispatched |
-| **RAG question (single-paper)** | `prepare_single_paper_rag` | [rag/streaming.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a question on a paper |
-| **RAG question (cross-paper)** | `prepare_cross_paper_rag` | [rag/streaming.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a cross-paper question; includes `decompose_query` child span |
-| **Extraction batch** | `batch_extract` | [extraction/core.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers batch extraction over N papers |
-| **Single-paper extraction** | `extract_fields_for_paper` | [extraction/core.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers single-paper extraction OR is invoked from `batch_extract` (in which case it's a child span of the batch trace) |
-| **KG entity extraction** | `extract_entities_for_paper` | [extraction/entities.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py) | User triggers entity extraction |
-| **Card generation** | `CardGenerator.generate_cards` | [learning_engine/card_generator.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/learning_engine/learning_engine/card_generator.py) | User generates flashcards for a paper |
-| **Weekly summary run** | `generate_weekly_summary` | [weekly_summary.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py) | Scheduled weekly digest job runs |
-| **Contradiction scan** | `scan_contradictions` | [services/contradictions.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py) | User triggers a contradiction scan (single-paper or library-wide) |
+| **Pulse run** | `run_pulse` | [pulse/job.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py) | Cron fires OR `pulse.generate` job dispatched |
+| **RAG question (single-paper)** | `prepare_single_paper_rag` | [rag/streaming.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a question on a paper |
+| **RAG question (cross-paper)** | `prepare_cross_paper_rag` | [rag/streaming.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a cross-paper question; includes `decompose_query` child span |
+| **Extraction batch** | `batch_extract` | [extraction/core.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers batch extraction over N papers |
+| **Single-paper extraction** | `extract_fields_for_paper` | [extraction/core.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers single-paper extraction OR is invoked from `batch_extract` (in which case it's a child span of the batch trace) |
+| **KG entity extraction** | `extract_entities_for_paper` | [extraction/entities.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py) | User triggers entity extraction |
+| **Card generation** | `CardGenerator.generate_cards` | [learning_engine/card_generator.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py) | User generates flashcards for a paper |
+| **Weekly summary run** | `generate_weekly_summary` | [weekly_summary.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py) | Scheduled weekly digest job runs |
+| **Contradiction scan** | `scan_contradictions` | [services/contradictions.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py) | User triggers a contradiction scan (single-paper or library-wide) |
 
 **Implicit nested span:** every call to `call_llm_structured`
 gets a `@observe(as_type="generation")` wrap at the choke-point function
 itself, capturing model, input messages, validated output, latency.
-Streaming RAG calls in [rag/streaming.py](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) get their own
+Streaming RAG calls in [rag/streaming.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py) get their own
 `@observe(as_type="generation")` wrap at the streaming call site (since
 they don't go through the choke-point).
 
@@ -180,7 +180,7 @@ JARVIS contract is self-hosted-first.
 
 ## 7. SDK initialization
 
-Once per service in [`configure_lifespan`](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py) at startup. Roughly:
+Once per service in [`configure_lifespan`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py) at startup. Roughly:
 
 ```python
 # Pseudocode — mirrors _langfuse_lifespan_hook in jarvis_common/llm_client.py
@@ -205,7 +205,7 @@ missing. The `@observe()` decorator from `langfuse.decorators` handles
 the no-op case automatically when the SDK is uninitialized.
 
 The lifespan teardown counterpart (per the equal-length contract enforced by
-[configure_lifespan](https://github.com/limitcycle-oss/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py)) is `langfuse.shutdown()` — flushes pending spans
+[configure_lifespan](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py)) is `langfuse.shutdown()` — flushes pending spans
 to the backend, important for short-lived workers.
 
 ---
