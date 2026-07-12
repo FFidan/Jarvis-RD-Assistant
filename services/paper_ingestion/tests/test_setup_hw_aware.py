@@ -272,8 +272,8 @@ def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
     KEEP_PROFILE_ARGS=() empty.  On bash < 4.4, ``"${KEEP_PROFILE_ARGS[@]}"``
     under ``set -u`` raises "unbound variable" — guard: the portable idiom
     ``${ARR[@]+"${ARR[@]}"}`` must be used at the site.  Asserts that the script
-    reaches the stack-start path and runs plain ``docker compose up -d`` (no
-    ``--profile`` flags).
+    reaches the stack-start path with no ``--profile`` flags injected, pulls the
+    published images first, and brings the stack up with ``--no-build``.
     """
     _stage_hw_tmpdir(tmp_path)
     # Minimal .env: no TELEGRAM_BOT_TOKEN, no COMPOSE_PROFILES → KEEP_PROFILE_ARGS stays empty.
@@ -300,11 +300,22 @@ def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
     )
     assert "Keeping existing .env" in result.stdout
     invocations = log.read_text().splitlines()
-    # Must run plain "compose up -d" — no --profile flags injected.
-    assert "compose up -d" in invocations, (
-        f"plain compose up -d not found; docker invocations: {invocations}"
+    # The published images must be materialised BEFORE the stack starts, and the
+    # bring-up must forbid a build: every published service pairs `pull_policy: missing`
+    # with a `build:` block, so an image left missing here would be silently BUILT —
+    # the multi-GB torch build this release exists to eliminate.
+    assert any(i.startswith("compose pull ") for i in invocations), (
+        f"published images not pulled before start; docker invocations: {invocations}"
     )
-    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+    assert "compose up -d --no-build" in invocations, (
+        f"bring-up is missing the --no-build guard; docker invocations: {invocations}"
+    )
+    # The user's own configuration survives; only the derived torch-variant pair is
+    # backfilled (a pre-1.1 .env has none, and without it a CUDA host would silently
+    # resolve the CPU image tag).
+    env_after = (tmp_path / ".env").read_text()
+    assert env_before.strip() in env_after, "existing .env configuration must be preserved"
+    assert "TORCH_VARIANT=cpu" in env_after, "the torch variant must be backfilled"
 
 
 @_requires_bash
@@ -314,8 +325,9 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
 
     The pre-v0.8 dead end ("Keeping existing .env. Exiting." with services
     down) must not return. A legacy .env without COMPOSE_PROFILES but with a
-    TELEGRAM_BOT_TOKEN must derive ``--profile telegram``. docker is
-    PATH-shimmed; the invocation log proves the stack-start path was reached.
+    TELEGRAM_BOT_TOKEN must derive ``--profile telegram`` — and must pull the
+    telegram image too, since an image left missing would be silently BUILT.
+    docker is PATH-shimmed; the invocation log proves the path taken.
     """
     _stage_hw_tmpdir(tmp_path)
     env_before = "TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
@@ -338,10 +350,18 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
     assert "Keeping existing .env" in result.stdout
     invocations = log.read_text().splitlines()
-    assert "compose --profile telegram up -d" in invocations, (
-        f"stack-start path not reached; docker invocations: {invocations}"
+    pulls = [i for i in invocations if i.startswith("compose --profile telegram pull ")]
+    assert pulls, f"published images not pulled before start; docker invocations: {invocations}"
+    assert "telegram_bot" in pulls[0], (
+        "the telegram profile is active, so its image must be pulled too — otherwise "
+        f"`up` would silently BUILD it; got: {pulls[0]}"
     )
-    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+    assert "compose --profile telegram up -d --no-build" in invocations, (
+        f"bring-up is missing the --no-build guard; docker invocations: {invocations}"
+    )
+    env_after = (tmp_path / ".env").read_text()
+    assert env_before.strip() in env_after, "existing .env configuration must be preserved"
+    assert "TORCH_VARIANT=cpu" in env_after, "the torch variant must be backfilled"
 
 
 def _write_missing_compose_docker_shim(tmp: Path) -> Path:
