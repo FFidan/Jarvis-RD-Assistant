@@ -170,11 +170,10 @@ preflight_disk() {
     info "Skipping disk preflight (--skip-disk-check)."
     return 0
   fi
-  # jarvis-setup always builds the CPU image set (plain `up -d`, no GPU
-  # overlay), so the cold-install footprint is the cpu-build budget even on an
-  # NVIDIA host. setup.sh, which engages the GPU overlay, is the path that
-  # needs the larger cuda-build figure.
-  local _variant="cpu-build"
+  # This launcher PULLS the CPU image set (no GPU overlay, no --build-local path),
+  # so the cold-install footprint is the cpu-pull budget even on an NVIDIA host —
+  # strictly smaller than a build, which acquires the build cache as well.
+  local _variant="cpu-pull"
   local _req_gb _req_exact=1
   _req_gb="$(compute_required_disk_gb "qwen3:8b" "$_variant")" || _req_exact=0
   local _out _rc=0
@@ -282,8 +281,20 @@ fi
 info "Pulling models via ollama-bootstrap..."
 ${COMPOSE} run --rm ollama-bootstrap
 
-info "Starting Docker Compose stack (${COMPOSE} up -d)"
-${COMPOSE} up -d
+# Materialise the published images, then forbid a build. A bare `up -d` here would
+# find them missing and SILENTLY BUILD them (`pull_policy: missing` + a `build:`
+# block) — the multi-GB torch build, and the ENOSPC, that installing from prebuilt
+# images exists to eliminate. This launcher has no --build-local path, so a failed
+# pull must fail loudly rather than fall back. No profiles are engaged here, so the
+# base set (no telegram_bot, no langfuse) is exactly what starts.
+info "Pulling prebuilt images: ${PUBLISHED_SERVICES_BASE[*]}"
+if ! ${COMPOSE} pull "${PUBLISHED_SERVICES_BASE[@]}"; then
+  die "Image pull failed." \
+      "Check network access to ghcr.io, then re-run this installer. To build from source instead, use ./setup.sh --build-local"
+fi
+
+info "Starting Docker Compose stack (${COMPOSE} up -d --no-build)"
+${COMPOSE} up -d --no-build
 
 # ---------------------------------------------------------------------------
 # Wait for mandatory services to become healthy

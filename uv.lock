@@ -1481,7 +1481,7 @@ wheels = [
 
 [[package]]
 name = "jarvis-rd-assistant"
-version = "1.0.4"
+version = "1.1.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]

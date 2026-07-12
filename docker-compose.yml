@@ -11,7 +11,7 @@ x-shared-env: &shared-env
   # Release version surfaced by /health/internal + FastAPI metadata + the UI.
   # The service images don't install the root distribution, so app_version()
   # reads this env; defaults to the release tag (same var drives the image tags).
-  JARVIS_VERSION: ${JARVIS_VERSION:-1.0.4}
+  JARVIS_VERSION: ${JARVIS_VERSION:-1.1.0}
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
@@ -615,7 +615,7 @@ services:
       SECRETS_DIR: /secrets
       # Stamped into each backup manifest's app_version (so a restore point shows
       # the JARVIS version it was taken on, not a constant "unknown").
-      JARVIS_VERSION: ${JARVIS_VERSION:-1.0.4}
+      JARVIS_VERSION: ${JARVIS_VERSION:-1.1.0}
     secrets:
       - postgres_password
       - backup_encrypt_key
@@ -689,6 +689,18 @@ services:
     volumes:
       - restore_inbox:/restore-inbox:rw  # the ONLY writable surface: streams the uploaded archive set + operator key here for restore.sh
       - backup_trigger:/backup-trigger:ro  # reads only .upload_grant.json (sha256 + expiry, never a secret) to authorize an upload
+    healthcheck:
+      # The uploader is PUT-only and deliberately answers 405 to every GET, so an
+      # exact 405 IS the liveness signal (anything else means the server isn't
+      # serving). stdlib http.client because the slim image has no curl/wget.
+      # The body is read and the connection closed explicitly: the server speaks
+      # HTTP/1.1 keep-alive, so exiting on an unread socket RSTs it and dumps a
+      # ConnectionResetError traceback into the uploader's own log every few probes.
+      test: ["CMD-SHELL", "python -c \"import http.client; c = http.client.HTTPConnection('127.0.0.1', 8090, timeout=5); c.request('GET', '/'); r = c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status == 405 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - jarvis
 
@@ -735,7 +747,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.0.4}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.1.0}
     pull_policy: build
     build:
       context: ./langfuse

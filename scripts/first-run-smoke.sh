@@ -29,7 +29,7 @@
 #     residue (intended for an ephemeral CI checkout).
 #
 # Usage:
-#   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS]
+#   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS] [--build-local]
 #                                   [--integration] [--rerun] [--wrapper] [--help]
 #
 #   --force            Tear down a pre-existing smoke project before starting,
@@ -38,6 +38,13 @@
 #   --timeout SECONDS  Overall budget for `setup.sh` to finish (default 3600).
 #                      The first run pulls 7-11 GB of model data, so a clean
 #                      machine legitimately needs 20-60 min.
+#   --build-local      Pass --build-local to setup.sh so the app images are
+#                      BUILT from this checkout instead of pulled from GHCR —
+#                      how CI proves the branch's own code boots (the pull
+#                      path only exercises previously-published images).
+#                      Incompatible with --wrapper: scripts/jarvis-setup.sh
+#                      takes no bootstrap-mode flag, so there is nothing to
+#                      forward to it.
 #   --integration      After the stack is healthy, run the gated integration
 #                      suite against it (sets SMOKE_INTEGRATION=1; requires uv).
 #   --rerun            After the first bootstrap succeeds, run it again with
@@ -70,14 +77,17 @@ export PAPER_INGESTION_HOST_PORT LEARNING_ENGINE_HOST_PORT QDRANT_HOST_PORT OLLA
 
 readonly DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}"
 
-# Disk-budget ratchet for the CPU build path: app images plus build cache this
-# run may add, in SI GB. Mirrors the "cpu-build" figure in scripts/setup_lib.sh
-# _image_budget_gb (measured build peak + headroom). Lower it to the pull-path
-# figure once the default install pulls prebuilt images instead of building.
-readonly DISK_BUDGET_GB=9
+# Disk-budget ratchet: app images plus build cache this run may add, in SI GB.
+# Keyed to the bootstrap mode so each is ratcheted at its OWN figure — budgeting the
+# pull path at the build ceiling would let a pull-size regression of several GB pass
+# unnoticed. Both mirror scripts/setup_lib.sh::_image_budget_gb (cpu-build 9 /
+# cpu-pull 6); a pull acquires strictly less than a build, which also fills the
+# build cache. Resolved after argument parsing, once the mode is known.
+DISK_BUDGET_GB=6
 
 FORCE=0
 TIMEOUT_SECONDS=3600
+BUILD_LOCAL=0
 INTEGRATION=0
 RERUN=0
 WRAPPER=0
@@ -109,6 +119,7 @@ while [ $# -gt 0 ]; do
     --force)   FORCE=1; shift ;;
     --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --timeout=*) TIMEOUT_SECONDS="${1#*=}"; shift ;;
+    --build-local) BUILD_LOCAL=1; shift ;;
     --integration) INTEGRATION=1; shift ;;
     --rerun)   RERUN=1; shift ;;
     --wrapper) WRAPPER=1; shift ;;
@@ -119,6 +130,15 @@ done
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
+if [ "$BUILD_LOCAL" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
+  err "--build-local cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
+  err "bootstrap-mode flag, so there is nothing to forward to it."
+  exit 2
+fi
+# A --build-local run also fills the Docker build cache, so it is held to the larger
+# cpu-build ceiling; the pull path keeps the tighter cpu-pull figure set above.
+[ "$BUILD_LOCAL" -eq 1 ] && DISK_BUDGET_GB=9
+readonly DISK_BUDGET_GB
 
 # -----------------------------------------------------------------------------
 # Resolve repo root (this script lives in <root>/scripts)
@@ -215,6 +235,7 @@ ok "Preconditions met — clean checkout, no conflicting deployment."
 # the bootstrap creates lands in the isolated project.
 # -----------------------------------------------------------------------------
 BOOTSTRAP_CMD=(./setup.sh --non-interactive --profile=dev)
+[ "$BUILD_LOCAL" -eq 1 ] && BOOTSTRAP_CMD+=(--build-local)
 [ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
 
 # App images plus Docker build cache, in bytes — the disk the install acquires.

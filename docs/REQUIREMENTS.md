@@ -154,10 +154,14 @@ Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](ht
 
 ## Optional Reranker
 
-Two flags required:
+How to enable it depends on which image you installed:
 
-1. **Build**: `INSTALL_OPTIONAL=true docker compose build paper_ingestion`
-2. **Runtime**: `RERANKER_ENABLED=true` in `.env`
+- **NVIDIA (CUDA) install** — the published CUDA image already ships the dependency.
+  Set `RERANKER_ENABLED=true` in `.env` and restart. Nothing to rebuild.
+- **CPU install** — the dependency is deliberately excluded to keep the image lean, so
+  it must be built in: set `INSTALL_OPTIONAL=true` and `RERANKER_ENABLED=true` in `.env`,
+  then re-run `./setup.sh --build-local`.
 
-Without these flags, the service falls back to RRF-only ranking. Model:
+Without the dependency the service falls back to RRF-only ranking and logs a warning
+naming the remedy. Model:
 `mixedbread-ai/mxbai-rerank-base-v2` (~280 MB, downloaded from HuggingFace on first use).

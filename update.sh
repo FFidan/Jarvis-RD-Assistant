@@ -178,10 +178,10 @@ fi
 # them to a newer version without touching versions.env, so always offer to
 # refresh. Telegram is optional and only included when a token is configured; its
 # profile must be named explicitly or Compose hides the service.
-APP_SERVICES=(paper_ingestion learning_engine dashboard restore-uploader)
+APP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
 APP_PROFILE_ARGS=()
 if [ -f .env ] && grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env; then
-  APP_SERVICES+=(telegram_bot)
+  APP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
   APP_PROFILE_ARGS+=(--profile telegram)
 fi
 

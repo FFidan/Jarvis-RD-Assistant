@@ -122,25 +122,6 @@ compose_or_die() {
   rm -f "$log_file"
 }
 
-# -----------------------------------------------------------------------------
-# The application images published to GHCR — single source of truth.
-# -----------------------------------------------------------------------------
-# Every one of these keeps a `build:` block so contributors can still build from
-# source, and that is precisely why they must be pulled BY NAME:
-# `docker compose pull --ignore-buildable` skips every buildable service and so
-# would pull none of them. telegram_bot is profile-gated, so callers append it
-# only when that profile is active; langfuse is never published (local build
-# only). tests/test_docker_compose_invariants.py asserts this list still matches
-# the published set declared in docker-compose.yml.
-PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
-PUBLISHED_SERVICE_TELEGRAM=telegram_bot
-# The image repositories behind that set, used to recognise a warm re-run on disk.
-PUBLISHED_IMAGE_REPOS=(
-  ghcr.io/limitcycle-oss/jarvis-paper-ingestion
-  ghcr.io/limitcycle-oss/jarvis-learning-engine
-  ghcr.io/limitcycle-oss/jarvis-dashboard
-)
-
 os_install_hint() {  # $1 = tool name (informational)
   case "$(uname -s 2>/dev/null)" in
     Darwin) printf 'macOS: install Docker Desktop — https://docs.docker.com/desktop/install/mac-install/' ;;
@@ -1491,6 +1472,12 @@ upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_overlay_name" "$_has_over
 # TORCH_VARIANT is the build arg the --build-local path hands the Dockerfile.
 upsert_env_var TORCH_VARIANT "$TORCH_VARIANT"
 upsert_env_var TORCH_VARIANT_SUFFIX "$TORCH_VARIANT_SUFFIX"
+# The published CUDA image ships the optional reranker dependency (it costs only
+# sentence-transformers there — the CUDA runtime it needs is already in that image),
+# while the CPU image deliberately omits it. Persist the matching build arg so a
+# --build-local build of the SAME tag produces the SAME contents; without this a
+# locally built :X.Y.Z-cuda would silently lack the reranker the pulled one has.
+upsert_env_var INSTALL_OPTIONAL "$([ "$TORCH_VARIANT" = "cuda" ] && echo true || echo false)"
 # Materialise the application images BEFORE anything heavy lands on disk: this is
 # a cold install's peak disk consumer, so an ENOSPC surfaces here — with recovery
 # guidance and nothing else half-downloaded — instead of mid-model-pull.
@@ -1572,7 +1559,7 @@ compose_or_die "docker compose up failed." \
 # -----------------------------------------------------------------------------
 # Optional services (telegram_bot) are profile-gated and intentionally
 # excluded from this list.
-MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard)
+MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader)
 
 printf '\n'
 info "Waiting for services to become healthy..."

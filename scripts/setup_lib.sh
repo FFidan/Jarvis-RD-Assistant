@@ -443,6 +443,35 @@ preflight_disk_lib() {
   [ "$((free_kb / 1048576))" -ge "$required_gb" ]
 }
 
+# -----------------------------------------------------------------------------
+# The application images published to GHCR — single source of truth.
+# -----------------------------------------------------------------------------
+# Shared by every entry point that starts the stack (setup.sh, update.sh,
+# scripts/jarvis-setup.sh), because each of them must materialise these images
+# BEFORE bringing the stack up. They all keep a `build:` block so contributors can
+# still build from source, and that is exactly why they must be pulled BY NAME:
+# `docker compose pull --ignore-buildable` skips every buildable service and would
+# pull none of them. Worse, `pull_policy: missing` + `build:` means a service whose
+# image is merely absent gets SILENTLY BUILT by `up` — the multi-GB torch build
+# (and the ENOSPC) this release exists to eliminate. Hence: pull these, then bring
+# up with `--no-build`.
+#
+# telegram_bot is profile-gated, so callers append it only when that profile is
+# active; langfuse is never published (local build only).
+# tests/test_docker_compose_invariants.py asserts this list still matches the
+# published set declared in docker-compose.yml, and that every entry point uses it.
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+PUBLISHED_SERVICE_TELEGRAM=telegram_bot
+# The image repositories behind that set, used to recognise a warm re-run on disk.
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+PUBLISHED_IMAGE_REPOS=(
+  ghcr.io/limitcycle-oss/jarvis-paper-ingestion
+  ghcr.io/limitcycle-oss/jarvis-learning-engine
+  ghcr.io/limitcycle-oss/jarvis-dashboard
+)
+
 # backfill_torch_variant_from_env — give a pre-1.1 .env the TORCH_VARIANT pair it
 # never had, echoing the variant when it writes one (nothing when there is already
 # a value, or no .env).

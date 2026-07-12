@@ -139,6 +139,10 @@ class _RerankerState:
 
 _reranker_state = _RerankerState()
 
+# Latches once so an enabled-but-unavailable reranker is reported a single time
+# rather than on every query.
+_WARNED_MISSING_DEPENDENCY = False
+
 
 def get_reranker() -> Reranker | None:
     """Get or create the singleton reranker instance.
@@ -152,6 +156,20 @@ def get_reranker() -> Reranker | None:
     """
     from jarvis_common.settings import get_reranker_settings
 
-    if not get_reranker_settings().reranker_enabled or not _HAS_RERANKER:
+    if not get_reranker_settings().reranker_enabled:
+        return None
+    if not _HAS_RERANKER:
+        # Asked for, but the dependency is not in this image — the CPU image omits it
+        # on purpose. Say so once instead of silently degrading: the caller would
+        # otherwise see plain retrieval scores and no reason why.
+        global _WARNED_MISSING_DEPENDENCY
+        if not _WARNED_MISSING_DEPENDENCY:
+            _WARNED_MISSING_DEPENDENCY = True
+            logger.warning(
+                "RERANKER_ENABLED is set but sentence-transformers is not installed in "
+                "this image; using retrieval scores only. The published CUDA image "
+                "includes it; on a CPU install set INSTALL_OPTIONAL=true in .env and "
+                "re-run ./setup.sh --build-local."
+            )
         return None
     return _reranker_state.get()

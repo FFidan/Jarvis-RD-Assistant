@@ -139,6 +139,45 @@ def test_paper_ingestion_image_selects_the_torch_variant(compose):
         )
 
 
+def test_jarvis_version_defaults_agree():
+    """Invariant: every ``${JARVIS_VERSION:-<x>}`` default in docker-compose.yml is identical.
+
+    JARVIS_VERSION drives both the published image tags AND the version the
+    containers report: app_version() falls back to this env var in production
+    (the images don't install the root distribution) and backup.sh stamps it
+    into every backup manifest. With the var unset — the default install — a
+    drifted default means pulling release-N images that report release-M via
+    /health, the UI, and every backup manifest.
+    """
+    raw = (REPO_ROOT / "docker-compose.yml").read_text()
+
+    # Every reference must CARRY a default: a bare ${JARVIS_VERSION} would resolve to an
+    # empty string on a default install — an image tag of `jarvis-dashboard:` — so the
+    # defaults being equal is not on its own enough.
+    bare = re.findall(r"\$\{JARVIS_VERSION\}", raw)
+    assert not bare, (
+        f"{len(bare)} bare ${{JARVIS_VERSION}} reference(s) in docker-compose.yml — with the "
+        "var unset these resolve to an empty tag; give each one a `:-<version>` default"
+    )
+
+    defaults = re.findall(r"\$\{JARVIS_VERSION:-([^}]*)\}", raw)
+    assert len(defaults) >= 2, "expected multiple JARVIS_VERSION defaults in docker-compose.yml"
+    assert len(set(defaults)) == 1, (
+        f"JARVIS_VERSION defaults drifted apart: {sorted(set(defaults))} — the pulled image "
+        "tags and the version the containers report/stamp into backups must agree"
+    )
+
+    # ...and they must agree with the release version itself, so the images cannot be
+    # tagged for one release while the project declares another.
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+    declared = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
+    assert declared, "pyproject.toml must declare a version"
+    assert defaults[0] == declared.group(1), (
+        f"docker-compose.yml defaults JARVIS_VERSION to {defaults[0]!r} but pyproject.toml "
+        f"declares {declared.group(1)!r} — the image tags and the release version must agree"
+    )
+
+
 def _bash_array_items(text: str, name: str) -> set[str]:
     """Collect every element assigned to a bash array (both `X=(...)` and `X+=(...)`)."""
     items: set[str] = set()
@@ -167,17 +206,22 @@ def test_installer_scripts_pull_every_published_service(compose):
         f"{published_in_compose ^ PUBLISHED_SERVICES}"
     )
 
-    setup_sh = (REPO_ROOT / "setup.sh").read_text()
-    telegram = re.search(r"^\s*PUBLISHED_SERVICE_TELEGRAM=(\S+)", setup_sh, re.MULTILINE)
-    assert telegram, "setup.sh must declare PUBLISHED_SERVICE_TELEGRAM"
-    setup_named = _bash_array_items(setup_sh, "PUBLISHED_SERVICES_BASE") | {telegram.group(1)}
-    assert setup_named == PUBLISHED_SERVICES, (
-        "setup.sh does not pull exactly the published services; unpulled ones would be "
-        f"silently BUILT. Difference: {setup_named ^ PUBLISHED_SERVICES}"
+    lib = (REPO_ROOT / "scripts" / "setup_lib.sh").read_text()
+    telegram = re.search(r"^\s*PUBLISHED_SERVICE_TELEGRAM=(\S+)", lib, re.MULTILINE)
+    assert telegram, "scripts/setup_lib.sh must declare PUBLISHED_SERVICE_TELEGRAM"
+    declared = _bash_array_items(lib, "PUBLISHED_SERVICES_BASE") | {telegram.group(1)}
+    assert declared == PUBLISHED_SERVICES, (
+        "the shared published-service list does not match compose's published set; a service "
+        f"missing from it is never pulled and so gets silently BUILT. Difference: "
+        f"{declared ^ PUBLISHED_SERVICES}"
     )
 
-    update_named = _bash_array_items((REPO_ROOT / "update.sh").read_text(), "APP_SERVICES")
-    assert update_named == PUBLISHED_SERVICES, (
-        "update.sh does not refresh exactly the published services; missing ones would be "
-        f"silently BUILT. Difference: {update_named ^ PUBLISHED_SERVICES}"
-    )
+    # Every entry point that brings the stack up must materialise those images from the
+    # shared list rather than keeping its own copy — a hand-maintained second list is
+    # exactly how a service silently falls back to being built.
+    for script in ("setup.sh", "update.sh", "scripts/jarvis-setup.sh"):
+        text = (REPO_ROOT / script).read_text()
+        assert "PUBLISHED_SERVICES_BASE" in text, (
+            f"{script} starts the stack but does not pull the shared published set — "
+            "any image it leaves missing would be silently BUILT by `up`"
+        )

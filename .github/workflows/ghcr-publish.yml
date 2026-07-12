@@ -16,7 +16,8 @@ name: GHCR publish
 # matching compose's ${JARVIS_VERSION} interpolation. Release candidates get
 # `:X.Y.Z-rc.N`; `latest` is never moved (flavor latest=false).
 # paper-ingestion ships two flavors: `:X.Y.Z` (TORCH_VARIANT=cpu, multi-arch)
-# and `:X.Y.Z-cuda` (amd64-only).
+# and `:X.Y.Z-cuda` (amd64-only, includes the reranker extras — see the matrix
+# note on INSTALL_OPTIONAL).
 #
 # arm64 builds run natively on the free public-repo `ubuntu-24.04-arm` hosted
 # runners (no QEMU); multi-arch manifests are assembled from per-platform
@@ -92,12 +93,21 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
-          # CUDA flavor is amd64-only (no arm64 CUDA wheel set).
+          # CUDA flavor is amd64-only (no arm64 CUDA wheel set). It also bakes
+          # in the cross-encoder reranker extras: on the CUDA base they add
+          # only sentence-transformers (a few MB), whereas on the CPU flavor
+          # the same flag would pull the ~3.7 GB nvidia-*/triton wheel set the
+          # flavor exists to exclude (constraints-optional.txt is pinned
+          # against the CUDA lock) — so the CPU flavor keeps the default
+          # INSTALL_OPTIONAL=false and RERANKER_ENABLED there needs a
+          # `--build-local` rebuild (documented in the hardware matrix).
           - slug: paper-ingestion-cuda
             image: jarvis-paper-ingestion
             context: .
             file: services/paper_ingestion/Dockerfile
-            build_args: TORCH_VARIANT=cuda
+            build_args: |
+              TORCH_VARIANT=cuda
+              INSTALL_OPTIONAL=true
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
@@ -218,6 +228,12 @@ jobs:
   merge:
     needs: [preflight, build]
     if: needs.preflight.outputs.push == 'true'
+    # This job is where a tag actually becomes pullable, so it is the publish gate.
+    # A stable `vX.Y.Z` tag enters the `release` environment and waits for the owner's
+    # approval; `-rc` dry-runs resolve to no environment and stay unattended. Together
+    # with the `refs/tags/v*` ruleset (admin-only tag creation), releasing an image
+    # takes two independent, deliberate acts.
+    environment: ${{ !contains(github.ref_name, '-rc') && 'release' || '' }}
     strategy:
       fail-fast: false
       matrix:

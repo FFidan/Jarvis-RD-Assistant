@@ -6,11 +6,18 @@ name: First-run smoke
 #
 # Matrix (push to main + on demand):
 #   dev-boot    — the README's `./setup.sh --non-interactive --profile=dev`
-#                 path, plus the gated integration suite against the live
-#                 stack (the only leg that blocks this workflow's status).
+#                 path with --build-local, so the stack runs THIS commit's
+#                 code (the default pull path would boot previously-published
+#                 images and green-light a broken push), plus the gated
+#                 integration suite against the live stack (the only leg that
+#                 blocks this workflow's status).
 #   setup-check — `./setup.sh --check` doctor on a cold box (informational).
-#   env-rerun   — a second bootstrap run against the kept .env (informational).
+#   env-rerun   — a second --build-local bootstrap against the kept .env
+#                 (informational).
 #   wrapper     — the scripts/jarvis-setup.sh bootstrap path (informational).
+#                 The wrapper has no local-build mode, so this leg exercises
+#                 the published-image pull path and needs those images to be
+#                 anonymously pullable.
 # Plus:
 #   coldbox-prereqs — Docker removed, then the guided prerequisite installer;
 #                 the EXPECTED outcome is the documented exit-3 "log out and
@@ -77,10 +84,15 @@ jobs:
 
       - name: Run the ${{ matrix.mode }} smoke
         run: |
+          # --build-local makes the smoke BUILD the app images from this
+          # checkout: these legs must test the pushed code, not whatever was
+          # last published to GHCR. The published-image pull path is covered
+          # by the cold-install job and the wrapper leg (jarvis-setup.sh has
+          # no local-build mode).
           case "${{ matrix.mode }}" in
-            dev-boot)    bash scripts/first-run-smoke.sh --integration ;;
+            dev-boot)    bash scripts/first-run-smoke.sh --integration --build-local ;;
             setup-check) ./setup.sh --check ;;
-            env-rerun)   bash scripts/first-run-smoke.sh --rerun ;;
+            env-rerun)   bash scripts/first-run-smoke.sh --rerun --build-local ;;
             wrapper)     bash scripts/first-run-smoke.sh --wrapper ;;
           esac
 
