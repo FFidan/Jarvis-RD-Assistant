@@ -10,6 +10,48 @@ Wording such as "public-ready", "public-readiness", or "public-launch groundwork
 
 _No unreleased changes yet._
 
+## v1.1.0 (2026-07-13)
+
+The install-and-distribution release. A default `./setup.sh` now installs JARVIS by pulling prebuilt, multi-architecture container images from the project's registry instead of building them locally, which removes the multi-gigabyte PyTorch/CUDA build that could exhaust disk on a first install. This release also adds passkey sign-in, rolling sessions, and a browser-driven disaster-recovery flow, and makes disk, hardware, and status reporting honest about what a given host will actually do.
+
+> Includes the operational-friction and status-truthfulness improvements that landed after the v1.0.4 tag (grouped under "Post-v1.0.4 improvements" below).
+
+### Added
+- **Install from prebuilt images.** The default installer pulls the four application images (plus the restore-uploader) from the container registry and brings the stack up without building, selecting a CPU or CUDA image flavor from the detected GPU. A `--build-local` flag keeps the from-source path for contributors, forks, and air-gapped installs; a failed pull stops with a clear message pointing at `--build-local` rather than silently building.
+- **Passkey sign-in and device management.** Register and sign in with a platform or roaming authenticator, manage credentials from the web UI, and revoke a credential (which also ends its sessions). Passkeys require a secure-context origin; raw-IP LAN installs keep the magic-link flow.
+- **Rolling sessions.** An in-use session renews across both the cookie and the database, at most once per day, and stale sessions and challenges are purged on a schedule.
+- **Web-based disaster recovery.** Recover onto a fresh host entirely from the browser: upload the backup archives and one-time key, trigger an inbox restore, and let the stack reconcile secrets, the database role, and services automatically — no terminal steps after `./setup.sh`. A guided recovery view reports progress throughout.
+- **Catalog-driven disk preflight** measured at the Docker data root, with a `--skip-disk-check` escape and a read-only `--check`.
+- **GPU vendor and VRAM detection** across NVIDIA, AMD, and Intel hosts, surfaced in the setup wizard and the status API; experimental ROCm and Vulkan compose overlays for AMD and Intel.
+- **Self-explanatory access modes.** The setup chooser presents localhost, LAN, Cloudflare Tunnel, and Let's Encrypt with their capability consequences, and derives a canonical application URL.
+- **Double-clickable launchers** for macOS, Linux, and Windows, and a hardware-validation helper for contributors certifying a new GPU.
+- **Admin storage-usage card** on the System Health page, and an estimate of reclaimable disk space when removing an installed model.
+- **Documentation**: a hardware support matrix, consolidated requirements, install troubleshooting, and new user-guide pages for access modes, passkeys, and backup & restore.
+
+### Changed
+- **Restore is now staged and atomic.** A restore loads into a staging database and swaps it in with a rename, self-healing back to the original data if any step fails, instead of dropping the live database first. Older backups migrate forward automatically; scheduled backups stand down while a restore runs, and the restore's progress poll stays authorized while the database is swapped out.
+- **Session minting is unified** across all entry points, and sign-in help points at the admin-link recovery flow when email delivery is not configured.
+- **Continuous integration** publishes multi-architecture images on release tags, enforces a measured disk budget, runs a release-blocking cold-install check, and promotes the mocked end-to-end suite to a required check.
+- Bumped the Ollama image and the docling, FastAPI, and frontend dependency pins.
+
+### Fixed
+- Require HTTPS for a configured public passkey origin.
+- Harden restore recovery-target validation and preserve host-authoritative service keys during an off-host restore.
+- Pause background writers during maintenance and reconcile the schema forward on resume.
+
+### Removed
+- The `JARVIS_TUNNEL_ACK_ZT_CONFIGURED` environment hand-edit is gone; Cloudflare Tunnel is now acknowledged in the setup flow (or with `--tunnel-ack`). Pre-1.1 `.env` files carrying it are ignored harmlessly.
+
+### Post-v1.0.4 improvements
+_These landed after the v1.0.4 tag and are included in v1.1.0._
+- The application version is reported by the API and health endpoints, shown in the UI, and recorded in backup manifests, distinguishing a redeployed server from a stale browser tab.
+- Restore reports its maintenance state rather than generic connection errors, exposes its current phase and manual steps, and enforces an upper bound on its own runtime; admins can delete individual restore points behind a typed confirmation and set a keep-last-N / maximum-age retention policy.
+- The sign-in page explains the magic-link cooldown and reports an unreachable email relay instead of failing silently; suppressed send failures are logged without storing addresses.
+- Custom OpenAI-compatible model endpoints are validated against private and reserved address ranges before use.
+- The model settings page keeps only the per-role selectors; detected hardware, the serving backend, and the recommended model move to a compact runtime summary on the System Health page. The recommended model for the 24–48 GB tier is qwen3:14b.
+- Unhandled server errors are recorded in the event log, deduplicated, alongside backup lifecycle events.
+- Consensus and contradiction scans explain empty results; cross-references again include shared-corpus papers; an unknown model provider returns HTTP 400 rather than 500; an empty SMTP value is treated as unset. soupsieve updated to 2.8.4 (GHSA-2wc2-fm75-p42x, GHSA-836r-79rf-4m37).
+
 ## v1.0.4 (2026-07-08)
 
 A focused maintenance and polish release that stabilizes magic-link email verification, simplifies Advanced settings to prevent duplicate model assignment, and introduces guided preflight prerequisite installation.
