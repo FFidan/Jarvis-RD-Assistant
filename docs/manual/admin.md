@@ -29,6 +29,7 @@ The **AdminUsersPage** provides a table of all registered users on the instance.
 | **Role dropdown** | Set a user's role to **User** or **Admin**. Takes effect immediately. |
 | **Send sign-in link** | Send a magic-link email directly to the user's registered address. Useful for account recovery if the user cannot receive email through the normal flow. |
 | **Remove** | Soft-delete the user account. This button is **disabled for the currently signed-in admin** (you cannot delete yourself). |
+| **Passkeys** | Shows how many passkeys the user has registered, with a **Revoke all** action that immediately invalidates every passkey on the account (for example after a lost or compromised device). The user can still sign in via magic link and re-register. |
 
 **Invite modal:**
 
@@ -81,13 +82,14 @@ Admins can restore the instance to any listed backup point without leaving the b
 *What happens automatically:*
 
 - **Safety pre-backup.** Before touching any live data, the sidecar captures a snapshot of the current state. If something goes wrong after the destructive step, the safety backup appears in the panel and can be used to recover.
-- **NEWER-version block.** If the chosen backup was made by a newer version of the app than is currently running, the restore is refused. Update the app first (`./update.sh`), then retry.
-- **Maintenance gate.** User-facing requests are blocked during the restore and resume automatically when it is complete.
+- **Staged, self-healing swap.** The backup is loaded into a separate staging database and swapped in atomically only once it verifies; a failure before the swap leaves the original untouched and served again, so a restore never leaves a half-restored instance.
+- **Older backups migrate forward.** A backup taken by an older app version is accepted and migrated forward automatically after the swap. A **newer** backup is refused — update the app first (`./update.sh`), then retry.
+- **Maintenance gate.** User-facing requests are blocked during the restore and resume automatically when a clean restore completes.
 - **Qdrant recovery.** The search index is restored best-effort. If the Qdrant step fails, the rest of the restore still completes — your papers and data are intact. The search index rebuilds itself by re-embedding from the restored database; this may take a few minutes on a large library but involves no data loss.
 
-**Manual restore (advanced):**
+**Recovering a fresh host (disaster recovery):** if the original server is gone, you can rebuild a brand-new host from your off-site archives entirely in the browser — generate a one-time upload grant, upload the archive set and backup key, and trigger the restore from the Backups panel. See [Backup & Restore](backup-and-restore.md) for the full admin walkthrough, and the [Deployment Guide](../DEPLOYMENT.md#off-host-total-host-loss-recovery) for the command-line fallback.
 
-If the one-click path is unavailable — for example, after a catastrophic host failure where the app itself cannot start — use the host-level procedure documented in the [Deployment Guide](../DEPLOYMENT.md#backup--restore). The steps: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases (drop/create, then `gunzip | psql`), and recover the Qdrant snapshots.
+**Manual restore (advanced):** if both the one-click path and the browser upload are unavailable — for example a headless host whose app cannot start — use the host-level procedure documented in the [Deployment Guide](../DEPLOYMENT.md#backup-restore). The steps: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases, and recover the Qdrant snapshots.
 
 ---
 

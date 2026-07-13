@@ -103,6 +103,8 @@ nav:
   - User Guide:
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md
+      - Choosing how you access JARVIS: manual/access-modes.md
+      - Passkeys: manual/passkeys.md
       - My Day & Home: manual/home-my-day.md
       - Navigation: manual/navigation.md
       - Research Feed & Library: manual/research-feed.md
@@ -121,6 +123,7 @@ nav:
       - Hardware support matrix: manual/hardware-support-matrix.md
       - Context window: manual/context-window.md
       - Telegram: manual/telegram.md
+      - Backup & Restore: manual/backup-and-restore.md
       - Admin & Multi-tenant: manual/admin.md
   - Install & Operate:
       - Quickstart: readme-shim.md

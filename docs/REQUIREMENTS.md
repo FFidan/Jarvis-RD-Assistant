@@ -47,7 +47,7 @@ bash scripts/check-python-deps.sh            # verify parity
 ```
 
 Groups: `jarvis-common` (shared), `paper-ingestion`, `paper-ingestion-optional`,
-`learning-engine`, `telegram-bot`. FastAPI pinned `>=0.136.1,<0.138.0`.
+`learning-engine`, `telegram-bot` (plus `-cpu` conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned `>=0.136.1,<0.140.0`.
 
 Frontend (`frontend/package.json`): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,
@@ -64,7 +64,7 @@ Dev deps (root): `pytest>=8.0`, `pytest-asyncio>=0.24.0`, `ruff>=0.8.0`,
 | Ollama | `ollama/ollama:0.31.2` (pin in `versions.env`) | Local LLM inference |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper embeddings |
 | LiteLLM | sha256-pinned (see `versions.env`) | Unified LLM gateway |
-| React dashboard | `nginx:alpine` | Web dashboard (container 3000, host 3001) |
+| React dashboard | `ghcr.io/limitcycle-oss/jarvis-dashboard` (nginx-unprivileged base) | Web dashboard (container 3000, host 3001) |
 
 Ollama is loopback-only by default. Security posture: [docs/SECURITY.md](SECURITY.md).
 

@@ -73,10 +73,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 **Full single-instance install** (Docker, Python, Node, secrets, etc.):
 
 ```bash
-./setup.sh            # interactive — asks for API keys and config
+./setup.sh --build-local   # interactive; builds the app images from your source
 # or
 ./scripts/jarvis-setup.sh   # non-interactive — reads env vars / defaults
 ```
+
+> A plain `./setup.sh` **pulls** the prebuilt application images from the registry, so your local
+> code changes would not run. Contributors must pass **`--build-local`** (and `./update.sh --build-local`
+> when updating) to build the images from the working tree. The `build:` blocks in `docker-compose.yml`
+> are preserved for exactly this path.
 
 **Python deps only** (after the full install, or for CI-style local work):
 

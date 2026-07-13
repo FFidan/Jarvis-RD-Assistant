@@ -18,7 +18,9 @@ JARVIS uses three distinct credential types with strictly bounded authority:
 
 The `JARVIS_API_KEY` is an ops secret, not a user password. Anyone who holds it can call service endpoints but cannot read or write another user's papers, cards, or settings — the user-data layer requires a valid session identity.
 
-The session layer includes a deliberate 24-hour `SESSION_GRACE` window (in `session_middleware.py`): a session expired by no more than 24 hours still resolves the user's identity (without renewing `expires_at`) so that reviews captured offline can reconcile after a realistic offline gap. This is an intentional offline-tolerance design choice, not a misconfiguration. `revoked_at` and `deleted_at` still hard-fail immediately regardless of the grace window — explicit revocation is never relaxed.
+The session layer uses **rolling (sliding) expiry** (`session_middleware.py`). A signed-in session is valid for 30 days (`SESSION_TTL`); each time it is used its expiry rolls forward another 30 days, but at most once per day (`SESSION_RENEW_AFTER`) so a busy user triggers a single database write per day rather than one per request. Renewal is a single atomic `UPDATE` whose `WHERE` clause is the security boundary: it renews only rows that are **not revoked** and **not already expired**, so neither a revoked session nor a grace-resolved one can extend itself. When a renewal happens the response re-issues the `Set-Cookie`, so the browser and the database row move together and never disagree on when the session ends.
+
+Layered on top is a deliberate 24-hour `SESSION_GRACE` window: a session expired by no more than 24 hours still **resolves** the user's identity (without renewing `expires_at`) so that reviews captured offline can reconcile after a realistic offline gap. This is an intentional offline-tolerance design choice, not a misconfiguration. `revoked_at` and `deleted_at` still hard-fail immediately regardless of the grace window — explicit revocation and account deletion are never relaxed. A scheduled purge job deletes expired-and-revoked sessions and expired passkey challenges so neither table grows without bound.
 
 ### In-Scope Attackers
 
@@ -35,6 +37,19 @@ The session layer includes a deliberate 24-hour `SESSION_GRACE` window (in `sess
 - Supply-chain compromise of upstream images or Python packages.
 
 See `docs/known-residual-risks.md` for the full residual-risk register.
+
+---
+
+## Passkeys (WebAuthn)
+
+JARVIS supports passkey sign-in and per-device credential management alongside the magic-link flow.
+
+- **Origin binding.** The allowed WebAuthn origin is derived from the operator-configured `APP_BASE_URL` (the same value that drives the access-mode conduit) and matched **exactly** — the server never trusts a `request.url`-derived origin, and `rp_id` is the matched hostname. A configured **public** origin must be HTTPS; loopback and other secure-context origins are allowed for local installs.
+- **User verification (UV) is required** for both registration and login. A login that fails UV is rejected **without** revoking the credential, so a failed verification cannot be used to lock a user out of their own passkey.
+- **Replay / one-finish.** Each challenge is claimed with a single `DELETE … RETURNING`, so a replayed or concurrently double-finished ceremony resolves exactly once.
+- **Cloned-authenticator detection.** An authenticator presenting a signature counter that is nonzero and less-than-or-equal-to the stored value is treated as cloned: the credential is revoked and all of its sessions are ended in the same transaction. Authenticators that legitimately never increment their counter (counter stays 0) continue to work.
+- **Revocation.** Deleting one credential ends only that credential's sessions; an admin revoke-all ends every passkey session. The magic-link recovery path is always available, so losing a device never locks an account out.
+- **Honest availability.** A capability endpoint reports whether this origin can run passkey ceremonies, so the UI only offers passkeys where they will actually work; a raw-IP LAN install keeps magic-link sign-in and rolling sessions instead of showing a button that cannot succeed.
 
 ---
 
@@ -342,7 +357,7 @@ topology changes.
 
 The admin Backups panel (v1.0.0+) allows an admin to restore the instance to a previous backup point from the browser.
 
-**Privilege boundary:** the app container gains no new operating-system privilege. On restore request, it writes a small JSON sentinel file to the `backup_trigger` volume (a minimal RW mount shared only with the backup sidecar). All destructive operations — DROP/CREATE DATABASE, the gunzip-and-psql dump reload, Qdrant snapshot recovery — run exclusively inside the `postgres-backup` sidecar, which already runs with the elevated database credentials it needs for scheduled backups. The `/backups` volume remains read-only to the app container; the app cannot read or overwrite backup archives.
+**Privilege boundary:** the app container gains no new operating-system privilege. On restore request, it writes a small JSON sentinel file to the `backup_trigger` volume (a minimal RW mount shared only with the backup sidecar). All database work runs exclusively inside the `postgres-backup` sidecar, which already holds the elevated database credentials it needs for scheduled backups. The restore loads the archive into a **staging database and swaps it in atomically** (renaming the previous database aside), rather than dropping the live database first; if any step before the swap fails, the original database is left untouched and served again automatically, and the previous database is dropped only after the swap succeeds. The `/backups` volume remains read-only to the app container; the app cannot read or overwrite backup archives.
 
 **Access controls:**
 
@@ -355,7 +370,12 @@ The admin Backups panel (v1.0.0+) allows an admin to restore the instance to a p
 
 ### Off-host (cross-host) restore — Security Posture
 
-Off-host disaster recovery (recovering on a fresh host from off-site backups) is **operator-driven via the runbook** in [DEPLOYMENT.md](DEPLOYMENT.md), not a WebUI action — a total-host-loss recovery may have no working UI. It adds **no new application surface or privilege**: the app gains nothing; the same already-privileged `postgres-backup` sidecar runs the same `restore.sh`, triggered by an operator-written request. It is the only restore path that touches secrets, so it is hardened specifically:
+Off-host disaster recovery (recovering on a fresh host from off-site backups) is now **web-first**: after `./setup.sh` and first-admin sign-in, the operator uploads the archive set and the one-time key from the browser and triggers the restore from the UI, which reconciles secrets, the database role, and services automatically. The scp/terminal runbook in [DEPLOYMENT.md](DEPLOYMENT.md) remains as a fallback for constrained environments. The browser path is served by a **dedicated `restore-uploader` container**, a new but deliberately bounded surface:
+
+- **Grant-gated, stdlib-only ingress.** The uploader is a small standard-library service that mounts only the restore inbox (read-write) and the trigger volume (read-only). It holds no database credentials, no Docker socket, and no host secrets. Every upload requires an admin-minted, hash-stored, 30-minute grant.
+- **The key and archive bytes never transit the application.** The operator's backup-encryption key and the uploaded archives are consumed by the privileged sidecar, not the app container. Possession of an unexpired grant allows writing (encrypted, inert) files into the inbox only — an actual restore still requires the admin-typed RESTORE trigger, and the sidecar's decrypt-probe rejects anything the operator key cannot open.
+
+The same already-privileged `postgres-backup` sidecar runs the same `restore.sh` regardless of whether the request came from the browser or the runbook. It is the only restore path that touches secrets, so it is hardened specifically:
 
 - **The backup encryption key is held out-of-band and is one-time.** The operator drops it into the writable `restore_inbox` volume as `operator_key` for a single restore. `restore.sh` **shreds** it (`shred -u`, falling back to `rm`) on every clean or recorded-failure exit, so a failed restore never leaves the key on the volume. A `SIGKILL` of the sidecar cannot run the exit trap; the next run shreds any leftover before re-staging.
 - **No write is ever attempted against the read-only `/secrets` mount.** On a fresh host the script cannot and does not write `/secrets` (it stays `:ro`). The **rw `restore_inbox`** volume is the only writable cross-host secrets-staging surface, and it is never mounted under `/secrets`.

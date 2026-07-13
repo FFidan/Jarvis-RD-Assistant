@@ -22,7 +22,7 @@ This manual is for **end users** — researchers and readers who use the web app
 
 **Operators** (people who install and maintain the system) should also read:
 
-- [`DEPLOYMENT.md`](../DEPLOYMENT.md) — installation, Docker Compose configuration, environment variables, and TLS setup.
+- [`DEPLOYMENT.md`](../DEPLOYMENT.md) — installation (prebuilt images by default), the access-mode chooser (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), Docker Compose configuration, and operations.
 - [`SECURITY.md`](../SECURITY.md) — hardening checklist, secret management, and known residual risks.
 
 These documents are part of the repository and are available in the **Get Started** and **Operate** sections of this site.
@@ -32,6 +32,8 @@ These documents are part of the repository and are available in the **Get Starte
 | Page | What it covers |
 |------|---------------|
 | [Getting Started](getting-started.md) | First-run operator bootstrap, signing in, post-login setup wizard, and the onboarding tour |
+| [Choosing how you access JARVIS](access-modes.md) | The localhost, LAN, Cloudflare Tunnel, and Let's Encrypt access modes and how to switch |
+| [Passkeys](passkeys.md) | Password-less sign-in with passkeys: registration, revocation, and magic-link recovery |
 | [Navigation](navigation.md) | AppShell layout, sidebar nav groups, TopBar controls (⌘K, Jobs, Pomodoro, theme) |
 | [Home & My Day](home-my-day.md) | Home dashboard, My Day page |
 | [Research Feed & Library](research-feed.md) | Inbox, Library, Discover (search), and Trash views of the feed |
@@ -45,7 +47,10 @@ These documents are part of the repository and are available in the **Get Starte
 | [Learning Cards](learning-cards.md) | FSRS spaced-repetition review and card library |
 | [Analytics](analytics.md) | Reading activity charts and corpus statistics |
 | [Settings](settings.md) | Sources, topics, automation, integrations, and account |
+| [What your hardware gets you](hardware-and-models.md) | How detected hardware maps to model recommendations |
+| [Hardware support matrix](hardware-support-matrix.md) | Supported GPU vendors and acceleration status |
 | [Telegram](telegram.md) | Pairing your Telegram account and (admin) bot-token configuration |
+| [Backup & Restore](backup-and-restore.md) | One-click restore, retention, and web-first disaster recovery (admin) |
 | [Admin Pages](admin.md) | User management, system health, audit log, backups, system logs (admin role only) |
 
 ## How this manual is maintained

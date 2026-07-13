@@ -218,7 +218,7 @@ Migration 0096 set `chunked_at = NOW()` on any paper that already had at least o
 
 `scripts/restore.sh` writes a durable `.destructive` sentinel at the DB DROP boundary (line 178: `touch "$MAINTENANCE_DESTRUCTIVE"`), before any DROP or data modification. While this sentinel is present, the app returns HTTP 503 on all non-exempt routes regardless of sentinel age (see `libs/jarvis_common/jarvis_common/maintenance.py:11–16`). This means a SIGKILL mid-restore no longer leaves the stack silently serving a half-restored database.
 
-**Operator action required to resume:** on a clean same-host restore, `restore.sh` clears both the `.maintenance` and `.destructive` sentinels automatically. For an inbox/off-host restore or a restore from an older backup, the script exits in maintenance mode and both sentinels must be cleared manually — see DEPLOYMENT.md for the full runbook.
+**Operator action required to resume:** on any **clean** restore — same-host one-click, off-host inbox, or older-than-code — `restore.sh` clears both the `.maintenance` and `.destructive` sentinels automatically (an off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the gate lifts). Only a restore that **fails after the destructive drop** exits still in maintenance, holding the durable `.destructive` sentinel; the operator recovers from the safety pre-backup and then clears both sentinels manually — see DEPLOYMENT.md for the runbook.
 
 ---
 

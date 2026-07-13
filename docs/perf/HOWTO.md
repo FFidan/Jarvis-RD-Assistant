@@ -25,14 +25,14 @@ preload it. To enable:
 
 ```bash
 # 1. Add to docker-compose Postgres command, or via init script:
-docker exec jarvis_rd_assistant-postgres-1 psql -U jarvis -d jarvis -c \
+docker compose exec postgres psql -U jarvis -d jarvis -c \
   "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';"
 
 # 2. Restart Postgres:
-docker restart jarvis_rd_assistant-postgres-1
+docker compose restart postgres
 
 # 3. Create the extension in the target DB:
-docker exec jarvis_rd_assistant-postgres-1 psql -U jarvis -d jarvis -c \
+docker compose exec postgres psql -U jarvis -d jarvis -c \
   "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
 
 # 4. Re-run the workload, then:

@@ -39,7 +39,7 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 
 - Docker Engine 24+ with Compose v2, `openssl`, `git`
 - **~25–53 GB free disk space** for the first install — a one-time peak, not the ongoing footprint. The exact figure depends on your GPU tier and whether images are pulled prebuilt or built locally; see [Disk budget](docs/REQUIREMENTS.md#disk-budget).
-- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. `setup.sh` builds/pulls the application images first, then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers.
+- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 - `./setup.sh --check` verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or `openssl` are missing, `./setup.sh --install-prereqs` can run the guided installer after showing the exact commands.
 - **Windows:** use WSL2 + Docker Desktop
@@ -52,11 +52,11 @@ cd jarvis-rd-assistant
 ./setup.sh             # add --install-prereqs only if you want setup to install missing host packages
 ```
 
-`setup.sh` generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens **http://localhost:3001** — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off.
+`setup.sh` asks how you'll access JARVIS (this computer only / home or lab network / Cloudflare Tunnel / your own domain with Let's Encrypt), generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens the printed URL (**http://localhost:3001** in localhost mode) — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off. Once signed in, any user can add a passkey (fingerprint / face / PIN) for password-free sign-in — see the [User Guide → Passkeys](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/passkeys/).
 
 Prefer not to open a terminal? Double-click a launcher in `launchers/` — `Start JARVIS.command` (macOS), `jarvis.desktop` (Linux), or `Start JARVIS.bat` (Windows) — each runs the same `setup.sh` and keeps the window open so you can read its output.
 
-Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see [Disk budget](docs/REQUIREMENTS.md#disk-budget)) streams its progress directly to your terminal after the application images are built, so the initial pull shows visible progress instead of a silent wait.
+Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see [Disk budget](docs/REQUIREMENTS.md#disk-budget)) streams its progress directly to your terminal after the application images are pulled, so the initial download shows visible progress instead of a silent wait.
 
 In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
 

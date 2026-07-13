@@ -79,19 +79,23 @@ commits since the last Git tag.
 
 ## Docker Image Versioning
 
-The four main services (`paper_ingestion`, `learning_engine`, `telegram_bot`,
-`dashboard`) are tagged using the `JARVIS_VERSION` environment variable. The
-compose fallback tracks the current release; set it explicitly in `.env` or
-`versions.env` before building a different version:
+Five images are published to GHCR on a release tag by `.github/workflows/ghcr-publish.yml`:
+`ghcr.io/limitcycle-oss/jarvis-{paper-ingestion,learning-engine,telegram-bot,dashboard,restore-uploader}`.
+Image tags drop the leading `v` (`v1.1.0` → `:1.1.0`), matching the `${JARVIS_VERSION}` interpolation in
+`docker-compose.yml`. `paper-ingestion` also publishes a `:X.Y.Z-cuda` flavor for NVIDIA hosts; the
+default install selects it from the detected GPU. `langfuse-hardened` is not published — it is
+observability-profile-only and built locally.
+
+Because the images are published, **rolling forward or back to a specific version is a registry pull**,
+not a rebuild. Pin `JARVIS_VERSION` and pull:
 
 ```bash
-JARVIS_VERSION=1.0.4
-docker compose build
-docker compose up -d
+JARVIS_VERSION=1.1.0 docker compose pull
+JARVIS_VERSION=1.1.0 docker compose up -d --no-build
 ```
 
-The `image:` tag in `docker-compose.yml` is applied to the built result so that
-`docker compose pull` works after images have been pushed to a registry.
+The `build:` blocks remain for contributors; `./setup.sh --build-local` (and `./update.sh --build-local`)
+build from source instead of pulling.
 
 ## Release Checklist
 
@@ -108,6 +112,21 @@ Before tagging a release:
 - [ ] All external service keys verified (LiteLLM, Langfuse, SMTP, Telegram).
 - [ ] Tag annotated and pushed.
 
+Publishing a stable image is gated by two independent controls: a `refs/tags/v*` repository ruleset
+(admin-only tag creation) and a `release` deployment environment on the publish job (the owner must
+approve the run). Release-candidate tags (`vX.Y.Z-rc.N`) publish unattended for dry-runs; only a clean
+`vX.Y.Z` tag enters the `release` environment.
+
+After the final `vX.Y.Z` publish completes:
+
+- [ ] Note that the squash-merge produced a **new commit SHA** — tag that SHA promptly so the published
+      images correspond to the tagged source (the rc images were built from a different SHA).
+- [ ] Run the anonymous cold-install smoke against the **final** tags (`gh workflow run first-run-smoke.yml`
+      with the release version) and confirm zero app-image builds and all mandatory services healthy.
+- [ ] `docker manifest inspect` every published image from an **empty** `DOCKER_CONFIG` (`DOCKER_CONFIG="$(mktemp -d)"`),
+      including the `-cuda` flavor, to prove they pull anonymously.
+- [ ] Announce the release only after both the cold-install smoke and the anonymous manifest inspection pass.
+
 ## Rollback Procedures
 
 ### Code Rollback
@@ -117,15 +136,17 @@ Before tagging a release:
 > a database restore from backup (see below), or use a forward-only "reverse
 > migration" instead.
 
-To revert to a previous release after confirming the DB state is compatible:
+To revert to a previously published release after confirming the DB state is compatible, pin
+`JARVIS_VERSION` to that tag and pull it back from the registry:
 
 ```bash
-# Redeploy the target version
-docker compose down
-docker compose pull  # if images exist in registry
-# Or build locally against the tag's source
-docker compose up -d
+JARVIS_VERSION=<previous-version> docker compose pull
+JARVIS_VERSION=<previous-version> docker compose up -d --no-build
 ```
+
+Only tags already published to GHCR can be rolled back this way. If the target predates the published
+images, or you run a `--build-local` install, check out the target tag's source and rebuild
+(`./update.sh --build-local`) instead.
 
 ### Database Rollback
 

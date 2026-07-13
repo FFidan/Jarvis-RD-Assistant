@@ -116,9 +116,13 @@ HTTP client.
 
 ## Authentication And Ownership
 
-- **Magic-link auth** — `users`, `magic_link_tokens`, and `user_sessions` tables
-  (see `db/init.sql`). `jarvis_common.auth` resolves the caller user from a
-  session cookie; admin endpoints require `role='admin'`.
+- **Magic-link + passkey auth** — magic-link sign-in uses the `users`,
+  `magic_link_tokens`, and `user_sessions` tables (see `db/init.sql`); optional
+  WebAuthn passkeys are stored in `webauthn_credentials` (migration 0102), bound
+  to the exact `APP_BASE_URL` origin with user verification required.
+  `jarvis_common.auth` resolves the caller user from a session cookie; sessions
+  roll forward on use (sliding 30-day expiry, throttled to one write per day);
+  admin endpoints require `role='admin'`.
 - **Per-user ownership** — every product row (`daily_log`,
   `paper_recommendations`, `projects`, `tasks`, `milestones`,
   `pulse_source_health`, `system_events`, and others) carries a non-NULL
