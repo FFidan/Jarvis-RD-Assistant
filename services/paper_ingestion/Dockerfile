@@ -35,6 +35,7 @@ WORKDIR /app
 COPY services/paper_ingestion/requirements.txt services/paper_ingestion/constraints.txt \
      services/paper_ingestion/constraints-cpu.txt \
      services/paper_ingestion/requirements-optional.txt services/paper_ingestion/constraints-optional.txt \
+     services/paper_ingestion/constraints-optional-cpu.txt \
      services/paper_ingestion/constraints-profiling.txt ./
 # Hash-pinned install of every transitive dep FIRST so this multi-GB layer is
 # immune to jarvis_common changes (the wheel COPY below busts only the cheap
@@ -56,7 +57,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
          pip install --require-hashes -r constraints-profiling.txt; \
        fi \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
-         pip install --require-hashes -r constraints-optional.txt; \
+         case "$TORCH_VARIANT" in \
+           cpu)  OPTIONAL_CONSTRAINTS=constraints-optional-cpu.txt ;; \
+           cuda) OPTIONAL_CONSTRAINTS=constraints-optional.txt ;; \
+         esac; \
+         pip install --require-hashes -r "$OPTIONAL_CONSTRAINTS"; \
        fi
 
 # jarvis_common wheel installed with --no-deps (its transitives are already

@@ -115,5 +115,10 @@ export_constraints "paper-ingestion" "services/paper_ingestion/constraints.txt"
 export_constraints "paper-ingestion-cpu" "services/paper_ingestion/constraints-cpu.txt" \
   "--extra-index-url https://download.pytorch.org/whl/cpu"
 export_constraints "paper-ingestion-optional" "services/paper_ingestion/constraints-optional.txt"
+# CPU flavor of the reranker extras: torch from the PyTorch CPU index so a
+# TORCH_VARIANT=cpu build with INSTALL_OPTIONAL=true reuses the +cpu torch
+# already in the base image instead of the ~3.7 GB nvidia-*/triton set.
+export_constraints "paper-ingestion-optional-cpu" "services/paper_ingestion/constraints-optional-cpu.txt" \
+  "--extra-index-url https://download.pytorch.org/whl/cpu"
 export_constraints "learning-engine" "services/learning_engine/constraints.txt"
 export_constraints "telegram-bot" "services/telegram_bot/constraints.txt"
