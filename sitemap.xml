@@ -1,139 +1,155 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/ARCHITECTURE/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/ARCHITECTURE/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/DEPLOYMENT/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/DEPLOYMENT/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/ENGINEERING_STANDARDS/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/ENGINEERING_STANDARDS/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/METHODS_AND_LIMITATIONS/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/METHODS_AND_LIMITATIONS/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/RELEASE/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/RELEASE/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/REQUIREMENTS/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/REQUIREMENTS/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/SECURITY/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/SECURITY/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/contributing/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/contributing/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/known-residual-risks/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/known-residual-risks/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/license-notices/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/license-notices/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/migrations-shim/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/migrations-shim/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/readme-shim/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/readme-shim/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/decisions/2026-06-25-no-per-model-structured-output-boolean/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/decisions/2026-06-25-no-per-model-structured-output-boolean/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/admin/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/access-modes/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/analytics/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/admin/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/ask/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/analytics/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/citation-graph/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/ask/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/consensus/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/backup-and-restore/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/context-window/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/citation-graph/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/extraction-table/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/consensus/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/getting-started/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/context-window/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/hardware-and-models/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/extraction-table/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/home-my-day/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/getting-started/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/knowledge-graph/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-and-models/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/learning-cards/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/navigation/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/home-my-day/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/paper-detail/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/knowledge-graph/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/projects/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/learning-cards/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/pulse/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/navigation/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/research-feed/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/paper-detail/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/settings/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/passkeys/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
     <url>
-         <loc>https://ffidan.github.io/Jarvis-RD-Assistant/manual/telegram/</loc>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/projects/</loc>
+         <lastmod>2026-07-13</lastmod>
+    </url>
+    <url>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/pulse/</loc>
+         <lastmod>2026-07-13</lastmod>
+    </url>
+    <url>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/research-feed/</loc>
+         <lastmod>2026-07-13</lastmod>
+    </url>
+    <url>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/settings/</loc>
+         <lastmod>2026-07-13</lastmod>
+    </url>
+    <url>
+         <loc>https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/telegram/</loc>
          <lastmod>2026-07-13</lastmod>
     </url>
 </urlset>
