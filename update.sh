@@ -5,8 +5,9 @@
 #                   the prebuilt ones published to GHCR. Slower and needs far more
 #                   disk; for development or an air-gapped host.
 #
-# Never auto-rollbacks. On failure, prints the exact command the operator
-# should run. macOS-safe: no `sed -i`, no GNU-only flags.
+# Never auto-rollbacks. On failure, prints the recovery commands for both the
+# third-party pins (versions.env) and the application images (JARVIS_VERSION
+# tag). macOS-safe: no `sed -i`, no GNU-only flags.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -275,8 +276,19 @@ printf '\n'
 warn "The following service(s) failed health checks: ${FAILED[*]}"
 cat <<EOF
 
-To rollback the version pin and re-run the update:
-  ${C_BOLD}git checkout HEAD~1 -- versions.env && ./update.sh${C_RESET}
+Recovery — the two image sets roll back differently:
+
+  ${C_BOLD}Third-party services${C_RESET} (postgres, ollama, qdrant, litellm, cloudflared) are
+  pinned in versions.env. Roll their pins back one commit and re-run:
+    ${C_BOLD}git checkout HEAD~1 -- versions.env && ./update.sh${C_RESET}
+
+  ${C_BOLD}Application services${C_RESET} are tagged by JARVIS_VERSION in docker-compose.yml —
+  versions.env does NOT pin them, so the command above re-pulls the same
+  images. To return them to a previously PUBLISHED release, pin that tag and
+  pull it back (only tags already in the registry can be rolled back; a
+  --build-local install rebuilds from source with --build-local instead):
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose pull ${FAILED[*]}${C_RESET}
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose up -d --no-build ${FAILED[*]}${C_RESET}
 
 To inspect logs for the failed service(s):
   docker compose logs --tail=200 ${FAILED[*]}

@@ -114,6 +114,14 @@ else
   ok "Created .env from .env.example (chmod 600) — secrets will be generated next"
 fi
 
+# A pre-1.1 .env carries no TORCH_VARIANT, so the paper-ingestion tag would
+# resolve to the CPU flavour even on a kept GPU install — pulling a CPU image
+# under a still-active GPU overlay. Backfill it (nvidia overlay -> cuda, else
+# cpu) before anything resolves an image, exactly as setup.sh and update.sh do.
+if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; then
+  info "Recorded this host's torch image variant in .env: ${_bf_variant}"
+fi
+
 # ---------------------------------------------------------------------------
 # init-dirs (volume mount preconditions)
 # ---------------------------------------------------------------------------
@@ -190,9 +198,12 @@ preflight_disk() {
       ;;
   esac
   # Shortfall. Cached app images mean this is a re-run, not a cold install —
-  # the big layers are already on disk, so never block it.
+  # the big layers are already on disk, so never block it. Key off the published
+  # repositories the install actually pulls: the pre-1.1 `jarvis/*` names no
+  # longer exist once images come from GHCR, so grepping them would leave this
+  # escape hatch dead and make every low-disk re-run of a v1.1 install falsely fatal.
   local _img
-  for _img in jarvis/paper_ingestion jarvis/learning_engine jarvis/dashboard; do
+  for _img in "${PUBLISHED_IMAGE_REPOS[@]}"; do
     if [ -n "$(docker images -q "$_img" 2>/dev/null)" ]; then
       warn "Low disk: ${_free_gb} GB free on ${_data_root} (a full reinstall needs ~${_req_gb} GB) — continuing, app images are already present."
       return 0

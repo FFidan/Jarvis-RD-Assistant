@@ -10,6 +10,7 @@ re-run which keeps the existing .env still starts the stack.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -364,6 +365,63 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
     assert "TORCH_VARIANT=cpu" in env_after, "the torch variant must be backfilled"
 
 
+def _run_backfill(tmp: Path) -> subprocess.CompletedProcess[str]:
+    """Run the real backfill_torch_variant_from_env against a .env in ``tmp``."""
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'source "{REPO_ROOT}/scripts/setup_lib.sh" && backfill_torch_variant_from_env',
+        ],
+        cwd=str(tmp),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@_requires_bash
+def test_backfill_torch_variant_nvidia_env_lands_cuda_tag(tmp_path: Path) -> None:
+    """A pre-1.1 NVIDIA .env (gpu overlay in COMPOSE_FILE) backfills the cuda tag.
+
+    This is the wave's highest-value invariant and the one with the widest blast
+    radius: without ``TORCH_VARIANT_SUFFIX=-cuda`` the paper-ingestion image tag
+    ``${JARVIS_VERSION:-1.1.0}${TORCH_VARIANT_SUFFIX:-}`` resolves to the CPU
+    flavour on a CUDA host, and a --build-local rebuild without
+    ``INSTALL_OPTIONAL=true`` reproduces the published :X.Y.Z-cuda tag WITHOUT
+    the reranker it ships. The cpu path is covered by the keep-env setup tests
+    above; this pins the cuda path directly against the real helper.
+    """
+    (tmp_path / ".env").write_text(
+        "JARVIS_SECRET_KEY=keep_me\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n"
+    )
+    result = _run_backfill(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "cuda", result.stdout
+    env_after = (tmp_path / ".env").read_text()
+    assert "TORCH_VARIANT=cuda" in env_after, env_after
+    assert "TORCH_VARIANT_SUFFIX=-cuda" in env_after, env_after
+    assert "INSTALL_OPTIONAL=true" in env_after, env_after
+    assert "JARVIS_SECRET_KEY=keep_me" in env_after, "existing config must be preserved"
+
+    # Idempotent: a second run writes nothing more and echoes nothing.
+    again = _run_backfill(tmp_path)
+    assert again.returncode == 0 and again.stdout == "", again.stdout
+    assert (tmp_path / ".env").read_text().count("TORCH_VARIANT=") == 1
+
+
+@_requires_bash
+def test_backfill_torch_variant_cpu_env_leaves_optional_untouched(tmp_path: Path) -> None:
+    """A non-GPU .env backfills the cpu tag and never forces INSTALL_OPTIONAL on."""
+    (tmp_path / ".env").write_text("COMPOSE_FILE=docker-compose.yml\n")
+    result = _run_backfill(tmp_path)
+    assert result.returncode == 0 and result.stdout == "cpu", result.stdout
+    env_after = (tmp_path / ".env").read_text()
+    assert "TORCH_VARIANT=cpu" in env_after
+    assert "TORCH_VARIANT_SUFFIX=" in env_after and "TORCH_VARIANT_SUFFIX=-cuda" not in env_after
+    assert "INSTALL_OPTIONAL" not in env_after, "the cpu image must not force the reranker extras"
+
+
 def _write_missing_compose_docker_shim(tmp: Path) -> Path:
     """Return a PATH dir whose docker exists but lacks compose v2."""
     bin_dir = tmp / "missing-compose-bin"
@@ -382,13 +440,22 @@ def _write_missing_compose_docker_shim(tmp: Path) -> Path:
 
 
 def _write_sudo_logger(tmp: Path) -> tuple[Path, Path]:
-    """Return a PATH dir with sudo that logs reviewed installer commands."""
+    """Return a PATH dir with sudo that logs reviewed installer commands.
+
+    Each invocation is logged as one line, its arguments joined by the unit
+    separator (\\x1f), so the caller can compare exact ARGUMENT VECTORS rather
+    than a space-joined string — the latter loses the quoting of an argument
+    like ``sh -c 'echo ... > file'``, which is a single argv element even though
+    it contains spaces and redirections.
+    """
     bin_dir = tmp / "sudo-bin"
     bin_dir.mkdir()
     log = tmp / "sudo-invocations.log"
     log.touch()
     sudo = bin_dir / "sudo"
-    sudo.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n")
+    sudo.write_text(
+        f"#!/usr/bin/env bash\nIFS=$'\\x1f'\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n"
+    )
     sudo.chmod(0o755)
     return bin_dir, log
 
@@ -522,21 +589,33 @@ def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
     assert any(
         line.startswith("sudo apt-get install") and "docker-compose-plugin" in line for line in plan
     ), f"plan must install the compose plugin: {plan}"
-    keyring = "/etc/apt/keyrings/docker.gpg"
-    assert any(line.startswith("sudo gpg --dearmor") and keyring in line for line in plan), (
-        f"signing key must land in a keyring file: {plan}"
+    keyring = "/etc/apt/keyrings/docker.asc"
+    assert any(line.startswith("sudo curl -fsSL") and keyring in line for line in plan), (
+        f"signing key must be fetched straight to the root-owned keyring: {plan}"
     )
     assert any(f"signed-by={keyring}" in line and "download.docker.com" in line for line in plan), (
         f"apt repo must be pinned to the fetched key: {plan}"
     )
     for line in plan:
-        assert not ("curl" in line and "|" in line), f"piped curl-to-shell in plan: {line}"
+        # No root-consumed file may be staged at a predictable /tmp path (CWE-377):
+        # a local attacker could pre-plant it before the sudo reads it back.
+        assert "/tmp/" not in line, f"prereq plan stages a root-consumed file in /tmp: {line}"
+        # A remote fetch must never be piped into a shell; piping data into a
+        # tool (curl | gpg --dearmor) is fine and used for the nvidia key.
+        assert "| sh" not in line and "| bash" not in line, f"piped curl-to-shell in plan: {line}"
 
+    # Compare exact ARGUMENT VECTORS: the shim logs argv joined by \x1f, and a
+    # plan line is parsed with shlex so that `sh -c 'echo ... > file'` stays a
+    # single argument. Each privileged command executed is the reviewed plan's
+    # sudo line rewritten to `sudo -n …`, in order, with nothing extra.
     expected_sudo = [
-        f"-n {line.removeprefix('sudo ')}" for line in plan if line.startswith("sudo ")
+        ["-n", *shlex.split(line.removeprefix("sudo "))]
+        for line in plan
+        if line.startswith("sudo ")
     ]
     assert expected_sudo, f"plan has no privileged steps: {plan}"
-    assert sudo_log.read_text().splitlines() == expected_sudo, (
+    executed_sudo = [row.split("\x1f") for row in sudo_log.read_text().splitlines()]
+    assert executed_sudo == expected_sudo, (
         "executed privileged commands must be exactly the reviewed plan's sudo "
         f"lines under sudo -n, in order; plan: {plan}"
     )

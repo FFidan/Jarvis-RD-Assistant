@@ -201,21 +201,26 @@ def _prereq_plan(
 def test_prereq_plan_for_ubuntu_apt_host() -> None:
     """The apt plan installs Docker Engine from Docker's own signed repository.
 
-    Asserts the security-relevant shape: signing key pinned to an apt keyring,
-    the repo bound to that key via signed-by, official docker-ce packages (not
-    the stock docker.io), remote content never piped into a shell, and sudo
-    only ever line-leading (setup.sh rewrites leading sudo for consent runs).
+    Asserts the security-relevant shape: the signing key is fetched straight to
+    a root-owned apt keyring and the repo file is written by a root shell — no
+    world-writable /tmp staging that a later sudo reads back (CWE-377); the repo
+    is bound to that key via signed-by; official docker-ce packages (not stock
+    docker.io); remote content is never piped into a shell; and sudo is only
+    ever line-leading (setup.sh rewrites leading sudo for consent runs).
     """
     result = _prereq_plan("Linux", "ubuntu", "1", "0", "0", "docker", "docker-compose", "openssl")
     assert result.returncode == 0
     lines = result.stdout.splitlines()
-    keyring = "/etc/apt/keyrings/docker.gpg"
+    keyring = "/etc/apt/keyrings/docker.asc"
 
+    # Key lands in the root-owned keyring directly (sudo curl -o), never via /tmp.
     assert any(
-        ln.startswith("curl -fsSL https://download.docker.com/linux/ubuntu/gpg") for ln in lines
-    )
-    assert any(ln.startswith("sudo gpg --dearmor") and keyring in ln for ln in lines)
-    repo = next(ln for ln in lines if ln.startswith('echo "deb '))
+        ln.startswith("sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg")
+        and keyring in ln
+        for ln in lines
+    ), lines
+    repo = next(ln for ln in lines if "deb [" in ln and "docker.list" in ln)
+    assert repo.startswith("sudo ")  # the repo file is written as root, not staged in /tmp
     assert f"signed-by={keyring}" in repo
     assert "https://download.docker.com/linux/ubuntu" in repo
 
@@ -230,9 +235,11 @@ def test_prereq_plan_for_ubuntu_apt_host() -> None:
     assert 'sudo usermod -aG docker "$USER"' in lines
 
     for ln in lines:
-        assert "sudo" not in ln.removeprefix("sudo ")
-        if ln.startswith("curl"):
-            assert "|" not in ln
+        assert "sudo" not in ln.removeprefix("sudo ")  # one sudo per line
+        # No root-consumed file is staged at a predictable /tmp path (CWE-377).
+        assert "/tmp/" not in ln, ln
+        # A remote fetch is never piped into a shell (curl|sh); data pipes are fine.
+        assert "| sh" not in ln and "| bash" not in ln
 
 
 def test_prereq_plan_for_macos_homebrew_host() -> None:

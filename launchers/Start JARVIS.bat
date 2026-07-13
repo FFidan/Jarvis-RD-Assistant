@@ -28,8 +28,9 @@ goto :report
 
 :no_shell
 echo Could not find WSL or Git Bash to run setup.sh.
-echo Install WSL2 (recommended for Docker Desktop): https://learn.microsoft.com/windows/wsl/install
-echo Or use the native Windows installer instead: scripts\jarvis-setup.ps1
+echo Docker Desktop for Windows runs on WSL2, so installing it is the supported path:
+echo   https://learn.microsoft.com/windows/wsl/install
+echo Then re-run this launcher (it will use WSL automatically).
 set STATUS=1
 goto :end
 

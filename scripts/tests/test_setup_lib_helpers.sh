@@ -246,8 +246,10 @@ esac
 # Debian/Ubuntu and skips the daemon/group steps. Root-escalation discipline:
 # every plan line is unprivileged or starts with exactly ONE line-leading sudo
 # (_run_prereq_plan rewrites only line-leading sudo to `sudo -n`, so a
-# mid-pipeline sudo would hang a no-tty non-interactive run), and remote
-# content is never piped into another command.
+# mid-pipeline sudo would hang a no-tty non-interactive run); root-consumed
+# files are fetched straight to their root-owned destinations rather than staged
+# in a predictable /tmp path (CWE-377); and remote content is never piped into a
+# shell (piping fetched data into a tool such as `gpg --dearmor` is fine).
 
 plan_has() {  # plan_has <description> <plan> <grep -E pattern>
   if printf '%s\n' "$2" | grep -Eq -e "$3"; then
@@ -270,14 +272,20 @@ plan="$(prereq_install_plan Linux ubuntu 1 0 0 docker docker-compose openssl nvi
 plan_has   "ubuntu: docker-ce repo from download.docker.com"       "$plan" 'download\.docker\.com/linux/ubuntu'
 plan_has   "ubuntu: installs docker-ce + official compose plugin"  "$plan" 'apt-get install -y docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin'
 plan_lacks "ubuntu: stock docker.io is gone"                       "$plan" 'docker\.io'
-plan_has   "ubuntu: repo key fetched unprivileged to a temp file"  "$plan" '^curl -fsSL https://download\.docker\.com/linux/ubuntu/gpg -o /tmp/'
-plan_has   "ubuntu: single-sudo gpg dearmor into the keyring"      "$plan" '^sudo gpg --dearmor'
+plan_has   "ubuntu: signing key fetched straight to the root keyring (no /tmp)" "$plan" '^sudo curl -fsSL https://download\.docker\.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker\.asc$'
+plan_has   "ubuntu: repo written by a root shell, not staged in /tmp"          "$plan" '^sudo sh -c .* /etc/apt/sources\.list\.d/docker\.list'
+plan_has   "ubuntu: repo pinned to the fetched .asc key via signed-by"         "$plan" 'signed-by=/etc/apt/keyrings/docker\.asc'
 plan_has   "ubuntu: enables + starts the daemon"                   "$plan" '^sudo systemctl enable --now docker$'
 plan_has   "ubuntu: adds the user to the docker group"             "$plan" '^sudo usermod -aG docker'
 plan_has   "ubuntu: installs nvidia-container-toolkit"             "$plan" 'apt-get install -y nvidia-container-toolkit'
 plan_has   "ubuntu: wires the nvidia runtime into docker"          "$plan" '^sudo nvidia-ctk runtime configure --runtime=docker$'
 plan_has   "ubuntu: restarts the daemon after runtime configure"   "$plan" '^sudo systemctl restart docker$'
-plan_lacks "ubuntu: nothing is piped (no curl-into-shell, no mid-pipe sudo)" "$plan" '\|'
+# No root-consumed file is staged at a predictable /tmp path (CWE-377): a local
+# attacker on a multi-user host could pre-plant it before the sudo reads it back.
+plan_lacks "ubuntu: no root-consumed file staged in a predictable /tmp path"   "$plan" '/tmp/'
+# A remote fetch is never piped into a SHELL (curl|sh); piping fetched data into
+# a tool (curl | gpg --dearmor) is fine and used for the nvidia key.
+plan_lacks "ubuntu: no remote content piped into a shell"          "$plan" '\| *(sh|bash)([[:space:]]|$)'
 plan_lacks "ubuntu: every sudo is line-leading (exactly one)"      "$plan" '.sudo '
 
 # nvidia-ctk configure edits /etc/docker/daemon.json — the engine must be
@@ -309,11 +317,12 @@ plan_has "debian: uses the debian repo path" "$debian_plan" 'download\.docker\.c
 
 # Fedora mirrors the apt branch via dnf + Docker's repo file.
 fedora_plan="$(prereq_install_plan Linux fedora 0 0 1 docker openssl nvidia-toolkit)" || fedora_plan=""
-plan_has   "fedora: fetches Docker's repo file unprivileged"  "$fedora_plan" '^curl -fsSL https://download\.docker\.com/linux/fedora/docker-ce\.repo -o /tmp/'
+plan_has   "fedora: fetches Docker's repo file straight to the root repo dir (no /tmp)" "$fedora_plan" '^sudo curl -fsSL https://download\.docker\.com/linux/fedora/docker-ce\.repo -o /etc/yum\.repos\.d/docker-ce\.repo$'
 plan_has   "fedora: installs docker-ce via dnf"               "$fedora_plan" '^sudo dnf install -y docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin openssl$'
 plan_has   "fedora: enables + starts the daemon"              "$fedora_plan" '^sudo systemctl enable --now docker$'
 plan_has   "fedora: adds the user to the docker group"        "$fedora_plan" '^sudo usermod -aG docker'
 plan_has   "fedora: installs nvidia-container-toolkit"        "$fedora_plan" '^sudo dnf install -y nvidia-container-toolkit$'
+plan_lacks "fedora: no root-consumed file staged in a predictable /tmp path" "$fedora_plan" '/tmp/'
 plan_lacks "fedora: every sudo is line-leading (exactly one)" "$fedora_plan" '.sudo '
 
 prereq_install_plan Linux fedora 0 0 0 docker >/dev/null 2>&1 && rc=0 || rc=$?

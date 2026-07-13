@@ -294,9 +294,19 @@ preflight_disk() {
     info "Skipping disk preflight (--skip-disk-check)."
     return 0
   fi
-  local _variant="cpu-build"
+  # Budget the path this run will actually take: the default install PULLS the
+  # published images (cpu-pull/cuda-pull), only --build-local builds them
+  # (cpu-build/cuda-build). Charging the build ceiling for a pull would falsely
+  # block hosts that have ample room for the smaller pull.
+  local _accel="cpu"
   if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
-    _variant="cuda-build"
+    _accel="cuda"
+  fi
+  local _variant
+  if [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
+    _variant="${_accel}-build"
+  else
+    _variant="${_accel}-pull"
   fi
   local _req_gb _req_exact=1
   _req_gb="$(compute_required_disk_gb "${NI_SMART_MODEL:-qwen3:8b}" "$_variant")" || _req_exact=0

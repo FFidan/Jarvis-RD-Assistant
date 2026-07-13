@@ -42,6 +42,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       push: ${{ steps.mode.outputs.push }}
+      stable: ${{ steps.mode.outputs.stable }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -50,18 +51,35 @@ jobs:
       - name: Decide publish vs build-only
         id: mode
         run: |
+          # Only two tag shapes may ever publish, matched EXACTLY: a stable
+          # release `vX.Y.Z` or a release candidate `vX.Y.Z-rc.N`. Anything else
+          # that begins with `v` (build metadata like `v1.1.0+meta-rc`, a stray
+          # prerelease id) is refused outright — never published. This closes the
+          # fail-open where `contains(ref, '-rc')` classified the *ref* as a
+          # prerelease while docker/metadata-action's `{{version}}` dropped the
+          # build metadata and published the STABLE `:X.Y.Z` tag unattended.
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
-            echo "push=true" >> "$GITHUB_OUTPUT"
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "push=true" >> "$GITHUB_OUTPUT"
+              echo "stable=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+              echo "push=true" >> "$GITHUB_OUTPUT"
+              echo "stable=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::tag ${GITHUB_REF_NAME} is not a valid release tag (expected vX.Y.Z or vX.Y.Z-rc.N) — refusing to publish"
+              exit 1
+            fi
           else
             echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "stable=false" >> "$GITHUB_OUTPUT"
             echo "Not a v* tag ref — building without pushing."
           fi
 
       # A writable tag alone must not publish trusted-looking stable images:
-      # non-rc tags must point at a commit that main already contains. (The tag
-      # ruleset + release environment form the second lock.)
+      # stable releases must point at a commit that main already contains. (The
+      # tag ruleset + release environment form the second lock.)
       - name: Require stable tags to be reachable from main
-        if: steps.mode.outputs.push == 'true' && !contains(github.ref_name, '-rc')
+        if: steps.mode.outputs.stable == 'true'
         run: |
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -230,10 +248,12 @@ jobs:
     if: needs.preflight.outputs.push == 'true'
     # This job is where a tag actually becomes pullable, so it is the publish gate.
     # A stable `vX.Y.Z` tag enters the `release` environment and waits for the owner's
-    # approval; `-rc` dry-runs resolve to no environment and stay unattended. Together
-    # with the `refs/tags/v*` ruleset (admin-only tag creation), releasing an image
-    # takes two independent, deliberate acts.
-    environment: ${{ !contains(github.ref_name, '-rc') && 'release' || '' }}
+    # approval; `-rc` dry-runs resolve to no environment and stay unattended. The
+    # stable/prerelease decision comes from preflight's EXACT-semver classification
+    # (not a ref substring), so the gate can never disagree with the published tag.
+    # Together with the `refs/tags/v*` ruleset (admin-only tag creation), releasing
+    # an image takes two independent, deliberate acts.
+    environment: ${{ needs.preflight.outputs.stable == 'true' && 'release' || '' }}
     strategy:
       fail-fast: false
       matrix:

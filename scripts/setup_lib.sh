@@ -181,12 +181,13 @@ _prereq_plan_apt() {
   printf 'sudo apt-get update\n'
   if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
     printf 'sudo apt-get install -y ca-certificates curl gnupg\n'
-    printf 'curl -fsSL https://download.docker.com/linux/%s/gpg -o /tmp/jarvis-docker.asc\n' "$repo_base"
+    # Fetch the signing key straight to the root-owned keyring (Docker's own
+    # documented apt method) and write the repo list through a root shell — no
+    # world-writable /tmp staging that a later sudo would read back (CWE-377).
     printf 'sudo install -m 0755 -d /etc/apt/keyrings\n'
-    printf 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg /tmp/jarvis-docker.asc\n'
-    printf 'sudo chmod a+r /etc/apt/keyrings/docker.gpg\n'
-    printf 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/%s $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" > /tmp/jarvis-docker.list\n' "$repo_base"
-    printf 'sudo install -m 0644 /tmp/jarvis-docker.list /etc/apt/sources.list.d/docker.list\n'
+    printf 'sudo curl -fsSL https://download.docker.com/linux/%s/gpg -o /etc/apt/keyrings/docker.asc\n' "$repo_base"
+    printf 'sudo chmod a+r /etc/apt/keyrings/docker.asc\n'
+    printf 'sudo sh -c '\''echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" > /etc/apt/sources.list.d/docker.list'\''\n' "$repo_base"
     printf 'sudo apt-get update\n'
   fi
 
@@ -207,11 +208,12 @@ _prereq_plan_apt() {
     printf 'sudo usermod -aG docker "$USER"\n'
   fi
   if [ "$needs_toolkit" = "1" ]; then
-    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey -o /tmp/jarvis-nvidia-toolkit.asc\n'
-    printf 'sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg /tmp/jarvis-nvidia-toolkit.asc\n'
-    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o /tmp/jarvis-nvidia-toolkit.list\n'
-    printf 'sed -i "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g" /tmp/jarvis-nvidia-toolkit.list\n'
-    printf 'sudo install -m 0644 /tmp/jarvis-nvidia-toolkit.list /etc/apt/sources.list.d/nvidia-container-toolkit.list\n'
+    # Dearmor the key through a root pipe (data into gpg, never a remote script
+    # into a shell) and transform the fetched list in place at its root-owned
+    # destination — again no predictable /tmp file a later sudo reads back.
+    printf 'sudo sh -c '\''curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg'\''\n'
+    printf 'sudo curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o /etc/apt/sources.list.d/nvidia-container-toolkit.list\n'
+    printf 'sudo sed -i "s#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g" /etc/apt/sources.list.d/nvidia-container-toolkit.list\n'
     printf 'sudo apt-get update\n'
     printf 'sudo apt-get install -y nvidia-container-toolkit\n'
     printf 'sudo nvidia-ctk runtime configure --runtime=docker\n'
@@ -226,8 +228,8 @@ _prereq_plan_dnf() {
   local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4"
 
   if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
-    printf 'curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo -o /tmp/jarvis-docker-ce.repo\n'
-    printf 'sudo install -m 0644 /tmp/jarvis-docker-ce.repo /etc/yum.repos.d/docker-ce.repo\n'
+    # Fetch the repo file straight to its root-owned destination — no /tmp hop.
+    printf 'sudo curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo\n'
   fi
 
   local packages=()
@@ -247,8 +249,7 @@ _prereq_plan_dnf() {
     printf 'sudo usermod -aG docker "$USER"\n'
   fi
   if [ "$needs_toolkit" = "1" ]; then
-    printf 'curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo -o /tmp/jarvis-nvidia-toolkit.repo\n'
-    printf 'sudo install -m 0644 /tmp/jarvis-nvidia-toolkit.repo /etc/yum.repos.d/nvidia-container-toolkit.repo\n'
+    printf 'sudo curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo -o /etc/yum.repos.d/nvidia-container-toolkit.repo\n'
     printf 'sudo dnf install -y nvidia-container-toolkit\n'
     printf 'sudo nvidia-ctk runtime configure --runtime=docker\n'
     printf 'sudo systemctl restart docker\n'
@@ -361,12 +362,15 @@ compute_ollama_models() {
 # one install variant. Measured 2026-07 (build peak + 20% headroom) on the
 # containerd image store — the Docker fresh-install default, which retains
 # compressed blobs on top of the unpacked layers. cpu-pull is a conservative
-# floor for the registry-pull install path.
+# floor for the registry-pull install path. cuda-pull is pinned to the cuda
+# build peak until a real anonymous registry pull can be measured (the packages
+# are private): fail-safe — it only ever over-provisions, never ENOSPCs a pull.
 _image_budget_gb() {
   case "$1" in
-    cpu-pull)  printf '6' ;;
-    cpu-build) printf '9' ;;
-    *)         printf '17' ;;  # cuda-build — the largest variant, safe default
+    cpu-pull)   printf '6' ;;
+    cuda-pull)  printf '17' ;;
+    cpu-build)  printf '9' ;;
+    *)          printf '17' ;;  # cuda-build — the largest variant, safe default
   esac
 }
 
@@ -493,6 +497,14 @@ backfill_torch_variant_from_env() {
   fi
   upsert_env_var TORCH_VARIANT "$variant" || return 1
   upsert_env_var TORCH_VARIANT_SUFFIX "$suffix" || return 1
+  # The published :X.Y.Z-cuda image bakes the reranker extras (INSTALL_OPTIONAL);
+  # a --build-local rebuild after this backfill must reproduce that, or an
+  # upgrading CUDA host silently gets a reranker-less image under the same tag.
+  # Mirror the fresh-install invariant (setup.sh). Only add it when absent, so a
+  # user who deliberately turned it off is not overridden.
+  if [ "$variant" = "cuda" ] && ! grep -q '^INSTALL_OPTIONAL=' .env; then
+    upsert_env_var INSTALL_OPTIONAL true || return 1
+  fi
   printf '%s' "$variant"
 }
 
