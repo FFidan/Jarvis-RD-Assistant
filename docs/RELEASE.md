@@ -81,7 +81,7 @@ commits since the last Git tag.
 
 Five images are published to GHCR on a release tag by `.github/workflows/ghcr-publish.yml`:
 `ghcr.io/limitcycle-oss/jarvis-{paper-ingestion,learning-engine,telegram-bot,dashboard,restore-uploader}`.
-Image tags drop the leading `v` (`v1.1.0` → `:1.1.0`), matching the `${JARVIS_VERSION}` interpolation in
+Image tags drop the leading `v` (`v1.1.1` → `:1.1.1`), matching the `${JARVIS_VERSION}` interpolation in
 `docker-compose.yml`. `paper-ingestion` also publishes a `:X.Y.Z-cuda` flavor for NVIDIA hosts; the
 default install selects it from the detected GPU. `langfuse-hardened` is not published — it is
 observability-profile-only and built locally.
@@ -90,8 +90,8 @@ Because the images are published, **rolling forward or back to a specific versio
 not a rebuild. Pin `JARVIS_VERSION` and pull:
 
 ```bash
-JARVIS_VERSION=1.1.0 docker compose pull
-JARVIS_VERSION=1.1.0 docker compose up -d --no-build
+JARVIS_VERSION=1.1.1 docker compose pull
+JARVIS_VERSION=1.1.1 docker compose up -d --no-build
 ```
 
 The `build:` blocks remain for contributors; `./setup.sh --build-local` (and `./update.sh --build-local`)

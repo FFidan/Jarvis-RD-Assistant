@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.1.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current release: **v1.1.1**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
 - **Install from prebuilt images (v1.1.0).** A default `./setup.sh` pulls

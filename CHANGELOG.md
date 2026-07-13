@@ -10,6 +10,19 @@ Wording such as "public-ready", "public-readiness", or "public-launch groundwork
 
 _No unreleased changes yet._
 
+## v1.1.1 (2026-07-13)
+
+A patch release that repairs install and update reliability on the prebuilt-image path and fixes the first-run smoke checks. The application and its container images are unchanged from v1.1.0; only the installer, updater, and CI scripts changed, so the `:1.1.1` images are functionally identical to `:1.1.0`.
+
+### Fixed
+- **Non-interactive install no longer aborts at startup.** The non-interactive bootstrap now generates the Langfuse key material before starting the stack, so a fresh install no longer fails at `docker compose up` with a missing-secret error.
+- **Disk preflight honours the selected accelerator.** An explicit `--gpu` now drives the disk estimate, so a CUDA install no longer under-budgets (which risked running out of space mid-pull) and a CPU install on an NVIDIA host no longer over-budgets and blocks.
+- **Re-running against an existing `.env` regenerates missing secrets**, so a second `./setup.sh` on a partially provisioned host no longer dead-ends at startup.
+- **AMD (ROCm) Ollama updates correctly.** The ROCm image is now pinned and `update.sh` compares against it, so AMD hosts are no longer reported as perpetually out of date.
+- **Shared directories stay readable on non-root hosts.** When ownership cannot be handed to the container user, the directories keep world read-and-traverse permission so the container can still read them.
+- **Clearer install diagnostics.** A flag passed without its value now reports which flag needs an argument instead of a raw shell error, and `update.sh` lists third-party and application services under the rollback command that applies to each.
+- **First-run smoke reports honestly.** The clean-machine checks now read the installer's real exit code, which a pipeline had masked — so the restart-required check passes and a genuine failure can no longer be reported as success. The prerequisite check also accepts Docker Compose v2 and newer.
+
 ## v1.1.0 (2026-07-13)
 
 The install-and-distribution release. A default `./setup.sh` now installs JARVIS by pulling prebuilt, multi-architecture container images from the project's registry instead of building them locally, which removes the multi-gigabyte PyTorch/CUDA build that could exhaust disk on a first install. This release also adds passkey sign-in, rolling sessions, and a browser-driven disaster-recovery flow, and makes disk, hardware, and status reporting honest about what a given host will actually do.
