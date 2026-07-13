@@ -298,8 +298,17 @@ preflight_disk() {
   # published images (cpu-pull/cuda-pull), only --build-local builds them
   # (cpu-build/cuda-build). Charging the build ceiling for a pull would falsely
   # block hosts that have ample room for the smaller pull.
+  # Budget the accelerator the install will ACTUALLY pull, not just whatever the
+  # Docker runtime reports: an explicit --gpu wins over the runtime probe. Only
+  # --gpu cuda (or, absent an override, an auto-detected NVIDIA runtime) pulls the
+  # larger CUDA image; rocm, vulkan and cpu keep the CPU torch image (mirrors the
+  # _gpu_choice resolution below). Without this, `--gpu cuda` on a host whose
+  # nvidia runtime is not yet configured budgets cpu-pull but pulls cuda -> ENOSPC,
+  # and `--gpu cpu` on an nvidia-runtime host over-budgets and can falsely block.
   local _accel="cpu"
-  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+  if [ -n "${NI_GPU_OVERRIDE:-}" ]; then
+    [ "$NI_GPU_OVERRIDE" = "cuda" ] && _accel="cuda"
+  elif docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
     _accel="cuda"
   fi
   local _variant
@@ -433,6 +442,13 @@ TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI 
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
 
 while [ $# -gt 0 ]; do
+  # A value-taking flag passed as the final argument would read an unset $2 under
+  # `set -u` and abort with a raw "unbound variable". Guard them centrally so the
+  # message is actionable. (The --flag=value forms carry their value inline.)
+  case "$1" in
+    --domain|--admin-email|--profile|--smtp-host|--smtp-user|--smtp-pass-file|--mode|--backend|--smart-model|--gpu)
+      [ "$#" -ge 2 ] || die "$1 requires a value." "Run: $0 --help" ;;
+  esac
   case "$1" in
     --non-interactive)
       NON_INTERACTIVE=1
@@ -829,6 +845,13 @@ if [ -f .env ]; then
         # Only tunnel/telegram are ever persisted to COMPOSE_PROFILES, so the
         # observability profile (langfuse, the one unpublished image) cannot be
         # active here and needs no local build.
+        # Materialise the file-backed Docker secrets before `up`: init-secrets.sh
+        # does not create the Langfuse init keypair, so a keep-path re-run whose
+        # secrets/ is missing it would otherwise dead-end at `docker compose up`
+        # with "secret ... not found". Both generators are idempotent (no churn
+        # for a healthy deployment).
+        [ -x scripts/init-secrets.sh ] && bash scripts/init-secrets.sh
+        [ -x scripts/gen-langfuse-keys.sh ] && bash scripts/gen-langfuse-keys.sh >/dev/null
         KEEP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
         [ "$_keep_telegram" -eq 1 ] && KEEP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
         KEEP_UP_ARGS=(up -d)

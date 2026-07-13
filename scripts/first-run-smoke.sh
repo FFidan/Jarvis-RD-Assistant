@@ -135,9 +135,16 @@ if [ "$BUILD_LOCAL" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
   err "bootstrap-mode flag, so there is nothing to forward to it."
   exit 2
 fi
-# A --build-local run also fills the Docker build cache, so it is held to the larger
-# cpu-build ceiling; the pull path keeps the tighter cpu-pull figure set above.
-[ "$BUILD_LOCAL" -eq 1 ] && DISK_BUDGET_GB=9
+# Adjust the budget to the path this run actually takes. The default above (6) is
+# cpu-pull; --build-local fills the build cache (cpu-build 9); and a GPU host
+# pulls/builds the much larger CUDA image (cuda-pull == cuda-build == 17). Mirrors
+# scripts/setup_lib.sh::_image_budget_gb. The smoke never passes --gpu, so the
+# accelerator matches setup.sh's auto path: the Docker nvidia runtime.
+if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+  DISK_BUDGET_GB=17
+elif [ "$BUILD_LOCAL" -eq 1 ]; then
+  DISK_BUDGET_GB=9
+fi
 readonly DISK_BUDGET_GB
 
 # -----------------------------------------------------------------------------
