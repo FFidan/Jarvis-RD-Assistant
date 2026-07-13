@@ -139,6 +139,17 @@ if [ -x scripts/init-secrets.sh ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Langfuse init keypair — a file-backed Docker secret the DEFAULT paper_ingestion
+# and learning_engine services mount (docker-compose.yml). init-secrets.sh does
+# not create it, so without this the later `docker compose up` aborts with
+# "secret ... not found". Generate it exactly as setup.sh does (idempotent).
+# ---------------------------------------------------------------------------
+if [ -x scripts/gen-langfuse-keys.sh ]; then
+  info "Generating Langfuse init keypair"
+  bash scripts/gen-langfuse-keys.sh >/dev/null
+fi
+
+# ---------------------------------------------------------------------------
 # mkcert (best-effort; skipped silently when absent)
 # ---------------------------------------------------------------------------
 if command -v mkcert >/dev/null 2>&1; then

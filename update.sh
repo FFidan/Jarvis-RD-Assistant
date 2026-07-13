@@ -119,6 +119,14 @@ for idx in "${!SERVICES[@]}"; do
   pinned="${!var:-}"
   running="$(get_running_image "$svc")"
 
+  # ollama has a ROCm variant (docker-compose.rocm.yml) pinned separately as
+  # OLLAMA_ROCM_IMAGE. When the running image is that flavour, diff and update it
+  # against the ROCm pin so an AMD host is not perpetually "update available" and
+  # actually moves to the tracked ROCm version rather than the CPU one.
+  if [ "$svc" = "ollama" ] && [[ "$running" == *-rocm ]]; then
+    pinned="${OLLAMA_ROCM_IMAGE:-$pinned}"
+  fi
+
   if [ -z "$pinned" ]; then
     status_color="$C_YELLOW"
     status_text="no pin — skipped"
@@ -274,6 +282,15 @@ fi
 
 printf '\n'
 warn "The following service(s) failed health checks: ${FAILED[*]}"
+# Third-party services are pinned in versions.env; only application services are
+# tagged by JARVIS_VERSION. Split the failure set so each recovery command names
+# only the services it can actually roll back (the JARVIS_VERSION command silently
+# no-ops for third-party images).
+_THIRD_PARTY_RE='^(postgres|ollama|qdrant|litellm|cloudflared)$'
+FAILED_APP=(); FAILED_THIRD=()
+for _svc in "${FAILED[@]}"; do
+  if [[ "$_svc" =~ $_THIRD_PARTY_RE ]]; then FAILED_THIRD+=("$_svc"); else FAILED_APP+=("$_svc"); fi
+done
 cat <<EOF
 
 Recovery — the two image sets roll back differently:
