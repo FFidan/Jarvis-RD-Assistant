@@ -2022,14 +2022,14 @@ commits since the last Git tag.</p>
 <h2 id="docker-image-versioning">Docker Image Versioning<a class="headerlink" href="#docker-image-versioning" title="Permanent link">&para;</a></h2>
 <p>Five images are published to GHCR on a release tag by <code>.github/workflows/ghcr-publish.yml</code>:
 <code>ghcr.io/limitcycle-oss/jarvis-{paper-ingestion,learning-engine,telegram-bot,dashboard,restore-uploader}</code>.
-Image tags drop the leading <code>v</code> (<code>v1.1.0</code> → <code>:1.1.0</code>), matching the <code>${JARVIS_VERSION}</code> interpolation in
+Image tags drop the leading <code>v</code> (<code>v1.1.1</code> → <code>:1.1.1</code>), matching the <code>${JARVIS_VERSION}</code> interpolation in
 <code>docker-compose.yml</code>. <code>paper-ingestion</code> also publishes a <code>:X.Y.Z-cuda</code> flavor for NVIDIA hosts; the
 default install selects it from the detected GPU. <code>langfuse-hardened</code> is not published — it is
 observability-profile-only and built locally.</p>
 <p>Because the images are published, <strong>rolling forward or back to a specific version is a registry pull</strong>,
 not a rebuild. Pin <code>JARVIS_VERSION</code> and pull:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">JARVIS_VERSION</span><span class="o">=</span><span class="m">1</span>.1.0<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">JARVIS_VERSION</span><span class="o">=</span><span class="m">1</span>.1.0<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">JARVIS_VERSION</span><span class="o">=</span><span class="m">1</span>.1.1<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">JARVIS_VERSION</span><span class="o">=</span><span class="m">1</span>.1.1<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
 </code></pre></div>
 <p>The <code>build:</code> blocks remain for contributors; <code>./setup.sh --build-local</code> (and <code>./update.sh --build-local</code>)
 build from source instead of pulling.</p>
