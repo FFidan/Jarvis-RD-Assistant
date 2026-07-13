@@ -122,6 +122,12 @@ jobs:
 
       - name: Guided installer honours the exit-3 restart-required contract
         run: |
+          # The implicit step shell is `bash -e` WITHOUT pipefail, so a
+          # pipeline's status is its last command's — tee, which always exits 0.
+          # Without this, setup.sh's exit 3 is masked and `|| rc=$?` never fires,
+          # so rc stays 0 and this contract check false-fails. Turn pipefail on
+          # so the pipeline surfaces setup.sh's real exit code.
+          set -o pipefail
           rc=0
           ./setup.sh --non-interactive --profile=dev --install-prereqs 2>&1 \
             | tee /tmp/coldbox.log || rc=$?
@@ -178,7 +184,12 @@ jobs:
           echo "$!" > /tmp/data-root-sampler.pid
 
       - name: Cold-install from published images
-        run: bash scripts/first-run-smoke.sh 2>&1 | tee /tmp/cold-install.log
+        run: |
+          # pipefail so a non-zero exit from the smoke script is not masked by
+          # tee's exit 0. This job is release-blocking; without pipefail a real
+          # install failure would be swallowed and reported as a pass.
+          set -o pipefail
+          bash scripts/first-run-smoke.sh 2>&1 | tee /tmp/cold-install.log
 
       - name: Assert the install built nothing
         run: |

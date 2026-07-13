@@ -702,11 +702,15 @@ info "Checking prerequisites..."
 
 ensure_prerequisites
 
-# docker compose v2 (space form). `docker-compose` (hyphen) is v1 and unsupported.
+# docker compose v2+ (space form). `docker-compose` (hyphen) is v1 and
+# unsupported. ensure_prerequisites already proved the plugin runs, so accept
+# any v2-or-newer line; only the genuinely-too-old v0/v1 or an unreadable
+# version warrant a heads-up. (Runners now ship Compose well past v2.)
 COMPOSE_VER="$(docker compose version --short 2>/dev/null || echo 'unknown')"
-case "$COMPOSE_VER" in
-  2.*|v2.*) ok "Docker Compose v${COMPOSE_VER#v}" ;;
-  *)        warn "Unexpected Compose version '$COMPOSE_VER' — expected v2.x. Proceeding." ;;
+case "${COMPOSE_VER#v}" in
+  0.*|1.*)  warn "Docker Compose v${COMPOSE_VER#v} is older than the required v2. Proceeding, but please upgrade the 'docker compose' plugin." ;;
+  unknown)  warn "Could not read the Docker Compose version. Proceeding." ;;
+  *)        ok "Docker Compose v${COMPOSE_VER#v}" ;;
 esac
 
 # Fatal daemon probe — must run before the idempotency gate and every prompt,
