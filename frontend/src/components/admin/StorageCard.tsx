@@ -28,8 +28,8 @@ function sectionText(section: StorageSection): string {
 
 export function StorageCard() {
   const { data, isLoading, error } = useQuery({
-    // Owned-file scope keeps this out of the shared QUERY_KEYS registry
-    // (frontend/src/lib/query-keys.ts) — not part of this lane's edit set.
+    // One-off admin query key, kept local rather than in the shared
+    // QUERY_KEYS registry (frontend/src/lib/query-keys.ts).
     queryKey: ['admin', 'system-storage'] as const,
     queryFn: getSystemStorage,
     staleTime: 30_000,

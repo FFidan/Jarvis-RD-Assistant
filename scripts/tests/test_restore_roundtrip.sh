@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test_restore_roundtrip.sh — live backup -> break -> older-restore round-trip proof
-# for the frictionless disaster-recovery story (Task 4.5).
+# for the frictionless disaster-recovery flow.
 #
 # WHAT THIS PROVES LIVE (against a real postgres:16.8 + the REAL backup.sh /
 # restore.sh running in the REAL postgres-backup sidecar dispatch loop, on a
@@ -35,7 +35,7 @@
 # WHAT IS PROVEN ELSEWHERE (NOT re-proven here — do not overstate):
 #   * the full app /health 503->200 transition and background-worker resume are
 #     covered on real Postgres by libs/jarvis_common/tests/test_maintenance_middleware.py
-#     and services/paper_ingestion/tests/test_main_lifespan.py, which the W4 gate runs.
+#     and services/paper_ingestion/tests/test_main_lifespan.py, which CI runs.
 #     This test proves the watcher's core reconcile ACTION (forward-migration), not
 #     the FastAPI lifecycle around it.
 #   * the app self-restart onto the rotated secrets + rebound role after an inbox
@@ -48,7 +48,7 @@
 # falls back to plaintext archives (reported in the run banner below).
 #
 # SAFETY: this is a heavy, on-demand live test (like test_restore_swap_recovery.sh)
-# — NOT part of the fast wave-smoke. It refuses to run unless COMPOSE_PROJECT_NAME
+# — NOT part of the fast test suite. It refuses to run unless COMPOSE_PROJECT_NAME
 # names a dedicated throwaway project (^jarvis-rt-<tag>$, no underscores, so it can
 # never equal a real jarvis_* stack). Every container/volume/network lives under that
 # project and is torn down with `down -v` on exit. It publishes NO host ports and
@@ -559,11 +559,11 @@ else
 fi
 
 # =============================================================================
-# PHASE 4 — off-host (inbox) STEP-8 restore: role rebind + F2 exclusions + self-clear
+# PHASE 4 — off-host (inbox) STEP-8 restore: role rebind + host-key exclusions + self-clear
 #           (the app self-restart onto the rotated secrets is covered by the
 #           app_factory unit tests; here only the SIDECAR-side outcomes are asserted).
 # =============================================================================
-sec "PHASE 4: off-host (inbox) STEP-8 restore — role rebind, F2 exclusions, self-clear"
+sec "PHASE 4: off-host (inbox) STEP-8 restore — role rebind, host-key exclusions, self-clear"
 # The real backup tars the whole /secrets dir, so drop the .txt-named secrets STEP 8
 # consumes into it (the fixture's Docker-secret files are un-suffixed). postgres_password
 # carries a single quote to exercise the ALTER ROLE single-quote doubling on a REAL role.
@@ -612,19 +612,19 @@ SQL
       no "the OLD postgres password still authenticates (ALTER ROLE did not rebind)"; rebind_ok=0
     fi
     [ "$rebind_ok" = "1" ] && ok "ALTER ROLE rebound the role to the restored password (single quote handled; old rejected)"
-    # F2: the target host's own local-service keys are NOT overwritten; a normal
+    # The target host's own local-service keys are NOT overwritten; a normal
     # restored secret IS materialized; the backup key is never materialized.
     host_secrets_has postgres_password.txt || no "postgres_password.txt was not materialized into host-secrets"
     host_secrets_has app_alpha.txt         || no "a normal restored secret (app_alpha.txt) was not materialized"
-    ! host_secrets_has qdrant_api_key.txt      || no "qdrant_api_key.txt was materialized (F2: excluded — qdrant is not restarted)"
-    ! host_secrets_has langfuse_pg_password.txt || no "langfuse_pg_password.txt was materialized (F2: excluded — langfuse-postgres is not restarted)"
+    ! host_secrets_has qdrant_api_key.txt      || no "qdrant_api_key.txt was materialized (excluded — qdrant is not restarted)"
+    ! host_secrets_has langfuse_pg_password.txt || no "langfuse_pg_password.txt was materialized (excluded — langfuse-postgres is not restarted)"
     ! host_secrets_has backup_encrypt_key.txt   || no "backup_encrypt_key.txt was materialized (the target keeps its own backup key)"
     [ "$(sc 'cat /host-secrets/postgres_password.txt 2>/dev/null' | tr -d '\r\n')" = "$NEWPW" ] \
       || no "materialized postgres_password.txt content is wrong (single quote mangled)"
     sc 'cat /backup-trigger/.secrets_rotated 2>/dev/null' | grep -qE '^[0-9]+$' \
       || no ".secrets_rotated is missing or not an integer epoch"
     [ "$fail" = "$fails_before" ] \
-      && ok "inbox STEP-8: DBs reverted, role rebound, F2 keys excluded, secrets rotated, sentinels self-cleared"
+      && ok "inbox STEP-8: DBs reverted, role rebound, host keys excluded, secrets rotated, sentinels self-cleared"
   else
     no "off-host inbox restore did not complete cleanly"
   fi
@@ -635,7 +635,7 @@ SQL
 fi
 
 # =============================================================================
-# PHASE 5 — --recover rejects a SQL-injection payload in the swap-state file (F1).
+# PHASE 5 — --recover rejects a SQL-injection payload in the swap-state file.
 # =============================================================================
 sec "PHASE 5: --recover rejects an injected swap-state db name (no DROP)"
 if [ -n "${TS4:-}" ]; then

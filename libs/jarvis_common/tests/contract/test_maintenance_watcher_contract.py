@@ -5,7 +5,7 @@ When a restore clears, the watcher's ``_resume_after_maintenance`` runs
 background writers. This exercises that path on a real pg16.8: a pending
 migration is seeded (a temp dir holding a single higher-versioned file) and the
 resume reconcile must actually apply it — a mock of ``run_migrations`` would
-hide a dead call (W3 lesson: mock-only masked a silently-dead SQL), so the
+hide a dead call (mocking it here would mask a silently-dead SQL path), so the
 migration DDL genuinely PREPAREs and executes here and the table is asserted to
 exist in Postgres afterward.
 

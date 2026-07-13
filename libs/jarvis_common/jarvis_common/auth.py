@@ -125,7 +125,7 @@ def refresh_api_key_cache() -> None:
     _CACHED_API_KEY = _load_api_key()
 
 
-# --- Restore-status one-time bearer token (P6 one-click restore) -------------
+# --- Restore-status one-time bearer token (one-click restore) ----------------
 # The admin Backup panel's restore endpoint mints a one-time token and persists
 # ONLY its sha256 + expiry to this sentinel-plane file (same RW trigger volume as
 # the maintenance sentinels; written by the app, read here). It lets the admin who

@@ -355,7 +355,7 @@ else
   fail=1
 fi
 
-# S6. The safety pre-backup is forced past the (4.3) maintenance skip-guard: the
+# S6. The safety pre-backup is forced past the maintenance skip-guard: the
 #     restore's own .maintenance is already up, so the backup must be told to run.
 check "safety pre-backup is forced past the maintenance skip-guard" 'export BACKUP_FORCE=1'
 

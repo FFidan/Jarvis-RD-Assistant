@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test_restore_swap_recovery.sh — REAL postgres:16.8 fault-injection matrix for the
-# restore.sh rename-swap + deterministic recovery (Task 4.2).
+# restore.sh rename-swap + deterministic recovery.
 #
 # The swap's correctness (rename semantics, ALLOW_CONNECTIONS inheritance, the
 # post-swap SQL gate, and `restore.sh --recover`) is UNTESTABLE by source grep, so

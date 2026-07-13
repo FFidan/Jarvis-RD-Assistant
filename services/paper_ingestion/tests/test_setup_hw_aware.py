@@ -384,8 +384,8 @@ def _run_backfill(tmp: Path) -> subprocess.CompletedProcess[str]:
 def test_backfill_torch_variant_nvidia_env_lands_cuda_tag(tmp_path: Path) -> None:
     """A pre-1.1 NVIDIA .env (gpu overlay in COMPOSE_FILE) backfills the cuda tag.
 
-    This is the wave's highest-value invariant and the one with the widest blast
-    radius: without ``TORCH_VARIANT_SUFFIX=-cuda`` the paper-ingestion image tag
+    This is the highest-value invariant here: without ``TORCH_VARIANT_SUFFIX=-cuda``
+    the paper-ingestion image tag
     ``${JARVIS_VERSION:-1.1.0}${TORCH_VARIANT_SUFFIX:-}`` resolves to the CPU
     flavour on a CUDA host, and a --build-local rebuild without
     ``INSTALL_OPTIONAL=true`` reproduces the published :X.Y.Z-cuda tag WITHOUT
