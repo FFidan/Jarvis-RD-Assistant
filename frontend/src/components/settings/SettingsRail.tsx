@@ -42,6 +42,7 @@ export const ALL_SECTIONS: RailSection[] = [
     title: 'Account',
     items: [
       { section: 'account', item: 'profile', label: 'Profile & Email' },
+      { section: 'account', item: 'passkeys', label: 'Passkeys' },
       { section: 'account', item: 'appearance', label: 'Appearance' },
     ],
   },

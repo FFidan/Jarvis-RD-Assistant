@@ -26,10 +26,45 @@ const requestMagicLinkMock = vi.fn().mockResolvedValue({ sent: true });
 const getFirstRunStatusMock = vi.fn();
 const loginMock = vi.fn().mockResolvedValue(false);
 
+// Passkey seams — the capability probe + login ceremony.
+const getPasskeyCapabilityMock = vi.fn();
+const beginPasskeyLoginMock = vi.fn();
+const finishPasskeyLoginMock = vi.fn();
+const startAuthenticationMock = vi.fn();
+const browserSupportsWebAuthnMock = vi.fn().mockReturnValue(false);
+const loginWithSessionMock = vi.fn();
+
+// Minimal stand-in for the library's WebAuthnError so `instanceof` in the hook
+// (which imports the SAME mocked module) matches user-cancel / timeout errors.
+// Hoisted so the (synchronous) module-mock factory can reference it eagerly.
+const { MockWebAuthnError } = vi.hoisted(() => {
+  class MockWebAuthnError extends Error {
+    code: string;
+    // Default to the code the library emits for a user cancel / ceremony timeout
+    // (a passed-through NotAllowedError), not the abort-signal code.
+    constructor(code = 'ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY') {
+      super('webauthn ceremony error');
+      this.name = 'WebAuthnError';
+      this.code = code;
+    }
+  }
+  return { MockWebAuthnError };
+});
+
+vi.mock('@simplewebauthn/browser', () => ({
+  browserSupportsWebAuthn: () => browserSupportsWebAuthnMock(),
+  startAuthentication: (opts: unknown) => startAuthenticationMock(opts),
+  startRegistration: vi.fn(),
+  WebAuthnError: MockWebAuthnError,
+}));
+
 vi.mock('@/lib/api', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/api')>()),
   requestMagicLink: (email: string) => requestMagicLinkMock(email),
   getFirstRunStatus: () => getFirstRunStatusMock(),
+  getPasskeyCapability: () => getPasskeyCapabilityMock(),
+  beginPasskeyLogin: () => beginPasskeyLoginMock(),
+  finishPasskeyLogin: (assertion: unknown) => finishPasskeyLoginMock(assertion),
 }));
 
 let storeLastError: string | null = null;
@@ -37,8 +72,14 @@ let storeLastError: string | null = null;
 vi.mock('@/stores/auth-store', () => {
   const useAuthStore = () => ({ login: loginMock });
   // LoginPage reads useAuthStore.getState().lastError after a failed login to
-  // surface the precise backend message (e.g. the 403 multi-tenant message).
-  useAuthStore.getState = () => ({ lastError: storeLastError, getApiKey: () => null, isAuthenticated: false });
+  // surface the precise backend message (e.g. the 403 multi-tenant message);
+  // the passkey login path calls getState().loginWithSession(user).
+  useAuthStore.getState = () => ({
+    lastError: storeLastError,
+    getApiKey: () => null,
+    isAuthenticated: false,
+    loginWithSession: loginWithSessionMock,
+  });
   return { useAuthStore };
 });
 
@@ -73,6 +114,13 @@ describe('LoginPage', () => {
     getFirstRunStatusMock.mockReset();
     storeLastError = null;
     loginMock.mockResolvedValue(false);
+    // Passkeys off by default (jsdom has no WebAuthn); capable tests opt in.
+    browserSupportsWebAuthnMock.mockReturnValue(false);
+    getPasskeyCapabilityMock.mockReset();
+    beginPasskeyLoginMock.mockReset();
+    finishPasskeyLoginMock.mockReset();
+    startAuthenticationMock.mockReset();
+    localStorage.clear();
   });
 
   // ---------------------------------------------------------------------------
@@ -154,7 +202,24 @@ describe('LoginPage', () => {
     await waitFor(() => {
       expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
     });
-    expect(await screen.findByText(/will be delivered when email is configured/i)).toBeInTheDocument();
+    expect(await screen.findByText(/a sign-in link is on its way/i)).toBeInTheDocument();
+  });
+
+  it('points at the admin sign-in link when SMTP is off', async () => {
+    const user = userEvent.setup();
+    renderLoginPage({ configured: true, smtp_configured: false, setup_mode: 'multi' });
+    const input = await screen.findByPlaceholderText(/you@example\.com/i);
+    await user.type(input, 'ferhat@example.com');
+    await user.click(screen.getByRole('button', { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
+    });
+    // Honest when email can't deliver: the link exists; the admin can share it —
+    // still enumeration-safe ("If an account exists…"), never "email is configured".
+    const confirmation = await screen.findByText(/ask your admin to share your sign-in link/i);
+    expect(confirmation).toBeInTheDocument();
+    expect(confirmation).toHaveTextContent(/if an account exists/i);
   });
 
   it('shows the static cooldown hint on the magic-link tab', async () => {
@@ -265,5 +330,104 @@ describe('LoginPage', () => {
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
     await userEvent.click(await screen.findByRole('button', { name: /send magic link/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(/email is required/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Passkey sign-in (progressive enhancement)
+  // ---------------------------------------------------------------------------
+
+  describe('passkey sign-in', () => {
+    /** Turn on browser + server capability for a "passkeys work here" render. */
+    function capableHere(mode = 'localhost') {
+      browserSupportsWebAuthnMock.mockReturnValue(true);
+      getPasskeyCapabilityMock.mockResolvedValue({ available: true, access_mode: mode });
+    }
+
+    it('renders an honest note (no button) when the browser lacks WebAuthn', async () => {
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+      expect(
+        await screen.findByText(/browser does not support passkeys/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /sign in with a passkey/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('shows the LAN one-liner (no button) when the server says passkeys are unavailable here', async () => {
+      browserSupportsWebAuthnMock.mockReturnValue(true);
+      getPasskeyCapabilityMock.mockResolvedValue({ available: false, access_mode: 'lan' });
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+      expect(
+        await screen.findByText(/passkeys work on the jarvis computer itself/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /sign in with a passkey/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('completes a passkey login and hands the user to loginWithSession', async () => {
+      const user = userEvent.setup();
+      capableHere();
+      beginPasskeyLoginMock.mockResolvedValue({ challenge: 'x' });
+      startAuthenticationMock.mockResolvedValue({ id: 'assertion' });
+      finishPasskeyLoginMock.mockResolvedValue({ id: 7, email: 'a@b.co', role: 'user' });
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+
+      await user.click(await screen.findByRole('button', { name: /sign in with a passkey/i }));
+
+      await waitFor(() =>
+        expect(finishPasskeyLoginMock).toHaveBeenCalledWith({ id: 'assertion' }),
+      );
+      await waitFor(() =>
+        expect(loginWithSessionMock).toHaveBeenCalledWith({ id: 7, email: 'a@b.co', role: 'user' }),
+      );
+    });
+
+    it('shows a cancelled/timeout alert and retries the ceremony on "Try again"', async () => {
+      const user = userEvent.setup();
+      capableHere();
+      beginPasskeyLoginMock.mockResolvedValue({ challenge: 'x' });
+      startAuthenticationMock.mockRejectedValue(
+        new MockWebAuthnError('ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY'),
+      );
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+
+      await user.click(await screen.findByRole('button', { name: /sign in with a passkey/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/cancelled or timed out/i);
+
+      startAuthenticationMock.mockResolvedValue({ id: 'assertion' });
+      finishPasskeyLoginMock.mockResolvedValue({ id: 7, email: 'a@b.co', role: 'user' });
+      await user.click(screen.getByRole('button', { name: /try again/i }));
+      await waitFor(() => expect(beginPasskeyLoginMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('reports a config fault honestly instead of blaming a cancel', async () => {
+      const user = userEvent.setup();
+      capableHere();
+      beginPasskeyLoginMock.mockResolvedValue({ challenge: 'x' });
+      // A SecurityError → ERROR_INVALID_RP_ID: a deployment/config fault, not a cancel.
+      startAuthenticationMock.mockRejectedValue(new MockWebAuthnError('ERROR_INVALID_RP_ID'));
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+
+      await user.click(await screen.findByRole('button', { name: /sign in with a passkey/i }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/complete passkey sign-in here/i);
+      expect(alert).not.toHaveTextContent(/cancelled or timed out/i);
+    });
+
+    it('surfaces an expired-request message when finish rejects with 400', async () => {
+      const { ApiError } = await import('@/lib/api');
+      const user = userEvent.setup();
+      capableHere();
+      beginPasskeyLoginMock.mockResolvedValue({ challenge: 'x' });
+      startAuthenticationMock.mockResolvedValue({ id: 'assertion' });
+      finishPasskeyLoginMock.mockRejectedValue(
+        new ApiError(400, '{"detail":"challenge expired"}'),
+      );
+      renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
+
+      await user.click(await screen.findByRole('button', { name: /sign in with a passkey/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/expired/i);
+    });
   });
 });

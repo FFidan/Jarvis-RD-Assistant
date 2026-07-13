@@ -15,6 +15,7 @@ for file in \
   services/paper_ingestion/requirements.txt \
   services/paper_ingestion/requirements-optional.txt \
   services/paper_ingestion/constraints.txt \
+  services/paper_ingestion/constraints-cpu.txt \
   services/paper_ingestion/constraints-optional.txt \
   services/learning_engine/requirements.txt \
   services/learning_engine/constraints.txt \
@@ -35,10 +36,10 @@ def major_minor_patch(raw: str) -> tuple[int, int, int]:
 
 
 fastapi_version = version("fastapi")
-if major_minor_patch(fastapi_version) >= (0, 139, 0):
+if major_minor_patch(fastapi_version) >= (0, 140, 0):
     raise SystemExit(
-        f"host FastAPI {fastapi_version} is outside the Docker runtime cap <0.139.0"
+        f"host FastAPI {fastapi_version} is outside the Docker runtime cap <0.140.0"
     )
 
-print(f"OK host FastAPI {fastapi_version} matches Docker runtime cap <0.139.0")
+print(f"OK host FastAPI {fastapi_version} matches Docker runtime cap <0.140.0")
 PY

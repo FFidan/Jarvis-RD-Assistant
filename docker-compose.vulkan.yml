@@ -1,0 +1,15 @@
+# Vulkan overlay — added by setup.sh ONLY when GPU acceleration is requested via
+# the Vulkan backend (e.g. Intel/AMD hosts without a dedicated ROCm/CUDA path).
+# Base docker-compose.yml is CPU-safe; this re-enables GPU access for ollama via
+# Vulkan device passthrough.
+# Order matters with docker-compose.override.yml: apply this BEFORE override so a
+# dev-box override's `deploy: !reset null` on ollama still wins.
+#
+# paper_ingestion stays CPU-only: torch has no Vulkan backend.
+services:
+  ollama:
+    environment:
+      OLLAMA_VULKAN: "1"
+    devices:
+      - /dev/dri
+    group_add: ["video", "render"]

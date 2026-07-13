@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # update.sh — pull newer pinned images from versions.env and restart.
 #
-# Never auto-rollbacks. On failure, prints the exact command the operator
-# should run. macOS-safe: no `sed -i`, no GNU-only flags.
+#   --build-local   Rebuild the application images from source instead of pulling
+#                   the prebuilt ones published to GHCR. Slower and needs far more
+#                   disk; for development or an air-gapped host.
+#
+# Never auto-rollbacks. On failure, prints the recovery commands for both the
+# third-party pins (versions.env) and the application images (JARVIS_VERSION
+# tag). macOS-safe: no `sed -i`, no GNU-only flags.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -34,6 +39,24 @@ die() {
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+BUILD_LOCAL=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --build-local) BUILD_LOCAL=1; shift ;;
+    -h|--help)
+      sed -n '/^# update.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0"
+      exit 0
+      ;;
+    *) die "Unknown flag: $1" "Run: $0 --help" ;;
+  esac
+done
+
+# The .env writer has exactly one implementation; reuse it rather than growing a
+# second one here.
+# shellcheck source=scripts/setup_lib.sh
+# shellcheck disable=SC1091  # resolved at runtime relative to SCRIPT_DIR
+. scripts/setup_lib.sh
+
 # -----------------------------------------------------------------------------
 # 1-2. Load pinned versions
 # -----------------------------------------------------------------------------
@@ -50,6 +73,19 @@ command -v docker >/dev/null 2>&1 \
 docker compose version >/dev/null 2>&1 \
   || die "Docker Compose v2 required ('docker compose' plugin)." \
          "Install it: https://docs.docker.com/compose/install/"
+
+# Every published service pairs `pull_policy: missing` with a `build:` block, so a
+# missing image turns any `up` into a silent multi-GB rebuild. Guard every bring-up
+# below unless the user explicitly asked to build from source.
+UP_NO_BUILD=()
+[ "$BUILD_LOCAL" -eq 1 ] || UP_NO_BUILD=(--no-build)
+
+# A pre-1.1 .env carries no TORCH_VARIANT, so the image tag would resolve to the
+# CPU flavour even on a CUDA host. Backfill BEFORE anything resolves an image —
+# section 4 below already starts services, and cloudflared depends on dashboard.
+if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; then
+  info "Recorded this host's torch image variant in .env: ${_bf_variant}"
+fi
 
 # -----------------------------------------------------------------------------
 # 3. Service → version-var mapping
@@ -119,8 +155,10 @@ if [ "${#TO_UPDATE[@]}" -gt 0 ]; then
         die "docker compose pull failed." \
             "Check network / registry auth, then re-run ./update.sh"
       fi
+      # cloudflared depends on dashboard, so this bring-up can reach an application
+      # service whose image may be absent — hence the same no-build guard.
       info "Recreating services..."
-      if ! docker compose up -d "${TO_UPDATE[@]}"; then
+      if ! docker compose up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} "${TO_UPDATE[@]}"; then
         die "docker compose up failed." \
             "Inspect logs: docker compose logs --tail=200 ${TO_UPDATE[*]}"
       fi
@@ -135,36 +173,49 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 4b. Locally-built services — rebuild if the user wants to pick up code changes.
+# 4b. Application services — refresh them to this checkout's images.
 # -----------------------------------------------------------------------------
-# These core services build from this repo. `git pull` may have changed their
-# source without changing versions.env, so we always offer to rebuild them.
-# Telegram is optional and intentionally excluded from the default path because
-# testing installs often do not set TELEGRAM_BOT_TOKEN.
-LOCAL_SERVICES=(paper_ingestion learning_engine dashboard)
-LOCAL_LABEL="paper_ingestion, learning_engine, dashboard"
+# These are published as prebuilt images from this repo. `git pull` may have moved
+# them to a newer version without touching versions.env, so always offer to
+# refresh. Telegram is optional and only included when a token is configured; its
+# profile must be named explicitly or Compose hides the service.
+APP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+APP_PROFILE_ARGS=()
 if [ -f .env ] && grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env; then
-  LOCAL_SERVICES+=(telegram_bot)
-  LOCAL_LABEL="${LOCAL_LABEL}, telegram_bot"
+  APP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+  APP_PROFILE_ARGS+=(--profile telegram)
 fi
+
 printf '\n'
-read -rp "Rebuild locally-built services (${LOCAL_LABEL}) to pick up code changes? (y/N): " reply
+if [ "$BUILD_LOCAL" -eq 1 ]; then
+  read -rp "Rebuild application services from source (${APP_SERVICES[*]})? (y/N): " reply
+else
+  read -rp "Pull the published application images (${APP_SERVICES[*]}) and restart? (y/N): " reply
+fi
 case "$reply" in
   [yY]|[yY][eE][sS])
-    info "Building local images..."
-    if ! docker compose build "${LOCAL_SERVICES[@]}"; then
-      die "docker compose build failed." \
-          "Inspect output above; re-run ./update.sh after fixing."
+    if [ "$BUILD_LOCAL" -eq 1 ]; then
+      info "Building application images from source..."
+      if ! docker compose ${APP_PROFILE_ARGS[@]+"${APP_PROFILE_ARGS[@]}"} build "${APP_SERVICES[@]}"; then
+        die "docker compose build failed." \
+            "Inspect output above; re-run ./update.sh after fixing."
+      fi
+    else
+      info "Pulling published application images..."
+      if ! docker compose ${APP_PROFILE_ARGS[@]+"${APP_PROFILE_ARGS[@]}"} pull "${APP_SERVICES[@]}"; then
+        die "docker compose pull failed." \
+            "Check network access to ghcr.io, then re-run ./update.sh — or build from source: ./update.sh --build-local"
+      fi
     fi
-    info "Recreating local services..."
-    if ! docker compose up -d "${LOCAL_SERVICES[@]}"; then
+    info "Recreating application services..."
+    if ! docker compose ${APP_PROFILE_ARGS[@]+"${APP_PROFILE_ARGS[@]}"} up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} "${APP_SERVICES[@]}"; then
       die "docker compose up failed." \
-          "Inspect logs: docker compose logs --tail=200 ${LOCAL_SERVICES[*]}"
+          "Inspect logs: docker compose logs --tail=200 ${APP_SERVICES[*]}"
     fi
-    TO_UPDATE+=("${LOCAL_SERVICES[@]}")
+    TO_UPDATE+=("${APP_SERVICES[@]}")
     ;;
   *)
-    info "Skipped local rebuild — running containers keep their current code."
+    info "Skipped — running application containers keep their current images."
     ;;
 esac
 
@@ -225,8 +276,19 @@ printf '\n'
 warn "The following service(s) failed health checks: ${FAILED[*]}"
 cat <<EOF
 
-To rollback the version pin and re-run the update:
-  ${C_BOLD}git checkout HEAD~1 -- versions.env && ./update.sh${C_RESET}
+Recovery — the two image sets roll back differently:
+
+  ${C_BOLD}Third-party services${C_RESET} (postgres, ollama, qdrant, litellm, cloudflared) are
+  pinned in versions.env. Roll their pins back one commit and re-run:
+    ${C_BOLD}git checkout HEAD~1 -- versions.env && ./update.sh${C_RESET}
+
+  ${C_BOLD}Application services${C_RESET} are tagged by JARVIS_VERSION in docker-compose.yml —
+  versions.env does NOT pin them, so the command above re-pulls the same
+  images. To return them to a previously PUBLISHED release, pin that tag and
+  pull it back (only tags already in the registry can be rolled back; a
+  --build-local install rebuilds from source with --build-local instead):
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose pull ${FAILED[*]}${C_RESET}
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose up -d --no-build ${FAILED[*]}${C_RESET}
 
 To inspect logs for the failed service(s):
   docker compose logs --tail=200 ${FAILED[*]}

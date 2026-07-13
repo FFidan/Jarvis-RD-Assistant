@@ -1,8 +1,13 @@
 """API key authentication shared across JARVIS services."""
 
+import hashlib
 import hmac
 import ipaddress
+import json
 import logging
+import os
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -120,6 +125,73 @@ def refresh_api_key_cache() -> None:
     _CACHED_API_KEY = _load_api_key()
 
 
+# --- Restore-status one-time bearer token (one-click restore) ----------------
+# The admin Backup panel's restore endpoint mints a one-time token and persists
+# ONLY its sha256 + expiry to this sentinel-plane file (same RW trigger volume as
+# the maintenance sentinels; written by the app, read here). It lets the admin who
+# initiated a restore keep polling GET /api/admin/backups/restore/status after the
+# restore has rewritten the sessions table: the session-cookie DB lookup fails mid
+# restore, so a valid bearer token is the ONLY credential that survives — validated
+# DB-free so the global front door does not reject the progress poll.
+RESTORE_STATUS_PATH = "/api/admin/backups/restore/status"
+_RESTORE_STATUS_TOKEN_FILENAME = ".restore_status_token.json"
+
+
+def restore_status_token_file() -> Path:
+    """Path of the restore-status bearer-token sentinel (env-resolved at call time)."""
+    trigger_dir = os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")
+    return Path(trigger_dir) / _RESTORE_STATUS_TOKEN_FILENAME
+
+
+def _valid_restore_status_hash() -> str | None:
+    """Return the stored, unexpired restore-status token hash, or None.
+
+    DB-FREE: reads only the sentinel-plane hash file. Returns None on a missing /
+    malformed / non-object / expired token file — and never raises — so the caller
+    degrades to the normal session / API-key checks.
+    """
+    try:
+        data = json.loads(restore_status_token_file().read_text())
+    except (OSError, ValueError):
+        return None
+    # Non-object JSON (a list/number/string/null) has no ``.get`` — treat any
+    # shape other than an object as an invalid token file rather than raising.
+    if not isinstance(data, dict):
+        return None
+    stored_hash = data.get("sha256")
+    expires_at = data.get("expires_at")
+    if not isinstance(stored_hash, str) or not isinstance(expires_at, str):
+        return None
+    try:
+        if datetime.now(UTC) > datetime.fromisoformat(expires_at):
+            return None
+    except (ValueError, TypeError):
+        # ValueError: malformed ISO string. TypeError: a naive timestamp is not
+        # comparable to the aware ``now(UTC)``. Either way the token is unusable.
+        return None
+    return stored_hash
+
+
+def restore_status_bearer_valid(request: Request) -> bool:
+    """Return True iff the request carries a valid, unexpired restore-status token.
+
+    DB-FREE by construction: reads only the sentinel-plane hash file (never the
+    database), sha256s the presented bearer token, and constant-time compares it
+    to the stored hash. A non-bearer ``Authorization`` header or a missing /
+    expired / malformed token file yields False (the caller then falls through to
+    the normal session / API-key checks). Never raises.
+    """
+    header = request.headers.get("Authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    stored_hash = _valid_restore_status_hash()
+    if stored_hash is None:
+        return False
+    presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(presented, stored_hash)
+
+
 # System ``user_config`` row (user_id NULL) that lets an admin flip the
 # multi-tenant API-key-login gate in-app — the recovery path before the boot
 # API key would otherwise be the only credential. Read as ``env default OR DB
@@ -197,6 +269,13 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # exists, admin-only after. Without this exemption, FirstRunGate 403s and
     # the whole UI hangs on the loading spinner.
     if request.url.path.startswith("/api/setup/"):
+        return
+    # The restore-status progress poll may arrive with a one-time bearer token
+    # instead of a session/API-key when an in-flight restore has torn down the
+    # admin's session store. Accept a valid token DB-free here so the front door
+    # does not reject the poll; a non-bearer request still falls through to the
+    # session/API-key enforcement below (defense in depth — never opens the path).
+    if request.url.path == RESTORE_STATUS_PATH and restore_status_bearer_valid(request):
         return
     # A valid browser session is sufficient to pass this
     # global front-door gate. SessionMiddleware (ASGI middleware, runs BEFORE

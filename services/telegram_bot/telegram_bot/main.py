@@ -5,15 +5,20 @@ task management, and paper interactions via inline keyboards.
 """
 
 import asyncio
+import contextlib
 import logging
+import os
+import signal
 import sys
+import time
 
 import httpx
 from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
+from jarvis_common.maintenance import maintenance_active, secrets_rotated_since
 from jarvis_common.settings import get_core_settings
-from telegram import BotCommand
-from telegram.ext import Application
+from telegram import BotCommand, Update
+from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
 
 from telegram_bot.config import BotConfig, create_db_pool
 from telegram_bot.handlers import (
@@ -26,6 +31,31 @@ from telegram_bot.scheduler import JarvisScheduler
 
 configure_logging("telegram_bot", log_level=get_core_settings().log_level)
 logger = logging.getLogger(__name__)
+
+
+async def _secrets_rotation_watcher(started_at: float, poll_interval_s: float = 5.0) -> None:
+    """Exit the bot when an off-host restore rotates secrets, so it reloads them.
+
+    The bot reads its telegram_bot_token + the postgres password once at start
+    (compose file-secrets are per-inode bind mounts), so a role/secret rotation
+    during a restore is only picked up by a full process exit + ``restart:
+    unless-stopped`` revive. Polls the shared marker and, once the restore has
+    finished (maintenance lifted) AND the marker post-dates this boot, sends SIGINT
+    — python-telegram-bot's ``run_polling`` installs a clean SIGINT/SIGTERM shutdown
+    — so the container exits and Docker restarts it against the rotated secrets.
+    Self-limiting: the restarted process's ``started_at`` exceeds the marker epoch.
+    """
+    while True:
+        try:
+            await asyncio.sleep(poll_interval_s)
+            if not maintenance_active() and secrets_rotated_since(started_at):
+                logger.warning("secrets rotated; restarting to reload updated secrets")
+                os.kill(os.getpid(), signal.SIGINT)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("secrets-rotation watcher tick failed", exc_info=True)
 
 
 async def post_init(application: Application) -> None:
@@ -71,6 +101,14 @@ async def post_init(application: Application) -> None:
             logger.error("internal_api task raised: %s", exc, exc_info=exc)
 
     _internal_api_task.add_done_callback(_log_internal_api_exception)
+
+    # Self-restart onto rotated secrets after an off-host restore. The bot bypasses
+    # the app_factory maintenance watcher, so it runs its own equivalent here.
+    _secrets_watcher_task = asyncio.get_running_loop().create_task(
+        _secrets_rotation_watcher(time.time()),
+        name="secrets_rotation_watcher",
+    )
+    application.bot_data["secrets_rotation_watcher_task"] = _secrets_watcher_task
 
     # Register bot commands for the Telegram "/" autocomplete menu
     await application.bot.set_my_commands(
@@ -119,6 +157,12 @@ async def post_shutdown(application: Application) -> None:
         except asyncio.CancelledError:
             logger.warning("Internal API server task was cancelled during shutdown")
 
+    watcher_task = application.bot_data.get("secrets_rotation_watcher_task")
+    if watcher_task is not None:
+        watcher_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await watcher_task
+
     scheduler = application.bot_data.get("scheduler")
     if scheduler:
         await scheduler.stop()
@@ -132,6 +176,26 @@ async def post_shutdown(application: Application) -> None:
         await db_pool.close()
 
     logger.info("Bot shutdown: resources released")
+
+
+async def _maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Short-circuit every update while a restore holds a maintenance sentinel.
+
+    The bot bypasses the HTTP :class:`MaintenanceMiddleware`, so this handler is
+    registered in group ``-1`` to run before every command/callback handler:
+    during a restore it replies once and raises ``ApplicationHandlerStop`` so no
+    downstream handler writes to the (being-restored) database.
+    """
+    if not maintenance_active():
+        return
+    notice = "⏳ Restore in progress — please try again shortly."
+    if update.callback_query is not None:
+        with contextlib.suppress(Exception):
+            await update.callback_query.answer(notice, show_alert=True)
+    elif update.effective_message is not None:
+        with contextlib.suppress(Exception):
+            await update.effective_message.reply_text(notice)
+    raise ApplicationHandlerStop
 
 
 def main() -> None:
@@ -158,6 +222,10 @@ def main() -> None:
     )
 
     application.bot_data["config"] = config
+
+    # Maintenance gate runs before every other handler (group -1): the bot
+    # bypasses the HTTP MaintenanceMiddleware, so this is its restore guard.
+    application.add_handler(TypeHandler(Update, _maintenance_gate), group=-1)
 
     # Register handlers
     register_command_handlers(application)

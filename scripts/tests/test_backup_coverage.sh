@@ -337,6 +337,95 @@ else
   fi
 fi
 
+# RESTORE-BACKUP-RACE: a scheduled/on-demand backup must STAND DOWN while a restore
+# holds the maintenance sentinel (dumping mid drop-swap captures an inconsistent DB),
+# but the restore's OWN safety pre-backup (BACKUP_FORCE=1) must run. Source checks:
+check "honors BACKUP_FORCE to bypass the maintenance skip-guard" '\bBACKUP_FORCE\b'
+check "guards scheduled backups behind a maintenance_active check" '^maintenance_active\(\)'
+check "tags a maintenance skip in .last_run.json" '"skipped_maintenance":'
+check "takes a flock single-run mutex" 'flock -n'
+
+# Behavioral: single-source the write_last_run + maintenance-guard blocks out of
+# backup.sh and replay them in isolation (no Postgres). replay_guard echoes REACHED
+# iff the backup would proceed; the EXIT trap writes .last_run.json either way.
+MAINT_WLR="$(sed -n '/^write_last_run()/,/^}/p' "$BACKUP_SCRIPT")"
+MAINT_GUARD="$(awk '/^# --- Maintenance skip-guard/{f=1} f{print} /another backup is already running/{c++} c&&/^fi$/{exit}' "$BACKUP_SCRIPT")"
+replay_guard() {
+  # replay_guard <trigger_dir> <backup_dir> <force>
+  BACKUP_TRIGGER_DIR="$1" BACKUP_DIR="$2" BACKUP_FORCE="$3" \
+  bash -c '
+    set -euo pipefail
+    ATTEMPTED_AT=x TIMESTAMP=t JARVIS_STATE=failed LITELLM_STATE=failed
+    SECRETS_STATE=skipped QDRANT_STATE=skipped ENCRYPT=0 RETENTION_DAYS=7
+    '"$MAINT_WLR"'
+    trap write_last_run EXIT
+    '"$MAINT_GUARD"'
+    echo REACHED
+  ' 2>/dev/null || true
+}
+
+# (a) the forced safety backup RUNS under a fresh .maintenance sentinel.
+mg_dir="$(mktemp -d)"; mg_trig="${mg_dir}/trig"; mkdir -p "$mg_trig"; : > "${mg_trig}/.maintenance"
+if replay_guard "$mg_trig" "$mg_dir" 1 | grep -q REACHED \
+   && grep -q '"skipped_maintenance":false' "${mg_dir}/.last_run.json"; then
+  pass "BACKUP_FORCE=1 safety backup runs under a fresh .maintenance sentinel"
+else
+  printf 'FAIL: forced safety backup did not run under .maintenance\n' >&2; fail=1
+fi
+rm -rf "$mg_dir"
+
+# (b) a non-forced scheduled run SKIPS under .maintenance AND under .destructive,
+#     tagging skipped_maintenance:true without producing a backup.
+for sentinel in .maintenance .destructive; do
+  mb_dir="$(mktemp -d)"; mb_trig="${mb_dir}/trig"; mkdir -p "$mb_trig"; : > "${mb_trig}/${sentinel}"
+  mb_out="$(replay_guard "$mb_trig" "$mb_dir" "")"
+  if ! printf '%s' "$mb_out" | grep -q REACHED \
+     && grep -q '"skipped_maintenance":true' "${mb_dir}/.last_run.json"; then
+    pass "scheduled run skips + tags skipped_maintenance under ${sentinel}"
+  else
+    printf 'FAIL: scheduled run did not skip/tag under %s (out=%s)\n' "$sentinel" "$mb_out" >&2; fail=1
+  fi
+  rm -rf "$mb_dir"
+done
+
+# (c) with sentinels CLEARED a scheduled run does NOT skip (no stale-status wedge).
+mc_dir="$(mktemp -d)"; mc_trig="${mc_dir}/trig"; mkdir -p "$mc_trig"
+if replay_guard "$mc_trig" "$mc_dir" "" | grep -q REACHED \
+   && grep -q '"skipped_maintenance":false' "${mc_dir}/.last_run.json"; then
+  pass "cleared sentinels resume scheduled backups (no wedge)"
+else
+  printf 'FAIL: scheduled run skipped with no sentinel present\n' >&2; fail=1
+fi
+rm -rf "$mc_dir"
+
+# (d) a stale (>1800s) .maintenance with no .destructive does NOT skip (age-expiry).
+md_dir="$(mktemp -d)"; md_trig="${md_dir}/trig"; mkdir -p "$md_trig"
+: > "${md_trig}/.maintenance"; touch -d '2000-01-01 00:00:00' "${md_trig}/.maintenance"
+if replay_guard "$md_trig" "$md_dir" "" | grep -q REACHED; then
+  pass "stale (>1800s) .maintenance with no .destructive does not wedge backups"
+else
+  printf 'FAIL: stale soft sentinel wrongly skipped the backup\n' >&2; fail=1
+fi
+rm -rf "$md_dir"
+
+# (e) the flock mutex blocks a second concurrent NON-forced run, but a BACKUP_FORCE=1
+#     safety backup is never blocked. A background holder takes the lock first.
+me_dir="$(mktemp -d)"; me_trig="${me_dir}/trig"; mkdir -p "$me_trig"
+( exec 8>"${me_trig}/.backup.lock"; flock -n 8 && { : > "${me_dir}/.held"; sleep 3; } ) &
+me_holder=$!
+for _ in $(seq 1 40); do [ -f "${me_dir}/.held" ] && break; sleep 0.05; done
+me_blocked="$(replay_guard "$me_trig" "$me_dir" "")"
+me_forced="$(replay_guard "$me_trig" "$me_dir" 1)"
+kill "$me_holder" 2>/dev/null || true; wait "$me_holder" 2>/dev/null || true
+if ! printf '%s' "$me_blocked" | grep -q REACHED && printf '%s' "$me_forced" | grep -q REACHED; then
+  pass "flock blocks a concurrent non-forced backup; BACKUP_FORCE=1 is never blocked"
+else
+  printf 'FAIL: flock mutex wrong (blocked reached=%s, forced reached=%s)\n' \
+    "$(printf '%s' "$me_blocked" | grep -qc REACHED)" \
+    "$(printf '%s' "$me_forced" | grep -qc REACHED)" >&2; fail=1
+fi
+rm -rf "$me_dir"
+
 if [ "$fail" -ne 0 ]; then
   printf '\nbackup coverage: FAILED\n' >&2
   exit 1

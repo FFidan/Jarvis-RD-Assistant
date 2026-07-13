@@ -26,6 +26,10 @@ Download a ZIP of your own account data from the Account section. The export is 
 
 Toggle between **light mode**, **dark mode**, and **system** (follows your OS preference).
 
+### Passkeys
+
+Register **passkeys** (fingerprint, Face ID, or a hardware security key) for password-less sign-in, and view or revoke the passkeys registered to your account. Registration requires user verification and works only on the exact origin the instance is served from (HTTPS for any non-localhost address), so the controls appear only where passkeys can actually work. See [Passkeys](passkeys.md) for the full guide, including magic-link recovery if you lose a device.
+
 ---
 
 ## §II — Sources

@@ -213,13 +213,29 @@ def test_feed_route_served_from_papers_feed_module():
     import pytest
     from fastapi.routing import APIRoute
 
+    try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
+        from fastapi.routing import (
+            iter_route_contexts as _iter_route_contexts,  # type: ignore[attr-defined]
+        )
+    except ImportError:  # FastAPI <0.137 keeps app.routes a flat APIRoute list.
+        _iter_route_contexts = None
+
     from paper_ingestion.main import app
 
-    route = next(
-        r
-        for r in app.routes
-        if isinstance(r, APIRoute) and r.path == "/api/papers/feed" and "GET" in r.methods
-    )
+    if _iter_route_contexts is not None:
+        route = next(
+            context.route
+            for context in _iter_route_contexts(app.routes)
+            if isinstance(context.route, APIRoute)
+            and context.path == "/api/papers/feed"
+            and "GET" in context.methods
+        )
+    else:
+        route = next(
+            r
+            for r in app.routes
+            if isinstance(r, APIRoute) and r.path == "/api/papers/feed" and "GET" in r.methods
+        )
     assert route.endpoint.__module__.endswith("routers.papers_feed"), (
         f"/api/papers/feed must be defined in papers_feed; got {route.endpoint.__module__}"
     )

@@ -1,29 +1,161 @@
 name: First-run smoke
 
-# Clean-machine first-run confidence check: proves a fresh checkout can reach a
-# healthy stack by following the README's documented first-run command
-# (`./setup.sh --non-interactive --profile=dev`). It catches "works on my
-# machine" / undocumented-manual-step regressions before public launch.
+# Clean-machine first-run confidence checks: prove a fresh checkout reaches a
+# healthy stack via the documented install paths, and hold the install's disk
+# footprint to a measured budget.
 #
-# Intentionally NOT a required gate and NOT on pull_request: the first run pulls
-# 7-11 GB of model data and can take 20-60 minutes, far too heavy to block PRs.
-# It runs on pushes to main and on demand. Promote it to a required gate only
-# after it has proven stable over several green main runs.
+# Matrix (push to main + on demand):
+#   dev-boot    — the README's `./setup.sh --non-interactive --profile=dev`
+#                 path with --build-local, so the stack runs THIS commit's
+#                 code (the default pull path would boot previously-published
+#                 images and green-light a broken push), plus the gated
+#                 integration suite against the live stack (the only leg that
+#                 blocks this workflow's status).
+#   setup-check — `./setup.sh --check` doctor on a cold box (informational).
+#   env-rerun   — a second --build-local bootstrap against the kept .env
+#                 (informational).
+#   wrapper     — the scripts/jarvis-setup.sh bootstrap path (informational).
+#                 The wrapper has no local-build mode, so this leg exercises
+#                 the published-image pull path and needs those images to be
+#                 anonymously pullable.
+# Plus:
+#   coldbox-prereqs — Docker removed, then the guided prerequisite installer;
+#                 the EXPECTED outcome is the documented exit-3 "log out and
+#                 back in" contract, never a silent success (informational).
+#   cold-install — release-blocking published-image install check, run via
+#                 workflow_dispatch with cold_install_version set (images must
+#                 already be published, so it cannot run on pull_request).
+#
+# Intentionally NOT a required PR gate: the first run pulls 7-11 GB of model
+# data and can take 20-60 minutes, far too heavy to block PRs.
 
 on:
   public:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      cold_install_version:
+        description: >-
+          Published image version to cold-install (no v prefix, e.g.
+          1.1.0-rc.1). Leave empty to run the standard smoke matrix instead.
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   first-run-smoke:
-    if: github.event.repository.private == false
+    if: github.event.repository.private == false && (github.event_name != 'workflow_dispatch' || inputs.cold_install_version == '')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: dev-boot
+            required: true
+          - mode: setup-check
+            required: false
+          - mode: env-rerun
+            required: false
+          - mode: wrapper
+            required: false
+    name: first-run-smoke (${{ matrix.mode }})
+    continue-on-error: ${{ !matrix.required }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Free disk space
+        if: matrix.mode != 'setup-check'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          docker image prune --all --force
+
+      - name: Set up uv
+        if: matrix.mode == 'dev-boot'
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        with:
+          enable-cache: true
+
+      - name: Run the ${{ matrix.mode }} smoke
+        run: |
+          # --build-local makes the smoke BUILD the app images from this
+          # checkout: these legs must test the pushed code, not whatever was
+          # last published to GHCR. The published-image pull path is covered
+          # by the cold-install job and the wrapper leg (jarvis-setup.sh has
+          # no local-build mode).
+          case "${{ matrix.mode }}" in
+            dev-boot)    bash scripts/first-run-smoke.sh --integration --build-local ;;
+            setup-check) ./setup.sh --check ;;
+            env-rerun)   bash scripts/first-run-smoke.sh --rerun --build-local ;;
+            wrapper)     bash scripts/first-run-smoke.sh --wrapper ;;
+          esac
+
+  coldbox-prereqs:
+    name: Cold-box prerequisite installer (informational)
+    if: github.event.repository.private == false && (github.event_name != 'workflow_dispatch' || inputs.cold_install_version == '')
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Remove the preinstalled Docker toolchain
+        run: |
+          # Runner images have shipped Docker both as docker-* and as moby-*
+          # packages; purge every variant.
+          sudo apt-get remove -y --purge 'docker*' 'moby*' 'containerd*' > /dev/null
+          # The runner user's pre-existing docker-group membership would let
+          # `docker info` succeed right after the reinstall and defeat the
+          # exit-3 contract this smoke exists to verify.
+          sudo gpasswd -d "$USER" docker 2>/dev/null || true
+          sudo groupdel docker 2>/dev/null || true
+          if command -v docker > /dev/null 2>&1; then
+            echo "::error::docker survived removal — cold box not established"
+            exit 1
+          fi
+
+      - name: Guided installer honours the exit-3 restart-required contract
+        run: |
+          rc=0
+          ./setup.sh --non-interactive --profile=dev --install-prereqs 2>&1 \
+            | tee /tmp/coldbox.log || rc=$?
+          if ! command -v docker > /dev/null 2>&1; then
+            echo "::error::the guided installer did not install docker"
+            exit 1
+          fi
+          # Exit 3 + the re-login message is the EXPECTED cold-box outcome
+          # (docker just installed; this shell is not in the docker group yet).
+          # Anything else — including success — breaks the documented contract.
+          if [ "$rc" -ne 3 ]; then
+            echo "::error::expected exit code 3 (restart required), got rc=${rc}"
+            exit 1
+          fi
+          if ! grep -q "log out and back in" /tmp/coldbox.log; then
+            echo "::error::exit 3 without the documented re-login message"
+            exit 1
+          fi
+          echo "Guided installer installed docker and honoured the exit-3 contract."
+
+  cold-install:
+    # The motivating release scenario: a credential-less fresh machine must
+    # reach a healthy stack by PULLING the published images — zero app-image
+    # builds. Dispatch-only because the images must already exist on GHCR;
+    # the release process runs it (gh workflow run) and blocks on its result.
+    name: Cold install from published images (release-blocking)
+    if: github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.cold_install_version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      JARVIS_VERSION: ${{ inputs.cold_install_version }}
+      # An empty Docker config = no registry credentials: proves anonymous
+      # pulls of the published images work for first-time users.
+      DOCKER_CONFIG: /tmp/jarvis-empty-docker-config
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -35,5 +167,33 @@ jobs:
           sudo rm -rf "/usr/local/share/boost"
           docker image prune --all --force
 
-      - name: Clean-machine first-run smoke
-        run: bash scripts/first-run-smoke.sh
+      - name: Start the data-root usage sampler
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          ( while :; do
+              df -B1 --output=used /var/lib/docker 2>/dev/null | tail -1 \
+                >> /tmp/data-root-usage.samples
+              sleep 10
+            done ) &
+          echo "$!" > /tmp/data-root-sampler.pid
+
+      - name: Cold-install from published images
+        run: bash scripts/first-run-smoke.sh 2>&1 | tee /tmp/cold-install.log
+
+      - name: Assert the install built nothing
+        run: |
+          if grep -nE '\[internal\] load build definition|naming to docker\.io/jarvis' /tmp/cold-install.log; then
+            echo "::error::app images were BUILT during the cold install — the published-image path must be pull-only"
+            exit 1
+          fi
+          echo "No build events in the install transcript — images were pulled."
+
+      - name: Record peak data-root usage
+        if: always()
+        run: |
+          kill "$(cat /tmp/data-root-sampler.pid)" 2>/dev/null || true
+          peak="$(sort -n /tmp/data-root-usage.samples 2>/dev/null | tail -1)"
+          {
+            echo "### Cold install (version ${JARVIS_VERSION})"
+            echo "Peak Docker data-root usage: $(( ${peak:-0} / 1000000000 )) GB"
+          } >> "$GITHUB_STEP_SUMMARY"

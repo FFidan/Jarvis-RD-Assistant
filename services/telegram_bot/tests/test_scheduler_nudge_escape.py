@@ -113,3 +113,17 @@ async def test_failure_alert_sent_only_to_owner_chat() -> None:
         await scheduler._run_job("daily_summary", 5)
     scheduler.bot.send_message.assert_called_once()
     assert scheduler.bot.send_message.call_args.kwargs["chat_id"] == 4242
+
+
+@pytest.mark.asyncio
+async def test_run_job_skips_under_maintenance_sentinel(tmp_path, monkeypatch) -> None:
+    """A fresh maintenance sentinel makes _run_job return before the last_fired_at UPDATE."""
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(tmp_path / ".maintenance"))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    (tmp_path / ".maintenance").touch()
+
+    scheduler = _make_scheduler()
+    await scheduler._run_job("daily_summary", 5)
+
+    scheduler.db_pool.execute.assert_not_called()  # no UPDATE scheduled_nudges
+    scheduler.bot.send_message.assert_not_called()  # not treated as a failure

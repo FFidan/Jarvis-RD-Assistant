@@ -1,0 +1,75 @@
+name: Hardware compatibility report
+description: Report how JARVIS ran on your GPU — especially AMD (ROCm/Vulkan) and Intel (Vulkan), which ship as [Experimental].
+title: "[hardware] "
+labels: hardware-report
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing an [Experimental] hardware path. This report feeds the
+        [hardware support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/) —
+        every data point helps the next person on similar hardware.
+  - type: dropdown
+    id: vendor
+    attributes:
+      label: GPU vendor
+      options:
+        - NVIDIA
+        - AMD
+        - Intel
+        - Other / integrated
+    validations:
+      required: true
+  - type: input
+    id: gpu-model
+    attributes:
+      label: GPU model
+      placeholder: e.g. Radeon RX 7900 XTX, Arc A770, RTX 4070
+    validations:
+      required: true
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver / ROCm version
+      description: "AMD: `amd-smi version` or `rocm-smi --showdriverversion`. NVIDIA: `nvidia-smi`."
+      placeholder: e.g. ROCm 6.2, driver 550.120
+    validations:
+      required: false
+  - type: dropdown
+    id: overlay
+    attributes:
+      label: Overlay / --gpu value
+      description: The acceleration overlay setup.sh selected (or the --gpu flag you passed).
+      options:
+        - cuda
+        - rocm
+        - vulkan
+        - cpu
+        - Not sure / auto-detected
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Works — normal speed and quality
+        - Degraded — runs, but slow or fell back to CPU
+        - Fails — install or inference errors out
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you observed. Include your OS and whether this is WSL2.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`docker compose logs ollama` around the failure, and `./setup.sh --check` output. Strip any secrets first."
+      render: shell
+    validations:
+      required: false

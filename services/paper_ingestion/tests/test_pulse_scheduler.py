@@ -82,6 +82,27 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module):
 
 
 @pytest.mark.asyncio
+async def test_run_pulse_wrapper_skips_under_maintenance(scheduler_module, tmp_path, monkeypatch):
+    """A fresh maintenance sentinel makes run_pulse_wrapper return before any DB read/defer."""
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(tmp_path / ".maintenance"))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    (tmp_path / ".maintenance").touch()
+
+    pool, conn = _make_pool_and_conn()
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
+        await scheduler_module.run_pulse_wrapper(app)
+
+    assert len(in_memory.jobs) == 0  # nothing deferred
+    conn.fetchrow.assert_not_called()  # returned before reading pulse.enabled
+
+
+@pytest.mark.asyncio
 async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
     """``run_pulse_wrapper`` fans out one defer per active user
     (no legacy ``user_id=None`` system fallback).

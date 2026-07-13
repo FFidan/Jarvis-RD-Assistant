@@ -71,6 +71,19 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: API-key session bootstrap (dependencies=[] — it IS the auth front door)",  # noqa: E501
+    # Passkey sign-in — the same class as the magic-link flow above: a login
+    # ceremony cannot require the session it exists to create. /login/begin is
+    # discoverable (username-less), so it takes no identifier and cannot enumerate
+    # users; both ceremonies require user verification and are origin-matched.
+    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::GET /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data",  # noqa: E501
+    # NOT public — gated by restore_status_auth (admin session, ops X-API-Key, or
+    # the one-time bearer minted by request_restore). It resolves no *user id*, so
+    # the caller-identity check cannot see its gate. Validated DB-free on purpose:
+    # the poll must keep answering while a restore has the jarvis DB swapped out.
+    # Exposes progress only (step names + state), never archive contents.
+    "services/paper_ingestion/paper_ingestion/routers/backups.py::GET /restore/status": "authenticated by restore_status_auth; DB-free so it survives the restore swap",  # noqa: E501
     # Shared global catalog tables (tracked_authors, topics, extraction
     # templates, sources) — not per-user data.
     "services/paper_ingestion/paper_ingestion/routers/authors.py::GET ": "shared tracked_authors catalog",  # noqa: E501

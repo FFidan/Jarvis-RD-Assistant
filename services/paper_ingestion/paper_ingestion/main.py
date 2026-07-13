@@ -41,7 +41,9 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
+    make_maintenance_watcher_hook,
     make_procrastinate_worker_hook,
+    shutdown_maintenance_watcher,
 )
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
@@ -461,10 +463,11 @@ def _register_tasks(procrastinate_app: Any) -> None:
 
 
 # B.4 Step 4 — start the procrastinate worker polling paper_ingestion + builtin
-# Hook body is shared via jarvis_common.app_factory.
-_start_procrastinate_worker = make_procrastinate_worker_hook(
-    _register_tasks, queues=["paper_ingestion", "builtin"]
-)
+# Hook body is shared via jarvis_common.app_factory. The maintenance watcher must
+# pause/resume the SAME queues, so both hooks read one constant to prevent drift.
+_WORKER_QUEUES = ["paper_ingestion", "builtin"]
+_start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, queues=_WORKER_QUEUES)
+_maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 
 
 async def _shutdown_qdrant(app: FastAPI) -> None:
@@ -512,6 +515,7 @@ _lifespan_config = ServiceLifespanConfig(
         _start_litellm_reconciler,
         _start_scheduler_hook,
         _start_procrastinate_worker,
+        _maintenance_watcher,
         make_warmup_hook(
             lambda app: [
                 lambda: warm_embedding_model(app.state.http_client, EMBEDDING_MODEL),
@@ -534,6 +538,9 @@ _lifespan_config = ServiceLifespanConfig(
         _shutdown_litellm_reconciler,  # _start_litellm_reconciler
         _shutdown_scheduler,  # _start_scheduler_hook
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        # LIFO: watcher inits after the worker, so it is torn down BEFORE the
+        # worker's connector closes — the watcher never resumes onto a closed app.
+        shutdown_maintenance_watcher,  # _maintenance_watcher
         None,  # make_warmup_hook (fire-and-forget; cancelled at process exit)
     ],
 )
@@ -621,6 +628,7 @@ from paper_ingestion.routers import (  # noqa: E402
 )
 from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
+from paper_ingestion.routers import auth_passkeys as auth_passkeys_router  # noqa: E402
 from paper_ingestion.routers import backups as backups_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import settings_ai as settings_ai_router  # noqa: E402
@@ -629,6 +637,10 @@ from paper_ingestion.routers import source_config as source_config_router  # noq
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
+# Passkey ceremonies. Under /api/auth/* so verify_api_key exempts the front door;
+# login/* + capability are unauthenticated, register/list/delete enforce the
+# session in-handler via current_user_id_strict.
+app.include_router(auth_passkeys_router.router)
 # Admin router uses session-only auth (no X-API-Key required for browser
 # sessions). Exempt from the global verify_api_key dep via dependencies=[].
 app.include_router(admin_router.router, dependencies=[])

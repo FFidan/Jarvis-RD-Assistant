@@ -584,7 +584,11 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
         title="Delete Model"
         description={
           deleteTarget
-            ? `This will remove ${deleteTarget.name} from Ollama. You can pull it again later.`
+            ? `This removes ${deleteTarget.name} from Ollama${
+                deleteTarget.disk_gb > 0
+                  ? ` and frees approximately ${deleteTarget.disk_gb.toFixed(1)} GB`
+                  : ''
+              }. You can pull it again later.`
             : undefined
         }
         confirmLabel="Delete"

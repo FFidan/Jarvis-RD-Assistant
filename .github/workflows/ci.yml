@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
         with:
           enable-cache: true
           python-version: "3.12"
@@ -138,7 +138,7 @@ jobs:
           >> "$GITHUB_ENV"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
         with:
           enable-cache: true
           python-version: "3.12"
@@ -230,7 +230,7 @@ jobs:
           >> "$GITHUB_ENV"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
         with:
           enable-cache: true
           python-version: "3.12"
@@ -295,18 +295,16 @@ jobs:
 
   e2e-mocked:
     if: github.event.repository.private == false
-    name: E2E mocked smoke (non-blocking)
-    # NOT listed in gate.needs — failures are informational only (continue-on-error: true).
-    # The mocked suite is green as of 2026-06; it was previously red/cancelled due to a
-    # Service-Worker-vs-page.route bypass, fixed via serviceWorkers:'block' in playwright.config.ts.
-    # Promote to required after >=2 consecutive green e2e-mocked runs on main. Two edits required:
-    #   1. Set `continue-on-error: false` on this job (line below).
-    #   2. Add "e2e-mocked" to gate.needs (the list in the gate job below).
+    name: E2E mocked smoke
+    # Required via gate.needs: a failed run fails the CI gate and blocks the
+    # merge. The suite runs against the static production build only —
+    # Playwright intercepts every /api call (serviceWorkers:'block' in
+    # playwright.config.ts keeps the Service Worker from bypassing page.route).
     timeout-minutes: 20
     runs-on: ubuntu-latest
     # Run only after the frontend build succeeds so we know the bundle is healthy.
     needs: [frontend]
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -359,7 +357,7 @@ jobs:
     name: CI gate (required status check)
     timeout-minutes: 5
     runs-on: ubuntu-latest
-    needs: [lint-test, cross-user-isolation, contract-tests, frontend]
+    needs: [lint-test, cross-user-isolation, contract-tests, frontend, e2e-mocked]
     steps:
       - name: Verify CI jobs
         env:
@@ -367,10 +365,12 @@ jobs:
           CROSS_USER_ISOLATION: ${{ needs.cross-user-isolation.result }}
           CONTRACT_TESTS: ${{ needs.contract-tests.result }}
           FRONTEND: ${{ needs.frontend.result }}
+          E2E_MOCKED: ${{ needs.e2e-mocked.result }}
         run: |
           fail=0
           for pair in "lint-test=$LINT_TEST" "cross-user-isolation=$CROSS_USER_ISOLATION" \
-                      "contract-tests=$CONTRACT_TESTS" "frontend=$FRONTEND"; do
+                      "contract-tests=$CONTRACT_TESTS" "frontend=$FRONTEND" \
+                      "e2e-mocked=$E2E_MOCKED"; do
             name="${pair%%=*}"; result="${pair##*=}"
             if [ "$result" != "success" ]; then
               echo "::error::required CI job '$name' did not succeed (result=$result)"

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
-from typing import Literal
+from typing import Literal, cast
 
 Tier = Literal["cpu", "lt-8", "8-16", "16-24", "24-48", "ge-48"]
+Vendor = Literal["nvidia", "amd", "intel", "none"]
+
+_VENDORS: tuple[Vendor, ...] = ("nvidia", "amd", "intel", "none")
 
 
 def classify_tier(vram_mb: int | None) -> Tier:
@@ -47,3 +51,25 @@ def probe_vram_mb() -> int | None:
 def detect_tier() -> Tier:
     """Convenience wrapper: probe VRAM then classify into a tier."""
     return classify_tier(probe_vram_mb())
+
+
+def vendor_from_env() -> Vendor | None:
+    """Parse JARVIS_GPU_VENDOR (written into .env by setup.sh).
+
+    Returns None when the variable is unset or not a recognized vendor, so
+    callers can distinguish an explicit host-side answer from inference.
+    """
+    value = os.environ.get("JARVIS_GPU_VENDOR", "").strip().lower()
+    return cast(Vendor, value) if value in _VENDORS else None
+
+
+def detect_vendor() -> Vendor:
+    """GPU vendor: the setup-written host value wins, else in-container probe.
+
+    nvidia-smi is the only vendor tool available inside the service images, so
+    without the env conduit an AMD/Intel host is indistinguishable from CPU.
+    """
+    env_vendor = vendor_from_env()
+    if env_vendor is not None:
+        return env_vendor
+    return "nvidia" if probe_vram_mb() is not None else "none"

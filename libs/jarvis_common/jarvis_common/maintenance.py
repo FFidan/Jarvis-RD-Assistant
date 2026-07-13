@@ -25,11 +25,15 @@ SSE/streaming routes are never buffered.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+from pathlib import Path
 
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+logger = logging.getLogger(__name__)
 
 # Paths a mid-restore browser reload must still reach: the health probe, the
 # restore-progress poll, the pre-auth setup-status read that drives the app
@@ -55,6 +59,12 @@ _DEFAULT_MAX_AGE_S = 1800
 # Retry-After advertised to clients: short so a polling progress view re-checks
 # promptly, rather than the full staleness window.
 _RETRY_AFTER_S = 30
+# Off-host restore rotation marker: restore.sh writes an integer epoch here after it
+# rebinds the postgres role + materializes ./secrets, so each postgres-connecting
+# service can self-restart onto the rotated secrets (mirrors the sentinel-path resolve).
+SECRETS_ROTATED_MARKER = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".secrets_rotated"
+)
 
 
 def maintenance_active() -> bool:
@@ -77,6 +87,39 @@ def maintenance_active() -> bool:
     except OSError:
         return False
     return time.time() - mtime <= max_age_s
+
+
+def secrets_rotated_since(started_at: float) -> bool:
+    """Return ``True`` iff the secrets-rotation marker is newer than ``started_at``.
+
+    :data:`SECRETS_ROTATED_MARKER` carries an integer epoch written by restore.sh
+    after an off-host restore rebinds the postgres role + materializes ./secrets. A
+    service whose process started before that epoch holds pre-rotation secrets (compose
+    file-secrets are per-inode bind mounts read once at start) and must restart to
+    reload them. Never raises — a missing/malformed/unreadable marker means "no
+    rotation to react to" (``False``); self-limiting because a restarted process's
+    ``started_at`` exceeds the marker epoch, so it does not re-exit.
+    """
+    try:
+        epoch = float(SECRETS_ROTATED_MARKER.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    return epoch > started_at
+
+
+def skip_for_maintenance(job_label: str) -> bool:
+    """Entry guard for background writers: log-and-signal a skip during a restore.
+
+    Schedulers, the procrastinate worker loop, and the telegram bot bypass
+    :class:`MaintenanceMiddleware` (HTTP-only), so each background writer calls
+    this at entry and returns early when it is ``True`` — performing no DB write
+    while a restore holds a sentinel. Reads :func:`maintenance_active` directly
+    (cheap ``os.stat``; never raises).
+    """
+    if maintenance_active():
+        logger.info("skip %s: maintenance in progress", job_label)
+        return True
+    return False
 
 
 class MaintenanceMiddleware:

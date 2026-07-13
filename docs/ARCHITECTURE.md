@@ -8,7 +8,7 @@ Related docs:
 
 - [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) - coding, API, DB, anti-hallucination, and testing
   standards.
-- [PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) - product requirements and durable Pulse design.
+- [PRD.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/PRD.md) - product requirements and durable Pulse design.
 - [known-residual-risks.md](known-residual-risks.md) - accepted risks and reopen criteria.
 
 ## Runtime Topology
@@ -67,7 +67,7 @@ that enforces an equal-length init/teardown hook contract across services.
 ## Pulse
 
 Pulse is proactive overnight paper discovery. Durable product design lives in
-[PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) sections 3.1.1 and 8.5.
+[PRD.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/PRD.md) sections 3.1.1 and 8.5.
 
 Rules:
 
@@ -116,9 +116,13 @@ HTTP client.
 
 ## Authentication And Ownership
 
-- **Magic-link auth** — `users`, `magic_link_tokens`, and `user_sessions` tables
-  (see `db/init.sql`). `jarvis_common.auth` resolves the caller user from a
-  session cookie; admin endpoints require `role='admin'`.
+- **Magic-link + passkey auth** — magic-link sign-in uses the `users`,
+  `magic_link_tokens`, and `user_sessions` tables (see `db/init.sql`); optional
+  WebAuthn passkeys are stored in `webauthn_credentials` (migration 0102), bound
+  to the exact `APP_BASE_URL` origin with user verification required.
+  `jarvis_common.auth` resolves the caller user from a session cookie; sessions
+  roll forward on use (sliding 30-day expiry, throttled to one write per day);
+  admin endpoints require `role='admin'`.
 - **Per-user ownership** — every product row (`daily_log`,
   `paper_recommendations`, `projects`, `tasks`, `milestones`,
   `pulse_source_health`, `system_events`, and others) carries a non-NULL
@@ -204,7 +208,7 @@ isolation.
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
 `paper_ingestion` startup. The current migration count and range are documented in
-[`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
+[`db/migrations/README.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 

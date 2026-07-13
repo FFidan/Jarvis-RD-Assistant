@@ -16,6 +16,10 @@
 #                             dev          — ENVIRONMENT=development, localhost binding
 #                             local-https  — self-signed cert, access mode 1
 #                             letsencrypt  — Caddy + ACME; requires --domain + --admin-email
+#   --tunnel-ack              Acknowledge that the Cloudflare tunnel access mode
+#                             exposes this instance to the internet. Zero-Trust
+#                             access policies must be configured first. Required to
+#                             select the tunnel access mode non-interactively.
 #   --mode <single|multi>     Install mode written to JARVIS_SETUP_MODE in .env.
 #                             single (default) — personal instance, API-key login.
 #                             multi            — team instance, email/magic-link login.
@@ -26,11 +30,22 @@
 #                             Docker, Docker Compose, or openssl are missing.
 #                             In --non-interactive mode this flag is required for
 #                             host package installation.
+#   --skip-disk-check         Skip the pre-install free-disk check on the Docker
+#                             data root (a first install needs ~35-55 GB there,
+#                             depending on GPU variant and model choice).
+#   --build-local             Build the application images from source instead of
+#                             pulling the prebuilt ones published to GHCR. Much
+#                             slower and needs considerably more disk. Use it for
+#                             development, for an air-gapped host, or if a pull
+#                             is unavailable.
 #   --backend ollama|vllm|auto
 #                             Override AI backend selection. Default: auto (inferred
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
 #   --smart-model <id>        Override the model id for the active backend
 #                             (Ollama tag or HuggingFace AWQ repo id).
+#   --gpu cuda|rocm|vulkan|cpu
+#                             Override GPU compose-overlay selection (default:
+#                             detected from GPU vendor + container runtime).
 #   --smtp-host <host>        SMTP relay hostname.
 #   --smtp-user <user>        SMTP relay username.
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
@@ -38,6 +53,12 @@
 #
 # In non-interactive mode every prompt is driven by flags or safe defaults;
 # no stdin reads are attempted.
+#
+# Exit codes:
+#   0  success; 1  failure.
+#   3  Docker was just installed and this shell session is not in the 'docker'
+#      group yet — log out and back in (or run 'newgrp docker'), then re-run
+#      ./setup.sh.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -66,6 +87,41 @@ die() {
   exit 1
 }
 
+die_enospc_aware() {
+  # $1 = captured command output, $2/$3 = die() message/hint.
+  # Builds and pulls land on the Docker data root — often a different
+  # filesystem from the repo — so disk-exhaustion recovery reports free
+  # space THERE (resolve_docker_data_root, scripts/setup_lib.sh).
+  local log_file="$1" data_root
+  if grep -qi 'no space left on device' "$log_file" 2>/dev/null; then
+    data_root="$(resolve_docker_data_root)"
+    err "Docker ran out of disk space on its data root ($data_root):"
+    df -h "$data_root" >&2 || true
+    cat >&2 <<EOF
+
+Free up space on $data_root, then re-run ./setup.sh:
+  1. Reclaim Docker build cache:  docker builder prune -af
+  2. Still short? Grow the filesystem holding the data root — on LVM hosts:
+     sudo lvextend --resizefs -L +30G <logical-volume-path>
+EOF
+  fi
+  rm -f "$log_file"  # content already streamed to the terminal via tee
+  die "$2" "$3"
+}
+
+compose_or_die() {
+  # $1 = failure message, $2 = failure hint, $3.. = docker compose args.
+  # Output streams to the terminal AND is captured (tee) so failures can
+  # be diagnosed for disk exhaustion by die_enospc_aware.
+  local message="$1" hint="$2" log_file
+  shift 2
+  log_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-compose.XXXXXX")"
+  if ! docker compose "$@" 2>&1 | tee "$log_file"; then
+    die_enospc_aware "$log_file" "$message" "$hint"
+  fi
+  rm -f "$log_file"
+}
+
 os_install_hint() {  # $1 = tool name (informational)
   case "$(uname -s 2>/dev/null)" in
     Darwin) printf 'macOS: install Docker Desktop — https://docs.docker.com/desktop/install/mac-install/' ;;
@@ -75,12 +131,10 @@ os_install_hint() {  # $1 = tool name (informational)
 }
 
 detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
-  local smi; smi=$(resolve_nvidia_smi) || { echo cpu; return; }
-  "$smi" -L 2>/dev/null | grep -q . || { echo cpu; return; }
+  # Vendor-neutral: the tier cuts only need a VRAM figure, whichever vendor
+  # tool produced it (detect_gpu_vendor/resolve_gpu_vram_mb in setup_lib.sh).
   local mb
-  mb=$("$smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-  [ -z "$mb" ] && { echo cpu; return; }
-  case "$mb" in *[!0-9]*) echo cpu; return ;; esac
+  mb="$(resolve_gpu_vram_mb "$(detect_gpu_vendor)")" || { echo cpu; return; }
   if   [ "$mb" -lt 8000  ]; then echo lt-8
   elif [ "$mb" -lt 16000 ]; then echo 8-16
   elif [ "$mb" -lt 24000 ]; then echo 16-24
@@ -227,6 +281,67 @@ print(recommend_models(${_vram_mb}).summary)
   return "$fail"
 }
 
+# preflight_disk — install-path disk check (run_doctor's --check advisory above
+# stays warn-only). Sizes the whole cold install for the chosen smart model
+# (app-image budget + infra pulls + Ollama model set) and measures free space
+# on the Docker data root via preflight_disk_lib — images, volumes and models
+# all land there, and `df .` lies on split-mount hosts. The shortfall is fatal
+# only on a FIRST install (no app image present yet): a re-run with cached
+# images only warns, as does a catalog-fallback estimate with the 20 GB hard
+# floor still free. --skip-disk-check bypasses the check entirely.
+preflight_disk() {
+  if [ "$SKIP_DISK_CHECK" -eq 1 ]; then
+    info "Skipping disk preflight (--skip-disk-check)."
+    return 0
+  fi
+  # Budget the path this run will actually take: the default install PULLS the
+  # published images (cpu-pull/cuda-pull), only --build-local builds them
+  # (cpu-build/cuda-build). Charging the build ceiling for a pull would falsely
+  # block hosts that have ample room for the smaller pull.
+  local _accel="cpu"
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    _accel="cuda"
+  fi
+  local _variant
+  if [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
+    _variant="${_accel}-build"
+  else
+    _variant="${_accel}-pull"
+  fi
+  local _req_gb _req_exact=1
+  _req_gb="$(compute_required_disk_gb "${NI_SMART_MODEL:-qwen3:8b}" "$_variant")" || _req_exact=0
+  local _out _rc=0
+  _out="$(preflight_disk_lib "$_req_gb")" || _rc=$?
+  local _free_gb="${_out%% *}" _data_root="${_out#* }"
+  case "$_rc" in
+    0)
+      ok "Disk preflight: ${_free_gb} GB free on ${_data_root} (~${_req_gb} GB needed)."
+      return 0
+      ;;
+    2)
+      warn "Disk preflight: could not measure free space on ${_data_root} — proceeding."
+      return 0
+      ;;
+  esac
+  # Shortfall. Cached app images mean this is a re-run, not a cold install —
+  # the big layers are already on disk, so never block it. Keyed off the published
+  # repositories: the pre-1.1 `jarvis/*` names no longer exist once the install
+  # pulls from GHCR, and grepping them would leave this escape hatch dead.
+  local _img
+  for _img in "${PUBLISHED_IMAGE_REPOS[@]}"; do
+    if [ -n "$(docker images -q "$_img" 2>/dev/null)" ]; then
+      warn "Low disk: ${_free_gb} GB free on ${_data_root} (a full reinstall needs ~${_req_gb} GB) — continuing, app images are already present."
+      return 0
+    fi
+  done
+  if [ "$_req_exact" -eq 0 ] && [ "$_free_gb" -ge 20 ]; then
+    warn "Low disk: ${_free_gb} GB free on ${_data_root}; the ~${_req_gb} GB figure is a worst-case estimate (model catalog unreadable). Proceeding — watch free space during the install."
+    return 0
+  fi
+  die "Not enough free disk for a first install: ${_free_gb} GB free on ${_data_root} (df -Pk), ~${_req_gb} GB needed for images + models." \
+      "Free up space on ${_data_root} (e.g. docker system prune), move the Docker data root to a larger disk, or re-run with --skip-disk-check to proceed anyway."
+}
+
 # require_langfuse_secrets — precondition guard for --profile observability.
 # The Langfuse image does NOT honour the Docker Secrets _FILE convention, so
 # the three secrets are sourced from .env (mirrored to ./secrets/ for parity
@@ -309,7 +424,13 @@ NI_SMTP_PASS=""
 NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
 NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
+NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
+NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
 INSTALL_PREREQS=0
+SKIP_DISK_CHECK=0
+BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
+TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI consent)
+DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -373,6 +494,12 @@ while [ $# -gt 0 ]; do
       RUN_DOCTOR=1; shift ;;
     --install-prereqs)
       INSTALL_PREREQS=1; shift ;;
+    --skip-disk-check)
+      SKIP_DISK_CHECK=1; shift ;;
+    --build-local)
+      BUILD_LOCAL=1; shift ;;
+    --tunnel-ack)
+      TUNNEL_ACK=1; shift ;;
     --backend)
       case "$2" in
         ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
@@ -388,8 +515,19 @@ while [ $# -gt 0 ]; do
       NI_SMART_MODEL="$2"; shift 2 ;;
     --smart-model=*)
       NI_SMART_MODEL="${1#*=}"; shift ;;
+    --gpu)
+      case "$2" in
+        cuda|rocm|vulkan|cpu) NI_GPU_OVERRIDE="$2"; shift 2 ;;
+        *) die "Invalid --gpu '$2'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
+      esac ;;
+    --gpu=*)
+      _v="${1#*=}"
+      case "$_v" in
+        cuda|rocm|vulkan|cpu) NI_GPU_OVERRIDE="$_v"; shift ;;
+        *) die "Invalid --gpu '$_v'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
+      esac ;;
     -h|--help)
-      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -40
+      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -80
       exit 0
       ;;
     *)
@@ -442,12 +580,13 @@ _host_os_id() {
 }
 
 _prereq_install_plan_for_host() {
-  local os os_id has_apt=0 has_brew=0
+  local os os_id has_apt=0 has_brew=0 has_dnf=0
   os="$(uname -s 2>/dev/null || printf unknown)"
   os_id="$(_host_os_id)"
   command -v apt-get >/dev/null 2>&1 && has_apt=1
   command -v brew >/dev/null 2>&1 && has_brew=1
-  prereq_install_plan "$os" "$os_id" "$has_apt" "$has_brew" "$@"
+  command -v dnf >/dev/null 2>&1 && has_dnf=1
+  prereq_install_plan "$os" "$os_id" "$has_apt" "$has_brew" "$has_dnf" "$@"
 }
 
 _run_prereq_plan() {
@@ -467,7 +606,13 @@ _run_prereq_plan() {
 
 handle_missing_prereqs() {
   local missing=("$@")
-  local plan=""
+  local plan="" docker_in_plan=0
+  case " ${missing[*]} " in
+    *" docker "*) docker_in_plan=1 ;;
+  esac
+  if _gpu_present_for_prereqs; then
+    missing+=(nvidia-toolkit)
+  fi
   printf '%sMissing prerequisites:%s %s\n' "$C_YELLOW" "$C_RESET" "${missing[*]}" >&2
 
   if ! plan="$(_prereq_install_plan_for_host "${missing[@]}")" || [ -z "$plan" ]; then
@@ -479,6 +624,7 @@ handle_missing_prereqs() {
 
   if [ "$INSTALL_PREREQS" -eq 1 ]; then
     _run_prereq_plan "$plan" "$NON_INTERACTIVE"
+    if [ "$docker_in_plan" -eq 1 ]; then DOCKER_JUST_INSTALLED=1; fi
     return
   fi
 
@@ -495,12 +641,22 @@ handle_missing_prereqs() {
   local reply=""
   read -rp "Run these prerequisite installation commands now? [y/N]: " reply
   case "$reply" in
-    [yY]|[yY][eE][sS]) _run_prereq_plan "$plan" 0 ;;
+    [yY]|[yY][eE][sS])
+      _run_prereq_plan "$plan" 0
+      if [ "$docker_in_plan" -eq 1 ]; then DOCKER_JUST_INSTALLED=1; fi
+      ;;
     *) die "Prerequisites are missing." "$(prereq_manual_guidance "${missing[@]}")" ;;
   esac
 }
 
 ensure_prerequisites() {
+  # Snap-packaged Docker is strictly confined: bind mounts outside $HOME and
+  # compose secrets break in ways that only surface mid-install. Refuse early.
+  if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+    die "Snap-packaged Docker detected ('snap list docker') — it is not supported." \
+        "Remove it with 'sudo snap remove docker', then re-run ./setup.sh to install Docker Engine from Docker's official repository."
+  fi
+
   local missing=()
   while IFS= read -r item; do
     [ -n "$item" ] && missing+=("$item")
@@ -540,30 +696,46 @@ esac
 # Fatal daemon probe — must run before the idempotency gate and every prompt,
 # so a dead daemon can never strand a half-answered wizard or persist a stale
 # COMPOSE_FILE. `docker info` (not a socket stat) honours DOCKER_HOST/rootless.
-docker info >/dev/null 2>&1 \
-  || die "Docker daemon is not reachable ('docker info' failed)." \
-         "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
-
-# GPU is informational — not fatal. Resolve nvidia-smi via the WSL2-aware helper
-# (same as detect_hw_tier) so WSL2 hosts — where nvidia-smi is off PATH at
-# /usr/lib/wsl/lib/nvidia-smi — still capture JARVIS_HOST_VRAM_MB for the GPU
-# overlay handoff. A bare `command -v nvidia-smi` would miss them.
-NI_HOST_VRAM_MB=""
-_ni_smi="$(resolve_nvidia_smi 2>/dev/null || true)"
-if [ -n "$_ni_smi" ]; then
-  GPU_LINE="$("$_ni_smi" -L 2>/dev/null | head -n 1 || true)"
-  if [ -n "$GPU_LINE" ]; then
-    ok "GPU detected: $GPU_LINE"
-    _vram_mb="$("$_ni_smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
-    case "$_vram_mb" in
-      ''|*[!0-9]*) ;;
-      *) NI_HOST_VRAM_MB="$_vram_mb" ;;
-    esac
-  else
-    warn "nvidia-smi present but no GPU enumerated — Ollama will run on CPU (slower)."
+# Right after a guided docker install the daemon runs but this shell predates
+# the docker-group grant: exit 3 (see the usage header) tells callers
+# "re-login and re-run", distinctly from failure and never as false success.
+if ! _docker_info_err="$(docker info 2>&1 >/dev/null)"; then
+  if [ "$DOCKER_JUST_INSTALLED" -eq 1 ] \
+     && printf '%s' "$_docker_info_err" | grep -qi 'permission denied'; then
+    err "docker installed — log out and back in (or run 'newgrp docker'), then re-run ./setup.sh"
+    exit 3
   fi
-else
-  info "No NVIDIA GPU detected — Ollama will run on CPU (slower)."
+  die "Docker daemon is not reachable ('docker info' failed)." \
+      "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
+fi
+
+# GPU is informational — not fatal. detect_gpu_vendor is WSL2-aware for NVIDIA
+# (nvidia-smi off PATH at /usr/lib/wsl/lib/nvidia-smi) and probes amd-smi /
+# /dev/dri for AMD/Intel. The vendor and VRAM captured here feed the .env
+# handoff (JARVIS_GPU_VENDOR + JARVIS_HOST_VRAM_MB) and overlay selection.
+NI_HOST_VRAM_MB=""
+NI_GPU_VENDOR="$(detect_gpu_vendor)"
+case "$NI_GPU_VENDOR" in
+  nvidia)
+    GPU_LINE="$("$(resolve_nvidia_smi)" -L 2>/dev/null | head -n 1 || true)"
+    ok "GPU detected: ${GPU_LINE:-NVIDIA}"
+    ;;
+  amd)
+    ok "GPU detected: AMD (via amd-smi)"
+    ;;
+  intel)
+    info "Intel GPU detected — no dedicated VRAM; the Vulkan overlay can accelerate Ollama (experimental)."
+    ;;
+  *)
+    info "No GPU detected — Ollama will run on CPU (slower)."
+    ;;
+esac
+if [ "$NI_GPU_VENDOR" = "nvidia" ] || [ "$NI_GPU_VENDOR" = "amd" ]; then
+  if _vram_mb="$(resolve_gpu_vram_mb "$NI_GPU_VENDOR")"; then
+    NI_HOST_VRAM_MB="$_vram_mb"
+  else
+    warn "${NI_GPU_VENDOR} GPU detected but VRAM could not be measured — model defaults stay conservative (CPU tier)."
+  fi
 fi
 
 # Port pre-check — warn only. Probes all ports JARVIS exposes on the host.
@@ -622,12 +794,20 @@ if [ -f .env ]; then
       *)
         ok "Keeping existing .env — starting the stack with it."
         KEEP_PROFILE_ARGS=()
+        _keep_telegram=0
         if ! existing_env_value COMPOSE_PROFILES >/dev/null; then
           # Pre-v0.8 .env files never persisted the profile selection.
           if existing_env_value TELEGRAM_BOT_TOKEN >/dev/null; then
             KEEP_PROFILE_ARGS+=(--profile telegram)
+            _keep_telegram=1
             info "No COMPOSE_PROFILES in .env — enabling the telegram profile (TELEGRAM_BOT_TOKEN is set)."
           fi
+        else
+          # COMPOSE_PROFILES is honoured natively by compose; we only need to know
+          # whether telegram is among them so its image is materialised too.
+          case ",$(existing_env_value COMPOSE_PROFILES)," in
+            *,telegram,*) _keep_telegram=1 ;;
+          esac
         fi
         # Source versions.env so the postgres SHA-digest pin and image tags
         # are available on the keep-path the same as on the normal install path.
@@ -635,11 +815,39 @@ if [ -f .env ]; then
           # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
           set -a && . ./versions.env && set +a
         fi
-        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} up -d"
-        if ! docker compose ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} up -d; then
-          die "docker compose up failed." \
-              "Inspect logs: docker compose logs --tail=200"
+        # An .env written before 1.1 carries no TORCH_VARIANT, so the image tag
+        # would resolve to the CPU flavour even on a CUDA host whose GPU overlay is
+        # still recorded in COMPOSE_FILE. Backfill before anything resolves an image.
+        if _keep_variant="$(backfill_torch_variant_from_env)" && [ -n "$_keep_variant" ]; then
+          info "Recorded this host's torch image variant in .env: ${_keep_variant}"
         fi
+        # This path bypasses the install flow below, so it needs the same
+        # materialise-then-guard sequence. Without it a `up -d` here would find the
+        # published images missing and SILENTLY BUILD them — `pull_policy: missing`
+        # plus a `build:` block — which is the multi-GB torch build (and the ENOSPC)
+        # that installing from prebuilt images exists to eliminate.
+        # Only tunnel/telegram are ever persisted to COMPOSE_PROFILES, so the
+        # observability profile (langfuse, the one unpublished image) cannot be
+        # active here and needs no local build.
+        KEEP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+        [ "$_keep_telegram" -eq 1 ] && KEEP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+        KEEP_UP_ARGS=(up -d)
+        if [ "$BUILD_LOCAL" -eq 1 ]; then
+          info "Building application images from source (--build-local): ${KEEP_SERVICES[*]}"
+          compose_or_die "docker compose build failed." \
+              "Inspect the build output above, then re-run ./setup.sh" \
+              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} build "${KEEP_SERVICES[@]}"
+        else
+          info "Pulling prebuilt images: ${KEEP_SERVICES[*]}"
+          compose_or_die "Image pull failed." \
+              "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
+              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} pull "${KEEP_SERVICES[@]}"
+          KEEP_UP_ARGS+=(--no-build)
+        fi
+        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} ${KEEP_UP_ARGS[*]}"
+        compose_or_die "docker compose up failed." \
+            "Inspect logs: docker compose logs --tail=200" \
+            ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} "${KEEP_UP_ARGS[@]}"
         ok "Stack started with the existing configuration. To regenerate .env, re-run ./setup.sh and answer 'y'."
         exit 0
         ;;
@@ -696,11 +904,21 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
       ;;
   esac
 else
-  printf '\n%sHow do you want to access the dashboard?%s\n' "$C_BOLD" "$C_RESET"
+  printf '\n%sHow will you access JARVIS?%s\n' "$C_BOLD" "$C_RESET"
   cat <<'EOF'
-  1) Localhost only (default, safest)
-  2) LAN — reachable from other devices on your network
-  3) Global — access from anywhere via Cloudflare Tunnel (free, no ports opened)
+  1) On this computer only (recommended to start)
+     Everything works here: sign-in links, passkeys (fingerprint/face/PIN).
+  2) From devices on your home or lab network
+     Sign-in links work on every device. Passkeys work on this computer
+     (add option 3 or 4 later for passkeys everywhere). Your browser will
+     show a one-time certificate warning per device — expected for a
+     private setup.
+  3) From anywhere — Cloudflare Tunnel (free, no router changes)
+     Full features everywhere incl. passkeys. Needs a free Cloudflare
+     account and a tunnel token (guided).
+  4) From anywhere — your own domain with Let's Encrypt
+     Full features everywhere incl. passkeys. Needs a domain pointing at
+     this machine and port 443 reachable.
 EOF
   read -rp "Choice [1]: " access_mode
   access_mode="${access_mode:-1}"
@@ -727,9 +945,14 @@ if [ "$NON_INTERACTIVE" -eq 0 ] && [ -z "${NI_LLM_BACKEND:-}" ]; then
   prompt_ai_backend
 fi
 
+# Disk preflight — sized to the smart model chosen above, so it must run after
+# the backend/model resolution and before anything pulls or builds.
+preflight_disk
+
 CLOUDFLARE_TUNNEL_TOKEN=""
 USE_TUNNEL_PROFILE=0
 ACCESS_MODE_LABEL="localhost"
+APP_BASE_URL_VALUE=""   # canonical public origin; derived per mode below, written to .env
 CORS_ORIGINS_OVERRIDE=""
 CF_TRUST_OVERRIDE=""
 LAN_IP=""
@@ -784,13 +1007,18 @@ case "$access_mode" in
   3)
     ACCESS_MODE_LABEL="tunnel"
     DASHBOARD_BIND_HOST="127.0.0.1"
-    # Zero-Trust gate — must be acknowledged before proceeding.
-    if [ -z "${JARVIS_TUNNEL_ACK_ZT_CONFIGURED:-}" ] || [ "$JARVIS_TUNNEL_ACK_ZT_CONFIGURED" != "1" ]; then
-      printf '\n'
-      printf '\033[0;31m[WARNING] Cloudflare tunnel exposes your services to the internet!\033[0m\n'
-      printf 'You MUST configure Zero-Trust access policies at https://one.dash.cloudflare.com/\n'
-      printf 'Once configured, set JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1 in your .env to proceed.\n'
-      exit 1
+    # Zero-Trust consent — a tunnel exposes this instance to the internet, so
+    # require an explicit acknowledgement in-flow (no hand-edited .env values):
+    # a typed confirmation interactively, or --tunnel-ack non-interactively.
+    printf '\n'
+    warn "A Cloudflare tunnel exposes your services to the internet. You MUST configure Zero-Trust access policies at https://one.dash.cloudflare.com/ first."
+    if [ "$NON_INTERACTIVE" -eq 1 ]; then
+      [ "$TUNNEL_ACK" -eq 1 ] || die "Tunnel access requires acknowledging the internet exposure." \
+        "Configure Zero-Trust access policies, then re-run with --tunnel-ack."
+    else
+      read -rp 'Type "I understand" to continue (anything else aborts): ' _tunnel_ack
+      [ "$_tunnel_ack" = "I understand" ] || die "Tunnel setup aborted — acknowledgement not given." \
+        "Configure Zero-Trust access policies, then re-run ./setup.sh and choose the tunnel option."
     fi
     printf '\n'
     cat <<'EOF'
@@ -824,11 +1052,61 @@ EOF
     ok "Tunnel hostname: ${TUNNEL_HOSTNAME} (added to CORS_ORIGINS and cert SAN)."
     ok "JARVIS_TRUST_CF_CONNECTING_IP=true — rate limiting will key off the real CF-Connecting-IP header rather than the tunnel origin."
     ;;
+  4)
+    # Interactive Let's Encrypt: drive the SAME machinery as --profile=letsencrypt
+    # (no parallel cert/Caddy path). Setting NI_PROFILE/NI_DOMAIN/NI_ADMIN_EMAIL makes
+    # the existing LETSENCRYPT_*, ENVIRONMENT, and summary logic fire from these prompts.
+    ACCESS_MODE_LABEL="letsencrypt"
+    DASHBOARD_BIND_HOST="127.0.0.1"   # dashboard stays local; Caddy terminates public TLS
+    NI_PROFILE="letsencrypt"
+    printf '\n'
+    info "Let's Encrypt issues a real TLS certificate for a public domain that resolves to this machine (port 443 must be reachable)."
+    while true; do
+      read -r -p "Public domain (e.g. jarvis.example.com): " NI_DOMAIN
+      if printf '%s' "$NI_DOMAIN" | grep -qE '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'; then
+        break
+      fi
+      echo "Invalid domain. Use lowercase letters, digits, hyphens, and dots only."
+    done
+    while true; do
+      read -r -p "Admin email (Let's Encrypt expiry notices): " NI_ADMIN_EMAIL
+      if printf '%s' "$NI_ADMIN_EMAIL" | grep -qE '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; then
+        break
+      fi
+      echo "Invalid email address. Enter a valid address, e.g. you@example.com."
+    done
+    ok "Let's Encrypt configured for ${NI_DOMAIN}. After setup, start public TLS: docker compose --profile letsencrypt up -d caddy"
+    ;;
   *)
-    die "Invalid choice '$access_mode'. Expected 1, 2, or 3." \
+    die "Invalid choice '$access_mode'. Expected 1, 2, 3, or 4." \
         "Re-run ./setup.sh and pick a listed option."
     ;;
 esac
+
+# ---------------------------------------------------------------------------
+# Canonical access-mode identity, written to .env below. JARVIS_ACCESS_MODE
+# names the mode; APP_BASE_URL is the single server-known public origin the
+# passkey ceremony validates against (empty for localhost/LAN, where the origin
+# is implicit — a raw LAN IP is not a valid WebAuthn origin). Both are derived
+# here and never hand-edited. NI --profile=letsencrypt lands on access_mode 1
+# above, so re-label it here from the profile.
+# ---------------------------------------------------------------------------
+if [ "$NI_PROFILE" = "letsencrypt" ]; then
+  ACCESS_MODE_LABEL="letsencrypt"
+fi
+case "$ACCESS_MODE_LABEL" in
+  tunnel)      APP_BASE_URL_VALUE="https://${TUNNEL_HOSTNAME}" ;;
+  letsencrypt) APP_BASE_URL_VALUE="https://${NI_DOMAIN}" ;;
+  *)           APP_BASE_URL_VALUE="" ;;
+esac
+if [ "$NON_INTERACTIVE" -eq 0 ]; then
+  case "$ACCESS_MODE_LABEL" in
+    localhost)   info "Access mode: on this computer only — sign-in links and passkeys all work here." ;;
+    lan)         info "Access mode: home/lab network — sign-in links on every device; passkeys on this computer." ;;
+    tunnel)      info "Access mode: anywhere via Cloudflare Tunnel — full features including passkeys." ;;
+    letsencrypt) info "Access mode: anywhere via your own domain — full features including passkeys." ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # Detect SAN change — cert volume must be wiped when the access mode changes
@@ -960,6 +1238,8 @@ sub_value() {
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;
     DASHBOARD_BIND_HOST)      printf '%s' "$DASHBOARD_BIND_HOST" ;;
     JARVIS_CERT_SAN)          printf '%s' "$JARVIS_CERT_SAN" ;;
+    APP_BASE_URL)             printf '%s' "$APP_BASE_URL_VALUE" ;;
+    JARVIS_ACCESS_MODE)       printf '%s' "$ACCESS_MODE_LABEL" ;;
     JARVIS_TRUST_CF_CONNECTING_IP) [ -n "$CF_TRUST_OVERRIDE" ] && printf '%s' "$CF_TRUST_OVERRIDE" || return 1 ;;
     CORS_ORIGINS)
       if [ -n "$CORS_ORIGINS_OVERRIDE" ]; then
@@ -980,9 +1260,10 @@ sub_value() {
       [ -n "$NI_DOMAIN" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_DOMAIN" || return 1 ;;
     LETSENCRYPT_EMAIL)
       [ -n "$NI_ADMIN_EMAIL" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_ADMIN_EMAIL" || return 1 ;;
-    # Non-interactive: ENVIRONMENT based on --profile
+    # ENVIRONMENT from --profile (also the interactive Let's Encrypt mode, which
+    # sets NI_PROFILE=letsencrypt): a public deployment must run in production.
     ENVIRONMENT)
-      if [ "$NON_INTERACTIVE" -eq 1 ]; then
+      if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$NI_PROFILE" = "letsencrypt" ]; then
         case "$NI_PROFILE" in
           dev)           printf 'development' ;;
           local-https)   printf 'development' ;;
@@ -998,6 +1279,8 @@ sub_value() {
       printf '%s' "${NI_HW_TIER:-$(detect_hw_tier)}" ;;
     JARVIS_HOST_VRAM_MB)
       [ -n "$NI_HOST_VRAM_MB" ] && printf '%s' "$NI_HOST_VRAM_MB" || return 1 ;;
+    JARVIS_GPU_VENDOR)
+      printf '%s' "${NI_GPU_VENDOR:-none}" ;;
     JARVIS_LLM_BACKEND)
       printf '%s' "${NI_LLM_BACKEND:-auto}" ;;
     JARVIS_SMART_MODEL)
@@ -1112,16 +1395,70 @@ if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
 fi
 
 printf '\n'
-# GPU overlay is opt-in based on the Docker nvidia runtime (NOT host nvidia-smi):
-# only when the runtime is wired do we add docker-compose.gpu.yml, which re-adds
-# the GPU reservation for ollama + paper_ingestion. CPU-only hosts stay on the
-# base compose so install never hard-fails for lack of a GPU.
-COMPOSE_OVERLAY=()
-if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
-  COMPOSE_OVERLAY=(-f docker-compose.gpu.yml)
-  info "Docker nvidia runtime detected — enabling GPU overlay"
+# GPU overlay selection is vendor-driven: NVIDIA engages docker-compose.gpu.yml
+# (re-adds the GPU reservation for ollama + paper_ingestion) only when the
+# Docker nvidia runtime is wired — a present GPU without the runtime is called
+# out loudly, never silently degraded. AMD engages the ROCm overlay when
+# /dev/kfd exists, else the Vulkan overlay; Intel uses Vulkan; no GPU stays on
+# the CPU base so install never hard-fails. --gpu cuda|rocm|vulkan|cpu
+# overrides detection.
+_gpu_choice=""
+if [ -n "$NI_GPU_OVERRIDE" ]; then
+  _gpu_choice="$NI_GPU_OVERRIDE"
+  info "GPU overlay forced by --gpu: ${_gpu_choice}"
+  if [ "$_gpu_choice" = "cuda" ] \
+     && ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    warn "--gpu cuda but the Docker NVIDIA runtime is not configured — startup will fail the GPU reservation. Install nvidia-container-toolkit, then: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+  fi
 else
-  info "Docker nvidia runtime not found — CPU-only (Ollama on CPU; slower, OK)"
+  case "$NI_GPU_VENDOR" in
+    nvidia)
+      if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+        _gpu_choice="cuda"
+        info "NVIDIA GPU + Docker nvidia runtime detected — enabling the GPU overlay"
+      else
+        _gpu_choice="cpu"
+        warn "NVIDIA GPU detected but the Docker NVIDIA runtime is not configured — the stack will run on CPU. Install nvidia-container-toolkit, then: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+      fi
+      ;;
+    amd)
+      if [ -e "${JARVIS_KFD_DEV:-/dev/kfd}" ]; then
+        _gpu_choice="rocm"
+        info "AMD GPU with /dev/kfd detected — enabling the ROCm overlay (experimental)"
+      else
+        _gpu_choice="vulkan"
+        info "AMD GPU without /dev/kfd (no ROCm kernel driver) — enabling the Vulkan overlay (experimental)"
+      fi
+      ;;
+    intel)
+      _gpu_choice="vulkan"
+      info "Intel GPU detected — enabling the Vulkan overlay (experimental)"
+      ;;
+    *)
+      _gpu_choice="cpu"
+      info "No GPU detected — CPU-only (Ollama on CPU; slower, OK)"
+      ;;
+  esac
+fi
+case "$_gpu_choice" in
+  cuda)   _overlay_name="gpu";    COMPOSE_OVERLAY=(-f docker-compose.gpu.yml) ;;
+  rocm)   _overlay_name="rocm";   COMPOSE_OVERLAY=(-f docker-compose.rocm.yml) ;;
+  vulkan) _overlay_name="vulkan"; COMPOSE_OVERLAY=(-f docker-compose.vulkan.yml) ;;
+  *)      _overlay_name="";       COMPOSE_OVERLAY=() ;;
+esac
+
+# paper_ingestion is published in two torch flavours: a CUDA build (image tag
+# suffix `-cuda`, several GB larger) and a CPU build (no suffix). Key the choice
+# off the SAME effective-GPU decision the overlay just made, so the torch wheel
+# and the Ollama overlay can never disagree. In particular an NVIDIA card WITHOUT
+# the Docker nvidia runtime already resolved to the CPU overlay above, and must
+# likewise take the CPU image — a CUDA image it cannot reach the GPU from would
+# be multiple wasted GB. AMD/Intel accelerate Ollama through their own overlay
+# while paper_ingestion's torch stays CPU either way.
+if [ "$_gpu_choice" = "cuda" ]; then
+  TORCH_VARIANT="cuda"; TORCH_VARIANT_SUFFIX="-cuda"
+else
+  TORCH_VARIANT="cpu";  TORCH_VARIANT_SUFFIX=""
 fi
 # An explicit -f list suppresses Compose's implicit docker-compose.override.yml
 # auto-load, so when that file exists we must list it back explicitly. gpu BEFORE
@@ -1139,16 +1476,59 @@ fi
 # nvidia runtime) overwrites a stale `docker-compose.gpu.yml` entry — a leftover
 # GPU overlay on a now-CPU host fails the device reservation.
 _has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
-_has_nvidia=0; [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ] && _has_nvidia=1
-upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_has_nvidia" "$_has_override")"
+upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_overlay_name" "$_has_override")"
+# Persist the torch flavour for the same reason: TORCH_VARIANT_SUFFIX picks the
+# image tag that a later bare `docker compose pull`/`up` resolves, and
+# TORCH_VARIANT is the build arg the --build-local path hands the Dockerfile.
+upsert_env_var TORCH_VARIANT "$TORCH_VARIANT"
+upsert_env_var TORCH_VARIANT_SUFFIX "$TORCH_VARIANT_SUFFIX"
+# The published CUDA image ships the optional reranker dependency (it costs only
+# sentence-transformers there — the CUDA runtime it needs is already in that image),
+# while the CPU image deliberately omits it. Persist the matching build arg so a
+# --build-local build of the SAME tag produces the SAME contents; without this a
+# locally built :X.Y.Z-cuda would silently lack the reranker the pulled one has.
+upsert_env_var INSTALL_OPTIONAL "$([ "$TORCH_VARIANT" = "cuda" ] && echo true || echo false)"
+# Materialise the application images BEFORE anything heavy lands on disk: this is
+# a cold install's peak disk consumer, so an ENOSPC surfaces here — with recovery
+# guidance and nothing else half-downloaded — instead of mid-model-pull.
+#
+# The published services are pulled BY NAME (see PUBLISHED_SERVICES_BASE above for
+# why `--ignore-buildable` cannot be used). telegram_bot is profile-gated, hence
+# only named when its profile is active; langfuse is never published (local-build
+# only) and is handled below.
+PUBLISHED_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
+  PUBLISHED_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+fi
+
+if [ "$BUILD_LOCAL" -eq 1 ]; then
+  info "Building application images from source (--build-local)."
+  info "This takes minutes and needs considerably more disk than a pull; later runs reuse the cache."
+  compose_or_die "docker compose build failed." \
+      "Inspect the build output above, then re-run ./setup.sh" \
+      ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} build
+else
+  info "Pulling prebuilt images (${TORCH_VARIANT} build): ${PUBLISHED_SERVICES[*]}"
+  compose_or_die "Image pull failed." \
+      "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
+      ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} pull "${PUBLISHED_SERVICES[@]}"
+  # langfuse is not published, so the observability profile still needs a local
+  # build — and the bring-up below runs --no-build, which would otherwise fail on
+  # its missing image. Small hardened image, not a torch build.
+  if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
+    info "Building the observability image (langfuse) locally — it is not published."
+    compose_or_die "docker compose build langfuse failed." \
+        "Inspect the build output above, then re-run ./setup.sh" \
+        ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} --profile observability build langfuse
+  fi
+fi
 # Start Ollama alone first, then run the model pull as an attached one-off so
 # its progress streams to the terminal — buried inside a bare `up -d` the
 # 7-11 GB first pull looks like a hang.
 info "Starting Ollama: docker compose ${COMPOSE_FILE_ARGS[*]:-} up -d ollama"
-if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama; then
-  die "docker compose up failed." \
-      "Inspect logs: docker compose logs --tail=200"
-fi
+compose_or_die "docker compose up failed." \
+    "Inspect logs: docker compose logs --tail=200" \
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama
 wait_healthy ollama 180 \
   || warn "Ollama is still starting — model inventory unknown; proceeding to the model pull."
 
@@ -1159,7 +1539,7 @@ else
   _FIRST_RUN_PULL=1
   printf '\n'
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s  Downloading models (7-11 GB) — first run can take 20-60 min. %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  Images built — downloading models next (7-11 GB, 20-60 min).%s\n' "$C_YELLOW" "$C_RESET"
   printf '%s  Pull progress streams below. This is not an error.           %s\n' "$C_YELLOW" "$C_RESET"
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
   printf '\n'
@@ -1171,18 +1551,25 @@ if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} run --rm o
       "Check network/disk space and re-run ./setup.sh — or pull manually: docker compose exec ollama ollama pull <model>"
 fi
 
-info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
-if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d; then
-  die "docker compose up failed." \
-      "Inspect logs: docker compose logs --tail=200"
-fi
+# --no-build is a guard, not a nicety: every published service pairs
+# `pull_policy: missing` with a `build:` block, so if an image were somehow
+# missing here Compose would silently BUILD it — resurrecting the very multi-GB
+# torch build (and its ENOSPC) that installing from prebuilt images exists to
+# avoid. Failing loudly is the correct outcome. On --build-local the images were
+# just built from source, so no guard applies.
+UP_ARGS=(up -d)
+[ "$BUILD_LOCAL" -eq 1 ] || UP_ARGS+=(--no-build)
+info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} ${UP_ARGS[*]}"
+compose_or_die "docker compose up failed." \
+    "Inspect logs: docker compose logs --tail=200" \
+    ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "${UP_ARGS[@]}"
 
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy
 # -----------------------------------------------------------------------------
 # Optional services (telegram_bot) are profile-gated and intentionally
 # excluded from this list.
-MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard)
+MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader)
 
 printf '\n'
 info "Waiting for services to become healthy..."

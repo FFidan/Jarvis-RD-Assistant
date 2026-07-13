@@ -1,7 +1,7 @@
 # 03 — LLM Call Contract
 **Status:** LIVING
 **Reviewers must update this contract in the same patch as any change to:**
-- The public surface of [libs/jarvis_common/jarvis_common/llm_client.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py)
+- The public surface of [libs/jarvis_common/jarvis_common/llm_client.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py)
 - Any of the LLM call sites enumerated in §2
 - The Pydantic response models in §4
 - The retry / fallback policy
@@ -37,10 +37,10 @@ outside this module may construct a chat-completions HTTP request directly.
 
 | Function | File:line | Purpose | Returns |
 |---|---|---|---|
-| `call_llm_structured` | [llm_client.py:328](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L328) | Strict-JSON structured output via Instructor | `T` (a Pydantic `BaseModel` subclass) |
-| `request_chat_completion_content` | [llm_client.py:226](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L226) | Raw chat completion | `str` (think-blocks stripped) |
-| `embed_texts` | [llm_client.py:442](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L442) | Embeddings | `list[list[float]]` |
-| `get_litellm_config` | [llm_client.py:123](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L123) | Resolve LiteLLM base URL | `LiteLLMConfig` |
+| `call_llm_structured` | [llm_client.py:328](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L328) | Strict-JSON structured output via Instructor | `T` (a Pydantic `BaseModel` subclass) |
+| `request_chat_completion_content` | [llm_client.py:226](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L226) | Raw chat completion | `str` (think-blocks stripped) |
+| `embed_texts` | [llm_client.py:442](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L442) | Embeddings | `list[list[float]]` |
+| `get_litellm_config` | [llm_client.py:123](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L123) | Resolve LiteLLM base URL | `LiteLLMConfig` |
 
 There is no `call_llm` or `call_llm_json_value` — the older dict-returning
 helpers were removed; there is no backwards-compat alias.
@@ -49,7 +49,7 @@ helpers were removed; there is no backwards-compat alias.
 
 Every structured call is **grammar-constrained by construction**. The
 Instructor client is built once per service lifespan at
-[app_factory.py:467-473](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473)
+[app_factory.py:467-473](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473)
 with `instructor.Mode.JSON_SCHEMA`. This mode emits a native
 `response_format={"type":"json_schema","json_schema":{…}}` header on every
 chat-completion request — it does NOT inject the schema into the prompt text.
@@ -107,7 +107,7 @@ prepending the `options.system` system message if set and not already present.
 
 ### 1.2 `ChatCompletionOptions`
 
-`@dataclass(frozen=True)` at [llm_client.py:91-100](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L91-L100). Default values:
+`@dataclass(frozen=True)` at [llm_client.py:91-100](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L91-L100). Default values:
 `model="smart"`, `max_tokens=2000`, `temperature=0.1`, `timeout=120.0` (`LLM_TIMEOUT_DEFAULT`), `response_format=None`, `system=None`.
 
 `response_format` is irrelevant to `call_llm_structured` (Instructor handles
@@ -121,15 +121,15 @@ Nine `call_llm_structured` call sites. Each site has its own row below; details 
 
 | # | Site | File:line | Model alias | Output Pydantic | QuoteVerifier? |
 |---|---|---|---|---|---|
-| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:309](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L309) | `fast` (default; env-overridable) | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
-| 2 | Template-driven extraction | [extraction/core.py:188](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L188) | `get_smart_model()` | dynamic via `create_model` over `ExtractedFieldOutput` | Yes (per-field `quote`) |
-| 3 | KG entity + relationship | [extraction/entities.py:146](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L146) | `get_fast_model()` | `KGExtractionOutput` | Yes (per-relationship `evidence`) |
-| 4 | Flashcard generation | [learning_engine/card_generator.py:106](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L106) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
-| 5 | Contradiction classifier | [services/contradictions.py:266](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L266) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
-| 6 | Weekly digest | [weekly_summary.py:187](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py#L187) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
-| 7 | Paper summarization | [services/summarization.py:207](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/summarization.py#L207) | `get_smart_model()` | `SummarizationOutput` (single window) / `WindowDigest` + `CondensedDigest` + `ReduceSummary` (map-reduce, §4.7) | Yes (per-finding quote verified against the window the model saw) |
-| 8 | Query decomposition | [rag/decomposition.py:74](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
-| 9 | RAG answer (`/ask`) | [routers/rag.py:132](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/routers/rag.py#L132) | resolved `smart` alias | `AskResponse` | Yes (sentence-level verifier on the answer; sources carry per-sentence confidence) |
+| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:309](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L309) | `fast` (default; env-overridable) | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
+| 2 | Template-driven extraction | [extraction/core.py:188](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L188) | `get_smart_model()` | dynamic via `create_model` over `ExtractedFieldOutput` | Yes (per-field `quote`) |
+| 3 | KG entity + relationship | [extraction/entities.py:146](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L146) | `get_fast_model()` | `KGExtractionOutput` | Yes (per-relationship `evidence`) |
+| 4 | Flashcard generation | [learning_engine/card_generator.py:106](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L106) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
+| 5 | Contradiction classifier | [services/contradictions.py:266](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L266) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
+| 6 | Weekly digest | [weekly_summary.py:187](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py#L187) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
+| 7 | Paper summarization | [services/summarization.py:207](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/summarization.py#L207) | `get_smart_model()` | `SummarizationOutput` (single window) / `WindowDigest` + `CondensedDigest` + `ReduceSummary` (map-reduce, §4.7) | Yes (per-finding quote verified against the window the model saw) |
+| 8 | Query decomposition | [rag/decomposition.py:74](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
+| 9 | RAG answer (`/ask`) | [routers/rag.py:132](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/routers/rag.py#L132) | resolved `smart` alias | `AskResponse` | Yes (sentence-level verifier on the answer; sources carry per-sentence confidence) |
 
 Site 9 is the conversational-RAG answer path: `_call_rag_llm` (wrapped by
 `@observe()`) is invoked by both `ask_paper` (`POST /api/papers/{paper_id}/ask`)
@@ -146,7 +146,7 @@ There is also a non-call-site streaming path; it stays outside Instructor — se
 ### 3.1 Timeout
 
 Per-call timeout is owned by `ChatCompletionOptions.timeout`. Three named
-defaults at [llm_client.py:69-71](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L69-L71):
+defaults at [llm_client.py:69-71](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L69-L71):
 
 | Constant | Value | Used by |
 |---|---|---|
@@ -236,7 +236,7 @@ PaperExtractionOutput = create_model(
 
 The template's `ExtractionField.name` must match `^[a-zA-Z_][a-zA-Z0-9_]*$`
 (the Python identifier rule, enforced on `ExtractionField.name` in
-[models/extractions.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/models/extractions.py)).
+[models/extractions.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/models/extractions.py)).
 
 ### 4.3 Site 3 — KG entity extraction (`KGExtractionOutput`)
 
@@ -482,14 +482,14 @@ diverges deliberately between Tier 1 (`> 50 %`) and Tier 2 (`≥ 50 %`).
 
 | Site | Verifier type | Path |
 |---|---|---|
-| 1 Pulse Stage-2 | `QuoteVerifier` (optional, Tier 3 bucket mapping) | [verification.py:verify_pulse_reasoning](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:303-308](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L303-L308) — verifies `reasoning` against title+abstract |
-| 2 Extraction | `QuoteVerifier` (mandatory, Tier 1) | [extraction/core.py:197-215](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L197-L215) — per-field; unverified `value` is dropped |
-| 3 KG entity | `QuoteVerifier` (mandatory, Tier 1) | [extraction/entities.py:399-413](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L399-L413) — relationships dropped if `evidence` not verifiable against full text |
-| 4 Card gen | Custom fuzzy verify (`_verify_quote`) | [card_generator.py:72-79](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L72-L79) — unverified cards dropped; rule 5/6/7 confidence + abstract fallback ([card_generator.py:138-263](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L138-L263)) |
-| 5 Contradiction | `QuoteVerifier` (mandatory, Tier 1) | [contradictions.py:_quotes_verify](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L408-L425) — both quotes verified; if either fails, contradiction NOT persisted |
-| 6 Weekly digest | `QuoteVerifier` (display-only, Tier 4) | [weekly_summary.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py) `_theme_supported` — themes annotated with `verified` / `verification_reason`; split into `verified_themes` / `unverified_themes` (display only, not persisted) |
+| 1 Pulse Stage-2 | `QuoteVerifier` (optional, Tier 3 bucket mapping) | [verification.py:verify_pulse_reasoning](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:303-308](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L303-L308) — verifies `reasoning` against title+abstract |
+| 2 Extraction | `QuoteVerifier` (mandatory, Tier 1) | [extraction/core.py:197-215](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L197-L215) — per-field; unverified `value` is dropped |
+| 3 KG entity | `QuoteVerifier` (mandatory, Tier 1) | [extraction/entities.py:399-413](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L399-L413) — relationships dropped if `evidence` not verifiable against full text |
+| 4 Card gen | Custom fuzzy verify (`_verify_quote`) | [card_generator.py:72-79](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L72-L79) — unverified cards dropped; rule 5/6/7 confidence + abstract fallback ([card_generator.py:138-263](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L138-L263)) |
+| 5 Contradiction | `QuoteVerifier` (mandatory, Tier 1) | [contradictions.py:_quotes_verify](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L408-L425) — both quotes verified; if either fails, contradiction NOT persisted |
+| 6 Weekly digest | `QuoteVerifier` (display-only, Tier 4) | [weekly_summary.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py) `_theme_supported` — themes annotated with `verified` / `verification_reason`; split into `verified_themes` / `unverified_themes` (display only, not persisted) |
 | 7 Summarization | `QuoteVerifier` (mandatory, Tier 1) | per-window in map-reduce path; unverified findings discarded immediately (§4.7) |
-| 9 RAG answer | `verify_answer_sentences` (Tier 2) | [rag/verification.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/verification.py) — sentence-level grounded-support at 70 %; result on `AskResponse` |
+| 9 RAG answer | `verify_answer_sentences` (Tier 2) | [rag/verification.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/verification.py) — sentence-level grounded-support at 70 %; result on `AskResponse` |
 
 ---
 
@@ -497,7 +497,7 @@ diverges deliberately between Tier 1 (`> 50 %`) and Tier 2 (`≥ 50 %`).
 
 ### 6.1 RAG streaming
 
-[rag/streaming.py:381](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py#L381) calls
+[rag/streaming.py:381](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/streaming.py#L381) calls
 `http_client.stream("POST", "/v1/chat/completions", json={"stream": True, ...})`
 directly against the LiteLLM gateway. Streaming chat is intrinsically
 non-structured — Instructor doesn't apply.
@@ -513,10 +513,10 @@ The streaming `/ask/stream` endpoints take this path; the non-streaming
 
 ### 6.2 Raw scalar helper (`request_chat_completion_content`)
 
-`request_chat_completion_content` ([llm_client.py:226](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L226))
+`request_chat_completion_content` ([llm_client.py:226](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L226))
 is the non-streaming scalar exception: it sends to LiteLLM `/v1/chat/completions`,
 strips `<think>...</think>` blocks, records the served `smart` model, and raises
-`EmptyVisibleLLMContentError` ([llm_client.py:74](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L74))
+`EmptyVisibleLLMContentError` ([llm_client.py:74](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L74))
 when the response has no visible content after stripping. It is part of the
 public choke-point surface for plain-text completions that have no Pydantic shape.
 
@@ -527,7 +527,7 @@ with an explicit degraded detail object rather than a blank answer.
 
 ### 6.3 Query decomposition (`decompose_query`)
 
-[rag/decomposition.py:74-85](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74-L85) uses `call_llm_structured` with `RootModel[list[str]]`:
+[rag/decomposition.py:74-85](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74-L85) uses `call_llm_structured` with `RootModel[list[str]]`:
 
 ```python
 result = await call_llm_structured(
@@ -541,7 +541,7 @@ because its output is a bare list rather than a nested model.
 
 ### 6.4 Embeddings (`embed_texts`)
 
-[llm_client.py:442](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L442). Different endpoint (`/v1/embeddings`), different return shape (`list[list[float]]`), no JSON parsing, no retry, no Pydantic. Default timeout 60 s. Errors wrapped as `RuntimeError`. It is a separate function family from the chat-completion sites.
+[llm_client.py:442](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L442). Different endpoint (`/v1/embeddings`), different return shape (`list[list[float]]`), no JSON parsing, no retry, no Pydantic. Default timeout 60 s. Errors wrapped as `RuntimeError`. It is a separate function family from the chat-completion sites.
 
 ### 6.5 Canonical `@observe` import path
 

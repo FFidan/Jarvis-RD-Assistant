@@ -61,7 +61,7 @@ def _derive_client_version() -> str:
 
 _ARXIV_USER_AGENT = (
     f"JARVIS-RD/{_derive_client_version()} "
-    "(research paper assistant; +https://github.com/FFidan/Jarvis-RD-Assistant)"
+    "(research paper assistant; +https://github.com/limitcycle-oss/jarvis-rd-assistant)"
 )
 
 

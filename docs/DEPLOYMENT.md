@@ -2,15 +2,16 @@
 
 JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
 
-For first-time setup, start with [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md) Quickstart. If the two conflict, this file is canonical.
+For first-time setup, start with [README.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/README.md) Quickstart. If the two conflict, this file is canonical.
 
 ---
 
 ## Solo deployment (recommended for single-user)
 
-Use the installer for first-time setup. It generates secrets, selects single-user
-or multi-user mode, detects GPU support, starts the stack, and opens the
-first-run wizard.
+Use the installer for first-time setup. It generates secrets, asks how you will
+access JARVIS (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), selects
+single-user or multi-user mode, detects GPU support, pulls the prebuilt
+application images, starts the stack, and opens the first-run wizard.
 
 ```bash
 ./setup.sh --check   # read-only preflight
@@ -44,8 +45,8 @@ curl http://127.0.0.1:8011/health   # learning_engine
 ## Fresh install on a second machine
 
 ```bash
-git clone <your-remote>/JARVIS_RD_Assistant.git
-cd JARVIS_RD_Assistant
+git clone https://github.com/limitcycle-oss/jarvis-rd-assistant.git
+cd jarvis-rd-assistant
 ./setup.sh --check
 ./setup.sh
 ```
@@ -79,7 +80,7 @@ OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a
 
 ## GPU acceleration (optional)
 
-The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
+The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also downloads the Ollama model set for your hardware tier — roughly 5–22 GB depending on tier, after the application images are pulled; see [Disk budget](REQUIREMENTS.md#disk-budget). On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 
 ### Standard GPU overlay (auto-engaged by `setup.sh`)
 
@@ -126,7 +127,7 @@ make observability-up
 
 Open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL` (default `operator@jarvis.local`). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.
 
-Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md) §9.
+Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md) §9.
 
 ---
 
@@ -209,7 +210,7 @@ Telegram needs no change for any of this — the bot only makes outbound calls.
 | **Tailscale Funnel** | ~20 min | *none* on your host | Tailscale-provisioned TLS |
 | **VPN (Tailscale/WireGuard)** | ~15 min | VPN ports only | Self-signed |
 
-`./setup.sh` runs localhost mode by default. LAN and Cloudflare Tunnel are prompts in the same script.
+`./setup.sh` runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); the chosen mode also sets `APP_BASE_URL` and `JARVIS_ACCESS_MODE` in `.env`. See [Choosing how you access JARVIS](manual/access-modes.md).
 
 ---
 
@@ -439,7 +440,7 @@ Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, 
 
 ### Single-user vs multi-user mode
 
-`single` (default) makes the sign-in screen offer API-key login first and does not require SMTP. `multi` makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization.
+`single` (default) makes the sign-in screen offer API-key login first and does not require SMTP. `multi` makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization. In either mode, signed-in users can additionally register **passkeys** (WebAuthn) for future sign-ins; passkeys are bound to the exact origin in `APP_BASE_URL` and require HTTPS for a public origin — see the [User Guide → Passkeys](manual/passkeys.md).
 
 ### Copy-paste examples
 
@@ -472,7 +473,9 @@ git pull
 ./update.sh
 ```
 
-`update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, prompts to pull stale services and rebuild local containers, and waits up to 180 s per service. On failure it prints: `git checkout HEAD~1 -- versions.env && ./update.sh`.
+`update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass `./update.sh --build-local` to rebuild them from source), waiting up to 180 s per service. On failure it prints recovery commands for both image sets: `git checkout HEAD~1 -- versions.env && ./update.sh` rolls back the third-party pins, while the application images roll back by pinning `JARVIS_VERSION` to a previously published tag and pulling it.
+
+From v1.1.0, `update.sh` pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)). Contributors, forks, and air-gapped hosts rebuild from source with `./update.sh --build-local` (the same flag exists on `./setup.sh`).
 
 ### Upgrade notes
 
@@ -558,21 +561,23 @@ The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created i
 From **Admin → Backups**, choose a backup set from the archive table and click **Restore**. Type **RESTORE** in the confirmation dialog to proceed. The sidecar:
 
 1. Takes a **safety pre-backup** of the current live data before making any destructive change.
-2. Checks that the backup is not **newer** than the running app version — if it is, the restore is refused and you must update the app first (`./update.sh`).
-3. Drops and recreates both databases behind a **maintenance gate** (the app returns "restore in progress" to all users while this runs).
+2. Checks the backup against the running app version. A **newer** backup is refused (update the app first with `./update.sh`); an **older** backup is accepted and migrated forward automatically after it is swapped in.
+3. Loads each database into a **staging database behind a maintenance gate** (the app returns "restore in progress" to all users while this runs) and **swaps it in atomically** once it verifies. If anything fails before the swap, the original database is left untouched and served again automatically — the restore self-heals rather than leaving a half-restored database. The previous database is dropped only after the swap succeeds.
 4. Recovers the Qdrant search index best-effort — if the Qdrant step fails, the database restore still completes. The search index re-embeds automatically from the restored data on next use; no paper data is lost.
 
-After the restore, all users are signed out (the session store was replaced) and will need to sign in again.
+After a clean restore the maintenance gate lifts automatically. All users are signed out (the session store was replaced) and will need to sign in again.
 
-**Security posture:** the app container holds no new privilege — it only writes a small JSON sentinel file to the `backup_trigger` volume. All destructive work (DROP/CREATE DATABASE, pg_restore, Qdrant recovery) runs exclusively inside the already-privileged `postgres-backup` sidecar. The `/backups` volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.
+**Security posture:** the app container holds no new privilege — it only writes a small JSON sentinel file to the `backup_trigger` volume. All database work (the staged reload, the atomic swap, and Qdrant recovery) runs exclusively inside the already-privileged `postgres-backup` sidecar. The `/backups` volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.
 
 **Residual risk:** a compromised admin browser session can trigger a restore, replacing live data with the chosen backup point (a safety pre-backup is always taken first, so the prior state remains recoverable). See [SECURITY.md](SECURITY.md) and `docs/known-residual-risks.md` for the full residual-risk register.
 
 ---
 
-#### Manual restore (fallback)
+#### Manual restore (last resort)
 
-Use the steps below when the app itself cannot start — for example, after a total host failure where you are starting fresh on a new machine. The one-click path is unavailable in that case; this procedure does the same work from the host.
+> **Prefer the sidecar-driven restore.** The `postgres-backup` sidecar runs independently of the app, so even when the app cannot start you can trigger a restore by writing `/backup-trigger/.restore_request.json` (a `local` source for same-host archives already in `/backups`, or an `inbox` source for an off-site set — see [Off-host recovery](#off-host-total-host-loss-recovery)). That path keeps the safety pre-backup, the staged atomic swap, and the automatic forward-migration of older backups. The raw steps below **bypass all of those protections** — use them only if the sidecar itself is unavailable.
+
+Use the steps below as a last resort — for example, after a total host failure where you are starting fresh on a new machine and cannot run the sidecar. This procedure does the database work by hand from the host.
 
 **Step 0 — decrypt** (if the archive ends in `.enc`):
 
@@ -635,19 +640,24 @@ docker compose exec qdrant sh -c 'curl -s -X PUT \
 
 ---
 
-#### Off-host / total-host-loss recovery (inbox restore)
+#### Off-host / total-host-loss recovery
 
-Use this when you are recovering on a **fresh host** from an off-site copy of the backups — the original machine (and its `./secrets`) is gone. Unlike the manual fallback above (which you run statement-by-statement), this path reuses the same hardened `restore.sh` that the one-click restore uses, driven by a request you write yourself. It is the only restore path that materializes secrets and rebinds the database role, because a fresh cluster starts with a different role password than the backup was taken with.
+Use this when you are recovering on a **fresh host** from an off-site copy of the backups — the original machine (and its `./secrets`) is gone. Both paths below drive the same hardened `restore.sh` in the `postgres-backup` sidecar, which — for an off-host restore — takes a safety pre-backup, runs the compat + decrypt-probe gates, restores each database via the staged swap, recovers Qdrant, **rebinds the `jarvis` role password** to the restored secret (`ALTER ROLE … WITH PASSWORD`, single-quote-safe), **materializes the restored `./secrets` on the host** (except the keys the new host is authoritative for — `qdrant_api_key`, `langfuse_pg_password`, `backup_encrypt_key`), writes a `.secrets_rotated` marker so the app services **self-restart** onto the rotated secrets, and **shreds the one-time operator key and the plaintext staging on exit**. On a clean restore the maintenance gate then lifts automatically — **there are no terminal steps after you start the restore**.
 
-**What is automated vs operator-run.** `restore.sh` (in the `postgres-backup` sidecar) automatically: takes a safety pre-backup, runs the compat + decrypt-probe gates, drops/recreates/reloads both databases, recovers Qdrant, **rebinds the `jarvis` role password** (`ALTER ROLE … WITH PASSWORD`, the chosen path — see below), and **shreds the one-time operator key + the plaintext secrets staging on exit**. You (the operator) run: dropping the archive set + key into the inbox, writing the trigger, and afterwards materializing the host `./secrets`, recreating the app containers + the `postgres-backup` sidecar, and clearing the maintenance gate.
+**Prerequisites (either path):** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, and `manifest_<ts>.json`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above). A wrong or corrupt key fails safe: `restore.sh` proves the key decrypts the database archives before any `DROP`, so nothing is destroyed.
 
-**Prerequisites:** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, and `manifest_<ts>.json`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above).
+##### Web-based recovery (recommended)
 
-The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** into the sidecar at `/restore-inbox`. It is the only writable cross-host secrets-staging surface and is **never** under the read-only `/secrets` mount.
+1. **Bring up a fresh stack** on the new host (`./setup.sh`) and complete first-admin sign-in.
+2. From the **Backups** panel, generate a **one-time upload grant** and, in the browser, upload the archive set and the backup encryption key, then trigger the inbox restore from the UI. Uploads go to the dedicated `restore-uploader` ingress (grant-gated, inbox-only); the operator key and the archive bytes never transit the application. See [Backup & restore](manual/backup-and-restore.md) for the click-through.
+3. Watch progress in the guided restore view. When it completes, the stack has reconciled its secrets, database role, and services and returned to service — no shell access required.
 
-1. **Bring up a fresh stack** on the new host (`./setup.sh` / `docker compose up -d`). This initialises Postgres with a fresh role password; the restore rebinds it in step 4.
+##### Command-line fallback (constrained environments)
 
-2. **Place the archive set into the inbox.** Either copy it from your off-site store, or pull it from S3 with the built-in helper (S3-pull is optional and aws-guarded; it does nothing and prints a notice if `aws`/`BACKUP_S3_BUCKET` are absent):
+For a headless host with no browser access, write the request yourself. The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** into the sidecar at `/restore-inbox` (never under the read-only `/secrets` mount).
+
+1. **Bring up a fresh stack** on the new host (`./setup.sh` / `docker compose up -d`).
+2. **Place the archive set into the inbox** — copy it from your off-site store, or pull one timestamp's set from S3 with the built-in helper (aws-guarded; a no-op with a notice if `aws`/`BACKUP_S3_BUCKET` are absent):
 
    ```bash
    # Option A — copy a local off-site set into the volume:
@@ -658,7 +668,7 @@ The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** i
      postgres-backup /usr/local/bin/backup.sh
    ```
 
-3. **Place the one-time backup key** into the inbox as the file **`operator_key`** (fixed name), then write the restore trigger. `restore.sh` validates the key exists before any destructive step and verifies it actually decrypts the database archives before any `DROP` (a wrong key fails safe, destroying nothing):
+3. **Place the one-time backup key** into the inbox as the file **`operator_key`** (fixed name), then write the restore trigger:
 
    ```bash
    docker compose cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
@@ -666,29 +676,15 @@ The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** i
      'printf "{\"source\":\"inbox\",\"timestamp\":\"<ts>\"}" > /backup-trigger/.restore_request.json'
    ```
 
-   The sidecar's poll loop runs `restore.sh` within a few seconds. Watch progress in `/backup-trigger/.restore_status.json` (or the sidecar logs).
+   The sidecar's poll loop runs `restore.sh` within a few seconds. Watch progress in `/backup-trigger/.restore_status.json` (or the sidecar logs). On a clean restore it rebinds the role, materializes `./secrets`, self-restarts the app services, and lifts the maintenance gate on its own — nothing further to run. Do **not** wipe the Postgres data volume afterward, or the role rebind is lost.
 
-4. **Password binding (chosen path):** on a fresh cluster the `jarvis` role's password was fixed at first-init from the new host's `POSTGRES_PASSWORD`, but the restored databases (dumped `--no-owner --no-acl`) do not carry roles, and the app will read the **old** restored `postgres_password.txt`. So `restore.sh` runs `ALTER ROLE "jarvis" WITH PASSWORD '<restored>'` against the running Postgres after the database reload, making the live role match the restored secret. *Alternative (for operators who hold `./secrets` out-of-band):* materialize the host `./secrets` from the backup **before** the stack's `postgres` first-init on an empty data directory — then the role is created with the restored password and no rebind is needed. Do not wipe the Postgres data volume after the inbox restore, or the rebind is lost.
-
-5. **Materialize the host `./secrets` and recreate the app + sidecar.** `restore.sh` decrypts the secrets archive only internally (to read the role password for the rebind) and then **shreds that staging** on exit (`shred` per file, then remove) — it does not leave the decrypted bundle on the volume. Populate the host `./secrets` yourself from the same archive so the app can decrypt the restored config-key Fernet rows, then **recreate** (not merely restart) every container that authenticates with `postgres_password`, **including the `postgres-backup` sidecar** — Docker file-secrets are re-read only when a container is recreated, so a sidecar left running would keep the stale new-host password and its scheduled backups would start failing authentication:
-
-   ```bash
-   openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d \
-     -kfile /path/to/backup_encrypt_key.txt \
-     -in secrets_<ts>.tar.gz.enc | tar -xzf - -C ./secrets
-   docker compose up -d --force-recreate \
-     paper_ingestion learning_engine litellm dashboard postgres-backup
-   ```
-
-6. **Clear maintenance.** Unlike the same-host one-click restore, the off-host path deliberately leaves the stack in maintenance (HTTP 503) until you finish — the app boots with the new-host password while the role was rebound to the restored one, so it is not servable until step 5 completes. Once the recreated containers are healthy, lift the gate:
+4. **Only if the restore fails after the destructive step** does the stack stay at HTTP 503, holding the durable `.destructive` sentinel (which — unlike the soft `.maintenance` sentinel — never auto-expires). Recover from the safety backup the sidecar took first, then clear both sentinels explicitly:
 
    ```bash
    docker compose exec postgres-backup rm -f /backup-trigger/.maintenance /backup-trigger/.destructive
    ```
 
-   The off-host path opens the destructive window (it drops and reloads the databases), so it holds a **durable** `.destructive` sentinel that — unlike the soft `.maintenance` sentinel — does **not** auto-expire after `MAINTENANCE_MAX_AGE_S`. You **must** clear both sentinels explicitly with the command above; skipping it leaves the stack at HTTP 503 indefinitely.
-
-7. **Cleanup.** The operator key is one-time: `restore.sh` shreds `/restore-inbox/operator_key` (and shreds + removes the plaintext staging) on every clean or recorded-failure exit. Remove the archive set from the inbox once recovery is confirmed.
+Once recovery is confirmed, remove the archive set from the inbox. The operator key is one-time — `restore.sh` shreds `/restore-inbox/operator_key` (and the plaintext staging) on every clean or recorded-failure exit.
 
 ---
 
@@ -701,15 +697,13 @@ The app returns HTTP 503 during and after a restore via two sentinel files in th
 | Soft | `MAINTENANCE_SENTINEL` | `/backup-trigger/.maintenance` | Auto-expires after `MAINTENANCE_MAX_AGE_S` (default 1800 s) |
 | Durable | `MAINTENANCE_DESTRUCTIVE_SENTINEL` | `/backup-trigger/.destructive` | Never auto-expires; written at the DROP boundary |
 
-**A clean same-host one-click restore** clears both sentinels automatically at the end of the restore — no operator action needed.
+**Any clean restore clears both sentinels automatically** — same-host one-click, off-host inbox, and older-than-code restores alike. An off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the maintenance gate lifts. No operator action is needed in the success case.
 
-**The following situations leave the stack at HTTP 503 after `restore.sh` exits.** Complete the required step first, then clear both sentinels:
+**Only a restore that fails after the destructive step** leaves the stack at HTTP 503, holding the durable `.destructive` sentinel:
 
 | Situation | Required step before clearing |
 |---|---|
-| Off-host (inbox) restore | Materialize `./secrets` and recreate app containers (step 5 above) |
-| Older-than-code restore (backup schema < current code) | Recreate app containers so forward migrations run on startup |
-| Crash after the DROP boundary | Restore from the safety backup the sidecar took before the destructive step |
+| Crash/failure after the DROP boundary | Restore from the safety backup the sidecar took before the destructive step, then clear both sentinels |
 
 Once the required step is done, clear both sentinels:
 
@@ -740,13 +734,15 @@ bash scripts/production-readiness-check.sh
 | Rate limiter buckets by proxy IP instead of client | Upstream proxy not in `TRUSTED_PROXY_CIDRS` | Add the proxy CIDR to `TRUSTED_PROXY_CIDRS`. |
 | Pinned subnet `10.137.241.0/24` collides with LAN | `setup.sh --check` warns | Set `JARVIS_NET_SUBNET=<free /24>` and update `frontend/nginx.conf` `set_real_ip_from` literals. |
 | LAN device pings host but `curl -k https://<IP>:3001` hangs | `DASHBOARD_BIND_HOST=127.0.0.1` | Run `setup.sh` mode 2, or set `DASHBOARD_BIND_HOST=0.0.0.0` and restart dashboard. |
-| `setup.sh` option 3 exits with a ZT warning | `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` not set | Configure your Zero-Trust access policy first, then add the var to `.env`. |
+| `setup.sh` Cloudflare Tunnel mode stops at the Zero-Trust warning | You have not acknowledged that a tunnel exposes the instance | Configure your Cloudflare Zero-Trust access policy first, then type `I understand` at the prompt (or pass `--tunnel-ack` for a non-interactive install). The old `JARVIS_TUNNEL_ACK_ZT_CONFIGURED` env hand-edit has been removed. |
 | Settings → "Models & Preferences" shows "No config entries" | DB initialized before default config rows were seeded | `docker compose restart paper_ingestion`, then verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — expect 3 rows. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Model not pulled or config read-only | Pull the model from Settings → Models first. The default smart model is `qwen3:8b` (16 GB VRAM tier). |
 | Pulse generates 0 cards but job shows "done" | All enabled sources returned zero candidates, were rate-limited, or are unconfigured | Open Settings → Pulse → Diagnostics. For OpenAlex set `OPENALEX_EMAIL`; for arXiv wait `Retry-After` (≥30 s). |
 | Embedding dimension mismatch on startup | Qdrant collection dimension doesn't match the active embedding model | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560`, pull the model, then run `REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed` if the collection dimension is still wrong. |
 | Re-embedding too slow | `scripts/reembed.py` defaults to the HTTP-bound LiteLLM path | Switch to local backend: `REEMBED_BACKEND=local python -m scripts.reembed` (requires sentence-transformers). Benchmark first with `REEMBED_BENCHMARK=true`. |
 | `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | Postgres bakes the password into its data volume on first init; a later `.env` change is not applied to an existing volume | Reset the volume: `docker compose down && docker volume rm <project>_postgres_data && docker compose up -d` — this destroys local DB data. The `<project>` prefix is your compose project name (the repo directory name by default; visible in `docker compose ps`). Run `setup.sh` afterwards if you need the GPU overlay re-engaged. |
+| `docker compose build`/`up` fails with "no space left on device" during install | Docker's data root ran out of space — the cold-install peak can reach several tens of GB depending on hardware tier; see [Disk budget](REQUIREMENTS.md#disk-budget) | Check free space on the data root (not `/`): `df -h $(docker info -f '{{ .DockerRootDir }}')`. Reclaim the local build cache: `docker builder prune -af`. If the data root lives on an LVM volume with spare space in the volume group, grow it: `sudo lvextend -r -L +20G <lv-path>`. Re-run `./setup.sh` — cached images are kept, so a re-run only needs the remaining gap. |
+| `docker compose build` prints `pull access denied for jarvis/paper_ingestion` (or a sibling service) before building | Cosmetic — Compose probes the registry for the pinned tag before falling back to a local build | Harmless; ignore it. From v1.1.0 the application images are prebuilt on GHCR and `docker-compose.yml` sets `pull_policy: missing` on them (only the locally-built Langfuse wrapper uses `pull_policy: build`), so this message is only seen on pre-1.1.0 installs or a `--build-local` build. |
 
 ---
 
@@ -765,7 +761,7 @@ JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8
 
 ## See also
 
-- [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md) — quick start and high-level orientation.
+- [README.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/README.md) — quick start and high-level orientation.
 - [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, multi-tenant hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
-- [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.
+- [docs/contracts/04-observability.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.

@@ -4,8 +4,8 @@ JARVIS RD Assistant is a self-hosted research workspace for scientific literatur
 discovery, source-linked RAG, PDF annotation, Zotero workflows, project tracking,
 and spaced repetition.
 
-Repository: https://github.com/FFidan/Jarvis-RD-Assistant
-Documentation: https://ffidan.github.io/Jarvis-RD-Assistant/
+Repository: https://github.com/limitcycle-oss/jarvis-rd-assistant
+Documentation: https://limitcycle-oss.github.io/jarvis-rd-assistant/
 License: Apache-2.0
 
 Important boundaries

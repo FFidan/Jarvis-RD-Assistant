@@ -93,6 +93,8 @@ export interface FirstRunStatus {
   hw_tier_changed?: boolean;
   hw_tier_baseline?: string | null;
   hw_tier_current?: string | null;
+  /** Detected accelerator vendor (nvidia | amd | intel | none). Optional — older backends omit it. */
+  gpu_vendor?: string;
   recommended_backend?: string | null;
   current_backend?: string | null;
   observed_backend?: string | null;

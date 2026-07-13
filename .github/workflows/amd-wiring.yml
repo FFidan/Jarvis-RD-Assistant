@@ -1,0 +1,114 @@
+name: AMD wiring
+
+# Validates the experimental ROCm/Vulkan overlays without AMD hardware:
+#   L1 — the pinned ROCm ollama image exists upstream and both overlay pairs
+#        produce a valid compose config;
+#   L2 — the ROCm image boots and answers /api/version on a GPU-less host
+#        (CPU fallback).
+# Informational only — never a required check: CPU fallback is evidenced, not
+# vendor-guaranteed, and the manifest check depends on an external registry.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - docker-compose.yml
+      - docker-compose.rocm.yml
+      - docker-compose.vulkan.yml
+      - .github/workflows/amd-wiring.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OLLAMA_ROCM_TAG: ollama/ollama:0.31.2-rocm
+  # Manifest-list digest of the tag when this wiring was last validated
+  # (2026-07-11). L1 warns when the tag moves; L2 boots exactly this digest.
+  OLLAMA_ROCM_DIGEST: sha256:b718f6b4f86fe27ac36791af72edce3cc2b5b5ada5089b78efd715bd2d8851f8
+
+jobs:
+  overlay-config:
+    name: Overlay config + ROCm manifest (informational)
+    if: github.event.repository.private == false
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: ROCm image manifest present upstream
+        run: |
+          docker manifest inspect "$OLLAMA_ROCM_TAG" > /dev/null
+          digest="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$OLLAMA_ROCM_TAG" | tr -d '"')"
+          if [ "$digest" != "$OLLAMA_ROCM_DIGEST" ]; then
+            echo "::warning::${OLLAMA_ROCM_TAG} digest moved (now ${digest}) — re-validate the CPU fallback and update OLLAMA_ROCM_DIGEST"
+          fi
+
+      - name: Validate the ROCm overlay pair
+        run: docker compose -f docker-compose.yml -f docker-compose.rocm.yml config -q
+
+      - name: Validate the Vulkan overlay pair
+        run: docker compose -f docker-compose.yml -f docker-compose.vulkan.yml config -q
+
+  rocm-cpu-fallback:
+    name: ROCm image CPU fallback (informational)
+    if: github.event.repository.private == false
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Boot the ROCm ollama image without a GPU
+        run: |
+          # Hosted runners have no /dev/kfd or /dev/dri; a `devices:` entry
+          # naming a missing node fails container create, so a CI-only override
+          # clears the passthrough (the same `!reset` mechanism the dev
+          # docker-compose.override.yml uses). What remains under test: the
+          # pinned ROCm image booting into CPU mode.
+          cat > /tmp/ci-no-gpu.override.yml <<'EOF'
+          services:
+            ollama:
+              devices: !reset []
+              group_add: !reset []
+          EOF
+          OLLAMA_ROCM_IMAGE="ollama/ollama@${OLLAMA_ROCM_DIGEST}" \
+            docker compose -f docker-compose.yml -f docker-compose.rocm.yml \
+              -f /tmp/ci-no-gpu.override.yml up -d ollama
+
+      - name: Ollama answers /api/version on CPU
+        run: |
+          for _ in $(seq 1 36); do
+            if version="$(curl -fs --max-time 5 http://127.0.0.1:11434/api/version)"; then
+              echo "ROCm image fell back to CPU and answered /api/version: ${version}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::ollama (ROCm image) did not answer /api/version within 3 minutes on a GPU-less host"
+          docker ps -a
+          exit 1
+
+      - name: GPU-detection log excerpt
+        if: always()
+        run: |
+          {
+            echo '### ollama ROCm-image boot log (GPU detection lines)'
+            echo '```'
+            docker logs "$(docker ps -aq --filter name=ollama | head -1)" 2>&1 \
+              | grep -iE 'gpu|rocm|amdgpu|hip|cpu' | head -20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Failure guidance
+        if: failure()
+        run: |
+          echo "::warning::CPU fallback of the ROCm ollama image failed. If AMD hardware misbehaves for you, please file a hardware report: https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml"
+
+      - name: Teardown
+        if: always()
+        run: |
+          OLLAMA_ROCM_IMAGE="ollama/ollama@${OLLAMA_ROCM_DIGEST}" \
+            docker compose -f docker-compose.yml -f docker-compose.rocm.yml \
+              -f /tmp/ci-no-gpu.override.yml down -v --remove-orphans || true

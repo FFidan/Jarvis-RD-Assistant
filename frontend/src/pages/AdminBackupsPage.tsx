@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import {
   getBackupStatus,
   getRestorePoints,
+  getInboxRestorePoints,
   triggerBackup,
   downloadBackup,
   requestRestore,
@@ -28,10 +29,14 @@ import {
   getRetention,
   putRetention,
   type RestorePoint,
+  type InboxRestorePoint,
+  type RestoreSource,
   type RetentionConfig,
 } from '@/lib/api/backups';
+import { useMaintenanceStore } from '@/stores/maintenance-store';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
+import { GuidedRecoveryView } from '@/components/admin/GuidedRecoveryView';
 import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
 
 const STORE_LABELS: Record<string, string> = {
@@ -57,6 +62,103 @@ function formatAge(iso: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+/** Parse a backup's %Y%m%d_%H%M%S key into a Date (local time); null if malformed. */
+function parseBackupTs(ts: string): Date | null {
+  const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(ts);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+}
+
+function InboxBadge({ ok, okLabel, badLabel }: { ok: boolean; okLabel: string; badLabel: string }) {
+  return ok ? (
+    <span className="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+      {okLabel}
+    </span>
+  ) : (
+    <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+      {badLabel}
+    </span>
+  );
+}
+
+/**
+ * Off-host recovery: list the backup sets the operator has staged in this server's
+ * restore inbox and trigger a cross-host restore. The trigger is disabled (with an
+ * inline hint) until a set is complete AND its one-time key is present, and while any
+ * restore is already in flight. The file upload itself is host-side (out of scope
+ * here); the app only lists what the sidecar reports and requests the restore.
+ */
+function InboxRestoreSection({
+  points,
+  restoringTimestamp,
+  onRestore,
+}: {
+  points: InboxRestorePoint[];
+  restoringTimestamp: string | null;
+  onRestore: (timestamp: string) => void;
+}) {
+  return (
+    <div className="rounded-md border p-4 space-y-3" data-testid="inbox-restore-section">
+      <div>
+        <h2 className="text-sm font-medium">Restore from another JARVIS</h2>
+        <p className="text-xs text-muted-foreground">
+          Recover this server from a backup taken on a different JARVIS. Copy that backup&apos;s
+          archive set and its one-time key into this server&apos;s restore inbox; staged sets appear
+          below.
+        </p>
+      </div>
+      {points.length === 0 ? (
+        <div
+          data-testid="inbox-empty"
+          className="rounded-md border px-4 py-6 text-center text-sm text-muted-foreground"
+        >
+          No off-host backups staged. Place a backup archive set and its one-time key in this
+          server&apos;s restore inbox to recover from another JARVIS.
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {points.map((p) => {
+            const disabled = !p.complete || !p.has_key || restoringTimestamp !== null;
+            const hint = !p.complete
+              ? 'This backup is missing a required database archive.'
+              : !p.has_key
+                ? 'Drop the one-time operator key into the restore inbox before restoring.'
+                : null;
+            return (
+              <li
+                key={p.timestamp}
+                data-testid="inbox-restore-point"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+              >
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">
+                    {parseBackupTs(p.timestamp)?.toLocaleString() ?? p.timestamp}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <InboxBadge ok={p.complete} okLabel="Complete" badLabel="Incomplete" />
+                    <InboxBadge ok={p.has_secrets} okLabel="Secrets" badLabel="No secrets" />
+                    <InboxBadge ok={p.has_key} okLabel="Key ready" badLabel="Key missing" />
+                  </div>
+                  {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                  disabled={disabled}
+                  onClick={() => onRestore(p.timestamp)}
+                >
+                  Restore to this point
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function RestorePointCard({
@@ -202,10 +304,15 @@ function RestorePointCard({
 
 export function AdminBackupsPage() {
   const queryClient = useQueryClient();
+  const maintenanceActive = useMaintenanceStore((s) => s.active);
   const [confirming, setConfirming] = useState(false);
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
+  const [confirmSource, setConfirmSource] = useState<RestoreSource>('local');
   const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
   const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(null);
+  // One-time bearer token from POST /restore: keeps the progress poll authorized
+  // DB-free after the restore tears down the admin session (see getRestoreStatus).
+  const [restoreToken, setRestoreToken] = useState<string | null>(null);
   const [manualStepsNotice, setManualStepsNotice] = useState<string | null>(null);
   const [keepLastN, setKeepLastN] = useState('');
   const [maxAgeDays, setMaxAgeDays] = useState('');
@@ -231,6 +338,12 @@ export function AdminBackupsPage() {
     placeholderData: keepPreviousData,
   });
 
+  const inbox = useQuery({
+    queryKey: ['admin', 'backups', 'inbox'],
+    queryFn: getInboxRestorePoints,
+    placeholderData: keepPreviousData,
+  });
+
   const trigger = useMutation({
     mutationFn: triggerBackup,
     onSuccess: () => {
@@ -244,14 +357,18 @@ export function AdminBackupsPage() {
     },
   });
 
-  // Poll restore progress only while a restore is being tracked. A numeric
-  // refetchInterval keeps polling even when the query errors, so the brief
-  // app-down window mid-restore degrades (below) instead of dropping out.
+  // Poll restore progress while a restore is being tracked — either one we started
+  // this session, or (after the 503 interceptor flips maintenance) as long as we still
+  // hold the one-time token. The token authorizes the poll DB-free so it survives the
+  // DB swap that drops the admin session. A numeric refetchInterval keeps polling even
+  // when the query errors, so the brief app-down window mid-restore degrades (below)
+  // instead of dropping out.
+  const trackingRestore = restoringTimestamp !== null || (maintenanceActive && restoreToken !== null);
   const restoreStatus = useQuery({
     queryKey: ['admin', 'restore-status'],
-    queryFn: getRestoreStatus,
-    enabled: restoringTimestamp !== null,
-    refetchInterval: restoringTimestamp ? 3000 : false,
+    queryFn: () => getRestoreStatus(restoreToken ?? undefined),
+    enabled: trackingRestore,
+    refetchInterval: trackingRestore ? 3000 : false,
     retry: false,
   });
 
@@ -279,17 +396,22 @@ export function AdminBackupsPage() {
       }
       void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
       setRestoringTimestamp(null);
+      setRestoreToken(null);
     } else if (restoreState === 'failed') {
       setRestoringTimestamp(null);
+      setRestoreToken(null);
     }
   }, [restoreState, restoringTimestamp, restoreStatus.data, queryClient]);
 
   const restoreMutation = useMutation({
-    mutationFn: (timestamp: string) => requestRestore(timestamp, 'RESTORE'),
-    onSuccess: (_data, timestamp) => {
+    mutationFn: ({ timestamp, source }: { timestamp: string; source: RestoreSource }) =>
+      requestRestore(timestamp, 'RESTORE', source),
+    onSuccess: (data, { timestamp }) => {
       // Evict any terminal state (e.g. 'done') left by a previous restore so the
       // new restore starts from a clean fetch rather than the stale cached state.
       queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] });
+      // Capture the one-time bearer token so the poll survives the session teardown.
+      setRestoreToken(data.status_token ?? null);
       setRestoringTimestamp(timestamp);
       setConfirmTs(null);
     },
@@ -362,13 +484,22 @@ export function AdminBackupsPage() {
   };
 
   const points = restore?.restore_points ?? [];
+  const inboxPoints = inbox.data ?? [];
   const confirmPoint = confirmTs ? (points.find((p) => p.timestamp === confirmTs) ?? null) : null;
   const deleteConfirmPoint = deleteConfirmTs
     ? (points.find((p) => p.timestamp === deleteConfirmTs) ?? null)
     : null;
   const restoreData = restoreStatus.data;
+  // Open the shared typed-RESTORE confirm, remembering which source it targets.
+  const askRestore = (timestamp: string, source: RestoreSource) => {
+    setConfirmSource(source);
+    setConfirmTs(timestamp);
+  };
   const showRestorePanel =
-    restoringTimestamp !== null || restoreData?.state === 'failed' || manualStepsNotice !== null;
+    restoringTimestamp !== null ||
+    restoreData?.state === 'failed' ||
+    manualStepsNotice !== null ||
+    (maintenanceActive && restoreToken !== null);
 
   return (
     <div className="p-6 space-y-6">
@@ -458,13 +589,21 @@ export function AdminBackupsPage() {
                 point={point}
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
-                onRestore={(ts) => setConfirmTs(ts)}
+                onRestore={(ts) => askRestore(ts, 'local')}
                 onDelete={(ts) => setDeleteConfirmTs(ts)}
                 restoringTimestamp={restoringTimestamp}
               />
             ))
           )}
         </div>
+      )}
+
+      {!inbox.isLoading && !inbox.isError && (
+        <InboxRestoreSection
+          points={inboxPoints}
+          restoringTimestamp={restoringTimestamp}
+          onRestore={(ts) => askRestore(ts, 'inbox')}
+        />
       )}
 
       <div className="rounded-md border p-4 space-y-3" data-testid="retention-controls">
@@ -516,88 +655,16 @@ export function AdminBackupsPage() {
       </div>
 
       {showRestorePanel && (
-        <div
-          data-testid="restore-progress"
-          role="status"
-          aria-live="polite"
-          className="rounded-md border p-4 space-y-3"
-        >
-          {restoringTimestamp !== null && restoreStatus.isError ? (
-            <div data-testid="restore-degraded" className="space-y-1">
-              <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                Restoring…
-              </div>
-              <p className="text-sm text-muted-foreground">
-                The app is briefly unavailable while the database is restored — this can take a few
-                minutes. This page keeps checking automatically.
-              </p>
-            </div>
-          ) : restoreData?.state === 'failed' ? (
-            <div data-testid="restore-failed" className="space-y-2">
-              <div className="text-sm font-medium text-destructive">Restore failed</div>
-              <p className="text-sm text-muted-foreground">
-                {restoreData.error ?? 'The restore did not finish.'}
-              </p>
-              {restoreData.safety_backup_ts && (
-                <p className="text-xs text-muted-foreground">
-                  A safety backup was taken before this restore ({restoreData.safety_backup_ts}). You
-                  can restore from it if needed.
-                </p>
-              )}
-              <button
-                type="button"
-                className="self-start rounded-md border px-3 py-1.5 text-sm"
-                onClick={() => queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : manualStepsNotice !== null ? (
-            <div data-testid="restore-manual-steps" className="space-y-2">
-              <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                One more step needed to finish
-              </div>
-              <p className="text-sm text-muted-foreground">{manualStepsNotice}</p>
-              <p className="text-xs text-muted-foreground">
-                Follow the guided steps below to finish and bring the app back online.
-              </p>
-              <button
-                type="button"
-                className="self-start rounded-md border px-3 py-1.5 text-sm"
-                onClick={() => setManualStepsNotice(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : restoreData ? (
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Restoring…</div>
-              {restoreData.current_step && (
-                <p className="text-sm text-muted-foreground">{restoreData.current_step}</p>
-              )}
-              <ol className="space-y-1">
-                {restoreData.steps.map((step) => (
-                  <li key={step.name} className="flex items-center gap-2 text-sm">
-                    <span aria-hidden className="w-4 text-center">
-                      {step.status === 'done'
-                        ? '✓'
-                        : step.status === 'failed'
-                          ? '✗'
-                          : step.status === 'running'
-                            ? '…'
-                            : '•'}
-                    </span>
-                    <span className={step.status === 'done' ? 'text-muted-foreground' : undefined}>
-                      {step.name}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">Starting the restore…</div>
-          )}
-        </div>
+        <GuidedRecoveryView
+          restoringTimestamp={restoringTimestamp}
+          pollError={restoreStatus.isError}
+          status={restoreData}
+          manualStepsNotice={manualStepsNotice}
+          onDismissFailed={() =>
+            queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })
+          }
+          onDismissManual={() => setManualStepsNotice(null)}
+        />
       )}
 
       <TypedConfirmDialog
@@ -618,7 +685,7 @@ export function AdminBackupsPage() {
           </span>
         }
         onConfirm={() => {
-          if (confirmTs) restoreMutation.mutate(confirmTs);
+          if (confirmTs) restoreMutation.mutate({ timestamp: confirmTs, source: confirmSource });
         }}
       />
 

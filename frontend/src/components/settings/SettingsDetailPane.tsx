@@ -26,6 +26,7 @@ import { SourcesList } from './SourcesList';
 import { SmtpSection } from './SmtpSection';
 import { TelegramBotTokenSection } from './TelegramBotTokenSection';
 import { AccessModeSection } from './AccessModeSection';
+import { SignInDevicesSection } from './SignInDevicesSection';
 import { useAuthStore } from '@/stores/auth-store';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ const SECTION_TITLES: Record<string, string> = {
 const ITEM_LABELS: Record<string, Record<string, string>> = {
   account: {
     profile: 'Profile & Email',
+    passkeys: 'Passkeys',
     appearance: 'Appearance',
   },
   sources: {
@@ -113,6 +115,7 @@ function DetailContent({
 }) {
   if (section === 'account') {
     if (item === 'profile') return <AccountSection />;
+    if (item === 'passkeys') return <SignInDevicesSection />;
     if (item === 'appearance') return <AppearanceSection />;
   }
 

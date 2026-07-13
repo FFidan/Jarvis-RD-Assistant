@@ -8,7 +8,7 @@ This page walks through everything needed to go from a fresh installation to a w
 
 ## Installation (operator)
 
-JARVIS RD Assistant runs as a set of Docker Compose services. Full installation instructions — Docker prerequisites, environment variables, TLS configuration, and first-boot checklist — are in the repository's **[DEPLOYMENT.md](../DEPLOYMENT.md)**. This manual does not duplicate those steps.
+JARVIS RD Assistant runs as a set of Docker Compose services. A default `./setup.sh` install pulls prebuilt images — no local build required — and during setup you choose how you will access JARVIS (localhost, LAN, Cloudflare Tunnel, or Let's Encrypt); see [Choosing how you access JARVIS](access-modes.md). Full installation instructions — Docker prerequisites, the access-mode chooser, and the first-boot checklist — are in the repository's **[DEPLOYMENT.md](../DEPLOYMENT.md)**. This manual does not duplicate those steps.
 
 ---
 
@@ -31,7 +31,7 @@ The models-ready check reports green when **both** of the following are true:
 - The embedder is present (any model whose name starts with the configured embedding model prefix, e.g. `qwen3-embedding`).
 - At least one qwen3 chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`).
 
-The default install (`setup.sh`) pulls `qwen3:8b` and `qwen3-embedding:4b`, which satisfies the ready condition. If models are still downloading, the check shows "still pulling" rather than a generic error.
+The default install (`setup.sh`) pulls a main model matched to your hardware tier plus `qwen3:4b` and `qwen3-embedding:4b`, which satisfies the ready condition on every tier. If models are still downloading, the check shows "still pulling" rather than a generic error.
 
 If any service is unreachable, fix it in your Docker Compose environment and click **Re-check** before proceeding.
 
@@ -91,6 +91,8 @@ Setup is complete. `setup_completed` is set to `true`. The wizard does not appea
 - **Single-user mode:** the login page defaults to the API-key tab. Enter the `JARVIS_API_KEY` value set in your server's environment and click **Sign In**. SMTP is optional for this mode.
 - **Multi-user mode with SMTP configured:** the login page defaults to the magic-link tab. Enter your email address, click **Send magic link**, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.
 - **Multi-user mode without SMTP:** the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but API-key sign-in is limited to the configured owner/admin or to deployments where the operator explicitly enables it.
+
+Once signed in, you can add a **passkey** (fingerprint, face, or device PIN) for one-tap sign-in on that device — the sign-in page offers it wherever your address supports it, and a magic link always remains available as a fallback. See [Passkeys](passkeys.md).
 
 ---
 

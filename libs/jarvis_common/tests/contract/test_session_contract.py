@@ -154,8 +154,11 @@ async def test_verify_token_creates_session_row(
 ):
     """POST /api/auth/verify with a valid token creates a sessions row + sets cookie.
 
-    Grounding: auth.py:249-257 — ``INSERT INTO sessions (user_id, expires_at) RETURNING id``.
-    Covers the full creation-flow contract including token → session atomicity.
+    Grounding: verify mints through ``jarvis_common.session_middleware.mint_session``
+    (INSERT INTO sessions (user_id, expires_at, credential_id) RETURNING id, then the
+    shared ``session_cookie_kwargs`` cookie). Covers token → session atomicity AND the
+    byte-equivalent Set-Cookie the unified mint must keep emitting (credential_id NULL
+    for the passwordless flow).
     """
     user_id, _ = await _seed_user(contract_conn, "ml-verify@contract.example.com")
     raw_token = secrets.token_urlsafe(32)
@@ -174,13 +177,15 @@ async def test_verify_token_creates_session_row(
 
     assert resp.status_code == 200, f"verify failed: {resp.status_code}: {resp.text[:300]}"
 
-    # Session row must exist
+    # Session row must exist; the passwordless mint leaves credential_id NULL.
     session_row = await contract_conn.fetchrow(
-        "SELECT id, user_id, expires_at FROM sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 1",
+        "SELECT id, user_id, expires_at, credential_id FROM sessions "
+        "WHERE user_id = $1 ORDER BY id DESC LIMIT 1",
         user_id,
     )
     assert session_row is not None, "sessions row was not created by verify"
     assert session_row["user_id"] == user_id
+    assert session_row["credential_id"] is None, "magic-link mint must not set credential_id"
 
     # Token must now be marked used
     token_row = await contract_conn.fetchrow(
@@ -188,11 +193,14 @@ async def test_verify_token_creates_session_row(
     )
     assert token_row["used_at"] is not None, "Token used_at should be set after verify"
 
-    # Set-Cookie header must be present
+    # Set-Cookie must carry the byte-equivalent attributes every mint site shares
+    # (30-day Max-Age + absolute expires, HttpOnly, SameSite=strict, Path=/).
     cookie_header = resp.headers.get("set-cookie", "")
-    assert "jarvis_session" in cookie_header, (
+    assert "jarvis_session=" in cookie_header, (
         f"set-cookie did not contain jarvis_session; headers: {dict(resp.headers)}"
     )
+    for attr in ("Max-Age=2592000", "expires=", "HttpOnly", "SameSite=strict", "Path=/"):
+        assert attr in cookie_header, f"Set-Cookie missing {attr!r}: {cookie_header!r}"
 
 
 async def test_verify_token_replay_returns_400(

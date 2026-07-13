@@ -8,9 +8,17 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.0.4**. See [CHANGELOG.md](CHANGELOG.md) for the
-maintenance changes since the v1.0.0 public baseline.
+Current release: **v1.1.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
+change list since the v1.0.0 public baseline.
 
+- **Install from prebuilt images (v1.1.0).** A default `./setup.sh` pulls
+  multi-architecture application images from the container registry instead of
+  building them locally, ending the multi-gigabyte PyTorch/CUDA build that could
+  exhaust disk on a first install; contributors keep a `--build-local` path. The
+  same release adds passkey sign-in, rolling 30-day sessions, a hardware-honest
+  disk preflight and GPU-vendor detection, a self-explanatory access-mode chooser
+  (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), and a staged,
+  self-healing restore with browser-driven, off-host disaster recovery.
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
   path for single-operator installs; admin role separation; Telegram account
   pairing.

@@ -23,29 +23,45 @@ ARG INSTALL_OPTIONAL=false
 # Not needed in production; only install for debugging/profiling.
 ARG INSTALL_PROFILING=false
 
+# Torch flavor for the base install (torch is a Docling base dependency,
+# hash-pinned in the base constraints). "cpu" selects constraints-cpu.txt
+# (torch from the PyTorch CPU index, no nvidia-*/triton — ~3.7 GB smaller);
+# "cuda" selects constraints.txt (PyPI torch with bundled CUDA libraries).
+# cpu is the default so builds never ship CUDA blobs unless asked to.
+ARG TORCH_VARIANT=cpu
+
 WORKDIR /app
 
 COPY services/paper_ingestion/requirements.txt services/paper_ingestion/constraints.txt \
+     services/paper_ingestion/constraints-cpu.txt \
      services/paper_ingestion/requirements-optional.txt services/paper_ingestion/constraints-optional.txt \
+     services/paper_ingestion/constraints-optional-cpu.txt \
      services/paper_ingestion/constraints-profiling.txt ./
 # Hash-pinned install of every transitive dep FIRST so this multi-GB layer is
 # immune to jarvis_common changes (the wheel COPY below busts only the cheap
 # --no-deps install). Final package set is identical to the prior ordering.
-# The cu124 torch pre-install was removed: constraints-optional.txt pins
-# torch==2.11.0 (PyPI) with its bundled nvidia-* libs.
 # A BuildKit cache mount keeps pip's wheel cache across builds, so a
-# constraints.txt change re-uses already-downloaded wheels (the multi-GB
+# constraints change re-uses already-downloaded wheels (the multi-GB
 # torch/docling set) instead of re-fetching them — dep-bump rebuilds drop from
 # ~8 min to ~2 min. --require-hashes still verifies every wheel, so the cache
 # cannot introduce an unpinned package. The mount is build-only, so the image
 # stays small without --no-cache-dir.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --require-hashes -r constraints.txt \
+    case "$TORCH_VARIANT" in \
+      cpu)  BASE_CONSTRAINTS=constraints-cpu.txt ;; \
+      cuda) BASE_CONSTRAINTS=constraints.txt ;; \
+      *) echo "ERROR: unknown TORCH_VARIANT='$TORCH_VARIANT' (expected 'cpu' or 'cuda')" >&2; exit 1 ;; \
+    esac \
+    && pip install --require-hashes -r "$BASE_CONSTRAINTS" \
     && if [ "$INSTALL_PROFILING" = "true" ]; then \
          pip install --require-hashes -r constraints-profiling.txt; \
        fi \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
-         pip install --require-hashes -r constraints-optional.txt; \
+         case "$TORCH_VARIANT" in \
+           cpu)  OPTIONAL_CONSTRAINTS=constraints-optional-cpu.txt ;; \
+           cuda) OPTIONAL_CONSTRAINTS=constraints-optional.txt ;; \
+         esac; \
+         pip install --require-hashes -r "$OPTIONAL_CONSTRAINTS"; \
        fi
 
 # jarvis_common wheel installed with --no-deps (its transitives are already

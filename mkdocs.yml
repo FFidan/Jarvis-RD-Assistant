@@ -33,11 +33,11 @@ site_name: JARVIS RD Assistant
 site_description: >-
   Documentation for the self-hosted JARVIS RD Assistant research workspace,
   including user workflows, deployment, security, and engineering contracts.
-site_url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
+site_url: "https://limitcycle-oss.github.io/jarvis-rd-assistant/"
 
 # Repo link shown in the Material theme header
-repo_url: https://github.com/FFidan/Jarvis-RD-Assistant
-repo_name: FFidan/Jarvis-RD-Assistant
+repo_url: https://github.com/limitcycle-oss/jarvis-rd-assistant
+repo_name: limitcycle-oss/jarvis-rd-assistant
 edit_uri: edit/main/
 
 docs_dir: docs
@@ -103,6 +103,8 @@ nav:
   - User Guide:
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md
+      - Choosing how you access JARVIS: manual/access-modes.md
+      - Passkeys: manual/passkeys.md
       - My Day & Home: manual/home-my-day.md
       - Navigation: manual/navigation.md
       - Research Feed & Library: manual/research-feed.md
@@ -118,8 +120,10 @@ nav:
       - Analytics: manual/analytics.md
       - Settings: manual/settings.md
       - What your hardware gets you: manual/hardware-and-models.md
+      - Hardware support matrix: manual/hardware-support-matrix.md
       - Context window: manual/context-window.md
       - Telegram: manual/telegram.md
+      - Backup & Restore: manual/backup-and-restore.md
       - Admin & Multi-tenant: manual/admin.md
   - Install & Operate:
       - Quickstart: readme-shim.md

@@ -1,5 +1,5 @@
 # JARVIS RD Assistant is an authentication-gated application shell.
 # There is no public content to index here; the documentation site
-# (https://FFidan.github.io/Jarvis-RD-Assistant/) is the public surface.
+# (https://limitcycle-oss.github.io/jarvis-rd-assistant/) is the public surface.
 User-agent: *
 Disallow: /

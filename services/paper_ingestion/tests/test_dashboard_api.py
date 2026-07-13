@@ -15,6 +15,13 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
+    from fastapi.routing import (
+        iter_route_contexts as _iter_route_contexts,  # type: ignore[attr-defined]
+    )
+except ImportError:  # FastAPI <0.137 keeps app.routes a flat APIRoute list.
+    _iter_route_contexts = None
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -131,7 +138,10 @@ def test_feed_route_precedes_dynamic_paper_detail_route() -> None:
     """Static feed route must be registered before /api/papers/{paper_id}."""
     from paper_ingestion.main import app
 
-    paths = [route.path for route in app.router.routes if hasattr(route, "path")]
+    if _iter_route_contexts is not None:
+        paths = [context.path for context in _iter_route_contexts(app.router.routes)]
+    else:
+        paths = [route.path for route in app.router.routes if hasattr(route, "path")]
 
     assert "/api/papers/feed" in paths
     assert "/api/papers/{paper_id}" in paths

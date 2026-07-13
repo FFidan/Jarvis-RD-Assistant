@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from jarvis_common.advisory_lock import _kind_lock_key
+from jarvis_common.maintenance import skip_for_maintenance
 from jarvis_common.serialization import _coerce_bool
 
 from paper_ingestion.ingestion import refresh_recommendations
@@ -306,6 +307,8 @@ async def _defer_per_user(
 
 async def run_zotero_sync_wrapper(app: Any, user_id: int | None = None) -> None:
     """APScheduler entrypoint for Zotero library sync — defers via procrastinate."""
+    if skip_for_maintenance("zotero sync"):
+        return
     db_pool = app.state.db_pool
     try:
         ready_user_ids = await _list_zotero_polling_users(db_pool)
@@ -331,6 +334,8 @@ async def run_pulse_wrapper(app: Any) -> None:
     ``/pulse_now`` or earlier cron job is still running) to prevent stacking
     duplicate pipeline runs.
     """
+    if skip_for_maintenance("pulse"):
+        return
     db_pool = app.state.db_pool
     if not await _is_pulse_enabled(db_pool):
         logger.info("pulse: disabled via user_config, skipping nightly run")
@@ -351,6 +356,8 @@ async def run_pulse_wrapper(app: Any) -> None:
 
 async def run_pulse_classifier_training_wrapper(app: Any) -> None:
     """APScheduler entrypoint for Pulse classifier retraining."""
+    if skip_for_maintenance("pulse classifier training"):
+        return
     db_pool = app.state.db_pool
     if not await _is_pulse_enabled(db_pool):
         logger.info("pulse: disabled via user_config, skipping classifier retraining")
@@ -378,6 +385,8 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
     Fans out one digest job per active user instead of producing a single
     global digest.
     """
+    if skip_for_maintenance("weekly digest"):
+        return
     db_pool = app.state.db_pool  # touch to surface AttributeError early in tests
     try:
         await _defer_per_user(
@@ -389,6 +398,8 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
 
 async def purge_system_events_task(app: Any) -> None:
     """Tiered retention: 30 days for app events, 7 days for infra events."""
+    if skip_for_maintenance("purge system events"):
+        return
     from jarvis_common.event_log import log_event  # noqa: PLC0415
 
     pool = app.state.db_pool
@@ -480,6 +491,8 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     """
 
     async def _run_recommendations(app: Any) -> None:
+        if skip_for_maintenance("recommendation refresh"):
+            return
         try:
             count = await refresh_recommendations(app)
             logger.info("Nightly recommendations: %d saved", count)
@@ -600,6 +613,11 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     from paper_ingestion.jobs.purge_tokens import register_purge_tokens  # noqa: PLC0415
 
     register_purge_tokens(scheduler, app)
+
+    # Daily purge of stale (long-expired / long-revoked) session rows.
+    from paper_ingestion.jobs.purge_sessions import register_purge_sessions  # noqa: PLC0415
+
+    register_purge_sessions(scheduler, app)
 
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)

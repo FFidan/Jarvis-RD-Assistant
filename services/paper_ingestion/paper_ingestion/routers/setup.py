@@ -38,7 +38,7 @@ import logging
 import os
 import re
 import socket
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Annotated, Any, Literal
@@ -56,7 +56,7 @@ from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
 from jarvis_common.serialization import _coerce_bool
-from jarvis_common.session_middleware import SESSION_COOKIE_NAME
+from jarvis_common.session_middleware import mint_session
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -71,7 +71,6 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 # Marker — exempted from global verify_api_key at include time (see main.py).
 router.auth_exempt = True  # type: ignore[attr-defined]
 
-SESSION_TTL = timedelta(days=30)
 MAX_EMAIL_LEN = 320  # RFC 5321
 SMTP_TEST_TIMEOUT_SECONDS = 10.0
 
@@ -107,6 +106,12 @@ class SetupStatusResponse(BaseModel):
     hw_tier_baseline: str | None = None
     hw_tier_current: str | None = None
     hw_tier_changed: bool = False
+    # GPU vendor: the setup-written JARVIS_GPU_VENDOR (host truth) when
+    # present, else inferred in-container (nvidia | amd | intel | none).
+    gpu_vendor: str = "none"
+    # Access mode written by setup.sh (localhost | lan | tunnel | letsencrypt).
+    # Lets the frontend explain in-product which sign-in capabilities work here.
+    access_mode: str = "localhost"
     recommended_backend: str | None = None
     current_backend: str | None = None
     observed_backend: str | None = None
@@ -283,11 +288,6 @@ async def _admin_count(pool: Any) -> int:
         )
 
 
-def _cookie_secure() -> bool:
-    """Match Secure flag to runtime mode (mirrors auth.py)."""
-    return not get_core_settings().dev_mode
-
-
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -354,7 +354,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
     Always reachable — the SetupGate on the frontend polls this on every
     boot, so it must never 401/403/500 on a fresh DB.
     """
-    from jarvis_common.hw_detect import detect_tier  # noqa: PLC0415
+    from jarvis_common.hw_detect import detect_tier, detect_vendor  # noqa: PLC0415
     from jarvis_common.litellm_observer import observed_share  # noqa: PLC0415
 
     pool = request.app.state.db_pool
@@ -362,6 +362,8 @@ async def get_status(request: Request) -> SetupStatusResponse:
 
     baseline = os.getenv("JARVIS_HW_TIER") or None
     current = detect_tier()
+    vendor = detect_vendor()
+    access_mode = os.getenv("JARVIS_ACCESS_MODE") or "localhost"
     # Effective backend = explicit override, else the runtime default the LLM
     # router actually uses (rag.py: os.getenv("JARVIS_LLM_BACKEND", "ollama")).
     # recommended_backend (the tier suggestion) is reported separately — don't conflate.
@@ -415,6 +417,8 @@ async def get_status(request: Request) -> SetupStatusResponse:
         hw_tier_baseline=baseline,
         hw_tier_current=current,
         hw_tier_changed=changed,
+        gpu_vendor=vendor,
+        access_mode=access_mode,
         recommended_backend=recommended,
         current_backend=backend,
         observed_backend=served,
@@ -814,26 +818,7 @@ async def create_first_admin(
                 user_id,
             )
 
-            session_id = await conn.fetchval(
-                """
-                INSERT INTO sessions (user_id, expires_at)
-                VALUES ($1, $2)
-                RETURNING id
-                """,
-                user_id,
-                now + SESSION_TTL,
-            )
-
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=str(session_id),
-        max_age=int(SESSION_TTL.total_seconds()),
-        expires=int((now + SESSION_TTL).timestamp()),
-        httponly=True,
-        secure=_cookie_secure(),
-        samesite="strict",
-        path="/",
-    )
+            await mint_session(conn, response, user_id, now=now)
 
     logger.info("setup: first admin created id=%s email_hash=%s", user_id, _hash_email(email_norm))
     return AdminResponse(id=user_id, email=user_row["email"], role=user_row["role"])

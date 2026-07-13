@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, RefreshCw, Sparkles, AlertTriangle, Loader2, CheckCircle2 } from 'lucide-react';
+import { ArrowRight, RefreshCw, Sparkles, AlertTriangle, Loader2, CheckCircle2, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SetupStep } from '@/components/setup/SetupStep';
-import { runFirstRunSystemCheck, type FirstRunSystemCheck } from '@/lib/api';
+import { runFirstRunSystemCheck, type FirstRunSystemCheck, type FirstRunStatus } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import type { StepNavProps } from './shared';
 
@@ -11,6 +11,9 @@ interface WelcomeSystemCheckStepProps extends StepNavProps {
   onSkip: () => void;
   skipError?: Error | null;
   setupToken?: string | null;
+  /** Already-fetched pre-auth status — reused here (no new fetch) to surface
+   * the detected hardware tier while the models row may still be warming up. */
+  firstRun?: FirstRunStatus;
 }
 
 export function WelcomeSystemCheckStep({
@@ -20,6 +23,7 @@ export function WelcomeSystemCheckStep({
   onSkip,
   skipError,
   setupToken,
+  firstRun,
 }: WelcomeSystemCheckStepProps) {
   const [data, setData] = useState<FirstRunSystemCheck | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,6 +81,31 @@ export function WelcomeSystemCheckStep({
           </p>
         </div>
       </div>
+      {firstRun?.hw_tier_current && (
+        <div className="flex items-start gap-3 rounded-md border p-4" data-testid="detected-hardware">
+          <Cpu className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            Detected hardware tier{' '}
+            <span className="font-mono font-medium text-foreground">{firstRun.hw_tier_current}</span>
+            {firstRun.recommended_backend && (
+              <>
+                {' '}
+                — recommended backend{' '}
+                <span className="font-mono font-medium text-foreground">
+                  {firstRun.recommended_backend}
+                </span>
+              </>
+            )}
+            {firstRun.gpu_vendor && firstRun.gpu_vendor !== 'none' && (
+              <>
+                {' '}
+                (<span className="font-mono font-medium text-foreground">{firstRun.gpu_vendor}</span> GPU)
+              </>
+            )}
+            . You can review and change models later from Settings &rarr; Models.
+          </p>
+        </div>
+      )}
       {loading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Probing services...

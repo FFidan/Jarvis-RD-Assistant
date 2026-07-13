@@ -10,6 +10,7 @@ re-run which keeps the existing .env still starts the stack.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -272,8 +273,8 @@ def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
     KEEP_PROFILE_ARGS=() empty.  On bash < 4.4, ``"${KEEP_PROFILE_ARGS[@]}"``
     under ``set -u`` raises "unbound variable" — guard: the portable idiom
     ``${ARR[@]+"${ARR[@]}"}`` must be used at the site.  Asserts that the script
-    reaches the stack-start path and runs plain ``docker compose up -d`` (no
-    ``--profile`` flags).
+    reaches the stack-start path with no ``--profile`` flags injected, pulls the
+    published images first, and brings the stack up with ``--no-build``.
     """
     _stage_hw_tmpdir(tmp_path)
     # Minimal .env: no TELEGRAM_BOT_TOKEN, no COMPOSE_PROFILES → KEEP_PROFILE_ARGS stays empty.
@@ -300,11 +301,22 @@ def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
     )
     assert "Keeping existing .env" in result.stdout
     invocations = log.read_text().splitlines()
-    # Must run plain "compose up -d" — no --profile flags injected.
-    assert "compose up -d" in invocations, (
-        f"plain compose up -d not found; docker invocations: {invocations}"
+    # The published images must be materialised BEFORE the stack starts, and the
+    # bring-up must forbid a build: every published service pairs `pull_policy: missing`
+    # with a `build:` block, so an image left missing here would be silently BUILT —
+    # the multi-GB torch build this release exists to eliminate.
+    assert any(i.startswith("compose pull ") for i in invocations), (
+        f"published images not pulled before start; docker invocations: {invocations}"
     )
-    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+    assert "compose up -d --no-build" in invocations, (
+        f"bring-up is missing the --no-build guard; docker invocations: {invocations}"
+    )
+    # The user's own configuration survives; only the derived torch-variant pair is
+    # backfilled (a pre-1.1 .env has none, and without it a CUDA host would silently
+    # resolve the CPU image tag).
+    env_after = (tmp_path / ".env").read_text()
+    assert env_before.strip() in env_after, "existing .env configuration must be preserved"
+    assert "TORCH_VARIANT=cpu" in env_after, "the torch variant must be backfilled"
 
 
 @_requires_bash
@@ -314,8 +326,9 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
 
     The pre-v0.8 dead end ("Keeping existing .env. Exiting." with services
     down) must not return. A legacy .env without COMPOSE_PROFILES but with a
-    TELEGRAM_BOT_TOKEN must derive ``--profile telegram``. docker is
-    PATH-shimmed; the invocation log proves the stack-start path was reached.
+    TELEGRAM_BOT_TOKEN must derive ``--profile telegram`` — and must pull the
+    telegram image too, since an image left missing would be silently BUILT.
+    docker is PATH-shimmed; the invocation log proves the path taken.
     """
     _stage_hw_tmpdir(tmp_path)
     env_before = "TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
@@ -338,10 +351,75 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
     assert "Keeping existing .env" in result.stdout
     invocations = log.read_text().splitlines()
-    assert "compose --profile telegram up -d" in invocations, (
-        f"stack-start path not reached; docker invocations: {invocations}"
+    pulls = [i for i in invocations if i.startswith("compose --profile telegram pull ")]
+    assert pulls, f"published images not pulled before start; docker invocations: {invocations}"
+    assert "telegram_bot" in pulls[0], (
+        "the telegram profile is active, so its image must be pulled too — otherwise "
+        f"`up` would silently BUILD it; got: {pulls[0]}"
     )
-    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+    assert "compose --profile telegram up -d --no-build" in invocations, (
+        f"bring-up is missing the --no-build guard; docker invocations: {invocations}"
+    )
+    env_after = (tmp_path / ".env").read_text()
+    assert env_before.strip() in env_after, "existing .env configuration must be preserved"
+    assert "TORCH_VARIANT=cpu" in env_after, "the torch variant must be backfilled"
+
+
+def _run_backfill(tmp: Path) -> subprocess.CompletedProcess[str]:
+    """Run the real backfill_torch_variant_from_env against a .env in ``tmp``."""
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'source "{REPO_ROOT}/scripts/setup_lib.sh" && backfill_torch_variant_from_env',
+        ],
+        cwd=str(tmp),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@_requires_bash
+def test_backfill_torch_variant_nvidia_env_lands_cuda_tag(tmp_path: Path) -> None:
+    """A pre-1.1 NVIDIA .env (gpu overlay in COMPOSE_FILE) backfills the cuda tag.
+
+    This is the highest-value invariant here: without ``TORCH_VARIANT_SUFFIX=-cuda``
+    the paper-ingestion image tag
+    ``${JARVIS_VERSION:-1.1.0}${TORCH_VARIANT_SUFFIX:-}`` resolves to the CPU
+    flavour on a CUDA host, and a --build-local rebuild without
+    ``INSTALL_OPTIONAL=true`` reproduces the published :X.Y.Z-cuda tag WITHOUT
+    the reranker it ships. The cpu path is covered by the keep-env setup tests
+    above; this pins the cuda path directly against the real helper.
+    """
+    (tmp_path / ".env").write_text(
+        "JARVIS_SECRET_KEY=keep_me\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n"
+    )
+    result = _run_backfill(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "cuda", result.stdout
+    env_after = (tmp_path / ".env").read_text()
+    assert "TORCH_VARIANT=cuda" in env_after, env_after
+    assert "TORCH_VARIANT_SUFFIX=-cuda" in env_after, env_after
+    assert "INSTALL_OPTIONAL=true" in env_after, env_after
+    assert "JARVIS_SECRET_KEY=keep_me" in env_after, "existing config must be preserved"
+
+    # Idempotent: a second run writes nothing more and echoes nothing.
+    again = _run_backfill(tmp_path)
+    assert again.returncode == 0 and again.stdout == "", again.stdout
+    assert (tmp_path / ".env").read_text().count("TORCH_VARIANT=") == 1
+
+
+@_requires_bash
+def test_backfill_torch_variant_cpu_env_leaves_optional_untouched(tmp_path: Path) -> None:
+    """A non-GPU .env backfills the cpu tag and never forces INSTALL_OPTIONAL on."""
+    (tmp_path / ".env").write_text("COMPOSE_FILE=docker-compose.yml\n")
+    result = _run_backfill(tmp_path)
+    assert result.returncode == 0 and result.stdout == "cpu", result.stdout
+    env_after = (tmp_path / ".env").read_text()
+    assert "TORCH_VARIANT=cpu" in env_after
+    assert "TORCH_VARIANT_SUFFIX=" in env_after and "TORCH_VARIANT_SUFFIX=-cuda" not in env_after
+    assert "INSTALL_OPTIONAL" not in env_after, "the cpu image must not force the reranker extras"
 
 
 def _write_missing_compose_docker_shim(tmp: Path) -> Path:
@@ -362,14 +440,47 @@ def _write_missing_compose_docker_shim(tmp: Path) -> Path:
 
 
 def _write_sudo_logger(tmp: Path) -> tuple[Path, Path]:
-    """Return a PATH dir with sudo that logs reviewed installer commands."""
+    """Return a PATH dir with sudo that logs reviewed installer commands.
+
+    Each invocation is logged as one line, its arguments joined by the unit
+    separator (\\x1f), so the caller can compare exact ARGUMENT VECTORS rather
+    than a space-joined string — the latter loses the quoting of an argument
+    like ``sh -c 'echo ... > file'``, which is a single argv element even though
+    it contains spaces and redirections.
+    """
     bin_dir = tmp / "sudo-bin"
     bin_dir.mkdir()
     log = tmp / "sudo-invocations.log"
     log.touch()
     sudo = bin_dir / "sudo"
-    sudo.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n")
+    sudo.write_text(
+        f"#!/usr/bin/env bash\nIFS=$'\\x1f'\nprintf '%s\\n' \"$*\" >> '{log}'\nexit 0\n"
+    )
     sudo.chmod(0o755)
+    return bin_dir, log
+
+
+def _write_curl_logger(tmp: Path) -> tuple[Path, Path]:
+    """Return a PATH dir with curl that logs fetches and creates the -o target.
+
+    The plan's unprivileged fetch lines run for real during the guided install,
+    so a curl shim keeps the test offline; it creates the ``-o`` target so the
+    plan's later steps (sed -i on the fetched file) still succeed.
+    """
+    bin_dir = tmp / "curl-bin"
+    bin_dir.mkdir()
+    log = tmp / "curl-invocations.log"
+    log.touch()
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> '{log}'\n"
+        'prev=""; out=""\n'
+        'for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done\n'
+        '[ -n "$out" ] && : > "$out"\n'
+        "exit 0\n"
+    )
+    curl.chmod(0o755)
     return bin_dir, log
 
 
@@ -427,29 +538,90 @@ def test_setup_check_install_prereqs_stays_read_only(tmp_path):
 
 @_requires_bash
 def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
-    """--install-prereqs runs explicit package-manager commands via the reviewed plan."""
+    """--install-prereqs executes exactly the reviewed plan, printed first.
+
+    The plan installs Docker from Docker's official apt repository (the stock
+    distro packages miss the compose plugin), so its exact line count varies by
+    host (a GPU host appends the NVIDIA Container Toolkit steps).  Instead of a
+    literal list, this asserts the root-escalation contract from setup_lib.sh:
+    the plan is echoed for review BEFORE anything runs, every privileged command
+    executed is a plan line rewritten to ``sudo -n`` (non-interactive runs must
+    never hang on a password prompt) in plan order with nothing extra, every
+    fetch is a plan line downloading to a file — never piped to a shell — and
+    the repo is pinned to the fetched signing key.  stderr is merged into stdout
+    so the print-before-run ordering is observable.
+    """
     _stage_hw_tmpdir(tmp_path)
     docker_bin = _write_missing_compose_docker_shim(tmp_path)
     sudo_bin, sudo_log = _write_sudo_logger(tmp_path)
+    curl_bin, curl_log = _write_curl_logger(tmp_path)
     env = dict(os.environ)
-    env["PATH"] = f"{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+    env["PATH"] = (
+        f"{curl_bin}{os.pathsep}{sudo_bin}{os.pathsep}{docker_bin}{os.pathsep}{env['PATH']}"
+    )
 
     result = subprocess.run(
         ["bash", "setup.sh", "--non-interactive", "--install-prereqs", "--mode", "single"],
         cwd=str(tmp_path),
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         timeout=60,
         check=False,
     )
 
-    combined = result.stdout + result.stderr
-    assert "Guided prerequisite installer would run" in combined
-    assert "Running: sudo -n apt-get update" in combined
-    assert sudo_log.read_text().splitlines() == [
-        "-n apt-get update",
-        "-n apt-get install -y docker-compose-plugin",
+    lines = result.stdout.splitlines()
+    assert "Guided prerequisite installer would run:" in lines, result.stdout
+    marker = lines.index("Guided prerequisite installer would run:")
+    # Plan lines follow the marker until the next [INFO]/[ERROR]-prefixed line.
+    plan: list[str] = []
+    for line in lines[marker + 1 :]:
+        if line.startswith("["):
+            break
+        plan.append(line)
+    run_indices = [i for i, line in enumerate(lines) if line.startswith("[INFO]  Running: ")]
+    assert run_indices and marker < run_indices[0], (
+        f"plan must be printed for review before anything runs:\n{result.stdout}"
+    )
+
+    assert "sudo apt-get update" in plan
+    assert any(
+        line.startswith("sudo apt-get install") and "docker-compose-plugin" in line for line in plan
+    ), f"plan must install the compose plugin: {plan}"
+    keyring = "/etc/apt/keyrings/docker.asc"
+    assert any(line.startswith("sudo curl -fsSL") and keyring in line for line in plan), (
+        f"signing key must be fetched straight to the root-owned keyring: {plan}"
+    )
+    assert any(f"signed-by={keyring}" in line and "download.docker.com" in line for line in plan), (
+        f"apt repo must be pinned to the fetched key: {plan}"
+    )
+    for line in plan:
+        # No root-consumed file may be staged at a predictable /tmp path (CWE-377):
+        # a local attacker could pre-plant it before the sudo reads it back.
+        assert "/tmp/" not in line, f"prereq plan stages a root-consumed file in /tmp: {line}"
+        # A remote fetch must never be piped into a shell; piping data into a
+        # tool (curl | gpg --dearmor) is fine and used for the nvidia key.
+        assert "| sh" not in line and "| bash" not in line, f"piped curl-to-shell in plan: {line}"
+
+    # Compare exact ARGUMENT VECTORS: the shim logs argv joined by \x1f, and a
+    # plan line is parsed with shlex so that `sh -c 'echo ... > file'` stays a
+    # single argument. Each privileged command executed is the reviewed plan's
+    # sudo line rewritten to `sudo -n …`, in order, with nothing extra.
+    expected_sudo = [
+        ["-n", *shlex.split(line.removeprefix("sudo "))]
+        for line in plan
+        if line.startswith("sudo ")
     ]
+    assert expected_sudo, f"plan has no privileged steps: {plan}"
+    executed_sudo = [row.split("\x1f") for row in sudo_log.read_text().splitlines()]
+    assert executed_sudo == expected_sudo, (
+        "executed privileged commands must be exactly the reviewed plan's sudo "
+        f"lines under sudo -n, in order; plan: {plan}"
+    )
+    expected_curl = [line.removeprefix("curl ") for line in plan if line.startswith("curl ")]
+    assert curl_log.read_text().splitlines() == expected_curl, (
+        f"executed fetches must be exactly the reviewed plan's curl lines; plan: {plan}"
+    )
     assert result.returncode != 0  # docker shim still lacks compose after the fake install.
     assert not (tmp_path / ".env").exists()
