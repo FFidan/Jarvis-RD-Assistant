@@ -156,6 +156,39 @@ valid_archive_name() {
     '^(jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|litellm_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|secrets_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?|qdrant_[A-Za-z0-9_-]+_[0-9]{8}_[0-9]{6}\.snapshot(\.enc)?)$'
 }
 
+# --- resolve_secrets_archive — echo the secrets_<ts> archive path in ${ARCHIVE_DIR}
+#     (prefer the .enc form), or nothing (return 1) if absent. Single source shared by
+#     the STEP-2 secrets preflight (fail BEFORE any destruction when it is missing) and
+#     STEP 8 (materialize it), so the two can never diverge on what "has secrets" means.
+resolve_secrets_archive() {
+  local cand
+  for cand in "${ARCHIVE_DIR}/secrets_${TIMESTAMP}.tar.gz.enc" \
+              "${ARCHIVE_DIR}/secrets_${TIMESTAMP}.tar.gz"; do
+    if [ -f "$cand" ]; then printf '%s' "$cand"; return 0; fi
+  done
+  return 1
+}
+
+# --- safety_backup_is_fresh <backup_rc> — true iff the STEP-4 safety pre-backup is a
+#     usable rollback point FOR THIS RUN: backup.sh exited 0, ${BACKUP_DIR}/.last_run.json
+#     records succeeded:true, and its attempted_at is NEWER than this restore's start
+#     (STARTED_AT). Freshness matters: a safety backup that fails on a full/read-only
+#     /backups cannot rewrite .last_run.json, so YESTERDAY's succeeded:true record
+#     survives — a stale succeeded record must NOT count as a fresh rollback point.
+safety_backup_is_fresh() {
+  local rc="$1" lr succeeded attempted
+  [ "$rc" -eq 0 ] || return 1
+  lr="$(cat "${BACKUP_DIR}/.last_run.json" 2>/dev/null || true)"
+  succeeded="$(printf '%s' "$lr" \
+    | grep -oE '"succeeded"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE 'true|false' | head -1 || true)"
+  [ "$succeeded" = "true" ] || return 1
+  attempted="$(printf '%s' "$lr" \
+    | grep -oE '"attempted_at"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true)"
+  [ -n "$attempted" ] || return 1
+  [[ "$attempted" > "$STARTED_AT" ]]
+}
+
 # --- write_inbox_manifest — inventory ${INBOX_DIR} into a SANITIZED
 #     ${TRIGGER_DIR}/.inbox_manifest.json (names/booleans ONLY — never a path or a key
 #     byte) that the admin app's GET /inbox lists. Groups valid_archive_name-accepted
@@ -194,8 +227,12 @@ write_inbox_manifest() {
       [ -n "$t" ] || continue
       complete="false"
       has_secrets="false"
+      # complete requires the manifest too: restore.sh STEP 2 HARD-requires
+      # manifest_<ts>.json for an inbox restore, so a DB-complete point that is missing
+      # its manifest is NOT restorable (it fails pre-swap) and must not read complete.
       if { [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz.enc" ]; } \
-         && { [ -f "${INBOX_DIR}/litellm_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ]; }; then
+         && { [ -f "${INBOX_DIR}/litellm_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ]; } \
+         && [ -f "${INBOX_DIR}/manifest_${t}.json" ]; then
         complete="true"
       fi
       if [ -f "${INBOX_DIR}/secrets_${t}.tar.gz" ] || [ -f "${INBOX_DIR}/secrets_${t}.tar.gz.enc" ]; then
@@ -554,6 +591,12 @@ _cleanup() {
       fi
     fi
   fi
+  # Any terminal FAILURE that entered the destructive window (DROP_STARTED=1) leaves the
+  # DB inconsistent — the operator must recover from the safety backup / finish the
+  # off-host secrets+role steps — so report manual_steps_required honestly rather than a
+  # bare error. Covers every post-DROP path (step5_fail, STEP-8 fail_after_restore,
+  # timeout, abnormal death). A clean restore is STATE="done" here, so it stays false.
+  if [ "$STATE" = "failed" ] && [ "$DROP_STARTED" = "1" ]; then MANUAL_STEPS_REQUIRED=1; fi
   [ -n "$FINISHED_AT" ] || FINISHED_AT="$(date -Iseconds)"
   write_status
   # Lift maintenance on ANY clean restore (same-host OR off-host) OR any failure
@@ -787,6 +830,20 @@ for arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
   fi
 done
 
+# === STEP 2.5: secrets preflight (inbox only, BEFORE any destruction) =========
+# An off-host set with NO secrets archive would otherwise swap BOTH DBs and only fail at
+# STEP 8 (secrets materialization) — leaving a shredded one-time key and a durable
+# maintenance hold. Verify the secrets archive is present up front and refuse before any
+# DROP. STEP 2's manifest sha256 check already integrity-verified it (backup.sh lists the
+# secrets archive in the manifest, and an inbox restore hard-requires that manifest), so
+# presence here means present + integrity-checked. Local restores never touch secrets.
+if [ "$SOURCE" = "inbox" ]; then
+  if ! resolve_secrets_archive >/dev/null; then
+    MANUAL_STEPS_REQUIRED=1
+    fail_before_destruction "off-host restore requires the secrets archive secrets_${TIMESTAMP}.tar.gz[.enc] (stage the full backup set, including its secrets, into the restore_inbox); nothing was changed"
+  fi
+fi
+
 # === STEP 3: maintenance ON + heartbeat ======================================
 # Turn the stack to 503 for the whole restore, and re-touch the sentinel every
 # 60s so a >30-min restore does not auto-expire (MAINTENANCE_MAX_AGE_S) mid-flight.
@@ -828,15 +885,18 @@ export BACKUP_SKIP_PRUNE=1
 # maintenance sentinel as "someone else is mid-restore" and abort the very safety
 # snapshot the restore depends on.
 export BACKUP_FORCE=1
-if /usr/local/bin/backup.sh; then :; else echo "[restore] WARN: safety backup.sh exited non-zero" >&2; fi
+if /usr/local/bin/backup.sh; then SAFETY_RC=0; else SAFETY_RC=$?; echo "[restore] WARN: safety backup.sh exited non-zero (${SAFETY_RC})" >&2; fi
 LAST_RUN="$(cat "${BACKUP_DIR}/.last_run.json" 2>/dev/null || true)"
-SAFETY_SUCCEEDED="$(printf '%s' "$LAST_RUN" \
-  | grep -oE '"succeeded"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE 'true|false' | head -1 || true)"
 SAFETY_BACKUP_TS="$(printf '%s' "$LAST_RUN" \
   | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[0-9]{8}_[0-9]{6}"' | grep -oE '[0-9]{8}_[0-9]{6}' | head -1 || true)"
-if [ "$SAFETY_SUCCEEDED" != "true" ]; then
+# The safety pre-backup is the ONLY rollback point for a mid-swap failure, so it must be
+# proven FRESH for THIS run (exit 0 + succeeded + newer than STARTED_AT), not merely
+# "some prior backup succeeded". A failed backup that could not rewrite .last_run.json
+# would leave a stale succeeded record; treating that as a rollback point is the N-1 bug.
+if ! safety_backup_is_fresh "$SAFETY_RC"; then
   STEP_SAFETY="failed"
-  fail_before_destruction "safety backup failed; nothing was changed"
+  MANUAL_STEPS_REQUIRED=1
+  fail_before_destruction "safety backup failed or is stale (no fresh rollback point); nothing was changed"
 fi
 STEP_SAFETY="done"
 write_status
@@ -945,11 +1005,7 @@ if [ "$SOURCE" = "inbox" ]; then
   CURRENT_STEP="Restoring secrets"
   PHASE="secrets"
   write_status
-  SECRETS_ARCHIVE=""
-  for cand in "${ARCHIVE_DIR}/secrets_${TIMESTAMP}.tar.gz.enc" \
-              "${ARCHIVE_DIR}/secrets_${TIMESTAMP}.tar.gz"; do
-    if [ -f "$cand" ]; then SECRETS_ARCHIVE="$cand"; break; fi
-  done
+  SECRETS_ARCHIVE="$(resolve_secrets_archive || true)"
   if [ -z "$SECRETS_ARCHIVE" ]; then
     fail_after_restore "off-host restore: secrets archive secrets_${TIMESTAMP}.tar.gz[.enc] not found in the inbox; databases were restored — materialize ./secrets and rebind the postgres role manually per the runbook"
   fi

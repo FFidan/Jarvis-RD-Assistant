@@ -300,6 +300,21 @@ describe('AdminBackupsPage', () => {
     );
   });
 
+  it('blocks an inbox restore with no secrets archive (would fail post-swap)', async () => {
+    // A complete + keyed point that lacks its secrets archive must not be restorable:
+    // the trigger is disabled and a hint explains the post-swap failure (P1-04).
+    getInboxRestorePointsMock.mockResolvedValue([
+      { timestamp: '20260701_030000', complete: true, has_secrets: false, has_key: true },
+    ]);
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    const point = within(section).getByTestId('inbox-restore-point');
+    expect(within(point).getByText('No secrets')).toBeInTheDocument();
+    expect(within(point).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(point).getByText(/no secrets archive/i)).toBeInTheDocument();
+    expect(requestRestoreMock).not.toHaveBeenCalled();
+  });
+
   it('authenticates the restore-status poll with the captured one-time bearer token', async () => {
     requestRestoreMock.mockResolvedValue({ status: 'scheduled', status_token: 'poll-bearer-42' });
     const user = userEvent.setup();
