@@ -11,6 +11,7 @@ import logging
 import asyncpg
 import httpx
 from telegram import Update
+from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from telegram_bot.config import BotConfig
@@ -79,6 +80,10 @@ async def auth_check(
     """
     chat = update.effective_chat
     if chat is None:
+        return False, None
+    # Identity is bound to chat_id, so a group/supergroup pairing would let every
+    # member act as the paired user. Only 1:1 private chats may hold an identity.
+    if chat.type != ChatType.PRIVATE:
         return False, None
     try:
         pairing_row = await db_pool.fetchrow(

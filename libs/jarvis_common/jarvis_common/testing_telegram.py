@@ -61,6 +61,7 @@ def make_telegram_update(
     text: str | None = None,
     user_id: int | None = None,
     username: str | None = "testuser",
+    chat_type: str = "private",
 ) -> MagicMock:
     """Build a minimal PTB ``Update``-like MagicMock.
 
@@ -77,10 +78,14 @@ def make_telegram_update(
     ``user_id`` wires ``update.effective_user.id`` for handlers that inspect
     the PTB user object (not used in current tests but anticipated by D9-04).
     ``username`` wires ``update.effective_chat.username``.
+    ``chat_type`` wires ``update.effective_chat.type`` (defaults to ``"private"``
+    since these fakes simulate 1:1 DMs; pass ``"group"``/``"supergroup"`` to
+    exercise the non-private auth guard).
     """
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = chat_type
     update.effective_chat.username = username
     update.message = MagicMock()
     if text is not None:

@@ -77,6 +77,7 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
 

@@ -127,6 +127,63 @@ async def test_pair_already_consumed_token_replies_error():
     assert "already been used" in text
 
 
+@pytest.mark.asyncio
+async def test_pair_in_group_chat_rejected_without_touching_db():
+    """/pair sent from a group chat is rejected BEFORE the token is consumed.
+
+    Identity binds to chat_id, so pairing in a group would grant every member
+    the paired identity (finding P1-08).  Even with a valid token available in
+    the DB, a non-private chat must early-return with the "1:1 chat only"
+    message and never acquire the pool / upsert a row.
+    """
+    conn = _make_conn(
+        fetchrow_return={
+            "user_id": 5,
+            "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+            "consumed_at": None,
+        }
+    )
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=-1001234567890, chat_type="group")
+    context = _make_context(pool, args=["validtoken"])
+
+    await pair_command(update, context)
+
+    pool.acquire.assert_not_called()  # no DB work → no upsert, token not consumed
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "1:1" in text or "private chat" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_pair_in_private_chat_still_succeeds():
+    """Regression: a valid /pair in a private chat completes and replies Paired."""
+    conn = MagicMock()
+    # 1st fetchrow = token lookup; 2nd fetchrow = upsert RETURNING row.
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "user_id": 5,
+                "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+                "consumed_at": None,
+            },
+            {"was_update": False, "prior_chat_id": None},
+        ]
+    )
+    conn.execute = AsyncMock(return_value="EXECUTE 1")
+    conn.transaction = MagicMock(return_value=FakeTxnCM())
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=424242, chat_type="private")
+    context = _make_context(pool, args=["validtoken"])
+
+    await pair_command(update, context)
+
+    pool.acquire.assert_called_once()  # private chat reaches the DB flow
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Paired" in text
+
+
 # test_pair_expired_token_deletes_and_replies_error — deleted; DB assertion covered by
 #   test_tg_contract.py::test_pair_command_rejects_expired_token
 # Kept: test_pair_rebound_emits_system_event_and_notifies_prior_chat (unique audit path)

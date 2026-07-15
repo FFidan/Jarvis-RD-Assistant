@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import asyncpg
 from jarvis_common.event_log import log_event
 from telegram import Update
+from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import escape
@@ -39,6 +40,15 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     message = update.message
     chat = update.effective_chat
     if message is None or chat is None:
+        return
+
+    # Identity binds to chat_id; in a group every member shares it, so pairing
+    # there would grant them all the paired identity. Only allow 1:1 chats.
+    if chat.type != ChatType.PRIVATE:
+        await message.reply_text(
+            "Pairing only works in a direct 1:1 chat with the bot — "
+            "open a private chat and run /pair <token> there."
+        )
         return
 
     args = context.args or []
