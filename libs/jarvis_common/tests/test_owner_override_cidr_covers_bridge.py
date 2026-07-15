@@ -134,3 +134,44 @@ def test_startup_warning_fires_for_loopback_only_default(
         for r in caplog.records
         if r.levelno == logging.WARNING and "OWNER_OVERRIDE_ALLOWED_CIDRS" in r.getMessage()
     ], "no loopback warning when the operator widens the allowlist"
+
+
+def _trusted_proxy_hosts_line(text: str) -> str:
+    for line in text.splitlines():
+        if "TRUSTED_PROXY_HOSTS:" in line and "${" in line:
+            return line
+    raise AssertionError(
+        "docker-compose.yml shared-env must set TRUSTED_PROXY_HOSTS (P1-01): absent "
+        "→ ProxyHeadersMiddleware never trusts the nginx bridge hop, never rewrites "
+        "scope['client'] from XFF, and the X-Owner-User-Id guard trusts a "
+        "browser-relayed request"
+    )
+
+
+def test_compose_trusted_proxy_hosts_tracks_the_bridge_subnet() -> None:
+    """P1-01 layer 1: compose must inject a NUMERIC TRUSTED_PROXY_HOSTS covering
+    the bridge, so ProxyHeadersMiddleware trusts the nginx hop and rewrites the
+    client IP the owner-override guard checks. A bare hostname (the old
+    'dashboard' default) can never match a numeric peer."""
+    text = _COMPOSE.read_text()
+    subnet = _net_subnet_default(text)
+    proxy_line = _trusted_proxy_hosts_line(text)
+
+    assert "JARVIS_NET_SUBNET" in proxy_line, (
+        "TRUSTED_PROXY_HOSTS must track ${JARVIS_NET_SUBNET} so the nginx hop is "
+        f"trusted regardless of the bridge subnet; got: {proxy_line.strip()}"
+    )
+
+    resolved = proxy_line.replace("${JARVIS_NET_SUBNET:-" + subnet + "}", subnet)
+    m = re.search(r"TRUSTED_PROXY_HOSTS:-([^}]+)\}", resolved)
+    assert m, f"could not resolve TRUSTED_PROXY_HOSTS default from: {proxy_line.strip()}"
+    hosts = [c.strip() for c in m.group(1).split(",") if c.strip()]
+
+    # Every entry must be numeric (a hostname literal never matches a peer IP).
+    nets = [ipaddress.ip_network(h) for h in hosts]
+    bridge = ipaddress.IPv4Network(subnet)
+    assert any(bridge.subnet_of(net) for net in nets), (
+        f"jarvis bridge subnet {subnet} is not covered by TRUSTED_PROXY_HOSTS "
+        f"{hosts} — the nginx hop would not be trusted and browser-relayed "
+        "owner-override requests would not be rejected"
+    )

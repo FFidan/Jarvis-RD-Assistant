@@ -64,6 +64,13 @@ x-shared-env: &shared-env
   # subnet so the nginx hop is honoured; tracks JARVIS_NET_SUBNET. Empty in code
   # falls back to loopback-only so a bridge container cannot spoof X-Forwarded-For.
   TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
+  # Numeric CIDRs uvicorn's ProxyHeadersMiddleware trusts as the immediate proxy
+  # hop before rewriting scope["client"] from X-Forwarded-For. Distinct from
+  # TRUSTED_PROXY_CIDRS above (rate-limit keying) — this one drives the client
+  # rewrite the X-Owner-User-Id guard depends on to reject nginx-relayed browser
+  # requests. MUST include the bridge subnet so the nginx hop is trusted; tracks
+  # JARVIS_NET_SUBNET.
+  TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
   LANGFUSE_HOST: ${LANGFUSE_HOST:-}
