@@ -98,7 +98,7 @@ async def test_auth_check_db_error_denies():
 @pytest.mark.asyncio
 async def test_auth_check_denies_non_private_chat_even_when_paired():
     """A group/supergroup chat is denied WITHOUT resolving identity, even when a
-    stale telegram_user_pairings row exists for its (negative) chat_id (P1-08).
+    stale telegram_user_pairings row exists for its (negative) chat_id.
 
     Identity binds to chat_id, so a group pairing would let every member act as
     the paired user.  The gate must fire before the DB lookup so stale group
@@ -175,7 +175,7 @@ async def test_auth_required_paired_runs_handler_and_stashes_user_id():
 @pytest.mark.asyncio
 async def test_auth_required_denies_group_chat_even_when_paired():
     """An authed op invoked in a group chat is denied and the handler is skipped,
-    even when a telegram_user_pairings row exists for that chat_id (P1-08)."""
+    even when a telegram_user_pairings row exists for that chat_id."""
     called: list[bool] = []
 
     @auth_required

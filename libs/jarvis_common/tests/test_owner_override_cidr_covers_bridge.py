@@ -141,7 +141,7 @@ def _trusted_proxy_hosts_line(text: str) -> str:
         if "TRUSTED_PROXY_HOSTS:" in line and "${" in line:
             return line
     raise AssertionError(
-        "docker-compose.yml shared-env must set TRUSTED_PROXY_HOSTS (P1-01): absent "
+        "docker-compose.yml shared-env must set TRUSTED_PROXY_HOSTS: absent "
         "→ ProxyHeadersMiddleware never trusts the nginx bridge hop, never rewrites "
         "scope['client'] from XFF, and the X-Owner-User-Id guard trusts a "
         "browser-relayed request"
@@ -149,7 +149,7 @@ def _trusted_proxy_hosts_line(text: str) -> str:
 
 
 def test_compose_trusted_proxy_hosts_tracks_the_bridge_subnet() -> None:
-    """P1-01 layer 1: compose must inject a NUMERIC TRUSTED_PROXY_HOSTS covering
+    """Compose must inject a NUMERIC TRUSTED_PROXY_HOSTS covering
     the bridge, so ProxyHeadersMiddleware trusts the nginx hop and rewrites the
     client IP the owner-override guard checks. A bare hostname (the old
     'dashboard' default) can never match a numeric peer."""

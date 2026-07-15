@@ -302,7 +302,7 @@ describe('AdminBackupsPage', () => {
 
   it('blocks an inbox restore with no secrets archive (would fail post-swap)', async () => {
     // A complete + keyed point that lacks its secrets archive must not be restorable:
-    // the trigger is disabled and a hint explains the post-swap failure (P1-04).
+    // the trigger is disabled and a hint explains the post-swap failure.
     getInboxRestorePointsMock.mockResolvedValue([
       { timestamp: '20260701_030000', complete: true, has_secrets: false, has_key: true },
     ]);

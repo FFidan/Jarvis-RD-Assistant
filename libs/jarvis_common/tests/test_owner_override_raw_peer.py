@@ -80,7 +80,7 @@ def _build_factory_app(pool: object, *, trusted_proxy_hosts: str | list[str] = "
     ``trusted_proxy_hosts="*"`` (the default here) is the most permissive
     proxy-trust setting — exactly the configuration where ProxyHeadersMiddleware
     rewrites ``scope["client"]`` from ANY caller's X-Forwarded-For, i.e. the M5
-    attack surface. The P1-01 tests below pass the PRODUCTION value instead
+    attack surface. The owner-override tests below pass the PRODUCTION value instead
     (``get_core_settings().trusted_proxy_hosts_list``) to prove the deployed
     proxy-trust config actually un-masks nginx-relayed browsers.
     """
@@ -339,7 +339,7 @@ async def test_app_without_stash_middleware_falls_back_to_client_check(
 
 
 # ---------------------------------------------------------------------------
-# P1-01 (AC-4) — owner-override proxy-trust bypass: the PRODUCTION proxy-trust
+# owner-override proxy-trust bypass: the PRODUCTION proxy-trust
 # value (the settings default, NOT "*") must un-mask an nginx-relayed browser.
 # Verified: libs/jarvis_common/jarvis_common/settings.py:107 — trusted_proxy_hosts
 #   default is now the numeric "127.0.0.0/8,10.137.241.0/24". The pre-fix default
@@ -358,7 +358,7 @@ def _settings_default_proxy_hosts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 async def test_browser_relayed_rejected_under_production_proxy_trust(
     bridge_allowlist: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-4 (red→green): a browser relayed through the bridge nginx hop → 403.
+    """A browser relayed through the bridge nginx hop → 403.
 
     Immediate peer = the trusted bridge proxy (allowlisted), XFF carries a
     PUBLIC browser IP, caller holds the ops key + a valid X-Owner-User-Id.
@@ -387,7 +387,7 @@ async def test_browser_relayed_rejected_under_production_proxy_trust(
 async def test_bridge_bot_accepted_under_production_proxy_trust(
     bridge_allowlist: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-4 companion: the direct bridge bot still resolves under the SAME
+    """The direct bridge bot still resolves under the SAME
     production proxy-trust value — the fix must not regress the bot.
 
     Allowlisted bridge peer, NO X-Forwarded-For, ops key + X-Owner-User-Id.

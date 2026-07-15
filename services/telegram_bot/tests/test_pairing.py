@@ -132,7 +132,7 @@ async def test_pair_in_group_chat_rejected_without_touching_db():
     """/pair sent from a group chat is rejected BEFORE the token is consumed.
 
     Identity binds to chat_id, so pairing in a group would grant every member
-    the paired identity (finding P1-08).  Even with a valid token available in
+    the paired identity.  Even with a valid token available in
     the DB, a non-private chat must early-return with the "1:1 chat only"
     message and never acquire the pool / upsert a row.
     """

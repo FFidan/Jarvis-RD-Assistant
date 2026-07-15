@@ -512,7 +512,7 @@ async def test_restore_inbox_missing_key_409(admin_client, restore_paths, inbox_
 
 
 async def test_restore_inbox_missing_secrets_409(admin_client, restore_paths, inbox_manifest):
-    # A secrets-less off-host set would swap both DBs then fail post-swap (P1-04): the
+    # A secrets-less off-host set would swap both DBs then fail post-swap: the
     # validator must reject it up front with a 409 and never write the restore sentinel,
     # even when the point is otherwise complete and keyed.
     inbox_manifest(

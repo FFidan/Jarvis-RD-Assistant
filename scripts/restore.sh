@@ -892,7 +892,7 @@ SAFETY_BACKUP_TS="$(printf '%s' "$LAST_RUN" \
 # The safety pre-backup is the ONLY rollback point for a mid-swap failure, so it must be
 # proven FRESH for THIS run (exit 0 + succeeded + newer than STARTED_AT), not merely
 # "some prior backup succeeded". A failed backup that could not rewrite .last_run.json
-# would leave a stale succeeded record; treating that as a rollback point is the N-1 bug.
+# would leave a stale succeeded record; treating that as a rollback point is the bug this guards against.
 if ! safety_backup_is_fresh "$SAFETY_RC"; then
   STEP_SAFETY="failed"
   MANUAL_STEPS_REQUIRED=1

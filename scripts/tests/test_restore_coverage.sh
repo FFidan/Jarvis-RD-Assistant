@@ -702,7 +702,7 @@ if command -v python3 >/dev/null 2>&1; then
   im_trig="${im_dir}/trig"
   mkdir -p "$im_inbox" "$im_trig"
   # complete (DB + manifest) + secrets + key at ts A; jarvis-only (incomplete) at ts B;
-  # DB-complete but MANIFEST-LESS at ts C (R-2: must NOT read complete); junk ignored.
+  # DB-complete but MANIFEST-LESS at ts C (must NOT read complete); junk ignored.
   : > "${im_inbox}/jarvis_20260701_030000.sql.gz"
   : > "${im_inbox}/litellm_20260701_030000.sql.gz.enc"
   : > "${im_inbox}/secrets_20260701_030000.tar.gz.enc"
@@ -727,7 +727,7 @@ assert by["20260701_030000"] == {
     "timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}, by
 assert by["20260630_020000"]["complete"] is False, by
 assert by["20260630_020000"]["has_secrets"] is False, by
-# R-2: DB archives present but manifest_<ts>.json absent is NOT complete (restore.sh
+# DB archives present but manifest_<ts>.json absent is NOT complete (restore.sh
 # STEP 2 hard-requires the manifest for an inbox restore).
 assert by["20260702_040000"]["complete"] is False, by
 # Sanitized: no path or key material anywhere in the JSON.
@@ -767,7 +767,7 @@ else
   printf 'SKIP: python3 unavailable; skipping --inbox-manifest behavioral test\n' >&2
 fi
 
-# === Verify-before-destroy: secrets preflight (P1-04) ========================
+# === Verify-before-destroy: secrets preflight ========================
 # An off-host (inbox) set with NO secrets archive must abort BEFORE any DROP (nothing
 # destroyed) instead of swapping both DBs and only failing at STEP 8, and it must
 # report manual_steps_required so the admin panel tells the operator recovery is needed.
@@ -818,7 +818,7 @@ else
   fail=1
 fi
 
-# === Verify-before-destroy: FRESH safety pre-backup (N-1) ====================
+# === Verify-before-destroy: FRESH safety pre-backup ====================
 # The STEP-4 safety pre-backup is the only rollback point, so it must be proven fresh
 # for THIS run (exit 0 + succeeded + attempted_at newer than STARTED_AT). A stale
 # succeeded record (e.g. left when a full/read-only /backups blocked the write) must
