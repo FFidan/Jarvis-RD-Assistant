@@ -87,8 +87,9 @@ function InboxBadge({ ok, okLabel, badLabel }: { ok: boolean; okLabel: string; b
 /**
  * Off-host recovery: list the backup sets the operator has staged in this server's
  * restore inbox and trigger a cross-host restore. The trigger is disabled (with an
- * inline hint) until a set is complete AND its one-time key is present, and while any
- * restore is already in flight. The file upload itself is host-side (out of scope
+ * inline hint) until a set is complete, carries its secrets archive, AND its one-time
+ * key is present, and while any restore is already in flight. A secrets-less set would
+ * fail post-swap, so it is blocked here. The file upload itself is host-side (out of scope
  * here); the app only lists what the sidecar reports and requests the restore.
  */
 function InboxRestoreSection({
@@ -121,12 +122,15 @@ function InboxRestoreSection({
       ) : (
         <ul className="space-y-2">
           {points.map((p) => {
-            const disabled = !p.complete || !p.has_key || restoringTimestamp !== null;
+            const disabled =
+              !p.complete || !p.has_secrets || !p.has_key || restoringTimestamp !== null;
             const hint = !p.complete
               ? 'This backup is missing a required database archive.'
-              : !p.has_key
-                ? 'Drop the one-time operator key into the restore inbox before restoring.'
-                : null;
+              : !p.has_secrets
+                ? 'This backup has no secrets archive; the restore would fail after swapping the databases. Stage the secrets archive before restoring.'
+                : !p.has_key
+                  ? 'Drop the one-time operator key into the restore inbox before restoring.'
+                  : null;
             return (
               <li
                 key={p.timestamp}

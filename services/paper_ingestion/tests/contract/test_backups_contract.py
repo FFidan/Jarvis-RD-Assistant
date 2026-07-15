@@ -511,6 +511,22 @@ async def test_restore_inbox_missing_key_409(admin_client, restore_paths, inbox_
     assert not (restore_paths / ".restore_request.json").exists()
 
 
+async def test_restore_inbox_missing_secrets_409(admin_client, restore_paths, inbox_manifest):
+    # A secrets-less off-host set would swap both DBs then fail post-swap (P1-04): the
+    # validator must reject it up front with a 409 and never write the restore sentinel,
+    # even when the point is otherwise complete and keyed.
+    inbox_manifest(
+        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": False, "has_key": True}]
+    )
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260701_030000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "secrets" in resp.json()["detail"].lower()
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
 async def test_restore_status_idle_when_absent(admin_client, restore_paths):
     resp = await admin_client.get("/api/admin/backups/restore/status")
     assert resp.status_code == 200, resp.text
