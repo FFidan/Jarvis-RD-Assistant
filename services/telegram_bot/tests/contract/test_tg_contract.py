@@ -152,6 +152,7 @@ def _make_callback_update(*, chat_id: int = 42, callback_data: str) -> MagicMock
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
 
     query = MagicMock()
     query.data = callback_data

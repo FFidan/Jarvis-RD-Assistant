@@ -39,6 +39,7 @@ def _make_command_update_and_context(chat_id=_TEST_CHAT_ID):
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
     # A real command Update carries no callback_query — keep the mock faithful
@@ -65,6 +66,7 @@ def _make_callback_update_and_context(callback_data: str, user_data=None, chat_i
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
 
     query = MagicMock()
     query.data = callback_data

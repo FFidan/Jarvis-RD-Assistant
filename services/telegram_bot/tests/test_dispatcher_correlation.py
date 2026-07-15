@@ -205,6 +205,7 @@ async def test_start_paired_chat_sends_welcome_via_pairing_lookup():
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = 42
+    update.effective_chat.type = "private"
     update.message = MagicMock()
     update.message.text = "/start"
     update.message.reply_text = AsyncMock()
@@ -229,6 +230,7 @@ async def test_start_unpaired_chat_shows_pair_guidance():
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = 42
+    update.effective_chat.type = "private"
     update.message = MagicMock()
     update.message.text = "/start"
     update.message.reply_text = AsyncMock()

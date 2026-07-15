@@ -101,6 +101,7 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_chat.type = "private"
 
     query = MagicMock()
     query.data = callback_data
@@ -1151,6 +1152,7 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = _TEST_CHAT_ID
+    update.effective_chat.type = "private"
 
     query = MagicMock()
     query.data = "start_review"
