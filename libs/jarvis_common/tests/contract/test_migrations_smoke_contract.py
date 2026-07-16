@@ -12,6 +12,7 @@ by this predicate-direct idempotence smoke.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -104,3 +105,78 @@ async def test_0102_webauthn_schema_applied(_contract_pool):
 
         max_version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
         assert max_version >= 102, f"schema floor not lifted to 102; max applied = {max_version}"
+
+
+async def test_0103_purges_only_group_chat_pairings(contract_conn):
+    """0103 hard-deletes stale group/supergroup pairings (chat_id < 0), private ones survive.
+
+    Group pairings created before the private-chat-only guard still receive
+    outbound scheduled pushes, leaking a user's private content. This
+    forward-only data migration purges them. The test executes the SHIPPED
+    .sql text (not a re-derived DELETE) against real Postgres, then asserts
+    the negative-chat_id row is gone and a positive-chat_id (private) pairing
+    for a different user is untouched. It also re-runs the file to prove the
+    DELETE is idempotent.
+
+    Runs inside the per-test rollback txn (contract_conn), so it never mutates
+    shared state. Repo root is parents[4] from
+    libs/jarvis_common/tests/contract/ (parents[5] would resolve above the repo).
+
+    Verified: db/migrations/0103_purge_group_chat_pairings.sql;
+    db/init.sql:1311-1316 telegram_user_pairings(user_id bigint, chat_id bigint).
+    """
+    tag = uuid.uuid4().hex[:8]
+
+    # Two synthetic users (precedent: test_record_author_alert_contract.py:51-54).
+    group_user_id: int = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        f"pair-group-{tag}@contract.example.com",
+    )
+    private_user_id: int = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        f"pair-private-{tag}@contract.example.com",
+    )
+
+    # One stale group pairing (chat_id < 0) and one private pairing (chat_id > 0).
+    await contract_conn.execute(
+        "INSERT INTO telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
+        group_user_id,
+        -100123456789,
+    )
+    await contract_conn.execute(
+        "INSERT INTO telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
+        private_user_id,
+        123456789,
+    )
+
+    # Execute the SHIPPED migration artifact's own SQL, proving the deployed file
+    # deletes (a re-derived DELETE here would not).
+    sql_path = (
+        Path(__file__).resolve().parents[4]
+        / "db"
+        / "migrations"
+        / "0103_purge_group_chat_pairings.sql"
+    )
+    sql_text = sql_path.read_text()
+    await contract_conn.execute(sql_text)
+
+    stale_remaining = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
+        group_user_id,
+        -100123456789,
+    )
+    assert stale_remaining == 0, "0103 did not purge the stale group (chat_id < 0) pairing"
+
+    private_remaining = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
+        private_user_id,
+        123456789,
+    )
+    assert private_remaining == 1, "0103 wrongly deleted a private (chat_id > 0) pairing"
+
+    # Idempotent: re-running the same DELETE removes zero further rows and does not error.
+    await contract_conn.execute(sql_text)
+    negatives_after = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM telegram_user_pairings WHERE chat_id < 0"
+    )
+    assert negatives_after == 0, "negative-chat_id pairings still present after re-running 0103"
