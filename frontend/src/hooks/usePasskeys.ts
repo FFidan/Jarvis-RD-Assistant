@@ -3,7 +3,7 @@
  *
  * Capability rule: a passkey is only offered when BOTH the browser can do
  * WebAuthn (`browserSupportsWebAuthn()`) AND the server says this request origin
- * is allow-listed (`GET /api/auth/passkeys/capability` → `available`). The server
+ * is allow-listed (`POST /api/auth/passkeys/capability` → `available`). The server
  * is the source of truth — the browser flag alone never implies capability.
  *
  * All ceremony errors are mapped to a small typed set so callers render one
