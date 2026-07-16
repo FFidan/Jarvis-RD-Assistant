@@ -10,6 +10,34 @@ Wording such as "public-ready", "public-readiness", or "public-launch groundwork
 
 _No unreleased changes yet._
 
+## v1.1.2 (2026-07-16)
+
+A patch release closing a set of security, data-safety, reliability, and truthfulness issues found in a post-v1.1.1 audit. Unlike v1.1.1, this release changes application code, so the `:1.1.2` images differ from `:1.1.1`.
+
+### Security
+- **Owner-override is bound to a trusted proxy.** Internal owner-override now requires a trusted numeric proxy, and the browser-facing proxy strips any client-supplied owner header, so a relayed browser request can no longer act as a different user.
+- **Telegram pairing is private-chat only.** Pairing and authenticated bot actions are restricted to private chats, and stale group or supergroup pairings created before this change are purged — closing a path that could deliver a user's private content to a group chat.
+- **Logout is final.** Signing out can no longer leave the session cookie re-issuable, and the session cookie now carries a correct absolute expiry.
+- **Passkey sign-in works again** in same-origin and default localhost installs.
+
+### Added
+- **In-browser recovery upload.** The staged restore flow gains an in-browser uploader that works across every access mode (localhost, LAN, tunnel, and domain).
+
+### Fixed
+- **Restore is safe by default.** No destructive database swap proceeds unless the secrets archive and a fresh safety backup are both verified first, and every post-restore failure clearly flags that manual steps are required.
+- **Account email changes no longer deadlock** the connection pool under load.
+- **Offline review replays can't rewind scheduling** — recorded review history stays in chronological order.
+- **Failed loads show an error, not an empty page.** Ask, Discover, and the flashcard views now surface a retryable error state instead of masquerading as empty or "not set up yet", and a valid session is restored on a new browser tab instead of forcing a re-login.
+- **Citations are verified against the cited paper**, not merely any retrieved one.
+- **Truncated Telegram messages stay well-formed** — a shortened message no longer fails to send because a formatting tag was left open.
+- **Cancelled background work cleans up.** A cancelled job releases its resources and is no longer recorded as a failure, and one cancelled health check no longer disrupts concurrent ones.
+- **A pending email change no longer blocks the login link.**
+- **Backups report honestly.** A backup skipped during a maintenance window is reported as skipped rather than failed; the retention form no longer saves from an unloaded state; and the restore schema-compatibility floor, the upload size limit, and the version and proxy documentation are corrected.
+- **Clearer install and update diagnostics.** `update.sh` lists only the rollback steps for the services that actually failed, and `setup.sh` rejects an option given without its value.
+
+### Upgrade notes
+- If you paired the Telegram bot from a group or supergroup chat, that pairing is removed on upgrade; re-pair from a private 1:1 chat with the bot (Settings → Integrations) to keep receiving scheduled updates.
+
 ## v1.1.1 (2026-07-13)
 
 A patch release that repairs install and update reliability on the prebuilt-image path and fixes the first-run smoke checks. The application and its container images are unchanged from v1.1.0; only the installer, updater, and CI scripts changed, so the `:1.1.1` images are functionally identical to `:1.1.0`.
