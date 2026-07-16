@@ -77,6 +77,7 @@ _PLACEHOLDER_DT = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
 _SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z\d"\'"])')
 _ALPHANUM_RE = re.compile(r"[a-zA-Z0-9]")
+_CITATION_RE = re.compile(r"\[Paper\s+(\d+)\]", re.IGNORECASE)
 
 
 def _split_sentences(answer: str) -> list[str]:
@@ -147,14 +148,31 @@ async def _fetch_fulltext(conn: asyncpg.pool.PoolConnectionProxy, paper_id: int)
     return "\n\n".join(row["content"] for row in rows)
 
 
+def _paper_ordinals(sources: list[dict]) -> dict[int, int]:
+    """Map ``[Paper N]`` ordinals (1-based) to the ``paper_id``s of *sources*.
+
+    Uses first-appearance order over *sources* — the same order the prompt
+    builder enumerates papers when it labels them ``Paper 1..N``.
+    """
+    ordered = dict.fromkeys(src["paper_id"] for src in sources if src.get("paper_id") is not None)
+    return {i: pid for i, pid in enumerate(ordered, start=1)}
+
+
 def _verify_sentence(
     sentence: str,
     full_texts: dict[int, str],
     chunks_by_paper: dict[int, list[ChunkResponse]],
     verifier: QuoteVerifier,
+    cited_paper_ids: list[int] | None = None,
 ) -> bool:
-    """Return True if *sentence* verifies against ANY of the provided papers."""
-    for paper_id, full_text in full_texts.items():
+    """Return True if *sentence* verifies against any of its cited papers.
+
+    When *cited_paper_ids* is empty/None (no ``[Paper N]`` marker, or the
+    single-paper path) every provided paper is checked.
+    """
+    target_ids = cited_paper_ids or list(full_texts.keys())
+    for paper_id in target_ids:
+        full_text = full_texts[paper_id]
         chunks = chunks_by_paper.get(paper_id, [])
         result = verifier.verify_quote(sentence, full_text, chunks)
         if result.verified:
@@ -241,14 +259,23 @@ async def verify_answer_sentences(
         else:
             chunks_by_paper[pid] = _make_chunk_responses(sources, keep_paper_id=pid)
 
+    # Ordinal -> paper_id via first-appearance order of sources: the prompt
+    # builder numbers papers by enumerating them in exactly this order.
+    paper_ordinals = _paper_ordinals(sources)
+
     # Per-sentence verification
     _batch_size = 10
 
     async def _verify_batch(batch: list[str]) -> list[VerifiedSentence]:
         results: list[VerifiedSentence] = []
         for sent in batch:
+            cited = [
+                paper_ordinals[int(n)]
+                for n in _CITATION_RE.findall(sent)
+                if int(n) in paper_ordinals
+            ]
             verified = await asyncio.to_thread(
-                _verify_sentence, sent, full_texts, chunks_by_paper, verifier
+                _verify_sentence, sent, full_texts, chunks_by_paper, verifier, cited
             )
             results.append(VerifiedSentence(text=sent, verified=verified))
         return results
