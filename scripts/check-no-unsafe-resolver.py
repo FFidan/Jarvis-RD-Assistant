@@ -77,7 +77,7 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     # users; both ceremonies require user verification and are origin-matched.
     "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::GET /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
     # NOT public — gated by restore_status_auth (admin session, ops X-API-Key, or
     # the one-time bearer minted by request_restore). It resolves no *user id*, so
     # the caller-identity check cannot see its gate. Validated DB-free on purpose:
