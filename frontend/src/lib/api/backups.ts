@@ -147,6 +147,63 @@ export const deleteRestorePoint = (timestamp: string, confirm: string) =>
     { method: 'POST', body: JSON.stringify({ confirm }) },
   );
 
+export interface UploadGrant {
+  grant_token: string;
+  expires_in_seconds: number;
+}
+
+/** Mint the one-time grant (30-min expiry) that authorizes a browser off-host upload. */
+export const createUploadGrant = () =>
+  apiFetch<UploadGrant>('/api/admin/backups/upload-grant', { method: 'POST' });
+
+/** Operator-facing messages for the restore-uploader's typed denials. */
+const UPLOAD_ERROR_DETAILS: Record<number, string> = {
+  0: 'Network error during the upload — check the connection and retry.',
+  400: 'The server rejected the file (disallowed name or incomplete transfer) — retry the upload.',
+  401: 'Upload grant missing — generate an upload grant first.',
+  403: 'Upload grant invalid or expired — generate a new grant, then retry.',
+  413: 'The file exceeds the server upload size limit.',
+  507: 'Not enough free disk space on the server for this file.',
+};
+
+export class UploadError extends Error {
+  constructor(public status: number) {
+    super(UPLOAD_ERROR_DETAILS[status] ?? `Upload failed (HTTP ${status}) — retry the upload.`);
+    this.name = 'UploadError';
+  }
+}
+
+/**
+ * Stream one backup file to the restore-uploader sidecar
+ * (PUT /restore-upload/<filename>, authorized by the X-Upload-Grant header).
+ * XMLHttpRequest instead of fetch solely for upload-progress events; `signal`
+ * aborts the transfer. Bypasses apiFetch on purpose: the uploader checks only
+ * the grant (no cookies/API key) and the bytes never traverse the app.
+ */
+export function uploadRestoreFile(
+  filename: string,
+  file: Blob,
+  grantToken: string,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', `/restore-upload/${encodeURIComponent(filename)}`);
+    xhr.setRequestHeader('X-Upload-Grant', grantToken);
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => (xhr.status === 201 ? resolve() : reject(new UploadError(xhr.status)));
+    xhr.onerror = () => reject(new UploadError(0));
+    xhr.onabort = () => reject(new DOMException('The upload was aborted.', 'AbortError'));
+    xhr.onloadend = () => signal?.removeEventListener('abort', onAbort);
+    xhr.send(file);
+  });
+}
+
 /** Read the backup retention policy (keep-last-N + max-age-days; nulls = env default). */
 export const getRetention = () => apiFetch<RetentionConfig>('/api/admin/backups/retention');
 
