@@ -281,3 +281,135 @@ async def test_sync_reviews_naive_reviewed_at_counts_on_utc_day(
         "a naive reviewed_at == now(UTC) must be counted on the current UTC day "
         f"(daily_log.cards_reviewed for CURRENT_DATE); got {cards_reviewed!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# out-of-order guard: a stale (older) review must never rewind card scheduling
+# ---------------------------------------------------------------------------
+#
+# Verified: services/learning_engine/learning_engine/routers/review.py (sync_reviews) —
+#   prior_last = MAX(review_logs.reviewed_at) is read under the card's FOR UPDATE lock
+#   BEFORE the current event's log is inserted; the `UPDATE cards SET fsrs_state, due_at`
+#   only runs when NOT is_stale, so an older review records history without moving
+#   `due_at` / `fsrs_state->>'last_review'` backwards.
+
+
+async def _post_sync(_le_app, cookie, event_payload) -> dict:
+    async with _client(_le_app, cookie) as c:
+        resp = await c.post("/api/review/sync", json={"reviews": [event_payload]})
+    assert resp.status_code == 200, f"sync_reviews returned {resp.status_code}: {resp.text[:300]}"
+    return resp.json()
+
+
+def _sync_event(card_id, reviewed_at, key_prefix) -> dict:
+    return {
+        "idempotency_key": f"{key_prefix}-{uuid.uuid4()}",
+        "card_id": card_id,
+        "rating": 3,
+        "reviewed_at": reviewed_at.isoformat(),
+        "review_duration_ms": 800,
+    }
+
+
+async def _read_card_schedule(contract_conn, card_id, user_id):
+    row = await contract_conn.fetchrow(
+        "SELECT due_at, fsrs_state->>'last_review' AS last_review "
+        "FROM cards WHERE id = $1 AND user_id = $2",
+        card_id,
+        user_id,
+    )
+    return row["due_at"], row["last_review"]
+
+
+async def test_sync_reviews_stale_replay_does_not_rewind_schedule(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+) -> None:
+    """A DISTINCT older review posted in a LATER request must not rewind the card.
+
+    Regression for the chronology defect: ``sync_reviews`` used to overwrite
+    ``cards.fsrs_state``/``due_at`` unconditionally, so a distinct older event
+    arriving after a newer one re-anchored FSRS at the older time and moved
+    scheduling backwards.  With the guard the older event is still recorded in
+    ``review_logs`` (synced == 1) but the card's persisted schedule is unchanged.
+
+    FAILS ON BASE: the older event's ``schedule_review`` anchored at T1 overwrites
+    the card, so ``due_at`` drops below ``due2`` and ``last_review`` regresses to T1.
+    """
+    card_id = contract_two_users.card_id_a
+    user_a_id = contract_two_users.user_a_id
+    now = datetime.now(UTC)
+
+    # Newer review first — establishes the card's authoritative schedule.
+    newer = await _post_sync(
+        _le_app,
+        contract_two_users.cookie_a,
+        _sync_event(card_id, now - timedelta(hours=1), "stale-newer"),
+    )
+    assert newer["synced"] == 1, f"newer event should sync once; got {newer}"
+    due2, last_review2 = await _read_card_schedule(contract_conn, card_id, user_a_id)
+    assert due2 is not None and last_review2 is not None
+
+    # Distinct OLDER review, same card, unique key, in a separate request.
+    older = await _post_sync(
+        _le_app,
+        contract_two_users.cookie_a,
+        _sync_event(card_id, now - timedelta(hours=25), "stale-older"),
+    )
+    assert older["synced"] == 1, (
+        f"stale older event is still newly written to review_logs (synced==1); got {older}"
+    )
+
+    due_after, last_review_after = await _read_card_schedule(contract_conn, card_id, user_a_id)
+    assert due_after == due2, (
+        f"stale older review rewound due_at: {due_after} != {due2} (must not regress)"
+    )
+    assert datetime.fromisoformat(last_review_after) == datetime.fromisoformat(last_review2), (
+        f"stale older review rewound last_review to the older time: "
+        f"{last_review_after!r} != {last_review2!r}"
+    )
+
+
+async def test_sync_reviews_concurrent_out_of_order_reflects_newer(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+) -> None:
+    """Newer and older reviews racing on the SAME card converge on the newer schedule.
+
+    Fired concurrently via ``asyncio.gather`` with distinct keys; the FOR UPDATE lock
+    serializes them and the staleness guard makes the outcome order-independent: the
+    persisted ``last_review`` is always the newer event T2, never the older T1.
+
+    ON BASE this fails whenever the older transaction commits last (it overwrites the
+    card with scheduling anchored at T1).
+    """
+    card_id = contract_two_users.card_id_a
+    user_a_id = contract_two_users.user_a_id
+    now = datetime.now(UTC)
+    t2_newer = now - timedelta(hours=1)
+    t1_older = now - timedelta(hours=25)
+
+    newer_event = _sync_event(card_id, t2_newer, "race-newer")
+    older_event = _sync_event(card_id, t1_older, "race-older")
+
+    results = await asyncio.gather(
+        _post_sync(_le_app, contract_two_users.cookie_a, newer_event),
+        _post_sync(_le_app, contract_two_users.cookie_a, older_event),
+    )
+    assert sum(r["synced"] for r in results) == 2, (
+        f"both distinct-key events are newly recorded (synced total == 2); got {results}"
+    )
+
+    _, last_review = await _read_card_schedule(contract_conn, card_id, user_a_id)
+    persisted = datetime.fromisoformat(last_review)
+    assert persisted == t2_newer, (
+        f"persisted last_review must reflect the newer review {t2_newer.isoformat()}, "
+        f"got {last_review!r}"
+    )
+    assert persisted != t1_older, (
+        f"persisted last_review must never reflect the older review {t1_older.isoformat()}"
+    )
