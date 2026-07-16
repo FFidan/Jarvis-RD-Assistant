@@ -269,10 +269,23 @@ async def sync_reviews(
                         applied.add(event.idempotency_key)
                         skipped += 1
                         continue
+                    event_utc = _to_utc(event.reviewed_at).astimezone(UTC)
+                    # Read the card's newest already-applied review BEFORE inserting this
+                    # event's log: under the FOR UPDATE lock this MAX excludes the current
+                    # event and is stable against concurrent syncs of the same card.
+                    prior_last = await conn.fetchval(
+                        "SELECT MAX(reviewed_at) FROM review_logs "
+                        "WHERE card_id = $1 AND user_id = $2",
+                        event.card_id,
+                        user_id,
+                    )
+                    is_stale = prior_last is not None and event_utc < _to_utc(
+                        prior_last
+                    ).astimezone(UTC)
                     new_state, log_dict, next_due = fsrs_manager.schedule_review(
                         card["fsrs_state"],
                         event.rating.value,
-                        review_datetime=_to_utc(event.reviewed_at).astimezone(UTC),
+                        review_datetime=event_utc,
                     )
                     inserted_log_id = await conn.fetchval(
                         """
@@ -299,18 +312,22 @@ async def sync_reviews(
                         applied.add(event.idempotency_key)
                         already_synced += 1
                         continue
-                    await conn.execute(
-                        "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
-                        "WHERE id = $3 AND user_id = $4",
-                        new_state,
-                        next_due,
-                        event.card_id,
-                        user_id,
-                    )
-                    reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC)
-                    # Atomic with the review_logs insert above: daily_log is the
-                    # per-day denormalization of review_logs, keyed by the event's
-                    # own UTC date so offline reviews land on the day they happened.
+                    # Out-of-order guard: a review older than the card's newest applied
+                    # review must not rewind persisted scheduling — record it (log above)
+                    # but skip the card overwrite so due_at / last_review never regress.
+                    if not is_stale:
+                        await conn.execute(
+                            "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
+                            "WHERE id = $3 AND user_id = $4",
+                            new_state,
+                            next_due,
+                            event.card_id,
+                            user_id,
+                        )
+                    # Atomic with the review_logs insert above: daily_log is the per-day
+                    # denormalization of review_logs, keyed by the event's own UTC date so
+                    # offline reviews land on the day they happened (counted even when the
+                    # scheduling overwrite was skipped as stale).
                     await conn.execute(
                         """
                         INSERT INTO daily_log (user_id, log_date, cards_reviewed)
@@ -319,7 +336,7 @@ async def sync_reviews(
                         DO UPDATE SET cards_reviewed = COALESCE(daily_log.cards_reviewed, 0) + 1
                         """,
                         user_id,
-                        reviewed_at_utc.date(),
+                        event_utc.date(),
                     )
                 applied.add(event.idempotency_key)
                 synced += 1
