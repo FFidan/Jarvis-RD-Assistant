@@ -233,7 +233,6 @@ async def _run_legacy_handler(
     dependencies: TaskDependencies | None = None,
 ) -> dict[str, Any]:
     """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
-    import asyncio  # noqa: PLC0415
     import uuid  # noqa: PLC0415
 
     if dependencies is None:
@@ -260,20 +259,19 @@ async def _run_legacy_handler(
         )
         try:
             result = await handler(pool, http_client, payload, ctx)
-        except BaseException as exc:
-            if isinstance(exc, asyncio.CancelledError):
-                await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
-            elif isinstance(exc, Exception):
-                await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
-                await log_event(
-                    pool=pool,
-                    level="error",
-                    category="job",
-                    source=task_kind,
-                    message="failed",
-                    context={"job_id": job_id, "task_kind": task_kind, "error": repr(exc)[:500]},
-                    correlation_id=corr,
-                )
+        except Exception as exc:
+            # CancelledError (a BaseException) propagates without persistence:
+            # a cancel is not a job failure and must not poison retry state.
+            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
+            await log_event(
+                pool=pool,
+                level="error",
+                category="job",
+                source=task_kind,
+                message="failed",
+                context={"job_id": job_id, "task_kind": task_kind, "error": repr(exc)[:500]},
+                correlation_id=corr,
+            )
             raise
         await ctx.record_terminal_outcome(result=result, is_error=False)
         await log_event(
