@@ -169,6 +169,20 @@ else
   pass "compat gate does NOT query the live DB (file-based CODE_MAX only)"
 fi
 
+# 5c2. CODE_MAX guardrail: the CODE_MAX fallback literal (used only when both the
+#      migrations glob AND the db/SCHEMA_VERSION reads come up empty) must
+#      track the code's actual schema floor, or a schema-N backup is wrongly
+#      refused as "newer than code" after a migrations squash.
+code_max_literal="$(grep -oE 'CODE_MAX=[0-9]+' "$RESTORE_SCRIPT" | grep -oE '[0-9]+' | tail -1)"
+schema_version="$(cat "${SCRIPT_DIR}/../../db/SCHEMA_VERSION")"
+if [ -n "$code_max_literal" ] && [ "$code_max_literal" -eq "$schema_version" ]; then
+  pass "CODE_MAX fallback literal (${code_max_literal}) matches db/SCHEMA_VERSION (${schema_version})"
+else
+  printf 'FAIL: CODE_MAX fallback literal (%s) does not match db/SCHEMA_VERSION (%s)\n' \
+    "$code_max_literal" "$schema_version" >&2
+  fail=1
+fi
+
 # 5d. A wrong/rotated encryption key (or corrupt archive) is caught by a gzip-magic
 #     probe BEFORE any DROP — a bad key found mid-reload would leave the DB
 #     dropped+empty.

@@ -15,7 +15,7 @@ Related docs:
 
 ## OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR
 
-Current posture is documented in `docs/REQUIREMENTS.md`: the tested image pin is `ollama/ollama:0.23.1` via `versions.env`, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the `jarvis` network can reach `http://ollama:11434`, so untrusted peers must not join that network.
+Current posture is documented in `docs/REQUIREMENTS.md`: the tested image pin is `ollama/ollama:0.31.2` via `versions.env`, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the `jarvis` network can reach `http://ollama:11434`, so untrusted peers must not join that network.
 
 Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host publish changes away from `127.0.0.1`, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.
 

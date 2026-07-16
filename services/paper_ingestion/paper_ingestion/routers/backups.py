@@ -284,6 +284,22 @@ def _read_last_run() -> dict | None:
         return None
 
 
+def _last_run_succeeded(run: dict | None) -> bool | None:
+    """The truthful ``last_run_succeeded`` value for ``/status``.
+
+    A maintenance-skip run (the sidecar stood down for an in-flight restore)
+    leaves ``succeeded`` at its startup-default ``false`` — it is never
+    flipped before the skip branch's early ``exit 0`` — so the raw value
+    would misreport a deliberate stand-down as "last backup attempt failed".
+    ``None`` ("unknown"/"no attempt to judge") is already a valid, supported
+    value for this field, so a skipped run reports that instead of a new
+    field or state.
+    """
+    if run is None or run.get("skipped_maintenance"):
+        return None
+    return run.get("succeeded")
+
+
 def _read_manifest(ts: str) -> dict | None:
     """Read manifest_<ts>.json metadata; None if absent/unreadable/malformed.
 
@@ -531,7 +547,7 @@ async def backup_status(request: Request) -> BackupStatus:
         archive_count=len(entries),
         last_run_at=last,
         last_attempt_at=run.get("attempted_at") if run else None,
-        last_run_succeeded=run.get("succeeded") if run else None,
+        last_run_succeeded=_last_run_succeeded(run),
         trigger_pending=_TRIGGER_SENTINEL.exists(),
     )
 

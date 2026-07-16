@@ -158,6 +158,25 @@ def test_read_last_run_returns_none_when_absent_or_malformed(backup_dir):
     assert bk._read_last_run() is None  # malformed → never raises
 
 
+def test_last_run_succeeded_none_for_maintenance_skip_not_failure():
+    # A maintenance-skip run leaves succeeded=false (its startup default, never
+    # flipped before the skip's early exit) — that must NOT surface as a failed
+    # attempt. /status reports None ("no attempt to judge"), not False.
+    skipped = {"succeeded": False, "skipped_maintenance": True}
+    assert bk._last_run_succeeded(skipped) is None
+
+    # A genuine failure (no maintenance skip) still surfaces as False.
+    failed = {"succeeded": False, "skipped_maintenance": False}
+    assert bk._last_run_succeeded(failed) is False
+
+    # A genuine success is unaffected.
+    ok = {"succeeded": True, "skipped_maintenance": False}
+    assert bk._last_run_succeeded(ok) is True
+
+    # No run recorded at all still degrades to None.
+    assert bk._last_run_succeeded(None) is None
+
+
 def test_last_run_json_is_not_treated_as_an_archive(backup_dir):
     (backup_dir / ".last_run.json").write_text("{}")
     (backup_dir / "jarvis_20260624_120000.sql.gz").write_bytes(b"j")

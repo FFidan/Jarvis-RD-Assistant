@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -227,3 +229,25 @@ def test_grant_token_never_logged(monkeypatch, tmp_path, capfd):
     out = capfd.readouterr().out
     assert _TOKEN not in out
     assert "archive-bytes" not in out
+
+
+def test_caddyfile_upload_cap_covers_default_max_gb(monkeypatch):
+    # Caddy's max_size default must be >= the uploader's own hard
+    # ceiling, or Caddy rejects a legitimately-sized upload before the
+    # uploader ever sees it. Caddy's go-humanize parser treats "GB" as
+    # decimal (10**9) but "GiB" as binary (2**30); the uploader's cap is
+    # computed in binary GiB, so the Caddyfile default must use "GiB" too.
+    monkeypatch.delenv("UPLOAD_MAX_GB", raising=False)
+    cap = uploader._cap_bytes()
+    repo_root = Path(__file__).resolve().parents[3]
+    pattern = re.compile(r"max_size \{\$UPLOAD_MAX_BODY:(\d+)(GiB|GB)\}")
+    for name in ("Caddyfile", "Caddyfile.local"):
+        text = (repo_root / "caddy" / name).read_text()
+        match = pattern.search(text)
+        assert match, f"{name}: no max_size {{$UPLOAD_MAX_BODY:...}} default found"
+        value, unit = int(match.group(1)), match.group(2)
+        multiplier = 2**30 if unit == "GiB" else 10**9
+        assert value * multiplier >= cap, (
+            f"{name}: default cap {value}{unit} ({value * multiplier} B) < "
+            f"uploader's _cap_bytes() ({cap} B)"
+        )

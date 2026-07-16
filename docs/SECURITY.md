@@ -240,13 +240,26 @@ The IP-allowlist call sites are:
   scheme and has no replay/nonce protection; the internal-network + default-deny
   CIDR posture is the boundary.
 
-**Deployment requirement:** keep `trusted_proxy_hosts` scoped to the
-actual reverse-proxy host(s) — in this stack that is the Caddy container's
-bridge IP only. Do NOT set `trusted_proxy_hosts="*"` in any production
+**Deployment requirement:** keep `trusted_proxy_hosts` scoped to the actual
+reverse-proxy hop(s). Do NOT set `trusted_proxy_hosts="*"` in any production
 deployment. The setting is exposed via `TRUSTED_PROXY_HOSTS` in
-`CoreSettings`; the default value is `dashboard` (the Caddy reverse-proxy
-service), which is correct for the standard single-host stack. Override only
-when deploying behind a different proxy fleet.
+`CoreSettings`; its default is the numeric range
+`127.0.0.0/8,10.137.241.0/24` (loopback plus the Docker bridge subnet,
+tracking `JARVIS_NET_SUBNET` — see `libs/jarvis_common/jarvis_common/settings.py`
+and the `TRUSTED_PROXY_HOSTS` line in `docker-compose.yml`'s environment
+block), which is correct for the standard single-host stack. It must be
+numeric: uvicorn's `ProxyHeadersMiddleware` matches the immediate socket peer
+against this list before it will rewrite `scope["client"]` from
+`X-Forwarded-For`, and a hostname literal like `dashboard` can never match a
+numeric peer address — the rewrite would never fire and the `X-Owner-User-Id`
+guard could be tricked into trusting a relayed browser request. In this
+stack, the trusted hop is the dashboard (nginx) container, not Caddy — Caddy
+terminates the public edge and proxies to `dashboard:3000`, and it is
+dashboard's nginx that makes the proxied connection to the app. As a second
+layer, that nginx also strips any browser-supplied `X-Owner-User-Id` header
+before proxying, so only the container-internal caller (which never
+traverses nginx) can set it. Override the default only when deploying behind
+a different proxy fleet.
 
 ---
 
@@ -333,7 +346,7 @@ There is no in-place rotation framework. To rotate the HMAC key:
 The Ollama daemon handles local LLM inference. Key constraints:
 
 - **Image pin:** keep `OLLAMA_IMAGE` in `versions.env` at the tested pin
-  (`ollama/ollama:0.23.1`) or a newer validated pin. Downgrading below the
+  (`ollama/ollama:0.31.2`) or a newer validated pin. Downgrading below the
   patched line reintroduces known vulnerabilities (see
   [known-residual-risks.md](known-residual-risks.md) for the current CVE
   posture entry).
