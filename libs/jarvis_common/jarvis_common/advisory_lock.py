@@ -77,7 +77,7 @@ class AdvisoryLock:
                 await self._pool.release(self._conn)
                 self._conn = None
             return self._locked
-        except Exception:
+        except BaseException:  # release the pooled conn on CancelledError too
             if self._conn is not None:
                 await self._pool.release(self._conn)
                 self._conn = None

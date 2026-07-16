@@ -358,6 +358,29 @@ async def test_run_legacy_handler_redacts_unexpected_exception_text(monkeypatch)
     assert "/tmp/provider-body" not in str(error_payload)
 
 
+@pytest.mark.asyncio
+async def test_run_legacy_handler_propagates_cancellation_without_persisting(monkeypatch) -> None:
+    """A cancelled handler must re-raise CancelledError without persisting a failure."""
+    import asyncio
+
+    import jarvis_common.task_registry as task_registry
+
+    ctx = SimpleNamespace(job_id="test-uuid-4", record_terminal_outcome=AsyncMock())
+
+    async def handler(_pool, _http_client, _payload, _ctx):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(task_registry, "_pool", object())
+    monkeypatch.setattr(task_registry, "_http_client", object())
+    monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+    monkeypatch.setattr(task_registry, "log_event", AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)
+
+    ctx.record_terminal_outcome.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # Connector double-assign guard (task_registry.py:80 comment)
 # ---------------------------------------------------------------------------

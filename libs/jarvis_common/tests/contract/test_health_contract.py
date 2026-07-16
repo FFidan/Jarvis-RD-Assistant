@@ -498,6 +498,38 @@ async def test_concurrent_health_polls_share_in_flight_sweep() -> None:
     assert calls["n"] == 1, "concurrent health polls should share one in-flight sweep"
 
 
+async def test_cancelled_waiter_does_not_cancel_shared_sweep() -> None:
+    """Cancelling one health waiter must not cancel the shared in-flight sweep."""
+    import asyncio
+
+    from jarvis_common.health import _SWEEP_MEMO_ATTR, run_health_checks
+
+    calls = {"n": 0}
+    release = asyncio.Event()
+
+    async def _counting(_request: Any) -> str:
+        calls["n"] += 1
+        await release.wait()
+        return "ok"
+
+    request = _fake_request()
+    checks = [("dep", _counting)]
+    first = asyncio.create_task(run_health_checks(request, checks))
+    second = asyncio.create_task(run_health_checks(request, checks))
+    await asyncio.sleep(0)
+
+    first.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert await second == ("ok", {"dep": "ok"})
+    assert calls["n"] == 1, "probe must run exactly once despite the cancelled waiter"
+    memo = getattr(request.app.state, _SWEEP_MEMO_ATTR, None)
+    assert memo is not None and memo.status == "ok", "surviving waiter must populate the memo"
+
+
 async def test_sweep_memo_expires_after_ttl() -> None:
     """After the TTL, run_health_checks re-probes rather than serving a stale memo."""
     import jarvis_common.health as health
