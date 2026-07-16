@@ -447,7 +447,9 @@ while [ $# -gt 0 ]; do
   # message is actionable. (The --flag=value forms carry their value inline.)
   case "$1" in
     --domain|--admin-email|--profile|--smtp-host|--smtp-user|--smtp-pass-file|--mode|--backend|--smart-model|--gpu)
-      [ "$#" -ge 2 ] || die "$1 requires a value." "Run: $0 --help" ;;
+      if [ "$#" -lt 2 ] || [[ "$2" == -* ]]; then
+        die "$1 requires a value." "Run: $0 --help"
+      fi ;;
   esac
   case "$1" in
     --non-interactive)
