@@ -61,8 +61,11 @@ def _no_app_base_url(monkeypatch) -> None:
     [
         ("https://localhost", "localhost"),
         ("https://jarvis.localhost", "jarvis.localhost"),
-        # Loopback is accepted on ANY port — the local dashboard is served on
-        # https://localhost:<DASHBOARD_HOST_PORT> (e.g. :3001), not :443.
+        # Loopback is accepted on http OR https and on ANY port — the default installer
+        # serves plain http://localhost:<DASHBOARD_HOST_PORT> (e.g. :3001), which W3C
+        # Secure Contexts treats as a trustworthy context for WebAuthn.
+        ("http://localhost:3001", "localhost"),
+        ("http://jarvis.localhost", "jarvis.localhost"),
         ("https://localhost:3001", "localhost"),
         ("https://jarvis.localhost:8443", "jarvis.localhost"),
     ],
@@ -79,8 +82,9 @@ def test_match_origin_allows_loopback(monkeypatch, origin, expected_rp_id):
     [
         "https://127.0.0.1",  # raw IP is an invalid rp_id
         "https://127.0.0.1:3001",
+        "http://127.0.0.1",  # http does not rescue a raw-IP host
         "https://evil.example.com",
-        "http://localhost",  # http is not a secure context here
+        "http://evil.example.com",  # http is accepted for loopback ONLY, never public hosts
         "https://notlocalhost",  # not a loopback host
         None,
         "",
@@ -295,28 +299,40 @@ def _client(app, cookie: str | None):
 
 
 async def _register(
-    client, auth: _SoftAuthenticator, *, uv: bool = True, extra: dict | None = None
+    client,
+    auth: _SoftAuthenticator,
+    *,
+    uv: bool = True,
+    extra: dict | None = None,
+    origin: str = _ORIGIN,
 ):
-    begin = await client.post("/api/auth/passkeys/register/begin", headers={"Origin": _ORIGIN})
+    begin = await client.post("/api/auth/passkeys/register/begin", headers={"Origin": origin})
     assert begin.status_code == 200, begin.text
     opts = begin.json()
-    cred = auth.register(_b64d(opts["challenge"]), _ORIGIN, opts["rp"]["id"], uv=uv)
+    cred = auth.register(_b64d(opts["challenge"]), origin, opts["rp"]["id"], uv=uv)
     if extra:
         cred.update(extra)
     return await client.post(
-        "/api/auth/passkeys/register/finish", json=cred, headers={"Origin": _ORIGIN}
+        "/api/auth/passkeys/register/finish", json=cred, headers={"Origin": origin}
     )
 
 
-async def _login(client, auth: _SoftAuthenticator, *, sign_count: int = 1, uv: bool = True):
-    begin = await client.post("/api/auth/passkeys/login/begin", headers={"Origin": _ORIGIN})
+async def _login(
+    client,
+    auth: _SoftAuthenticator,
+    *,
+    sign_count: int = 1,
+    uv: bool = True,
+    origin: str = _ORIGIN,
+):
+    begin = await client.post("/api/auth/passkeys/login/begin", headers={"Origin": origin})
     assert begin.status_code == 200, begin.text
     opts = begin.json()
     assertion = auth.authenticate(
-        _b64d(opts["challenge"]), _ORIGIN, opts["rpId"], sign_count=sign_count, uv=uv
+        _b64d(opts["challenge"]), origin, opts["rpId"], sign_count=sign_count, uv=uv
     )
     resp = await client.post(
-        "/api/auth/passkeys/login/finish", json=assertion, headers={"Origin": _ORIGIN}
+        "/api/auth/passkeys/login/finish", json=assertion, headers={"Origin": origin}
     )
     return resp, assertion
 
@@ -602,12 +618,71 @@ class TestPasskeyCeremonies:
             is None
         )
 
-    async def test_capability_reflects_origin(self, _passkey_app, _configure_api_key):
+    async def test_capability_is_post_and_reflects_real_origin(
+        self, _passkey_app, _configure_api_key
+    ):
+        # The probe is POST, not GET: a browser OMITS the Origin header on a same-origin
+        # GET, so the capability endpoint must be a POST for the same-origin production
+        # request to carry Origin. Modelling that honestly here: NO manual Origin on a
+        # GET (which no real browser sends), and the method must be POST-only.
         async with _client(_passkey_app, None) as c:
-            good = await c.get("/api/auth/passkeys/capability", headers={"Origin": _ORIGIN})
-            bad = await c.get(
-                "/api/auth/passkeys/capability", headers={"Origin": "https://evil.example.com"}
+            no_origin = await c.post("/api/auth/passkeys/capability")
+            with_origin = await c.post(
+                "/api/auth/passkeys/capability", headers={"Origin": "http://localhost:3001"}
             )
-        assert good.status_code == 200 and good.json()["available"] is True
-        assert bad.status_code == 200 and bad.json()["available"] is False
-        assert "access_mode" in good.json()
+            get_probe = await c.get("/api/auth/passkeys/capability")
+        # No Origin (fail-closed) -> not available; a legitimate same-origin POST carries
+        # Origin -> available.
+        assert no_origin.status_code == 200 and no_origin.json()["available"] is False
+        assert with_origin.status_code == 200 and with_origin.json()["available"] is True
+        assert "access_mode" in with_origin.json()
+        assert get_probe.status_code == 405  # route is POST-only
+
+    @pytest.mark.parametrize(
+        ("label", "origin", "app_base_url", "reg_ok"),
+        [
+            # Default localhost install serves plain http — reachable (rp_id localhost).
+            ("localhost", "http://localhost:3001", "", True),
+            # Tunnel / custom domain: APP_BASE_URL matches the https Origin -> reachable.
+            ("tunnel", "https://jarvis.example.com", "https://jarvis.example.com", True),
+            # LAN raw-IP: an IP is an invalid rp_id -> correctly NOT reachable (by design).
+            ("lan", "https://192.168.1.5:3001", "", False),
+        ],
+    )
+    async def test_ceremony_reachable_per_access_mode(
+        self,
+        _passkey_app,
+        contract_conn,
+        _configure_api_key,
+        monkeypatch,
+        label,
+        origin,
+        app_base_url,
+        reg_ok,
+    ):
+        from tests.conftest import _seed_user
+
+        monkeypatch.setattr(
+            pk,
+            "get_paper_ingestion_settings",
+            lambda: SimpleNamespace(app_base_url=app_base_url or None),
+        )
+        uid, cookie = await _seed_user(contract_conn, f"pk-mode-{label}@contract.example.com")
+        auth = _SoftAuthenticator()
+
+        if not reg_ok:
+            async with _client(_passkey_app, cookie) as c:
+                begin = await c.post(
+                    "/api/auth/passkeys/register/begin", headers={"Origin": origin}
+                )
+            assert begin.status_code == 403, begin.text  # invalid rp_id for a raw-IP origin
+            return
+
+        async with _client(_passkey_app, cookie) as c:
+            reg = await _register(c, auth, origin=origin)
+        assert reg.status_code == 200, reg.text
+
+        async with _client(_passkey_app, None) as c:  # login is unauthenticated
+            resp, _ = await _login(c, auth, origin=origin)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["id"] == uid
