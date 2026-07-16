@@ -501,6 +501,56 @@ scheck "exit-3 path tells the user to re-login or newgrp" 'log out and back in.*
 scheck "usage text documents exit code 3" '^#   3  Docker was just installed'
 scheck "host probe passes dnf availability to the planner" 'command -v dnf'
 
+# === setup.sh flag-value validation (behavioral subprocess) ==========
+# A value-taking flag followed by ANOTHER recognized flag (instead of its
+# value) must die with an actionable message rather than silently swallowing
+# the next flag as its value and exiting 0. setup.sh's flag loop (~420-553)
+# runs entirely before any docker/prereq code, so every case below exits via
+# die/-h before touching docker — safe to run as a real subprocess.
+
+run_setup() {  # run_setup <arg...> -> combined stdout+stderr; rc left in $?
+  bash "$SETUP_SCRIPT" "$@" 2>&1
+}
+
+for flag in --domain --admin-email --profile --smtp-host --smtp-user \
+            --smtp-pass-file --mode --backend --smart-model --gpu; do
+  out="$(run_setup "$flag" --non-interactive --help)" && rc=0 || rc=$?
+  case "${rc}:${out}" in
+    1:*"${flag} requires a value"*)
+      pass "${flag} followed by another flag dies (does not swallow it)" ;;
+    *)
+      printf 'FAIL: %s followed by another flag did not die as expected (rc=%s out=%s)\n' \
+        "$flag" "$rc" "$out" >&2
+      fail=1 ;;
+  esac
+done
+
+# No-regression: a real value still works.
+out="$(run_setup --domain example.com --help)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "--domain example.com --help still exits 0 (no regression)"
+else
+  printf 'FAIL: --domain example.com --help rc=%s out=%s\n' "$rc" "$out" >&2; fail=1
+fi
+
+# No-regression: the --flag=value form tolerates a dash-prefixed value (the
+# documented escape hatch — must NOT be affected by the $2-lookahead guard,
+# since the guard only fires for the space-separated form).
+out="$(run_setup --domain=-example.com --help)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "--domain=-example.com --help still exits 0 (= form escape hatch intact)"
+else
+  printf 'FAIL: --domain=-example.com --help rc=%s out=%s\n' "$rc" "$out" >&2; fail=1
+fi
+
+# No-regression: a value-taking flag as the LAST argument still dies (the
+# original set -u guard this pre-check exists for).
+out="$(run_setup --domain)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*'--domain requires a value'*) pass "--domain as the last argument still dies" ;;
+  *) printf 'FAIL: --domain as last arg rc=%s out=%s\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+
 # =============================================================================
 
 if [ "$fail" -ne 0 ]; then
