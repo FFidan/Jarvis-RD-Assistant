@@ -385,6 +385,16 @@ for sentinel in .maintenance .destructive; do
   else
     printf 'FAIL: scheduled run did not skip/tag under %s (out=%s)\n' "$sentinel" "$mb_out" >&2; fail=1
   fi
+  # a maintenance-skip must not leave jarvis/litellm at their "failed"
+  # startup default — that reads as a real backup failure to /status. They
+  # must be tagged "skipped", mirroring how secrets/qdrant already default.
+  if grep -q '"jarvis":"skipped"' "${mb_dir}/.last_run.json" \
+     && grep -q '"litellm":"skipped"' "${mb_dir}/.last_run.json"; then
+    pass "maintenance-skip under ${sentinel} tags jarvis/litellm stores as skipped (not failed)"
+  else
+    printf 'FAIL: maintenance-skip under %s left jarvis/litellm stores non-skipped\n' "$sentinel" >&2
+    fail=1
+  fi
   rm -rf "$mb_dir"
 done
 
