@@ -157,4 +157,57 @@ describe('OffHostUploadSection', () => {
     expect(within(section).getByTestId('upload-start')).toBeDisabled();
     expect(uploadRestoreFileMock).not.toHaveBeenCalled();
   });
+
+  // Pins the client ALLOWED_FILENAME_RE against the canonical shapes the sidecar's
+  // _FILENAME_RE (services/restore_uploader/uploader.py) accepts, one per alternative,
+  // so the mirrored regexes cannot silently drift apart.
+  it('accepts one canonical filename of each sidecar allowlist shape', async () => {
+    const user = userEvent.setup();
+    const section = await openSectionWithGrant(user);
+
+    const names = [
+      'jarvis_20260101_000000.sql.gz',
+      'litellm_20260101_000000.sql.gz.enc',
+      'secrets_20260101_000000.tar.gz',
+      'qdrant_papers_20260101_000000.snapshot',
+      'manifest_20260101_000000.json',
+      'operator_key',
+    ];
+    await user.upload(
+      within(section).getByTestId('upload-file-input'),
+      names.map((name) => new File(['x'], name)),
+    );
+
+    const rows = await within(section).findAllByTestId('upload-file-row');
+    expect(rows.map((row) => row.querySelector('.font-mono')?.textContent)).toEqual(names);
+    expect(within(section).queryByTestId('upload-rejected')).not.toBeInTheDocument();
+    expect(within(section).getByTestId('upload-start')).toBeEnabled();
+  });
+
+  it('shows the failure with its error message and Retry re-invokes the upload', async () => {
+    const user = userEvent.setup();
+    const section = await openSectionWithGrant(user);
+    uploadRestoreFileMock.mockRejectedValueOnce(
+      new Error('Upload grant invalid or expired — generate a new grant, then retry.'),
+    );
+
+    const file = new File(['dump'], 'jarvis_20260617_120000.sql.gz');
+    await user.upload(within(section).getByTestId('upload-file-input'), file);
+    await user.click(within(section).getByTestId('upload-start'));
+
+    const row = await within(section).findByTestId('upload-file-row');
+    expect(
+      await within(row).findByText(
+        'Upload grant invalid or expired — generate a new grant, then retry.',
+      ),
+    ).toBeInTheDocument();
+    const retry = within(row).getByRole('button', { name: 'Retry' });
+    expect(uploadRestoreFileMock).toHaveBeenCalledTimes(1);
+
+    await user.click(retry);
+
+    await waitFor(() => expect(uploadRestoreFileMock).toHaveBeenCalledTimes(2));
+    expect(await within(row).findByText('Uploaded')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
 });
