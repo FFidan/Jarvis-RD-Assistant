@@ -123,6 +123,56 @@ async def get_account(
     return _row_to_account(row)
 
 
+async def _stage_email_change(
+    conn,
+    current_email: str,
+    requested_email: str,
+    request: Request,
+    user_id: int,
+) -> tuple[tuple[str, str] | None, tuple[str, dict | None] | None, bool]:
+    """Validate and stage a verified email change under an open connection.
+
+    Returns ``(pending_send, audit_event, email_conflict)`` and runs NO
+    post-release side-effects (no email sent, no audit written): send_magic_link
+    and log_audit each re-acquire from the pool, so the caller must run them only
+    after the connection is released (else a saturated pool deadlocks).
+    ``email_conflict`` is True when the address is already in use so the caller
+    can defer the 409 until after any staged display_name audit has flushed.
+    """
+    new_email = requested_email.lower().strip()
+    if new_email == current_email.lower():
+        return None, None, False
+    # Reject if the address is already in use by another live user.
+    clash = await conn.fetchrow(
+        "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
+        new_email,
+    )
+    if clash is not None:
+        return None, None, True
+    if await _is_email_change_on_cooldown(conn, user_id):
+        return None, None, False
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw_token)
+    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
+    await conn.execute(
+        """
+        INSERT INTO magic_link_tokens
+            (token_hash, user_id, expires_at, pending_email)
+        VALUES ($1, $2, $3, $4)
+        """,
+        token_hash,
+        user_id,
+        expires_at,
+        new_email,
+    )
+    link = _build_email_confirm_link(request, raw_token)
+    audit_event = (
+        "account.email.change.requested",
+        {"new_email_hash": _hash_email(new_email)},
+    )
+    return (new_email, link), audit_event, False
+
+
 @router.patch("", response_model=AccountUpdateResponse)
 @limiter.limit("20/minute")
 async def update_account(
@@ -167,40 +217,11 @@ async def update_account(
 
         # 2. email — verified change only (no direct UPDATE users.email here).
         if body.email is not None:
-            new_email = body.email.lower().strip()
-            if new_email != current["email"].lower():
-                # Reject if the address is already in use by another live user.
-                clash = await conn.fetchrow(
-                    "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
-                    new_email,
-                )
-                if clash is not None:
-                    # Defer the 409 to after the block so the staged
-                    # display_name audit still flushes; skip minting a token.
-                    email_conflict = True
-                elif not await _is_email_change_on_cooldown(conn, user_id):
-                    raw_token = secrets.token_urlsafe(32)
-                    token_hash = _hash_token(raw_token)
-                    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
-                    await conn.execute(
-                        """
-                    INSERT INTO magic_link_tokens
-                        (token_hash, user_id, expires_at, pending_email)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                        token_hash,
-                        user_id,
-                        expires_at,
-                        new_email,
-                    )
-                    link = _build_email_confirm_link(request, raw_token)
-                    pending_send = (new_email, link)
-                    audit_events.append(
-                        (
-                            "account.email.change.requested",
-                            {"new_email_hash": _hash_email(new_email)},
-                        )
-                    )
+            pending_send, email_audit, email_conflict = await _stage_email_change(
+                conn, current["email"], body.email, request, user_id
+            )
+            if email_audit is not None:
+                audit_events.append(email_audit)
 
         # Re-read so the response reflects the persisted row (email unchanged
         # until the token is confirmed).
