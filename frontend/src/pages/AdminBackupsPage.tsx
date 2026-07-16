@@ -5,8 +5,9 @@
  * Shows sidecar status, restore points grouped from GET /api/admin/backups/restore-points,
  * allows an on-demand backup (confirm), per-file download (expandable per card),
  * a guided one-click restore (typed-RESTORE confirm + polled progress that degrades
- * gracefully while the app is briefly unreachable mid-restore), and the manual host
- * runbook as the advanced fallback.
+ * gracefully while the app is briefly unreachable mid-restore), an in-browser
+ * off-host upload that stages another server's backup in the restore inbox, and
+ * the manual host runbook as the advanced fallback.
  */
 
 import { useEffect, useState } from 'react';
@@ -35,6 +36,7 @@ import {
 } from '@/lib/api/backups';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
+import { OffHostUploadSection } from '@/components/admin/OffHostUploadSection';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
 import { GuidedRecoveryView } from '@/components/admin/GuidedRecoveryView';
 import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
@@ -89,8 +91,9 @@ function InboxBadge({ ok, okLabel, badLabel }: { ok: boolean; okLabel: string; b
  * restore inbox and trigger a cross-host restore. The trigger is disabled (with an
  * inline hint) until a set is complete, carries its secrets archive, AND its one-time
  * key is present, and while any restore is already in flight. A secrets-less set would
- * fail post-swap, so it is blocked here. The file upload itself is host-side (out of scope
- * here); the app only lists what the sidecar reports and requests the restore.
+ * fail post-swap, so it is blocked here. Files are staged by the in-browser uploader
+ * (OffHostUploadSection) or a host-side copy; the app only lists what the sidecar
+ * reports and requests the restore.
  */
 function InboxRestoreSection({
   points,
@@ -106,9 +109,9 @@ function InboxRestoreSection({
       <div>
         <h2 className="text-sm font-medium">Restore from another JARVIS</h2>
         <p className="text-xs text-muted-foreground">
-          Recover this server from a backup taken on a different JARVIS. Copy that backup&apos;s
-          archive set and its one-time key into this server&apos;s restore inbox; staged sets appear
-          below.
+          Recover this server from a backup taken on a different JARVIS. Upload that backup&apos;s
+          archive set and its one-time key with the uploader above (or copy them into the
+          server&apos;s restore inbox); staged sets appear below.
         </p>
       </div>
       {points.length === 0 ? (
@@ -116,8 +119,8 @@ function InboxRestoreSection({
           data-testid="inbox-empty"
           className="rounded-md border px-4 py-6 text-center text-sm text-muted-foreground"
         >
-          No off-host backups staged. Place a backup archive set and its one-time key in this
-          server&apos;s restore inbox to recover from another JARVIS.
+          No off-host backups staged. Upload a backup archive set and its one-time key to
+          recover from another JARVIS.
         </div>
       ) : (
         <ul className="space-y-2">
@@ -611,6 +614,12 @@ export function AdminBackupsPage() {
           )}
         </div>
       )}
+
+      <OffHostUploadSection
+        onUploaded={() =>
+          void queryClient.invalidateQueries({ queryKey: ['admin', 'backups', 'inbox'] })
+        }
+      />
 
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection

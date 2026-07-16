@@ -225,3 +225,45 @@ def test_installer_scripts_pull_every_published_service(compose):
             f"{script} starts the stack but does not pull the shared published set — "
             "any image it leaves missing would be silently BUILT by `up`"
         )
+
+
+def _brace_block(text: str, opener: str) -> str:
+    """Return the body of the first brace-delimited block whose header matches ``opener``."""
+    match = re.search(opener + r"[^{]*\{", text)
+    assert match, f"no block matching {opener!r}"
+    depth, pos = 1, match.end()
+    while depth:
+        if text[pos] == "{":
+            depth += 1
+        elif text[pos] == "}":
+            depth -= 1
+        pos += 1
+    return text[match.end() : pos - 1]
+
+
+def test_restore_upload_ingress_exists_in_every_same_origin_mode():
+    """Invariant: every same-origin ingress routes /restore-upload/ to the uploader.
+
+    The in-browser off-host recovery upload PUTs to /restore-upload/<filename> on
+    the same origin as the dashboard. Caddy fronts only the optional TLS profiles;
+    localhost, LAN, and the Cloudflare tunnel all terminate at frontend/nginx.conf —
+    without a location there the PUT falls into the SPA fallback and the advertised
+    flow silently breaks. Dropping the route from either Caddyfile would break the
+    TLS modes the same way.
+    """
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text()
+    block = _brace_block(nginx, r"location \^~ /restore-upload/")
+    assert "proxy_pass http://restore-uploader:8090;" in block, (
+        "frontend/nginx.conf must proxy /restore-upload/ to restore-uploader:8090"
+    )
+    # Multi-GB archive streams: nginx must not cap or buffer the body — the
+    # uploader itself enforces UPLOAD_MAX_GB.
+    assert "client_max_body_size 0;" in block
+    assert "proxy_request_buffering off;" in block
+
+    for name in ("Caddyfile", "Caddyfile.local"):
+        text = (REPO_ROOT / "caddy" / name).read_text()
+        handle = _brace_block(text, r"handle /restore-upload/\*")
+        assert "reverse_proxy http://restore-uploader:8090" in handle, (
+            f"caddy/{name} must reverse_proxy /restore-upload/* to restore-uploader:8090"
+        )
