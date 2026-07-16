@@ -280,12 +280,15 @@ async def test_sync_today_event_writes_daily_log_inside_per_event_transaction():
             }
         ]
     )
-    # fetch -> [] (no applied keys, no fsrs config rows); fetchrow -> owned card;
-    # fetchval -> inserted log id (insert won the row).
+    # fetch -> [] (no applied keys, no fsrs config rows); fetchrow -> owned card.
     pool, conn = make_pool_and_conn(
         fetch_return=[],
         fetchrow_return={"fsrs_state": {}},
-        fetchval_return=123,
+    )
+    # fetchval is called twice per event: the chronology-guard MAX(reviewed_at)
+    # probe (no prior review -> None) then the log INSERT RETURNING id (123 = won).
+    conn.fetchval = AsyncMock(
+        side_effect=lambda q, *a, **k: None if "MAX(reviewed_at)" in q else 123
     )
     handler = getattr(sync_reviews, "__wrapped__", sync_reviews)
 
@@ -346,10 +349,14 @@ async def test_sync_replays_events_oldest_first(monkeypatch):
 
     monkeypatch.setattr(review_mod, "_build_fsrs_manager_from_db", _fake_build)
 
-    pool, _ = make_pool_and_conn(
+    pool, conn = make_pool_and_conn(
         fetch_return=[],
         fetchrow_return={"fsrs_state": {}},
-        fetchval_return=123,
+    )
+    # MAX(reviewed_at) chronology probe -> None (no prior review recorded in the
+    # mock), log INSERT RETURNING id -> 123. See test_sync_today_... above.
+    conn.fetchval = AsyncMock(
+        side_effect=lambda q, *a, **k: None if "MAX(reviewed_at)" in q else 123
     )
     handler = getattr(sync_reviews, "__wrapped__", sync_reviews)
     result = await handler(request=MagicMock(), body=body, db_pool=pool, user_id=1)
