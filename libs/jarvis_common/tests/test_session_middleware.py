@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from jarvis_common.session_middleware import (
     SESSION_COOKIE_NAME,
+    SESSION_TTL,
     SessionMiddleware,
     _populate_state_from_cookie,
+    session_cookie_kwargs,
 )
 from starlette.responses import Response
 
@@ -296,6 +298,19 @@ async def test_dispatch_refreshes_cookie_when_session_renewed(mock_pool):
     assert "Max-Age=2592000" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "SameSite=strict" in set_cookie
+    # the absolute Expires must be ~now+30d, not the ~year-2083 artifact of
+    # passing an epoch int (which starlette misreads as delta-seconds).
+    from email.utils import parsedate_to_datetime
+
+    expires_str = next(
+        part.split("=", 1)[1]
+        for part in set_cookie.split("; ")
+        if part.lower().startswith("expires=")
+    )
+    parsed = parsedate_to_datetime(expires_str)
+    assert abs((parsed - (datetime.now(UTC) + SESSION_TTL)).total_seconds()) <= 2 * 86400, (
+        f"renewal Expires must be ~now+30d; got {parsed.isoformat()} from {expires_str!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -313,6 +328,45 @@ async def test_dispatch_leaves_cookie_untouched_when_not_renewed(mock_pool):
     result = await middleware.dispatch(request, call_next)
 
     assert result.headers.get("set-cookie") is None
+
+
+# ---------------------------------------------------------------------------
+# cookie Expires is an absolute now+TTL date, not a ~2083 artifact
+# ---------------------------------------------------------------------------
+
+
+def test_session_cookie_kwargs_expires_matches_max_age():
+    """session_cookie_kwargs emits an absolute Expires ~now+TTL.
+
+    The bug: passing ``int(...timestamp())`` handed starlette a non-datetime
+    ``expires``, which ``http.cookies._getdate`` reads as delta-seconds → an
+    Expires ~60 years out. The fix passes an aware-UTC datetime so starlette
+    takes the ``format_datetime(usegmt=True)`` branch. ``Max-Age`` is unaffected.
+    """
+    from email.utils import parsedate_to_datetime
+
+    fixed_now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
+    max_age = int(SESSION_TTL.total_seconds())
+
+    response = Response()
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        "session-id",
+        **session_cookie_kwargs(max_age, now=fixed_now),
+    )
+    set_cookie = response.headers.get("set-cookie")
+    assert set_cookie is not None
+    assert "Max-Age=2592000" in set_cookie
+
+    expires_str = next(
+        part.split("=", 1)[1]
+        for part in set_cookie.split("; ")
+        if part.lower().startswith("expires=")
+    )
+    parsed = parsedate_to_datetime(expires_str)
+    assert abs((parsed - (fixed_now + SESSION_TTL)).total_seconds()) <= 2 * 86400, (
+        f"Expires must be ~fixed_now+30d, not ~2083; got {parsed.isoformat()} from {expires_str!r}"
+    )
 
 
 __all__ = []

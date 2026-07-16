@@ -201,6 +201,114 @@ async def test_a18_logout_without_session_returns_204(
     )
 
 
+async def test_a18_logout_does_not_reissue_renewed_cookie(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """logout must not let the middleware re-issue a fresh 30-day cookie.
+
+    The seeded session (expires_at = now + 1 day) is renewal-eligible, so
+    SessionMiddleware.dispatch sets ``request.state.session_renewed`` BEFORE the
+    route runs. logout revokes the row and clears the cookie; without clearing
+    session_renewed, dispatch would append a fresh Max-Age=2592000 Set-Cookie
+    AFTER the deletion, clobbering it. The only jarvis_session Set-Cookie must be
+    the deletion (Max-Age=0).
+
+    Verified: auth.py logout (session_renewed=None before delete_cookie);
+    session_middleware.py dispatch re-issue branch.
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/auth/logout")
+
+    assert resp.status_code == 204, (
+        f"Expected 204 from logout, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    session_cookies = [
+        h for h in resp.headers.get_list("set-cookie") if h.startswith("jarvis_session=")
+    ]
+    assert session_cookies, "logout must emit a jarvis_session deletion cookie"
+    assert not any("Max-Age=2592000" in h for h in session_cookies), (
+        f"logout must NOT re-issue a renewal cookie; got: {session_cookies}"
+    )
+    assert any("Max-Age=0" in h for h in session_cookies), (
+        f"logout must clear the cookie (Max-Age=0); got: {session_cookies}"
+    )
+
+    # Regression: the session row is still revoked (A18 invariant preserved).
+    import uuid
+
+    try:
+        session_id = uuid.UUID(contract_two_users.cookie_a)
+    except ValueError:
+        return
+    row = await contract_conn.fetchrow(
+        "SELECT revoked_at FROM sessions WHERE id = $1",
+        str(session_id),
+    )
+    if row is not None:
+        assert row["revoked_at"] is not None, "sessions.revoked_at must be set after logout"
+
+
+# ---------------------------------------------------------------------------
+# the request-link cooldown probe is login-scoped — an in-flight
+# email-change token (pending_email set) must NOT suppress a login-link.
+# ---------------------------------------------------------------------------
+
+
+async def test_request_link_email_change_token_does_not_suppress_login(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """an in-flight email-change token does not trigger the login cooldown.
+
+    Seed a recent email-change token (pending_email set) for user A and NO recent
+    login token, then request a login link for A's email. A login token
+    (pending_email IS NULL) must be minted. Before the fix the unscoped cooldown
+    probe saw the email-change token as "recent" and suppressed issuance.
+
+    Verified: auth.py request_link cooldown probe (WHERE ... AND pending_email IS NULL).
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, patch
+
+    email_a = "iso-user-a@contract.example.com"
+
+    # In-flight email-change token (pending_email set, created_at defaults to now()).
+    ec_hash = hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest()
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at, pending_email)"
+        " VALUES ($1, $2, $3, $4)",
+        ec_hash,
+        contract_two_users.user_a_id,
+        datetime.now(UTC) + timedelta(minutes=15),
+        "changed@contract.example.com",
+    )
+
+    with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()):
+        async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+            resp = await c.post("/api/auth/request-link", json={"email": email_a})
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from request-link, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    login_tokens = await contract_conn.fetchval(
+        "SELECT count(*) FROM magic_link_tokens WHERE user_id = $1 AND pending_email IS NULL",
+        contract_two_users.user_a_id,
+    )
+    assert int(login_tokens) == 1, (
+        f"an in-flight email-change token must not suppress login-link issuance; "
+        f"expected 1 login token, got {login_tokens}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Non-ASCII api_key body must return 403, not 500
 # ---------------------------------------------------------------------------

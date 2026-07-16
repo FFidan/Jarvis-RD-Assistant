@@ -82,7 +82,11 @@ def session_cookie_kwargs(max_age: int, *, now: datetime) -> dict[str, Any]:
     """
     return {
         "max_age": max_age,
-        "expires": int((now + timedelta(seconds=max_age)).timestamp()),
+        # Pass an aware-UTC datetime, NOT an epoch int: starlette's set_cookie
+        # feeds a non-datetime expires to http.cookies._getdate, which treats the
+        # int as seconds-from-now and serialises an Expires ~60y out. A datetime
+        # takes the format_datetime(usegmt=True) branch → correct absolute date.
+        "expires": now + timedelta(seconds=max_age),
         "httponly": True,
         "secure": not get_core_settings().dev_mode,
         "samesite": "strict",
