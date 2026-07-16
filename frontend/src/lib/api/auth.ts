@@ -52,9 +52,11 @@ export interface PasskeyInfo {
   last_used_at: string | null;
 }
 
-/** Probe whether passkeys are usable from this origin (unauthenticated). */
+/** Probe whether passkeys are usable from this origin (unauthenticated). POST (not
+ *  GET) so the browser attaches the Origin header on the same-origin production
+ *  request — a same-origin GET omits it, which would hide every passkey control. */
 export const getPasskeyCapability = () =>
-  apiFetch<PasskeyCapability>('/api/auth/passkeys/capability');
+  apiFetch<PasskeyCapability>('/api/auth/passkeys/capability', { method: 'POST' });
 
 /** Fetch WebAuthn creation options to hand straight to `startRegistration`. */
 export const beginPasskeyRegistration = () =>
