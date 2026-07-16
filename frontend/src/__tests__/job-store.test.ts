@@ -444,6 +444,7 @@ describe('JobStore', () => {
       loginWithSession: vi.fn(),
       isSessionValid: vi.fn(() => true),
       expireSession: vi.fn(),
+      hydrateFromCookie: vi.fn(),
     });
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 401 }));
@@ -478,6 +479,7 @@ describe('JobStore', () => {
       loginWithSession: vi.fn(),
       isSessionValid: vi.fn(() => true),
       expireSession: vi.fn(),
+      hydrateFromCookie: vi.fn(),
     });
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }));
@@ -994,6 +996,7 @@ describe('JobStore', () => {
       loginWithSession: vi.fn(),
       isSessionValid: vi.fn(() => authenticated),
       expireSession: vi.fn(),
+      hydrateFromCookie: vi.fn(),
     }));
 
     const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementationOnce(
@@ -1052,6 +1055,7 @@ describe('JobStore', () => {
       loginWithSession: vi.fn(),
       isSessionValid: vi.fn(() => authenticated),
       expireSession: vi.fn(),
+      hydrateFromCookie: vi.fn(),
     }));
 
     const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementationOnce(
@@ -1255,6 +1259,7 @@ describe('JobStore', () => {
       loginWithSession: vi.fn(),
       isSessionValid: vi.fn(() => true),
       expireSession: vi.fn(),
+      hydrateFromCookie: vi.fn(),
     });
     vi.mocked(getJob).mockResolvedValue(null as unknown as ReturnType<typeof getJob> extends Promise<infer T> ? T : never);
 

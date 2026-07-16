@@ -68,6 +68,29 @@ describe('DeckBrowser — createDeck onError', () => {
   });
 });
 
+describe('DeckBrowser — fetchDecks failure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the error state (not the empty-state) and Retry recovers the deck grid', async () => {
+    mockFetchDecks
+      .mockRejectedValueOnce(new Error('network failure'))
+      .mockResolvedValueOnce([makeDeck()]);
+
+    wrap(<DeckBrowser selectedDeckId={null} onSelectDeck={vi.fn()} />);
+
+    // Failure renders an explicit error + Retry, never the misleading empty-state.
+    expect(await screen.findByText(/check your connection and try again/i)).toBeInTheDocument();
+    expect(screen.queryByText('No flashcard decks yet')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Deck One')).toBeInTheDocument();
+    expect(mockFetchDecks).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('DeckBrowser — deck card DOM and keyboard activation', () => {
   beforeEach(() => {
     vi.clearAllMocks();

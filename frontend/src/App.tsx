@@ -6,6 +6,7 @@ import { setNavigate } from '@/lib/navigate-bridge';
 import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { LoginPage } from '@/pages/LoginPage';
 import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
 import { HomePage } from '@/pages/HomePage';
@@ -18,7 +19,7 @@ const ResearchFeedPage = lazy(() =>
 );
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { AskPage } from '@/pages/AskPage';
-import { getFirstRunStatus } from '@/lib/api';
+import { fetchAccount, getFirstRunStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
@@ -98,7 +99,7 @@ function NavigateBridgeRegistrar() {
 }
 
 export function App() {
-  const { isAuthenticated, isSessionValid, expireSession } = useAuthStore();
+  const { isAuthenticated, isSessionValid, expireSession, hydrateFromCookie } = useAuthStore();
 
   // Single onboarding gate (Task A2 — wizard consolidation). Keyed on the
   // PRE-AUTH /api/setup/status (reachable with no session, HTTP 200) so the
@@ -108,12 +109,34 @@ export function App() {
     data: firstRun,
     isLoading: firstRunLoading,
     isError: firstRunError,
+    refetch: refetchFirstRun,
   } = useQuery({
     queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 30_000,
     retry: false,
   });
+
+  // Cookie-session bootstrap: sessionStorage is per-tab, so a new tab (or a
+  // restored browser) renders unauthenticated even while a valid HttpOnly
+  // session cookie exists. Probe /api/account once (401s cleanly when no
+  // cookie) and rehydrate the identity instead of bouncing to Login.
+  const { data: bootstrapAccount, isLoading: bootstrapLoading } = useQuery({
+    queryKey: QUERY_KEYS.account.self(),
+    queryFn: fetchAccount,
+    enabled: !isAuthenticated,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (bootstrapAccount && !isAuthenticated) {
+      hydrateFromCookie({
+        id: bootstrapAccount.id,
+        email: bootstrapAccount.email,
+        role: bootstrapAccount.role === 'admin' ? 'admin' : 'user',
+      });
+    }
+  }, [bootstrapAccount, isAuthenticated, hydrateFromCookie]);
   // Offline / PWA contract — CANONICAL:
   // When the device is offline AND a prior authenticated identity exists (isAuthenticated
   // is true with a recent authTime), do NOT hard-bounce to /login. Instead allow the
@@ -144,9 +167,10 @@ export function App() {
     }
   }, [online, isAuthenticated, sessionOk, expireSession]);
 
-  // Keep the loading spinner while the gate's status query is in flight, so we
-  // don't flash the login page then bounce into the wizard.
-  if (firstRunLoading) {
+  // Keep the loading spinner while the gate's status query or the cookie
+  // bootstrap is in flight, so we don't flash the login page then bounce into
+  // the wizard (or the app, when a valid cookie hydrates the session).
+  if (firstRunLoading || bootstrapLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
         Loading...
@@ -175,6 +199,20 @@ export function App() {
   }
 
   if (!authed) {
+    // Unauthed + status probe failed: neither Login nor the wizard can be the
+    // right call (the gate can't know which), so surface the failure instead
+    // of masquerading as logged-out. Authed users fall through above (fails
+    // OPEN on a status blip — see showOnboarding).
+    if (firstRunError) {
+      return (
+        <div className="flex min-h-screen items-center justify-center">
+          <QueryErrorState
+            onRetry={refetchFirstRun}
+            message="Couldn't reach the server to check setup status. Confirm the JARVIS services are running, then retry."
+          />
+        </div>
+      );
+    }
     return (
       <Routes>
         {/* Magic-link landing must be reachable without an existing session — */}

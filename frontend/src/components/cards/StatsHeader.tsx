@@ -4,9 +4,10 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { getStats } from '@/lib/api';
 import { MetricTile } from '@/components/MetricTile';
 import { Skeleton } from '@/components/ui/skeleton';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 
 export function StatsHeader() {
-  const { data: stats, isLoading } = useQuery({
+  const { data: stats, isLoading, isError, refetch } = useQuery({
     queryKey: QUERY_KEYS.cards.stats(),
     queryFn: getStats,
     refetchInterval: 30_000,
@@ -18,6 +19,10 @@ export function StatsHeader() {
         {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-24" />)}
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryErrorState onRetry={refetch} message="Couldn't load your stats." />;
   }
 
   if (!stats) return null;

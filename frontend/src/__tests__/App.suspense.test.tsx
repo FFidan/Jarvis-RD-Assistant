@@ -57,6 +57,9 @@ vi.mock('@/lib/api', async () => {
       nudge_count: 0, onboarding_stage: 'complete',
     }),
     runFirstRunSystemCheck: vi.fn().mockResolvedValue({ services: [], all_ok: true }),
+    // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
+    // unauthenticated tests deterministically stay unauthenticated.
+    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
   };
 });
 

@@ -35,6 +35,9 @@ const flushMicrotasks = async (): Promise<void> => {
 
 const OWNER = { id: 7, email: 'owner@example.com', role: 'admin' as const };
 
+// Client-side ceiling mirrors the backend SESSION_TTL (30 days).
+const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+
 describe('auth-store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -136,14 +139,14 @@ describe('auth-store', () => {
     expect(useAuthStore.getState().getUser()).toBeNull();
   });
 
-  it('session expires after 8 hours (isSessionValid pure check + expireSession mutation)', async () => {
+  it('session expires after 30 days (isSessionValid pure check + expireSession mutation)', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => OWNER });
     await useAuthStore.getState().login('valid-key-32chars-xxxxxxxxxx');
     expect(useAuthStore.getState().isSessionValid()).toBe(true);
 
-    // Simulate 9 hours passing
-    const nineHoursAgo = Date.now() - 9 * 60 * 60 * 1000;
-    useAuthStore.setState({ authTime: nineHoursAgo });
+    // Simulate 31 days passing
+    const thirtyOneDaysAgo = Date.now() - THIRTY_ONE_DAYS_MS;
+    useAuthStore.setState({ authTime: thirtyOneDaysAgo });
 
     // isSessionValid() is a pure check — returns false but does NOT mutate
     expect(useAuthStore.getState().isSessionValid()).toBe(false);
@@ -153,6 +156,17 @@ describe('auth-store', () => {
     // expireSession() does the mutation
     useAuthStore.getState().expireSession();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  it('a day-old session is still valid (30-day ceiling, not the former 8h)', () => {
+    const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: twentyFourHoursAgo,
+      apiKey: null,
+      user: OWNER,
+    });
+    expect(useAuthStore.getState().isSessionValid()).toBe(true);
   });
 
   it('isSessionValid returns false when neither apiKey nor user is present', () => {
@@ -185,10 +199,10 @@ describe('auth-store', () => {
   });
 
   it('isSessionValid returns false for an expired session without mutating state', () => {
-    const nineHoursAgo = Date.now() - 9 * 60 * 60 * 1000;
+    const thirtyOneDaysAgo = Date.now() - THIRTY_ONE_DAYS_MS;
     useAuthStore.setState({
       isAuthenticated: true,
-      authTime: nineHoursAgo,
+      authTime: thirtyOneDaysAgo,
       apiKey: null,
       user: OWNER,
     });
@@ -198,7 +212,7 @@ describe('auth-store', () => {
     expect(result).toBe(false);
     // Pure: isAuthenticated still true — no side-effect happened
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
-    expect(useAuthStore.getState().authTime).toBe(nineHoursAgo);
+    expect(useAuthStore.getState().authTime).toBe(thirtyOneDaysAgo);
   });
 
   it('isSessionValid returns false when not authenticated', () => {
@@ -211,7 +225,7 @@ describe('auth-store', () => {
   it('expireSession clears authentication state', () => {
     useAuthStore.setState({
       isAuthenticated: true,
-      authTime: Date.now() - 9 * 60 * 60 * 1000,
+      authTime: Date.now() - THIRTY_ONE_DAYS_MS,
       apiKey: null,
       user: OWNER,
     });
@@ -405,6 +419,45 @@ describe('auth-store', () => {
 
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
     expect(useAuthStore.getState().user).toEqual(USER);
+  });
+
+  // -----------------------------------------------------------------------
+  // hydrateFromCookie — restores the CURRENT identity from a valid session
+  // cookie (new tab / empty sessionStorage). No identity switch, so it must
+  // NOT run the cross-user purge fan-out that loginWithSession runs.
+  // -----------------------------------------------------------------------
+  it('hydrateFromCookie sets the session fields synchronously', () => {
+    useAuthStore.getState().hydrateFromCookie(OWNER);
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().authTime).not.toBeNull();
+    expect(useAuthStore.getState().user).toEqual(OWNER);
+    expect(useAuthStore.getState().apiKey).toBeNull();
+    expect(useAuthStore.getState().lastError).toBeNull();
+  });
+
+  it('hydrateFromCookie does NOT trigger the identity-cache purge fan-out', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        controller: { postMessage },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+
+    useAuthStore.getState().hydrateFromCookie(OWNER);
+    await flushMicrotasks();
+
+    // Restoring an identity, not switching users: nothing may be purged.
+    expect(mockClearPersistedQueryCache).not.toHaveBeenCalled();
+    expect(mockClearReviewOutbox).not.toHaveBeenCalled();
+    expect(mockCancelQueries).not.toHaveBeenCalled();
+    expect(mockQueryClientClear).not.toHaveBeenCalled();
+    expect(postMessage).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
   });
 
   it('loginWithSession completes even if the IDB purge never settles', async () => {

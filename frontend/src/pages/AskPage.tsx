@@ -67,11 +67,7 @@ export function AskPage() {
             </Button>
           </div>
         ) : (
-          <StreamingChat
-            chatId={ASK_CHAT_ID}
-            scope="cross-paper"
-            hasAnalyzedPapers={hasAnalyzedPapers}
-          />
+          <StreamingChat chatId={ASK_CHAT_ID} scope="cross-paper" />
         )}
       </div>
     </div>

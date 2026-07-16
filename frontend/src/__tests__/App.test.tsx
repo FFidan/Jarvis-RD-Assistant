@@ -29,6 +29,9 @@ vi.mock('@/lib/api', async () => {
       onboarding_stage: 'complete',
     }),
     verifyMagicLink: vi.fn().mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' }),
+    // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
+    // unauthenticated tests deterministically land on the login page.
+    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
   };
 });
 
@@ -102,5 +105,38 @@ describe('App', () => {
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
     expect(vi.mocked(api.verifyMagicLink)).toHaveBeenCalledWith('route-flip-token');
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
+  });
+
+  it('hydrates a valid session cookie via /api/account without flashing the login page', async () => {
+    // New tab: sessionStorage empty (store unauthenticated) but the HttpOnly
+    // cookie is still valid — /api/account resolves the identity.
+    type Account = Awaited<ReturnType<typeof api.fetchAccount>>;
+    let resolveAccount!: (v: Account) => void;
+    vi.mocked(api.fetchAccount).mockImplementationOnce(
+      () =>
+        new Promise<Account>((resolve) => {
+          resolveAccount = resolve;
+        }),
+    );
+    renderApp();
+
+    // While the bootstrap probe is pending: loading, NOT the login form.
+    expect(await screen.findByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+
+    resolveAccount({
+      id: 7,
+      email: 'a@b.com',
+      role: 'admin',
+      display_name: null,
+      created_at: '2026-01-01T00:00:00Z',
+      last_login_at: null,
+    });
+
+    const dashboards = await screen.findAllByText('Dashboard');
+    expect(dashboards.length).toBeGreaterThanOrEqual(1);
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().user).toEqual({ id: 7, email: 'a@b.com', role: 'admin' });
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
   });
 });
