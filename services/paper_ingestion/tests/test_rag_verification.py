@@ -238,3 +238,83 @@ def test_build_confidence_medium_boundary_pin():
 def test_build_confidence_none_when_total_zero():
     """total==0 → None (not UNVERIFIED); preserves the no-badge sentinel."""
     assert _build_confidence(0.0, 0) is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-paper citation attribution: verify against the CITED paper only
+# ---------------------------------------------------------------------------
+
+_XP_CLAIM = (
+    "Self-attention mechanisms compute contextual representations of the "
+    "input tokens without any recurrence or convolution layers"
+)
+_XP_UNRELATED = (
+    "Ocean tides are driven primarily by the gravitational pull of the moon "
+    "acting on large bodies of water across the planet."
+)
+_XP_SOURCES = [
+    {"paper_id": 101, "content": _XP_UNRELATED},
+    {"paper_id": 202, "content": _XP_CLAIM + "."},
+]
+
+
+class _FakeAcquire:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeConn:
+    """fetch() returns the chunk rows registered for the paper_id ($1) argument."""
+
+    def __init__(self, rows_by_paper: dict[int, list[dict]]):
+        self._rows_by_paper = rows_by_paper
+
+    async def fetch(self, _query, *args):
+        return self._rows_by_paper.get(args[0], [])
+
+
+def _fulltext_pool(rows_by_paper: dict[int, list[dict]]) -> asyncpg.Pool:
+    """Pool whose connections serve per-paper chunk rows (cross-paper path)."""
+
+    class _FakePool:
+        def acquire(self):
+            return _FakeAcquire(_FakeConn(rows_by_paper))
+
+    return cast("asyncpg.Pool", _FakePool())
+
+
+def _xp_pool() -> asyncpg.Pool:
+    return _fulltext_pool(
+        {
+            101: [{"content": _XP_UNRELATED}],
+            202: [{"content": _XP_CLAIM + "."}],
+        }
+    )
+
+
+async def test_cross_paper_citation_attributed_to_cited_paper_not_any_match():
+    """A claim present only in Paper 2 but cited as [Paper 1] must NOT verify."""
+    verifier = QuoteVerifier()
+    answer = _XP_CLAIM + " [Paper 1]."
+    report = await verify_answer_sentences(answer, _XP_SOURCES, verifier, _xp_pool())
+    assert report.total == 1
+    assert report.verified_count == 0, (
+        f"mis-cited sentence must not verify via the uncited paper; got {report.per_sentence}"
+    )
+    assert report.confidence == RagConfidence.UNVERIFIED
+
+
+async def test_cross_paper_citation_verifies_against_correctly_cited_paper():
+    """The same claim correctly cited as [Paper 2] still verifies HIGH."""
+    verifier = QuoteVerifier()
+    answer = _XP_CLAIM + " [Paper 2]."
+    report = await verify_answer_sentences(answer, _XP_SOURCES, verifier, _xp_pool())
+    assert report.total == 1
+    assert report.verified_count == 1
+    assert report.confidence == RagConfidence.HIGH
