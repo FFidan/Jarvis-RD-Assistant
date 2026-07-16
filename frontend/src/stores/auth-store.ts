@@ -40,7 +40,10 @@ export function registerQueryClient(qc: QueryClient): void {
  * the session cookie (verify_api_key skips /api/auth/* and the session
  * middleware runs unconditionally).
  */
-const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 hours
+// 30 days — mirrors jarvis_common/session_middleware.py SESSION_TTL. The backend
+// 401 interceptor (core.ts handleAuthFailure → logout) remains the authoritative
+// fast-path for real expiry/revocation.
+const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface SessionUser {
   id: number;
@@ -58,6 +61,12 @@ interface AuthState {
   lastError: string | null;
   login: (apiKey: string) => Promise<boolean>;
   loginWithSession: (user: SessionUser) => Promise<void>;
+  /**
+   * Restore the CURRENT identity from a still-valid session cookie (e.g. a new
+   * tab where sessionStorage is empty). Unlike loginWithSession this never
+   * purges caches — it restores an identity, it does not switch users.
+   */
+  hydrateFromCookie: (user: SessionUser) => void;
   logout: () => void;
   /**
    * Pure predicate — reads state only, never mutates.
@@ -145,7 +154,7 @@ function withTimeout(p: Promise<unknown>, timeoutMs: number): Promise<void> {
 
 /**
  * Cross-user cache hygiene — the in-app half of the logout fan-out, also
- * invoked on session expiry (8h timeout / tab-close) and on re-login. Drops
+ * invoked on session expiry (client timeout / tab-close) and on re-login. Drops
  * every trace of the current identity that lives inside the app: persisted UI
  * flags, the React-Query cache (in-memory + IndexedDB-persisted), in-memory
  * user-scoped stores, and the offline review outbox. The service worker's
@@ -270,6 +279,16 @@ export const useAuthStore = create<AuthState>()(
         });
       },
 
+      hydrateFromCookie(user: SessionUser): void {
+        set({
+          isAuthenticated: true,
+          authTime: Date.now(),
+          apiKey: null,
+          user,
+          lastError: null,
+        });
+      },
+
       logout() {
         // Clear auth state first so the UI reflects logged-out immediately.
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null, lastError: null });
@@ -299,7 +318,7 @@ export const useAuthStore = create<AuthState>()(
 
       expireSession(): void {
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
-        // 8h timeout / tab-close on a shared browser: purge the expired
+        // Client timeout / tab-close on a shared browser: purge the expired
         // identity's caches so the next user never inherits its persisted or
         // SW-cached private data.
         void purgeIdentityCaches();

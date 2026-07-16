@@ -4,7 +4,8 @@
  * The single gate keys on the PRE-AUTH /api/setup/status (getFirstRunStatus).
  * It shows the unified OnboardingWizard when:
  *   !setup_completed && (!configured || authed)
- * and fails OPEN on a status error.
+ * On a status error it fails OPEN for authed users (the app renders) and shows
+ * an explicit error + Retry state for unauthed users (never Login/wizard).
  *
  * Asserted here:
  *   (a) fresh install (configured=false, setup_completed=false), unauthed →
@@ -16,7 +17,7 @@
  *   (d) setup_completed=true → normal app, no wizard.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -48,6 +49,9 @@ vi.mock('@/lib/api', async () => {
       nudge_count: 0,
       onboarding_stage: 'complete',
     }),
+    // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
+    // unauthenticated tests deterministically stay unauthenticated.
+    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
   };
 });
 
@@ -120,15 +124,33 @@ describe('App onboarding gate (single signal)', () => {
     expect(screen.queryByText('Welcome to JARVIS')).not.toBeInTheDocument();
   });
 
-  // GAP-1: gate fails OPEN — getFirstRunStatus rejects → unauthed user sees Login (not wizard, not white screen).
-  it('(GAP-1) getFirstRunStatus rejects: unauthed user sees login page (fail-open)', async () => {
+  // GAP-1 (unauthed sub-case): getFirstRunStatus rejects → explicit error + Retry.
+  // Login would be a dead end (its submit needs the backend) and the wizard
+  // could clobber an existing install — never masquerade a failed status probe
+  // as either.
+  it('(GAP-1) getFirstRunStatus rejects: unauthed user sees the error state with Retry (no Login, no wizard)', async () => {
     vi.mocked(api.getFirstRunStatus).mockRejectedValue(new Error('Network error'));
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
     renderApp(['/']);
-    // Fail-open: the gate must not crash; unauthed user sees the Login page.
+    expect(
+      await screen.findByText(/Couldn't reach the server to check setup status/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    // Neither the Login form nor the wizard renders.
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+    expect(screen.queryByText('Welcome to JARVIS')).not.toBeInTheDocument();
+  });
+
+  it('(GAP-1) Retry re-probes the status and recovers to the login page', async () => {
+    vi.mocked(api.getFirstRunStatus)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({ configured: true, setup_completed: true });
+    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    renderApp(['/']);
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
     expect(await screen.findByText('JARVIS RD Assistant')).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
-    expect(screen.queryByText('Welcome to JARVIS')).not.toBeInTheDocument();
   });
 
   // GAP-1 (authed sub-case): getFirstRunStatus rejects → authed user sees the app (not the wizard).

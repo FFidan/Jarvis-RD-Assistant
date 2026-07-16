@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
@@ -393,6 +393,37 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
     // Local (uploaded PDF) source should not appear in the Search tab checkboxes
     expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
+  });
+
+  it('shows an error state with Retry (not the empty/help copy) when sources fail to load', async () => {
+    const user = userEvent.setup();
+    const { fetchSources } = await import('@/lib/api');
+    vi.mocked(fetchSources).mockRejectedValueOnce(new Error('sources down'));
+
+    // Local client with retry:false so the single rejection surfaces deterministically.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/feed?surface=search']}>
+          <Routes>
+            <Route path="/feed" element={<ResearchFeedPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Failure is surfaced explicitly — never as "no sources"/"Select at least one source".
+    expect(await screen.findByText(/Couldn't load your sources/)).toBeInTheDocument();
+    expect(screen.queryByText('Select at least one source')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('arXiv')).not.toBeInTheDocument();
+
+    // Retry re-invokes the query (factory default resolves) and restores the checkboxes.
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('arXiv')).toBeInTheDocument();
+    });
+    expect(vi.mocked(fetchSources)).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Couldn't load your sources/)).not.toBeInTheDocument();
   });
 
   it('search with only arxiv + pubmed checked passes correct source_types to API', async () => {

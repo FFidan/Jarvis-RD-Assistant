@@ -41,6 +41,29 @@ const wrap = (ui: React.ReactNode) => {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 };
 
+describe('CardList — fetchCards failure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the error state (not the empty-state) and Retry recovers the card table', async () => {
+    mockFetchCards
+      .mockRejectedValueOnce(new Error('network failure'))
+      .mockResolvedValueOnce([CARD]);
+
+    wrap(<CardList deckId={1} />);
+
+    // Failure renders an explicit error + Retry, never the misleading empty-state.
+    expect(await screen.findByText(/check your connection and try again/i)).toBeInTheDocument();
+    expect(screen.queryByText('No cards in this deck')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('What is entropy?')).toBeInTheDocument();
+    expect(mockFetchCards).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('CardList — deleteCard onError', () => {
   beforeEach(() => {
     vi.clearAllMocks();

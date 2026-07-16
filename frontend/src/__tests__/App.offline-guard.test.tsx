@@ -42,6 +42,9 @@ vi.mock('@/lib/api', async () => {
       nudge_count: 0,
       onboarding_stage: 'complete',
     }),
+    // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
+    // unauthenticated/expired tests deterministically land on the login page.
+    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
   };
 });
 
@@ -66,7 +69,9 @@ vi.mock('@/lib/query-client', async () => {
 const { App } = await import('@/App');
 const { useAuthStore } = await import('@/stores/auth-store');
 
-const SESSION_8H = 8 * 60 * 60 * 1000;
+// Client-side session ceiling is 30 days (mirrors the backend SESSION_TTL) —
+// an authTime older than that is genuinely expired.
+const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
 
 function renderApp(initialEntries: string[] = ['/']) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -113,10 +118,10 @@ describe('App offline route-guard (P1c)', () => {
   //     during render — no "update during render" risk in React 19 concurrent.
   // -------------------------------------------------------------------------
   it('(a) ONLINE + expired session: redirects to /login and clears state via effect', async () => {
-    const nineHoursAgo = Date.now() - 9 * SESSION_8H;
+    const expiredAuthTime = Date.now() - THIRTY_ONE_DAYS_MS;
     useAuthStore.setState({
       isAuthenticated: true,
-      authTime: nineHoursAgo,
+      authTime: expiredAuthTime,
       apiKey: null,
       user: { id: 1, email: 'a@b.com', role: 'user' },
     });
@@ -140,10 +145,10 @@ describe('App offline route-guard (P1c)', () => {
   // -------------------------------------------------------------------------
   it('(b) OFFLINE + prior authenticated session: renders app shell without /login bounce', async () => {
     // Set up a session that has expired (would normally bounce to /login when ONLINE).
-    const nineHoursAgo = Date.now() - 9 * SESSION_8H;
+    const expiredAuthTime = Date.now() - THIRTY_ONE_DAYS_MS;
     useAuthStore.setState({
       isAuthenticated: true,
-      authTime: nineHoursAgo,
+      authTime: expiredAuthTime,
       apiKey: null,
       user: { id: 1, email: 'researcher@uni.edu', role: 'user' },
     });
@@ -204,11 +209,11 @@ describe('App offline route-guard (P1c)', () => {
   //     NOT mutate store state (no "update during render" side-effect).
   // -------------------------------------------------------------------------
   it('(e) isSessionValid() returns false for expired session without mutating store', () => {
-    const nineHoursAgo = Date.now() - 9 * SESSION_8H;
+    const expiredAuthTime = Date.now() - THIRTY_ONE_DAYS_MS;
     const user = { id: 1, email: 'a@b.com', role: 'user' as const };
     useAuthStore.setState({
       isAuthenticated: true,
-      authTime: nineHoursAgo,
+      authTime: expiredAuthTime,
       apiKey: null,
       user,
     });
@@ -219,7 +224,7 @@ describe('App offline route-guard (P1c)', () => {
     // Pure: store state must be unchanged — isAuthenticated still true,
     // authTime still set, user record still present.
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
-    expect(useAuthStore.getState().authTime).toBe(nineHoursAgo);
+    expect(useAuthStore.getState().authTime).toBe(expiredAuthTime);
     expect(useAuthStore.getState().user).toEqual(user);
   });
 
