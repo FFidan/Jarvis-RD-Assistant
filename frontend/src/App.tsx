@@ -169,8 +169,12 @@ export function App() {
 
   // Keep the loading spinner while the gate's status query or the cookie
   // bootstrap is in flight, so we don't flash the login page then bounce into
-  // the wizard (or the app, when a valid cookie hydrates the session).
-  if (firstRunLoading || bootstrapLoading) {
+  // the wizard (or the app, when a valid cookie hydrates the session). Gate the
+  // bootstrap only while unauthenticated: once authed the probe is disabled and
+  // meaningless, and an account.self() invalidation must not force-refetch it
+  // into a full-screen remount that drops transient UI (e.g. the email-confirm
+  // banner).
+  if (firstRunLoading || (bootstrapLoading && !isAuthenticated)) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
         Loading...
