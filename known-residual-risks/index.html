@@ -2292,7 +2292,7 @@
 </ul>
 <hr />
 <h2 id="ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor">OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR<a class="headerlink" href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" title="Permanent link">&para;</a></h2>
-<p>Current posture is documented in <code>docs/REQUIREMENTS.md</code>: the tested image pin is <code>ollama/ollama:0.23.1</code> via <code>versions.env</code>, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the <code>jarvis</code> network can reach <code>http://ollama:11434</code>, so untrusted peers must not join that network.</p>
+<p>Current posture is documented in <code>docs/REQUIREMENTS.md</code>: the tested image pin is <code>ollama/ollama:0.31.2</code> via <code>versions.env</code>, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the <code>jarvis</code> network can reach <code>http://ollama:11434</code>, so untrusted peers must not join that network.</p>
 <p>Reopen if <code>OLLAMA_IMAGE</code> is downgraded below the patched tested pin, the host publish changes away from <code>127.0.0.1</code>, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.</p>
 <hr />
 <h2 id="paper_summariesthemes_verified-descoped"><code>paper_summaries.themes_verified</code> — descoped<a class="headerlink" href="#paper_summariesthemes_verified-descoped" title="Permanent link">&para;</a></h2>

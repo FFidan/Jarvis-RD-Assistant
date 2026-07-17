@@ -2548,13 +2548,26 @@ included host could spoof <code>X-Forwarded-For</code> to forge the source IP.</
   scheme and has no replay/nonce protection; the internal-network + default-deny
   CIDR posture is the boundary.</li>
 </ul>
-<p><strong>Deployment requirement:</strong> keep <code>trusted_proxy_hosts</code> scoped to the
-actual reverse-proxy host(s) — in this stack that is the Caddy container's
-bridge IP only. Do NOT set <code>trusted_proxy_hosts="*"</code> in any production
+<p><strong>Deployment requirement:</strong> keep <code>trusted_proxy_hosts</code> scoped to the actual
+reverse-proxy hop(s). Do NOT set <code>trusted_proxy_hosts="*"</code> in any production
 deployment. The setting is exposed via <code>TRUSTED_PROXY_HOSTS</code> in
-<code>CoreSettings</code>; the default value is <code>dashboard</code> (the Caddy reverse-proxy
-service), which is correct for the standard single-host stack. Override only
-when deploying behind a different proxy fleet.</p>
+<code>CoreSettings</code>; its default is the numeric range
+<code>127.0.0.0/8,10.137.241.0/24</code> (loopback plus the Docker bridge subnet,
+tracking <code>JARVIS_NET_SUBNET</code> — see <code>libs/jarvis_common/jarvis_common/settings.py</code>
+and the <code>TRUSTED_PROXY_HOSTS</code> line in <code>docker-compose.yml</code>'s environment
+block), which is correct for the standard single-host stack. It must be
+numeric: uvicorn's <code>ProxyHeadersMiddleware</code> matches the immediate socket peer
+against this list before it will rewrite <code>scope["client"]</code> from
+<code>X-Forwarded-For</code>, and a hostname literal like <code>dashboard</code> can never match a
+numeric peer address — the rewrite would never fire and the <code>X-Owner-User-Id</code>
+guard could be tricked into trusting a relayed browser request. In this
+stack, the trusted hop is the dashboard (nginx) container, not Caddy — Caddy
+terminates the public edge and proxies to <code>dashboard:3000</code>, and it is
+dashboard's nginx that makes the proxied connection to the app. As a second
+layer, that nginx also strips any browser-supplied <code>X-Owner-User-Id</code> header
+before proxying, so only the container-internal caller (which never
+traverses nginx) can set it. Override the default only when deploying behind
+a different proxy fleet.</p>
 <hr />
 <h2 id="audit-log">Audit Log<a class="headerlink" href="#audit-log" title="Permanent link">&para;</a></h2>
 <p>Security-relevant events are written to the <code>audit_log</code> table by
@@ -2622,7 +2635,7 @@ configured.</p>
 <p>The Ollama daemon handles local LLM inference. Key constraints:</p>
 <ul>
 <li><strong>Image pin:</strong> keep <code>OLLAMA_IMAGE</code> in <code>versions.env</code> at the tested pin
-  (<code>ollama/ollama:0.23.1</code>) or a newer validated pin. Downgrading below the
+  (<code>ollama/ollama:0.31.2</code>) or a newer validated pin. Downgrading below the
   patched line reintroduces known vulnerabilities (see
   <a href="../known-residual-risks/">known-residual-risks.md</a> for the current CVE
   posture entry).</li>
