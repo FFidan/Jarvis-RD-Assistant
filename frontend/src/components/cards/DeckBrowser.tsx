@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,7 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
   const [exporting, setExporting] = useState<number | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const { data: decks = [], isLoading } = useQuery({
+  const { data: decks = [], isLoading, isError, refetch } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -69,6 +70,10 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
         {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full" />)}
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryErrorState onRetry={refetch} />;
   }
 
   return (

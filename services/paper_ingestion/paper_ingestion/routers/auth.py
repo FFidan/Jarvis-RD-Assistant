@@ -173,7 +173,8 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     async with pool.acquire() as conn:
         recent = await conn.fetchval(
             "SELECT created_at FROM magic_link_tokens"
-            " WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+            " WHERE user_id = $1 AND pending_email IS NULL"
+            " ORDER BY created_at DESC LIMIT 1",
             user_id,
         )
         if (
@@ -539,6 +540,11 @@ async def logout(request: Request, response: Response) -> Response:
                     user_id=str(uid) if isinstance(uid, int) else None,
                 )
 
+    # SessionMiddleware.dispatch re-issues a fresh 30-day cookie AFTER the route
+    # when request.state.session_renewed is truthy (set before logout ran, for a
+    # renewal-eligible session). Clear it here so that re-issue is skipped and does
+    # not clobber the deletion below. Unconditional + idempotent (falsy → no-op).
+    request.state.session_renewed = None
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,
         path="/",

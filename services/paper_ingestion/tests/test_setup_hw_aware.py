@@ -386,7 +386,7 @@ def test_backfill_torch_variant_nvidia_env_lands_cuda_tag(tmp_path: Path) -> Non
 
     This is the highest-value invariant here: without ``TORCH_VARIANT_SUFFIX=-cuda``
     the paper-ingestion image tag
-    ``${JARVIS_VERSION:-1.1.1}${TORCH_VARIANT_SUFFIX:-}`` resolves to the CPU
+    ``${JARVIS_VERSION:-1.1.2}${TORCH_VARIANT_SUFFIX:-}`` resolves to the CPU
     flavour on a CUDA host, and a --build-local rebuild without
     ``INSTALL_OPTIONAL=true`` reproduces the published :X.Y.Z-cuda tag WITHOUT
     the reranker it ships. The cpu path is covered by the keep-env setup tests

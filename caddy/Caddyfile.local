@@ -32,7 +32,7 @@
 	# /restore-upload/<filename> path (handle, not handle_path — prefix preserved).
 	handle /restore-upload/* {
 		request_body {
-			max_size {$UPLOAD_MAX_BODY:21GB}
+			max_size {$UPLOAD_MAX_BODY:21GiB}
 		}
 		reverse_proxy http://restore-uploader:8090
 	}

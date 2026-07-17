@@ -284,6 +284,22 @@ def _read_last_run() -> dict | None:
         return None
 
 
+def _last_run_succeeded(run: dict | None) -> bool | None:
+    """The truthful ``last_run_succeeded`` value for ``/status``.
+
+    A maintenance-skip run (the sidecar stood down for an in-flight restore)
+    leaves ``succeeded`` at its startup-default ``false`` — it is never
+    flipped before the skip branch's early ``exit 0`` — so the raw value
+    would misreport a deliberate stand-down as "last backup attempt failed".
+    ``None`` ("unknown"/"no attempt to judge") is already a valid, supported
+    value for this field, so a skipped run reports that instead of a new
+    field or state.
+    """
+    if run is None or run.get("skipped_maintenance"):
+        return None
+    return run.get("succeeded")
+
+
 def _read_manifest(ts: str) -> dict | None:
     """Read manifest_<ts>.json metadata; None if absent/unreadable/malformed.
 
@@ -531,7 +547,7 @@ async def backup_status(request: Request) -> BackupStatus:
         archive_count=len(entries),
         last_run_at=last,
         last_attempt_at=run.get("attempted_at") if run else None,
-        last_run_succeeded=run.get("succeeded") if run else None,
+        last_run_succeeded=_last_run_succeeded(run),
         trigger_pending=_TRIGGER_SENTINEL.exists(),
     )
 
@@ -666,16 +682,27 @@ def _validate_local_restore(timestamp: str) -> None:
 def _validate_inbox_restore(timestamp: str) -> None:
     """Validate an INBOX (off-host) restore target against the sidecar's inbox manifest.
 
-    The point must be present in the manifest and complete (jarvis + litellm archives),
-    and the one-time operator key must be staged. The local group/compat/manifest checks
-    do not apply — restore.sh STEP 2 compat-gates the off-host archive itself before any
-    destruction. Raises 404 (absent/incomplete) or 409 (no key); returns None when valid.
+    The point must be present in the manifest, complete (jarvis + litellm archives, and
+    the manifest restore.sh STEP 2 requires), carry a secrets archive, and have its
+    one-time operator key staged. Without the secrets archive the off-host restore swaps
+    both DBs then fails at STEP 8 (a shredded key + a durable maintenance hold), so it is
+    rejected up front here too. The local group/compat/manifest checks do not apply —
+    restore.sh STEP 2 compat-gates the off-host archive itself before any destruction.
+    Raises 404 (absent/incomplete) or 409 (no secrets / no key); returns None when valid.
     """
     pt = next((p for p in _read_inbox_manifest() if p.timestamp == timestamp), None)
     if pt is None or not pt.complete:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No complete backup at that time",
+        )
+    if not pt.has_secrets:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This off-host backup has no secrets archive; the restore would fail "
+                "after swapping the databases. Stage the secrets archive before restoring."
+            ),
         )
     if not pt.has_key:
         raise HTTPException(

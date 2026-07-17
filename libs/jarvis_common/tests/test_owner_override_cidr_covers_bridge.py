@@ -29,42 +29,46 @@ def _net_subnet_default(text: str) -> str:
     return m.group(1)
 
 
-def _owner_override_line(text: str) -> str:
+def _assert_compose_var_tracks_bridge_subnet(text: str, subnet: str, var_name: str) -> None:
+    """Assert the compose default for `var_name` (a `${VAR:-a,b,c}` CIDR list)
+    references JARVIS_NET_SUBNET and, once resolved, actually covers the
+    jarvis bridge subnet — belt-and-suspenders against a malformed reference."""
     for line in text.splitlines():
-        if "OWNER_OVERRIDE_ALLOWED_CIDRS:" in line and "${" in line:
-            return line
-    raise AssertionError(
-        "docker-compose.yml shared-env must set OWNER_OVERRIDE_ALLOWED_CIDRS "
-        "(absent → the bare code default applies, which does not cover the bridge)"
+        if f"{var_name}:" in line and "${" in line:
+            var_line = line
+            break
+    else:
+        raise AssertionError(
+            f"docker-compose.yml shared-env must set {var_name} "
+            "(absent → the bare code default applies, which does not cover the bridge)"
+        )
+
+    # It must reference JARVIS_NET_SUBNET so the allowlist FOLLOWS the bridge
+    # subnet (including operator overrides of JARVIS_NET_SUBNET).
+    assert "JARVIS_NET_SUBNET" in var_line, (
+        f"{var_name} must track ${{JARVIS_NET_SUBNET}} so the bridge hop is "
+        f"trusted regardless of the bridge subnet; got: {var_line.strip()}"
+    )
+
+    # Belt-and-suspenders: resolve the default allowlist and prove the default
+    # bridge subnet is actually covered (catches a malformed reference).
+    resolved = var_line.replace("${JARVIS_NET_SUBNET:-" + subnet + "}", subnet)
+    m = re.search(rf"{var_name}:-([^}}]+)\}}", resolved)
+    assert m, f"could not resolve the {var_name} default from: {var_line.strip()}"
+    entries = [e.strip() for e in m.group(1).split(",") if e.strip()]
+    allowlist = [ipaddress.IPv4Network(e) for e in entries]
+
+    bridge = ipaddress.IPv4Network(subnet)
+    assert any(bridge.subnet_of(net) for net in allowlist), (
+        f"jarvis bridge subnet {subnet} is not covered by {var_name} "
+        f"{[str(n) for n in allowlist]} — the bridge hop would not be trusted"
     )
 
 
 def test_compose_owner_override_tracks_the_bridge_subnet() -> None:
     text = _COMPOSE.read_text()
     subnet = _net_subnet_default(text)
-    owner_line = _owner_override_line(text)
-
-    # It must reference JARVIS_NET_SUBNET so the allowlist FOLLOWS the bridge
-    # subnet (including operator overrides of JARVIS_NET_SUBNET).
-    assert "JARVIS_NET_SUBNET" in owner_line, (
-        "OWNER_OVERRIDE_ALLOWED_CIDRS must track ${JARVIS_NET_SUBNET} so the bot "
-        f"is trusted regardless of the bridge subnet; got: {owner_line.strip()}"
-    )
-
-    # Belt-and-suspenders: resolve the default allowlist and prove the default
-    # bridge subnet is actually covered (catches a malformed reference).
-    resolved = owner_line.replace("${JARVIS_NET_SUBNET:-" + subnet + "}", subnet)
-    m = re.search(r"OWNER_OVERRIDE_ALLOWED_CIDRS:-([^}]+)\}", resolved)
-    assert m, (
-        f"could not resolve the OWNER_OVERRIDE_ALLOWED_CIDRS default from: {owner_line.strip()}"
-    )
-    allowlist = [ipaddress.IPv4Network(c.strip()) for c in m.group(1).split(",") if c.strip()]
-
-    bridge = ipaddress.IPv4Network(subnet)
-    assert any(bridge.subnet_of(net) for net in allowlist), (
-        f"jarvis bridge subnet {subnet} is not covered by the owner-override "
-        f"allowlist {[str(n) for n in allowlist]} — the bot would 403"
-    )
+    _assert_compose_var_tracks_bridge_subnet(text, subnet, "OWNER_OVERRIDE_ALLOWED_CIDRS")
 
 
 def test_compose_resolved_allowlist_covers_a_bridge_ip(
@@ -134,3 +138,13 @@ def test_startup_warning_fires_for_loopback_only_default(
         for r in caplog.records
         if r.levelno == logging.WARNING and "OWNER_OVERRIDE_ALLOWED_CIDRS" in r.getMessage()
     ], "no loopback warning when the operator widens the allowlist"
+
+
+def test_compose_trusted_proxy_hosts_tracks_the_bridge_subnet() -> None:
+    """Compose must inject a NUMERIC TRUSTED_PROXY_HOSTS covering
+    the bridge, so ProxyHeadersMiddleware trusts the nginx hop and rewrites the
+    client IP the owner-override guard checks. A bare hostname (the old
+    'dashboard' default) can never match a numeric peer."""
+    text = _COMPOSE.read_text()
+    subnet = _net_subnet_default(text)
+    _assert_compose_var_tracks_bridge_subnet(text, subnet, "TRUSTED_PROXY_HOSTS")

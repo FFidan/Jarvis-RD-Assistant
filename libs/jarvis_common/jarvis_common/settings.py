@@ -95,10 +95,16 @@ class CoreSettings(BaseSettings):
     dev_crypto_relaxed: bool = False
     log_level: str = "INFO"
     environment: str = "development"
-    # Comma-separated list of trusted proxy hostnames for ProxyHeadersMiddleware.
-    # Parsed at the use site — pydantic-settings would otherwise try to JSON-decode
-    # a list-typed field and reject plain "dashboard,foo" strings.
-    trusted_proxy_hosts: str = "dashboard"
+    # Comma-separated CIDRs/IPs of trusted reverse-proxy hops for
+    # ProxyHeadersMiddleware. uvicorn matches the immediate socket peer against
+    # this list and only then rewrites scope["client"] from X-Forwarded-For.
+    # It MUST be numeric (loopback + bridge subnet): a bare hostname literal like
+    # "dashboard" can never match a numeric peer, so the rewrite that un-masks an
+    # nginx-relayed browser's real IP never fires and the X-Owner-User-Id guard
+    # (auth.py) would trust a relayed browser request. The compose deploy widens
+    # this via TRUSTED_PROXY_HOSTS (tracks JARVIS_NET_SUBNET). Parsed at the use
+    # site — pydantic-settings would otherwise JSON-decode a list-typed field.
+    trusted_proxy_hosts: str = "127.0.0.0/8,10.137.241.0/24"
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
     # Deny-by-default: loopback only. The compose deploy injects the docker
     # bridge range (OWNER_OVERRIDE_ALLOWED_CIDRS tracks JARVIS_NET_SUBNET), so a
@@ -156,10 +162,11 @@ class CoreSettings(BaseSettings):
         if self.trusted_proxy_hosts.strip() == "*" and not self.dev_mode:
             _logger.warning(
                 "TRUSTED_PROXY_HOSTS='*' is not allowed outside dev mode "
-                "(IP-spoofing risk); resetting to default 'dashboard'. "
-                "Set DEV_MODE=true or list specific hostnames."
+                "(IP-spoofing risk); resetting to the loopback+bridge default "
+                "'127.0.0.0/8,10.137.241.0/24'. Set DEV_MODE=true or list "
+                "specific proxy CIDRs."
             )
-            object.__setattr__(self, "trusted_proxy_hosts", "dashboard")
+            object.__setattr__(self, "trusted_proxy_hosts", "127.0.0.0/8,10.137.241.0/24")
         return self
 
     @model_validator(mode="after")

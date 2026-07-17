@@ -154,6 +154,29 @@ describe('LearningCardsPage — Library view content', () => {
   });
 });
 
+describe('LearningCardsPage — stats failure (StatsHeader)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchDecks.mockResolvedValue([]);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
+  });
+
+  it('surfaces a stats error with Retry instead of silently hiding the header', async () => {
+    mockGetStats.mockRejectedValue(new Error('stats down'));
+    renderPage('/cards?mode=library');
+
+    // Failed stats render an explicit error, not a blank header.
+    expect(await screen.findByText("Couldn't load your stats.")).toBeInTheDocument();
+    expect(screen.queryByText('Total Cards')).toBeNull();
+
+    // Retry re-invokes the query and restores the tiles.
+    mockGetStats.mockResolvedValue(STATS_ALL_DONE);
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('Total Cards')).toBeInTheDocument());
+    expect(screen.queryByText("Couldn't load your stats.")).toBeNull();
+  });
+});
+
 describe('LearningCardsPage — breadcrumb and progress', () => {
   beforeEach(() => {
     vi.clearAllMocks();

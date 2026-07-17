@@ -123,6 +123,56 @@ async def get_account(
     return _row_to_account(row)
 
 
+async def _stage_email_change(
+    conn,
+    current_email: str,
+    requested_email: str,
+    request: Request,
+    user_id: int,
+) -> tuple[tuple[str, str] | None, tuple[str, dict | None] | None, bool]:
+    """Validate and stage a verified email change under an open connection.
+
+    Returns ``(pending_send, audit_event, email_conflict)`` and runs NO
+    post-release side-effects (no email sent, no audit written): send_magic_link
+    and log_audit each re-acquire from the pool, so the caller must run them only
+    after the connection is released (else a saturated pool deadlocks).
+    ``email_conflict`` is True when the address is already in use so the caller
+    can defer the 409 until after any staged display_name audit has flushed.
+    """
+    new_email = requested_email.lower().strip()
+    if new_email == current_email.lower():
+        return None, None, False
+    # Reject if the address is already in use by another live user.
+    clash = await conn.fetchrow(
+        "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
+        new_email,
+    )
+    if clash is not None:
+        return None, None, True
+    if await _is_email_change_on_cooldown(conn, user_id):
+        return None, None, False
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw_token)
+    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
+    await conn.execute(
+        """
+        INSERT INTO magic_link_tokens
+            (token_hash, user_id, expires_at, pending_email)
+        VALUES ($1, $2, $3, $4)
+        """,
+        token_hash,
+        user_id,
+        expires_at,
+        new_email,
+    )
+    link = _build_email_confirm_link(request, raw_token)
+    audit_event = (
+        "account.email.change.requested",
+        {"new_email_hash": _hash_email(new_email)},
+    )
+    return (new_email, link), audit_event, False
+
+
 @router.patch("", response_model=AccountUpdateResponse)
 @limiter.limit("20/minute")
 async def update_account(
@@ -141,6 +191,14 @@ async def update_account(
     pool = request.app.state.db_pool
     _audit = _audit_pool(request)
     email_verification_sent = False
+    # Side-effects are staged under the connection and executed only AFTER it
+    # is released (see the block below the acquire).
+    pending_send: tuple[str, str] | None = None
+    audit_events: list[tuple[str, dict | None]] = []
+    # Deferred so a same-request display_name change still flushes its staged
+    # audit event before the email-clash 409 is raised (raising inside the
+    # acquire block would exit before the post-block audit loop runs).
+    email_conflict = False
 
     async with pool.acquire() as conn:
         current = await conn.fetchrow(_ACCOUNT_SELECT, user_id)
@@ -155,65 +213,49 @@ async def update_account(
                 new_name,
                 user_id,
             )
-            if _audit is not None:
-                await log_audit(
-                    _audit,
-                    action="account.display_name.update",
-                    resource=f"users/{user_id}",
-                    user_id=str(user_id),
-                )
+            audit_events.append(("account.display_name.update", None))
 
         # 2. email — verified change only (no direct UPDATE users.email here).
         if body.email is not None:
-            new_email = body.email.lower().strip()
-            if new_email != current["email"].lower():
-                # Reject if the address is already in use by another live user.
-                clash = await conn.fetchrow(
-                    "SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL",
-                    new_email,
-                )
-                if clash is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A user with that email already exists",
-                    )
-
-                if not await _is_email_change_on_cooldown(conn, user_id):
-                    raw_token = secrets.token_urlsafe(32)
-                    token_hash = _hash_token(raw_token)
-                    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
-                    await conn.execute(
-                        """
-                    INSERT INTO magic_link_tokens
-                        (token_hash, user_id, expires_at, pending_email)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                        token_hash,
-                        user_id,
-                        expires_at,
-                        new_email,
-                    )
-                    link = _build_email_confirm_link(request, raw_token)
-                    try:
-                        await send_magic_link(new_email, link, pool=pool)
-                        email_verification_sent = True
-                    except Exception:  # noqa: BLE001 — never leak SMTP detail
-                        logger.exception(
-                            "send_magic_link (email-change) failed for email_hash=%s",
-                            _hash_email(new_email),
-                        )
-                    if _audit is not None:
-                        await log_audit(
-                            _audit,
-                            action="account.email.change.requested",
-                            resource=f"users/{user_id}",
-                            user_id=str(user_id),
-                            metadata={"new_email_hash": _hash_email(new_email)},
-                        )
+            pending_send, email_audit, email_conflict = await _stage_email_change(
+                conn, current["email"], body.email, request, user_id
+            )
+            if email_audit is not None:
+                audit_events.append(email_audit)
 
         # Re-read so the response reflects the persisted row (email unchanged
         # until the token is confirmed).
         refreshed = await conn.fetchrow(_ACCOUNT_SELECT, user_id)
+
+    # Side-effects run only AFTER the connection is returned to the pool:
+    # send_magic_link and log_audit each RE-ACQUIRE a separate connection from
+    # this same pool, so invoking them while still holding `conn` hangs
+    # (hold-and-wait deadlock) once the pool is saturated.
+    if pending_send is not None:
+        new_email, link = pending_send
+        try:
+            await send_magic_link(new_email, link, pool=pool)
+            email_verification_sent = True
+        except Exception:  # noqa: BLE001 — never leak SMTP detail
+            logger.exception(
+                "send_magic_link (email-change) failed for email_hash=%s",
+                _hash_email(new_email),
+            )
+    if _audit is not None:
+        for action, metadata in audit_events:
+            await log_audit(
+                _audit,
+                action=action,
+                resource=f"users/{user_id}",
+                user_id=str(user_id),
+                metadata=metadata,
+            )
+
+    if email_conflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A user with that email already exists",
+        )
 
     return AccountUpdateResponse(
         account=_row_to_account(refreshed),

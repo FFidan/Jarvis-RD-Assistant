@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { cardTypeLabel } from '@/lib/labels/cardTypes';
 import {
@@ -27,7 +28,7 @@ export function CardList({ deckId }: CardListProps) {
   const queryClient = useQueryClient();
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  const { data: cards = [], isLoading } = useQuery({
+  const { data: cards = [], isLoading, isError, refetch } = useQuery({
     queryKey: QUERY_KEYS.cards.byDeck(deckId),
     queryFn: () => fetchCards(deckId),
   });
@@ -49,6 +50,10 @@ export function CardList({ deckId }: CardListProps) {
         {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryErrorState onRetry={refetch} />;
   }
 
   if (cards.length === 0) {

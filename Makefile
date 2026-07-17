@@ -117,6 +117,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/tests/test_restore_coverage.sh
 	bash scripts/tests/test_prune_coverage.sh
 	bash scripts/tests/test_setup_lib_helpers.sh
+	bash scripts/tests/test_update_coverage.sh
 	uv run pytest
 	$(MAKE) frontend-check
 

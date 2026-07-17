@@ -191,6 +191,12 @@ maintenance_active() {
 
 if [ -z "$BACKUP_FORCE" ] && maintenance_active; then
   SKIPPED_MAINTENANCE=1
+  # A stand-down is not an attempt, let alone a failure: keep the primary
+  # stores out of their "failed" startup default (mirrors how SECRETS_STATE/
+  # QDRANT_STATE already default to "skipped") so the EXIT trap's
+  # write_last_run does not misreport this run's stores as failed.
+  JARVIS_STATE="skipped"
+  LITELLM_STATE="skipped"
   echo "[backup] skipped: a restore holds the maintenance sentinel" >&2
   exit 0
 fi

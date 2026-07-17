@@ -291,21 +291,31 @@ FAILED_APP=(); FAILED_THIRD=()
 for _svc in "${FAILED[@]}"; do
   if [[ "$_svc" =~ $_THIRD_PARTY_RE ]]; then FAILED_THIRD+=("$_svc"); else FAILED_APP+=("$_svc"); fi
 done
-cat <<EOF
+printf '\nRecovery — the two image sets roll back differently:\n'
 
-Recovery — the two image sets roll back differently:
+if [ "${#FAILED_THIRD[@]}" -gt 0 ]; then
+cat <<EOF
 
   ${C_BOLD}Third-party services${C_RESET} (postgres, ollama, qdrant, litellm, cloudflared) are
   pinned in versions.env. Roll their pins back one commit and re-run:
     ${C_BOLD}git checkout HEAD~1 -- versions.env && ./update.sh${C_RESET}
+EOF
+fi
+
+if [ "${#FAILED_APP[@]}" -gt 0 ]; then
+cat <<EOF
 
   ${C_BOLD}Application services${C_RESET} are tagged by JARVIS_VERSION in docker-compose.yml —
   versions.env does NOT pin them, so the command above re-pulls the same
   images. To return them to a previously PUBLISHED release, pin that tag and
   pull it back (only tags already in the registry can be rolled back; a
   --build-local install rebuilds from source with --build-local instead):
-    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose pull ${FAILED[*]}${C_RESET}
-    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose up -d --no-build ${FAILED[*]}${C_RESET}
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose pull ${FAILED_APP[*]}${C_RESET}
+    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose up -d --no-build ${FAILED_APP[*]}${C_RESET}
+EOF
+fi
+
+cat <<EOF
 
 To inspect logs for the failed service(s):
   docker compose logs --tail=200 ${FAILED[*]}

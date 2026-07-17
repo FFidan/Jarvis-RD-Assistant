@@ -179,4 +179,33 @@ describe('AskPage', () => {
     expect(screen.queryByTestId('ask-empty-state')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Ask a question/)).toBeInTheDocument();
   });
+
+  it('keeps the chat input usable while the metrics request is failed or pending', async () => {
+    // Degraded, not dead: a failed/pending metrics query must never disable the
+    // workspace or claim a prerequisite ("Analyze at least one paper first").
+    vi.mocked(fetchDashboardMetrics).mockRejectedValue(new Error('metrics down'));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <AskPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchDashboardMetrics)).toHaveBeenCalled();
+    });
+
+    const textarea = screen.getByPlaceholderText(/Ask a question/);
+    expect(textarea).not.toBeDisabled();
+    expect(screen.queryByText('Analyze at least one paper first')).not.toBeInTheDocument();
+
+    // Send is disabled only while the input is empty — typing enables it.
+    fireEvent.change(textarea, { target: { value: 'Still works?' } });
+    expect(screen.getByRole('button', { name: 'Send message' })).not.toBeDisabled();
+  });
 });

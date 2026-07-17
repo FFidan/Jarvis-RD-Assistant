@@ -14,6 +14,7 @@ Verifies that:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,6 +42,22 @@ def _nginx_rate_limit_text() -> str:
 
 def _compose_text() -> str:
     return COMPOSE_FILE.read_text()
+
+
+def _location_blocks(text: str) -> list[str]:
+    """Return the body text of every top-level `location ... { ... }` block."""
+    blocks: list[str] = []
+    for match in re.finditer(r"^\s*location\b[^{]*\{", text, flags=re.MULTILINE):
+        depth = 1
+        pos = match.end()
+        while depth > 0:
+            if text[pos] == "{":
+                depth += 1
+            elif text[pos] == "}":
+                depth -= 1
+            pos += 1
+        blocks.append(text[match.end() : pos - 1])
+    return blocks
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +153,19 @@ def test_nginx_proxies_backend_liveness_routes():
     assert "proxy_pass http://paper_ingestion:8000/health/live;" in text
     assert "location = /health/learning_engine/live" in text
     assert "proxy_pass http://learning_engine:8001/health/live;" in text
+
+
+def test_nginx_proxied_locations_strip_owner_header():
+    """Every proxied location must strip a browser-supplied X-Owner-User-Id:
+    only the container-bridge bot (which never traverses nginx) may set it.
+    A future location added without this line — or a deleted strip line —
+    would silently reopen an owner-impersonation hole with no other signal."""
+    proxied_blocks = [block for block in _location_blocks(_nginx_text()) if "proxy_pass" in block]
+    assert len(proxied_blocks) >= 1, "no proxy_pass location blocks found in nginx.conf"
+    for block in proxied_blocks:
+        assert 'proxy_set_header X-Owner-User-Id "";' in block, (
+            'a proxied location block is missing proxy_set_header X-Owner-User-Id "";:\n' + block
+        )
 
 
 # ---------------------------------------------------------------------------

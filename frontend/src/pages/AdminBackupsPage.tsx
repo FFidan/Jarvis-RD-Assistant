@@ -5,8 +5,9 @@
  * Shows sidecar status, restore points grouped from GET /api/admin/backups/restore-points,
  * allows an on-demand backup (confirm), per-file download (expandable per card),
  * a guided one-click restore (typed-RESTORE confirm + polled progress that degrades
- * gracefully while the app is briefly unreachable mid-restore), and the manual host
- * runbook as the advanced fallback.
+ * gracefully while the app is briefly unreachable mid-restore), an in-browser
+ * off-host upload that stages another server's backup in the restore inbox, and
+ * the manual host runbook as the advanced fallback.
  */
 
 import { useEffect, useState } from 'react';
@@ -35,6 +36,7 @@ import {
 } from '@/lib/api/backups';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
+import { OffHostUploadSection } from '@/components/admin/OffHostUploadSection';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
 import { GuidedRecoveryView } from '@/components/admin/GuidedRecoveryView';
 import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
@@ -87,9 +89,11 @@ function InboxBadge({ ok, okLabel, badLabel }: { ok: boolean; okLabel: string; b
 /**
  * Off-host recovery: list the backup sets the operator has staged in this server's
  * restore inbox and trigger a cross-host restore. The trigger is disabled (with an
- * inline hint) until a set is complete AND its one-time key is present, and while any
- * restore is already in flight. The file upload itself is host-side (out of scope
- * here); the app only lists what the sidecar reports and requests the restore.
+ * inline hint) until a set is complete, carries its secrets archive, AND its one-time
+ * key is present, and while any restore is already in flight. A secrets-less set would
+ * fail post-swap, so it is blocked here. Files are staged by the in-browser uploader
+ * (OffHostUploadSection) or a host-side copy; the app only lists what the sidecar
+ * reports and requests the restore.
  */
 function InboxRestoreSection({
   points,
@@ -105,9 +109,9 @@ function InboxRestoreSection({
       <div>
         <h2 className="text-sm font-medium">Restore from another JARVIS</h2>
         <p className="text-xs text-muted-foreground">
-          Recover this server from a backup taken on a different JARVIS. Copy that backup&apos;s
-          archive set and its one-time key into this server&apos;s restore inbox; staged sets appear
-          below.
+          Recover this server from a backup taken on a different JARVIS. Upload that backup&apos;s
+          archive set and its one-time key with the uploader above (or copy them into the
+          server&apos;s restore inbox); staged sets appear below.
         </p>
       </div>
       {points.length === 0 ? (
@@ -115,18 +119,21 @@ function InboxRestoreSection({
           data-testid="inbox-empty"
           className="rounded-md border px-4 py-6 text-center text-sm text-muted-foreground"
         >
-          No off-host backups staged. Place a backup archive set and its one-time key in this
-          server&apos;s restore inbox to recover from another JARVIS.
+          No off-host backups staged. Upload a backup archive set and its one-time key to
+          recover from another JARVIS.
         </div>
       ) : (
         <ul className="space-y-2">
           {points.map((p) => {
-            const disabled = !p.complete || !p.has_key || restoringTimestamp !== null;
+            const disabled =
+              !p.complete || !p.has_secrets || !p.has_key || restoringTimestamp !== null;
             const hint = !p.complete
               ? 'This backup is missing a required database archive.'
-              : !p.has_key
-                ? 'Drop the one-time operator key into the restore inbox before restoring.'
-                : null;
+              : !p.has_secrets
+                ? 'This backup has no secrets archive; the restore would fail after swapping the databases. Stage the secrets archive before restoring.'
+                : !p.has_key
+                  ? 'Drop the one-time operator key into the restore inbox before restoring.'
+                  : null;
             return (
               <li
                 key={p.timestamp}
@@ -439,11 +446,18 @@ export function AdminBackupsPage() {
     queryFn: getRetention,
   });
 
+  // Latches true once the policy has hydrated from the server, so Save can never
+  // fire from the uninitialized '' defaults. Stays true afterward — a later
+  // background refetch failure (isError) doesn't blank the already-loaded fields,
+  // so it shouldn't re-lock Save either.
+  const [retentionLoaded, setRetentionLoaded] = useState(false);
+
   // Seed the inputs from the saved policy once it loads (empty string == "no cap").
   useEffect(() => {
     if (retentionQuery.data) {
       setKeepLastN(retentionQuery.data.keep_last_n?.toString() ?? '');
       setMaxAgeDays(retentionQuery.data.max_age_days?.toString() ?? '');
+      setRetentionLoaded(true);
     }
   }, [retentionQuery.data]);
 
@@ -459,6 +473,9 @@ export function AdminBackupsPage() {
   });
 
   const handleSaveRetention = () => {
+    // Belt-and-suspenders: the Save button is already disabled until the policy
+    // has loaded, but never build a PUT from uninitialized fields even so.
+    if (!retentionLoaded) return;
     // Blank, 0, or an invalid value all mean "no cap" (null): a 0 window would be
     // a footgun (delete everything but the last day), and 0 kept points is
     // meaningless — both collapse to the default, matching the sidecar's floors.
@@ -598,6 +615,12 @@ export function AdminBackupsPage() {
         </div>
       )}
 
+      <OffHostUploadSection
+        onUploaded={() =>
+          void queryClient.invalidateQueries({ queryKey: ['admin', 'backups', 'inbox'] })
+        }
+      />
+
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection
           points={inboxPoints}
@@ -614,44 +637,57 @@ export function AdminBackupsPage() {
             restore points are removed automatically by the backup service.
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-4">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium">Keep most recent</span>
-            <input
-              type="number"
-              min={0}
-              inputMode="numeric"
-              aria-label="Keep most recent restore points"
-              className="w-32 rounded-md border px-2 py-1 text-sm"
-              placeholder="All"
-              value={keepLastN}
-              onChange={(e) => setKeepLastN(e.target.value)}
-            />
-            <span className="text-xs text-muted-foreground">restore points</span>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium">Maximum age</span>
-            <input
-              type="number"
-              min={0}
-              inputMode="numeric"
-              aria-label="Maximum age in days"
-              className="w-32 rounded-md border px-2 py-1 text-sm"
-              placeholder="Default"
-              value={maxAgeDays}
-              onChange={(e) => setMaxAgeDays(e.target.value)}
-            />
-            <span className="text-xs text-muted-foreground">days</span>
-          </label>
-          <button
-            type="button"
-            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
-            onClick={handleSaveRetention}
-            disabled={retentionMutation.isPending}
-          >
-            Save retention policy
-          </button>
-        </div>
+        {retentionQuery.isError && !retentionLoaded ? (
+          <div className="text-sm text-destructive">
+            Could not load the retention policy.
+            <button
+              type="button"
+              className="ml-2 rounded-md border px-3 py-1.5 text-sm"
+              onClick={() => void retentionQuery.refetch()}
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs font-medium">Keep most recent</span>
+              <input
+                type="number"
+                min={0}
+                inputMode="numeric"
+                aria-label="Keep most recent restore points"
+                className="w-32 rounded-md border px-2 py-1 text-sm"
+                placeholder="All"
+                value={keepLastN}
+                onChange={(e) => setKeepLastN(e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">restore points</span>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs font-medium">Maximum age</span>
+              <input
+                type="number"
+                min={0}
+                inputMode="numeric"
+                aria-label="Maximum age in days"
+                className="w-32 rounded-md border px-2 py-1 text-sm"
+                placeholder="Default"
+                value={maxAgeDays}
+                onChange={(e) => setMaxAgeDays(e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">days</span>
+            </label>
+            <button
+              type="button"
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+              onClick={handleSaveRetention}
+              disabled={retentionMutation.isPending || !retentionLoaded}
+            >
+              Save retention policy
+            </button>
+          </div>
+        )}
       </div>
 
       {showRestorePanel && (

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import asyncpg
 from jarvis_common.event_log import log_event
 from telegram import Update
+from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import escape
@@ -16,6 +17,52 @@ from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+
+async def _notify_pairing_rebound(
+    context: ContextTypes.DEFAULT_TYPE,
+    db_pool: asyncpg.Pool,
+    user_id: int,
+    prior_chat_id: int,
+    new_chat_id: int,
+) -> None:
+    """Audit and notify when a new chat displaces a user's existing pairing."""
+    logger.warning(
+        "Telegram pairing rebound: user_id=%d displaced chat_id=%d → new chat_id=%d",
+        user_id,
+        prior_chat_id,
+        new_chat_id,
+    )
+    # Audit trail in system_events (fire-and-forget — don't fail the pairing)
+    try:
+        await log_event(
+            pool=db_pool,
+            level="warning",
+            category="auth",
+            source="telegram_bot",
+            message="pairing.rebound",
+            context={
+                "user_id": user_id,
+                "prior_chat_id": prior_chat_id,
+                "new_chat_id": new_chat_id,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to log pairing.rebound audit event")
+    # Notify the displaced chat (best-effort — stale/blocked chats must not fail pairing)
+    try:
+        await context.bot.send_message(
+            prior_chat_id,
+            text=(
+                "⚠️ Security notice: Your JARVIS account is now paired to a different "
+                "Telegram chat. If this wasn't you, please contact your administrator."
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Could not notify prior chat_id=%d of pairing rebound (chat may be stale)",
+            prior_chat_id,
+        )
 
 
 @rate_limit(max_calls=5, window_seconds=60)
@@ -41,20 +88,22 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if message is None or chat is None:
         return
 
+    # Identity binds to chat_id; in a group every member shares it, so pairing
+    # there would grant them all the paired identity. Only allow 1:1 chats.
+    if chat.type != ChatType.PRIVATE:
+        await message.reply_text(
+            "Pairing only works in a direct 1:1 chat with the bot — "
+            "open a private chat and run /pair <token> there."
+        )
+        return
+
     args = context.args or []
-    if not args:
+    token = args[0].strip() if args else ""
+    if not token:
         await message.reply_text(
             "Usage: <code>/pair &lt;token&gt;</code>\n\n"
             "Generate a token from the JARVIS web dashboard under "
             "Settings → Integrations → Telegram.",
-            parse_mode="HTML",
-        )
-        return
-
-    token = args[0].strip()
-    if not token:
-        await message.reply_text(
-            "Token cannot be empty. Generate one from Settings → Integrations.",
             parse_mode="HTML",
         )
         return
@@ -147,42 +196,7 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # --- rebound: a different chat_id just took over this user's pairing ---
         if prior_chat_id is not None and prior_chat_id != chat.id:
-            logger.warning(
-                "Telegram pairing rebound: user_id=%d displaced chat_id=%d → new chat_id=%d",
-                user_id,
-                prior_chat_id,
-                chat.id,
-            )
-            # Audit trail in system_events (fire-and-forget — don't fail the pairing)
-            try:
-                await log_event(
-                    pool=db_pool,
-                    level="warning",
-                    category="auth",
-                    source="telegram_bot",
-                    message="pairing.rebound",
-                    context={
-                        "user_id": user_id,
-                        "prior_chat_id": prior_chat_id,
-                        "new_chat_id": chat.id,
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to log pairing.rebound audit event")
-            # Notify the displaced chat (best-effort — stale/blocked chats must not fail pairing)
-            try:
-                await context.bot.send_message(
-                    prior_chat_id,
-                    text=(
-                        "⚠️ Security notice: Your JARVIS account is now paired to a different "
-                        "Telegram chat. If this wasn't you, please contact your administrator."
-                    ),
-                )
-            except Exception:
-                logger.warning(
-                    "Could not notify prior chat_id=%d of pairing rebound (chat may be stale)",
-                    prior_chat_id,
-                )
+            await _notify_pairing_rebound(context, db_pool, user_id, prior_chat_id, chat.id)
 
         await message.reply_text(
             "✅ Paired! You'll now receive personalised JARVIS notifications here.\n\n"

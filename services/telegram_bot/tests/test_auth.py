@@ -95,6 +95,23 @@ async def test_auth_check_db_error_denies():
     assert await _auth_check(update, config, pool) == (False, None)
 
 
+@pytest.mark.asyncio
+async def test_auth_check_denies_non_private_chat_even_when_paired():
+    """A group/supergroup chat is denied WITHOUT resolving identity, even when a
+    stale telegram_user_pairings row exists for its (negative) chat_id.
+
+    Identity binds to chat_id, so a group pairing would let every member act as
+    the paired user.  The gate must fire before the DB lookup so stale group
+    pairings become inert for authed ops.
+    """
+    pool = _make_pool(fetchrow_return={"user_id": 1})  # stale group pairing present
+    update = make_telegram_update(chat_id=-1001234567890, chat_type="group")
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
+
+    assert await _auth_check(update, config, pool) == (False, None)
+    pool.fetchrow.assert_not_awaited()  # identity never resolved for a group chat
+
+
 # ---------------------------------------------------------------------------
 # @auth_required — unpaired callers get the /pair reply and the handler is skipped
 # ---------------------------------------------------------------------------
@@ -153,3 +170,23 @@ async def test_auth_required_paired_runs_handler_and_stashes_user_id():
     await _handler(update, context)
 
     assert seen == [99]
+
+
+@pytest.mark.asyncio
+async def test_auth_required_denies_group_chat_even_when_paired():
+    """An authed op invoked in a group chat is denied and the handler is skipped,
+    even when a telegram_user_pairings row exists for that chat_id."""
+    called: list[bool] = []
+
+    @auth_required
+    async def _handler(update, context):
+        called.append(True)
+
+    update = make_telegram_update(chat_id=-1001234567890, chat_type="group", text="/help")
+    context = _make_decorator_context()
+    context.application.bot_data["db_pool"].fetchrow = AsyncMock(return_value={"user_id": 99})
+
+    await _handler(update, context)
+
+    assert called == [], "authed handler must not run in a group chat"
+    update.message.reply_text.assert_awaited_once()

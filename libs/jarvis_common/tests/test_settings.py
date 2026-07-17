@@ -46,8 +46,8 @@ def test_core_settings_defaults(monkeypatch):
     assert settings.dev_mode is False
     assert settings.log_level == "INFO"
     assert settings.environment == "development"
-    assert settings.trusted_proxy_hosts == "dashboard"
-    assert settings.trusted_proxy_hosts_list == ["dashboard"]
+    assert settings.trusted_proxy_hosts == "127.0.0.0/8,10.137.241.0/24"
+    assert settings.trusted_proxy_hosts_list == ["127.0.0.0/8", "10.137.241.0/24"]
 
 
 def test_core_settings_reads_env(monkeypatch):

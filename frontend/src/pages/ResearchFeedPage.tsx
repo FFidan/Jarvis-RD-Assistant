@@ -11,6 +11,7 @@ import {
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { getPersistedCacheTimestamp } from '@/lib/query-persister';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { SearchFilters } from '@/lib/api';
 import type {
   SearchPreviewResult,
@@ -206,7 +207,11 @@ export function ResearchFeedPage() {
     void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
   }, [queryClient]);
 
-  const { data: allSources } = useQuery<SourceConfig[]>({
+  const {
+    data: allSources,
+    isError: sourcesError,
+    refetch: refetchSources,
+  } = useQuery<SourceConfig[]>({
     queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
@@ -640,6 +645,13 @@ export function ResearchFeedPage() {
                       Search across your enabled sources — results can be added to your library.
                     </p>
                   </div>
+
+                  {sourcesError && (
+                    <QueryErrorState
+                      onRetry={refetchSources}
+                      message="Couldn't load your sources — check your connection and try again."
+                    />
+                  )}
 
                   {externalSources.length > 0 && (
                     <div className="space-y-1">

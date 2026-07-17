@@ -169,6 +169,20 @@ else
   pass "compat gate does NOT query the live DB (file-based CODE_MAX only)"
 fi
 
+# 5c2. CODE_MAX guardrail: the CODE_MAX fallback literal (used only when both the
+#      migrations glob AND the db/SCHEMA_VERSION reads come up empty) must
+#      track the code's actual schema floor, or a schema-N backup is wrongly
+#      refused as "newer than code" after a migrations squash.
+code_max_literal="$(grep -oE 'CODE_MAX=[0-9]+' "$RESTORE_SCRIPT" | grep -oE '[0-9]+' | tail -1)"
+schema_version="$(cat "${SCRIPT_DIR}/../../db/SCHEMA_VERSION")"
+if [ -n "$code_max_literal" ] && [ "$code_max_literal" -eq "$schema_version" ]; then
+  pass "CODE_MAX fallback literal (${code_max_literal}) matches db/SCHEMA_VERSION (${schema_version})"
+else
+  printf 'FAIL: CODE_MAX fallback literal (%s) does not match db/SCHEMA_VERSION (%s)\n' \
+    "$code_max_literal" "$schema_version" >&2
+  fail=1
+fi
+
 # 5d. A wrong/rotated encryption key (or corrupt archive) is caught by a gzip-magic
 #     probe BEFORE any DROP — a bad key found mid-reload would leave the DB
 #     dropped+empty.
@@ -701,11 +715,15 @@ if command -v python3 >/dev/null 2>&1; then
   im_inbox="${im_dir}/inbox"
   im_trig="${im_dir}/trig"
   mkdir -p "$im_inbox" "$im_trig"
-  # complete + secrets + key at ts A; jarvis-only (incomplete) at ts B; junk ignored.
+  # complete (DB + manifest) + secrets + key at ts A; jarvis-only (incomplete) at ts B;
+  # DB-complete but MANIFEST-LESS at ts C (must NOT read complete); junk ignored.
   : > "${im_inbox}/jarvis_20260701_030000.sql.gz"
   : > "${im_inbox}/litellm_20260701_030000.sql.gz.enc"
   : > "${im_inbox}/secrets_20260701_030000.tar.gz.enc"
+  : > "${im_inbox}/manifest_20260701_030000.json"
   : > "${im_inbox}/jarvis_20260630_020000.sql.gz"
+  : > "${im_inbox}/jarvis_20260702_040000.sql.gz"
+  : > "${im_inbox}/litellm_20260702_040000.sql.gz"
   : > "${im_inbox}/not-an-archive.txt"
   printf 'SECRETKEYBYTES' > "${im_inbox}/operator_key"
   # A pending restore request the inventory pass must NOT consume.
@@ -718,11 +736,14 @@ import json, sys
 raw = open(sys.argv[1]).read()
 d = json.loads(raw)
 by = {e["timestamp"]: e for e in d}
-assert set(by) == {"20260701_030000", "20260630_020000"}, by
+assert set(by) == {"20260701_030000", "20260630_020000", "20260702_040000"}, by
 assert by["20260701_030000"] == {
     "timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}, by
 assert by["20260630_020000"]["complete"] is False, by
 assert by["20260630_020000"]["has_secrets"] is False, by
+# DB archives present but manifest_<ts>.json absent is NOT complete (restore.sh
+# STEP 2 hard-requires the manifest for an inbox restore).
+assert by["20260702_040000"]["complete"] is False, by
 # Sanitized: no path or key material anywhere in the JSON.
 assert "operator_key" not in raw and "SECRETKEYBYTES" not in raw and "/" not in raw, raw
 PY
@@ -759,6 +780,107 @@ PY
 else
   printf 'SKIP: python3 unavailable; skipping --inbox-manifest behavioral test\n' >&2
 fi
+
+# === Verify-before-destroy: secrets preflight ========================
+# An off-host (inbox) set with NO secrets archive must abort BEFORE any DROP (nothing
+# destroyed) instead of swapping both DBs and only failing at STEP 8, and it must
+# report manual_steps_required so the admin panel tells the operator recovery is needed.
+
+# V1a. resolve_secrets_archive (the shared detector used by the preflight AND STEP 8)
+#      genuinely finds the secrets archive when present and returns non-zero when absent.
+rsa_fn="$(sed -n '/^resolve_secrets_archive()/,/^}/p' "$RESTORE_SCRIPT")"
+run_rsa() {
+  # $1 = "with"|"without" secrets; echoes "FOUND"/"MISSING".
+  local d; d="$(mktemp -d)"
+  : > "${d}/jarvis_20260701_030000.sql.gz"
+  : > "${d}/litellm_20260701_030000.sql.gz"
+  [ "$1" = "with" ] && : > "${d}/secrets_20260701_030000.tar.gz.enc"
+  ARCHIVE_DIR="$d" TIMESTAMP="20260701_030000" bash -c '
+    set -euo pipefail
+    '"$rsa_fn"'
+    if resolve_secrets_archive >/dev/null; then echo FOUND; else echo MISSING; fi
+  ' 2>/dev/null
+  rm -rf "$d"
+}
+if [ -n "$rsa_fn" ] && [ "$(run_rsa with)" = "FOUND" ] && [ "$(run_rsa without)" = "MISSING" ]; then
+  pass "resolve_secrets_archive detects a present secrets archive and reports its absence"
+else
+  printf 'FAIL: resolve_secrets_archive wrong (with=%s without=%s)\n' \
+    "$(run_rsa with)" "$(run_rsa without)" >&2
+  fail=1
+fi
+
+# V1b. The STEP-2.5 secrets preflight runs BEFORE the destructive swap (so DROP_STARTED
+#      is never set on this path), is inbox-scoped, sets manual_steps, and fails before
+#      destruction. Placement proven by line-ordering vs the STEP-5 restore_one_db_swap.
+secgate_line="$(line_of 'off-host restore requires the secrets archive' || true)"
+if [ -n "$secgate_line" ] && [ -n "$drop_call_line" ] && [ "$secgate_line" -lt "$drop_call_line" ]; then
+  pass "the secrets preflight aborts before the destructive swap (DROP_STARTED never set)"
+else
+  printf 'FAIL: secrets preflight (%s) does not precede the destructive swap (%s)\n' \
+    "$secgate_line" "$drop_call_line" >&2
+  fail=1
+fi
+sec_block="$(sed -n '/=== STEP 2.5:/,/=== STEP 3:/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$sec_block" | grep -q 'if \[ "\$SOURCE" = "inbox" \]' \
+   && printf '%s' "$sec_block" | grep -q 'resolve_secrets_archive' \
+   && printf '%s' "$sec_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && printf '%s' "$sec_block" | grep -q 'fail_before_destruction'; then
+  pass "the secrets preflight is inbox-scoped, sets manual_steps_required, and fails before destruction"
+else
+  printf 'FAIL: the STEP-2.5 secrets preflight is missing its inbox guard / manual_steps / fail-before-destruction\n' >&2
+  fail=1
+fi
+
+# === Verify-before-destroy: FRESH safety pre-backup ====================
+# The STEP-4 safety pre-backup is the only rollback point, so it must be proven fresh
+# for THIS run (exit 0 + succeeded + attempted_at newer than STARTED_AT). A stale
+# succeeded record (e.g. left when a full/read-only /backups blocked the write) must
+# NOT count — otherwise the restore proceeds believing it has a rollback point it lacks.
+sbf_fn="$(sed -n '/^safety_backup_is_fresh()/,/^}/p' "$RESTORE_SCRIPT")"
+run_sbf() {
+  # $1 = backup rc, $2 = .last_run.json content ("" omits the file); echoes FRESH/STALE.
+  local d; d="$(mktemp -d)"
+  [ -n "$2" ] && printf '%s' "$2" > "${d}/.last_run.json"
+  BACKUP_DIR="$d" STARTED_AT="2026-07-15T12:00:00+00:00" bash -c '
+    set -euo pipefail
+    '"$sbf_fn"'
+    if safety_backup_is_fresh "'"$1"'"; then echo FRESH; else echo STALE; fi
+  ' 2>/dev/null
+  rm -rf "$d"
+}
+fresh_lr='{"attempted_at":"2026-07-15T12:00:05+00:00","timestamp":"20260715_120005","succeeded":true}'
+stale_lr='{"attempted_at":"2026-07-14T09:00:00+00:00","timestamp":"20260714_090000","succeeded":true}'
+failed_lr='{"attempted_at":"2026-07-15T12:00:05+00:00","timestamp":"20260715_120005","succeeded":false}'
+sbf_fresh="$(run_sbf 0 "$fresh_lr")"
+sbf_stale="$(run_sbf 0 "$stale_lr")"
+sbf_rcfail="$(run_sbf 1 "$fresh_lr")"
+sbf_notok="$(run_sbf 0 "$failed_lr")"
+if [ -n "$sbf_fn" ] && [ "$sbf_fresh" = "FRESH" ] && [ "$sbf_stale" = "STALE" ] \
+   && [ "$sbf_rcfail" = "STALE" ] && [ "$sbf_notok" = "STALE" ]; then
+  pass "safety_backup_is_fresh: fresh=FRESH; a stale succeeded record, a non-zero rc, and succeeded:false all read STALE"
+else
+  printf 'FAIL: safety_backup_is_fresh wrong (fresh=%s stale=%s rcfail=%s notok=%s)\n' \
+    "$sbf_fresh" "$sbf_stale" "$sbf_rcfail" "$sbf_notok" >&2
+  fail=1
+fi
+# STEP 4 must capture backup.sh's exit code (not merely WARN) and gate on freshness,
+# failing before destruction with manual_steps when it is stale/failed.
+step4_block="$(sed -n '/=== STEP 4:/,/=== STEP 4.5:/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$step4_block" | grep -q 'SAFETY_RC=' \
+   && printf '%s' "$step4_block" | grep -q 'safety_backup_is_fresh "\$SAFETY_RC"' \
+   && printf '%s' "$step4_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && printf '%s' "$step4_block" | grep -q 'fail_before_destruction'; then
+  pass "STEP 4 captures backup.sh's rc, gates on freshness, and fails before destruction with manual_steps"
+else
+  printf 'FAIL: STEP 4 does not capture the backup rc / gate on freshness / set manual_steps before destruction\n' >&2
+  fail=1
+fi
+
+# V3. Honest status: any terminal FAILURE inside the destructive window (DROP_STARTED=1)
+#     sets manual_steps_required in the single EXIT-trap status writer.
+check "post-DROP failures set manual_steps_required in the EXIT trap" \
+  '\[ "\$STATE" = "failed" \] && \[ "\$DROP_STARTED" = "1" \]; then MANUAL_STEPS_REQUIRED=1'
 
 # I8. backup.sh has an aws-guarded S3 pull helper that the default scheduled
 #     backup never triggers (gated on BACKUP_PULL_TS).

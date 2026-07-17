@@ -300,6 +300,21 @@ describe('AdminBackupsPage', () => {
     );
   });
 
+  it('blocks an inbox restore with no secrets archive (would fail post-swap)', async () => {
+    // A complete + keyed point that lacks its secrets archive must not be restorable:
+    // the trigger is disabled and a hint explains the post-swap failure.
+    getInboxRestorePointsMock.mockResolvedValue([
+      { timestamp: '20260701_030000', complete: true, has_secrets: false, has_key: true },
+    ]);
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    const point = within(section).getByTestId('inbox-restore-point');
+    expect(within(point).getByText('No secrets')).toBeInTheDocument();
+    expect(within(point).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(point).getByText(/no secrets archive/i)).toBeInTheDocument();
+    expect(requestRestoreMock).not.toHaveBeenCalled();
+  });
+
   it('authenticates the restore-status poll with the captured one-time bearer token', async () => {
     requestRestoreMock.mockResolvedValue({ status: 'scheduled', status_token: 'poll-bearer-42' });
     const user = userEvent.setup();
@@ -645,5 +660,57 @@ describe('AdminBackupsPage', () => {
     await waitFor(() =>
       expect(putRetentionMock).toHaveBeenCalledWith({ keep_last_n: null, max_age_days: null }),
     );
+  });
+
+  it('disables Save while the retention policy is still loading, then enables it once hydrated', async () => {
+    const user = userEvent.setup();
+    let resolveRetention!: (v: { keep_last_n: number | null; max_age_days: number | null }) => void;
+    getRetentionMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRetention = resolve;
+      }),
+    );
+    renderPage();
+
+    // Still loading: the form is present but Save must be disabled, and clicking
+    // a disabled button must never reach putRetention with the blank defaults.
+    const saveButton = await screen.findByRole('button', { name: /save retention policy/i });
+    expect(saveButton).toBeDisabled();
+    await user.click(saveButton);
+    expect(putRetentionMock).not.toHaveBeenCalled();
+
+    // Resolve the query: fields hydrate from the real policy and Save unlocks.
+    await act(async () => {
+      resolveRetention({ keep_last_n: 5, max_age_days: 30 });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/keep most recent restore points/i)).toHaveValue(5),
+    );
+    await waitFor(() => expect(saveButton).not.toBeDisabled());
+
+    await user.click(saveButton);
+    await waitFor(() =>
+      expect(putRetentionMock).toHaveBeenCalledWith({ keep_last_n: 5, max_age_days: 30 }),
+    );
+  });
+
+  it('shows an error and Retry instead of an editable form when the retention policy fails to load', async () => {
+    const user = userEvent.setup();
+    getRetentionMock.mockRejectedValue(new Error('network down'));
+    renderPage();
+
+    expect(await screen.findByText(/could not load the retention policy/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/keep most recent restore points/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save retention policy/i })).not.toBeInTheDocument();
+    expect(putRetentionMock).not.toHaveBeenCalled();
+
+    getRetentionMock.mockResolvedValue({ keep_last_n: 5, max_age_days: 30 });
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/keep most recent restore points/i)).toHaveValue(5),
+    );
+    expect(screen.getByRole('button', { name: /save retention policy/i })).not.toBeDisabled();
   });
 });

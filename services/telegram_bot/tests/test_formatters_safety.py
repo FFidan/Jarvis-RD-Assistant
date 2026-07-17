@@ -68,13 +68,14 @@ class TestConfidenceBadge:
 
 
 class TestTruncateTagAware:
-    """M12b: truncate must never cut inside an HTML tag or entity.
+    """truncate must never cut inside — or leave open — an HTML tag.
 
     Telegram's HTML parse mode rejects a message containing a partially-cut
     tag (``<a hre``) or entity (``&amp``) with a 400 'can't parse entities'.
-    ``truncate`` backs the cut up to just before the split tag/entity.  Note
-    the contract is *no mid-tag/mid-entity cut* — re-balancing tags left open
-    by the cut is the caller's job (see paper_digest._send_chunked).
+    ``truncate`` backs the cut up to just before the split tag/entity, and
+    also closes (innermost-first) any spanning tag that is still open once
+    the cut lands — so the result is always self-contained valid HTML and
+    callers don't need to re-balance it themselves.
 
     All tests use ``max_length=120`` → effective cut at 20 chars
     (``limit = max_length - TRUNCATION_HEADROOM``).
@@ -87,16 +88,18 @@ class TestTruncateTagAware:
         assert result == "x" * 18 + "\n\n<i>... (truncated)</i>"
 
     def test_backs_up_before_partially_cut_closing_tag(self) -> None:
-        # Cut at 20 lands inside '</b>' → back up to before '<'.
+        # Cut at 20 lands inside '</b>' → back up to before '<'. The opener
+        # survives the backup, so truncate must close it before the marker.
         text = "<b>" + "x" * 15 + "</b>" + "y" * 10
         result = truncate(text, max_length=120)
-        assert result == "<b>" + "x" * 15 + "\n\n<i>... (truncated)</i>"
+        assert result == "<b>" + "x" * 15 + "</b>" + "\n\n<i>... (truncated)</i>"
 
     def test_keeps_complete_tag_just_before_cut(self) -> None:
-        # A fully-formed tag before the cut must NOT be backed out.
+        # A fully-formed tag before the cut must NOT be backed out, and the
+        # opener it introduces must be closed before the marker.
         text = "x" * 10 + "<b>" + "y" * 20
         result = truncate(text, max_length=120)
-        assert result == "x" * 10 + "<b>" + "y" * 7 + "\n\n<i>... (truncated)</i>"
+        assert result == "x" * 10 + "<b>" + "y" * 7 + "</b>" + "\n\n<i>... (truncated)</i>"
 
     def test_backs_up_before_partially_cut_entity(self) -> None:
         # Cut at 20 lands inside '&amp;' → back up to before '&'.
@@ -106,3 +109,34 @@ class TestTruncateTagAware:
 
     def test_text_within_limit_is_unchanged(self) -> None:
         assert truncate("<b>short</b>") == "<b>short</b>"
+
+    def test_closes_tag_opened_before_cut_with_content_past_it(self) -> None:
+        # '<b>' opens well before the cut, content runs past it, and the
+        # surviving 20-char span never reaches a closer.
+        text = "<b>" + "x" * 40
+        result = truncate(text, max_length=120)
+        assert result == "<b>" + "x" * 17 + "</b>" + "\n\n<i>... (truncated)</i>"
+
+    def test_closes_nested_tags_innermost_first(self) -> None:
+        # '<b><i>' both open before the cut and neither closes — closers
+        # must come out LIFO: '</i></b>', not '</b></i>'.
+        text = "<b><i>" + "x" * 40
+        result = truncate(text, max_length=120)
+        assert result == "<b><i>" + "x" * 14 + "</i></b>" + "\n\n<i>... (truncated)</i>"
+
+    def test_closes_open_anchor_tag_by_name_not_full_string(self) -> None:
+        # An '<a href="...">' anchor open at the cut must be closed with
+        # '</a>' — the tag NAME, not the full opening-tag string. The anchor
+        # itself is 23 chars, wider than the other tests' 20-char cut, so
+        # this case uses max_length=140 (limit=40) to keep it intact.
+        anchor = '<a href="http://e.com">'
+        text = anchor + "y" * 30
+        result = truncate(text, max_length=140)
+        assert result == anchor + "y" * 17 + "</a>" + "\n\n<i>... (truncated)</i>"
+
+    def test_no_spurious_closer_for_already_balanced_tag(self) -> None:
+        # '<b>done</b>' closes before the cut; the long filler after it is
+        # what gets cut. No extra '</b>' should be appended.
+        text = "<b>done</b>" + "y" * 20
+        result = truncate(text, max_length=120)
+        assert result == "<b>done</b>" + "y" * 9 + "\n\n<i>... (truncated)</i>"

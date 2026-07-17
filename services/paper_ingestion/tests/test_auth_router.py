@@ -147,6 +147,43 @@ async def test_request_link_cooldown_logs_info_on_suppression() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_request_link_cooldown_probe_is_login_scoped() -> None:
+    """The cooldown probe SELECT is scoped to login tokens (``pending_email IS NULL``).
+
+    An unscoped probe also matches in-flight email-change tokens
+    (``pending_email`` set), so an email change within the 2-min window would
+    suppress login-link issuance. The probe must scope to login tokens only —
+    mirrors account.py's ``pending_email IS NOT NULL`` email-change counterpart.
+    """
+    from paper_ingestion.routers.auth import RequestLinkBody, request_link
+
+    fetchval_queries: list[str] = []
+
+    async def _tracked_fetchval(query, *args):
+        fetchval_queries.append(query)
+        return None  # no recent login token → INSERT proceeds
+
+    pool, conn = make_pool_and_conn(fetchrow_return={"id": 42})
+    conn.fetchval = AsyncMock(side_effect=_tracked_fetchval)
+    conn.execute = AsyncMock(return_value=None)
+
+    request = _build_request(pool)
+    body = RequestLinkBody(email="scope@example.com")
+
+    with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()):
+        with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
+            await request_link(body=body, request=request)
+
+    cooldown_probes = [
+        q for q in fetchval_queries if "magic_link_tokens" in q and "created_at" in q
+    ]
+    assert len(cooldown_probes) == 1, f"expected one cooldown probe, got: {cooldown_probes}"
+    assert "pending_email IS NULL" in cooldown_probes[0], (
+        f"cooldown probe must be login-scoped (pending_email IS NULL); got: {cooldown_probes[0]!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # enumeration resistance + swallowed-send event
 # ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ from jarvis_common.auth import (
     current_user_id_with_owner_override,
 )
 from jarvis_common.http_rate_limiter import create_limiter
+from jarvis_common.settings import get_core_settings
 from jarvis_common.testing_contract_apps import configure_contract_api_key
 
 # Compose-default allowlist shape: loopback + the jarvis bridge subnet
@@ -73,21 +74,22 @@ class _StubUsersPool:
         return 1 if self._user_exists else None
 
 
-def _build_factory_app(pool: object) -> FastAPI:
+def _build_factory_app(pool: object, *, trusted_proxy_hosts: str | list[str] = "*") -> FastAPI:
     """Build a real app through configure_middleware_and_errors.
 
-    ``trusted_proxy_hosts="*"`` is the most permissive proxy-trust setting (the
-    app_factory parameter default) — exactly the configuration where
-    ProxyHeadersMiddleware rewrites ``scope["client"]`` from ANY caller's
-    X-Forwarded-For, i.e. the M5 attack surface. With a restrictive trust list
-    the rewrite would not fire and the pre-M5 single check was already safe.
+    ``trusted_proxy_hosts="*"`` (the default here) is the most permissive
+    proxy-trust setting — exactly the configuration where ProxyHeadersMiddleware
+    rewrites ``scope["client"]`` from ANY caller's X-Forwarded-For, i.e. the M5
+    attack surface. The owner-override tests below pass the PRODUCTION value instead
+    (``get_core_settings().trusted_proxy_hosts_list``) to prove the deployed
+    proxy-trust config actually un-masks nginx-relayed browsers.
     """
     app = FastAPI()
     configure_middleware_and_errors(
         app,
         limiter=create_limiter(default_limits=["10000/minute"], user_aware=False),
         cors_origins=["http://test"],
-        trusted_proxy_hosts="*",
+        trusted_proxy_hosts=trusted_proxy_hosts,
     )
     app.state.db_pool = pool
 
@@ -330,6 +332,71 @@ async def test_app_without_stash_middleware_falls_back_to_client_check(
         ) -> dict[str, int | None]:
             return {"user_id": user_id}
 
+        async with _asgi_client(app, raw_peer=BRIDGE_IP) as client:
+            resp = await client.get("/whoami", headers=_bot_headers(key, OWNER_USER_ID))
+    assert resp.status_code == 200, f"got {resp.status_code}: {resp.text}"
+    assert resp.json() == {"user_id": OWNER_USER_ID}
+
+
+# ---------------------------------------------------------------------------
+# owner-override proxy-trust bypass: the PRODUCTION proxy-trust
+# value (the settings default, NOT "*") must un-mask an nginx-relayed browser.
+# Verified: libs/jarvis_common/jarvis_common/settings.py:107 — trusted_proxy_hosts
+#   default is now the numeric "127.0.0.0/8,10.137.241.0/24". The pre-fix default
+#   was the hostname literal "dashboard", which uvicorn's _TrustedHosts can never
+#   match against the numeric bridge peer, so ProxyHeadersMiddleware never
+#   rewrote scope["client"] and guard (b) wrongly trusted a relayed browser.
+# ---------------------------------------------------------------------------
+
+
+def _settings_default_proxy_hosts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The proxy-trust list production uses when compose sets no override."""
+    monkeypatch.delenv("TRUSTED_PROXY_HOSTS", raising=False)
+    return get_core_settings().trusted_proxy_hosts_list
+
+
+async def test_browser_relayed_rejected_under_production_proxy_trust(
+    bridge_allowlist: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A browser relayed through the bridge nginx hop → 403.
+
+    Immediate peer = the trusted bridge proxy (allowlisted), XFF carries a
+    PUBLIC browser IP, caller holds the ops key + a valid X-Owner-User-Id.
+    Built with the PRODUCTION trusted-proxy value (not "*"),
+    ProxyHeadersMiddleware rewrites scope["client"] to the public browser IP, so
+    guard (b) rejects it.
+
+    On the base commit the default was the hostname literal "dashboard", which
+    never matched the numeric bridge peer: no rewrite fired, scope["client"]
+    stayed the allowlisted bridge IP, and the override was WRONGLY resolved
+    (200). This assertion fails there and passes after the fix.
+    """
+    proxy_hosts = _settings_default_proxy_hosts(monkeypatch)
+    with configure_contract_api_key(monkeypatch) as key:
+        app = _build_factory_app(_StubUsersPool(), trusted_proxy_hosts=proxy_hosts)
+        headers = {**_bot_headers(key, OWNER_USER_ID), "X-Forwarded-For": BROWSER_IP}
+        async with _asgi_client(app, raw_peer=BRIDGE_IP) as client:
+            resp = await client.get("/whoami", headers=headers)
+    assert resp.status_code == 403, (
+        "an nginx-relayed browser (public XFF) must be rejected under the "
+        f"production proxy-trust config; got {resp.status_code}: {resp.text}"
+    )
+    assert "source IP" in resp.json()["detail"]
+
+
+async def test_bridge_bot_accepted_under_production_proxy_trust(
+    bridge_allowlist: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The direct bridge bot still resolves under the SAME
+    production proxy-trust value — the fix must not regress the bot.
+
+    Allowlisted bridge peer, NO X-Forwarded-For, ops key + X-Owner-User-Id.
+    ProxyHeadersMiddleware has nothing to rewrite, so scope["client"] stays the
+    bridge IP and the override resolves.
+    """
+    proxy_hosts = _settings_default_proxy_hosts(monkeypatch)
+    with configure_contract_api_key(monkeypatch) as key:
+        app = _build_factory_app(_StubUsersPool(user_exists=True), trusted_proxy_hosts=proxy_hosts)
         async with _asgi_client(app, raw_peer=BRIDGE_IP) as client:
             resp = await client.get("/whoami", headers=_bot_headers(key, OWNER_USER_ID))
     assert resp.status_code == 200, f"got {resp.status_code}: {resp.text}"

@@ -123,9 +123,10 @@ class _OriginMatch(NamedTuple):
 # ``.localhost`` TLD for client loopback, so a page on either of these is reachable
 # only from the user's own machine — never from an attacker's network. Each is a
 # valid effective domain (rp_id) on any port, so they match on ANY port (the local
-# dashboard is served on https://localhost:<DASHBOARD_HOST_PORT>, e.g. :3001, not :443).
-# The set is exactly these two hosts (not arbitrary ``*.localhost``) — the pair the
-# stack actually serves.
+# dashboard is served on localhost:<DASHBOARD_HOST_PORT>, e.g. :3001). The default
+# installer serves plain http here, which W3C Secure Contexts still treats as a
+# trustworthy context for WebAuthn (see ``_origin_allowed``). The set is exactly these
+# two hosts (not arbitrary ``*.localhost``) — the pair the stack actually serves.
 _LOOPBACK_RP_IDS = frozenset({"localhost", "jarvis.localhost"})
 
 # Default port per scheme, stripped when normalising an origin so an explicit
@@ -148,8 +149,9 @@ def _app_base_origin() -> str | None:
         parsed_port = parsed.port
     except ValueError:
         return None
-    # A public (non-loopback) WebAuthn origin MUST be a secure context — reject a
-    # misconfigured http:// APP_BASE_URL rather than advertise an origin browsers block.
+    # A PUBLIC (non-loopback) WebAuthn origin MUST be https — reject a misconfigured
+    # http:// APP_BASE_URL rather than advertise an origin browsers block. (Loopback
+    # http is trustworthy and is accepted separately in ``_origin_allowed``.)
     if parsed.scheme != "https" or not parsed.hostname:
         return None
     port = (
@@ -163,9 +165,9 @@ def _app_base_origin() -> str | None:
 def _origin_allowed(origin: str | None) -> _OriginMatch | None:
     """Resolve a browser ``Origin`` to a permitted ``(origin, rp_id)``, else None.
 
-    The two loopback secure-context origins (``https://localhost``, ``https://jarvis.localhost``)
-    are accepted on ANY port — loopback is not attacker-reachable and their rp_id is
-    valid for every port. A PUBLIC origin must EXACTLY equal the configured
+    The two loopback secure-context hosts (``localhost``, ``jarvis.localhost``) are
+    accepted on http OR https and on ANY port — loopback is not attacker-reachable and
+    their rp_id is valid for every port. A PUBLIC origin must EXACTLY equal the configured
     ``APP_BASE_URL`` origin (no suffix/port relaxation for reachable hosts). A raw-IP
     origin such as ``https://127.0.0.1`` is never accepted — an IP is an invalid rp_id.
     """
@@ -173,7 +175,10 @@ def _origin_allowed(origin: str | None) -> _OriginMatch | None:
         return None
     parsed = urlparse(origin)
     host = parsed.hostname
-    if parsed.scheme == "https" and host in _LOOPBACK_RP_IDS:
+    # W3C Secure Contexts treats http://localhost (and the reserved *.localhost TLD) as
+    # potentially trustworthy, so browsers permit WebAuthn there — accept the two loopback
+    # hosts on http OR https. Public hosts and raw IPs stay https-only / rejected below.
+    if parsed.scheme in ("https", "http") and host in _LOOPBACK_RP_IDS:
         return _OriginMatch(origin=origin, rp_id=host)
     base = _app_base_origin()
     if base and origin == base and host:
@@ -437,13 +442,15 @@ async def _revoke_credential_and_sessions(conn: Any, credential_id: uuid.UUID) -
 # ---------------------------------------------------------------------------
 
 
-@router.get("/capability", response_model=PasskeyCapability)
+@router.post("/capability", response_model=PasskeyCapability)
 @limiter.limit("30/minute")
 async def passkey_capability(request: Request) -> PasskeyCapability:
     """Report whether this origin can run passkey ceremonies, and the access mode.
 
     Lets the frontend explain WHY passkeys are/aren't offered here without a
-    feature flag: ``available`` is purely the current Origin ∈ allowlist.
+    feature flag: ``available`` is purely the current Origin ∈ allowlist. This is a
+    POST (not GET) because browsers OMIT the Origin header on a same-origin GET, so a
+    GET probe would always see origin=None and report ``available=False`` in production.
     """
     return PasskeyCapability(
         available=_origin_allowed(request.headers.get("origin")) is not None,

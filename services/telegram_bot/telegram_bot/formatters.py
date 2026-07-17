@@ -99,6 +99,48 @@ def sanitize_user_input(text: str, max_len: int) -> str:
     return _BIDI_ZW_RE.sub("", text)[:max_len]
 
 
+# HTML tags this module documents as supported (module docstring above).
+_OPEN_TAG_RE = re.compile(r"<(b|i|u|s|a|code|pre)(?:\s[^>]*)?>", re.IGNORECASE)
+_CLOSE_TAG_RE = re.compile(r"</(b|i|u|s|a|code|pre)>", re.IGNORECASE)
+
+
+def _unclosed_tag_closers(text: str) -> str:
+    """Return closing tags (innermost-first) for spanning tags left open.
+
+    Scans *text* for this module's supported spanning tags and returns the
+    closers needed to balance whatever is still open at the end, e.g.
+    ``<b><i>`` yields ``</i></b>`` (LIFO, matching nesting order).
+
+    Parameters
+    ----------
+    text : str
+        Text to scan (already cut to its final length).
+
+    Returns
+    -------
+    str
+        Concatenated closing tags, or ``''`` if nothing is left open.
+    """
+    stack: list[str] = []
+    pos = 0
+    while pos < len(text):
+        open_match = _OPEN_TAG_RE.search(text, pos)
+        close_match = _CLOSE_TAG_RE.search(text, pos)
+        if open_match and (not close_match or open_match.start() <= close_match.start()):
+            stack.append(open_match.group(1).lower())
+            pos = open_match.end()
+        elif close_match:
+            tag_name = close_match.group(1).lower()
+            for idx in range(len(stack) - 1, -1, -1):
+                if stack[idx] == tag_name:
+                    stack.pop(idx)
+                    break
+            pos = close_match.end()
+        else:
+            break
+    return "".join(f"</{name}>" for name in reversed(stack))
+
+
 def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     """Truncate text to fit Telegram's message limit.
 
@@ -112,7 +154,9 @@ def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     Returns
     -------
     str
-        Truncated text with ellipsis if needed.
+        Truncated text with ellipsis if needed. Any spanning tag left open
+        by the cut is closed (innermost-first) before the marker, so the
+        result is always self-contained valid HTML.
     """
     limit = max_length - TRUNCATION_HEADROOM
     if len(text) <= limit:
@@ -128,7 +172,8 @@ def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     amp_pos = truncated.rfind("&")
     if amp_pos != -1 and ";" not in truncated[amp_pos:]:
         truncated = truncated[:amp_pos]
-    return truncated + "\n\n<i>... (truncated)</i>"
+    closers = _unclosed_tag_closers(truncated)
+    return truncated + closers + "\n\n<i>... (truncated)</i>"
 
 
 def _format_authors(authors: list[str], max_display: int = 3) -> str:

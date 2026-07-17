@@ -147,7 +147,8 @@ async def run_health_checks(
         setattr(request.app.state, _SWEEP_TASK_ATTR, task)
 
     try:
-        status, results = await task
+        # shield: a cancelled waiter must not cancel the sweep shared by others.
+        status, results = await asyncio.shield(task)
     finally:
         if getattr(request.app.state, _SWEEP_TASK_ATTR, None) is task and task.done():
             delattr(request.app.state, _SWEEP_TASK_ATTR)
