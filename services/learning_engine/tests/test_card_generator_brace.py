@@ -124,3 +124,39 @@ async def test_full_text_with_braces_does_not_crash_format() -> None:
     # With a None LLM result the pipeline returns _empty_result()
     assert isinstance(result, dict)
     assert "cards" in result
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_prompt_preserves_raw_braces() -> None:
+    """generate_cards must not double literal { } braces in the LLM prompt.
+
+    brace-escape regression (prompt side): before the fix, full_text was
+    escaped ({{ / }}) before being substituted as the ``text=`` VALUE of
+    ``_CARD_DATA_TEMPLATE.format(...)``. ``str.format()`` never re-parses
+    braces inside substituted values, so the doubled braces reached the LLM
+    verbatim, corrupting LaTeX / set-notation paper text.
+    """
+    generator, _ = _make_generator()
+    generator._call_llm_for_cards = AsyncMock(return_value=None)
+
+    chunks = [
+        {
+            "id": 1,
+            "content": "loss = {alpha}/2 for {x | Ax = b}",
+            "page_number": 1,
+        }
+    ]
+
+    await generator.generate_cards(
+        title="t",
+        authors=["a"],
+        chunks=chunks,
+        openai_client=_make_openai_client(),
+        paper_id=1,
+    )
+
+    prompt = generator._call_llm_for_cards.call_args.args[0]
+    assert "{alpha}" in prompt
+    assert "{{alpha}}" not in prompt
+    assert "{x | Ax = b}" in prompt
+    assert "{{x | Ax = b}}" not in prompt
