@@ -318,3 +318,15 @@ async def test_cross_paper_citation_verifies_against_correctly_cited_paper():
     assert report.total == 1
     assert report.verified_count == 1
     assert report.confidence == RagConfidence.HIGH
+
+
+async def test_out_of_range_citation_marks_sentence_unverified():
+    """A claim matching a real source but citing a nonexistent [Paper 9] must not verify."""
+    verifier = QuoteVerifier()
+    answer = _XP_CLAIM + " [Paper 9]."
+    report = await verify_answer_sentences(answer, _XP_SOURCES, verifier, _xp_pool())
+    assert report.total == 1
+    assert report.verified_count == 0, (
+        f"hallucinated citation must not fall back to any-paper matching; got {report.per_sentence}"
+    )
+    assert report.confidence == RagConfidence.UNVERIFIED

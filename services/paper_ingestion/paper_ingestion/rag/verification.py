@@ -269,11 +269,13 @@ async def verify_answer_sentences(
     async def _verify_batch(batch: list[str]) -> list[VerifiedSentence]:
         results: list[VerifiedSentence] = []
         for sent in batch:
-            cited = [
-                paper_ordinals[int(n)]
-                for n in _CITATION_RE.findall(sent)
-                if int(n) in paper_ordinals
-            ]
+            markers = _CITATION_RE.findall(sent)
+            cited = [paper_ordinals[int(n)] for n in markers if int(n) in paper_ordinals]
+            if markers and not cited and paper_ordinals:
+                # Citation marker(s) present but none resolve to a supplied source:
+                # a hallucinated citation must not fall back to any-paper matching.
+                results.append(VerifiedSentence(text=sent, verified=False))
+                continue
             verified = await asyncio.to_thread(
                 _verify_sentence, sent, full_texts, chunks_by_paper, verifier, cited
             )
