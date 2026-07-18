@@ -186,6 +186,40 @@ def _verify_sentence(
     return False
 
 
+def _resolve_cited_ordinals(sent: str, paper_ordinals: dict[int, int]) -> tuple[list[int], bool]:
+    """Resolve ``[Paper N]`` markers in *sent* to their source ``paper_id``s.
+
+    Returns ``(cited, hallucinated_only)`` where *cited* is the list of
+    resolved ``paper_id``s and *hallucinated_only* is True when the sentence
+    carries citation marker(s) that resolve to no supplied source — such a
+    sentence must not fall back to any-paper matching.
+    """
+    markers = _CITATION_RE.findall(sent)
+    cited = [paper_ordinals[int(n)] for n in markers if int(n) in paper_ordinals]
+    hallucinated_only = bool(markers) and not cited and bool(paper_ordinals)
+    return cited, hallucinated_only
+
+
+def _verify_one(
+    sent: str,
+    paper_ordinals: dict[int, int],
+    full_texts: dict[int, str],
+    chunks_by_paper: dict[int, list[ChunkResponse]],
+    verifier: QuoteVerifier,
+) -> VerifiedSentence:
+    """Verify a single *sent*, honouring its ``[Paper N]`` citations.
+
+    A sentence whose citations resolve to no supplied source is marked
+    unverified without any fuzzy fallback (see :func:`_resolve_cited_ordinals`).
+    Runs synchronously so callers can offload it via ``asyncio.to_thread``.
+    """
+    cited, hallucinated_only = _resolve_cited_ordinals(sent, paper_ordinals)
+    if hallucinated_only:
+        return VerifiedSentence(text=sent, verified=False)
+    verified = _verify_sentence(sent, full_texts, chunks_by_paper, verifier, cited)
+    return VerifiedSentence(text=sent, verified=verified)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -269,17 +303,11 @@ async def verify_answer_sentences(
     async def _verify_batch(batch: list[str]) -> list[VerifiedSentence]:
         results: list[VerifiedSentence] = []
         for sent in batch:
-            markers = _CITATION_RE.findall(sent)
-            cited = [paper_ordinals[int(n)] for n in markers if int(n) in paper_ordinals]
-            if markers and not cited and paper_ordinals:
-                # Citation marker(s) present but none resolve to a supplied source:
-                # a hallucinated citation must not fall back to any-paper matching.
-                results.append(VerifiedSentence(text=sent, verified=False))
-                continue
-            verified = await asyncio.to_thread(
-                _verify_sentence, sent, full_texts, chunks_by_paper, verifier, cited
+            results.append(
+                await asyncio.to_thread(
+                    _verify_one, sent, paper_ordinals, full_texts, chunks_by_paper, verifier
+                )
             )
-            results.append(VerifiedSentence(text=sent, verified=verified))
         return results
 
     per_sentence: list[VerifiedSentence] = []
