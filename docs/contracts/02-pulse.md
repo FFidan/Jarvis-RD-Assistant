@@ -79,7 +79,7 @@ Defined at [profile.py:35-60](https://github.com/limitcycle-oss/jarvis-rd-assist
 | `weights`, `deck_size`, `stage2_top_k` | `user_config` (`pulse.weights`, `pulse.deck_size`, `pulse.stage2_top_k`) |
 | `recent_positive_titles`, `recent_negative_titles` | `recommendation_feedback` 90-day window |
 | `negative_centroid` | mean embedding of papers with negative `recommendation_feedback` |
-| `negative_topics`, `negative_authors`, `dampened_topics` | L3 dampening signals |
+| `negative_topics`, `negative_authors`, `dampened_topics` | L3 dampening signals; `dampened_topics` is consumed by stage-1 topic similarity (multiplicative 0.5 on the positive domain) |
 | `liked_paper_ids` | starred papers |
 
 The HTTP call to embed library abstracts is intentionally outside any DB
@@ -360,15 +360,16 @@ is to surface the choices.
 | `_fallback_stage2` | services/paper_ingestion/paper_ingestion/pulse/job.py:64 | Clears LLM signals, preserves Stage 1 final_score |
 | `asyncio.wait_for(..., timeout=_stage2_timeout())` | services/paper_ingestion/paper_ingestion/pulse/job.py:331-346 | Outer Stage-2 timeout enforcement |
 | `_pulse_generate_job` job handler | services/paper_ingestion/paper_ingestion/pulse/job.py:555 | On-demand entry point via jobs subsystem |
-| `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:69 | Cross-stage envelope |
+| `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:73 | Cross-stage envelope |
 | `_llm_concurrency()` lazy getter | services/paper_ingestion/paper_ingestion/pulse/scoring.py:45 | Stage-2 semaphore; default 4 via env `PULSE_LLM_CONCURRENCY` |
 | `_llm_model()` reads `PULSE_STAGE2_MODEL` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:49 | Stage-2 model alias defaults to `smart` (must be structured-output-capable; the `fast` 4B alias schema-echoes → `llm_calls=0`) |
-| `_stage2_max_retries()` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:59 | Stage-2 structured-output retry budget defaults to 1 (env `PULSE_STAGE2_MAX_RETRIES`) |
-| `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:53-54 | Stage-2 LLM options |
-| `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:121 | Stage 1: embed + cosine + recency + author bonus + L2 |
-| `stage2_llm_rerank` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:252 | Stage 2 with bounded concurrency (semaphore at scoring.py:289) |
-| `_score_one` LLM call | services/paper_ingestion/paper_ingestion/pulse/scoring.py:291 | Per-candidate `call_llm_structured` call inside the semaphore |
-| `stage3_combine` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:387 | Weighted-sum final_score; missing signals → 0.0 |
+| `_stage2_max_retries()` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:63 | Stage-2 structured-output retry budget defaults to 1 (env `PULSE_STAGE2_MAX_RETRIES`) |
+| `_LLM_MAX_TOKENS = 1536`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:56-57 | Stage-2 LLM options |
+| `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:125 | Stage 1: embed + cosine + recency + author bonus + L2/L3 (dampened topics halved) |
+| `_DAMPENED_TOPIC_FACTOR = 0.5` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:60 | L3: halves a dampened topic's positive similarity at stage-1; negatives pass through |
+| `stage2_llm_rerank` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:277 | Stage 2 with bounded concurrency (semaphore at scoring.py:318) |
+| `_score_one` LLM call | services/paper_ingestion/paper_ingestion/pulse/scoring.py:339 | Per-candidate `call_llm_structured` call inside the semaphore |
+| `stage3_combine` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:417 | Weighted-sum final_score; missing signals → 0.0 |
 | `_DEFAULT_STAGE2_TOP_K = 40` | services/paper_ingestion/paper_ingestion/pulse/profile.py:19 | Top-K default for Stage 2 |
 | `_DEFAULT_WEIGHTS` | services/paper_ingestion/paper_ingestion/pulse/profile.py:20-31 | 10 weight keys; 4 default to 0.0 |
 | `_RATING_HISTORY_LIMIT = 10` | services/paper_ingestion/paper_ingestion/pulse/profile.py:32 | Recent positive/negative title cap |
