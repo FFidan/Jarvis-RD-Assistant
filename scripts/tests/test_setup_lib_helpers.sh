@@ -411,7 +411,6 @@ EOF
 }
 
 DRI_EMPTY="${FIXTURES}/dri-empty"; mkdir -p "$DRI_EMPTY"
-DRI_INTEL="${FIXTURES}/dri-intel"; mkdir -p "$DRI_INTEL"; touch "${DRI_INTEL}/renderD128"
 
 AMD_BIN="$(make_vendor_bin fail ok)"
 NV_BIN="$(make_vendor_bin ok ok)"
@@ -428,11 +427,50 @@ expect_eq "nvidia wins the probe order even with amd-smi present" "$got" "nvidia
 got="$(vendor_env "$AMD_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
 expect_eq "amd-smi enumerating a GPU -> amd" "$got" "amd"
 
-got="$(vendor_env "$NOGPU_BIN" "$DRI_INTEL" detect_gpu_vendor)"
-expect_eq "/dev/dri render node without a discrete probe -> intel" "$got" "intel"
+# A bare /dev/dri render node is NOT proof of an Intel GPU: VMs expose a
+# virtio-gpu render node, and an ARM SoC render node has no PCI vendor file.
+# Classification keys off the render node's PCI vendor id.
+# vendor_of <vendor-id-or-empty> -> classification for a render node whose PCI
+# vendor file holds <vendor-id> (empty = no vendor file), no discrete tool present.
+vendor_of() {
+  local d s
+  d="$(mktemp -d "${FIXTURES}/dri.XXXXXX")"; touch "${d}/renderD128"
+  s="$(mktemp -d "${FIXTURES}/drm.XXXXXX")"
+  if [ -n "$1" ]; then
+    mkdir -p "${s}/renderD128/device"
+    printf '%s\n' "$1" > "${s}/renderD128/device/vendor"
+  fi
+  (export PATH="${NOGPU_BIN}:${PATH}" JARVIS_WSL_NVIDIA_SMI=/nonexistent \
+     JARVIS_DRI_DIR="$d" JARVIS_DRM_SYS_DIR="$s"; detect_gpu_vendor)
+}
+
+expect_eq "render node, PCI vendor 0x8086 (Intel) -> intel" "$(vendor_of 0x8086)" "intel"
+expect_eq "render node, PCI vendor 0x1af4 (virtio VM) -> none" "$(vendor_of 0x1af4)" "none"
+expect_eq "render node, no PCI vendor file (ARM SoC) -> none" "$(vendor_of '')" "none"
+expect_eq "render node, PCI vendor 0x1002 (AMD) -> amd" "$(vendor_of 0x1002)" "amd"
 
 got="$(vendor_env "$NOGPU_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
 expect_eq "no probe answers -> none" "$got" "none"
+
+# resolve_dri_gids echoes the numeric owning-group ids of the /dev/dri nodes.
+# Assert against stat -c %g of the fixture files themselves (tmpdir owner GID —
+# no root needed).
+DRI_GIDS="${FIXTURES}/dri-gids"; mkdir -p "$DRI_GIDS"
+touch "${DRI_GIDS}/card0" "${DRI_GIDS}/renderD128"
+want_video="$(stat -c %g "${DRI_GIDS}/card0")"
+want_render="$(stat -c %g "${DRI_GIDS}/renderD128")"
+got="$(JARVIS_DRI_DIR="$DRI_GIDS" resolve_dri_gids)"
+expect_eq "resolve_dri_gids echoes '<video_gid> <render_gid>'" "$got" "${want_video} ${want_render}"
+
+DRI_RONLY="${FIXTURES}/dri-render-only"; mkdir -p "$DRI_RONLY"; touch "${DRI_RONLY}/renderD128"
+want_render="$(stat -c %g "${DRI_RONLY}/renderD128")"
+got="$(JARVIS_DRI_DIR="$DRI_RONLY" resolve_dri_gids)"
+expect_eq "resolve_dri_gids: video falls back to render GID with no card* node" "$got" "${want_render} ${want_render}"
+
+DRI_NORENDER="${FIXTURES}/dri-no-render"; mkdir -p "$DRI_NORENDER"
+got="$(JARVIS_DRI_DIR="$DRI_NORENDER" resolve_dri_gids)" && rc=0 || rc=$?
+expect_eq "resolve_dri_gids returns 1 with no renderD* node" "$rc" "1"
+expect_eq "resolve_dri_gids echoes nothing with no renderD* node" "$got" ""
 
 got="$(vendor_env "$NV_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb nvidia)"
 expect_eq "resolve_gpu_vram_mb nvidia reads nvidia-smi memory.total" "$got" "24576"
@@ -490,6 +528,12 @@ scheck "overlay selection references the ROCm overlay" 'docker-compose\.rocm\.ym
 scheck "overlay selection references the Vulkan overlay" 'docker-compose\.vulkan\.yml'
 scheck "AMD ROCm engagement is gated on /dev/kfd" 'JARVIS_KFD_DEV:-/dev/kfd'
 scheck "setup.sh persists JARVIS_GPU_VENDOR into .env" 'JARVIS_GPU_VENDOR\)'
+# GPU overlay is opt-in (default flip) with working numeric group_add + CPU recovery.
+scheck "Intel/AMD default to a CPU install (Vulkan/ROCm opt-in)" 'Vulkan acceleration is experimental; opt in'
+scheck "GPU overlay selection resolves numeric /dev/dri GIDs" 'resolve_dri_gids'
+scheck "the resolved render GID is persisted to .env" 'upsert_env_var JARVIS_RENDER_GID'
+scheck "a failed GPU overlay offers a one-keypress CPU retry via re-exec" 'exec "\$0" --gpu cpu'
+scheck "the CPU-retry prompt is gated on an interactive TTY (never non-interactive)" '\-eq 0 \] && \[ -t 0'
 
 # === setup.sh prereq wiring (static) =========================================
 

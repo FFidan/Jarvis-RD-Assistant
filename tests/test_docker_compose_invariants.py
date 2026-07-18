@@ -227,6 +227,24 @@ def test_installer_scripts_pull_every_published_service(compose):
         )
 
 
+GROUP_ADD_OK = re.compile(r"^(\d+|\$\{[A-Z0-9_]+:-\d+\})$")
+
+
+@pytest.mark.parametrize("overlay", ["docker-compose.vulkan.yml", "docker-compose.rocm.yml"])
+def test_overlay_group_add_entries_are_numeric(overlay):
+    """group_add NAMES resolve against the container image's /etc/group and
+    fail container start when absent (stock ollama images ship no `render`
+    group). Numeric GIDs and ${VAR:-numeric} interpolations apply without
+    any lookup."""
+    data = yaml.safe_load((REPO_ROOT / overlay).read_text())
+    for name, svc in data.get("services", {}).items():
+        for entry in svc.get("group_add", []):
+            assert GROUP_ADD_OK.match(str(entry)), (
+                f"{overlay}:{name} group_add entry {entry!r} is a bare "
+                "group name; use a numeric GID or ${VAR:-numeric}"
+            )
+
+
 def _brace_block(text: str, opener: str) -> str:
     """Return the body of the first brace-delimited block whose header matches ``opener``."""
     match = re.search(opener + r"[^{]*\{", text)

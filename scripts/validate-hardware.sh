@@ -85,9 +85,11 @@ else
       fi
       ;;
     amd)
-      if [ -e /dev/kfd ]; then GPU_CHOICE=rocm; else GPU_CHOICE=vulkan; fi
+      # ROCm auto-engages only with /dev/kfd; without it Vulkan is opt-in, so the
+      # default-detected path validates CPU (mirrors setup.sh's GPU ladder).
+      if [ -e /dev/kfd ]; then GPU_CHOICE=rocm; else GPU_CHOICE=cpu; fi
       ;;
-    intel) GPU_CHOICE=vulkan ;;
+    intel) GPU_CHOICE=cpu ;;   # Intel Vulkan is opt-in (--gpu vulkan)
     *)     GPU_CHOICE=cpu ;;
   esac
   info "Detected GPU vendor: ${GPU_VENDOR} -> overlay: ${GPU_CHOICE}"

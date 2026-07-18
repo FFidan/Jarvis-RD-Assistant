@@ -122,6 +122,34 @@ compose_or_die() {
   rm -f "$log_file"
 }
 
+compose_up_or_recover() {
+  # Like compose_or_die, but when a GPU overlay is active (COMPOSE_OVERLAY set)
+  # a failed bring-up is most often the overlay itself. Offer a one-keypress CPU
+  # retry interactively before dying; otherwise extend the guidance. The CPU
+  # re-exec drops any --gpu the user passed and appends --gpu cpu, so it cannot
+  # re-enter this branch (COMPOSE_OVERLAY is then empty).
+  # $1 = failure message, $2 = failure hint, $3.. = docker compose args.
+  local message="$1" hint="$2" log_file reply
+  shift 2
+  log_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-compose.XXXXXX")"
+  if docker compose "$@" 2>&1 | tee "$log_file"; then
+    rm -f "$log_file"
+    return 0
+  fi
+  if [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ]; then
+    if [ "$NON_INTERACTIVE" -eq 0 ] && [ -t 0 ]; then
+      read -rp "GPU overlay failed to start. Retry on CPU now? [Y/n] " reply
+      case "${reply:-Y}" in
+        [nN]|[nN][oO]) : ;;
+        *) rm -f "$log_file"; exec "$0" --gpu cpu ${_RECOVERY_ARGS[@]+"${_RECOVERY_ARGS[@]}"} ;;
+      esac
+    fi
+    hint="${hint}
+GPU overlay failed to start — re-run ./setup.sh --gpu cpu for a CPU-only install, then please file a hardware report (GitHub issue template)."
+  fi
+  die_enospc_aware "$log_file" "$message" "$hint"
+}
+
 os_install_hint() {  # $1 = tool name (informational)
   case "$(uname -s 2>/dev/null)" in
     Darwin) printf 'macOS: install Docker Desktop — https://docs.docker.com/desktop/install/mac-install/' ;;
@@ -150,16 +178,27 @@ prompt_ai_backend() {
   local tier; tier=$(detect_hw_tier)
   NI_HW_TIER="${tier}"
 
+  # A GPU-bearing host can still land on the CPU tier (Intel iGPUs report no
+  # VRAM; an AMD card without /dev/kfd is opt-in) — name the GPU so "Detected:
+  # cpu" does not read as a contradiction of the "GPU detected" line above.
+  local note=""
+  if [ "$tier" = "cpu" ]; then
+    case "${NI_GPU_VENDOR:-none}" in
+      intel) note=" (Intel GPU present — Vulkan is opt-in, see above)" ;;
+      amd)   note=" (AMD GPU present — ROCm/Vulkan is opt-in, see above)" ;;
+    esac
+  fi
+
   case "$tier" in
     cpu|lt-8|8-16)
-      printf '%sDetected: %s. Configuring Ollama.%s\n' "$C_BOLD" "$tier" "$C_RESET"
+      printf '%sDetected: %s%s. Configuring Ollama.%s\n' "$C_BOLD" "$tier" "$note" "$C_RESET"
       NI_LLM_BACKEND="ollama"
       NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama)
       return
       ;;
     16-24)
-      printf '%sDetected: %s. Configuring Ollama (advanced users can switch to vLLM in Settings).%s\n' \
-        "$C_BOLD" "$tier" "$C_RESET"
+      printf '%sDetected: %s%s. Configuring Ollama (advanced users can switch to vLLM in Settings).%s\n' \
+        "$C_BOLD" "$tier" "$note" "$C_RESET"
       NI_LLM_BACKEND="ollama"
       NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama)
       return
@@ -440,6 +479,10 @@ SKIP_DISK_CHECK=0
 BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
 TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI consent)
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
+
+# Snapshot the original invocation before the parse loop consumes it via `shift`,
+# so a GPU-overlay failure can re-exec on CPU with the user's other flags intact.
+ORIG_ARGS=("$@")
 
 while [ $# -gt 0 ]; do
   # A value-taking flag passed as the final argument would read an unset $2 under
@@ -746,7 +789,7 @@ case "$NI_GPU_VENDOR" in
     ok "GPU detected: AMD (via amd-smi)"
     ;;
   intel)
-    info "Intel GPU detected — no dedicated VRAM; the Vulkan overlay can accelerate Ollama (experimental)."
+    info "Intel GPU detected — no dedicated VRAM; installing on CPU. Vulkan acceleration is experimental and opt-in: re-run ./setup.sh --gpu vulkan."
     ;;
   *)
     info "No GPU detected — Ollama will run on CPU (slower)."
@@ -1455,13 +1498,13 @@ else
         _gpu_choice="rocm"
         info "AMD GPU with /dev/kfd detected — enabling the ROCm overlay (experimental)"
       else
-        _gpu_choice="vulkan"
-        info "AMD GPU without /dev/kfd (no ROCm kernel driver) — enabling the Vulkan overlay (experimental)"
+        _gpu_choice="cpu"
+        info "AMD GPU without /dev/kfd (no ROCm kernel driver) — CPU install (Vulkan acceleration is experimental; opt in with ./setup.sh --gpu vulkan)"
       fi
       ;;
     intel)
-      _gpu_choice="vulkan"
-      info "Intel GPU detected — enabling the Vulkan overlay (experimental)"
+      _gpu_choice="cpu"
+      info "Intel GPU detected — CPU install (Vulkan acceleration is experimental; opt in with ./setup.sh --gpu vulkan)"
       ;;
     *)
       _gpu_choice="cpu"
@@ -1469,6 +1512,34 @@ else
       ;;
   esac
 fi
+# The Vulkan/ROCm overlays pass /dev/dri into the container and must join its
+# video + render groups by NUMERIC GID (a group NAME is resolved against the
+# container image's /etc/group at start and stock ollama images have no `render`
+# group). Resolve the host GIDs now and persist them for the overlay's
+# ${JARVIS_*_GID} interpolation; with no render node the overlay cannot work, so
+# fall back to CPU BEFORE the overlay is selected below.
+if [ "$_gpu_choice" = "vulkan" ] || [ "$_gpu_choice" = "rocm" ]; then
+  if _dri_gids="$(resolve_dri_gids)"; then
+    upsert_env_var JARVIS_VIDEO_GID "${_dri_gids%% *}"
+    upsert_env_var JARVIS_RENDER_GID "${_dri_gids##* }"
+  else
+    warn "No /dev/dri render node — GPU overlay disabled, running on CPU."
+    _gpu_choice="cpu"
+  fi
+fi
+# Replay args for the interactive CPU-retry re-exec: the original invocation
+# minus any --gpu selection, so compose_up_or_recover's appended `--gpu cpu` is
+# the only GPU flag and the retry cannot loop back into the overlay path.
+_RECOVERY_ARGS=()
+_skip_gpu_val=0
+for _a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
+  if [ "$_skip_gpu_val" -eq 1 ]; then _skip_gpu_val=0; continue; fi
+  case "$_a" in
+    --gpu)   _skip_gpu_val=1 ;;
+    --gpu=*) ;;
+    *)       _RECOVERY_ARGS+=("$_a") ;;
+  esac
+done
 case "$_gpu_choice" in
   cuda)   _overlay_name="gpu";    COMPOSE_OVERLAY=(-f docker-compose.gpu.yml) ;;
   rocm)   _overlay_name="rocm";   COMPOSE_OVERLAY=(-f docker-compose.rocm.yml) ;;
@@ -1555,7 +1626,7 @@ fi
 # its progress streams to the terminal — buried inside a bare `up -d` the
 # 7-11 GB first pull looks like a hang.
 info "Starting Ollama: docker compose ${COMPOSE_FILE_ARGS[*]:-} up -d ollama"
-compose_or_die "docker compose up failed." \
+compose_up_or_recover "docker compose up failed." \
     "Inspect logs: docker compose logs --tail=200" \
     ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama
 wait_healthy ollama 180 \
@@ -1589,7 +1660,7 @@ fi
 UP_ARGS=(up -d)
 [ "$BUILD_LOCAL" -eq 1 ] || UP_ARGS+=(--no-build)
 info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} ${UP_ARGS[*]}"
-compose_or_die "docker compose up failed." \
+compose_up_or_recover "docker compose up failed." \
     "Inspect logs: docker compose logs --tail=200" \
     ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "${UP_ARGS[@]}"
 

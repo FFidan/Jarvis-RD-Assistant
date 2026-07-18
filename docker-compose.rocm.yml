@@ -12,6 +12,6 @@ services:
     devices:
       - /dev/kfd
       - /dev/dri
-    group_add: ["video", "render"]
+    group_add: ["${JARVIS_VIDEO_GID:-44}", "${JARVIS_RENDER_GID:-993}"]
     environment:
       HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}

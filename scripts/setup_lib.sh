@@ -42,12 +42,16 @@ resolve_amd_smi() {
 }
 
 # detect_gpu_vendor -> echoes nvidia | amd | intel | none.
-# Probe order nvidia -> amd -> intel: discrete vendor tools first (nvidia-smi
-# enumerates a GPU; amd-smi static reports one), then a bare /dev/dri render
-# node (Intel iGPU/dGPU, or an AMD card without any vendor tool installed).
-# JARVIS_DRI_DIR overrides the /dev/dri location for tests.
+# Probe order nvidia -> amd -> render node: discrete vendor tools first
+# (nvidia-smi enumerates a GPU; amd-smi static reports one), then a /dev/dri
+# render node identified by its PCI vendor id. A bare render node is NOT proof
+# of an Intel GPU — VMs expose a virtio-gpu render node (0x1af4) that has no
+# GPU acceleration path — so classify only known accelerators (0x8086 Intel,
+# 0x1002 AMD); virtio / unknown / non-PCI nodes (ARM SoCs have no vendor file)
+# stay on CPU. JARVIS_DRI_DIR / JARVIS_DRM_SYS_DIR override the device and
+# /sys/class/drm locations for tests.
 detect_gpu_vendor() {
-  local smi
+  local smi nodes vendor_file vid
   if smi="$(resolve_nvidia_smi)" && "$smi" -L 2>/dev/null | grep -q .; then
     printf 'nvidia'
     return 0
@@ -56,11 +60,38 @@ detect_gpu_vendor() {
     printf 'amd'
     return 0
   fi
-  if ls "${JARVIS_DRI_DIR:-/dev/dri}"/renderD* >/dev/null 2>&1; then
-    printf 'intel'
-    return 0
+  nodes=("${JARVIS_DRI_DIR:-/dev/dri}"/renderD*)
+  if [ -e "${nodes[0]}" ]; then
+    vendor_file="${JARVIS_DRM_SYS_DIR:-/sys/class/drm}/${nodes[0]##*/}/device/vendor"
+    if [ -r "$vendor_file" ] && read -r vid < "$vendor_file"; then
+      case "$vid" in
+        0x8086) printf 'intel'; return 0 ;;
+        0x1002) printf 'amd';   return 0 ;;
+      esac
+    fi
   fi
   printf 'none'
+}
+
+# resolve_dri_gids -> echoes "<video_gid> <render_gid>", the owning group ids of
+# the first card* and first renderD* node under ${JARVIS_DRI_DIR:-/dev/dri}.
+# The GPU overlays need NUMERIC GIDs in group_add: a group NAME is resolved
+# against the CONTAINER image's /etc/group at container start, and stock ollama
+# images ship no `render` group, so a name fails start on every host. video
+# falls back to the render GID when there is no card* node; returns 1 and echoes
+# nothing when there is no render node (the overlay cannot work without one).
+resolve_dri_gids() {
+  local dri="${JARVIS_DRI_DIR:-/dev/dri}" renders cards render_gid video_gid
+  renders=("$dri"/renderD*)
+  [ -e "${renders[0]}" ] || return 1
+  render_gid="$(stat -c %g "${renders[0]}")" || return 1
+  cards=("$dri"/card*)
+  if [ -e "${cards[0]}" ]; then
+    video_gid="$(stat -c %g "${cards[0]}")" || return 1
+  else
+    video_gid="$render_gid"
+  fi
+  printf '%s %s' "$video_gid" "$render_gid"
 }
 
 # resolve_gpu_vram_mb VENDOR -> echoes the GPU's total VRAM in MB, or returns 1
