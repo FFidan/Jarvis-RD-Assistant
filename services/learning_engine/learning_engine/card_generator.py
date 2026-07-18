@@ -317,8 +317,6 @@ class CardGenerator:
              "verified_count": int, "total_count": int}
         """
         full_text = " ".join(c["content"] for c in chunks)
-        # Escape braces ONLY for str.format(); keep raw full_text for verification
-        escaped_text = full_text.replace("{", "{{").replace("}", "}}")
 
         safe_title, _ = wrap_delimited("title", title)
         safe_authors, _ = wrap_delimited("authors", ", ".join(authors))
@@ -328,18 +326,17 @@ class CardGenerator:
             num_ctx if num_ctx is not None else get_core_settings().llm_smart_num_ctx,
             reserved_output_tokens=2048,
         )
-        if len(escaped_text) > _budget and summary_text:
-            digest = summary_text.replace("{", "{{").replace("}", "}}")
-            safe_text, _ = wrap_delimited("paper_text", digest, max_chars=_budget)
+        if len(full_text) > _budget and summary_text:
+            safe_text, _ = wrap_delimited("paper_text", summary_text, max_chars=_budget)
             logger.info(
                 "card generation: using reduce-stage digest for paper_id=%s "
-                "(escaped_text=%d chars, budget=%d chars)",
+                "(full_text=%d chars, budget=%d chars)",
                 paper_id,
-                len(escaped_text),
+                len(full_text),
                 _budget,
             )
         else:
-            safe_text, was_truncated = wrap_delimited("paper_text", escaped_text, max_chars=_budget)
+            safe_text, was_truncated = wrap_delimited("paper_text", full_text, max_chars=_budget)
             if was_truncated:
                 logger.warning(
                     "card generation: input truncated to %d chars to fit model context", _budget
