@@ -1680,11 +1680,10 @@ printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
 
 # Click-to-finish setup link: carries the setup token so the wizard can complete
 # first-run setup (the token gates the bootstrap WRITE endpoints). init-secrets.sh
-# generated secrets/jarvis_setup_token.txt above.
-JARVIS_SETUP_TOKEN="$(cat secrets/jarvis_setup_token.txt 2>/dev/null || true)"
-if [ -n "$JARVIS_SETUP_TOKEN" ]; then
-  SETUP_LINK="${DASHBOARD_URL}/setup?setup_token=${JARVIS_SETUP_TOKEN}"
-  printf '  Finish setup: %s\n' "$SETUP_LINK"
+# generated secrets/jarvis_setup_token.txt above. print_setup_link (setup_lib.sh)
+# is shared with scripts/jarvis-setup.sh so both entry points surface it.
+print_setup_link "$DASHBOARD_URL"
+if [ -n "$SETUP_LINK" ]; then
   # Best-effort: open the click-to-finish link in the operator's browser.
   # Non-fatal — a headless/server box simply skips this.
   if command -v xdg-open >/dev/null 2>&1; then

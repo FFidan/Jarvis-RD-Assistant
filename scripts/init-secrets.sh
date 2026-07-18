@@ -134,7 +134,8 @@ sync_secret() {
 sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 # JARVIS_SETUP_TOKEN gates the first-run setup wizard's WRITE endpoints while no
 # admin exists (closes the unauthenticated first-admin-takeover window). setup.sh
-# prints it as the ?setup_token= query param in the click-to-finish link.
+# and scripts/jarvis-setup.sh print it as the ?setup_token= query param in the
+# click-to-finish link; the wizard also accepts it pasted on a second device.
 sync_secret JARVIS_SETUP_TOKEN jarvis_setup_token.txt "openssl rand -hex 32"
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # LITELLM_SALT_KEY encrypts model credentials LiteLLM stores in its database.

@@ -70,6 +70,9 @@ vi.mock('@/lib/api/pulse', () => ({
 
 const api = await import('@/lib/api');
 const pulseApi = await import('@/lib/api/pulse');
+// The barrel above is fully mocked; ApiError comes from the un-mocked core so
+// it is the same class AdminStep checks with `instanceof`.
+const { ApiError } = await import('@/lib/api/core');
 const { OnboardingWizard } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
 
@@ -622,5 +625,43 @@ describe('OnboardingWizard', () => {
     await waitFor(() => {
       expect(sessionStorage.getItem('jarvis_setup_token')).toBeNull();
     });
+  });
+
+  // A token-gate 403 while this browser holds no token (second device /
+  // incognito) surfaces an inline "Setup token" paste field.
+  it('renders a setup-token input when admin creation 403s and no token is held', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createFirstRunAdmin).mockRejectedValueOnce(
+      new ApiError(403, '{"detail":"Invalid or missing setup token"}'),
+    );
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    expect(await screen.findByLabelText(/setup token/i)).toBeInTheDocument();
+  });
+
+  // Pasting the token retries the create with it and advances on success.
+  it('retries admin creation with the pasted setup token and advances', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createFirstRunAdmin)
+      .mockRejectedValueOnce(new ApiError(403, '{"detail":"Invalid or missing setup token"}'))
+      .mockResolvedValueOnce({ id: 1, email: 'admin@example.com', role: 'admin' });
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    const tokenInput = await screen.findByLabelText(/setup token/i);
+    await user.type(tokenInput, 'pasted-tok');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.createFirstRunAdmin).mock.calls[1]?.[1]).toBe('pasted-tok');
+    });
+    expect(await screen.findByText(/Cloud LLM keys/i)).toBeInTheDocument();
   });
 });

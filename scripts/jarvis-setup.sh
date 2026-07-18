@@ -367,6 +367,9 @@ printf '%s================================================================%s\n' 
   "$C_GREEN" "$C_RESET"
 printf '%sJARVIS is up.%s Open %s%s%s to finish setup.\n' \
   "${C_BOLD}" "${C_RESET}" "${C_BOLD}" "${DASHBOARD_URL}" "${C_RESET}"
+# Surface the token-carrying click-to-finish link (shared helper, setup_lib.sh)
+# so a compose install is not a bare-403 dead-end on a second device.
+print_setup_link "$DASHBOARD_URL"
 printf 'The first-run web wizard will walk you through SMTP, the admin email,\n'
 printf 'and (optionally) cloud LLM provider keys.\n'
 printf '%s================================================================%s\n' \
