@@ -12,6 +12,7 @@
 #   - resolve_amd_smi            : locate amd-smi (the stable AMD interface)
 #   - detect_gpu_vendor          : nvidia | amd | intel | none probe
 #   - resolve_gpu_vram_mb        : vendor-neutral total-VRAM (MB) probe
+#   - strip_gpu_args             : drop --gpu selection for the CPU-retry re-exec
 #   - _default_model_for_tier    : tier+backend -> default model id
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
@@ -145,6 +146,24 @@ print(int(max(sizes)))
     ''|*[!0-9]*) return 1 ;;
   esac
   printf '%s' "$mb"
+}
+
+# strip_gpu_args ARGS... -> echoes ARGS with any --gpu selection removed, one
+# arg per line: both the `--gpu VALUE` pair and the `--gpu=VALUE` form. setup.sh
+# rebuilds the interactive CPU-retry re-exec argv from this so its appended
+# `--gpu cpu` is the only GPU flag and the retry cannot loop back into the
+# overlay path. One arg per line (not space-joined) so a value containing spaces
+# survives intact; callers read it back with a while-read loop.
+strip_gpu_args() {
+  local a skip_val=0
+  for a in "$@"; do
+    if [ "$skip_val" -eq 1 ]; then skip_val=0; continue; fi
+    case "$a" in
+      --gpu)   skip_val=1 ;;
+      --gpu=*) ;;
+      *)       printf '%s\n' "$a" ;;
+    esac
+  done
 }
 
 

@@ -1531,15 +1531,9 @@ fi
 # minus any --gpu selection, so compose_up_or_recover's appended `--gpu cpu` is
 # the only GPU flag and the retry cannot loop back into the overlay path.
 _RECOVERY_ARGS=()
-_skip_gpu_val=0
-for _a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
-  if [ "$_skip_gpu_val" -eq 1 ]; then _skip_gpu_val=0; continue; fi
-  case "$_a" in
-    --gpu)   _skip_gpu_val=1 ;;
-    --gpu=*) ;;
-    *)       _RECOVERY_ARGS+=("$_a") ;;
-  esac
-done
+while IFS= read -r _a; do
+  [ -n "$_a" ] && _RECOVERY_ARGS+=("$_a")
+done < <(strip_gpu_args ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"})
 case "$_gpu_choice" in
   cuda)   _overlay_name="gpu";    COMPOSE_OVERLAY=(-f docker-compose.gpu.yml) ;;
   rocm)   _overlay_name="rocm";   COMPOSE_OVERLAY=(-f docker-compose.rocm.yml) ;;

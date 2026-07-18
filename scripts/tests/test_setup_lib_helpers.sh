@@ -519,6 +519,55 @@ expect_eq "compute_compose_file: rocm overlay" \
 expect_eq "compute_compose_file: vulkan overlay before override" \
   "$(compute_compose_file vulkan 1)" "docker-compose.yml:docker-compose.vulkan.yml:docker-compose.override.yml"
 
+# === strip_gpu_args ==========================================================
+# The CPU-retry re-exec argv is the original invocation minus any --gpu
+# selection (both the `--gpu VALUE` pair and the `--gpu=VALUE` form), so the
+# appended `--gpu cpu` is the only GPU flag and the retry cannot loop back into
+# the overlay path. Output is one surviving arg per line.
+
+expect_eq "strip_gpu_args drops the --gpu VALUE pair, keeps the rest" \
+  "$(strip_gpu_args --gpu vulkan --non-interactive)" "--non-interactive"
+expect_eq "strip_gpu_args drops the --gpu=VALUE form" \
+  "$(strip_gpu_args --gpu=rocm)" ""
+expect_eq "strip_gpu_args passes non-gpu args through unchanged (order preserved)" \
+  "$(strip_gpu_args --domain example.com --non-interactive --backend ollama)" \
+  "$(printf '%s\n' --domain example.com --non-interactive --backend ollama)"
+expect_eq "strip_gpu_args on empty args echoes nothing" \
+  "$(strip_gpu_args)" ""
+
+# === print_setup_link ========================================================
+# Prints the click-to-finish wizard link and sets SETUP_LINK when a setup token
+# exists under secrets/ relative to CWD; with no token it clears SETUP_LINK and
+# prints nothing. A trailing slash on the base must not double up before /setup.
+
+LINK_DIR="$(mktemp -d "${FIXTURES}/setuplink.XXXXXX")"
+mkdir -p "${LINK_DIR}/secrets"
+printf 'tok123' > "${LINK_DIR}/secrets/jarvis_setup_token.txt"
+
+got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link builds SETUP_LINK from base + token" \
+  "$got" "https://jarvis.example/setup?setup_token=tok123"
+printed="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example")"
+case "$printed" in
+  *"Finish setup: https://jarvis.example/setup?setup_token=tok123"*)
+    pass "print_setup_link prints the finish-setup line with the link" ;;
+  *) printf 'FAIL: print_setup_link output missing the link (got=%s)\n' "$printed" >&2; fail=1 ;;
+esac
+
+got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example/" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link: trailing slash on base does not double up before /setup" \
+  "$got" "https://jarvis.example/setup?setup_token=tok123"
+
+NOTOK_DIR="$(mktemp -d "${FIXTURES}/setuplink-notok.XXXXXX")"
+mkdir -p "${NOTOK_DIR}/secrets"
+got="$(cd "$NOTOK_DIR"; print_setup_link "https://jarvis.example" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link clears SETUP_LINK when no token file exists" "$got" ""
+printed="$(cd "$NOTOK_DIR"; print_setup_link "https://jarvis.example")"
+case "$printed" in
+  *setup_token*) printf 'FAIL: print_setup_link leaked a setup_token with no token file (got=%s)\n' "$printed" >&2; fail=1 ;;
+  *) pass "print_setup_link prints no setup_token when the token file is absent" ;;
+esac
+
 # === setup.sh GPU wiring (static) =============================================
 
 scheck "setup.sh parses --gpu with the four overlay choices" 'cuda\|rocm\|vulkan\|cpu\) NI_GPU_OVERRIDE'
