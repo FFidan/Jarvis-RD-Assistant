@@ -157,9 +157,10 @@ export const dismissBanner = (banner_kind: string) =>
   });
 
 // The first-run wizard authorizes these unauthenticated POSTs with the
-// bootstrap setup token (printed by setup.sh, captured from the URL). The
-// header is sent only when a token is present; an unconfigured/legacy install
-// without a token is treated as open by the backend.
+// bootstrap setup token (printed by setup.sh / scripts/jarvis-setup.sh,
+// captured from the URL or pasted into the wizard). The header is sent only
+// when a token is present; an unconfigured install without a token is open in
+// development but fails closed (403) in production.
 const setupTokenHeader = (token?: string | null): Record<string, string> =>
   token ? { 'X-Setup-Token': token } : {};
 

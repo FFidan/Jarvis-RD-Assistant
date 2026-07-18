@@ -88,15 +88,25 @@ async def test_bootstrap_get_is_open_without_token(_token_set) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_write_open_when_token_unset(_token_unset) -> None:
-    """Backward-compat: no configured token → the gate is a no-op (open)."""
+async def test_bootstrap_write_refused_when_token_unset_in_production(
+    _token_unset, monkeypatch
+) -> None:
+    """Production fails closed: no configured token → 403 naming the remedy."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
     request = _bootstrap_request(method="POST", token=None)
-    assert await setup_router.require_unconfigured_or_admin(request) is None
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.require_unconfigured_or_admin(request)
+    assert exc_info.value.status_code == 403
+    assert "JARVIS_SETUP_TOKEN" in exc_info.value.detail
+    assert "init-secrets" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_write_without_token_logs_warning(_token_unset, caplog) -> None:
-    """The open-window write is allowed but must warn that it is unprotected."""
+async def test_bootstrap_write_open_when_token_unset_in_development(
+    _token_unset, monkeypatch, caplog
+) -> None:
+    """Non-production keeps the backward-compat warn+allow window (no-op gate)."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
     request = _bootstrap_request(method="POST", token=None)
     with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.setup"):
         assert await setup_router.require_unconfigured_or_admin(request) is None

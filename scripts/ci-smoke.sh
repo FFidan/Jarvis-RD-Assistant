@@ -40,6 +40,9 @@ printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/jarvis_model_hmac_key.txt"
 printf '%s\n' "smoke-langfuse-pk" > "$TMP_DIR/langfuse_init_pk.txt"
 printf '%s\n' "smoke-langfuse-sk" > "$TMP_DIR/langfuse_init_sk.txt"
 printf '%s\n' "smoke-infra-ingest-key" > "$TMP_DIR/infra_ingest_key.txt"
+# jarvis_setup_token is required by the default paper_ingestion service (gates
+# the first-run wizard WRITE endpoints), so it must be present for a clean boot.
+printf '%s\n' "smoke-setup-token" > "$TMP_DIR/jarvis_setup_token.txt"
 
 cat > "$OVERRIDE_FILE" <<YAML
 secrets:
@@ -75,6 +78,8 @@ secrets:
     file: $TMP_DIR/langfuse_init_sk.txt
   infra_ingest_key:
     file: $TMP_DIR/infra_ingest_key.txt
+  jarvis_setup_token:
+    file: $TMP_DIR/jarvis_setup_token.txt
 YAML
 
 compose() {

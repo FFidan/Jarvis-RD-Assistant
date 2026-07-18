@@ -7,6 +7,7 @@
 #   - resolve_docker_data_root   : where Docker keeps images/volumes/cache
 #   - preflight_disk_lib         : free-vs-required disk measurement core
 #   - upsert_env_var             : idempotent in-place .env key write
+#   - print_setup_link           : click-to-finish wizard link when token exists
 #   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
 #   - resolve_amd_smi            : locate amd-smi (the stable AMD interface)
 #   - detect_gpu_vendor          : nvidia | amd | intel | none probe
@@ -519,4 +520,20 @@ upsert_env_var() {
     END { if (!seen) print k "=" v }
   ' .env > "$tmp" || { rm -f "$tmp"; printf 'upsert_env_var: awk rewrite of .env failed\n' >&2; return 1; }
   mv "$tmp" .env || { rm -f "$tmp"; printf 'upsert_env_var: mv to .env failed\n' >&2; return 1; }
+}
+
+# print_setup_link -> print the click-to-finish wizard link when a setup token
+# exists. $1 = dashboard base URL (trailing slash optional). Reads
+# secrets/jarvis_setup_token.txt relative to CWD (the repo root both entry
+# points cd into). When a token is present it prints the "Finish setup:" line
+# and sets SETUP_LINK so setup.sh can best-effort open it in a browser; with no
+# token it clears SETUP_LINK and prints nothing.
+print_setup_link() {
+  local base="${1%/}" token
+  token="$(cat secrets/jarvis_setup_token.txt 2>/dev/null || true)"
+  SETUP_LINK=""
+  if [ -n "$token" ]; then
+    SETUP_LINK="${base}/setup?setup_token=${token}"
+    printf '  Finish setup: %s\n' "$SETUP_LINK"
+  fi
 }
