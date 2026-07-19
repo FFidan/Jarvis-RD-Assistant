@@ -41,8 +41,8 @@ from paper_ingestion.models.account import (
     AccountUpdateResponse,
     ConfirmEmailChangeBody,
 )
+from paper_ingestion.routers._auth_shared import magic_link_on_cooldown
 from paper_ingestion.routers.auth import (
-    MAGIC_LINK_COOLDOWN,
     MAGIC_LINK_TTL,
     _audit_pool,
     _hash_email,
@@ -84,23 +84,6 @@ _ACCOUNT_SELECT = (
     "SELECT id, email, role, display_name, created_at, last_login_at "
     "FROM users WHERE id = $1 AND deleted_at IS NULL"
 )
-
-
-async def _is_email_change_on_cooldown(conn, user_id: int) -> bool:
-    """Return True when a pending email-change token was minted within MAGIC_LINK_COOLDOWN.
-
-    Scoped to ``pending_email IS NOT NULL`` so login links don't suppress
-    email-change links and vice versa.
-    """
-    recent = await conn.fetchval(
-        "SELECT created_at FROM magic_link_tokens"
-        " WHERE user_id = $1 AND pending_email IS NOT NULL"
-        " ORDER BY created_at DESC LIMIT 1",
-        user_id,
-    )
-    return (
-        recent is not None and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
-    )
 
 
 @router.get("", response_model=AccountResponse)
@@ -149,7 +132,7 @@ async def _stage_email_change(
     )
     if clash is not None:
         return None, None, True
-    if await _is_email_change_on_cooldown(conn, user_id):
+    if await magic_link_on_cooldown(conn, user_id, email_change=True):
         return None, None, False
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)

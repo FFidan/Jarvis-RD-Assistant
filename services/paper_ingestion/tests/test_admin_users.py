@@ -466,7 +466,12 @@ async def test_invite_returns_link_when_dev_log_only_drops_delivery(monkeypatch)
 async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
     monkeypatch, caplog
 ) -> None:
-    """Production without APP_BASE_URL → a warning naming APP_BASE_URL (link still built)."""
+    """Production without APP_BASE_URL → the admin logger warns about the invite link.
+
+    The warning must stay on this module's logger and name the invite link, so
+    operators filtering by logger name still see it and can tell it apart from
+    the sign-in-link warning the auth router emits.
+    """
     import logging
     from types import SimpleNamespace
 
@@ -483,8 +488,18 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
         link = admin_router._build_invite_link(request, "tok123")
 
     assert "token=tok123" in link
-    assert any("APP_BASE_URL" in r.message for r in caplog.records), (
-        "Expected a warning naming APP_BASE_URL when it is unset in production"
+    warnings = [
+        r
+        for r in caplog.records
+        if r.name == "paper_ingestion.routers.admin" and r.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1, (
+        "Expected exactly one warning on the admin logger; got "
+        f"{[(r.name, r.message) for r in caplog.records]}"
+    )
+    assert "APP_BASE_URL" in warnings[0].message
+    assert "invite link" in warnings[0].message, (
+        f"the warning must name the invite link; got: {warnings[0].message!r}"
     )
 
 

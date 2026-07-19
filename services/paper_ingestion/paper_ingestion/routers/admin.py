@@ -31,9 +31,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin
 from jarvis_common.email import MagicLinkDelivery, send_magic_link
-from jarvis_common.settings import get_core_settings, get_secrets_settings
+from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
+from paper_ingestion.routers._auth_shared import build_verify_link
 from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
 
 logger = logging.getLogger(__name__)
@@ -90,18 +91,7 @@ class UpdateRoleBody(BaseModel):
 
 def _build_invite_link(request: Request, token: str) -> str:
     """Construct the magic-link URL for an invited user."""
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    base = get_paper_ingestion_settings().app_base_url
-    if base:
-        return f"{base.rstrip('/')}/auth/verify?token={token}"
-    if get_core_settings().environment == "production":
-        logger.warning(
-            "APP_BASE_URL is unset in production; the invite link is derived from the "
-            "request origin and may be wrong behind a tunnel or proxy. Set APP_BASE_URL "
-            "to the public URL."
-        )
-    return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
+    return build_verify_link(request, token, logger=logger, link_kind="invite link")
 
 
 def _row_to_user(row: dict) -> UserRecord:  # type: ignore[type-arg]
