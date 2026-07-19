@@ -641,18 +641,21 @@ app.include_router(auth_router.router)
 # login/* + capability are unauthenticated, register/list/delete enforce the
 # session in-handler via current_user_id_strict.
 app.include_router(auth_passkeys_router.router)
-# Admin router uses session-only auth (no X-API-Key required for browser
-# sessions). Exempt from the global verify_api_key dep via dependencies=[].
-app.include_router(admin_router.router, dependencies=[])
-# Backup panel uses session-only admin auth (no X-API-Key); exempt from the
-# global verify_api_key dep like admin.py.
-app.include_router(backups_router.router, dependencies=[])
-# AI backend configuration — session-only admin auth, no X-API-Key required.
-app.include_router(settings_ai_router.router, dependencies=[])
-# Setup router is the first-run bootstrap. Endpoints are wide open until
-# the first admin exists; afterwards each handler enforces admin-role itself
-# via require_unconfigured_or_admin. Exempt from global verify_api_key.
-app.include_router(setup_router.router, dependencies=[])
+# Admin, backup and AI-settings panels stay behind the app-level verify_api_key:
+# it returns early once SessionMiddleware has set request.state.user_id from a
+# valid session, so a browser needs no X-API-Key. require_admin is the
+# authorization gate on every route here except GET
+# /api/admin/backups/restore/status, which uses restore_status_auth so the
+# progress poll still answers with a one-time bearer token or the ops X-API-Key
+# when a restore has torn down the session store.
+app.include_router(admin_router.router)
+app.include_router(backups_router.router)
+app.include_router(settings_ai_router.router)
+# Setup is the first-run bootstrap. verify_api_key exempts /api/setup/* by path
+# because FirstRunGate polls it before any credential exists; each handler's
+# require_unconfigured_or_admin is the real gate — open until the first admin
+# exists, admin-only afterwards.
+app.include_router(setup_router.router)
 app.include_router(topics.router)
 app.include_router(settings.router)
 app.include_router(analytics.router)

@@ -1,15 +1,13 @@
 """Admin user-management endpoints.
 
 All endpoints require both:
-1. A valid session cookie (set by SessionMiddleware on the request) OR
-   an X-API-Key that satisfies ``verify_api_key`` (already enforced globally).
+1. Passing the app-level ``verify_api_key`` front door: it returns early once
+   SessionMiddleware has set ``request.state.user_id`` from a valid session,
+   so a logged-in browser needs no ``X-API-Key``; other callers must present
+   a matching key.
 2. ``role = 'admin'`` on the resolved session user (enforced by
-   ``require_admin`` below).
-
-Registered in main.py with ``dependencies=[]`` at include time to override
-the global ``verify_api_key`` — the same exemption shape used by auth.py.
-Session-only callers (browsers logged in via magic-link) do NOT need to send
-``X-API-Key``; the session cookie is sufficient.
+   ``require_admin`` on every route below). The ops X-API-Key alone never
+   satisfies this — it carries no session role.
 
 Endpoints
 ---------
@@ -39,9 +37,6 @@ from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_toke
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-# Mark as session-exempt from global verify_api_key (browser session is enough).
-router.auth_exempt = True  # type: ignore[attr-defined]
 
 # Invite tokens get a longer TTL than normal 15-min magic links because the
 # recipient may not check email immediately.

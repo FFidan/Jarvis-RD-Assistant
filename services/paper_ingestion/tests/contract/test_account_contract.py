@@ -137,8 +137,8 @@ async def test_a2_patch_account_email_clash_returns_409(
 # E1.PI extensions — magic-link token race conditions
 #
 # The verify endpoint lives in routers/auth.py; we reuse _pi_app_with_pool
-# (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify
-# which is registered without verify_api_key (auth_exempt).
+# (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify,
+# which verify_api_key exempts by path prefix before any key comparison.
 #
 # Verified: auth.py:184-295 (verify — used_at guard + expires_at guard + pending_email guard)
 # ---------------------------------------------------------------------------

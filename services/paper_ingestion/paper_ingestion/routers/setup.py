@@ -19,10 +19,10 @@ A new ``require_unconfigured_or_admin`` dependency gates every endpoint:
 * When ≥ 1 admin user exists → caller must have ``role='admin'`` per the
   session cookie.
 
-The router is exported with the ``auth_exempt`` marker and registered with
-``dependencies=[]`` in ``main.py`` so it bypasses the global
-``verify_api_key`` — same exemption shape as ``routers/auth.py`` /
-``routers/admin.py``.
+The app-level ``verify_api_key`` returns early for any path starting with
+``/api/setup/``, so these endpoints answer without a session or API key. That
+exemption exists because ``FirstRunGate`` polls ``/api/setup/status`` on every
+boot with no credential in hand; without it the UI hangs on a 403.
 
 Naming note
 -----------
@@ -67,9 +67,6 @@ from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
-
-# Marker — exempted from global verify_api_key at include time (see main.py).
-router.auth_exempt = True  # type: ignore[attr-defined]
 
 MAX_EMAIL_LEN = 320  # RFC 5321
 SMTP_TEST_TIMEOUT_SECONDS = 10.0

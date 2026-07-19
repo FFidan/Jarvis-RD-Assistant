@@ -4,17 +4,22 @@ The disaster-recovery archives produced by ``scripts/backup.sh`` (in the
 ``postgres-backup`` sidecar) land in the ``postgres_backups`` volume, mounted
 read-only into this service at ``/backups``. These archives contain ALL
 platform secrets (the ``secrets_*.tar.gz`` is the full Docker-secret set,
-plaintext when no backup key is configured), so every route here requires an
-**admin browser session** (``Depends(require_admin)``) — never the ops
-X-API-Key, which must not reach secret-bearing archives.
+plaintext when no backup key is configured), so every secret-bearing route here
+requires an **admin browser session** (``Depends(require_admin)``) — never the
+ops X-API-Key, which must not reach the archives themselves.
+
+The one exception is ``GET /restore/status``, which carries no archive content:
+it is gated by ``restore_status_auth`` and also accepts a one-time bearer token
+or the ops X-API-Key, so progress polling survives a restore that has torn down
+the admin's session store.
 
 The app container (python:3.12-slim) cannot run ``pg_dump``/``backup.sh`` and
 has no docker.sock, so the on-demand trigger writes a sentinel flag-file into a
 small RW volume shared with the sidecar; the sidecar loop runs a backup
 immediately when it sees the flag, then removes it.
 
-Registered in main.py with ``dependencies=[]`` + ``router.auth_exempt=True``
-(same exemption shape as admin.py) so a browser session need not send X-API-Key.
+A logged-in browser needs no X-API-Key: the app-level ``verify_api_key`` returns
+early once SessionMiddleware has set ``request.state.user_id``.
 """
 
 from __future__ import annotations
@@ -49,8 +54,6 @@ from paper_ingestion.deps import limiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin/backups", tags=["admin", "backups"])
-# Session-only admin auth — exempt from the global verify_api_key dep.
-router.auth_exempt = True  # type: ignore[attr-defined]
 
 # Directory the postgres_backups volume is mounted at (read-only) in this service.
 _BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/backups"))

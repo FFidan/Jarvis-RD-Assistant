@@ -43,10 +43,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# Auth router endpoints are exempt from the global verify_api_key dependency.
-# They're explicitly registered with `dependencies=[]` overrides at include time
-# (see main.py). Marker attribute so future linters can audit.
-router.auth_exempt = True  # type: ignore[attr-defined]
+# Exempt from the app-level verify_api_key by the `/api/auth/` path check inside
+# it — this router IS the auth bootstrap, so it cannot require a credential the
+# caller has not been issued yet. Each endpoint enforces its own token TTL and
+# single-use semantics.
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
 MAGIC_LINK_COOLDOWN = timedelta(minutes=2)
