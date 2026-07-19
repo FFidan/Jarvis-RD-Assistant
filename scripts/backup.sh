@@ -41,6 +41,47 @@
 
 set -euo pipefail
 
+# --- Manifest authentication primitives --------------------------------------
+# The manifest is plaintext metadata that anyone who can write BACKUP_DIR could edit
+# (rewriting a sha256 to match a swapped archive), so it is signed and restore.sh
+# verifies the signature before it trusts those checksums.
+#
+# derive_manifest_hmac_key computes HMAC with the PUBLIC domain label as the HMAC key
+# over the SECRET key-file bytes as the message. That is deliberate, and it is not the
+# textbook KDF direction: openssl offers no way to key on the secret without exposing it
+# in the process list (`-hmac <secret>` and `-macopt hexkey:<secret>` both land in argv),
+# and stdin is the only safe channel for the secret. The result still requires the key
+# file to compute, so an attacker without it cannot forge a signature, and distinct
+# labels yield independent sub-keys.
+MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
+
+# `-r` is openssl's stable machine format "<hex> *stdin", so field 1 is always the bare
+# hex regardless of the openssl version's default digest output format.
+derive_manifest_hmac_key() {
+  openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$ENC_KEYFILE" | cut -d' ' -f1
+}
+
+# sign_manifest <manifest> — write <manifest>.hmac. Non-zero on any failure, leaving no
+# partial signature behind (an absent signature is honest; a truncated one is not).
+sign_manifest() {
+  local manifest="$1" tmp="${1}.hmac.tmp"
+  if ! openssl dgst -sha256 -mac HMAC -macopt "hexkey:$(derive_manifest_hmac_key)" -r < "$manifest" \
+       | cut -d' ' -f1 > "$tmp" || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "${manifest}.hmac"
+}
+
+# The script's tests source it to exercise the two helpers above without taking a
+# backup. Nothing above this line reads a secret, touches the DB, or writes a file.
+if [ "${1:-}" = "--functions-only" ]; then
+  # shellcheck disable=SC2317  # `return` succeeds when sourced and fails when
+  # executed; the `exit` is the executed-path fallback, not dead code.
+  return 0 2>/dev/null || exit 0
+fi
+
 # --- Optional S3 pull (off-host disaster recovery) ---------------------------
 # When BACKUP_PULL_TS is set this run does NOT take a backup: it downloads the
 # named timestamp's archive set (+ its manifest) from s3://$BACKUP_S3_BUCKET into
@@ -64,7 +105,8 @@ pull_from_s3() {
   # archive set + manifest without enumerating the variable .enc / qdrant-collection
   # filenames. The keys are flat basenames in the bucket.
   aws s3 cp "s3://${BACKUP_S3_BUCKET}/" "$dest" --recursive \
-    --exclude "*" --include "*_${ts}.*" --include "manifest_${ts}.json"
+    --exclude "*" --include "*_${ts}.*" --include "manifest_${ts}.json" \
+    --include "manifest_${ts}.json.hmac"
   echo "[$(date -Iseconds)] Pulled backup ${ts} from s3://${BACKUP_S3_BUCKET}/ into ${dest}" >&2
 }
 
@@ -98,6 +140,12 @@ LITELLM_DATABASE="${LITELLM_DATABASE:-litellm}"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 QDRANT_API_KEYFILE="${QDRANT_API_KEYFILE:-/run/secrets/qdrant_api_key}"
 SECRETS_DIR="${SECRETS_DIR:-/secrets}"
+# The sidecar's rw mount of the host ./secrets. It holds the out-of-band marker that
+# tells restore.sh a signed manifest is now mandatory: keeping that marker OUT of
+# BACKUP_DIR means an attacker who can only write BACKUP_DIR cannot remove it to
+# downgrade a later restore back to unsigned.
+HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
+MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # When a backup encryption key is configured archives get a .enc suffix and are
@@ -440,6 +488,27 @@ write_manifest() {
 }
 write_manifest || true
 
+# publish_manifest_signature — sign the manifest this run wrote, then arm the ratchet.
+# Deployments with no backup key have nothing to sign with and are skipped here; STEP 2
+# of restore.sh skips the verification symmetrically. Never fatal — it can only run
+# after a successful backup and must not retroactively fail one. The marker is written
+# ONLY after a signature exists, so the requirement can never arm without one.
+publish_manifest_signature() {
+  local manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
+  [ "$ENCRYPT" -eq 1 ] || return 0
+  [ -f "$manifest" ] || return 0
+  if ! sign_manifest "$manifest"; then
+    echo "[$(date -Iseconds)] WARNING: could not sign the backup manifest; continuing" >&2
+    return 0
+  fi
+  echo "[$(date -Iseconds)] Backup manifest signature written to ${manifest}.hmac" >&2
+  if [ -d "$HOST_SECRETS_DIR" ] && [ ! -e "$MANIFEST_HMAC_MARKER" ]; then
+    : > "$MANIFEST_HMAC_MARKER" 2>/dev/null \
+      || echo "[$(date -Iseconds)] WARNING: could not require signed manifests in ${HOST_SECRETS_DIR}; continuing" >&2
+  fi
+}
+publish_manifest_signature || true
+
 # --- Optional S3 upload ------------------------------------------------------
 if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   if ! command -v aws >/dev/null 2>&1; then
@@ -447,6 +516,7 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   else
     for f in "$JARVIS_BACKUP_FILE" "$LITELLM_BACKUP_FILE" "$SECRETS_BACKUP_FILE" \
              "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json \
+             "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json.hmac \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot.enc; do
       [ -n "$f" ] && [ -f "$f" ] || continue
@@ -522,7 +592,7 @@ retention_keep_last_n() {
         -o -name "litellm_${ts}.sql.gz" -o -name "litellm_${ts}.sql.gz.enc" \
         -o -name "secrets_${ts}.tar.gz" -o -name "secrets_${ts}.tar.gz.enc" \
         -o -name "qdrant_*_${ts}.snapshot" -o -name "qdrant_*_${ts}.snapshot.enc" \
-        -o -name "manifest_${ts}.json" \
+        -o -name "manifest_${ts}.json" -o -name "manifest_${ts}.json.hmac" \
       \) -delete
   done < <(find "$dir" -maxdepth 1 -type f \
         \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) -printf '%f\n' 2>/dev/null \
@@ -542,7 +612,7 @@ if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
       -o -name "litellm_*.sql.gz" -o -name "litellm_*.sql.gz.enc" \
       -o -name "secrets_*.tar.gz" -o -name "secrets_*.tar.gz.enc" \
       -o -name "qdrant_*.snapshot" -o -name "qdrant_*.snapshot.enc" \
-      -o -name "manifest_*.json" \
+      -o -name "manifest_*.json" -o -name "manifest_*.json.hmac" \
       -o -name "*.tmp" -o -name "*.raw" \
     \) -mtime "+${RETENTION_DAYS}" -delete
   echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"

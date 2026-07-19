@@ -43,9 +43,21 @@ OPERATOR_KEYFILE="${INBOX_DIR}/operator_key"
 SECRETS_STAGING="${INBOX_DIR}/.secrets-staging"
 # Off-host restore materializes the restored ./secrets/*.txt here (the sidecar's rw
 # bind mount of the host ./secrets) so the app containers self-restart onto the
-# rotated secrets — a fresh host recovers with zero terminal steps. Only the inbox
-# path mounts this; a local restore never does.
+# rotated secrets — a fresh host recovers with zero terminal steps. Only the inbox path
+# WRITES here; the mount itself is unconditional, which is what lets a local restore read
+# the signing ratchet marker below.
 HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
+# Out-of-band ratchet: backup.sh drops this marker the first time it signs a manifest.
+# The decision to REQUIRE a signature must never come from a field inside the
+# (unauthenticated) manifest — that would be a strip-the-field downgrade — so it is read
+# from the host secrets dir instead, which an attacker who only controls BACKUP_DIR
+# cannot touch. Mirrors backup.sh's marker path.
+MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+# Mirror of backup.sh's domain label; both sides must agree byte-for-byte.
+MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
+# The phrase the operator must type to restore a backup set that has no authenticated
+# manifest. Deliberately unguessable-by-accident and never satisfiable by a flag.
+BREAK_GLASS_PHRASE="I-ACCEPT-UNVERIFIED-BACKUP"
 
 PGHOST="${PGHOST:-postgres}"
 PGUSER="${PGUSER:-jarvis}"
@@ -142,6 +154,97 @@ decrypt_or_passthrough() {
     *.enc) openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -kfile "$ENC_KEYFILE" -in "$f" ;;
     *)     cat -- "$f" ;;
   esac
+}
+
+# --- Manifest authentication (the INVERSE of backup.sh's signing helpers) ------
+# The manifest carries the sha256 of every archive, so the sha256 gate in STEP 2 is
+# only as trustworthy as the manifest itself: anyone who can write the archive
+# directory could swap an archive and rewrite its digest. These helpers verify the
+# signature backup.sh emitted, BEFORE that gate runs.
+#
+# The derivation is an exact mirror of backup.sh's, including its deliberate direction:
+# the PUBLIC domain label is the HMAC key and the SECRET key-file bytes are the message,
+# because openssl cannot be keyed on the secret without exposing it in argv. See
+# backup.sh for the full rationale. Duplicated rather than shared for the same reason
+# qdrant_http_body is: the two scripts are independently mounted into the sidecar and a
+# shared file would need a third mount.
+derive_manifest_hmac_key() {
+  openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$ENC_KEYFILE" | cut -d' ' -f1
+}
+
+# verify_manifest_signature <manifest> — recompute the MAC and compare it with the
+# stored <manifest>.hmac. The comparison is a plain byte-compare of two fixed-length
+# 64-hex digest files; it is NOT constant-time and does not need to be. A restore is an
+# offline one-shot operator action with no online timing oracle, so an attacker gets no
+# repeatable measurement to exploit. Returns non-zero on a missing signature, a
+# mismatch, or any compute failure.
+verify_manifest_signature() {
+  local manifest="$1" stored="${1}.hmac" computed rc=1
+  [ -s "$stored" ] || return 1
+  computed="$(mktemp)" || return 1
+  set +e
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:$(derive_manifest_hmac_key)" -r < "$manifest" \
+    2>/dev/null | cut -d' ' -f1 > "$computed"
+  if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
+  set -e
+  rm -f "$computed"
+  return "$rc"
+}
+
+# manifest_signature_required — whether an ABSENT signature is fatal. It answers only
+# that question: a signature that is PRESENT is always verified regardless of this (see
+# gate_manifest_signature). Off-host sets require one UNCONDITIONALLY — the operator key
+# is present by construction, the archives are the least trusted, and a fresh-host
+# restore is the decisive DR path — so off-host recovery needs a backup set taken by a
+# version that signs. Same-host sets require one once the out-of-band ratchet marker
+# exists.
+manifest_signature_required() {
+  [ "$SOURCE" = "inbox" ] && return 0
+  [ -e "$MANIFEST_HMAC_MARKER" ]
+}
+
+# break_glass_accepted — the ONLY escape from the signature requirement, for the
+# disaster where the sole surviving backup set predates manifest signing. It needs BOTH
+# JARVIS_RESTORE_ALLOW_LEGACY=1 AND the operator typing the confirmation phrase at an
+# interactive prompt, so no combination of flags alone can take it and the sidecar's
+# non-interactive restore can never reach it. It applies ONLY to an ABSENT signature:
+# one that fails to verify is evidence of tampering, not of loss.
+break_glass_accepted() {
+  [ "${JARVIS_RESTORE_ALLOW_LEGACY:-}" = "1" ] || return 1
+  [ -t 0 ] || return 1
+  local reply=""
+  printf 'This backup set has no authenticated manifest and cannot be verified. Type %s to restore it anyway: ' \
+    "$BREAK_GLASS_PHRASE" >&2
+  IFS= read -r reply || return 1
+  [ "$reply" = "$BREAK_GLASS_PHRASE" ]
+}
+
+# gate_manifest_signature — refuse an unauthenticated backup set BEFORE any destruction.
+# Returns (restore proceeds) or terminates via fail_before_destruction.
+#
+# Two independent questions, deliberately not conflated:
+#   1. Is a signature PRESENT? If so it is ALWAYS verified — every source, every marker
+#      state — and a FAILED verification always refuses. Break-glass cannot rescue it: a
+#      bad MAC is evidence of tampering, not of loss.
+#   2. Is an ABSENT signature fatal? That is manifest_signature_required's question, and
+#      the only branch break-glass may rescue.
+# A deployment with no backup key has nothing to sign or verify with and skips both,
+# symmetrically with backup.sh.
+gate_manifest_signature() {
+  [ -n "$ENC_KEYFILE" ] && [ -s "$ENC_KEYFILE" ] || return 0
+  if [ -e "${MANIFEST}.hmac" ]; then
+    verify_manifest_signature "$MANIFEST" && return 0
+    fail_before_destruction "backup ${TIMESTAMP} failed its manifest authentication check — the manifest does not match its signature and may have been tampered with; nothing was changed"
+  fi
+  if ! manifest_signature_required; then
+    echo "[restore] WARNING: backup ${TIMESTAMP} predates manifest signing and cannot be checked for tampering; its archive checksums are self-reported. Take a new backup for a verifiable restore point." >&2
+    return 0
+  fi
+  if break_glass_accepted; then
+    echo "[restore] WARNING: restoring backup ${TIMESTAMP} WITHOUT manifest authentication on explicit operator override; its archive checksums are unverified" >&2
+    return 0
+  fi
+  fail_before_destruction "backup ${TIMESTAMP} has no authenticated manifest (manifest_${TIMESTAMP}.json.hmac is missing); restore a backup taken by this version, or re-run interactively with JARVIS_RESTORE_ALLOW_LEGACY=1 to accept an unverified set; nothing was changed"
 }
 
 # --- valid_archive_name — mirror of backups.py:_FILENAME_RE. Rejects path
@@ -618,6 +721,15 @@ _cleanup() {
   # Never crash-restart the sidecar: a recorded terminal failure exits 0.
   exit 0
 }
+# The script's tests source it to exercise the helpers above directly. Everything below
+# this line is trap installation and the restore flow itself; everything above it is
+# configuration assignments and function definitions, so sourcing has no side effects.
+if [ "${1:-}" = "--functions-only" ]; then
+  # shellcheck disable=SC2317  # `return` succeeds when sourced and fails when
+  # executed; the `exit` is the executed-path fallback, not dead code.
+  return 0 2>/dev/null || exit 0
+fi
+
 trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
@@ -747,6 +859,10 @@ export PGPASSWORD
 
 # === STEP 2: compat gate (defense-in-depth, BEFORE any destruction) ==========
 MANIFEST="${ARCHIVE_DIR}/manifest_${TIMESTAMP}.json"
+# Authenticate the manifest FIRST. The sha256 gate below reads its expected digests
+# from this file, so verifying the archives against an unverified manifest would prove
+# nothing about a set whose archives and digests were rewritten together.
+gate_manifest_signature
 if [ -r "$MANIFEST" ]; then
   MANIFEST_CONTENT="$(cat "$MANIFEST" 2>/dev/null || true)"
   CHECKFILE="$(mktemp)"
@@ -839,7 +955,6 @@ done
 # presence here means present + integrity-checked. Local restores never touch secrets.
 if [ "$SOURCE" = "inbox" ]; then
   if ! resolve_secrets_archive >/dev/null; then
-    MANUAL_STEPS_REQUIRED=1
     fail_before_destruction "off-host restore requires the secrets archive secrets_${TIMESTAMP}.tar.gz[.enc] (stage the full backup set, including its secrets, into the restore_inbox); nothing was changed"
   fi
 fi
@@ -895,7 +1010,6 @@ SAFETY_BACKUP_TS="$(printf '%s' "$LAST_RUN" \
 # would leave a stale succeeded record; treating that as a rollback point is the bug this guards against.
 if ! safety_backup_is_fresh "$SAFETY_RC"; then
   STEP_SAFETY="failed"
-  MANUAL_STEPS_REQUIRED=1
   fail_before_destruction "safety backup failed or is stale (no fresh rollback point); nothing was changed"
 fi
 STEP_SAFETY="done"
