@@ -408,7 +408,9 @@ cmd_update() {
     die "Your checkout has diverged from ${target_ref}; a fast-forward update is not possible." \
         "Reconcile by hand (git pull --ff-only) or reinstall; then run: jarvis-research doctor"
   fi
-  if [ "$(git rev-parse HEAD)" = "$(git rev-parse "$target_ref")" ]; then
+  # Release tags are annotated, so the tag name resolves to the tag object, not
+  # the commit it points at; peel it or this never matches.
+  if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${target_ref}^{commit}")" ]; then
     ok "Already up to date (${target_ref})."
     return 0
   fi

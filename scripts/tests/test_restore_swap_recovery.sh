@@ -25,7 +25,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESTORE_SH="${SCRIPT_DIR}/../restore.sh"
 IMAGE="${SWAP_TEST_IMAGE:-postgres:16.8}"
-CNAME="jarvis-w42-swaptest-$$"
+CNAME="jarvis-restore-swap-test-$$"
 WORK="$(mktemp -d)"
 
 pass=0; fail=0
@@ -38,6 +38,12 @@ trap cleanup EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   printf 'SKIP: docker unavailable; cannot run the real-pg swap/recovery matrix\n' >&2
+  exit 0
+fi
+# An installed client with an unreachable daemon must skip too, or this suite
+# fails the whole gate on a developer machine that simply has Docker stopped.
+if ! docker info >/dev/null 2>&1; then
+  printf 'SKIP: docker daemon unreachable; cannot run the real-pg swap/recovery matrix\n' >&2
   exit 0
 fi
 if [ ! -r "$RESTORE_SH" ]; then printf 'FAIL: cannot read %s\n' "$RESTORE_SH" >&2; exit 1; fi

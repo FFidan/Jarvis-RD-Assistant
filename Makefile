@@ -119,6 +119,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/check-burned-secrets.sh
 	bash scripts/tests/test_backup_coverage.sh
 	bash scripts/tests/test_restore_coverage.sh
+	bash scripts/tests/test_restore_swap_recovery.sh
 	bash scripts/tests/test_prune_coverage.sh
 	bash scripts/tests/test_setup_lib_helpers.sh
 	bash scripts/tests/test_update_coverage.sh
@@ -126,6 +127,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/tests/test_uninstall.sh
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/jarvis-research.sh; else echo "shellcheck not installed; skipping scripts/jarvis-research.sh lint"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/uninstall.sh; else echo "shellcheck not installed; skipping scripts/uninstall.sh lint"; fi
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/lifecycle-smoke.sh; else echo "shellcheck not installed; skipping scripts/lifecycle-smoke.sh lint"; fi
 	uv run pytest
 	$(MAKE) frontend-check
 
