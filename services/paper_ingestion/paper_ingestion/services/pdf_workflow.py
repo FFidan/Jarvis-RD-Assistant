@@ -25,6 +25,7 @@ except ImportError:
     torch = None  # type: ignore[assignment]
 
 from paper_ingestion.db_types import ConnLike
+from paper_ingestion.ingestion.embed_store import chunk_point_id
 from paper_ingestion.ingestion.embedder import (
     COLLECTION_NAME,
     EMBEDDING_MODEL_NAME,
@@ -307,6 +308,39 @@ async def run_process_pdf(
 
     await _maybe_progress(0.1, "Downloaded")
 
+    # --- Resume map: chunks already embedded by the current model, unchanged
+    # since the prior attempt (skipped instead of re-embedded). Force always
+    # replaces every chunk, so the map stays empty and the skip never applies.
+    resume_content: dict[int, str] = {}
+    if not force:
+        async with db_pool.acquire() as conn:
+            prior = {
+                r["chunk_index"]: r["content"]
+                for r in await conn.fetch(
+                    "SELECT chunk_index, content FROM paper_chunks"
+                    " WHERE paper_id = $1 AND embedding_id IS NOT NULL"
+                    "   AND embedding_model = $2",
+                    paper_id,
+                    EMBEDDING_MODEL_NAME,
+                )
+            }
+        if prior:
+            # Qdrant's backup is best-effort (backup.sh): a DB restored without
+            # a matching Qdrant snapshot can hold embedding_id rows whose
+            # points no longer exist — re-embed those instead of skipping
+            # them forever.
+            expected_ids = {idx: chunk_point_id(paper_id, idx) for idx in prior}
+            records = await embedder.qdrant.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=list(expected_ids.values()),
+                with_payload=False,
+                with_vectors=False,
+            )
+            present = {r.id for r in records}
+            resume_content = {
+                idx: content for idx, content in prior.items() if expected_ids[idx] in present
+            }
+
     # --- Extract text, chunk, embed (no lock, no connection held) ---
 
     async def _extraction_progress(chunk_index: int, total_chunks: int) -> None:
@@ -319,7 +353,11 @@ async def run_process_pdf(
 
     try:
         _full_text, chunks, point_ids = await pdf_processor.process(
-            pdf_path, paper_id, user_id=owner_id, progress_callback=_extraction_progress
+            pdf_path,
+            paper_id,
+            user_id=owner_id,
+            progress_callback=_extraction_progress,
+            resume_content=resume_content,
         )
         # Subtract newly upserted IDs: deterministic uuid5 IDs are identical for
         # unchanged chunk indices, so deleting them would erase just-written vectors.

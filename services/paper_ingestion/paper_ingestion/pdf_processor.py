@@ -385,6 +385,7 @@ class PDFProcessor:
         *,
         user_id: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
+        resume_content: dict[int, str] | None = None,
     ) -> tuple[str, list[ChunkForEmbedding], list[str]]:
         """Full PDF processing pipeline: extract, chunk, snapshot, embed.
 
@@ -397,6 +398,11 @@ class PDFProcessor:
         user_id : int | None
             Owner of the source paper (resolved by the caller from
             ``papers.discovered_by``). NULL = canonical/shared chunk.
+        resume_content : dict[int, str] | None
+            chunk_index -> content already embedded by the current model in a
+            prior run (see ``run_process_pdf``); threaded through to
+            ``embed_and_store`` so unchanged chunks are skipped instead of
+            re-embedded.
 
         Returns
         -------
@@ -418,7 +424,9 @@ class PDFProcessor:
         chunks = await asyncio.to_thread(self.embedder.chunk_text, full_text, page_anchors)
 
         # 4. Embed and store in Qdrant
-        point_ids = await self.embedder.embed_and_store(paper_id, chunks, user_id=user_id)
+        point_ids = await self.embedder.embed_and_store(
+            paper_id, chunks, user_id=user_id, resume_content=resume_content
+        )
 
         return full_text, chunks, point_ids
 

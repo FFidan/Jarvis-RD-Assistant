@@ -213,3 +213,76 @@ async def test_subsequent_batch_failure_still_raises_embedding_batch_error():
     assert len(err.completed_point_ids) == 1
     assert isinstance(err.__cause__, RuntimeError)
     assert "second batch failure" in str(err.__cause__)
+
+
+# ---------------------------------------------------------------------------
+# T1.2: resume — skip already-embedded chunks (content + model identity)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_resume_skips_already_persisted_chunks():
+    """A retry with the same extraction calls embed_texts ONLY for chunks not
+    covered by resume_content — the already-embedded ones are skipped, not
+    re-embedded, and still get a deterministic point_id in the result."""
+    from paper_ingestion.ingestion.embed_store import EmbeddingBatchError, chunk_point_id
+    from paper_ingestion.ingestion.embedding_config import EMBEDDING_DIMENSION
+
+    embedder = _make_embedder()
+    chunks = _make_chunks(n=4)  # content: "chunk 0".."chunk 3"
+
+    call_count = 0
+
+    async def _fail_second_batch(texts):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [[0.0] * EMBEDDING_DIMENSION for _ in texts]
+        raise RuntimeError("boom")
+
+    embedder.embed_texts = AsyncMock(side_effect=_fail_second_batch)
+    embedder.qdrant.upsert = AsyncMock()
+
+    with pytest.raises(EmbeddingBatchError) as exc_info:
+        await embedder.embed_and_store(paper_id=9, chunks=chunks, batch_size=2)
+
+    # Batch 0 (chunk_index 0, 1) persisted before batch 1 failed.
+    resume_content = {c.chunk_index: c.content for c in exc_info.value.completed_chunks}
+    assert set(resume_content) == {0, 1}
+
+    # Retry with the same extraction: only chunks 2 and 3 (unpersisted) are embedded.
+    embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION for _ in range(2)])
+    embedder.qdrant.upsert = AsyncMock()
+
+    ids = await embedder.embed_and_store(
+        paper_id=9, chunks=chunks, batch_size=2, resume_content=resume_content
+    )
+
+    embedder.embed_texts.assert_awaited_once_with(["chunk 2", "chunk 3"])
+    assert ids == [chunk_point_id(9, i) for i in range(4)]
+    # Skipped chunks must not be re-upserted.
+    upserted = embedder.qdrant.upsert.await_args.kwargs["points"]
+    assert len(upserted) == 2
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_resume_reembeds_changed_content():
+    """A chunk whose content changed since the prior run is re-embedded even
+    though resume_content has an entry for its chunk_index; an unchanged
+    chunk is skipped and still returns its deterministic point_id."""
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+    from paper_ingestion.ingestion.embedding_config import EMBEDDING_DIMENSION
+
+    embedder = _make_embedder()
+    chunks = _make_chunks(n=2)  # content: "chunk 0", "chunk 1"
+    resume_content = {0: "stale content", 1: "chunk 1"}  # chunk 1 unchanged
+
+    embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION])
+    embedder.qdrant.upsert = AsyncMock()
+
+    ids = await embedder.embed_and_store(paper_id=3, chunks=chunks, resume_content=resume_content)
+
+    embedder.embed_texts.assert_awaited_once_with(["chunk 0"])
+    assert ids == [chunk_point_id(3, 0), chunk_point_id(3, 1)]
+    upserted = embedder.qdrant.upsert.await_args.kwargs["points"]
+    assert len(upserted) == 1

@@ -254,7 +254,9 @@ async def test_extraction_progress_zero_chunks_returns_0_4_without_division_erro
     )
     pool, _ = make_pool_and_conn(conn=conn)
 
-    async def _invoke_callback_with_zero_chunks(pdf_path, paper_id, *, user_id, progress_callback):
+    async def _invoke_callback_with_zero_chunks(
+        pdf_path, paper_id, *, user_id, progress_callback, resume_content=None
+    ):
         # Simulate the extractor calling back once with zero total chunks.
         await progress_callback(chunk_index=0, total_chunks=0)
         return ("", [], [])
@@ -533,7 +535,9 @@ async def test_extraction_progress_maps_to_01_04_range():
 
     captured_callback: list = []
 
-    async def capture_and_succeed(pdf_path, paper_id, *, user_id=None, progress_callback=None):
+    async def capture_and_succeed(
+        pdf_path, paper_id, *, user_id=None, progress_callback=None, resume_content=None
+    ):
         if progress_callback is not None:
             captured_callback.append(progress_callback)
         return ("text", chunks, ["vec-1"])
@@ -816,6 +820,10 @@ async def test_force_reprocess_preserves_overlapping_vectors():
 
     assert result == {"paper_id": 99, "chunk_count": 2, "status": "processed"}
 
+    # T1.2: force=True bypasses the resume skip entirely (the resume query
+    # never runs — force always re-embeds every chunk).
+    assert pdf_processor.process.call_args.kwargs["resume_content"] == {}
+
     # Only vec-2 (stale) should be deleted; vec-0 and vec-1 must be preserved.
     embedder.qdrant.delete.assert_awaited_once()
     call_kwargs = embedder.qdrant.delete.await_args
@@ -955,3 +963,120 @@ async def test_run_process_pdf_marks_chunked_at_on_success():
     )
 
     conn.execute.assert_any_await("UPDATE papers SET chunked_at = now() WHERE id = $1", 12)
+
+
+# ---------------------------------------------------------------------------
+# T1.2: resume — skip already-embedded chunks on retry (content AND model
+# identity); the resume map itself is built here, before pdf_processor.process
+# is called, and threaded in as the resume_content kwarg.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_resume_excludes_other_model_rows():
+    """Model-change regression: the resume query is scoped to
+    embedding_model = EMBEDDING_MODEL_NAME.  A prior row embedded by an
+    OLDER model is excluded from resume_content (forcing a re-embed) even
+    though its content is unchanged; a same-model row with unchanged content
+    IS included."""
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+    from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME
+
+    # Fixture rows a real WHERE clause would hold: one embedded by an
+    # obsolete model, one by the current model. The fake conn.fetch applies
+    # the same `embedding_model = $2` filter a real DB would.
+    fixture_rows = [
+        {"chunk_index": 0, "content": "Stable content", "embedding_model": "obsolete-model"},
+        {"chunk_index": 1, "content": "Also stable", "embedding_model": EMBEDDING_MODEL_NAME},
+    ]
+
+    async def _fetch(sql, *params):
+        _paper_id, model = params
+        return [
+            {"chunk_index": r["chunk_index"], "content": r["content"]}
+            for r in fixture_rows
+            if r["embedding_model"] == model
+        ]
+
+    conn = AsyncMock()
+    conn.fetchval.side_effect = [0, None]  # no existing chunks, owner_id None
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    chunks = [
+        SimpleNamespace(
+            chunk_index=0, content="Stable content", page_number=1, start_char=0, end_char=14
+        ),
+        SimpleNamespace(
+            chunk_index=1, content="Also stable", page_number=1, start_char=15, end_char=26
+        ),
+    ]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-a", "vec-b"]))
+    embedder = MagicMock()
+    embedder.qdrant.retrieve = AsyncMock(return_value=[SimpleNamespace(id=chunk_point_id(200, 1))])
+
+    await run_process_pdf(
+        paper_id=200,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=False,
+    )
+
+    _, kwargs = pdf_processor.process.call_args
+    assert kwargs["resume_content"] == {1: "Also stable"}, (
+        "obsolete-model row (index 0) must be excluded; same-model row (index 1) included"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_resume_reembeds_when_qdrant_point_missing():
+    """Vector-loss regression: a prior row with matching content AND model
+    whose Qdrant point no longer exists (Qdrant's backup leg is best-effort
+    per backup.sh — a restored DB can outlive its vectors) must be dropped
+    from resume_content and re-embedded, not skipped forever."""
+
+    async def _fetch(sql, *params):
+        return [{"chunk_index": 0, "content": "Orphaned content"}]
+
+    conn = AsyncMock()
+    conn.fetchval.side_effect = [0, None]
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    chunks = [
+        SimpleNamespace(
+            chunk_index=0, content="Orphaned content", page_number=1, start_char=0, end_char=16
+        ),
+    ]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-a"]))
+    embedder = MagicMock()
+    embedder.qdrant.retrieve = AsyncMock(return_value=[])  # point absent from Qdrant
+
+    await run_process_pdf(
+        paper_id=201,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=False,
+    )
+
+    embedder.qdrant.retrieve.assert_awaited_once()
+    _, kwargs = pdf_processor.process.call_args
+    assert kwargs["resume_content"] == {}, "a row whose Qdrant point is absent must re-embed"

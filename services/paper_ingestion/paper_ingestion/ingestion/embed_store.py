@@ -46,8 +46,10 @@ class EmbeddingBatchError(RuntimeError):
     Carries the chunk/point-id pairs whose Qdrant upsert *did* succeed so the
     caller can persist their DB rows.  Those vectors are intentionally left in
     Qdrant: discarding them throws away minutes of CPU-bound embedding and
-    makes a retry start from zero.  A retry resumes via the Phase-1 idempotency
-    check + ``ON CONFLICT (paper_id, chunk_index) DO NOTHING``.
+    makes a retry start from zero.  A retry resumes by skipping any chunk
+    whose content is unchanged and was embedded by the current model (see
+    ``embed_and_store``'s ``resume_content``); a chunk with changed content, a
+    stale embedding model, or a missing Qdrant point is re-embedded.
     """
 
     def __init__(
@@ -60,6 +62,11 @@ class EmbeddingBatchError(RuntimeError):
         super().__init__(message)
         self.completed_chunks = completed_chunks
         self.completed_point_ids = completed_point_ids
+
+
+def chunk_point_id(paper_id: int, chunk_index: int) -> str:
+    """Deterministic uuid5 Qdrant point ID for a (paper_id, chunk_index) pair."""
+    return str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, f"{paper_id}:{chunk_index}"))
 
 
 class EmbeddingStoreMixin:
@@ -219,6 +226,7 @@ class EmbeddingStoreMixin:
         batch_size: int = 32,
         *,
         user_id: int | None = None,
+        resume_content: dict[int, str] | None = None,
     ) -> list[str]:
         """Embed chunks and upsert into Qdrant.
 
@@ -233,6 +241,11 @@ class EmbeddingStoreMixin:
         user_id : int | None
             Owner of the source paper. NULL = canonical/shared (visible to all
             authenticated users via the OR-IS-NULL leg of the scope filter).
+        resume_content : dict[int, str] | None
+            chunk_index -> content already embedded by the current model in a
+            prior run (see ``run_process_pdf``).  A chunk whose content still
+            matches is skipped: its deterministic point_id is returned without
+            a re-upsert.  Everything else is (re-)embedded.
 
         Returns
         -------
@@ -247,30 +260,26 @@ class EmbeddingStoreMixin:
             their DB rows; the completed Qdrant points are *kept* so a retry
             resumes instead of re-embedding from zero.
         """
+        resume_content = resume_content or {}
         completed_chunks: list[ChunkForEmbedding] = []
         completed_point_ids: list[str] = []
 
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
-            texts = [c.content for c in batch]
+            to_embed = [c for c in batch if resume_content.get(c.chunk_index) != c.content]
             try:
-                embeddings = await self.embed_texts(texts)
-                if len(embeddings) != len(texts):
-                    raise RuntimeError(
-                        f"Embedder returned {len(embeddings)} vectors for {len(texts)} texts;"
-                        " refusing partial upsert"
-                    )
+                if to_embed:
+                    texts = [c.content for c in to_embed]
+                    embeddings = await self.embed_texts(texts)
+                    if len(embeddings) != len(texts):
+                        raise RuntimeError(
+                            f"Embedder returned {len(embeddings)} vectors for {len(texts)} texts;"
+                            " refusing partial upsert"
+                        )
 
-                points = []
-                batch_ids: list[str] = []
-                for chunk, embedding in zip(batch, embeddings):
-                    point_id = str(
-                        uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, f"{paper_id}:{chunk.chunk_index}")
-                    )
-                    batch_ids.append(point_id)
-                    points.append(
+                    points = [
                         PointStruct(
-                            id=point_id,
+                            id=chunk_point_id(paper_id, chunk.chunk_index),
                             vector=embedding,
                             payload={
                                 "paper_id": paper_id,
@@ -281,9 +290,9 @@ class EmbeddingStoreMixin:
                                 "user_id": user_id,
                             },
                         )
-                    )
-
-                await self.qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+                        for chunk, embedding in zip(to_embed, embeddings)
+                    ]
+                    await self.qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
             except Exception as exc:
                 if not completed_point_ids:
                     # Nothing persisted yet — wrap in EmbeddingBatchError so
@@ -310,7 +319,7 @@ class EmbeddingStoreMixin:
                 ) from exc
 
             completed_chunks.extend(batch)
-            completed_point_ids.extend(batch_ids)
+            completed_point_ids.extend(chunk_point_id(paper_id, c.chunk_index) for c in batch)
 
         return completed_point_ids
 
