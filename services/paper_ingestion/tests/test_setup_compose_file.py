@@ -44,8 +44,9 @@ def test_infra_host_ports_are_overridable_for_isolated_smoke() -> None:
     assert ': "${LEARNING_ENGINE_HOST_PORT:=18011}"' in first_run
     assert ': "${OLLAMA_HOST_PORT:=11444}"' in first_run
 
-    assert '"${POSTGRES_HOST_PORT:-5432}"' in setup
-    assert '"${LITELLM_HOST_PORT:-4000}"' in setup
+    assert '"$(_port_or_default POSTGRES_HOST_PORT 5432)"' in setup
+    assert '"$(_port_or_default LITELLM_HOST_PORT 4000)"' in setup
+    assert 'local v="${!1-}"' in setup
     assert 'DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"' in setup
 
 

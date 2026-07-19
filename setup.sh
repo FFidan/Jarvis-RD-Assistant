@@ -994,7 +994,9 @@ existing_env_value() {
 # the ports this deployment ACTUALLY binds (a custom-port .env would otherwise be
 # checked at defaults it does not use).
 _port_or_default() {
-  local v
+  # Exported environment wins over .env, mirroring compose interpolation.
+  local v="${!1-}"
+  [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   v="$(existing_env_value "$1")" && [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   printf '%s' "$2"
 }
