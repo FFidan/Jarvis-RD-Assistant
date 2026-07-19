@@ -17,10 +17,11 @@ __all__ = ["PaperMarkdown", "build_paper_markdown"]
 NO_SUMMARY_PLACEHOLDER = "_This paper has not yet been summarized._"
 
 # Every per-user read binds the caller's id as $2, mirroring the scoping shapes
-# in services/data_export.py::_EXPORT_QUERIES. paper_summaries uses IS NOT
-# DISTINCT FROM (its UNIQUE NULLS NOT DISTINCT key lets single-user rows carry
-# user_id IS NULL); notes/cards/extractions use strict equality, matching
-# routers/notes.py and routers/extractions.py.
+# in services/data_export.py::_EXPORT_QUERIES. paper_summaries keeps the IS NOT
+# DISTINCT FROM form of the paper-detail read it mirrors (routers/papers_detail.py);
+# the caller id is always a concrete int here, so it behaves as strict equality
+# and a summary owned by no user is not exported. notes/cards/extractions use
+# strict equality, matching routers/notes.py and routers/extractions.py.
 _PAPER_SQL = """
     SELECT p.*, l.zotero_citation_key AS link_citation_key
     FROM papers p
