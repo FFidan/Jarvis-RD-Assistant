@@ -6,10 +6,10 @@ import json
 import re
 from typing import Any, NamedTuple
 
-import asyncpg
 from fastapi import HTTPException
 
 from paper_ingestion.citation_format import CitationFormat, build_citations
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.integrations.zotero_service import _resolve_zotero_user_id
 
 __all__ = ["PaperMarkdown", "build_paper_markdown"]
@@ -144,7 +144,7 @@ def _citation_section(paper: dict[str, Any]) -> str:
 
 
 async def build_paper_markdown(
-    conn: asyncpg.Connection,
+    conn: ConnLike,
     paper_id: int,
     user_id: int | None,
 ) -> PaperMarkdown:
