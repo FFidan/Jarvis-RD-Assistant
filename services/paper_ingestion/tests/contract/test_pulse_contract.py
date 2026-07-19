@@ -517,6 +517,319 @@ async def test_pulse_stats_user_isolation(
     )
 
 
+# §A-PULSE-02b — GET /api/pulse/debug: caller-scoped probes + honest degradation reasons
+# Verified: routers/pulse.py:477 (debug_pulse — load_active_classifier(user_id=caller_id))
+# Verified: routers/pulse.py:469 (topic-embedding read — DISTINCT ON + caller/global filter)
+# Verified: routers/pulse.py:488 (degradation reason — untrained filtered from both sources)
+
+
+def _dev_mode():
+    """Patch the pulse router's settings so the DEV_MODE-gated debug endpoint is reachable."""
+    from unittest.mock import patch
+
+    from jarvis_common.settings import CoreSettings
+
+    return patch(
+        "paper_ingestion.routers.pulse.get_core_settings",
+        return_value=CoreSettings(dev_mode=True),
+    )
+
+
+async def _seed_active_pulse_model(conn, user_id: int) -> None:
+    """Insert an active, HMAC-signed pulse_models row owned by *user_id*."""
+    import pickle
+
+    import sklearn
+    from sklearn.linear_model import LogisticRegression
+
+    from paper_ingestion.pulse.training import FEATURE_NAMES, _sign_blob
+
+    blob = _sign_blob(
+        pickle.dumps({"model": LogisticRegression(), "sklearn_version": sklearn.__version__})
+    )
+    await conn.execute(
+        """INSERT INTO pulse_models
+               (user_id, model_version, model_blob, feature_names, metrics, is_active)
+           VALUES ($1, 'v1', $2, $3::jsonb, $4::jsonb, TRUE)""",
+        user_id,
+        blob,
+        FEATURE_NAMES,
+        {"sample_count": 42, "auc": 0.75, "auc_degradation_reason": None},
+    )
+
+
+async def test_pulse_debug_hides_other_users_model(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """User A's debug diagnostics must not reveal that user B trained a model.
+
+    The debug probe was an unscoped `SELECT ... FROM pulse_models WHERE is_active`,
+    so any caller saw any user's active model — contradicting /api/pulse/stats,
+    which probes per-caller.
+    """
+    await _seed_active_pulse_model(contract_conn, contract_two_users.user_b_id)
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug for user A; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_available"] is False, (
+        "User A has no trained model, but debug reported one — user B's active "
+        "pulse_models row leaked through an unscoped availability probe"
+    )
+    assert body["classifier_auc"] is None, (
+        f"User A must not see user B's model metrics; got auc={body['classifier_auc']}"
+    )
+    assert body["classifier_sample_count"] is None, (
+        f"User A must not see user B's sample count; got {body['classifier_sample_count']}"
+    )
+
+
+async def test_pulse_debug_reports_callers_own_model(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """A caller with their own active model still sees its metadata in debug.
+
+    Guards against the scoping fix degenerating into a blanket disable.
+    """
+    await _seed_active_pulse_model(contract_conn, contract_two_users.user_a_id)
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug for user A; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_available"] is True, (
+        "User A owns an active model; debug must still report it as available"
+    )
+    assert body["classifier_auc"] == 0.75
+    assert body["classifier_sample_count"] == 42
+    assert body["classifier_feature_names"], "Own-model feature names must still be reported"
+
+
+async def _seed_topic_embedding(
+    conn, user_id: int | None, key: str, value: list[float] | None = None
+) -> None:
+    """Insert a topic-embedding user_config row owned by *user_id* (NULL = global)."""
+    await conn.execute(
+        "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3::jsonb)",
+        user_id,
+        key,
+        value if value is not None else [0.1, 0.2, 0.3],
+    )
+
+
+async def test_pulse_debug_hides_other_users_topic_embeddings(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """User A's debug diagnostics must not enumerate user B's topic-embedding keys.
+
+    The probe was an unscoped `WHERE key LIKE 'topic.%.embedding'`, so every
+    caller saw every user's topic keys, count and dimensions.
+    """
+    await _seed_topic_embedding(contract_conn, contract_two_users.user_b_id, "topic.999.embedding")
+    await _seed_topic_embedding(contract_conn, contract_two_users.user_a_id, "topic.111.embedding")
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug for user A; got {resp.status_code}: {resp.text[:300]}"
+    )
+    keys = {e["key"] for e in resp.json()["topic_embeddings"]}
+    assert "topic.999.embedding" not in keys, (
+        "User B's topic-embedding key leaked into user A's diagnostics via an "
+        f"unscoped user_config probe; got keys={sorted(keys)}"
+    )
+    assert "topic.111.embedding" in keys, (
+        f"User A must still see their own topic embedding; got keys={sorted(keys)}"
+    )
+
+
+async def test_pulse_debug_keeps_global_topic_embeddings(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """NULL-owned global rows must still reach the caller, and per-user wins.
+
+    A caller-only filter would hide the global defaults every single-tenant
+    install relies on — the regression the `OR user_id IS NULL` arm prevents.
+    The shared key pins DISTINCT ON precedence: one entry, the caller's.
+    """
+    user_a_id = contract_two_users.user_a_id
+    await _seed_topic_embedding(contract_conn, None, "topic.222.embedding")
+    await _seed_topic_embedding(contract_conn, None, "topic.333.embedding", [0.1, 0.2, 0.3])
+    await _seed_topic_embedding(contract_conn, user_a_id, "topic.333.embedding", [0.1] * 5)
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug; got {resp.status_code}: {resp.text[:300]}"
+    )
+    entries = resp.json()["topic_embeddings"]
+    keys = [e["key"] for e in entries]
+    assert "topic.222.embedding" in keys, (
+        f"NULL-owned global topic embeddings must remain visible; got keys={sorted(keys)}"
+    )
+    shared = [e for e in entries if e["key"] == "topic.333.embedding"]
+    assert len(shared) == 1, (
+        f"A key owned both globally and per-user must yield one entry; got {shared}"
+    )
+    assert shared[0]["dim"] == 5, (
+        f"The caller's own row must win over the global default; got dim={shared[0]['dim']}"
+    )
+
+
+async def test_pulse_debug_explains_unavailable_classifier(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """An unloadable model row must report why, not just `available: false`.
+
+    Sharing the caller-scoped probe made `classifier_available` strictly
+    narrower: a row that exists but fails HMAC verification now reports
+    unavailable, so the reason has to come through with it.
+    """
+    await contract_conn.execute(
+        """INSERT INTO pulse_models
+               (user_id, model_version, model_blob, feature_names, metrics, is_active)
+           VALUES ($1, 'v1', $2, '[]'::jsonb, '{}'::jsonb, TRUE)""",
+        contract_two_users.user_a_id,
+        b"\x00" * 32 + b"not-a-valid-signed-pickle",
+    )
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_available"] is False
+    assert body["classifier_degradation_reason"] == "active model could not be loaded", (
+        "A model row that fails to load must explain itself; got "
+        f"classifier_degradation_reason={body['classifier_degradation_reason']!r}"
+    )
+
+
+async def test_pulse_debug_untrained_caller_has_no_degradation_reason(
+    contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """Never having trained is the expected initial state, not a degradation.
+
+    Counterpart to test_pulse_debug_explains_unavailable_classifier: together
+    they pin `available: false` WITH a reason (genuine failure) apart from
+    `available: false` WITHOUT one (simply untrained).
+    """
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_available"] is False
+    assert body["classifier_degradation_reason"] is None, (
+        "An untrained caller has nothing degraded; surfacing a reason in the "
+        "operator diagnostics panel invites chasing a fault that does not exist. Got "
+        f"classifier_degradation_reason={body['classifier_degradation_reason']!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("stats_reason", "expected"),
+    [
+        ("no active model", None),
+        ("classifier weight is disabled", "classifier weight is disabled"),
+    ],
+)
+async def test_pulse_debug_deck_stats_degradation_reason(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key, stats_reason, expected
+):
+    """The untrained reason is filtered out of deck stats too, but only it.
+
+    pulse/job.py copies the probe's meta verbatim into deck stats, so an
+    untrained caller whose deck was built with a non-zero classifier weight
+    carries "no active model" by that route as well. Genuine job-side reasons
+    must still reach the operator.
+    """
+    from datetime import date
+
+    await contract_conn.execute(
+        """INSERT INTO pulse_decks (deck_date, card_count, user_id, generated_at, stats)
+           VALUES ($1, 0, $2, NOW() + INTERVAL '1 hour', $3::jsonb)""",
+        date(2099, 6, 1),
+        contract_two_users.user_a_id,
+        {"classifier": {"available": False, "degradation_reason": stats_reason}},
+    )
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_degradation_reason"] == expected, (
+        f"Deck stats carried {stats_reason!r}; expected the response to report "
+        f"{expected!r}, got {body['classifier_degradation_reason']!r}"
+    )
+
+
+async def test_pulse_debug_genuine_reason_survives_untrained_deck_stats(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """A genuine probe failure must outrank an untrained reason in deck stats.
+
+    Deck generated while untrained, model row inserted afterwards and unloadable.
+    Filtering the untrained string AFTER an `or` chain would collapse the whole
+    value to None here and hide the real fault; filtering per source is what
+    keeps it. Regression guard — this shape must not be refactored back.
+    """
+    from datetime import date
+
+    await contract_conn.execute(
+        """INSERT INTO pulse_decks (deck_date, card_count, user_id, generated_at, stats)
+           VALUES ($1, 0, $2, NOW() + INTERVAL '1 hour', $3::jsonb)""",
+        date(2099, 6, 2),
+        contract_two_users.user_a_id,
+        {"classifier": {"available": False, "degradation_reason": "no active model"}},
+    )
+    await contract_conn.execute(
+        """INSERT INTO pulse_models
+               (user_id, model_version, model_blob, feature_names, metrics, is_active)
+           VALUES ($1, 'v1', $2, '[]'::jsonb, '{}'::jsonb, TRUE)""",
+        contract_two_users.user_a_id,
+        b"\x00" * 32 + b"not-a-valid-signed-pickle",
+    )
+
+    with _dev_mode():
+        async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+            resp = await c.get("/api/pulse/debug")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/debug; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["classifier_available"] is False
+    assert body["classifier_degradation_reason"] == "active model could not be loaded", (
+        "The probe's genuine failure must survive an untrained reason in deck "
+        "stats; got classifier_degradation_reason="
+        f"{body['classifier_degradation_reason']!r}"
+    )
+
+
 # §A-PULSE-03 — GET /api/pulse/history: returns seeded deck in list
 # Verified: routers/pulse.py:210-219 (get_history — load_history)
 
