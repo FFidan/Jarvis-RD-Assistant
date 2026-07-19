@@ -265,12 +265,13 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(contract_conn):
-    """RAG-DB-1: papers owned exclusively by another user are not returned.
+    """Papers another user discovered are not returned to a different caller.
 
-    The SQL in prepare_cross_paper_rag uses a user_library visibility predicate.
-    When user_id=99 requests chunks, a paper owned only by user_id=1 via
-    user_library must not appear in the sources (it is dropped by the
-    defense-in-depth DB check).
+    Attribution lives in papers.discovered_by; user_library records who shelved
+    a paper, not who owns it, and a paper with no attribution is part of the
+    shared corpus every user can reach. So the paper seeded here is attributed
+    to its discoverer, and the caller neither discovered nor shelved it: the
+    defense-in-depth DB check must drop it from the sources.
     """
     from unittest.mock import AsyncMock
 
@@ -280,17 +281,18 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
 
-    # Seed a user to own the paper exclusively (user_library requires FK to users).
+    # Seed the discovering user (both discovered_by and user_library FK to users).
     owner_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ('owner@contract.example.com', 'user') RETURNING id"
     )
-    # Seed a paper owned exclusively by that user.
+    # Attribute the paper to that user, so it is theirs rather than shared.
     pid_owned = await contract_conn.fetchval(
-        "INSERT INTO papers (external_id, source_type, title, authors, url)"
-        " VALUES ('contract-xrag-vis-01', 'arxiv', 'User1 Private Paper', '{\"X\"}', 'http://priv')"
-        " RETURNING id"
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('contract-xrag-vis-01', 'arxiv', 'Another User Paper', '{\"X\"}', 'http://priv', $1)"
+        " RETURNING id",
+        owner_id,
     )
-    # Link it to the owner's library (no other users → exclusively owned).
+    # They have also shelved it, which must not make it reachable by anyone else.
     await contract_conn.execute(
         "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
         owner_id,
