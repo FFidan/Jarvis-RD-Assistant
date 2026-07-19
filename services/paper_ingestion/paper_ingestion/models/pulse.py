@@ -59,6 +59,7 @@ class PulseStatsResponse(BaseModel):
     last_run_at: datetime | None
     last_error: str | None
     degraded_reason: str | None = None
+    has_learned_model: bool = False
 
 
 class PulseRateRequest(BaseModel):

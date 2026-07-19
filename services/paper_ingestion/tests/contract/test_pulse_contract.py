@@ -471,6 +471,8 @@ async def test_pulse_stats_reflects_seeded_deck(
         f"Stats must reflect at least the seeded deck; got decks_generated={body['decks_generated']}"
     )
     assert body["window_days"] == 365
+    assert isinstance(body["has_learned_model"], bool)
+    assert body["has_learned_model"] is False
 
 
 # §A-PULSE-02 — GET /api/pulse/stats: user isolation (user B cannot see user A's decks)
