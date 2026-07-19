@@ -1526,6 +1526,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../REQUIREMENTS/" class="md-nav__link">
         
   
@@ -2100,6 +2128,7 @@
 <hr />
 <h2 id="installation-operator">Installation (operator)<a class="headerlink" href="#installation-operator" title="Permanent link">&para;</a></h2>
 <p>JARVIS RD Assistant runs as a set of Docker Compose services. A default <code>./setup.sh</code> install pulls prebuilt images — no local build required — and during setup you choose how you will access JARVIS (localhost, LAN, Cloudflare Tunnel, or Let's Encrypt); see <a href="../access-modes/">Choosing how you access JARVIS</a>. Full installation instructions — Docker prerequisites, the access-mode chooser, and the first-boot checklist — are in the repository's <strong><a href="../../DEPLOYMENT/">DEPLOYMENT.md</a></strong>. This manual does not duplicate those steps.</p>
+<p>Once services are healthy, <code>setup.sh</code> prints a <strong><code>Finish setup:</code></strong> link ending in <code>/setup#setup_token=…</code> — open that link (it best-effort opens itself in your browser) rather than just navigating to the dashboard URL. The token gates the first-admin bootstrap so nobody else can claim the first account, and travels as a URL fragment so it never reaches a server log. Opening the bare dashboard URL still works, but drops you into <a href="#step-3-create-admin-sign-in">Step 3</a> with an extra paste step.</p>
 <hr />
 <h2 id="onboarding-wizard-operator-user">Onboarding wizard (operator &amp; user)<a class="headerlink" href="#onboarding-wizard-operator-user" title="Permanent link">&para;</a></h2>
 <p>On a fresh installation — or whenever <code>setup_completed</code> is not yet <code>true</code> — the application replaces the normal UI with the <strong>Onboarding Wizard</strong>. This single continuous flow spans the full bootstrap: it starts before any account exists and ends after the admin is signed in and the instance is configured. Once the wizard is complete it does not appear again.</p>
@@ -2124,7 +2153,8 @@
 </ul>
 <p>Use the <strong>Save &amp; test send</strong> button to save the settings and verify delivery in one step before continuing. During the wizard (before any admin account exists), the test email is always sent to the From address — an admin can only mail themselves at this stage. This step is skippable — you can configure email later in Settings → System → Email / SMTP if the instance will use API-key login only.</p>
 <h3 id="step-3-create-admin-sign-in">Step 3 — Create admin &amp; sign in<a class="headerlink" href="#step-3-create-admin-sign-in" title="Permanent link">&para;</a></h3>
-<p>Enter the email address for the first administrator account and click <strong>Create admin &amp; sign in</strong>. The system creates the account and establishes a session in the same step (no separate magic-link round-trip needed). This is the mid-flow auth boundary: steps 4–9 require an active session and run after this point.</p>
+<p>Enter the email address for the first administrator account and click <strong>Create admin &amp; sign in</strong>. The system creates the account and establishes a session in the same step — no SMTP and no separate magic-link round-trip needed, regardless of how Step 2 went. This is the mid-flow auth boundary: steps 4–9 require an active session and run after this point.</p>
+<p>If you arrived via the <code>Finish setup:</code> link, the setup token travelled with you automatically. If you opened the dashboard directly (a second device, an incognito window) and the server has a token configured, this step shows a <strong>Setup token</strong> field instead — paste the token value from the end of the <code>./setup.sh</code> output line (<code>.../setup#setup_token=&lt;this part&gt;</code>).</p>
 <p>This step is skipped when an admin already exists (for example, when resuming a partially-completed setup after the admin was already created).</p>
 <h3 id="step-4-cloud-llm-keys-skippable">Step 4 — Cloud LLM keys (skippable)<a class="headerlink" href="#step-4-cloud-llm-keys-skippable" title="Permanent link">&para;</a></h3>
 <p>Optionally provide cloud provider API keys. Cloud models can supplement the local Ollama models when an administrator enables them, but this step is skippable and local-only installs remain supported. More providers and custom OpenAI-compatible endpoints can be added later in Settings → Models → Providers &amp; Routing.</p>
@@ -2144,6 +2174,7 @@
 <p>Pair your account with the Telegram bot to receive Pulse digests and send queries from Telegram. Follow the on-screen instructions to obtain a pairing code, then send <code>/pair &lt;code&gt;</code> to the bot. This step is skippable; pairing can be completed later in Settings → Integrations → Telegram.</p>
 <h3 id="step-9-youre-all-set">Step 9 — You’re all set<a class="headerlink" href="#step-9-youre-all-set" title="Permanent link">&para;</a></h3>
 <p>Setup is complete. <code>setup_completed</code> is set to <code>true</code>. The wizard does not appear again. The page redirects to <code>/</code> (the Home page).</p>
+<p><strong>Before inviting anyone (operator, multi-user mode):</strong> confirm the origin you are signed in at matches <code>APP_BASE_URL</code> and how other users will actually reach the instance — an invite link is built from that value, and passkeys require an exact-origin match. Get the origin right first; invite links sent from the wrong origin have to be resent.</p>
 <hr />
 <h2 id="signing-in-authverify-user">Signing in — <code>/auth/verify</code> (user)<a class="headerlink" href="#signing-in-authverify-user" title="Permanent link">&para;</a></h2>
 <!-- screenshot: LoginPage showing the email input and "Send magic link" button -->

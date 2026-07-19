@@ -1677,6 +1677,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../REQUIREMENTS/" class="md-nav__link">
         
   
@@ -2465,6 +2493,8 @@
 </ul>
 <p><strong>Misconfiguration warning.</strong> If the saved SMTP configuration is not deliverable — for example, a host is set but the From address is missing, a required field was saved as an empty string, or no relay is configured at all — the card displays an amber warning banner describing the issue. The form remains editable so you can correct the problem in place without navigating away.</p>
 <p><strong>Save &amp; send test email.</strong> In addition to the <strong>Save</strong> button, a <strong>Save &amp; send test email</strong> button saves the settings and immediately attempts a test delivery. An optional <strong>Test recipient</strong> field (defaults to the From address) lets you direct the test message to a specific address. The result — success or the exact SMTP error — is shown inline. This matches the test-send available during the onboarding wizard.</p>
+<p><strong>When SMTP isn't configured or delivery fails.</strong> No magic link is ever printed to server stdout. A request that can't be delivered — no relay configured, a <code>DEV_SMTP_LOG_ONLY</code> dev instance, an SMTP error, or a link that would point at a non-loopback private host — logs only a hashed, PII-free event to Logs Live; the link and its token are never logged anywhere. To hand a user a working link when email isn't an option, use <strong>Admin → Users → Send link</strong> — that returns the actual sign-in URL to you (never delivers a bearer link automatically to a route that failed) so you can pass it along by hand.</p>
+<p><strong>The SMTP password is a Docker Secret</strong>, not a plaintext <code>.env</code> value: <code>setup.sh --smtp-pass-file &lt;path&gt;</code> (or the wizard/Settings save) writes it to <code>secrets/smtp_pass.txt</code>, mounted read-only into the app containers via <code>SMTP_PASS_FILE</code>. It never appears in <code>docker inspect</code> output or shell history.</p>
 <h3 id="pulse">Pulse<a class="headerlink" href="#pulse" title="Permanent link">&para;</a></h3>
 <p>Configure Pulse-specific settings. The panel is divided into two cards:</p>
 <ul>

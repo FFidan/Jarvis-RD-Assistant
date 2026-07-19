@@ -670,10 +670,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#about-the-one-time-certificate-notice" class="md-nav__link">
+  <a href="#about-lan-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        About the one-time certificate notice
+        About LAN mode
       
     </span>
   </a>
@@ -685,6 +685,17 @@
     <span class="md-ellipsis">
       
         Passkeys vs sign-in links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#support-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Support tiers
       
     </span>
   </a>
@@ -1432,6 +1443,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../REQUIREMENTS/" class="md-nav__link">
         
   
@@ -1842,10 +1881,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#about-the-one-time-certificate-notice" class="md-nav__link">
+  <a href="#about-lan-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        About the one-time certificate notice
+        About LAN mode
       
     </span>
   </a>
@@ -1857,6 +1896,17 @@
     <span class="md-ellipsis">
       
         Passkeys vs sign-in links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#support-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Support tiers
       
     </span>
   </a>
@@ -1905,11 +1955,11 @@
   
 
 
-<!-- verified-against-UI: 2026-07-13 | routes: setup.sh (terminal chooser), /auth/verify, /settings?section=account -->
+<!-- verified-against-UI: 2026-07-19 | routes: setup.sh (terminal chooser), /auth/verify, /settings?section=account -->
 
 <h1 id="choosing-how-you-access-jarvis">Choosing how you access JARVIS<a class="headerlink" href="#choosing-how-you-access-jarvis" title="Permanent link">&para;</a></h1>
-<p>The very first question <code>./setup.sh</code> asks is <strong>"How will you access JARVIS?"</strong> Your answer decides where you can open the dashboard, which sign-in options each device gets, and whether your browser shows a one-time certificate notice. This page explains the four choices in plain language so you can pick confidently — and change your mind later without redoing anything else.</p>
-<p>There is nothing to edit by hand: setup derives all the address and security settings from your one answer and writes them itself.</p>
+<p>The very first question <code>./setup.sh</code> asks is <strong>"How will you access JARVIS?"</strong> Your answer decides where you can open the dashboard and which sign-in options each device gets. This page explains the choices in plain language, and gives you the two real ways to reach JARVIS from another device — a bootstrap route and a durable family route — so you can pick confidently.</p>
+<p>There is nothing to edit by hand: setup derives the address and network settings from your answer and writes them itself.</p>
 <hr />
 <h2 id="the-four-modes-at-a-glance">The four modes at a glance<a class="headerlink" href="#the-four-modes-at-a-glance" title="Permanent link">&para;</a></h2>
 <table>
@@ -1919,7 +1969,7 @@
 <th>Where you can open JARVIS</th>
 <th>Sign-in links (email)</th>
 <th>Passkeys (fingerprint / face / PIN)</th>
-<th>Certificate notice?</th>
+<th>Transport</th>
 </tr>
 </thead>
 <tbody>
@@ -1928,83 +1978,207 @@
 <td>The machine JARVIS runs on</td>
 <td>✅</td>
 <td>✅ on this computer</td>
-<td>Once, first visit</td>
+<td>Plain HTTP over loopback (<code>http://localhost:3001</code>)</td>
 </tr>
 <tr>
 <td><strong>2. Home or lab network</strong></td>
 <td>Any device on your network</td>
 <td>✅ on every device</td>
 <td>✅ on the JARVIS computer only</td>
-<td>Once per device</td>
+<td>Plain HTTP over your LAN (<code>http://&lt;lan-ip&gt;:3001</code>) — see <a href="#about-lan-mode">About LAN mode</a> below</td>
 </tr>
 <tr>
 <td><strong>3. Cloudflare Tunnel</strong></td>
 <td>Anywhere on the internet</td>
 <td>✅</td>
 <td>✅ everywhere</td>
-<td>No</td>
+<td>HTTPS, edge TLS terminated by Cloudflare</td>
 </tr>
 <tr>
 <td><strong>4. Your own domain (Let's Encrypt)</strong></td>
 <td>Anywhere on the internet</td>
 <td>✅</td>
 <td>✅ everywhere</td>
-<td>No</td>
+<td>HTTPS, a real Let's Encrypt certificate</td>
 </tr>
 </tbody>
 </table>
-<p>Whichever you pick, staying signed in works the same way everywhere: a sign-in lasts 30 days and quietly renews while you keep using JARVIS, so you won't be logged out mid-project.</p>
+<p>Whichever you pick, staying signed in works the same way everywhere a session can persist: a sign-in lasts 30 days and quietly renews while you keep using JARVIS, so you won't be logged out mid-project. Raw-IP LAN access (mode 2, browsed directly by IP) is the one exception — see below.</p>
 <hr />
 <h2 id="what-each-mode-means">What each mode means<a class="headerlink" href="#what-each-mode-means" title="Permanent link">&para;</a></h2>
 <h3 id="1-on-this-computer-only-recommended-to-start">1) On this computer only (recommended to start)<a class="headerlink" href="#1-on-this-computer-only-recommended-to-start" title="Permanent link">&para;</a></h3>
-<p>JARVIS is reachable only from the machine it is installed on. Nothing is opened to your network or the internet. Everything works here: sign-in links, passkeys, the lot. This is the safest default, and you lose nothing by starting here — you can re-run setup and move to any other mode whenever you're ready.</p>
+<p>JARVIS is reachable only from the machine it is installed on, at <code>http://localhost:3001</code>. Nothing is opened to your network or the internet. Everything works here: sign-in links, passkeys, the lot. This is the safest default, and you lose nothing by starting here — you can re-run setup and move to any other mode whenever you're ready.</p>
+<p>Want HTTPS on this machine too (a locally-trusted certificate, no browser warning)? Run <code>./setup.sh --profile=local-https</code> — it starts a local Caddy edge at <code>https://localhost:3443</code> using a certificate from <a href="https://github.com/FiloSottile/mkcert">mkcert</a> (installed to your system trust store by <code>make certs</code>).</p>
 <h3 id="2-from-devices-on-your-home-or-lab-network">2) From devices on your home or lab network<a class="headerlink" href="#2-from-devices-on-your-home-or-lab-network" title="Permanent link">&para;</a></h3>
-<p>The dashboard becomes reachable from other devices on the same network — your laptop on the sofa, a tablet in the lab — at an address like <code>https://192.168.1.20:3001</code> (setup detects and prints your address for you, and checks it is reachable at the end).</p>
-<p>Two things to know:</p>
-<ul>
-<li><strong>Sign-in links work on every device</strong>; passkeys keep working on the JARVIS computer itself. Other devices sign in with email links — that's a browser rule about numeric addresses, not a JARVIS limitation (see <a href="#passkeys-vs-sign-in-links">Passkeys vs sign-in links</a> below).</li>
-<li>Each device shows a <strong>one-time certificate notice</strong> on first visit — expected for a private setup, explained below.</li>
-</ul>
-<p>Setup will remind you of this too: LAN mode makes the dashboard reachable by every device on your network, so use it only on a network you trust. On shared or untrusted networks, prefer option 3 or a VPN such as Tailscale (see the access-mode comparison in <a href="../../DEPLOYMENT/">DEPLOYMENT.md</a>).</p>
+<p>The dashboard becomes reachable from other devices on the same network — your laptop on the sofa, a tablet in the lab — at <code>http://&lt;your-lan-ip&gt;:3001</code> (setup detects and prints your address, and checks it is reachable at the end).</p>
+<p>Setup will remind you of this too: LAN mode binds the dashboard to every interface over <strong>plain HTTP</strong>, reachable by every host on your network — use it only on a network you trust. See <a href="#about-lan-mode">About LAN mode</a> for what this does and does not give you, and for the two real ways to get a durable, authenticated family route on top of it.</p>
 <h3 id="3-from-anywhere-cloudflare-tunnel">3) From anywhere — Cloudflare Tunnel<a class="headerlink" href="#3-from-anywhere-cloudflare-tunnel" title="Permanent link">&para;</a></h3>
-<p>Gives JARVIS a real web address (like <code>jarvis.yourname.com</code>) reachable from anywhere, without opening any ports on your router. Full features everywhere, including passkeys, and no certificate notices — visitors get a proper trusted certificate at your tunnel address.</p>
+<p>Gives JARVIS a real web address (like <code>jarvis.yourname.com</code>) reachable from anywhere, without opening any ports on your router. Full features everywhere, including passkeys — Cloudflare terminates a proper trusted certificate at your tunnel address.</p>
 <p>You'll need a <strong>free Cloudflare account</strong> and a tunnel token; setup guides you through both. Because a tunnel exposes your JARVIS to the internet, setup first asks you to configure <strong>Zero Trust access policies</strong> in your Cloudflare dashboard and to type <code>I understand</code> before it continues — a deliberate speed bump, since this is the step that takes your instance public. It then asks for the public hostname you configured so everything lines up automatically.</p>
 <h3 id="4-from-anywhere-your-own-domain-with-lets-encrypt">4) From anywhere — your own domain with Let's Encrypt<a class="headerlink" href="#4-from-anywhere-your-own-domain-with-lets-encrypt" title="Permanent link">&para;</a></h3>
-<p>Like the tunnel, but using a domain you own that points directly at your machine. Setup asks for your <strong>domain</strong> and an <strong>admin email</strong> (Let's Encrypt sends certificate-expiry notices there), and JARVIS obtains a real, trusted certificate automatically. Full features everywhere, including passkeys, no certificate notices.</p>
+<p>Like the tunnel, but using a domain you own that points directly at your machine. Setup asks for your <strong>domain</strong> and an <strong>admin email</strong> (Let's Encrypt sends certificate-expiry notices there), waits for the certificate to be issued, and only then reports success — JARVIS never claims an HTTPS route that isn't actually serving yet. Full features everywhere, including passkeys.</p>
 <p>This mode needs your domain's DNS pointing at the machine and <strong>port 443 reachable</strong> from the internet — typically a port-forward on your router or a machine with a public address. If that sounds like homework, option 3 gets you the same result with no router changes.</p>
 <hr />
-<h2 id="about-the-one-time-certificate-notice">About the one-time certificate notice<a class="headerlink" href="#about-the-one-time-certificate-notice" title="Permanent link">&para;</a></h2>
-<p>In modes 1 and 2, JARVIS creates its own HTTPS certificate on first start. Your connection is fully encrypted — but because the certificate was made by your JARVIS rather than issued by a public authority, your browser shows a warning the first time each device visits. Accept it once per device and it won't reappear:</p>
+<h2 id="about-lan-mode">About LAN mode<a class="headerlink" href="#about-lan-mode" title="Permanent link">&para;</a></h2>
+<p>Mode 2 binds the dashboard to <code>0.0.0.0</code> and serves plain HTTP on your network. That gets you two things and explicitly <strong>not</strong> a third:</p>
 <ul>
-<li><strong>Chrome / Edge</strong> — type <code>thisisunsafe</code> on the warning page (there's no input box; just type it).</li>
-<li><strong>Firefox</strong> — click <strong>Advanced → Accept the Risk and Continue</strong>.</li>
-<li><strong>Safari</strong> — click <strong>Show Details → visit this website</strong> (macOS asks for your password).</li>
+<li><strong>Viewing works.</strong> Any device on the LAN can open <code>http://&lt;lan-ip&gt;:3001</code> and use the app once a session already exists on that device.</li>
+<li><strong>The one-time setup link is not for this.</strong> The click-to-finish link setup prints always stays on <code>http://localhost</code> — the setup token rides that link, and a bearer token must never cross a shared network in plaintext. Finish first-admin setup from the server itself, or forward the port over SSH:</li>
 </ul>
-<p>Modes 3 and 4 use real, publicly-trusted certificates at your public address, so there is no notice.</p>
-<p>If you ever see the notice again after changing access modes, that's normal — the certificate was regenerated to cover your new address (see below).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">3001</span>:127.0.0.1:3001<span class="w"> </span>user@host
+</code></pre></div>
+<p>then open the forwarded <code>http://localhost:3001</code> link.</p>
+<ul>
+<li><strong>Signed-in sessions do not persist over the raw IP.</strong> Session cookies are <code>Secure</code>, so they are dropped by the browser on plain <code>http://&lt;ip&gt;</code> — a sign-in there will not stick, and passkeys cannot be registered against a numeric IP at all (WebAuthn requires a real hostname; see <a href="#passkeys-vs-sign-in-links">Passkeys vs sign-in links</a>). Raw-IP LAN is a fine way to <em>view</em> JARVIS from a second device with a link someone hands you, but it is not an authenticated family route.</li>
+</ul>
+<p>For a durable, authenticated route to other devices, add a named private HTTPS origin on top of LAN (or localhost) mode:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./setup.sh<span class="w"> </span>--public-origin<span class="w"> </span>https://&lt;host&gt;.&lt;tailnet&gt;.ts.net
+</code></pre></div>
+<p>The reference walkthrough is <a href="https://tailscale.com/kb/1242/tailscale-serve">Tailscale Serve</a> — install Tailscale on the host, run <code>tailscale serve --bg --https=443 http://127.0.0.1:3001</code>, and pass that HTTPS URL to <code>--public-origin</code>. Setup adds the hostname to <code>APP_BASE_URL</code>, <code>CORS_ORIGINS</code>, and the dashboard's Host allowlist, then probes the origin; once it answers, the click-to-finish setup link is hosted there instead of loopback, and sign-ins and passkeys work exactly like modes 3 and 4. Any other named-HTTPS proxy that terminates TLS and forwards to the dashboard works the same way — Tailscale Serve is simply the easiest to set up.</p>
 <hr />
 <h2 id="passkeys-vs-sign-in-links">Passkeys vs sign-in links<a class="headerlink" href="#passkeys-vs-sign-in-links" title="Permanent link">&para;</a></h2>
 <p>JARVIS offers two everyday ways to sign in (plus API-key login for single-user installs — unaffected by any of this):</p>
 <ul>
-<li><strong>Sign-in links</strong> (magic links by email) work in <strong>every mode, on every device</strong>. They are always your fallback.</li>
-<li><strong>Passkeys</strong> — fingerprint, face, or device PIN — are the fastest option, but browsers only allow them on a proper named address: <code>localhost</code> on the JARVIS machine itself, or a real domain like modes 3 and 4 provide. A numeric network address (<code>https://192.168.x.x</code>) doesn't qualify, which is why LAN-mode devices other than the JARVIS computer stick to sign-in links.</li>
+<li><strong>Sign-in links</strong> (magic links by email) work wherever a session can persist — every mode except raw-IP LAN browsing (see above). They are always your fallback.</li>
+<li><strong>Passkeys</strong> — fingerprint, face, or device PIN — are the fastest option, but browsers only allow them on a proper origin: <code>localhost</code> on the JARVIS machine itself, or the exact HTTPS origin configured in <code>APP_BASE_URL</code> (modes 3, 4, or a named private origin). A numeric network address (<code>http://192.168.x.x</code>) is never a valid passkey origin, and enrolling a passkey only works at the <strong>final</strong> origin you'll actually sign in from — not a temporary one.</li>
 </ul>
 <p>You don't need to remember any of this: the sign-in page checks what your current address supports and only shows the passkey button where it will actually work — elsewhere it shows a short note instead. You can add and manage your passkeys under <strong>Settings → Account → Passkeys</strong>.</p>
 <hr />
+<h2 id="support-tiers">Support tiers<a class="headerlink" href="#support-tiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Routes</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Supported</strong></td>
+<td>localhost HTTP, named private HTTPS (Tailscale Serve or equivalent), Let's Encrypt, Cloudflare Tunnel</td>
+<td>Fully tested, gets the standard hardening and cookie/passkey behavior.</td>
+</tr>
+<tr>
+<td><strong>Experimental</strong></td>
+<td>Local HTTPS (<code>--profile=local-https</code>, mkcert at <code>:3443</code>); AMD/Intel Vulkan or ROCm GPU acceleration</td>
+<td>Works, lower validation confidence — report issues.</td>
+</tr>
+<tr>
+<td><strong>Manual</strong></td>
+<td>Custom reverse proxy (Traefik, ngrok, host nginx, …)</td>
+<td>Works if you satisfy the <a href="../../DEPLOYMENT/#per-adapter-trust-contract">trust-boundary contract</a> yourself — JARVIS does not configure or verify a proxy it didn't set up.</td>
+</tr>
+<tr>
+<td><strong>Unsupported for sign-in</strong></td>
+<td>Raw-IP LAN browsing</td>
+<td>Viewing only — see <a href="#about-lan-mode">About LAN mode</a>. No persistent session, no passkeys.</td>
+</tr>
+</tbody>
+</table>
+<p>The table below is generated from the same route registry the app enforces (<code>route_claims</code> in <code>scripts/setup_lib.sh</code>); a docs test keeps the two in lockstep so this page can never claim a tier or behavior the code doesn't grant.</p>
+<!-- route-claims:begin -->
+<table>
+<thead>
+<tr>
+<th>route</th>
+<th>scheme</th>
+<th>port</th>
+<th>host_allowlist</th>
+<th>setup_token_transport</th>
+<th>cookie_policy</th>
+<th>passkey_origin</th>
+<th>cert_owner</th>
+<th>tier</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>localhost-http</td>
+<td>http</td>
+<td>3001</td>
+<td>localhost</td>
+<td>fragment</td>
+<td>secure</td>
+<td>localhost</td>
+<td>none</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>raw-ip-lan</td>
+<td>http</td>
+<td>3001</td>
+<td>lan-ip</td>
+<td>paste</td>
+<td>none</td>
+<td>none</td>
+<td>none</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>named-private-https</td>
+<td>https</td>
+<td>443</td>
+<td>origin-host</td>
+<td>fragment</td>
+<td>secure</td>
+<td>origin-host</td>
+<td>external</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>local-https</td>
+<td>https</td>
+<td>3443</td>
+<td>localhost</td>
+<td>fragment</td>
+<td>secure</td>
+<td>localhost</td>
+<td>mkcert</td>
+<td>experimental</td>
+</tr>
+<tr>
+<td>letsencrypt</td>
+<td>https</td>
+<td>443</td>
+<td>domain</td>
+<td>fragment</td>
+<td>secure</td>
+<td>domain</td>
+<td>letsencrypt</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>tunnel</td>
+<td>https</td>
+<td>443</td>
+<td>tunnel-host</td>
+<td>fragment</td>
+<td>secure</td>
+<td>tunnel-host</td>
+<td>cloudflare</td>
+<td>supported</td>
+</tr>
+</tbody>
+</table>
+<!-- route-claims:end -->
+
+<p><code>tier</code> above is the route's own support classification (an unauthenticated <code>http://</code> view of the raw LAN route is "supported" because it works as designed) — it is a different axis from <strong>cookie_policy</strong>/<strong>passkey_origin</strong>, which is why raw-IP LAN shows <code>none</code>/<code>none</code>: the route serves pages, it just cannot carry a signed-in session.</p>
+<hr />
 <h2 id="switching-modes-later">Switching modes later<a class="headerlink" href="#switching-modes-later" title="Permanent link">&para;</a></h2>
 <p>Re-run setup and give a different answer to the first question:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./setup.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./setup.sh
 </code></pre></div>
 <p>That's the whole procedure. Your papers, notes, settings, and accounts are untouched — only the access configuration changes. Setup handles the follow-through for you:</p>
 <ul>
-<li>It detects that your address set changed and offers to <strong>regenerate the HTTPS certificate</strong> so it covers the new address (the dashboard restarts briefly). Say yes — declining leaves the old certificate in place and browsers may complain until you regenerate.</li>
-<li>In modes 1 and 2, expect the <strong>one-time certificate notice</strong> again on each device after the regeneration.</li>
+<li>It re-derives <code>CORS_ORIGINS</code> and the dashboard's Host allowlist for the new mode, accumulating rather than dropping — a named private origin you configured earlier stays allowed alongside a new LAN or tunnel choice.</li>
 <li>Moving up to mode 3 or 4 walks you through the extra pieces (Cloudflare consent + token, or domain + admin email) right in the flow.</li>
+<li>If you're adding <code>--profile=local-https</code>, generate the mkcert certificate first with <code>make certs</code> — setup tells you if it's missing.</li>
 </ul>
-<p>A common path: start with mode 1 on day one, switch to mode 2 when you want JARVIS on your tablet, and later move to mode 3 or 4 for access away from home — picking up passkeys on every device along the way.</p>
+<p>A common path: start with mode 1 on day one, switch to mode 2 when you want JARVIS on your tablet, and add a named private HTTPS origin (or move to mode 3 or 4) for a durable route away from home — picking up passkeys on every device along the way.</p>
 <hr />
 <h2 id="what-comes-next">What comes next<a class="headerlink" href="#what-comes-next" title="Permanent link">&para;</a></h2>
-<p>New here? <a href="../getting-started/">Getting Started</a> covers the onboarding wizard and your first sign-in. For operator-level detail — ports, VPN alternatives like Tailscale, and TLS specifics — see <a href="../../DEPLOYMENT/">DEPLOYMENT.md</a>.</p>
+<p>New here? <a href="../getting-started/">Getting Started</a> covers the onboarding wizard and your first sign-in. For operator-level detail — ports, the full trust-contract table per adapter, and TLS specifics — see <a href="../../DEPLOYMENT/">DEPLOYMENT.md</a>.</p>
 
 
 

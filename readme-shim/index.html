@@ -1356,6 +1356,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#uninstalling-jarvis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uninstalling JARVIS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#security" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1561,6 +1572,34 @@
     
   
     Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
   
 
     
@@ -2002,6 +2041,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#uninstalling-jarvis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Uninstalling JARVIS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#security" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2264,7 +2314,8 @@
 <ul>
 <li>Docker Engine 24+ with Compose v2, <code>openssl</code>, <code>git</code></li>
 <li><strong>~25–53 GB free disk space</strong> for the first install — a one-time peak, not the ongoing footprint. The exact figure depends on your GPU tier and whether images are pulled prebuilt or built locally; see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>.</li>
-<li>NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default <code>setup.sh</code> <strong>pulls</strong> prebuilt application images from <code>ghcr.io/limitcycle-oss/jarvis-*</code> (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with <code>./setup.sh --build-local</code>.</li>
+<li>GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default <code>setup.sh</code> <strong>pulls</strong> prebuilt application images from <code>ghcr.io/limitcycle-oss/jarvis-*</code> (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with <code>./setup.sh --build-local</code>.</li>
+<li>AMD (ROCm, or Vulkan without <code>/dev/kfd</code>) and Intel (Vulkan) GPUs are auto-detected and accelerate Ollama too, labeled <strong>[Experimental]</strong> — same tier-based model selection, lower validation confidence, and it may not accelerate on every card. Vulkan is opt-in (<code>./setup.sh --gpu vulkan</code>) and passes <code>/dev/dri</code> through by numeric render-node GIDs (<code>JARVIS_VIDEO_GID</code>/<code>JARVIS_RENDER_GID</code>, resolved from the host). <code>paper_ingestion</code> (PDF parsing, reranking) stays CPU-only on AMD/Intel regardless. See the <a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/">hardware support matrix</a> for caveats and how to report your results.</li>
 <li>On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</li>
 <li><code>./setup.sh --check</code> verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or <code>openssl</code> are missing, <code>./setup.sh --install-prereqs</code> can run the guided installer after showing the exact commands.</li>
 <li><strong>Windows:</strong> use WSL2 + Docker Desktop</li>
@@ -2279,15 +2330,22 @@
 <p>Prefer not to open a terminal? Double-click a launcher in <code>launchers/</code> — <code>Start JARVIS.command</code> (macOS), <code>jarvis.desktop</code> (Linux), or <code>Start JARVIS.bat</code> (Windows) — each runs the same <code>setup.sh</code> and keeps the window open so you can read its output.</p>
 <p>Re-running <code>./setup.sh</code> keeps your data: answering <code>N</code> (the default) at the <code>Overwrite?</code> prompt preserves your existing <code>.env</code> — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>) streams its progress directly to your terminal after the application images are pulled, so the initial download shows visible progress instead of a silent wait.</p>
 <p>In single-user mode (<code>JARVIS_SETUP_MODE=single</code>), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.</p>
-<p><strong>Non-interactive (CI / cloud-init):</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev<span class="w">  </span><span class="c1"># local dev / CI smoke test</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
+<p><strong>Everyday commands.</strong> Setup puts a <code>jarvis-research</code> launcher on your PATH for day-to-day operation from any directory:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>jarvis-research<span class="w"> </span>status<span class="w">     </span><span class="c1"># container status at a glance</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>jarvis-research<span class="w"> </span>logs<span class="w"> </span>-f<span class="w">     </span><span class="c1"># follow service logs</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>jarvis-research<span class="w"> </span>doctor<span class="w">      </span><span class="c1"># read-only health, disk, and update check</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>jarvis-research<span class="w"> </span>update<span class="w">      </span><span class="c1"># transactional, database-safe upgrade to the latest release</span>
 </code></pre></div>
-<p>See <code>./setup.sh --help</code> for all flags (including <code>--profile=local-https</code> for self-signed TLS). After the first admin exists, invite teammates at <strong>Admin → User Management</strong>.</p>
+<p>Full command reference → <strong><a href="../manual/cli/">docs/manual/cli.md</a></strong>.</p>
+<p><strong>Non-interactive (CI / cloud-init):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev<span class="w">  </span><span class="c1"># local dev / CI smoke test</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
+</code></pre></div>
+<p>See <code>./setup.sh --help</code> for all flags (including <code>--profile=local-https</code>, which starts a local Caddy edge at <code>https://localhost:3443</code> using an mkcert-issued certificate — run <code>make certs</code> first). After the first admin exists, invite teammates at <strong>Admin → User Management</strong>.</p>
 <h2 id="what-it-does">What it does<a class="headerlink" href="#what-it-does" title="Permanent link">&para;</a></h2>
 <p>Runs on your own hardware with Ollama, with optional cloud-model access through LiteLLM. It is designed for researchers who want literature workflows with visible sources and inspectable evidence.</p>
 <p><strong>Core subsystems:</strong></p>
@@ -2319,28 +2377,64 @@
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <p>Solo install: the <strong>Quickstart</strong> above is all you need. For team/multi-user setup, SMTP configuration, reverse-proxy / TLS (Caddy + Let's Encrypt or Cloudflare Tunnel), backups, upgrades, rollback, and remote access → <strong><a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a></strong>. End-user help (joining an existing instance) → <strong><a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/">User Guide</a></strong>.</p>
 <h2 id="updating-jarvis">Updating JARVIS<a class="headerlink" href="#updating-jarvis" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>pull
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./update.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>git<span class="w"> </span>pull
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./update.sh
 </code></pre></div>
 <p><code>update.sh</code> diffs your running containers against the versions pinned in <code>versions.env</code>, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → <strong><a href="../DEPLOYMENT/#update-workflow">docs/DEPLOYMENT.md</a></strong>.</p>
+<h2 id="uninstalling-jarvis">Uninstalling JARVIS<a class="headerlink" href="#uninstalling-jarvis" title="Permanent link">&para;</a></h2>
+<p><code>jarvis-research uninstall</code> tears the install down in four escalating tiers, each of which lists the exact resources it will touch and confirms before acting. Always preview first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>jarvis-research<span class="w"> </span>uninstall<span class="w"> </span>--dry-run<span class="w"> </span>--all<span class="w">   </span><span class="c1"># enumerate a full teardown, change nothing</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Removes</th>
+<th>Reversible?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>1</code> stop</td>
+<td>Containers and the network</td>
+<td>Yes — <code>jarvis-research start</code></td>
+</tr>
+<tr>
+<td><code>2</code> app</td>
+<td>Tier 1 + the JARVIS application images</td>
+<td>Yes — reinstall pulls them again</td>
+</tr>
+<tr>
+<td><code>3</code> data</td>
+<td>Tier 2 + the named data volumes (database, vector store, caches)</td>
+<td><strong>No</strong> — back up first</td>
+</tr>
+<tr>
+<td><code>4</code> purge</td>
+<td>Tier 3 + third-party images (each confirmed), <code>.env</code>, <code>secrets/</code>, <code>shared/</code>, and the clone directory</td>
+<td><strong>No</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Tier 3 requires typing the compose project name, and tier 4 requires exporting (or explicitly forgoing) the backup encryption key, because that key is excluded from backup archives — deleting <code>secrets/</code> without it makes every encrypted off-host backup unrecoverable. These destructive gates require typed confirmation from stdin; <code>--yes</code>/<code>--all</code> skip only the ordinary prompts, never the typed gates, so a run with closed stdin cannot complete tier 3 or 4. Full details → <strong><a href="../manual/cli/#uninstalling">docs/manual/cli.md</a></strong>.</p>
 <h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
 <p>JARVIS applies user scoping at the application and query layers. The ops API key (<code>JARVIS_API_KEY</code>) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.</p>
 <p>See <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md">SECURITY.md</a> for vulnerability disclosure and <a href="../SECURITY/">docs/SECURITY.md</a> for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.</p>
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <h3 id="prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv">Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, <a href="https://docs.astral.sh/uv/"><code>uv</code></a>.<a class="headerlink" href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv" title="Permanent link">&para;</a></h3>
 <p>Install <code>uv</code> (Python package manager used for all backend tooling):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>curl<span class="w"> </span>-LsSf<span class="w"> </span>https://astral.sh/uv/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>-LsSf<span class="w"> </span>https://astral.sh/uv/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
 </code></pre></div>
 <h3 id="local-setup">Local setup<a class="headerlink" href="#local-setup" title="Permanent link">&para;</a></h3>
 <p>We strictly use Docker Compose for local development to avoid polluting the host with heavy ML dependencies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start local development services</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start local development services</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
 </code></pre></div>
 <p>Install Python dev dependencies, then run the full quality gate:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>dev-env<span class="w">   </span><span class="c1"># uv sync --group dev</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>check<span class="w">     </span><span class="c1"># runs tach, pyright, test-shape, burned-secret guards, pytest, and frontend checks</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>dev-env<span class="w">   </span><span class="c1"># uv sync --group dev</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>make<span class="w"> </span>check<span class="w">     </span><span class="c1"># runs tach, pyright, test-shape, burned-secret guards, pytest, and frontend checks</span>
 </code></pre></div>
 <p>The canonical pre-push gate is <strong><code>make check</code></strong> — the same set CI runs. The <code>docker compose exec</code> commands above are for quick, scoped iteration on a single service.</p>
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
@@ -2395,19 +2489,19 @@
 <li>Add a row to the <code>paper_sources</code> table via the Settings UI.</li>
 </ol>
 <h3 id="project-structure">Project structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>├── services/
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>│   ├── paper_ingestion/   # FastAPI: paper fetch, PDF parse, chunk, embed, RAG
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>│   ├── learning_engine/   # FastAPI: FSRS cards, review scheduling, projects
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>│   └── telegram_bot/      # python-telegram-bot (optional profile)
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>├── frontend/              # React 19 + TypeScript + Vite + Shadcn/ui
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── db/
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>│   ├── init.sql           # PostgreSQL bedrock schema
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>│   └── migrations/        # Versioned schema changes (0102+; 0089–0101 folded into init.sql)
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>├── docker-compose.yml     # All services
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>├── .env.example           # Configuration template
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>└── Makefile               # Dev convenience commands
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>├── services/
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>│   ├── paper_ingestion/   # FastAPI: paper fetch, PDF parse, chunk, embed, RAG
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>│   ├── learning_engine/   # FastAPI: FSRS cards, review scheduling, projects
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>│   └── telegram_bot/      # python-telegram-bot (optional profile)
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>├── frontend/              # React 19 + TypeScript + Vite + Shadcn/ui
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>├── db/
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>│   ├── init.sql           # PostgreSQL bedrock schema
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>│   └── migrations/        # Versioned schema changes (0102+; 0089–0101 folded into init.sql)
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>├── docker-compose.yml     # All services
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>├── .env.example           # Configuration template
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>└── Makefile               # Dev convenience commands
 </code></pre></div>
 <h3 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram bot</strong> — daily digests, Pulse rating buttons, RAG Q&amp;A from your phone, FSRS review in chat. Enable with <code>docker compose --profile telegram up -d</code>; full setup + command list in the <strong><a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/telegram/">User Guide → Telegram</a></strong>.</p>

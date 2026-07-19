@@ -1269,6 +1269,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../REQUIREMENTS/" class="md-nav__link">
         
   
@@ -1383,6 +1411,67 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#v113-access-mode-and-setup-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v1.1.3 access-mode and setup entries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v1.1.3 access-mode and setup entries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#amdintel-vulkan-acceleration-experimental-not-supported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AMD/Intel Vulkan acceleration — Experimental, not Supported
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ip-lan-access-carries-no-authentication-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw-IP LAN access carries no authentication contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pre-113-setup-links-used-a-query-string-not-a-fragment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-1.1.3 setup links used a query string, not a fragment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom JARVIS_NET_SUBNET with a Caddy TLS profile is refused, not supported
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" class="md-nav__link">
@@ -1958,6 +2047,67 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#v113-access-mode-and-setup-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v1.1.3 access-mode and setup entries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v1.1.3 access-mode and setup entries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#amdintel-vulkan-acceleration-experimental-not-supported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AMD/Intel Vulkan acceleration — Experimental, not Supported
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raw-ip-lan-access-carries-no-authentication-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw-IP LAN access carries no authentication contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pre-113-setup-links-used-a-query-string-not-a-fragment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-1.1.3 setup links used a query string, not a fragment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom JARVIS_NET_SUBNET with a Caddy TLS profile is refused, not supported
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2282,7 +2432,7 @@
 
 
 <h1 id="risk-register">Risk Register<a class="headerlink" href="#risk-register" title="Permanent link">&para;</a></h1>
-<p><em>Last updated: 2026-07-06</em></p>
+<p><em>Last updated: 2026-07-19</em></p>
 <p><em>Known residual risks and accepted operational/code-quality deferrals.</em></p>
 <p>This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.</p>
 <p>Related docs:</p>
@@ -2290,6 +2440,24 @@
 <li><a href="../ARCHITECTURE/">ARCHITECTURE.md</a> — runtime boundaries affected by residual risks.</li>
 <li><a href="../SECURITY/">SECURITY.md</a> — threat model and hardening checklist.</li>
 </ul>
+<hr />
+<h2 id="v113-access-mode-and-setup-entries">v1.1.3 access-mode and setup entries<a class="headerlink" href="#v113-access-mode-and-setup-entries" title="Permanent link">&para;</a></h2>
+<h3 id="amdintel-vulkan-acceleration-experimental-not-supported">AMD/Intel Vulkan acceleration — Experimental, not Supported<a class="headerlink" href="#amdintel-vulkan-acceleration-experimental-not-supported" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> <code>--gpu vulkan</code> (and the AMD no-<code>/dev/kfd</code> fallback) passes <code>/dev/dri</code> and <code>OLLAMA_VULKAN=1</code> into the Ollama container, joining the host's <code>video</code>/<code>render</code> groups by numeric GID (<code>JARVIS_VIDEO_GID</code>/<code>JARVIS_RENDER_GID</code>, resolved from the host at install time — a group <em>name</em> would resolve against the container image's own <code>/etc/group</code>, not the host's).</p>
+<p><strong>Current state:</strong> the device passthrough and env wiring are real and exercised in <code>docker-compose.vulkan.yml</code>, but validation confidence is lower than the CUDA/ROCm paths — reach and actual acceleration depend on the host's Vulkan ICD, which JARVIS does not inventory. Classified Experimental, never Supported.</p>
+<p><strong>Reopen criteria:</strong> when enough field reports (<code>docs/manual/hardware-support-matrix.md#reporting-your-hardware</code>) accumulate to promote the tier, or an upstream regression is found.</p>
+<h3 id="raw-ip-lan-access-carries-no-authentication-contract">Raw-IP LAN access carries no authentication contract<a class="headerlink" href="#raw-ip-lan-access-carries-no-authentication-contract" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> the <code>raw-ip-lan</code> route (<code>route_claims</code> in <code>scripts/setup_lib.sh</code>) has <code>cookie_policy=none</code> and <code>passkey_origin=none</code> — a signed-in session cannot persist over plain <code>http://&lt;lan-ip&gt;</code>, and WebAuthn refuses a raw IP as an origin outright. The route is real and serves pages (<code>tier=supported</code>), but it is not, and cannot become, an authenticated route.</p>
+<p><strong>Why accepted:</strong> this is a browser/WebAuthn constraint (an IP literal is never a valid relying-party ID) and a deliberate application choice (<code>Secure</code> cookies), not a gap to close. The supported path to an authenticated family route is a named private HTTPS origin (<code>--public-origin</code>) layered on top of LAN mode.</p>
+<p><strong>Reopen criteria:</strong> none expected — re-open only if a browser vendor changes WebAuthn's origin rules, which JARVIS does not control.</p>
+<h3 id="pre-113-setup-links-used-a-query-string-not-a-fragment">Pre-1.1.3 setup links used a query string, not a fragment<a class="headerlink" href="#pre-113-setup-links-used-a-query-string-not-a-fragment" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> before this release, <code>print_setup_link</code> (<code>scripts/setup_lib.sh</code>) built the click-to-finish link as <code>/setup?setup_token=…</code> — a query string rides the request line and can land in access logs and <code>Referer</code> headers. It now builds <code>/setup#setup_token=…</code>, a URL fragment the browser never sends to the server.</p>
+<p><strong>Current state:</strong> the fix is forward-only. Links already printed to a pre-1.1.3 terminal's scrollback keep the old query-string form and still work — the onboarding wizard (<code>frontend/src/pages/OnboardingWizard.tsx</code>) accepts both forms for backward compatibility — but a query-string link that was ever pasted somewhere logged (chat history, a ticket) should be treated as exposed; regenerate the token via <code>scripts/init-secrets.sh</code> if that's a concern on an instance that hasn't finished first-admin bootstrap yet.</p>
+<p><strong>Reopen criteria:</strong> none — this is a completed, one-way fix; documented here for operators auditing old scrollback/logs.</p>
+<h3 id="custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported">Custom <code>JARVIS_NET_SUBNET</code> with a Caddy TLS profile is refused, not supported<a class="headerlink" href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> <code>local-https</code> and <code>letsencrypt</code> pin Caddy's container IP inside the default <code>10.137.241.0/24</code> bridge subnet, and nginx's <code>set_real_ip_from</code> (<code>frontend/nginx.conf</code>) trusts exactly that range. <code>setup.sh</code> refuses to start either Caddy profile under a non-default <code>JARVIS_NET_SUBNET</code> rather than silently starting with a broken client-IP trust boundary.</p>
+<p><strong>Why deferred:</strong> making the two hard-coded literals (the Caddy <code>ipv4_address</code> and the nginx <code>set_real_ip_from</code> values) subnet-derived is a small, contained change, but no operator has hit the collision in practice yet (the guidance path — edit both literals to the custom subnet, or keep the default — is a documented one-time step).</p>
+<p><strong>Reopen criteria:</strong> if subnet collisions with a Caddy profile become a recurring support question, template the two literals from <code>JARVIS_NET_SUBNET</code> instead of refusing.</p>
 <hr />
 <h2 id="ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor">OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR<a class="headerlink" href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" title="Permanent link">&para;</a></h2>
 <p>Current posture is documented in <code>docs/REQUIREMENTS.md</code>: the tested image pin is <code>ollama/ollama:0.31.2</code> via <code>versions.env</code>, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the <code>jarvis</code> network can reach <code>http://ollama:11434</code>, so untrusted peers must not join that network.</p>

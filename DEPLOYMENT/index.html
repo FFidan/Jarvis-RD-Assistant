@@ -16,7 +16,7 @@
         <link rel="prev" href="../readme-shim/">
       
       
-        <link rel="next" href="../REQUIREMENTS/">
+        <link rel="next" href="../manual/cli/">
       
       
         
@@ -1437,6 +1437,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Deployment Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-adapter-trust-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-adapter trust contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1452,10 +1469,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#self-signed-cert-browser-acceptance" class="md-nav__link">
+  <a href="#bootstrapping-the-first-admin-the-setup-token" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Self-signed cert — browser acceptance
+        Bootstrapping the first admin (the setup token)
       
     </span>
   </a>
@@ -1585,10 +1602,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#self-signed-default" class="md-nav__link">
+  <a href="#local-https-mkcert" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Self-signed (default)
+        Local HTTPS (mkcert)
       
     </span>
   </a>
@@ -1607,10 +1624,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#importing-an-existing-certificate" class="md-nav__link">
+  <a href="#importing-your-own-certificate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Importing an existing certificate
+        Importing your own certificate
       
     </span>
   </a>
@@ -1887,6 +1904,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line (jarvis-research)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -2373,6 +2418,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Deployment Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-adapter-trust-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-adapter trust contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2388,10 +2450,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#self-signed-cert-browser-acceptance" class="md-nav__link">
+  <a href="#bootstrapping-the-first-admin-the-setup-token" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Self-signed cert — browser acceptance
+        Bootstrapping the first admin (the setup token)
       
     </span>
   </a>
@@ -2521,10 +2583,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#self-signed-default" class="md-nav__link">
+  <a href="#local-https-mkcert" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Self-signed (default)
+        Local HTTPS (mkcert)
       
     </span>
   </a>
@@ -2543,10 +2605,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#importing-an-existing-certificate" class="md-nav__link">
+  <a href="#importing-your-own-certificate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Importing an existing certificate
+        Importing your own certificate
       
     </span>
   </a>
@@ -2961,13 +3023,13 @@ use JARVIS on that one machine, skip this section</strong> — nothing needs to 
 <p>To reach it from another device — your phone, or a laptop away from home —
 without putting it on the open internet, common options are:</p>
 <ul>
-<li><strong>A reverse proxy with TLS</strong> on your own domain — the Caddy <code>local-https</code> /
-  <code>letsencrypt</code> profiles (see <em>Deployment Modes</em> below).</li>
+<li><strong>A named private HTTPS origin</strong> — <code>./setup.sh --public-origin https://&lt;host&gt;</code> layers on top of your existing localhost/LAN setup and wires <code>APP_BASE_URL</code>/CORS/the Host allowlist automatically. The Tailscale walkthrough below is the reference implementation of this.</li>
+<li><strong>A reverse proxy with TLS</strong> on your own public domain — the Caddy <code>letsencrypt</code> profile (see <em>Deployment Modes</em> below). Note <code>local-https</code> (mkcert) is <strong>not</strong> a remote-access option — it is loopback-only, for a locally-trusted <code>https://localhost:3443</code> on the JARVIS machine itself.</li>
 <li><strong>A Cloudflare Tunnel</strong> — outbound-only, no open ports.</li>
 <li><strong>A mesh VPN</strong> — your devices share one private encrypted network.</li>
 </ul>
 <p>These are alternatives; pick whichever suits you. The walkthrough below is <strong>one
-example</strong> (Tailscale, a mesh VPN), not a requirement.</p>
+example</strong> (Tailscale, a mesh VPN), not a requirement — and shows what <code>--public-origin</code> automates under the hood.</p>
 <h3 id="example-tailscale">Example: Tailscale<a class="headerlink" href="#example-tailscale" title="Permanent link">&para;</a></h3>
 <p>Tailscale is a zero-config mesh VPN (WireGuard) that is free for personal use. Install it on the JARVIS host and on your phone, sign both into the same account, and the dashboard becomes reachable over the private tailnet with <strong>zero open inbound ports</strong> — reached by a stable MagicDNS name (e.g. <code>my-host.my-tailnet.ts.net</code>). See <a href="https://tailscale.com">https://tailscale.com</a>.</p>
 <blockquote>
@@ -3013,7 +3075,7 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <th>Mode</th>
 <th>Setup time</th>
 <th>Inbound ports</th>
-<th>TLS story</th>
+<th>Transport</th>
 </tr>
 </thead>
 <tbody>
@@ -3021,61 +3083,136 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <td><strong>Localhost</strong></td>
 <td>~5 min</td>
 <td>none</td>
-<td>Self-signed (localhost SAN)</td>
+<td>Plain HTTP on loopback (<code>:3001</code>)</td>
 </tr>
 <tr>
 <td><strong>LAN</strong></td>
 <td>~10 min</td>
 <td><code>3001/tcp</code> on LAN iface</td>
-<td>Self-signed with LAN IP SAN</td>
+<td>Plain HTTP on every interface — viewing only, see <a href="#mode-2-lan">Mode 2</a></td>
+</tr>
+<tr>
+<td><strong>Named private HTTPS</strong> (<code>--public-origin</code>, e.g. Tailscale Serve)</td>
+<td>~10 min on top of localhost/LAN</td>
+<td><em>none</em> on your host</td>
+<td>Real HTTPS at your chosen hostname; edge owns the cert</td>
+</tr>
+<tr>
+<td><strong>Local HTTPS</strong> (<code>--profile=local-https</code>)</td>
+<td>~5 min (<code>make certs</code> first)</td>
+<td><code>3443/tcp</code> on loopback</td>
+<td>mkcert-issued HTTPS, trusted only on this machine</td>
 </tr>
 <tr>
 <td><strong>Cloudflare Tunnel</strong></td>
 <td>~30 min</td>
 <td><em>none</em> (outbound-only)</td>
-<td>Self-signed origin + Cloudflare edge TLS</td>
+<td>HTTPS; Cloudflare edge owns the cert</td>
 </tr>
 <tr>
 <td><strong>Let's Encrypt / Caddy</strong></td>
 <td>~15 min after DNS</td>
 <td><code>80/tcp</code>, <code>443/tcp</code></td>
-<td>Caddy ACME edge TLS</td>
-</tr>
-<tr>
-<td><strong>Tailscale Funnel</strong></td>
-<td>~20 min</td>
-<td><em>none</em> on your host</td>
-<td>Tailscale-provisioned TLS</td>
-</tr>
-<tr>
-<td><strong>VPN (Tailscale/WireGuard)</strong></td>
-<td>~15 min</td>
-<td>VPN ports only</td>
-<td>Self-signed</td>
+<td>HTTPS; Caddy ACME edge owns the cert</td>
 </tr>
 </tbody>
 </table>
-<p><code>./setup.sh</code> runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); the chosen mode also sets <code>APP_BASE_URL</code> and <code>JARVIS_ACCESS_MODE</code> in <code>.env</code>. See <a href="../manual/access-modes/">Choosing how you access JARVIS</a>.</p>
+<p><code>./setup.sh</code> runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); a named private HTTPS origin layers onto localhost/LAN via <code>--public-origin</code>. The chosen mode sets <code>APP_BASE_URL</code> and <code>JARVIS_ACCESS_MODE</code> in <code>.env</code>. See <a href="../manual/access-modes/">Choosing how you access JARVIS</a>.</p>
+<h3 id="per-adapter-trust-contract">Per-adapter trust contract<a class="headerlink" href="#per-adapter-trust-contract" title="Permanent link">&para;</a></h3>
+<p>Every non-localhost adapter must agree with JARVIS on five things: which hostname reaches the app, who owns the edge certificate, whether the adapter rewrites the <code>Host</code> header (which changes what <code>DASHBOARD_SERVER_NAME</code> must allowlist), and how the setup-token bootstrap and passkey ceremony behave at that origin. <code>setup.sh</code> wires the first four adapters below automatically; a custom proxy is on you to match this contract.</p>
+<table>
+<thead>
+<tr>
+<th>Adapter</th>
+<th>Origin / hostname</th>
+<th>Cert owner</th>
+<th><code>Host</code> rewrite</th>
+<th><code>APP_BASE_URL</code> / CORS / <code>DASHBOARD_SERVER_NAME</code></th>
+<th>Trusted-proxy</th>
+<th>Cookie</th>
+<th>Setup-token handoff</th>
+<th>Passkey origin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cloudflare Tunnel</td>
+<td><code>TUNNEL_HOSTNAME</code> you configured in Zero Trust</td>
+<td>Cloudflare</td>
+<td>No — original Host forwarded</td>
+<td>Set automatically by <code>setup.sh</code> option 3</td>
+<td>In-network (bridge subnet); set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> to key rate limits on <code>CF-Connecting-IP</code></td>
+<td>Secure</td>
+<td>URL fragment, once the origin probes healthy</td>
+<td><code>TUNNEL_HOSTNAME</code></td>
+</tr>
+<tr>
+<td>Named private HTTPS (Tailscale Serve)</td>
+<td>Hostname you pass to <code>--public-origin</code></td>
+<td>The proxy (e.g. Tailscale)</td>
+<td>No — original Host forwarded</td>
+<td>Set automatically by <code>--public-origin</code></td>
+<td>Host loopback (<code>127.0.0.1</code>) — already trusted by default</td>
+<td>Secure</td>
+<td>URL fragment, once the edge probe (best-effort, 3 retries) succeeds; loopback until then</td>
+<td>Exact <code>--public-origin</code> origin</td>
+</tr>
+<tr>
+<td>Let's Encrypt (Caddy)</td>
+<td><code>LETSENCRYPT_DOMAIN</code></td>
+<td>Caddy ACME</td>
+<td>Yes — rewritten to <code>localhost</code></td>
+<td>Set automatically by <code>setup.sh</code> option 4</td>
+<td>In-network (bridge subnet), pinned Caddy IP</td>
+<td>Secure</td>
+<td>URL fragment, after the ACME cert-issuance gate passes (production: fatal on timeout)</td>
+<td><code>LETSENCRYPT_DOMAIN</code></td>
+</tr>
+<tr>
+<td>Local HTTPS (<code>caddy_local</code>)</td>
+<td><code>localhost:3443</code></td>
+<td>mkcert (local trust store only)</td>
+<td>Yes — rewritten to <code>localhost</code></td>
+<td><code>CORS_ORIGINS</code> gains <code>https://localhost:3443</code> automatically with <code>--profile=local-https</code></td>
+<td>In-network (bridge subnet), pinned Caddy IP</td>
+<td>Secure</td>
+<td>URL fragment</td>
+<td><code>localhost</code></td>
+</tr>
+<tr>
+<td>Custom reverse proxy</td>
+<td>Whatever you configure</td>
+<td>You</td>
+<td>Your choice — must match what you allowlist</td>
+<td>You must set <code>APP_BASE_URL</code>, <code>CORS_ORIGINS</code>, and <code>DASHBOARD_SERVER_NAME</code> by hand</td>
+<td>Add your proxy's CIDR to <code>TRUSTED_PROXY_CIDRS</code> (and, if it sits outside the default bridge subnet, <code>TRUSTED_PROXY_HOSTS</code>)</td>
+<td>Secure (requires HTTPS or <code>DEV_MODE=true</code>)</td>
+<td>Manual — no <code>setup.sh</code> automation for this path</td>
+<td>Exact origin in <code>APP_BASE_URL</code>; never a raw IP</td>
+</tr>
+</tbody>
+</table>
+<p>Raw-IP LAN browsing is deliberately absent from this table — it carries no cookie or passkey contract at all (see <a href="../manual/access-modes/#about-lan-mode">access-modes.md</a>).</p>
 <hr />
 <h2 id="mode-1-localhost">Mode 1 — Localhost<a class="headerlink" href="#mode-1-localhost" title="Permanent link">&para;</a></h2>
 <p>The default mode — see <a href="#solo-deployment-recommended-for-single-user">Solo deployment</a> above for the commands, or run <code>./setup.sh</code> and pick option 1 at the access-mode prompt.</p>
-<p>The dashboard is at <code>http://localhost:3001</code> (default <code>DASHBOARD_HOST_PORT=3001</code>). Enable the <code>caddy-local</code> profile only when you want local HTTPS.</p>
-<h3 id="self-signed-cert-browser-acceptance">Self-signed cert — browser acceptance<a class="headerlink" href="#self-signed-cert-browser-acceptance" title="Permanent link">&para;</a></h3>
-<p>On first start JARVIS generates a self-signed certificate. Accept the browser warning once: Chrome/Edge — type <code>thisisunsafe</code> (no input field); Firefox — <em>Advanced → Accept the Risk</em>; Safari — <em>Show Details → visit this website</em> (macOS prompts for your admin password).</p>
+<p>The dashboard is at <code>http://localhost:3001</code> (default <code>DASHBOARD_HOST_PORT=3001</code>) — plain HTTP; loopback traffic never leaves the machine. Enable the <code>caddy-local</code> profile (<code>--profile=local-https</code>, needs <code>make certs</code> first) only when you want a locally-trusted <code>https://localhost:3443</code>.</p>
+<h3 id="bootstrapping-the-first-admin-the-setup-token">Bootstrapping the first admin (the setup token)<a class="headerlink" href="#bootstrapping-the-first-admin-the-setup-token" title="Permanent link">&para;</a></h3>
+<p><code>scripts/init-secrets.sh</code> generates <code>JARVIS_SETUP_TOKEN</code> (a Docker Secret, <code>secrets/jarvis_setup_token.txt</code>) on first run. It gates the unauthenticated first-admin bootstrap endpoints via an <code>X-Setup-Token</code> header — a second factor on top of "no admin exists yet", closing the window where anyone who reaches the instance before you could create the first account. <code>setup.sh</code> prints the click-to-finish link with the token embedded in a URL <strong>fragment</strong> (<code>.../setup#setup_token=…</code>), never a query string — a fragment is never sent to the server, so it never lands in access logs, the <code>Referer</code> header, or a reverse proxy's request line. Links printed before this fragment migration used a <code>?setup_token=</code> query string; the wizard still accepts those for compatibility, but new links are always fragments.</p>
+<p>If the browser never received the printed link (a second device, an incognito window) the admin-creation step offers a <strong>paste field</strong> — enter just the token value from the end of the line <code>./setup.sh</code> printed (<code>.../setup#setup_token=&lt;this part&gt;</code>).</p>
+<p>In production, an unset <code>JARVIS_SETUP_TOKEN</code> fails closed: the bootstrap endpoint refuses every write until the secret exists. Outside production it warns and allows the request, for local/dev convenience.</p>
 <hr />
 <h2 id="mode-2-lan">Mode 2 — LAN<a class="headerlink" href="#mode-2-lan" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./setup.sh<span class="w">   </span><span class="c1"># pick option 2</span>
 </code></pre></div>
-<p><code>setup.sh</code> sets <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, detects your LAN IP, adds it to <code>CORS_ORIGINS</code> and <code>JARVIS_CERT_SAN</code>, and removes stale override files.</p>
+<p><code>setup.sh</code> sets <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, detects your LAN IPv4 (<code>--address &lt;ipv4&gt;</code> to override), and adds it to <code>CORS_ORIGINS</code> and the <code>DASHBOARD_SERVER_NAME</code> Host allowlist. This is plain HTTP — there is no certificate involved in LAN mode; see <a href="../manual/access-modes/#about-lan-mode">access-modes.md → About LAN mode</a> for what raw-IP LAN access does and does not give you (viewing yes, a persisted signed-in session no).</p>
 <h3 id="when-your-lan-ip-changes">When your LAN IP changes<a class="headerlink" href="#when-your-lan-ip-changes" title="Permanent link">&para;</a></h3>
-<p>DHCP can re-lease a different IP after a reboot (symptom: dashboard works on <code>localhost</code> but other devices get a cert or CORS error).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Option A — re-run setup.sh (re-detects IP, prompts to regenerate cert):</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>./setup.sh
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Option B — update .env manually, then regenerate:</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1,IP:&lt;new-LAN-IP&gt;</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="c1"># CORS_ORIGINS=https://localhost:3001,https://&lt;new-LAN-IP&gt;:3001</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+<p>DHCP can re-lease a different IP after a reboot (symptom: dashboard works on <code>localhost</code> but other devices get a CORS or <code>444</code>/Host-rejection error).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Re-run setup.sh — it re-detects the LAN IP and rewrites CORS_ORIGINS /</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="c1"># DASHBOARD_SERVER_NAME for the new address. No cert to regenerate.</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>./setup.sh
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># only needed if setup.sh did not restart it for you</span>
 </code></pre></div>
 <h3 id="hardening-checklist-before-lan-exposure">Hardening checklist before LAN exposure<a class="headerlink" href="#hardening-checklist-before-lan-exposure" title="Permanent link">&para;</a></h3>
 <p>Set in <code>.env</code> (<code>setup.sh</code> enforces the first two for option 2; verify the rest):</p>
@@ -3226,34 +3363,31 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <p><strong>VPN (Tailscale / WireGuard)</strong> — mesh your devices onto one network and keep JARVIS in localhost mode. Simplest and most secure option for a small set of trusted devices.</p>
 <hr />
 <h2 id="tls-certificates">TLS / Certificates<a class="headerlink" href="#tls-certificates" title="Permanent link">&para;</a></h2>
-<h3 id="self-signed-default">Self-signed (default)<a class="headerlink" href="#self-signed-default" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Generated inside the <code>dashboard</code> container on first start.</li>
-<li>SAN is controlled by <code>JARVIS_CERT_SAN</code> in <code>.env</code>; <code>setup.sh</code> sets this based on access mode.</li>
-<li>Key + cert live in <code>./certs/</code> (bind-mount at the repo root).</li>
-<li><code>JARVIS_SKIP_SELFSIGNED_GEN</code> defaults to <code>true</code> — generation is skipped if cert files already exist.</li>
-</ul>
-<p>To force regeneration:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+<p>The <code>dashboard</code> container itself never terminates TLS — it serves plain HTTP on <code>:3000</code> internally (published as <code>:3001</code> by default). TLS only exists at an edge in front of it: mkcert for local HTTPS, Caddy for Let's Encrypt, or an external provider (Cloudflare, Tailscale). <code>JARVIS_SKIP_SELFSIGNED_GEN</code> and <code>JARVIS_CERT_SAN</code> are legacy environment variables from an earlier self-signed-in-container design; the container's self-signed generation path is skipped by default and its <code>./certs/</code> mount is read-only, so neither variable has any effect on a current install.</p>
+<h3 id="local-https-mkcert">Local HTTPS (mkcert)<a class="headerlink" href="#local-https-mkcert" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>make<span class="w"> </span>certs<span class="w">         </span><span class="c1"># installs the mkcert root CA + writes ./certs/cert.pem, ./certs/key.pem</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>make<span class="w"> </span>up-https<span class="w">       </span><span class="c1"># or: docker compose --profile caddy-local up -d</span>
+</code></pre></div>
+<p><code>scripts/init-mkcert.sh</code> (what <code>make certs</code> runs) issues a certificate for <code>jarvis.localhost</code>, <code>localhost</code>, <code>127.0.0.1</code>, and <code>::1</code> only — this is a loopback-only certificate, not usable for LAN or public access. It auto-regenerates when the existing certificate expires within 30 days; to force regeneration sooner, delete the files and re-run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>make<span class="w"> </span>certs
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy_local
 </code></pre></div>
 <h3 id="lets-encrypt-caddy-profile">Let's Encrypt (Caddy profile)<a class="headerlink" href="#lets-encrypt-caddy-profile" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># .env</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nv">LETSENCRYPT_DOMAIN</span><span class="o">=</span>jarvis.example.com
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nv">LETSENCRYPT_EMAIL</span><span class="o">=</span>you@example.com
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="nv">CORS_ORIGINS</span><span class="o">=</span>https://jarvis.example.com,https://localhost:3001
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>
-<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>letsencrypt<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># .env</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="nv">LETSENCRYPT_DOMAIN</span><span class="o">=</span>jarvis.example.com
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="nv">LETSENCRYPT_EMAIL</span><span class="o">=</span>you@example.com
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="nv">CORS_ORIGINS</span><span class="o">=</span>https://jarvis.example.com,http://localhost:3001
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>letsencrypt<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy
 </code></pre></div>
-<p>Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network. <strong>Option B — host nginx + certbot:</strong> run certbot on the host, copy the cert into <code>./certs/</code>, and set <code>JARVIS_SKIP_SELFSIGNED_GEN=true</code>.</p>
-<h3 id="importing-an-existing-certificate">Importing an existing certificate<a class="headerlink" href="#importing-an-existing-certificate" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>dashboard
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>cp<span class="w"> </span>fullchain.pem<span class="w"> </span>./certs/cert.pem
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>cp<span class="w"> </span>privkey.pem<span class="w"> </span>./certs/key.pem
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>./certs/key.pem
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>./certs/cert.pem
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
-</code></pre></div>
+<p>Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network, rewriting <code>Host</code> to <code>localhost</code>. The ACME certificate lives in the <code>caddy_data</code>/<code>caddy_config</code> named volumes, managed entirely by Caddy — there is nothing under <code>./certs/</code> to hand-edit or import for this path. <code>setup.sh</code> waits for the certificate to be issued (up to 120s) before reporting success or printing the setup link.</p>
+<h3 id="importing-your-own-certificate">Importing your own certificate<a class="headerlink" href="#importing-your-own-certificate" title="Permanent link">&para;</a></h3>
+<p>There is no supported "drop in a certificate" path for the dashboard container. Two options:</p>
+<ul>
+<li><strong>Local HTTPS edge (loopback only):</strong> overwrite <code>./certs/cert.pem</code> and <code>./certs/key.pem</code> with your own cert/key pair, then restart the edge that reads them: <code>docker compose up -d caddy_local</code>. This only affects <code>https://localhost:3443</code>.</li>
+<li><strong>A public certificate:</strong> use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the <a href="#per-adapter-trust-contract">custom-proxy trust contract</a> — the certificate then belongs to that proxy, not to JARVIS.</li>
+</ul>
 <hr />
 <h2 id="non-interactive-automated-installer">Non-interactive / Automated Installer<a class="headerlink" href="#non-interactive-automated-installer" title="Permanent link">&para;</a></h2>
 <p><code>setup.sh</code> supports <code>--non-interactive</code> for CI pipelines and cloud-init scripts. Run <code>./setup.sh --help</code> for the full flag reference.</p>
@@ -3285,8 +3419,8 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Local development / CI smoke test:</span>
 <a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
 <a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Self-hosted with self-signed HTTPS (home lab):</span>
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.local<span class="w"> </span>--admin-email<span class="o">=</span>admin@example.com<span class="w"> </span>--profile<span class="o">=</span>local-https
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Local mkcert HTTPS (loopback only — run `make certs` first):</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>local-https
 <a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
 <a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
 <a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>/run/secrets/smtp_pass<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/run/secrets/smtp_pass
@@ -3301,11 +3435,22 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <p>After setup, open the dashboard and create the initial admin in the onboarding wizard. Once signed in as an admin, invite additional users at <code>https://jarvis.example.com/admin/users</code>.</p>
 <hr />
 <h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>git<span class="w"> </span>pull
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>./update.sh
+<p>The recommended path is the lifecycle command, which upgrades transactionally
+and refuses unsafe states:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>jarvis-research<span class="w"> </span>update
+</code></pre></div>
+<p>It verifies that every image for the target release is already published,
+requires a fresh, checksum-verified backup before any data-changing migration,
+stages the new images before advancing your checkout by fast-forward only, and
+waits for the stack to report healthy — resuming automatically if a run is
+interrupted, and never rolling back on its own. See
+<a href="../manual/cli/">Command line (jarvis-research)</a> for resume and rollback details.</p>
+<p>You can also update by hand:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>git<span class="w"> </span>pull
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>./update.sh
 </code></pre></div>
 <p><code>update.sh</code> loads pinned versions from <code>versions.env</code>, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass <code>./update.sh --build-local</code> to rebuild them from source), waiting up to 180 s per service. On failure it prints recovery commands for both image sets: <code>git checkout HEAD~1 -- versions.env &amp;&amp; ./update.sh</code> rolls back the third-party pins, while the application images roll back by pinning <code>JARVIS_VERSION</code> to a previously published tag and pulling it.</p>
-<p>From v1.1.0, <code>update.sh</code> pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>). Contributors, forks, and air-gapped hosts rebuild from source with <code>./update.sh --build-local</code> (the same flag exists on <code>./setup.sh</code>).</p>
+<p>From v1.1.0, <code>update.sh</code> pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>). <code>--build-local</code> (the same flag exists on <code>./setup.sh</code>) rebuilds from source instead — for contributors, forks, or when a GHCR pull is unavailable. It is <strong>not</strong> an offline/air-gapped path: a local build still needs network access for base images, Python/OS wheels, the third-party images (postgres, ollama, caddy, …), and the Ollama model downloads.</p>
 <h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram pairing (breaking change).</strong> The Telegram bot now identifies chats
 exclusively via the <code>/pair</code> token flow. To pair: open the dashboard → Settings
@@ -3327,11 +3472,11 @@ re-assigns any pre-existing product rows with a NULL owner to the single admin
 account. This is automatic and non-destructive; it only runs when exactly one
 admin user exists (the normal single-tenant state).</p>
 <p>Makefile shortcuts for development:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
 </code></pre></div>
 <hr />
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
@@ -3456,51 +3601,51 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </blockquote>
 <p>Use the steps below as a last resort — for example, after a total host failure where you are starting fresh on a new machine and cannot run the sidecar. This procedure does the database work by hand from the host.</p>
 <p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
 </code></pre></div>
 <p>The decryption flags match what <code>scripts/backup.sh</code> uses (<code>-aes-256-cbc -pbkdf2 -iter 600000</code>). Repeat for each <code>.enc</code> archive before using it.</p>
 <blockquote>
 <p><strong>Key dependency warning:</strong> the <code>jarvis</code> DB stores provider/model credentials encrypted with <code>JARVIS_CONFIG_KEY</code>; the LiteLLM DB stores its model keys encrypted with <code>LITELLM_SALT_KEY</code>. Restoring a DB dump without the <strong>same key that encrypted it</strong> leaves those secrets undecryptable. Always restore the matching <code>secrets/</code> archive (or confirm the keys are already in place) before starting the stack.</p>
 </blockquote>
 <p><strong>Step 1 — <code>secrets/</code></strong> (restore before starting the stack, so the right keys are in place):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
 </code></pre></div>
 <p><strong>Step 2 — Postgres (<code>jarvis</code> and <code>litellm</code>)</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
-<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
-<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
-<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
+<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
+<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
 </code></pre></div>
 <p><strong>Step 3 — Qdrant</strong> — stop the container first so the snapshot restore doesn't race an active index write:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
-<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
-<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
-<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
-<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>
-<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
-<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
-<a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-28-12" name="__codelineno-28-12" href="#__codelineno-28-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
-<a id="__codelineno-28-13" name="__codelineno-28-13" href="#__codelineno-28-13"></a>
-<a id="__codelineno-28-14" name="__codelineno-28-14" href="#__codelineno-28-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
-<a id="__codelineno-28-15" name="__codelineno-28-15" href="#__codelineno-28-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-28-16" name="__codelineno-28-16" href="#__codelineno-28-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-28-17" name="__codelineno-28-17" href="#__codelineno-28-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
-<a id="__codelineno-28-18" name="__codelineno-28-18" href="#__codelineno-28-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-28-19" name="__codelineno-28-19" href="#__codelineno-28-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>
+<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
+<a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
+<a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
+<a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a>
+<a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
+<a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
+<a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
 </code></pre></div>
 <hr />
 <h4 id="off-host-total-host-loss-recovery">Off-host / total-host-loss recovery<a class="headerlink" href="#off-host-total-host-loss-recovery" title="Permanent link">&para;</a></h4>
@@ -3518,25 +3663,25 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <li><strong>Bring up a fresh stack</strong> on the new host (<code>./setup.sh</code> / <code>docker compose up -d</code>).</li>
 <li><strong>Place the archive set into the inbox</strong> — copy it from your off-site store, or pull one timestamp's set from S3 with the built-in helper (aws-guarded; a no-op with a notice if <code>aws</code>/<code>BACKUP_S3_BUCKET</code> are absent):</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
-<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
-<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
-<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
-<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
 </code></pre></div>
 <ol>
 <li><strong>Place the one-time backup key</strong> into the inbox as the file <strong><code>operator_key</code></strong> (fixed name), then write the restore trigger:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
-<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
 </code></pre></div>
 <p>The sidecar's poll loop runs <code>restore.sh</code> within a few seconds. Watch progress in <code>/backup-trigger/.restore_status.json</code> (or the sidecar logs). On a clean restore it rebinds the role, materializes <code>./secrets</code>, self-restarts the app services, and lifts the maintenance gate on its own — nothing further to run. Do <strong>not</strong> wipe the Postgres data volume afterward, or the role rebind is lost.</p>
 <ol>
 <li><strong>Only if the restore fails after the destructive step</strong> does the stack stay at HTTP 503, holding the durable <code>.destructive</code> sentinel (which — unlike the soft <code>.maintenance</code> sentinel — never auto-expires). Recover from the safety backup the sidecar took first, then clear both sentinels explicitly:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
 </code></pre></div>
 <p>Once recovery is confirmed, remove the archive set from the inbox. The operator key is one-time — <code>restore.sh</code> shreds <code>/restore-inbox/operator_key</code> (and the plaintext staging) on every clean or recorded-failure exit.</p>
 <hr />
@@ -3583,11 +3728,11 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </tbody>
 </table>
 <p>Once the required step is done, clear both sentinels:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
 </code></pre></div>
 <hr />
 <h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
 </code></pre></div>
 <p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
 <hr />
@@ -3602,9 +3747,14 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>NET::ERR_CERT_AUTHORITY_INVALID</code> even after accepting once</td>
-<td>Cert SAN doesn't match hostname/IP</td>
-<td>Regenerate: update <code>JARVIS_CERT_SAN</code>, <code>rm ./certs/cert.pem ./certs/key.pem</code>, restart dashboard.</td>
+<td><code>NET::ERR_CERT_AUTHORITY_INVALID</code> on <code>https://localhost:3443</code></td>
+<td>mkcert root CA not installed in this browser's trust store, or the cert expired</td>
+<td><code>make certs</code> (re-)installs the root CA and regenerates the cert if needed, then <code>docker compose up -d caddy_local</code>.</td>
+</tr>
+<tr>
+<td><code>SSL_ERROR_RX_RECORD_TOO_LONG</code> opening a LAN address</td>
+<td>Browsing <code>https://&lt;lan-ip&gt;:...</code> — LAN mode is plain HTTP, not HTTPS</td>
+<td>Use <code>http://&lt;lan-ip&gt;:3001</code>, not <code>https://</code>. For a real HTTPS family route, add <code>--public-origin</code> (see <a href="../manual/access-modes/#about-lan-mode">access-modes.md</a>).</td>
 </tr>
 <tr>
 <td>API calls work from host but CORS-blocked from other devices</td>
@@ -3688,8 +3838,9 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <p>JARVIS exposes a REST API on <code>paper_ingestion</code> (:8010) and <code>learning_engine</code> (:8011). All routes (except <code>/health</code> and <code>/health/live</code>) require an <code>X-API-Key</code> header. Full interactive documentation is at <code>/docs</code> on each service.</p>
 <hr />
 <h2 id="other-access-options">Other access options<a class="headerlink" href="#other-access-options" title="Permanent link">&para;</a></h2>
+<p>Both of these are the <strong>custom reverse proxy</strong> row of the <a href="#per-adapter-trust-contract">trust contract table</a> — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:</p>
 <ul>
-<li><strong>ngrok</strong> — set <code>CORS_ORIGINS=https://&lt;subdomain&gt;.ngrok.io</code> and <code>JARVIS_CERT_SAN</code> accordingly.</li>
+<li><strong>ngrok</strong> — set <code>CORS_ORIGINS=https://&lt;subdomain&gt;.ngrok.io</code>, add the ngrok hostname to <code>DASHBOARD_SERVER_NAME</code>, and set <code>APP_BASE_URL</code> to the ngrok URL.</li>
 <li><strong>Traefik</strong> — add a label-based override next to <code>docker-compose.yml</code>. Refer to Traefik's documentation.</li>
 </ul>
 <hr />
