@@ -34,12 +34,18 @@ async def test_a269_run_migrations_idempotent(_contract_pool):
     """
     from jarvis_common.migrations import run_migrations
 
-    db_dir = Path(__file__).resolve().parents[5] / "db"
+    db_dir = Path(__file__).resolve().parents[4] / "db"
     migrations_dir = db_dir / "migrations"
+
+    # run_migrations warns and returns on a missing dir, which would make this
+    # test pass without applying anything.
+    assert migrations_dir.is_dir(), f"migrations dir did not resolve: {migrations_dir}"
 
     # Count rows before second run
     async with _contract_pool.acquire() as conn:
         count_before = await conn.fetchval("SELECT COUNT(*) FROM schema_migrations")
+
+    assert count_before > 0, "no migrations were applied, so idempotence is untested"
 
     # Second run — must not raise
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
@@ -64,8 +70,12 @@ async def test_a269_run_migrations_no_exception_on_already_applied_schema(_contr
     """
     from jarvis_common.migrations import run_migrations
 
-    db_dir = Path(__file__).resolve().parents[5] / "db"
+    db_dir = Path(__file__).resolve().parents[4] / "db"
     migrations_dir = db_dir / "migrations"
+
+    # run_migrations warns and returns on a missing dir, which would make this
+    # test pass without executing a single migration.
+    assert migrations_dir.is_dir(), f"migrations dir did not resolve: {migrations_dir}"
 
     # Should not raise any exception
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
