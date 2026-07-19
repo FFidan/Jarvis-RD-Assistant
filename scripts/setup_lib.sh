@@ -527,6 +527,94 @@ PUBLISHED_IMAGE_REPOS=(
   ghcr.io/limitcycle-oss/jarvis-dashboard
 )
 
+# -----------------------------------------------------------------------------
+# PROFILE_REGISTRY — single source of truth for every optional service group.
+# -----------------------------------------------------------------------------
+# Both entry points (setup.sh, scripts/jarvis-setup.sh) read this instead of
+# keeping their own hand-maintained profile lists, which is exactly how a group
+# came to be persisted-but-not-health-checked (or started-but-not-persisted).
+# One pipe-delimited row per group; columns, in order:
+#   name              group identifier (== the compose --profile flag)
+#   overlay_file      compose file the group's services live in
+#   profile_flag      the `docker compose --profile <flag>` name (== name)
+#   persist           yes = written to COMPOSE_PROFILES so a bare `up` re-engages it
+#   extra_health_svcs space-separated services that join the mandatory health gate
+#                     when the group is active (empty = none; TLS edges are gated
+#                     by their own cert/reachability probes instead)
+#   cert_owner        who owns/terminates TLS (none|mkcert|letsencrypt|cloudflare)
+#   tier              supported | manual | experimental
+#   delivery          published | upstream-pinned | local-build — which image
+#                     source the group's distinctive image comes from. A
+#                     local-build image (jarvis/langfuse-hardened, pull_policy:
+#                     build) is never on GHCR, so an update/pull gate keying off
+#                     this column can exclude it.
+# shellcheck disable=SC2034  # consumed by the accessors below and both entry points
+PROFILE_REGISTRY=(
+  "telegram|docker-compose.yml|telegram|yes|telegram_bot|none|supported|published"
+  "tunnel|docker-compose.yml|tunnel|yes||cloudflare|supported|upstream-pinned"
+  "observability|docker-compose.yml|observability|no|langfuse|none|manual|local-build"
+  "caddy-local|docker-compose.yml|caddy-local|yes||mkcert|experimental|upstream-pinned"
+  "letsencrypt|docker-compose.yml|letsencrypt|yes||letsencrypt|supported|upstream-pinned"
+  "vllm|docker-compose.vllm.yml|vllm|no||none|manual|upstream-pinned"
+  "perf|docker-compose.perf.yml|perf|no||none|manual|published"
+)
+
+# MANDATORY_HEALTH_BASE — the always-on services both entry points must wait on.
+# Shared here so setup.sh and scripts/jarvis-setup.sh cannot drift (the drift that
+# left restore-uploader started-but-unverified by the wrapper).
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+MANDATORY_HEALTH_BASE="postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader"
+
+# registry_profiles_to_persist -> space-separated profile flags whose rows are
+# persist=yes. setup.sh intersects this with the run's active profiles to build
+# COMPOSE_PROFILES, so a bare `docker compose up` re-engages the same set.
+registry_profiles_to_persist() {
+  local row name overlay flag persist rest out=""
+  for row in "${PROFILE_REGISTRY[@]}"; do
+    IFS='|' read -r name overlay flag persist rest <<< "$row"
+    [ "$persist" = "yes" ] && out="${out:+$out }$flag"
+  done
+  printf '%s' "$out"
+}
+
+# mandatory_health_services BASE [ACTIVE_PROFILE...] -> the health-gate service
+# list: BASE (space-separated) plus each active profile's extra_health_svcs from
+# the registry, de-duplicated and order-stable. An active group's service is
+# health-checked because it was deliberately started.
+mandatory_health_services() {
+  local base="$1"; shift
+  local out="$base" p row name overlay flag persist health rest svc
+  for p in "$@"; do
+    for row in "${PROFILE_REGISTRY[@]}"; do
+      IFS='|' read -r name overlay flag persist health rest <<< "$row"
+      [ "$name" = "$p" ] || continue
+      for svc in $health; do
+        _env_key_in_list "$svc" "$out" || out="$out $svc"
+      done
+    done
+  done
+  printf '%s' "$out"
+}
+
+# route_claims -> the FIXED set of host-level ingress routes JARVIS advertises,
+# one pipe-delimited row per route. These are transport planes, NOT compose
+# profiles (a route has no --profile), so they live apart from PROFILE_REGISTRY.
+# Columns, in order:
+#   route|scheme|port|host_allowlist|setup_token_transport|cookie_policy|
+#   passkey_origin|cert_owner|tier
+# A docs-parity test consumes this set to check the deployment docs describe
+# every route's real transport, token handoff, and WebAuthn behaviour.
+route_claims() {
+  cat <<'ROUTES'
+localhost-http|http|3001|localhost|fragment|secure|localhost|none|supported
+raw-ip-lan|http|3001|lan-ip|paste|none|none|none|supported
+named-private-https|https|443|origin-host|fragment|secure|origin-host|external|supported
+local-https|https|3443|localhost|fragment|secure|localhost|mkcert|experimental
+letsencrypt|https|443|domain|fragment|secure|domain|letsencrypt|supported
+tunnel|https|443|tunnel-host|fragment|secure|tunnel-host|cloudflare|supported
+ROUTES
+}
+
 # backfill_torch_variant_from_env — give a pre-1.1 .env the TORCH_VARIANT pair it
 # never had, echoing the variant when it writes one (nothing when there is already
 # a value, or no .env).
@@ -578,12 +666,16 @@ upsert_env_var() {
 # points cd into). When a token is present it prints the "Finish setup:" line
 # and sets SETUP_LINK so setup.sh can best-effort open it in a browser; with no
 # token it clears SETUP_LINK and prints nothing.
+# The token rides a URL FRAGMENT (#setup_token=), never a query string: a
+# fragment is never sent to the server, so it stays out of access logs, the
+# Referer header, and reverse-proxy request lines. The wizard reads it from
+# window.location.hash.
 print_setup_link() {
   local base="${1%/}" token
   token="$(cat secrets/jarvis_setup_token.txt 2>/dev/null || true)"
   SETUP_LINK=""
   if [ -n "$token" ]; then
-    SETUP_LINK="${base}/setup?setup_token=${token}"
+    SETUP_LINK="${base}/setup#setup_token=${token}"
     printf '  Finish setup: %s\n' "$SETUP_LINK"
   fi
 }

@@ -227,6 +227,45 @@ def test_installer_scripts_pull_every_published_service(compose):
         )
 
 
+def _env_keys(svc) -> set[str]:
+    """Environment keys of a service, handling both the mapping and list forms."""
+    env = svc.get("environment", {}) or {}
+    if isinstance(env, dict):
+        return set(env.keys())
+    return {str(e).split("=", 1)[0] for e in env}
+
+
+def test_smtp_password_is_a_mounted_secret_never_plain_env(compose):
+    """Invariant: the SMTP password reaches paper_ingestion as a Docker secret
+    (SMTP_PASS_FILE -> /run/secrets/smtp_pass), never a plaintext SMTP_PASS env
+    var that ``docker inspect`` would expose. The rest of the SMTP settings are
+    env-configurable so an operator relay actually reaches the container — before
+    this the whole SMTP_* set was absent and an env-configured relay was dead.
+    """
+    assert "smtp_pass" in (compose.get("secrets") or {}), (
+        "top-level smtp_pass secret must be declared"
+    )
+
+    pi = compose["services"]["paper_ingestion"]
+    mounted = {s if isinstance(s, str) else s.get("source") for s in pi.get("secrets", [])}
+    assert "smtp_pass" in mounted, "paper_ingestion must mount the smtp_pass secret"
+
+    env = pi.get("environment", {}) or {}
+    assert env.get("SMTP_PASS_FILE") == "/run/secrets/smtp_pass", (
+        f"paper_ingestion SMTP_PASS_FILE must point at the mounted secret; "
+        f"got {env.get('SMTP_PASS_FILE')!r}"
+    )
+    for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_FROM"):
+        assert key in env, (
+            f"paper_ingestion must pass {key} so an env-configured relay reaches the app"
+        )
+
+    for name, svc in compose["services"].items():
+        assert "SMTP_PASS" not in _env_keys(svc), (
+            f"{name} exposes SMTP_PASS as a plaintext env var — use the smtp_pass Docker secret"
+        )
+
+
 GROUP_ADD_OK = re.compile(r"^(\d+|\$\{[A-Z0-9_]+:-\d+\})$")
 
 

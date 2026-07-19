@@ -134,8 +134,9 @@ sync_secret() {
 sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 # JARVIS_SETUP_TOKEN gates the first-run setup wizard's WRITE endpoints while no
 # admin exists (closes the unauthenticated first-admin-takeover window). setup.sh
-# and scripts/jarvis-setup.sh print it as the ?setup_token= query param in the
-# click-to-finish link; the wizard also accepts it pasted on a second device.
+# and scripts/jarvis-setup.sh print it in the #setup_token= URL fragment of the
+# click-to-finish link (a fragment never reaches the server/logs); the wizard
+# also accepts it pasted on a second device.
 sync_secret JARVIS_SETUP_TOKEN jarvis_setup_token.txt "openssl rand -hex 32"
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # LITELLM_SALT_KEY encrypts model credentials LiteLLM stores in its database.
@@ -205,6 +206,18 @@ if [ ! -f "secrets/telegram_bot_token.txt" ]; then
   : > secrets/telegram_bot_token.txt
   chmod "$SECRET_FILE_MODE" secrets/telegram_bot_token.txt
   info "secrets/telegram_bot_token.txt created as empty placeholder (Telegram not configured)."
+fi
+
+# paper_ingestion mounts smtp_pass as a Docker Secret (declared unconditionally),
+# so docker compose up aborts with "secret not found" when the file is absent.
+# The SMTP password is an operator credential, NEVER openssl-generated: create an
+# empty placeholder when absent (empty resolves to None in SecretsSettings, the
+# correct "SMTP password not configured" sentinel). setup.sh --smtp-pass-file
+# writes the real password here.
+if [ ! -f "secrets/smtp_pass.txt" ]; then
+  : > secrets/smtp_pass.txt
+  chmod "$SECRET_FILE_MODE" secrets/smtp_pass.txt
+  info "secrets/smtp_pass.txt created as empty placeholder (SMTP password not configured)."
 fi
 
 # ---------------------------------------------------------------------------

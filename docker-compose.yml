@@ -389,6 +389,17 @@ services:
       INFRA_INGEST_KEY_FILE: /run/secrets/infra_ingest_key
       # Gates the first-run setup wizard's WRITE endpoints while no admin exists.
       JARVIS_SETUP_TOKEN_FILE: /run/secrets/jarvis_setup_token
+      # SMTP relay for magic-link / invite email. An env-configured relay is read
+      # here; the first-run wizard writes the same settings to the DB user_config.
+      # The password rides the Docker-secret _FILE convention so it never appears
+      # in `docker inspect`; the rest are plain interpolations.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_PASS_FILE: /run/secrets/smtp_pass
+      DEV_SMTP_LOG_ONLY: ${DEV_SMTP_LOG_ONLY:-false}
+      ALLOW_PRIVATE_SMTP_HOST: ${ALLOW_PRIVATE_SMTP_HOST:-false}
     secrets:
       - jarvis_api_key
       - jarvis_setup_token
@@ -399,6 +410,7 @@ services:
       - litellm_master_key
       - jarvis_config_key
       - infra_ingest_key
+      - smtp_pass
       - langfuse_init_pk
       - langfuse_init_sk
     volumes:
@@ -972,6 +984,8 @@ secrets:
     file: ./secrets/telegram_bot_token.txt
   qdrant_api_key:
     file: ./secrets/qdrant_api_key.txt
+  smtp_pass:
+    file: ./secrets/smtp_pass.txt
   litellm_master_key:
     file: ./secrets/litellm_master_key.txt
   litellm_salt_key:

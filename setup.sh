@@ -35,9 +35,11 @@
 #                             depending on GPU variant and model choice).
 #   --build-local             Build the application images from source instead of
 #                             pulling the prebuilt ones published to GHCR. Much
-#                             slower and needs considerably more disk. Use it for
-#                             development, for an air-gapped host, or if a pull
-#                             is unavailable.
+#                             slower and needs considerably more disk. NOT an
+#                             offline path: it still needs network for base images,
+#                             Python/OS wheels, third-party images (postgres, ollama,
+#                             caddy, ...), and the Ollama model downloads. Use it for
+#                             development or when a GHCR pull is unavailable.
 #   --backend ollama|vllm|auto
 #                             Override AI backend selection. Default: auto (inferred
 #                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
@@ -53,9 +55,14 @@
 #                             once the edge is reachable, hosts the setup link.
 #                             Must be https:// with a DNS hostname (not an IP).
 #   --smtp-host <host>        SMTP relay hostname.
+#   --smtp-port <port>        SMTP relay port (465 = implicit TLS, 587 = STARTTLS).
 #   --smtp-user <user>        SMTP relay username.
+#   --smtp-from <addr>        Sender address for magic-link email (host is not
+#                             deliverable without it).
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
-#                             (Avoids passing credentials on the command line.)
+#                             Written to the smtp_pass Docker secret, never .env.
+#                             An unreadable path is a fatal error, not an empty
+#                             password. (Avoids passing credentials on the CLI.)
 #
 # In non-interactive mode every prompt is driven by flags or safe defaults;
 # no stdin reads are attempted.
@@ -529,8 +536,10 @@ NI_MODE="single"      # single | multi
 NI_MODE_EXPLICIT=0
 RUN_DOCTOR=0
 NI_SMTP_HOST=""
+NI_SMTP_PORT=""
 NI_SMTP_USER=""
 NI_SMTP_PASS=""
+NI_SMTP_FROM=""
 NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
 NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
@@ -556,7 +565,7 @@ while [ $# -gt 0 ]; do
   # `set -u` and abort with a raw "unbound variable". Guard them centrally so the
   # message is actionable. (The --flag=value forms carry their value inline.)
   case "$1" in
-    --domain|--admin-email|--profile|--smtp-host|--smtp-user|--smtp-pass-file|--mode|--backend|--smart-model|--gpu|--address|--public-origin)
+    --domain|--admin-email|--profile|--smtp-host|--smtp-port|--smtp-user|--smtp-from|--smtp-pass-file|--mode|--backend|--smart-model|--gpu|--address|--public-origin)
       if [ "$#" -lt 2 ] || [[ "$2" == -* ]]; then
         die "$1 requires a value." "Run: $0 --help"
       fi ;;
@@ -598,6 +607,14 @@ while [ $# -gt 0 ]; do
       NI_SMTP_HOST="${1#*=}"
       shift
       ;;
+    --smtp-port)
+      NI_SMTP_PORT="$2"
+      shift 2
+      ;;
+    --smtp-port=*)
+      NI_SMTP_PORT="${1#*=}"
+      shift
+      ;;
     --smtp-user)
       NI_SMTP_USER="$2"
       shift 2
@@ -606,12 +623,25 @@ while [ $# -gt 0 ]; do
       NI_SMTP_USER="${1#*=}"
       shift
       ;;
+    --smtp-from)
+      NI_SMTP_FROM="$2"
+      shift 2
+      ;;
+    --smtp-from=*)
+      NI_SMTP_FROM="${1#*=}"
+      shift
+      ;;
+    # An unreadable pass file is fatal — a silently-empty password would install a
+    # non-deliverable relay that fails only when the first magic link is sent.
     --smtp-pass-file)
-      NI_SMTP_PASS="$(head -n 1 "$2" 2>/dev/null || true)"
+      [ -r "$2" ] || die "--smtp-pass-file: cannot read '$2'." "Point it at a readable file whose first line is the SMTP password."
+      NI_SMTP_PASS="$(head -n 1 "$2")"
       shift 2
       ;;
     --smtp-pass-file=*)
-      NI_SMTP_PASS="$(head -n 1 "${1#*=}" 2>/dev/null || true)"
+      _spf="${1#*=}"
+      [ -r "$_spf" ] || die "--smtp-pass-file: cannot read '$_spf'." "Point it at a readable file whose first line is the SMTP password."
+      NI_SMTP_PASS="$(head -n 1 "$_spf")"
       shift
       ;;
     --mode)
@@ -1115,6 +1145,24 @@ if [ "$NON_INTERACTIVE" -eq 0 ] && [ -z "${NI_LLM_BACKEND:-}" ]; then
   prompt_ai_backend
 fi
 
+# vLLM honesty: setup never auto-starts vLLM — the start path below always brings
+# up Ollama. JARVIS_LLM_BACKEND=vllm is kept so the app's served-by badge stays
+# truthful, but the non-interactive `--backend vllm` path must warn as loudly as
+# the interactive wizard does that vLLM is a manual overlay.
+if [ "${NI_LLM_BACKEND:-}" = "vllm" ] && [ "$NON_INTERACTIVE" -eq 1 ]; then
+  warn "vLLM is a manual overlay — setup does NOT start it. Ollama is serving your models now."
+  printf '  Run vLLM later: docker compose -f docker-compose.yml -f docker-compose.vllm.yml --profile vllm up -d\n'
+  printf '  then point the LiteLLM `smart` alias at vLLM in Settings.\n'
+fi
+
+# The bootstrap that actually pulls models is Ollama on every setup.sh path, so a
+# HuggingFace repo id (contains '/') is not a valid tag and would hard-fail
+# ollama-bootstrap. Reject it early with the fix.
+case "${NI_SMART_MODEL:-}" in
+  */*) die "--smart-model '${NI_SMART_MODEL}' looks like a HuggingFace id, but setup starts Ollama." \
+           "HuggingFace ids need the vLLM overlay; Ollama models look like qwen3:14b." ;;
+esac
+
 # Disk preflight — sized to the smart model chosen above, so it must run after
 # the backend/model resolution and before anything pulls or builds.
 preflight_disk
@@ -1385,25 +1433,30 @@ else
   fi
 fi
 
-# Comma-joined profile selection, persisted as COMPOSE_PROFILES in .env so a
-# bare `docker compose up -d` (and the keep-and-start re-run path) starts the
-# same profile set the wizard selected.
-COMPOSE_PROFILES_VALUE=""
-if [ "$USE_TUNNEL_PROFILE" -eq 1 ]; then
-  COMPOSE_PROFILES_VALUE="tunnel"
-fi
-if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
-  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}telegram"
-fi
+# The optional service groups this run engages, resolved from the wizard/flags.
+# PROFILE_REGISTRY (setup_lib.sh) is the single source of truth for each group's
+# compose profile flag, whether it persists to COMPOSE_PROFILES, and which extra
+# services join the health gate — no hand-maintained profile list lives here.
 # The TLS edges run as compose profiles so a bare `up` (and the readiness gates
 # below) start the same edge the wizard selected: local-https -> caddy_local on
 # https://localhost:3443, letsencrypt -> the ACME caddy on :443.
-if [ "$NI_PROFILE" = "local-https" ]; then
-  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}caddy-local"
-fi
-if [ "$NI_PROFILE" = "letsencrypt" ]; then
-  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}letsencrypt"
-fi
+ACTIVE_PROFILES=()
+[ "$USE_TUNNEL_PROFILE" -eq 1 ]                && ACTIVE_PROFILES+=(tunnel)
+[ "$USE_TELEGRAM_PROFILE" -eq 1 ]              && ACTIVE_PROFILES+=(telegram)
+[ "$NI_PROFILE" = "local-https" ]              && ACTIVE_PROFILES+=(caddy-local)
+[ "$NI_PROFILE" = "letsencrypt" ]              && ACTIVE_PROFILES+=(letsencrypt)
+[ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]    && ACTIVE_PROFILES+=(observability)
+
+# Persist only the groups the registry marks persist=yes, so a bare
+# `docker compose up -d` (and the keep-and-start re-run path) re-engages the same
+# set. observability is opt-in per run and intentionally not persisted.
+COMPOSE_PROFILES_VALUE=""
+_PERSIST_PROFILES="$(registry_profiles_to_persist)"
+for _ap in ${ACTIVE_PROFILES[@]+"${ACTIVE_PROFILES[@]}"}; do
+  if _env_key_in_list "$_ap" "$_PERSIST_PROFILES"; then
+    COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}${_ap}"
+  fi
+done
 
 # A caddy profile pins static container IPs inside JARVIS_NET_SUBNET (and nginx
 # trusts exactly those IPs), so a non-default subnet would attach-fail or silently
@@ -1469,13 +1522,17 @@ sub_value() {
         return 1
       fi
       ;;
-    # Non-interactive: SMTP relay flags
+    # Non-interactive: SMTP relay flags. SMTP_PASS is deliberately NOT here — the
+    # password rides the smtp_pass Docker secret (written from --smtp-pass-file
+    # below), never a plaintext .env line visible in `docker inspect`.
     SMTP_HOST)
       [ -n "$NI_SMTP_HOST" ] && printf '%s' "$NI_SMTP_HOST" || return 1 ;;
+    SMTP_PORT)
+      [ -n "$NI_SMTP_PORT" ] && printf '%s' "$NI_SMTP_PORT" || return 1 ;;
     SMTP_USER)
       [ -n "$NI_SMTP_USER" ] && printf '%s' "$NI_SMTP_USER" || return 1 ;;
-    SMTP_PASS)
-      [ -n "$NI_SMTP_PASS" ] && printf '%s' "$NI_SMTP_PASS" || return 1 ;;
+    SMTP_FROM)
+      [ -n "$NI_SMTP_FROM" ] && printf '%s' "$NI_SMTP_FROM" || return 1 ;;
     # Non-interactive: Let's Encrypt / Caddy profile
     LETSENCRYPT_DOMAIN)
       [ -n "$NI_DOMAIN" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_DOMAIN" || return 1 ;;
@@ -1582,6 +1639,14 @@ info "Writing Docker secret files via scripts/init-secrets.sh..."
 bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
 ok "Docker secret files ready in secrets/ (files 644, directory 700)."
 
+# The SMTP password is an operator credential (never auto-generated). init-secrets
+# left an empty placeholder; overwrite it with the supplied password so the app
+# reads it via SMTP_PASS_FILE. It stays out of .env entirely.
+if [ -n "${NI_SMTP_PASS:-}" ]; then
+  printf '%s' "$NI_SMTP_PASS" > secrets/smtp_pass.txt && chmod 644 secrets/smtp_pass.txt
+  ok "SMTP password written to secrets/smtp_pass.txt (Docker secret)."
+fi
+
 # De-seed guard: switchable model aliases (smart/fast/smart-fallback) live in
 # LiteLLM's admin DB (delivered by the paper_ingestion boot reconciler), never
 # in litellm/config.yaml — a YAML alias would stack with its DB replacement and
@@ -1627,32 +1692,28 @@ fi
 # -----------------------------------------------------------------------------
 # 10. Start services
 # -----------------------------------------------------------------------------
+# Every active group becomes a `--profile <flag>` for the install `up`, driven by
+# ACTIVE_PROFILES (built above from the registry) — not a second hand-kept list.
+# A couple of groups carry preconditions that must fail loudly before start.
 PROFILE_ARGS=()
-if [ "$USE_TUNNEL_PROFILE" -eq 1 ]; then
-  PROFILE_ARGS+=(--profile tunnel)
-fi
-if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
-  PROFILE_ARGS+=(--profile telegram)
-fi
-if [ "$NI_PROFILE" = "local-https" ]; then
-  # caddy_local hard-requires mkcert certs; fail loudly rather than start an edge
-  # that cannot serve TLS.
-  if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
-    die "local-https needs locally-trusted certs, but certs/cert.pem and certs/key.pem are missing." \
-        "Generate them first: make certs   (installs the mkcert root CA), then re-run ./setup.sh --profile=local-https"
-  fi
-  PROFILE_ARGS+=(--profile caddy-local)
-fi
-if [ "$NI_PROFILE" = "letsencrypt" ]; then
-  PROFILE_ARGS+=(--profile letsencrypt)
-fi
-# USE_OBSERVABILITY_PROFILE is opt-in (env-driven, defaults to 0).  Guard
-# against the common footgun where a user runs ``USE_OBSERVABILITY_PROFILE=1
-# ./setup.sh`` without first generating Langfuse secrets via init-secrets.sh.
-if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
-  require_langfuse_secrets
-  PROFILE_ARGS+=(--profile observability)
-fi
+for _ap in ${ACTIVE_PROFILES[@]+"${ACTIVE_PROFILES[@]}"}; do
+  case "$_ap" in
+    caddy-local)
+      # caddy_local hard-requires mkcert certs; fail loudly rather than start an
+      # edge that cannot serve TLS.
+      if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
+        die "local-https needs locally-trusted certs, but certs/cert.pem and certs/key.pem are missing." \
+            "Generate them first: make certs   (installs the mkcert root CA), then re-run ./setup.sh --profile=local-https"
+      fi
+      ;;
+    observability)
+      # Guard the footgun of USE_OBSERVABILITY_PROFILE=1 without first generating
+      # the Langfuse secrets via init-secrets.sh.
+      require_langfuse_secrets
+      ;;
+  esac
+  PROFILE_ARGS+=(--profile "$_ap")
+done
 
 printf '\n'
 # GPU overlay selection is vendor-driven: NVIDIA engages docker-compose.gpu.yml
@@ -1852,9 +1913,11 @@ _STACK_STARTED=1
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy
 # -----------------------------------------------------------------------------
-# Optional services (telegram_bot) are profile-gated and intentionally
-# excluded from this list.
-MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader)
+# The health gate is the shared always-on base plus each active group's own
+# service (registry extra_health_svcs): a group deliberately started is a group
+# whose health is verified. The base is shared with scripts/jarvis-setup.sh via
+# mandatory_health_services (setup_lib.sh), so the two entry points cannot drift.
+read -ra MANDATORY_SVCS <<< "$(mandatory_health_services "$MANDATORY_HEALTH_BASE" ${ACTIVE_PROFILES[@]+"${ACTIVE_PROFILES[@]}"})"
 
 printf '\n'
 info "Waiting for services to become healthy..."
@@ -1868,6 +1931,7 @@ for svc in "${MANDATORY_SVCS[@]}"; do
   case "$svc" in
     ollama)                          _budget=180 ;;  # model pull can be slow
     paper_ingestion|learning_engine) [ "$_FIRST_RUN_PULL" -eq 1 ] && _budget=3600 || _budget=60 ;;
+    langfuse)                        _budget=240 ;;  # heavy Node app + its own postgres
     *)                               _budget=60  ;;
   esac
   if ! wait_healthy "$svc" "$_budget"; then

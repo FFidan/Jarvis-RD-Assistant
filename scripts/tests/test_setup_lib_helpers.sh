@@ -539,6 +539,8 @@ expect_eq "strip_gpu_args on empty args echoes nothing" \
 # Prints the click-to-finish wizard link and sets SETUP_LINK when a setup token
 # exists under secrets/ relative to CWD; with no token it clears SETUP_LINK and
 # prints nothing. A trailing slash on the base must not double up before /setup.
+# The token rides a URL FRAGMENT (#setup_token=), never a query string, so it
+# never reaches server access logs / the Referer header / a proxy request line.
 
 LINK_DIR="$(mktemp -d "${FIXTURES}/setuplink.XXXXXX")"
 mkdir -p "${LINK_DIR}/secrets"
@@ -546,17 +548,21 @@ printf 'tok123' > "${LINK_DIR}/secrets/jarvis_setup_token.txt"
 
 got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example" >/dev/null; printf '%s' "$SETUP_LINK")"
 expect_eq "print_setup_link builds SETUP_LINK from base + token" \
-  "$got" "https://jarvis.example/setup?setup_token=tok123"
+  "$got" "https://jarvis.example/setup#setup_token=tok123"
+case "$got" in
+  *"?setup_token="*) printf 'FAIL: setup token rode a query string, not a fragment (got=%s)\n' "$got" >&2; fail=1 ;;
+  *) pass "print_setup_link keeps the token in a fragment, never a query string" ;;
+esac
 printed="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example")"
 case "$printed" in
-  *"Finish setup: https://jarvis.example/setup?setup_token=tok123"*)
+  *"Finish setup: https://jarvis.example/setup#setup_token=tok123"*)
     pass "print_setup_link prints the finish-setup line with the link" ;;
   *) printf 'FAIL: print_setup_link output missing the link (got=%s)\n' "$printed" >&2; fail=1 ;;
 esac
 
 got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example/" >/dev/null; printf '%s' "$SETUP_LINK")"
 expect_eq "print_setup_link: trailing slash on base does not double up before /setup" \
-  "$got" "https://jarvis.example/setup?setup_token=tok123"
+  "$got" "https://jarvis.example/setup#setup_token=tok123"
 
 NOTOK_DIR="$(mktemp -d "${FIXTURES}/setuplink-notok.XXXXXX")"
 mkdir -p "${NOTOK_DIR}/secrets"
@@ -617,8 +623,13 @@ scheck "public-origin feeds APP_BASE_URL" 'APP_BASE_URL_VALUE="\$NI_PUBLIC_ORIGI
 scheck "public-origin feeds CORS_ORIGINS" '_append_csv "\$CORS_ORIGINS_OVERRIDE" "\$NI_PUBLIC_ORIGIN"'
 scheck "public-origin feeds the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$PUBLIC_ORIGIN_HOST"'
 scheck "the setup link uses a loopback/verified base" 'print_setup_link "\$SETUP_LINK_BASE"'
-scheck "letsencrypt persists its compose profile" '\-\-profile letsencrypt'
-scheck "local-https persists the caddy-local profile" '\-\-profile caddy-local'
+# PROFILE_ARGS + COMPOSE_PROFILES are now registry-driven (no per-profile literal
+# list in setup.sh): assert the group is engaged as an ACTIVE_PROFILE, and let the
+# PROFILE_REGISTRY accessor tests below prove it persists.
+scheck "letsencrypt is engaged as an active profile" 'ACTIVE_PROFILES\+=\(letsencrypt\)'
+scheck "local-https engages the caddy-local profile" 'ACTIVE_PROFILES\+=\(caddy-local\)'
+scheck "setup.sh drives COMPOSE_PROFILES from the registry persist set" 'registry_profiles_to_persist'
+scheck "setup.sh derives the health gate from the shared registry accessor" 'mandatory_health_services'
 scheck "letsencrypt waits for the cert before advertising the URL" 'Waiting for the public certificate'
 # The setup token must never ride a raw-IP HTTP link: print_setup_link is fed a
 # loopback/verified base, never the LAN IP.
@@ -831,6 +842,72 @@ for _mk in "${JARVIS_MANAGED_SECRET_KEYS[@]}"; do
   _mv="$(grep "^${_mk}=" "${MERGE_DIR}/managed.out" | head -n 1 | cut -d= -f2- | tr -d '\r')"
   expect_eq "merge preserves managed key ${_mk}" "$_mv" "sentinel-${_mk}"
 done
+
+# === PROFILE_REGISTRY accessors ==============================================
+# The registry is the single source of truth for the optional service groups.
+# registry_profiles_to_persist drives COMPOSE_PROFILES; mandatory_health_services
+# drives both entry points' health gate; route_claims is the fixed ingress-route
+# spec a docs-parity test consumes.
+
+persist="$(registry_profiles_to_persist)"
+for _p in tunnel telegram caddy-local letsencrypt; do
+  if _env_key_in_list "$_p" "$persist"; then
+    pass "registry_profiles_to_persist includes ${_p}"
+  else
+    printf 'FAIL: registry_profiles_to_persist missing %s (got=%s)\n' "$_p" "$persist" >&2; fail=1
+  fi
+done
+# observability / vllm / perf are deliberately opt-in-per-run, never persisted.
+for _p in observability vllm perf; do
+  if _env_key_in_list "$_p" "$persist"; then
+    printf 'FAIL: registry_profiles_to_persist should NOT persist %s (got=%s)\n' "$_p" "$persist" >&2; fail=1
+  else
+    pass "registry_profiles_to_persist excludes ${_p} (not persisted)"
+  fi
+done
+
+# The base is returned unchanged when no group is active (the wrapper's case).
+expect_eq "mandatory_health_services returns the base with no active profiles" \
+  "$(mandatory_health_services "$MANDATORY_HEALTH_BASE")" "$MANDATORY_HEALTH_BASE"
+# restore-uploader is in the shared base (the drift the wrapper had, now killed).
+if _env_key_in_list restore-uploader "$MANDATORY_HEALTH_BASE"; then
+  pass "MANDATORY_HEALTH_BASE includes restore-uploader"
+else
+  printf 'FAIL: MANDATORY_HEALTH_BASE missing restore-uploader (got=%s)\n' "$MANDATORY_HEALTH_BASE" >&2; fail=1
+fi
+# An active group adds its own service to the gate (deliberately started ->
+# health-checked), de-duplicated and appended after the base.
+expect_eq "mandatory_health_services adds telegram_bot when telegram is active" \
+  "$(mandatory_health_services "$MANDATORY_HEALTH_BASE" telegram)" \
+  "${MANDATORY_HEALTH_BASE} telegram_bot"
+expect_eq "mandatory_health_services adds langfuse when observability is active" \
+  "$(mandatory_health_services "postgres" observability)" "postgres langfuse"
+# TLS-edge groups add nothing to the health gate (their own cert probes cover them).
+expect_eq "mandatory_health_services adds nothing for a TLS-edge group" \
+  "$(mandatory_health_services "postgres" letsencrypt caddy-local tunnel)" "postgres"
+
+# route_claims: the six fixed ingress routes, each a 9-column pipe row.
+routes="$(route_claims)"
+expect_eq "route_claims emits six ingress routes" "$(printf '%s\n' "$routes" | grep -c .)" "6"
+for _r in localhost-http raw-ip-lan named-private-https local-https letsencrypt tunnel; do
+  if printf '%s\n' "$routes" | grep -q "^${_r}|"; then
+    pass "route_claims declares the ${_r} route"
+  else
+    printf 'FAIL: route_claims missing the %s route\n' "$_r" >&2; fail=1
+  fi
+done
+# Every route row has exactly 9 columns and every token is bash/env-representable
+# (no spaces), and the token never rides a query string.
+while IFS= read -r _row; do
+  [ -n "$_row" ] || continue
+  _ncol="$(awk -F'|' '{print NF}' <<< "$_row")"
+  expect_eq "route row '${_row%%|*}' has 9 columns" "$_ncol" "9"
+  case "$_row" in
+    *" "*) printf 'FAIL: route row has a space (not env-representable): %s\n' "$_row" >&2; fail=1 ;;
+    *"?setup_token"*) printf 'FAIL: route row advertises a query-string token: %s\n' "$_row" >&2; fail=1 ;;
+    *) pass "route row '${_row%%|*}' is env-representable" ;;
+  esac
+done <<< "$routes"
 
 # =============================================================================
 
