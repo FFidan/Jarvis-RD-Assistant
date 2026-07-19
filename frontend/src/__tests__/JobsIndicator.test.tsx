@@ -127,6 +127,50 @@ describe('JobsIndicator', () => {
     expect(screen.getByText('0 failed, 2 skipped of 2')).toBeInTheDocument();
   });
 
+  it('a cancelled whole-library result reads Cancelled, never Done', async () => {
+    setupStore({
+      'job-libcancel': makeJob({
+        id: 'job-libcancel',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: {
+          status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+          blocked: [], errors: [],
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.queryByText('Done')).toBeNull();
+  });
+
+  it('a cancelled whole-library result still shows the failures accrued before the stop', async () => {
+    setupStore({
+      'job-libcancelerr': makeJob({
+        id: 'job-libcancelerr',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: {
+          status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+          blocked: [{ paper_id: 9, reason: 'no_pdf_source' }],
+          errors: [
+            { paper_id: 7, stage: 'process', error: 'boom' },
+            { paper_id: 8, stage: 'process', error: 'boom' },
+          ],
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.getByText('2 failed, 1 skipped of 100')).toBeInTheDocument();
+  });
+
   it('a plain-ok succeeded job stays green Done with no partial line', async () => {
     setupStore({
       'job-ok': makeJob({

@@ -99,6 +99,23 @@ const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
 const zoteroPushWarning = (status: string): string =>
   ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
 
+/** Failed, skipped and total paper counts from a `papers.process_library` result. */
+const libraryCounts = (result: Job['result']) => {
+  const r = (result ?? {}) as { total?: number; errors?: unknown[]; blocked?: unknown[] };
+  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
+  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  return { failed, skipped, total };
+};
+
+/** The count fragments a library warning names, omitting the zero ones. */
+const libraryOutcomeParts = (failed: number, skipped: number): string[] => {
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped (no PDF source)`);
+  return parts;
+};
+
 /**
  * A `papers.process_library` job reaches `succeeded` even when some papers
  * failed or were skipped (no PDF source) — the handler returns a `status`
@@ -106,15 +123,24 @@ const zoteroPushWarning = (status: string): string =>
  * `partial` result gets a warning naming both counts.
  */
 const libraryPartialWarning = (result: Job['result']): string => {
-  const r = (result ?? {}) as { total?: number; errors?: unknown[]; blocked?: unknown[] };
-  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
-  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
-  const total = typeof r.total === 'number' ? r.total : failed + skipped;
-  const parts: string[] = [];
-  if (failed > 0) parts.push(`${failed} failed`);
-  if (skipped > 0) parts.push(`${skipped} skipped (no PDF source)`);
+  const { failed, skipped, total } = libraryCounts(result);
+  const parts = libraryOutcomeParts(failed, skipped);
   const detail = parts.length > 0 ? parts.join(', ') : 'no work completed';
   return `Library processing finished - ${detail} of ${total}; open Jobs for details`;
+};
+
+/**
+ * A cancelled run also reaches `succeeded` — it stopped early rather than
+ * failing — so the warning names both the papers it never reached and whatever
+ * had already failed or been skipped before the stop.
+ */
+const libraryCancelledWarning = (result: Job['result']): string => {
+  const { failed, skipped, total } = libraryCounts(result);
+  const parts = [
+    `stopped before finishing ${total} papers`,
+    ...libraryOutcomeParts(failed, skipped),
+  ];
+  return `Library processing was cancelled - ${parts.join(', ')}; open Jobs for details`;
 };
 
 /** Terminal statuses — job will not receive more events. */
@@ -341,14 +367,16 @@ export const useJobStore = create<JobStore>()(
               job.kind === 'zotero.push_highlights'
                 ? (job.result as { status?: string } | null)?.status
                 : undefined;
-            // A whole-library run can succeed-with-failures; a `partial` status
-            // warns (naming failed + skipped) instead of a green success toast.
+            // A whole-library run can succeed-with-failures or stop on cancel;
+            // `partial` and `cancelled` warn instead of a green success toast.
             const libraryStatus =
               job.kind === 'papers.process_library'
                 ? (job.result as { status?: string } | null)?.status
                 : undefined;
             if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
               toast.warning(zoteroPushWarning(zoteroPushStatus));
+            } else if (libraryStatus === 'cancelled') {
+              toast.warning(libraryCancelledWarning(job.result));
             } else if (libraryStatus === 'partial') {
               toast.warning(libraryPartialWarning(job.result));
             } else if (!zeroCards) {
