@@ -145,3 +145,44 @@ async def process_batch(
         job_id=jarvis_job_id, user_id=user_id, paper_ids=body.paper_ids
     )
     return {"job_id": jarvis_job_id, "status": "queued"}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/process-library
+# ---------------------------------------------------------------------------
+
+
+@router.post("/process-library", response_model=JobCreateResponse, status_code=202)
+@limiter.limit("2/minute")
+async def process_library(
+    request: Request,
+    summarize: bool = False,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, object]:
+    """Enqueue one ``papers.process_library`` job for the caller's whole library.
+
+    The job selects every paper in the caller's ``user_library`` still needing a
+    stage (download → process → opt-in summarize) and runs them in one durable
+    job with honest partial reporting. When the library needs nothing, no job is
+    queued and the skip contract ``{"job_id": null, "status": "skipped",
+    "reason": "library_already_processed"}`` is returned instead. Poll progress
+    via ``GET /api/jobs/{job_id}``.
+    """
+    _ = request  # required by @limiter.limit; not used in body
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+    from paper_ingestion.paper_jobs import _PROCESS_LIBRARY_SELECTION  # noqa: PLC0415
+
+    async with db_pool.acquire() as conn:
+        has_work = await conn.fetchval(
+            f"SELECT EXISTS ({_PROCESS_LIBRARY_SELECTION})", user_id, summarize
+        )
+    if not has_work:
+        return {"job_id": None, "status": "skipped", "reason": "library_already_processed"}
+
+    jarvis_job_id = str(uuid.uuid4())
+    await KIND_TO_TASK["papers.process_library"].defer_async(
+        job_id=jarvis_job_id, user_id=user_id, summarize=summarize
+    )
+    return {"job_id": jarvis_job_id, "status": "queued"}

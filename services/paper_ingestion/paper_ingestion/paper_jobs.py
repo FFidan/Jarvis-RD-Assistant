@@ -29,6 +29,7 @@ __all__ = [
     "_paper_summarize_job",
     "_papers_batch_process_job",
     "_papers_batch_summarize_job",
+    "_papers_process_library_job",
     "_papers_scan_local_job",
     "_digest_weekly_job",
 ]
@@ -381,6 +382,178 @@ async def _papers_batch_process_job(
 
     await ctx.update_progress(1.0, f"Done: {processed} processed, {skipped} skipped")
     return {"processed": processed, "skipped": skipped, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# papers.process_library handler — whole-library per-paper stage machine
+# ---------------------------------------------------------------------------
+
+
+# Selection: every paper in the caller's user_library that still needs any stage.
+# Shared verbatim with the process-library endpoint's emptiness pre-check so the
+# skip contract and the job agree on "nothing to do". ``$1`` = user_id, ``$2`` =
+# summarize. paper_summaries is per-user (UNIQUE NULLS NOT DISTINCT
+# (paper_id, user_id)); scope the LEFT JOIN with IS NOT DISTINCT FROM to match
+# the batch-summarize selection (rag.py).
+_PROCESS_LIBRARY_SELECTION = """
+    SELECT p.id, p.source_type, p.pdf_url, p.pdf_downloaded, p.pdf_local_path,
+           (p.chunked_at IS NULL) AS needs_process,
+           (s.paper_id IS NULL)   AS needs_summary
+    FROM papers p
+    JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+    LEFT JOIN paper_summaries s
+      ON s.paper_id = p.id AND s.user_id IS NOT DISTINCT FROM $1
+    WHERE p.chunked_at IS NULL OR ($2 AND s.paper_id IS NULL)
+    ORDER BY p.id
+"""
+
+
+async def _papers_process_library_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: ProgressContext,
+) -> dict[str, Any]:
+    """Process a caller's whole library in one job via a per-paper stage machine.
+
+    Each selected paper runs download (skip for local) → process (when
+    ``chunked_at IS NULL``) → summarize (opt-in, when no summary exists). Each
+    paper's stages are isolated: a failure records an ``errors`` entry and the
+    loop continues; a paper with no PDF source records a ``blocked`` entry (a
+    skip, not an error). The result ``status`` is ``"partial"`` whenever any
+    paper failed OR was blocked, so an all-blocked run never reads as success.
+    Reruns are idempotent by construction — the selection picks only missing work.
+
+    Payload keys:
+        user_id (int): REQUIRED — the library owner and tenancy boundary.
+        summarize (bool): also generate missing summaries.
+    """
+    user_id: int | None = payload.get("user_id")
+    if user_id is None:
+        raise JobError("papers.process_library requires a user_id")
+    summarize: bool = bool(payload.get("summarize", False))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_PROCESS_LIBRARY_SELECTION, user_id, summarize)
+
+    total = len(rows)
+    if total == 0:
+        await ctx.update_progress(1.0, "Library already processed")
+        return {
+            "status": "ok",
+            "total": 0,
+            "downloaded": 0,
+            "processed": 0,
+            "summarized": 0,
+            "blocked": [],
+            "errors": [],
+        }
+
+    from paper_ingestion.services.pdf_workflow import run_process_pdf
+    from paper_ingestion.services.summarization import generate_paper_summary
+
+    # Defense-in-depth: the selection is already user_library-scoped, so this
+    # can only reaffirm the tenancy boundary — kept to mirror the batch clone and
+    # guard against a future selection-query change widening scope.
+    paper_ids = [row["id"] for row in rows]
+    async with pool.acquire() as conn:
+        await assert_papers_ownership(conn, paper_ids, user_id)
+
+    services = get_services()
+    pdf_processor = services.pdf_processor
+    if pdf_processor is None:
+        raise RuntimeError("pdf_processor not initialized")
+    embedder = services.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
+    verifier = services.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
+
+    downloaded = 0
+    processed = 0
+    summarized = 0
+    blocked: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    await ctx.update_progress(0.0, f"Starting: {total} papers")
+    for i, row in enumerate(rows):
+        if await ctx.is_cancelled():
+            break
+        paper_id = row["id"]
+        await ctx.update_progress(i / total, f"Paper {paper_id} ({i + 1}/{total})")
+        inner_start = (i / total) * 0.95
+        inner_end = ((i + 1) / total) * 0.95
+
+        is_local = row["source_type"] == "local" or row["pdf_local_path"] is not None
+        pdf_local_path = row["pdf_local_path"]
+        stage = "download"
+        try:
+            # ---- Stage 1: Download (skip for local / already downloaded) ----
+            if not is_local and not row["pdf_downloaded"]:
+                if not row["pdf_url"]:
+                    blocked.append({"paper_id": paper_id, "reason": "no_pdf_source"})
+                    continue
+                pdf_path_obj = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
+                async with pool.acquire() as conn:
+                    updated = await conn.fetchrow(
+                        "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
+                        "WHERE id = $2 RETURNING pdf_local_path",
+                        str(pdf_path_obj),
+                        paper_id,
+                    )
+                if updated is None:
+                    raise JobError(f"Paper {paper_id} deleted during download")
+                pdf_local_path = updated["pdf_local_path"]
+                downloaded += 1
+
+            # ---- Stage 2: Process ----
+            if row["needs_process"]:
+                stage = "process"
+                if not pdf_local_path:
+                    raise JobError(f"PDF path not set for paper {paper_id}")
+                pdf_path = Path(pdf_local_path)
+                if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
+                    raise JobError(f"Invalid PDF path for paper {paper_id}")
+                if not pdf_path.exists():
+                    raise JobError(f"PDF file missing from disk for paper {paper_id}")
+                await run_process_pdf(
+                    paper_id,
+                    pdf_path,
+                    pool,
+                    pdf_processor,
+                    embedder,
+                    ctx=_SubCtx(ctx, inner_start, inner_end),
+                )
+                processed += 1
+
+            # ---- Stage 3: Summarize (opt-in) ----
+            if summarize and row["needs_summary"]:
+                stage = "summarize"
+                await generate_paper_summary(
+                    paper_id,
+                    pool,
+                    http_client,
+                    verifier,
+                    embedder,
+                    user_id=user_id,
+                )
+                summarized += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"paper_id": paper_id, "stage": stage, "error": str(exc)})
+            logger.exception("Library processing failed for paper %s (stage=%s)", paper_id, stage)
+
+    status = "partial" if (errors or blocked) else "ok"
+    await ctx.update_progress(1.0, f"Done: {processed} processed, {summarized} summarized")
+    return {
+        "status": status,
+        "total": total,
+        "downloaded": downloaded,
+        "processed": processed,
+        "summarized": summarized,
+        "blocked": blocked,
+        "errors": errors,
+    }
 
 
 async def _papers_scan_local_job(

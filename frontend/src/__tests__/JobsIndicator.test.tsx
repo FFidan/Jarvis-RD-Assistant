@@ -81,4 +81,66 @@ describe('JobsIndicator', () => {
 
     expect(screen.getByText('Scanning Contradictions')).toBeInTheDocument();
   });
+
+  it('renders an amber partial line for a succeeded whole-library job (status still Done)', async () => {
+    setupStore({
+      'job-lib': makeJob({
+        id: 'job-lib',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: {
+          status: 'partial', total: 5, downloaded: 1, processed: 2, summarized: 0,
+          blocked: [{ paper_id: 5, reason: 'no_pdf_source' }],
+          errors: [{ paper_id: 4, stage: 'process', error: 'boom' }],
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('1 failed, 1 skipped of 5')).toBeInTheDocument();
+    // The status pill still reads Done — partial detail is additive, not a failure.
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  it('renders the blocked-only partial line (no failures)', async () => {
+    setupStore({
+      'job-lib2': makeJob({
+        id: 'job-lib2',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: {
+          status: 'partial', total: 2, downloaded: 0, processed: 0, summarized: 0,
+          blocked: [
+            { paper_id: 10, reason: 'no_pdf_source' },
+            { paper_id: 11, reason: 'no_pdf_source' },
+          ],
+          errors: [],
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('0 failed, 2 skipped of 2')).toBeInTheDocument();
+  });
+
+  it('a plain-ok succeeded job stays green Done with no partial line', async () => {
+    setupStore({
+      'job-ok': makeJob({
+        id: 'job-ok',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: { status: 'ok', total: 2, downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [] },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.queryByText(/skipped of/i)).toBeNull();
+  });
 });

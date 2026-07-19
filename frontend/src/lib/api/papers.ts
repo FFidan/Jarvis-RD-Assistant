@@ -368,6 +368,17 @@ export const batchSummarizePapers = (limit?: number) =>
     { method: 'POST' },
   );
 
+/**
+ * Enqueue a whole-library processing job (download → process → opt-in
+ * summarize). Returns the JobCreateResponse envelope; ``job_id`` is null with
+ * ``status: "skipped"`` when the library already needs no work.
+ */
+export const processLibrary = (summarize = false) =>
+  apiFetch<{ job_id: string | null; status: string; reason?: string | null }>(
+    `/api/papers/process-library?summarize=${summarize}`,
+    { method: 'POST' },
+  );
+
 // --- Paper Detail ---
 export const fetchPaperDetail = (paperId: number) =>
   apiFetch<PaperDetail>(`/api/papers/${paperId}`);

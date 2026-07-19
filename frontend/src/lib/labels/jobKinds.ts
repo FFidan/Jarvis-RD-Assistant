@@ -7,6 +7,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   'paper.summarize': 'Summarizing',
   'papers.batch_summarize': 'Batch Summarize',
   'papers.batch_process': 'Batch Process',
+  'papers.process_library': 'Whole-library processing',
   'papers.scan_local': 'Scanning Local PDFs',
   'extraction.single': 'Extracting',
   'extraction.batch': 'Batch Extraction',
