@@ -478,7 +478,10 @@ INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
 BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
 TUNNEL_ACK=0          # --tunnel-ack: acknowledges tunnel internet exposure (NI consent)
+OVERWRITE_ENV=0       # --overwrite-env: rebuild an existing .env (merge, non-destructive)
 DOCKER_JUST_INSTALLED=0  # set by handle_missing_prereqs; gates the exit-3 path
+_ENV_SNAPSHOT_TAKEN=0 # set once .env has been copied to .env.pre-setup.bak
+_STACK_STARTED=0      # set once the stack is up; gates the pre-start restore hint
 
 # Snapshot the original invocation before the parse loop consumes it via `shift`,
 # so a GPU-overlay failure can re-exec on CPU with the user's other flags intact.
@@ -561,6 +564,8 @@ while [ $# -gt 0 ]; do
       BUILD_LOCAL=1; shift ;;
     --tunnel-ack)
       TUNNEL_ACK=1; shift ;;
+    --overwrite-env)
+      OVERWRITE_ENV=1; shift ;;
     --backend)
       case "$2" in
         ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
@@ -835,11 +840,12 @@ fi
 # if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
 # as absent (the `=.\+` requires at least one char after `=`). The value is
 # emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
-# survive intact.
+# survive intact; a trailing CR from a Windows-edited (CRLF) .env is stripped so
+# the value round-trips byte-clean.
 existing_env_value() {
   [ -f .env ] || return 1
   grep -qE "^$1=.+" .env 2>/dev/null || return 1
-  grep "^$1=" .env | head -n 1 | cut -d'=' -f2-
+  grep "^$1=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r'
 }
 
 # -----------------------------------------------------------------------------
@@ -850,80 +856,88 @@ existing_env_value() {
 # -----------------------------------------------------------------------------
 if [ -f .env ]; then
   printf '\n%sConfiguration already exists (.env).%s\n' "$C_YELLOW" "$C_RESET"
-  if [ "$NON_INTERACTIVE" -eq 1 ]; then
-    info "Non-interactive mode — overwriting existing .env."
+  # An overwrite now MERGES: existing values are carried forward, so a re-run to
+  # change one setting never rotates secrets or drops operator-added keys. The
+  # default is still to keep .env untouched and start the stack; rebuilding is
+  # opt-in (interactive "y" or --overwrite-env).
+  _do_overwrite=0
+  if [ "$OVERWRITE_ENV" -eq 1 ]; then
+    _do_overwrite=1
+    info "Rebuilding .env (--overwrite-env) — existing values are carried forward."
+  elif [ "$NON_INTERACTIVE" -eq 1 ]; then
+    info "Existing .env kept — pass --overwrite-env to rebuild."
   else
     read -rp "Overwrite? (y/N): " reply
     case "$reply" in
-      [yY]|[yY][eE][sS]) info "Proceeding — existing .env will be replaced." ;;
-      *)
-        ok "Keeping existing .env — starting the stack with it."
-        KEEP_PROFILE_ARGS=()
-        _keep_telegram=0
-        if ! existing_env_value COMPOSE_PROFILES >/dev/null; then
-          # Pre-v0.8 .env files never persisted the profile selection.
-          if existing_env_value TELEGRAM_BOT_TOKEN >/dev/null; then
-            KEEP_PROFILE_ARGS+=(--profile telegram)
-            _keep_telegram=1
-            info "No COMPOSE_PROFILES in .env — enabling the telegram profile (TELEGRAM_BOT_TOKEN is set)."
-          fi
-        else
-          # COMPOSE_PROFILES is honoured natively by compose; we only need to know
-          # whether telegram is among them so its image is materialised too.
-          case ",$(existing_env_value COMPOSE_PROFILES)," in
-            *,telegram,*) _keep_telegram=1 ;;
-          esac
-        fi
-        # Source versions.env so the postgres SHA-digest pin and image tags
-        # are available on the keep-path the same as on the normal install path.
-        if [ -f versions.env ]; then
-          # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
-          set -a && . ./versions.env && set +a
-        fi
-        # An .env written before 1.1 carries no TORCH_VARIANT, so the image tag
-        # would resolve to the CPU flavour even on a CUDA host whose GPU overlay is
-        # still recorded in COMPOSE_FILE. Backfill before anything resolves an image.
-        if _keep_variant="$(backfill_torch_variant_from_env)" && [ -n "$_keep_variant" ]; then
-          info "Recorded this host's torch image variant in .env: ${_keep_variant}"
-        fi
-        # This path bypasses the install flow below, so it needs the same
-        # materialise-then-guard sequence. Without it a `up -d` here would find the
-        # published images missing and SILENTLY BUILD them — `pull_policy: missing`
-        # plus a `build:` block — which is the multi-GB torch build (and the ENOSPC)
-        # that installing from prebuilt images exists to eliminate.
-        # Only tunnel/telegram are ever persisted to COMPOSE_PROFILES, so the
-        # observability profile (langfuse, the one unpublished image) cannot be
-        # active here and needs no local build.
-        # Materialise the file-backed Docker secrets before `up`: init-secrets.sh
-        # does not create the Langfuse init keypair, so a keep-path re-run whose
-        # secrets/ is missing it would otherwise dead-end at `docker compose up`
-        # with "secret ... not found". Both generators are idempotent (no churn
-        # for a healthy deployment).
-        [ -x scripts/init-secrets.sh ] && bash scripts/init-secrets.sh
-        [ -x scripts/gen-langfuse-keys.sh ] && bash scripts/gen-langfuse-keys.sh >/dev/null
-        KEEP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
-        [ "$_keep_telegram" -eq 1 ] && KEEP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
-        KEEP_UP_ARGS=(up -d)
-        if [ "$BUILD_LOCAL" -eq 1 ]; then
-          info "Building application images from source (--build-local): ${KEEP_SERVICES[*]}"
-          compose_or_die "docker compose build failed." \
-              "Inspect the build output above, then re-run ./setup.sh" \
-              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} build "${KEEP_SERVICES[@]}"
-        else
-          info "Pulling prebuilt images: ${KEEP_SERVICES[*]}"
-          compose_or_die "Image pull failed." \
-              "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
-              ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} pull "${KEEP_SERVICES[@]}"
-          KEEP_UP_ARGS+=(--no-build)
-        fi
-        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} ${KEEP_UP_ARGS[*]}"
-        compose_or_die "docker compose up failed." \
-            "Inspect logs: docker compose logs --tail=200" \
-            ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} "${KEEP_UP_ARGS[@]}"
-        ok "Stack started with the existing configuration. To regenerate .env, re-run ./setup.sh and answer 'y'."
-        exit 0
-        ;;
+      [yY]|[yY][eE][sS]) _do_overwrite=1; info "Rebuilding .env — existing values are carried forward." ;;
     esac
+  fi
+  if [ "$_do_overwrite" -eq 0 ]; then
+    ok "Keeping existing .env — starting the stack with it."
+    KEEP_PROFILE_ARGS=()
+    _keep_telegram=0
+    if ! existing_env_value COMPOSE_PROFILES >/dev/null; then
+      # Pre-v0.8 .env files never persisted the profile selection.
+      if existing_env_value TELEGRAM_BOT_TOKEN >/dev/null; then
+        KEEP_PROFILE_ARGS+=(--profile telegram)
+        _keep_telegram=1
+        info "No COMPOSE_PROFILES in .env — enabling the telegram profile (TELEGRAM_BOT_TOKEN is set)."
+      fi
+    else
+      # COMPOSE_PROFILES is honoured natively by compose; we only need to know
+      # whether telegram is among them so its image is materialised too.
+      case ",$(existing_env_value COMPOSE_PROFILES)," in
+        *,telegram,*) _keep_telegram=1 ;;
+      esac
+    fi
+    # Source versions.env so the postgres SHA-digest pin and image tags
+    # are available on the keep-path the same as on the normal install path.
+    if [ -f versions.env ]; then
+      # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
+      set -a && . ./versions.env && set +a
+    fi
+    # An .env written before 1.1 carries no TORCH_VARIANT, so the image tag
+    # would resolve to the CPU flavour even on a CUDA host whose GPU overlay is
+    # still recorded in COMPOSE_FILE. Backfill before anything resolves an image.
+    if _keep_variant="$(backfill_torch_variant_from_env)" && [ -n "$_keep_variant" ]; then
+      info "Recorded this host's torch image variant in .env: ${_keep_variant}"
+    fi
+    # This path bypasses the install flow below, so it needs the same
+    # materialise-then-guard sequence. Without it a `up -d` here would find the
+    # published images missing and SILENTLY BUILD them — `pull_policy: missing`
+    # plus a `build:` block — which is the multi-GB torch build (and the ENOSPC)
+    # that installing from prebuilt images exists to eliminate.
+    # Only tunnel/telegram are ever persisted to COMPOSE_PROFILES, so the
+    # observability profile (langfuse, the one unpublished image) cannot be
+    # active here and needs no local build.
+    # Materialise the file-backed Docker secrets before `up`: init-secrets.sh
+    # does not create the Langfuse init keypair, so a keep-path re-run whose
+    # secrets/ is missing it would otherwise dead-end at `docker compose up`
+    # with "secret ... not found". Both generators are idempotent (no churn
+    # for a healthy deployment).
+    [ -x scripts/init-secrets.sh ] && bash scripts/init-secrets.sh
+    [ -x scripts/gen-langfuse-keys.sh ] && bash scripts/gen-langfuse-keys.sh >/dev/null
+    KEEP_SERVICES=("${PUBLISHED_SERVICES_BASE[@]}")
+    [ "$_keep_telegram" -eq 1 ] && KEEP_SERVICES+=("$PUBLISHED_SERVICE_TELEGRAM")
+    KEEP_UP_ARGS=(up -d)
+    if [ "$BUILD_LOCAL" -eq 1 ]; then
+      info "Building application images from source (--build-local): ${KEEP_SERVICES[*]}"
+      compose_or_die "docker compose build failed." \
+          "Inspect the build output above, then re-run ./setup.sh" \
+          ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} build "${KEEP_SERVICES[@]}"
+    else
+      info "Pulling prebuilt images: ${KEEP_SERVICES[*]}"
+      compose_or_die "Image pull failed." \
+          "Check network access to ghcr.io, then re-run ./setup.sh — or build from source instead: ./setup.sh --build-local" \
+          ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} pull "${KEEP_SERVICES[@]}"
+      KEEP_UP_ARGS+=(--no-build)
+    fi
+    info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} ${KEEP_UP_ARGS[*]}"
+    compose_or_die "docker compose up failed." \
+        "Inspect logs: docker compose logs --tail=200" \
+        ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} "${KEEP_UP_ARGS[@]}"
+    ok "Stack started with the existing configuration. To rebuild .env, re-run and choose overwrite (or pass --overwrite-env)."
+    exit 0
   fi
 fi
 
@@ -941,7 +955,9 @@ fi
 # When .env already exists, reuse each secret it already contains; only
 # openssl-generate a fresh value when the key is absent or empty (mirrors the
 # never-clobber contract of scripts/init-secrets.sh::sync_secret).  This must
-# read .env BEFORE section 7 overwrites it via tempfile + mv.
+# read .env BEFORE section 7 rebuilds it via tempfile + mv — on a reconfigure
+# section 7 merges these values back in place (every other existing key is
+# carried forward untouched).
 # (existing_env_value is defined above section 3 — the idempotency gate's
 # keep-and-start path needs it first.)
 
@@ -1048,25 +1064,15 @@ case "$access_mode" in
     ACCESS_MODE_LABEL="localhost"
     DASHBOARD_BIND_HOST="127.0.0.1"
     JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1"
-    # Default compose binding is 127.0.0.1 — nothing to override.
-    # Remove any stale LAN override so re-runs don't silently open the port.
-    if [ -f docker-compose.override.yml ]; then
-      # Back up rather than delete to avoid surprising users.
-      mv docker-compose.override.yml "docker-compose.override.yml.bak.$(date +%s)"
-      warn "Existing docker-compose.override.yml backed up (localhost mode does not need it)."
-    fi
+    # Binding is governed by DASHBOARD_BIND_HOST in .env; the user-owned
+    # docker-compose.override.yml is never moved or overwritten by setup.
     ;;
   2)
     ACCESS_MODE_LABEL="lan"
     DASHBOARD_BIND_HOST="0.0.0.0"
     warn "LAN mode binds the dashboard to 0.0.0.0 — reachable by every host on your network. Only use this on a trusted LAN; for untrusted networks prefer the Tailscale/tunnel option."
-    # Remove any stale docker-compose.override.yml — port binding is now
-    # controlled by DASHBOARD_BIND_HOST in .env, so the override is not needed
-    # and a leftover one would cause Docker to create duplicate port bindings.
-    if [ -f docker-compose.override.yml ]; then
-      mv docker-compose.override.yml "docker-compose.override.yml.bak.$(date +%s)"
-      warn "Existing docker-compose.override.yml backed up (LAN mode uses DASHBOARD_BIND_HOST instead)."
-    fi
+    # Port binding is governed by DASHBOARD_BIND_HOST in .env; the user-owned
+    # docker-compose.override.yml is never moved or overwritten by setup.
     LAN_IP="$(detect_lan_ip)"
     if [ -n "$LAN_IP" ]; then
       CORS_ORIGINS_OVERRIDE="https://localhost:3001,https://${LAN_IP}:3001"
@@ -1180,40 +1186,6 @@ if [ "$NON_INTERACTIVE" -eq 0 ]; then
   esac
 fi
 
-# ---------------------------------------------------------------------------
-# Detect SAN change — cert volume must be wiped when the access mode changes
-# so the new SAN is included in the regenerated certificate.
-# ---------------------------------------------------------------------------
-# `|| true` so a pre-existing .env that lacks JARVIS_CERT_SAN (e.g. a partial
-# run being resumed) does not abort the script under `set -e`/`pipefail`
-# (matches the guarded ENVIRONMENT lookup in section 13).
-OLD_SAN=$(grep '^JARVIS_CERT_SAN=' .env 2>/dev/null | cut -d= -f2- || true)
-if [ -n "$OLD_SAN" ] && [ "$OLD_SAN" != "$JARVIS_CERT_SAN" ]; then
-  warn "Access mode changed — SSL certificate SAN has changed."
-  warn "  Old: ${OLD_SAN}"
-  warn "  New: ${JARVIS_CERT_SAN}"
-  if [ "$NON_INTERACTIVE" -eq 1 ]; then
-    info "Non-interactive mode — regenerating certificate automatically."
-    _do_regen=1
-  else
-    read -r -p "Regenerate certificate? This will restart the dashboard container. [y/N] " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      _do_regen=1
-    else
-      _do_regen=0
-    fi
-  fi
-  if [ "${_do_regen:-0}" -eq 1 ]; then
-    docker compose down dashboard 2>/dev/null || true
-    # Use 'down -v' scoped to dashboard: Compose resolves the volume name
-    # with the correct project prefix (not a hardcoded jarvis_ prefix).
-    docker compose down -v dashboard 2>/dev/null || true
-    ok "Certificate volume removed — a new cert will be generated on next start."
-  else
-    warn "Skipping cert regeneration. Certificate SAN may be stale — browser may show a security warning."
-  fi
-fi
-
 # Ensure secrets/ exists before the Telegram section writes into it.
 # scripts/init-secrets.sh also `mkdir -p secrets`, but it runs much later
 # (section 7a); on a fresh checkout the directory is absent here and the
@@ -1291,9 +1263,25 @@ fi
 info "Writing .env from .env.example..."
 
 TMP_ENV="$(mktemp "${TMPDIR:-/tmp}/jarvis-env.XXXXXX")"
-# Make sure the tempfile is cleaned up on any exit path.
-cleanup_tmp() { [ -f "$TMP_ENV" ] && rm -f "$TMP_ENV" || true; }
+# Clean up the tempfile on any exit path; and if we rebuilt .env but never
+# reached a running stack, point the operator at the one-command restore of the
+# configuration snapshot taken just below.
+cleanup_tmp() {
+  [ -f "$TMP_ENV" ] && rm -f "$TMP_ENV" || true
+  if [ "$_ENV_SNAPSHOT_TAKEN" -eq 1 ] && [ "$_STACK_STARTED" -eq 0 ] && [ -f .env.pre-setup.bak ]; then
+    warn "Setup did not reach a running stack. Restore your previous configuration with:"
+    warn "  cp .env.pre-setup.bak .env"
+  fi
+}
 trap cleanup_tmp EXIT
+
+# Snapshot the existing .env before rebuilding it (single rolling backup) so a
+# failure before the stack is up is recoverable with the one-liner above. Fresh
+# installs have nothing to snapshot.
+if [ -f .env ]; then
+  cp .env .env.pre-setup.bak && chmod 600 .env.pre-setup.bak
+  _ENV_SNAPSHOT_TAKEN=1
+fi
 
 # Look up substitution value for a KEY. Prints the value, or nothing if the
 # key is not in our substitution set. We use a case statement instead of a
@@ -1364,31 +1352,57 @@ sub_value() {
   return 0
 }
 
-# Header banner marking machine-edited file.
-{
-  printf '# ==========================================================\n'
-  printf '# .env — generated by setup.sh on %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  printf '# Secrets below (POSTGRES_PASSWORD, *_KEY, *_SECRET) were\n'
-  # shellcheck disable=SC2016  # literal backticks in human-readable comment, not a command substitution
-  printf '# produced by `openssl rand -hex`. Do not commit this file.\n'
-  printf '# ==========================================================\n\n'
-} > "$TMP_ENV"
+# Keys retired in this release are dropped from a carried-forward .env unless
+# this run still owns them (see merge_env_file). JARVIS_CERT_SAN is still written
+# per access mode above, so listing it here is inert until its writer is removed.
+RETIRED_ENV_KEYS="JARVIS_CERT_SAN"
 
-# Walk .env.example line by line. For every `KEY=...` line whose KEY has a
-# substitution, emit `KEY=<value>`; otherwise emit the line verbatim.
-# Using read with IFS= to preserve leading whitespace and exact formatting.
-while IFS= read -r line || [ -n "$line" ]; do
-  # Match lines that look like assignments: KEY=rest (no leading whitespace
-  # in .env.example, but be forgiving). BASH_REMATCH is available in bash 3.2+.
-  if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
-    key="${BASH_REMATCH[1]}"
-    if value="$(sub_value "$key")"; then
-      printf '%s=%s\n' "$key" "$value" >> "$TMP_ENV"
-      continue
+if [ -f .env ]; then
+  # Reconfigure (--overwrite-env / interactive "y"): rebuild WITHOUT discarding
+  # operator state. The keys this run "owns" are the sub_value arms that a
+  # genuinely-supplied flag/prompt filled with a non-empty value; every other
+  # existing key — secrets, operator-added keys, SMTP settings — is carried
+  # forward byte-for-byte by merge_env_file, so no secret rotates and no custom
+  # key is lost. Empty owned values are skipped so an unset prompt (e.g. no
+  # Telegram token this run) never clobbers a previously-saved value.
+  UPSERTS="$(mktemp "${TMPDIR:-/tmp}/jarvis-upserts.XXXXXX")"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+      key="${BASH_REMATCH[1]}"
+      if _val="$(sub_value "$key")" && [ -n "$_val" ]; then
+        printf '%s=%s\n' "$key" "$_val" >> "$UPSERTS"
+      fi
     fi
-  fi
-  printf '%s\n' "$line" >> "$TMP_ENV"
-done < .env.example
+  done < .env.example
+  merge_env_file .env .env.example "$UPSERTS" "$RETIRED_ENV_KEYS" > "$TMP_ENV"
+  rm -f "$UPSERTS"
+else
+  # Fresh install: write straight from the template.
+  # Header banner marking machine-edited file.
+  {
+    printf '# ==========================================================\n'
+    printf '# .env — generated by setup.sh on %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    printf '# Secrets below (POSTGRES_PASSWORD, *_KEY, *_SECRET) were\n'
+    # shellcheck disable=SC2016  # literal backticks in human-readable comment, not a command substitution
+    printf '# produced by `openssl rand -hex`. Do not commit this file.\n'
+    printf '# ==========================================================\n\n'
+  } > "$TMP_ENV"
+  # Walk .env.example line by line. For every `KEY=...` line whose KEY has a
+  # substitution, emit `KEY=<value>`; otherwise emit the line verbatim.
+  # Using read with IFS= to preserve leading whitespace and exact formatting.
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Match lines that look like assignments: KEY=rest (no leading whitespace
+    # in .env.example, but be forgiving). BASH_REMATCH is available in bash 3.2+.
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+      key="${BASH_REMATCH[1]}"
+      if value="$(sub_value "$key")"; then
+        printf '%s=%s\n' "$key" "$value" >> "$TMP_ENV"
+        continue
+      fi
+    fi
+    printf '%s\n' "$line" >> "$TMP_ENV"
+  done < .env.example
+fi
 
 # Atomically replace .env.
 mv "$TMP_ENV" .env
@@ -1657,6 +1671,9 @@ info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE
 compose_up_or_recover "docker compose up failed." \
     "Inspect logs: docker compose logs --tail=200" \
     ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "${UP_ARGS[@]}"
+# The stack is up: a failure past this point must not offer to roll back .env
+# (the new configuration is already live), so suppress the pre-start restore hint.
+_STACK_STARTED=1
 
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy

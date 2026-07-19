@@ -1,7 +1,9 @@
 # docker-compose.override.yml.example
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-machine override template. Copy to docker-compose.override.yml (gitignored)
-# and customise for your local setup.
+# and customise for your local setup. setup.sh never reads, moves, or overwrites
+# this file — it is yours; compose auto-loads it and .env/DASHBOARD_BIND_HOST
+# governs the dashboard port binding.
 #
 #   cp docker-compose.override.yml.example docker-compose.override.yml
 #

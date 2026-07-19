@@ -644,6 +644,119 @@ case "${rc}:${out}" in
   *) printf 'FAIL: --domain as last arg rc=%s out=%s\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
+# === merge_env_file — non-destructive .env rebuild ===========================
+# A reconfigure must carry EVERY existing value forward unchanged (no rotated
+# secret, no dropped operator key), update only keys this run genuinely supplied,
+# add keys new in the release, and drop retired keys. Values here deliberately
+# carry a space, #, =, +, /, a double-quote, a single-quote, leading+trailing
+# spaces, and a CRLF terminator — the exact bytes a naive cut/quote-capturing
+# read mangles.
+MERGE_DIR="$(mktemp -d "${FIXTURES}/merge.XXXXXX")"
+MOLD="${MERGE_DIR}/old.env"
+MTMPL="${MERGE_DIR}/template.env"
+MUPS="${MERGE_DIR}/upserts.env"
+MOUT="${MERGE_DIR}/merged.env"
+
+cat > "$MOLD" <<'EOF'
+# machine-generated header — must survive verbatim
+SMTP_HOST=mail server.example
+SMTP_USER=user#name
+SMTP_PORT=587
+SMTP_FROM=jarvis@verified.dev
+LITELLM_SALT_KEY=a=b=c
+BACKUP_ENCRYPT_KEY=Zm9v+bar/baz==
+JARVIS_MODEL_HMAC_KEY=he said "hi"
+INFRA_INGEST_KEY=it's fine
+QDRANT_API_KEY=plainvalue
+MY_CUSTOM_FLAG="a b=c"
+CORS_ORIGINS=https://old.example
+JARVIS_ACCESS_MODE=localhost
+JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1
+EOF
+printf 'LANGFUSE_SALT=  spaced  \n' >> "$MOLD"
+printf 'POSTGRES_PASSWORD=crlfvalue\r\n' >> "$MOLD"
+
+cat > "$MTMPL" <<'EOF'
+SMTP_HOST=
+CORS_ORIGINS=
+NEW_RELEASE_KEY=default_new
+EOF
+
+# Owned this run: CORS_ORIGINS changes (and its new value carries a `=`, so the
+# owned read must keep every byte after the first `=`); JARVIS_ACCESS_MODE flips.
+cat > "$MUPS" <<'EOF'
+CORS_ORIGINS=https://a:1?x=1,https://b
+JARVIS_ACCESS_MODE=lan
+EOF
+
+merge_env_file "$MOLD" "$MTMPL" "$MUPS" "JARVIS_CERT_SAN" > "$MOUT"
+
+mval() { grep "^$1=" "$MOUT" | head -n 1 | cut -d= -f2- | tr -d '\r'; }
+
+# Carried-forward values survive byte-for-byte.
+expect_eq "merge preserves a value with a space"        "$(mval SMTP_HOST)"             "mail server.example"
+expect_eq "merge preserves a value with #"              "$(mval SMTP_USER)"             "user#name"
+expect_eq "merge preserves a value with ="              "$(mval LITELLM_SALT_KEY)"      "a=b=c"
+expect_eq "merge preserves a value with + and /"        "$(mval BACKUP_ENCRYPT_KEY)"    "Zm9v+bar/baz=="
+expect_eq "merge preserves a value with a double-quote" "$(mval JARVIS_MODEL_HMAC_KEY)" 'he said "hi"'
+expect_eq "merge preserves a value with a single-quote" "$(mval INFRA_INGEST_KEY)"      "it's fine"
+expect_eq "merge preserves leading+trailing spaces"     "$(mval LANGFUSE_SALT)"         "  spaced  "
+expect_eq "merge preserves a CRLF-terminated value"     "$(mval POSTGRES_PASSWORD)"     "crlfvalue"
+expect_eq "merge preserves an untouched neighbour"      "$(mval QDRANT_API_KEY)"        "plainvalue"
+
+# An unknown operator-added key survives byte-identical (whole line).
+expect_eq "merge keeps an unknown operator key verbatim" \
+  "$(grep '^MY_CUSTOM_FLAG=' "$MOUT")" 'MY_CUSTOM_FLAG="a b=c"'
+
+# SMTP_PORT / SMTP_FROM survive (dropped by the old carry-forward-list rebuild).
+expect_eq "merge keeps SMTP_PORT" "$(mval SMTP_PORT)" "587"
+expect_eq "merge keeps SMTP_FROM" "$(mval SMTP_FROM)" "jarvis@verified.dev"
+
+# An owned key updates — its adversarial `=` value round-trips intact.
+expect_eq "merge applies an owned update with an = in the value" \
+  "$(mval CORS_ORIGINS)" "https://a:1?x=1,https://b"
+expect_eq "merge applies an owned update (access mode)" "$(mval JARVIS_ACCESS_MODE)" "lan"
+
+# A key new in the release (absent from the old .env) is appended.
+expect_eq "merge appends a template key new in this release" \
+  "$(mval NEW_RELEASE_KEY)" "default_new"
+
+# A retired key not owned this run is dropped.
+expect_eq "merge drops a retired, un-owned key" \
+  "$(grep -c '^JARVIS_CERT_SAN=' "$MOUT")" "0"
+
+# A retired key this run STILL owns wins (re-emitted) — mirrors setup.sh keeping
+# JARVIS_CERT_SAN until its writer is removed.
+printf 'JARVIS_CERT_SAN=DNS:new\n' > "${MERGE_DIR}/ups2.env"
+merge_env_file "$MOLD" "$MTMPL" "${MERGE_DIR}/ups2.env" "JARVIS_CERT_SAN" > "${MERGE_DIR}/out2.env"
+expect_eq "merge re-emits a retired key the run still owns" \
+  "$(grep '^JARVIS_CERT_SAN=' "${MERGE_DIR}/out2.env" | cut -d= -f2-)" "DNS:new"
+
+# No-op merge (nothing owned, nothing retired, template == old) is byte-identical
+# — the guarantee the keep path relies on.
+merge_env_file "$MOLD" "$MOLD" /dev/null "" > "${MERGE_DIR}/noop.env"
+if diff -q "$MOLD" "${MERGE_DIR}/noop.env" >/dev/null; then
+  pass "no-op merge leaves the file byte-identical"
+else
+  printf 'FAIL: no-op merge changed the file\n' >&2
+  diff "$MOLD" "${MERGE_DIR}/noop.env" >&2 || true
+  fail=1
+fi
+
+# Every entry in the canonical walk-list survives a merge — the keys whose loss
+# would brick a live deployment (LiteLLM/backup decryption, model HMAC, Langfuse,
+# magic-link email). Guards the list against silent shrinkage too.
+MOLD3="${MERGE_DIR}/managed.env"
+: > "$MOLD3"
+for _mk in "${JARVIS_MANAGED_SECRET_KEYS[@]}"; do
+  printf '%s=sentinel-%s\n' "$_mk" "$_mk" >> "$MOLD3"
+done
+merge_env_file "$MOLD3" /dev/null /dev/null "" > "${MERGE_DIR}/managed.out"
+for _mk in "${JARVIS_MANAGED_SECRET_KEYS[@]}"; do
+  _mv="$(grep "^${_mk}=" "${MERGE_DIR}/managed.out" | head -n 1 | cut -d= -f2- | tr -d '\r')"
+  expect_eq "merge preserves managed key ${_mk}" "$_mv" "sentinel-${_mk}"
+done
+
 # =============================================================================
 
 if [ "$fail" -ne 0 ]; then

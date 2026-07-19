@@ -587,3 +587,84 @@ print_setup_link() {
     printf '  Finish setup: %s\n' "$SETUP_LINK"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Non-destructive .env rebuild
+# ---------------------------------------------------------------------------
+# JARVIS_MANAGED_SECRET_KEYS — the keys a re-run must NEVER silently rotate or
+# drop. It is the union of scripts/init-secrets.sh's generator table (the
+# openssl-minted secrets) and the operator SMTP relay settings. The merge below
+# preserves EVERY existing key regardless; this list names the ones whose loss
+# would brick a live deployment (LiteLLM credential decryption, backup
+# decryption, model HMAC, Langfuse, magic-link email) and is the canonical
+# walk-list for the byte-preservation checks. Keep in sync with the generator
+# names in scripts/init-secrets.sh.
+# shellcheck disable=SC2034  # consumed by scripts/tests + as project documentation
+JARVIS_MANAGED_SECRET_KEYS=(
+  POSTGRES_PASSWORD JARVIS_API_KEY JARVIS_CONFIG_KEY LITELLM_MASTER_KEY QDRANT_API_KEY
+  LITELLM_SALT_KEY BACKUP_ENCRYPT_KEY JARVIS_MODEL_HMAC_KEY INFRA_INGEST_KEY JARVIS_SETUP_TOKEN
+  LANGFUSE_NEXTAUTH_SECRET LANGFUSE_SALT LANGFUSE_PG_PASSWORD LANGFUSE_INIT_USER_PASSWORD
+  SMTP_HOST SMTP_USER SMTP_PASS SMTP_PORT SMTP_FROM
+)
+
+# _env_key_in_list KEY "space separated list" -> 0 if KEY is a member.
+_env_key_in_list() {
+  case " $2 " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# merge_env_file OLD_ENV TEMPLATE UPSERTS RETIRED -> merged .env on stdout.
+#
+# Rebuild an .env WITHOUT discarding operator state:
+#   * every assignment in OLD_ENV is carried forward BYTE-FOR-BYTE (unknown and
+#     operator-added keys included) unless this run owns it or it is retired;
+#   * keys this run owns (UPSERTS holds one KEY=VALUE per line — only keys whose
+#     flag/prompt was genuinely supplied) are written with the supplied value, so
+#     re-running to CHANGE a setting takes effect while its neighbours survive
+#     untouched;
+#   * keys present in TEMPLATE but absent from OLD_ENV are appended (new-in-
+#     release keys arrive), owned ones with their supplied value;
+#   * keys named in RETIRED (space-separated) are dropped — unless this run still
+#     owns them, in which case the owner wins and the key is re-emitted.
+# Values may hold =, #, +, /, spaces and quotes; a value read from UPSERTS keeps
+# every byte after the first '=', a carried-forward line is emitted verbatim.
+merge_env_file() {
+  local old_env="$1" template="$2" upserts="$3" retired="$4"
+  local line key
+
+  # 1. Carry OLD_ENV forward: verbatim, except owned upserts and retired drops.
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+      key="${BASH_REMATCH[1]}"
+      if grep -qE "^${key}=" "$upserts" 2>/dev/null; then
+        printf '%s=%s\n' "$key" "$(grep -E "^${key}=" "$upserts" | head -n 1 | cut -d= -f2-)"
+      elif _env_key_in_list "$key" "$retired"; then
+        :  # retired and not owned this run — drop
+      else
+        printf '%s\n' "$line"  # preserve operator/unknown value verbatim
+      fi
+    else
+      printf '%s\n' "$line"  # comment / blank — verbatim
+    fi
+  done < "$old_env"
+
+  # 2. Append TEMPLATE keys absent from OLD_ENV (keys new in this release).
+  local header_done=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+    key="${BASH_REMATCH[1]}"
+    grep -qE "^${key}=" "$old_env" 2>/dev/null && continue
+    _env_key_in_list "$key" "$retired" && continue
+    if [ "$header_done" -eq 0 ]; then
+      printf '\n# Added by this release (absent from your previous .env):\n'
+      header_done=1
+    fi
+    if grep -qE "^${key}=" "$upserts" 2>/dev/null; then
+      printf '%s=%s\n' "$key" "$(grep -E "^${key}=" "$upserts" | head -n 1 | cut -d= -f2-)"
+    else
+      printf '%s\n' "$line"  # template default, verbatim
+    fi
+  done < "$template"
+}
