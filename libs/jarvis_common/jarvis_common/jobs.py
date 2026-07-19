@@ -4,6 +4,8 @@ Provides:
 - ``ProgressContext`` — Protocol for handler execution context.
 - ``ProcrastinateJobContextShim`` — concrete adapter (re-exported from ``_ctx_shim``).
 - ``JobError`` for structured errors with an optional action_link payload.
+- ``JobLookupUnavailable`` for an infrastructure-caused lookup failure (503),
+  distinct from a job that genuinely does not exist (404/None).
 - ``get``, ``list_jobs`` — DB helpers.
 - ``get_unified``, ``get_procrastinate_job_for_jarvis_id`` — procrastinate bridge.
 - ``stream_job_events``, ``job_sse_payload`` — SSE streaming.
@@ -282,6 +284,10 @@ async def get_procrastinate_job_for_jarvis_id(
     migration 054 has not been applied (older DBs), the JOIN is silently
     dropped and the result still contains the procrastinate columns with
     ``progress`` / ``progress_message`` as ``None``.
+
+    Raises :class:`JobLookupUnavailable` for any other lookup failure (e.g. a
+    DB outage) — an infrastructure failure must not be reported the same way
+    as "no such job".
     """
     sql_with_progress = """
         SELECT
@@ -326,9 +332,9 @@ async def get_procrastinate_job_for_jarvis_id(
     except asyncpg.UndefinedTableError:
         # procrastinate_jobs missing (migration 052 not applied).
         return None
-    except Exception:
+    except Exception as exc:
         logger.warning("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
-        return None
+        raise JobLookupUnavailable(f"job lookup failed for {jarvis_job_id}") from exc
     if row is None:
         return None
     return dict(row)
@@ -338,7 +344,9 @@ async def get_unified(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
     """Lookup a job exclusively from the procrastinate table.
 
     Returns a row dict in the legacy Job interface shape, or None if not found.
-    The ``source`` field is always ``"procrastinate"``.
+    The ``source`` field is always ``"procrastinate"``. Propagates
+    :class:`JobLookupUnavailable` from :func:`get_procrastinate_job_for_jarvis_id`
+    on an infrastructure lookup failure.
     """
     prow = await get_procrastinate_job_for_jarvis_id(pool, job_id)
     if prow is None:
@@ -439,6 +447,12 @@ async def stream_job_events(
     the handler actually stops and its final row, result included, is emitted.
     A worker that dies mid-abort cannot hang the stream forever: the
     ``MAX_STREAM_SECONDS`` ceiling still yields ``streaming_timeout`` and exits.
+
+    A lookup failure caused by an infrastructure outage
+    (:class:`JobLookupUnavailable`) is distinct from the job genuinely not
+    existing: it yields a single ``{"error": "status_unavailable"}`` frame and
+    then closes the stream, rather than the silent break used when the
+    procrastinate row is simply absent.
     """
     # The change-detection key carries ``cancel_requested`` alongside progress and
     # status because a cancel request no longer moves ``status`` (doing → aborting
@@ -470,7 +484,11 @@ async def stream_job_events(
             yield sse_keepalive()
             last_keepalive = now
 
-        procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+        try:
+            procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+        except JobLookupUnavailable:
+            yield sse_event({"error": "status_unavailable"})
+            break
 
         # Emit procrastinate frame if changed.
         procrastinate_row: dict[str, Any] | None = None
@@ -515,6 +533,17 @@ async def stream_job_events(
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
+
+
+class JobLookupUnavailable(RuntimeError):  # noqa: N818 -- distinct concept from JobError below
+    """A job lookup failed for an infrastructure reason, not because the job is missing.
+
+    Raised by :func:`get_procrastinate_job_for_jarvis_id` when the DB call fails
+    for anything other than the two recognised schema-degradation cases
+    (``job_progress``/``procrastinate_jobs`` not yet migrated, which legitimately
+    degrade to ``None``). Callers must report this as 503, never fold it into
+    the same "not found" (404) response used for a job that truly does not exist.
+    """
 
 
 class JobError(Exception):
