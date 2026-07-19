@@ -25,7 +25,7 @@ on your PATH, or run `./setup.sh` again from your checkout.
 | `doctor` | Read-only health, disk, registration, and update-availability check, plus host preflight probes. |
 | `repair` | Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service. |
 | `register` | Record the current checkout as the managed install and refresh the launcher. |
-| `uninstall` | Remove a managed install. Not yet available in this release; the command reports so and exits non-zero. |
+| `uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
 | `version` | Print the command name and the installed `JARVIS_VERSION`. |
 | `help` | Print usage. |
 
@@ -119,3 +119,55 @@ git pull
 
 See [Deployment → Update Workflow](../DEPLOYMENT.md#update-workflow) for the
 details of the manual path.
+
+## Uninstalling
+
+`jarvis-research uninstall` removes an install in four escalating tiers. Each tier
+enumerates the exact containers, images, volumes, and files it will remove and
+confirms before acting — nothing is removed by a bulk `docker … prune`. Preview any
+teardown first, which mutates nothing:
+
+```bash
+jarvis-research uninstall --dry-run --all
+```
+
+| Tier | What it removes | Reversible? |
+| --- | --- | --- |
+| `1` stop | Containers and the `jarvis` network (`docker compose down`). Data, images, and files are kept. | Yes — `jarvis-research start`. |
+| `2` app | Tier 1 + the JARVIS application images (`ghcr.io/limitcycle-oss/jarvis-*`) at your pinned version. | Yes — a reinstall pulls them again. |
+| `3` data | Tier 2 + the project's named data volumes (`docker compose down --volumes`): the database, the vector store, and the caches. | **No.** Back up first. |
+| `4` purge | Tier 3 + the pinned third-party images (each confirmed individually), `.env`, `secrets/`, `shared/`, this install's registry line, the `jarvis-research` launcher (only if no other install remains), and finally the clone directory itself. | **No.** |
+
+### Flags
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Enumerate everything the chosen tier would remove and exit without changing anything. |
+| `--tier N` | Run tier `N` (1–4) directly instead of the interactive menu. |
+| `--keep-data` | Cap the run at tier 2, so the data volumes and on-disk files are always preserved. |
+| `--all` | Select tier 4 (full purge). |
+| `--yes` | Skip the ordinary per-tier `[y/N]` prompt. Requires an explicit `--tier N` (or `--all`). |
+
+### The destructive gates require typed confirmation
+
+`--yes` and `--all` skip only the ordinary confirmation. They can never satisfy the
+destructive gates, each of which reads a typed confirmation from stdin:
+
+- **Tier 3** requires typing the compose project name before any volume is deleted.
+- **Tier 4** first offers to copy the backup encryption key
+  (`secrets/backup_encrypt_key.txt`) to a path **outside** the clone. That key is
+  deliberately excluded from backup archives, so deleting `secrets/` without it
+  leaves every encrypted off-host backup permanently unrecoverable. If you decline
+  the export you must type an explicit acknowledgement phrase to continue.
+- **Tier 4** confirms each third-party image (postgres, ollama, qdrant, caddy, …)
+  individually, since those images may be shared with other projects on the host.
+
+A run with no controlling terminal (closed stdin) therefore cannot complete tier 3
+or tier 4 — the typed gates refuse and the install is left untouched.
+
+### When Docker is not running
+
+Every tier needs the Docker daemon. If it is unreachable, `uninstall` refuses with
+exit code 3 and prints an inventory of the orphaned containers, volumes, network,
+and on-disk files so you can start Docker (then re-run) or clean up by hand. There
+is no file-only teardown path.

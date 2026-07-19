@@ -492,6 +492,18 @@ else
   check_fail "update_resume_skips_merge_and_does_not_reexec: log=$(cat "$STUB_LOG")"
 fi
 
+# an explicit --resume tag that disagrees with the pending target is refused
+# before any pull/merge (a mistyped tag must not re-pin .env to the wrong version).
+new_env; register_repo
+printf '{"from_sha":"sha-head","from_version":"1.1.2","target":"v1.1.3","phase":"pull","started_at":"1"}' > "$PENDING_FILE"
+out="$(run_cli update --resume v9.9.9 --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && has "$out" 'does not match' \
+   && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+  pass "resume_tag_must_match_pending: mismatched --resume tag refused, no pull/merge"
+else
+  check_fail "resume_tag_must_match_pending: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
 # =============================================================================
 # 4. Mechanical + misc.
 # =============================================================================
@@ -499,6 +511,21 @@ if ! grep -qE 'checkout[[:space:]]+-B|reset[[:space:]]+--hard' "$CLI"; then
   pass "update_script_never_contains_checkout_dash_B: no 'checkout -B' / 'reset --hard' in the script"
 else
   check_fail "update_script_never_contains_checkout_dash_B: found a banned branch-rewrite verb"
+fi
+
+# uninstall dispatches to scripts/uninstall.sh, vouching for the repo with --repo
+# and passing the operator's flags through unchanged.
+new_env; register_repo
+cat > "$REPO/scripts/uninstall.sh" <<'PROBE'
+#!/usr/bin/env bash
+printf 'UNINSTALL-ARGS: %s\n' "$*"
+PROBE
+chmod +x "$REPO/scripts/uninstall.sh"
+out="$(run_cli uninstall --dry-run --tier 1)"; rc=$?
+if has "$out" "UNINSTALL-ARGS: --repo $REPO --dry-run --tier 1"; then
+  pass "uninstall_dispatches_to_script: CLI execs scripts/uninstall.sh --repo \$REPO with the flags"
+else
+  check_fail "uninstall_dispatches_to_script: <<<$out>>>"
 fi
 
 # status happy path against stubbed `docker compose ps`.

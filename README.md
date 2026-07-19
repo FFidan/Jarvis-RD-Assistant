@@ -132,6 +132,23 @@ git pull
 
 `update.sh` diffs your running containers against the versions pinned in `versions.env`, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
 
+## Uninstalling JARVIS
+
+`jarvis-research uninstall` tears the install down in four escalating tiers, each of which lists the exact resources it will touch and confirms before acting. Always preview first:
+
+```bash
+jarvis-research uninstall --dry-run --all   # enumerate a full teardown, change nothing
+```
+
+| Tier | Removes | Reversible? |
+| --- | --- | --- |
+| `1` stop | Containers and the network | Yes — `jarvis-research start` |
+| `2` app | Tier 1 + the JARVIS application images | Yes — reinstall pulls them again |
+| `3` data | Tier 2 + the named data volumes (database, vector store, caches) | **No** — back up first |
+| `4` purge | Tier 3 + third-party images (each confirmed), `.env`, `secrets/`, `shared/`, and the clone directory | **No** |
+
+Tier 3 requires typing the compose project name, and tier 4 requires exporting (or explicitly forgoing) the backup encryption key, because that key is excluded from backup archives — deleting `secrets/` without it makes every encrypted off-host backup unrecoverable. These destructive gates require typed confirmation from stdin; `--yes`/`--all` skip only the ordinary prompts, never the typed gates, so a run with closed stdin cannot complete tier 3 or 4. Full details → **[docs/manual/cli.md](docs/manual/cli.md#uninstalling)**.
+
 ## Security
 
 JARVIS applies user scoping at the application and query layers. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.

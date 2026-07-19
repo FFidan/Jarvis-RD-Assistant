@@ -13,7 +13,7 @@
 #   doctor                                          read-only health + preflight
 #   repair                                          bounded, non-destructive recovery
 #   register                                        record this repo as an install
-#   uninstall                                       (ships in a later release)
+#   uninstall [--dry-run] [--tier N] [--all] ...     tiered, contained teardown
 #   version | help
 #
 # Exit codes: 0 ok · 1 refused/failed · 2 usage · 3 environment (no docker).
@@ -357,8 +357,17 @@ cmd_update() {
     esac
   done
 
-  # Explicit resume (the phase-8 re-exec): run post-merge steps only.
+  # Explicit resume (the phase-8 re-exec): run post-merge steps only. A resume ref
+  # that disagrees with the pending transaction's recorded target is refused — a
+  # mistyped tag would otherwise re-pin .env to the wrong version.
   if [ -n "$resume_ref" ]; then
+    if [ -f "$PENDING_FILE_PATH" ]; then
+      p_target="$(_txn_field target)"
+      if [ -n "$p_target" ] && [ "$p_target" != "$resume_ref" ]; then
+        die "--resume ${resume_ref} does not match the pending update target (${p_target})." \
+            "Re-run: jarvis-research update --resume ${p_target}   (or remove ${PENDING_FILE_PATH} to abandon it)"
+      fi
+    fi
     _resume_transaction "$resume_ref"
     return
   fi
@@ -603,11 +612,9 @@ cmd_register() {
 }
 
 cmd_uninstall() {
-  if [ -x "${REPO}/scripts/uninstall.sh" ]; then
-    exec bash "${REPO}/scripts/uninstall.sh" "$@"
-  fi
-  err "Uninstall is available in the next release."
-  exit 1
+  [ -x "${REPO}/scripts/uninstall.sh" ] \
+    || die "The uninstall helper is missing from this checkout." "Restore it with: git checkout scripts/uninstall.sh"
+  exec bash "${REPO}/scripts/uninstall.sh" --repo "$REPO" "$@"
 }
 
 cmd_version() {
@@ -636,7 +643,10 @@ Commands:
   doctor             Read-only health, disk, registration, and update check.
   repair             Bounded, non-destructive recovery (recreate + restart unhealthy).
   register           Record this checkout as a managed install.
-  uninstall          Remove the install (available in the next release).
+  uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]
+                     Tiered, contained teardown: stop (1), remove app images (2),
+                     delete data volumes (3, typed confirmation), or full purge (4,
+                     third-party images + files + the clone). Lead with --dry-run.
   version | help     Print version / this help.
 
 Exit codes: 0 ok · 1 refused/failed · 2 usage · 3 environment (Docker missing).
