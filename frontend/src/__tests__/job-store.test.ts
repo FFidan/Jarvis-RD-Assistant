@@ -665,6 +665,39 @@ describe('JobStore', () => {
     expect(msg).not.toContain('failed');
   });
 
+  it('papers.process_library: cancelled result warns (never a green success)', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libcancel', {
+      status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+      blocked: [], errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    expect(warnCall[0] as string).toMatch(/cancelled/i);
+  });
+
+  it('papers.process_library: cancelled result still names failures accrued before the stop', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libcancelerr', {
+      status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+      blocked: [{ paper_id: 9, reason: 'no_pdf_source' }],
+      errors: [
+        { paper_id: 7, stage: 'process', error: 'boom' },
+        { paper_id: 8, stage: 'process', error: 'boom' },
+      ],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toMatch(/cancelled/i);
+    expect(msg).toContain('2 failed');
+    expect(msg).toContain('1 skipped');
+    expect(msg).toContain('100');
+  });
+
   it('subscribe: failed terminal event fires toast.error with message', async () => {
     const { toast } = await import('sonner');
 

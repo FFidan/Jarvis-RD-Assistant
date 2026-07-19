@@ -700,6 +700,96 @@ async def test_process_library_all_blocked_is_partial_not_success(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_process_library_cancelled_mid_run_is_not_unqualified_success(tmp_path, monkeypatch):
+    """A run stopped by cancellation must report ``cancelled`` — never ``ok`` —
+    so the counts it did not reach cannot read as a clean full completion."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    for name in ("40", "41", "42"):
+        (tmp_path / f"{name}.pdf").write_bytes(b"%PDF-1.4 stub")
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    _install_library_service_stubs(
+        monkeypatch,
+        run_process_pdf=AsyncMock(return_value={"status": "processed", "chunk_count": 1}),
+    )
+
+    user_id = 1
+    rows = [_lib_row(pid, pdf_local_path=str(tmp_path / f"{pid}.pdf")) for pid in (40, 41, 42)]
+    pool = _make_library_pool(rows, update_rows=[], user_id=user_id)
+    ctx = _make_ctx()
+    ctx.is_cancelled = AsyncMock(side_effect=[False, False, True])
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": False},
+        ctx=ctx,
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["total"] == 3
+    assert result["processed"] == 2
+    assert result["errors"] == []
+    assert result["blocked"] == []
+
+
+@pytest.mark.asyncio
+async def test_process_library_summary_only_paper_without_pdf_source_is_summarized(
+    tmp_path, monkeypatch
+):
+    """A chunked paper selected only for its missing summary still gets that
+    summary when it has no PDF source; a paper that genuinely needs the PDF to be
+    processed stays blocked and is not summarized."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    run_process_pdf = AsyncMock()
+    summ = _install_library_service_stubs(monkeypatch, run_process_pdf=run_process_pdf)
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    user_id = 3
+    rows = [
+        _lib_row(
+            30,
+            source_type="arxiv",
+            pdf_url=None,
+            pdf_downloaded=False,
+            needs_process=False,
+            needs_summary=True,
+        ),
+        _lib_row(
+            31,
+            source_type="arxiv",
+            pdf_url=None,
+            pdf_downloaded=False,
+            needs_process=True,
+            needs_summary=True,
+        ),
+    ]
+    pool = _make_library_pool(rows, update_rows=[], user_id=user_id)
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": True},
+        ctx=_make_ctx(),
+    )
+
+    assert result["summarized"] == 1
+    assert result["processed"] == 0
+    # Only paper 31 needed the PDF it cannot fetch; paper 30 lost no stage it needed.
+    assert result["status"] == "partial"
+    assert result["blocked"] == [{"paper_id": 31, "reason": "no_pdf_source"}]
+    summ.generate_paper_summary.assert_awaited_once()
+    assert summ.generate_paper_summary.await_args.args[0] == 30
+    svc.pdf_processor.download_pdf.assert_not_awaited()
+    run_process_pdf.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_library_summarize_stage_forwards_user_id(tmp_path, monkeypatch):
     """With ``summarize=True`` a paper needing a summary runs the summarize stage,
     forwarding the caller's user_id (per-user summaries)."""

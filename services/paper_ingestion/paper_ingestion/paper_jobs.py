@@ -514,28 +514,49 @@ async def _library_process_stage(
     await run.process_pdf(paper_id, pdf_path, ctx=sub_ctx)
 
 
-async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx) -> _PaperOutcome:
-    """Run download → process → summarize for one paper, isolating its failures."""
-    paper_id = row["id"]
+def _library_pdf_plan(row: Any) -> tuple[bool, dict[str, Any] | None]:
+    """Decide whether a paper needs its PDF downloaded and whether that is possible.
+
+    Returns ``(should_download, blocked)``. An unreachable PDF blocks only a
+    paper that still needs processing; one selected solely for its missing
+    summary needs nothing from the PDF, so nothing about it is blocked.
+    """
     is_local = row["source_type"] == "local" or row["pdf_local_path"] is not None
+    needs_download = not is_local and not row["pdf_downloaded"]
+    if needs_download and not row["pdf_url"]:
+        if row["needs_process"]:
+            return False, {"paper_id": row["id"], "reason": "no_pdf_source"}
+        return False, None
+    return needs_download, None
+
+
+async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx) -> _PaperOutcome:
+    """Run download → process → summarize for one paper, isolating its failures.
+
+    A paper with no PDF source is blocked only for the stages that need the PDF:
+    one already chunked still receives the summary it was selected for, and is
+    reported as neither blocked nor failed because nothing it needed was skipped.
+    """
+    paper_id = row["id"]
+    should_download, blocked = _library_pdf_plan(row)
     pdf_local_path = row["pdf_local_path"]
+    chunked = not row["needs_process"]
     downloaded = 0
     processed = 0
     summarized = 0
     stage = "download"
     try:
-        if not is_local and not row["pdf_downloaded"]:
-            if not row["pdf_url"]:
-                return _PaperOutcome(blocked={"paper_id": paper_id, "reason": "no_pdf_source"})
+        if should_download:
             pdf_local_path = await _library_download_stage(row, run)
             downloaded = 1
 
-        if row["needs_process"]:
+        if row["needs_process"] and blocked is None:
             stage = "process"
             await _library_process_stage(paper_id, pdf_local_path, run, sub_ctx)
             processed = 1
+            chunked = True
 
-        if run.summarize and row["needs_summary"]:
+        if run.summarize and row["needs_summary"] and chunked:
             stage = "summarize"
             await run.summarize_paper(paper_id)
             summarized = 1
@@ -547,7 +568,9 @@ async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx
             summarized=summarized,
             error={"paper_id": paper_id, "stage": stage, "error": str(exc)},
         )
-    return _PaperOutcome(downloaded=downloaded, processed=processed, summarized=summarized)
+    return _PaperOutcome(
+        downloaded=downloaded, processed=processed, summarized=summarized, blocked=blocked
+    )
 
 
 async def _papers_process_library_job(
@@ -562,8 +585,11 @@ async def _papers_process_library_job(
     ``chunked_at IS NULL``) → summarize (opt-in, when no summary exists). Each
     paper's stages are isolated: a failure records an ``errors`` entry and the
     loop continues; a paper with no PDF source records a ``blocked`` entry (a
-    skip, not an error). The result ``status`` is ``"partial"`` whenever any
-    paper failed OR was blocked, so an all-blocked run never reads as success.
+    skip, not an error) for the PDF-dependent stages only. The result ``status``
+    is ``"partial"`` whenever any paper failed OR was blocked, so an all-blocked
+    run never reads as success, and ``"cancelled"`` when the run stopped early on
+    cancellation, so a run that never reached most of its papers cannot read as a
+    clean completion.
     Reruns are idempotent by construction — the selection picks only missing work.
 
     Payload keys:
@@ -606,9 +632,11 @@ async def _papers_process_library_job(
     blocked: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
+    cancelled = False
     await ctx.update_progress(0.0, f"Starting: {total} papers")
     for i, row in enumerate(rows):
         if await ctx.is_cancelled():
+            cancelled = True
             break
         paper_id = row["id"]
         await ctx.update_progress(i / total, f"Paper {paper_id} ({i + 1}/{total})")
@@ -623,8 +651,14 @@ async def _papers_process_library_job(
         if outcome.error is not None:
             errors.append(outcome.error)
 
-    status = "partial" if (errors or blocked) else "ok"
-    await ctx.update_progress(1.0, f"Done: {processed} processed, {summarized} summarized")
+    if cancelled:
+        status = "cancelled"
+    elif errors or blocked:
+        status = "partial"
+    else:
+        status = "ok"
+    headline = "Cancelled" if cancelled else "Done"
+    await ctx.update_progress(1.0, f"{headline}: {processed} processed, {summarized} summarized")
     return {
         "status": status,
         "total": total,

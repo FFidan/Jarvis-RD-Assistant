@@ -33,17 +33,28 @@ function statusLabel(status: Job['status']): string {
 }
 
 /**
- * A job that reached `succeeded` but reports a `partial` result (e.g.
- * `papers.process_library`) completed some work and left some undone. Returns a
- * short "N failed, M skipped of T" line, or null for a plain success.
+ * A job that reached `succeeded` but reports a `partial` or `cancelled` result
+ * (e.g. `papers.process_library`) left work undone. Returns a short
+ * "N failed, M skipped of T" line, or null for a plain success — a cancelled run
+ * reports it too, so failures accrued before the stop stay visible.
  */
-function partialSummary(job: Job): string | null {
+function outcomeSummary(job: Job): string | null {
   const r = (job.result ?? {}) as { status?: string; total?: number; errors?: unknown[]; blocked?: unknown[] };
-  if (job.status !== 'succeeded' || r.status !== 'partial') return null;
+  if (job.status !== 'succeeded') return null;
+  if (r.status !== 'partial' && r.status !== 'cancelled') return null;
   const failed = Array.isArray(r.errors) ? r.errors.length : 0;
   const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
   const total = typeof r.total === 'number' ? r.total : failed + skipped;
   return `${failed} failed, ${skipped} skipped of ${total}`;
+}
+
+/**
+ * A run stopped by cancellation still reaches `succeeded` — it returned a
+ * `cancelled` result rather than raising — so the pill must read Cancelled.
+ */
+function effectiveStatus(job: Job): Job['status'] {
+  const resultStatus = (job.result as { status?: string } | null)?.status;
+  return job.status === 'succeeded' && resultStatus === 'cancelled' ? 'cancelled' : job.status;
 }
 
 interface JobRowProps {
@@ -55,14 +66,15 @@ interface JobRowProps {
 function JobRow({ job, onCancel, onRemove }: JobRowProps) {
   const isActive = job.status === 'queued' || job.status === 'running';
   const isTerminal = job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled';
-  const partial = partialSummary(job);
+  const summary = outcomeSummary(job);
+  const shownStatus = effectiveStatus(job);
 
   return (
     <div className="flex flex-col gap-1 py-2 border-b last:border-b-0">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium truncate">{kindLabel(job.kind)}</span>
         <div className="flex items-center gap-1 shrink-0">
-          <span className={`text-xs ${statusColor(job.status)}`}>{statusLabel(job.status)}</span>
+          <span className={`text-xs ${statusColor(shownStatus)}`}>{statusLabel(shownStatus)}</span>
           {isActive && (
             <Button
               variant="ghost"
@@ -100,8 +112,8 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
         <p className="text-xs text-destructive truncate">{job.error.message}</p>
       )}
 
-      {partial && (
-        <p className="text-xs text-[var(--status-warn)] truncate">{partial}</p>
+      {summary && (
+        <p className="text-xs text-[var(--status-warn)] truncate">{summary}</p>
       )}
     </div>
   );
