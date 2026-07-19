@@ -419,6 +419,7 @@ if [ "${#FAILED[@]}" -eq 0 ]; then
   else
     ok "Updated ${#TO_UPDATE[@]} service(s) successfully."
   fi
+  install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
   exit 0
 fi
 

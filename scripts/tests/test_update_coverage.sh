@@ -180,7 +180,9 @@ chmod +x "$STUB/docker"
 
 run_update() {
   : > "$FX/docker.log"
-  DOCKER_LOG="$FX/docker.log" PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" </dev/null 2>&1
+  mkdir -p "$FX/home"
+  DOCKER_LOG="$FX/docker.log" HOME="$FX/home" XDG_CONFIG_HOME="$FX/home/.config" \
+    PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" </dev/null 2>&1
 }
 
 # --- update_yes_runs_promptless ----------------------------------------------
@@ -217,6 +219,25 @@ if [ "$rc" -eq 0 ] \
   pass "no_healthcheck_reported_not_silent: reported as running-not-verified, never healthy"
 else
   check_fail "no_healthcheck_reported_not_silent: rc=$rc out=$out"
+fi
+
+# --- update_success_installs_shim --------------------------------------------
+rm -rf "$FX/home"
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && [ -x "$FX/home/.local/bin/jarvis-research" ] \
+   && grep -qxF "$FX" "$FX/home/.config/jarvis-research/installs"; then
+  pass "update_success_installs_shim: launcher installed and path registered on success"
+else
+  check_fail "update_success_installs_shim: rc=$rc shim=$(ls -l "$FX/home/.local/bin" 2>/dev/null) installs=$(cat "$FX/home/.config/jarvis-research/installs" 2>/dev/null)"
+fi
+# Failure runs must not install it.
+rm -rf "$FX/home"
+out="$(STUB_FAIL_PULL=1 run_update --yes)" || true
+if [ ! -e "$FX/home/.local/bin/jarvis-research" ]; then
+  pass "update_failure_skips_shim_install: failed update leaves no launcher behind"
+else
+  check_fail "update_failure_skips_shim_install: launcher appeared on a failed update"
 fi
 
 # --- die_paths_print_recovery (pull failure) ---------------------------------
