@@ -39,6 +39,7 @@ _DOWN_VOL_ALLOWED_FILES = {
     "scripts/uninstall.sh",
     "scripts/ci-smoke.sh",
     "scripts/first-run-smoke.sh",
+    "scripts/lifecycle-smoke.sh",
 }
 _ISOLATION_EXEMPT_FILES = {"scripts/uninstall.sh"}
 
