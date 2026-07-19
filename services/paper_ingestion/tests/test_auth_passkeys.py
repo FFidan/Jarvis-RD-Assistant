@@ -139,10 +139,12 @@ def test_match_origin_public_default_port_normalized(monkeypatch, app_base_url):
         "https://h:99999",  # malformed port (fail-closed, no crash)
         "http://jarvis.example.com",  # non-secure scheme: a public passkey origin must be https
         "ftp://jarvis.example.com",
+        "https://192.168.1.5",  # IPv4 literal is never a valid WebAuthn rp_id
+        "https://[::1]",  # IPv6 literal (brackets stripped by urlparse) is never a valid rp_id
     ],
 )
 def test_app_base_origin_unusable_values(monkeypatch, app_base_url):
-    """A malformed or non-https APP_BASE_URL yields no public origin (fail-closed)."""
+    """A malformed, non-https, or IP-literal APP_BASE_URL yields no public origin (fail-closed)."""
     monkeypatch.setattr(
         pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
     )
