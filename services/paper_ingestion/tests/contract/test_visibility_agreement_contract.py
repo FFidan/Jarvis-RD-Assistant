@@ -155,3 +155,91 @@ async def test_other_owned_paper_not_in_library_invisible(contract_conn):
     await _assert_layers_agree(
         contract_conn, paper, caller, expected=False, cell="other-owned-not-in-library"
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-summary holder selection (auto_fetch._UNSUMMARIZED_HOLDERS_SQL)
+#
+# Discovery defers one paper.summarize per library holder that lacks a summary
+# OF THEIR OWN. Summaries are per-user by schema and every reader binds a strict
+# integer owner, so the selection's correlated NOT EXISTS must key on BOTH
+# paper_id and user_id. A paper-global check (the shipped bug this replaces)
+# silently starves every holder after the first. Mocks cannot tell a correct
+# correlation from a subtly wrong one, so these run the shipped SQL constant
+# against real Postgres.
+#
+# Verified: services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py
+#           (_UNSUMMARIZED_HOLDERS_SQL — imported here, never re-typed)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_summary(conn, paper_id: int, user_id: int) -> None:
+    """Give *user_id* their own summary row for *paper_id*."""
+    await conn.execute(
+        """INSERT INTO paper_summaries (paper_id, user_id, summary_brief, summary_detailed)
+           VALUES ($1, $2, 'brief', 'detailed')""",
+        paper_id,
+        user_id,
+    )
+
+
+async def _unsummarized_holders(conn, paper_id: int) -> set[int]:
+    """Run the shipped holder-selection query; return the selected user ids."""
+    from paper_ingestion.pipelines.auto_fetch import _UNSUMMARIZED_HOLDERS_SQL
+
+    rows = await conn.fetch(_UNSUMMARIZED_HOLDERS_SQL, paper_id)
+    return {int(row["user_id"]) for row in rows}
+
+
+async def test_holder_without_any_summary_is_selected(contract_conn):
+    """A library holder with no summary at all is selected for summarization."""
+    holder = await _seed_user(contract_conn, "sum-plain-holder@contract.example.com")
+    paper = await _seed_paper(contract_conn, "sum-plain", None)
+    await _add_to_library(contract_conn, holder, paper)
+
+    assert await _unsummarized_holders(contract_conn, paper) == {holder}
+
+
+async def test_holder_with_own_summary_is_not_selected(contract_conn):
+    """A holder who already has THEIR OWN summary is skipped — no redundant LLM spend."""
+    holder = await _seed_user(contract_conn, "sum-own-holder@contract.example.com")
+    paper = await _seed_paper(contract_conn, "sum-own", None)
+    await _add_to_library(contract_conn, holder, paper)
+    await _seed_summary(contract_conn, paper, holder)
+
+    assert await _unsummarized_holders(contract_conn, paper) == set()
+
+
+async def test_holder_still_selected_when_a_different_user_has_a_summary(contract_conn):
+    """The regression case: user A's summary must NOT suppress holder B.
+
+    A paper-global EXISTS(paper_summaries WHERE paper_id = $1) — the shipped bug —
+    returns zero holders here, leaving B with a summary they can never read.
+    """
+    summarized = await _seed_user(contract_conn, "sum-cross-a@contract.example.com")
+    pending = await _seed_user(contract_conn, "sum-cross-b@contract.example.com")
+    paper = await _seed_paper(contract_conn, "sum-cross", None)
+    await _add_to_library(contract_conn, summarized, paper)
+    await _add_to_library(contract_conn, pending, paper)
+    await _seed_summary(contract_conn, paper, summarized)
+
+    selected = await _unsummarized_holders(contract_conn, paper)
+    assert pending in selected, (
+        "holder B has no summary of their own and MUST still be selected; "
+        "a paper-global summary check would starve them"
+    )
+    assert summarized not in selected
+
+
+async def test_non_holder_is_never_selected_even_with_a_summary_row(contract_conn):
+    """Selection is driven by user_library membership, never by paper_summaries.
+
+    A user with a summary row but no library entry must not be re-summarized.
+    """
+    holder = await _seed_user(contract_conn, "sum-nonholder-holder@contract.example.com")
+    stranger = await _seed_user(contract_conn, "sum-nonholder-stranger@contract.example.com")
+    paper = await _seed_paper(contract_conn, "sum-nonholder", None)
+    await _add_to_library(contract_conn, holder, paper)
+    await _seed_summary(contract_conn, paper, stranger)
+
+    assert await _unsummarized_holders(contract_conn, paper) == {holder}

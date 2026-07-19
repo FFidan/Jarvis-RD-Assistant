@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jarvis_common.task_registry as task_registry
 import pytest
 from paper_ingestion.pipelines import auto_fetch as af
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def test_resolve_topic_pairs_defaults_and_coerces_ids():
@@ -272,11 +273,13 @@ def _to_process_app(conn) -> SimpleNamespace:
     return _make_app(conn)
 
 
-def _configure_conn_for_process_one_paper(conn, *, auto_summarize_value) -> None:
-    """Wire a single to-process paper (id=7) plus the config/EXISTS reads used
-    by the auto-summarize toggle. ``.fetch()`` drives the four positional
-    queries (sources/topics/to_download/to_process); ``.fetchrow``/``.fetchval``
-    back the toggle read and the paper_summaries EXISTS guard respectively.
+def _configure_conn_for_process_one_paper(
+    conn, *, auto_summarize_value, holders=({"user_id": 3},)
+) -> None:
+    """Wire a single to-process paper (id=7) plus the reads used by the
+    auto-summarize toggle. ``.fetch()`` drives the five positional queries
+    (sources/topics/to_download/to_process/unsummarized library holders);
+    ``.fetchrow`` backs the toggle read.
     """
     storage = af.PDF_STORAGE_PATH
     conn.fetch = AsyncMock(
@@ -285,10 +288,40 @@ def _configure_conn_for_process_one_paper(conn, *, auto_summarize_value) -> None
             [],  # topics
             [],  # to_download
             [{"id": 7, "pdf_local_path": f"{storage}/7.pdf"}],  # to_process
+            list(holders),  # library holders lacking a summary for paper 7
         ]
     )
     conn.fetchrow = AsyncMock(return_value={"value": auto_summarize_value})
-    conn.fetchval = AsyncMock(return_value=False)  # no existing paper_summaries row
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("yes", True),
+        ("1", True),
+        ("false", False),
+        ("no", False),
+        ("null", False),
+        ("", False),
+        (None, False),
+        # Fail-closed: an unrecognised string must NOT enable auto-summarization.
+        # bool("maybe") is True, so a truthiness fallback would turn on unattended
+        # LLM spend for a value we cannot interpret.
+        ("maybe", False),
+        ("enabled", False),
+        ("TRUE ", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_is_auto_summarize_enabled_coerces_stored_values(stored, expected):
+    """Pins the shared flag reader's coercion for the auto-summarize flag,
+    including its fail-closed handling of unrecognised strings."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": stored})
+    assert await af._is_auto_summarize_enabled(pool) is expected
 
 
 @pytest.mark.asyncio
@@ -317,6 +350,9 @@ async def test_auto_summarize_toggle_on_defers_paper_summarize_once(monkeypatch)
     call_kwargs = mock_task.defer_async.await_args.kwargs
     assert call_kwargs.get("paper_id") == 7
     assert "job_id" in call_kwargs
+    # The summary must be owned by the library holder — a NULL owner is
+    # invisible to every reader (they bind a strict integer user id).
+    assert call_kwargs.get("user_id") == 3
 
 
 @pytest.mark.asyncio
@@ -326,6 +362,62 @@ async def test_auto_summarize_toggle_off_defers_nothing(monkeypatch):
 
     conn = AsyncMock()
     _configure_conn_for_process_one_paper(conn, auto_summarize_value=False)
+    app = _to_process_app(conn)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with (
+        patch.object(
+            af,
+            "run_process_pdf",
+            AsyncMock(return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}),
+        ),
+        patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}),
+    ):
+        await af.run_auto_pipeline(app)
+
+    mock_task.defer_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auto_summarize_defers_once_per_library_holder(monkeypatch):
+    """A paper held by N users defers N summarize jobs, one owned by each holder."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    _configure_conn_for_process_one_paper(
+        conn, auto_summarize_value=True, holders=({"user_id": 3}, {"user_id": 4})
+    )
+    app = _to_process_app(conn)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with (
+        patch.object(
+            af,
+            "run_process_pdf",
+            AsyncMock(return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}),
+        ),
+        patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}),
+    ):
+        await af.run_auto_pipeline(app)
+
+    assert mock_task.defer_async.await_count == 2
+    owners = sorted(call.kwargs["user_id"] for call in mock_task.defer_async.await_args_list)
+    assert owners == [3, 4]
+    assert all(call.kwargs["paper_id"] == 7 for call in mock_task.defer_async.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_auto_summarize_defers_nothing_when_no_user_holds_the_paper(monkeypatch):
+    """A paper in nobody's library defers ZERO jobs — summarizing it would be
+    LLM spend on content no reader can ever see."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    _configure_conn_for_process_one_paper(conn, auto_summarize_value=True, holders=())
     app = _to_process_app(conn)
 
     mock_task = MagicMock()

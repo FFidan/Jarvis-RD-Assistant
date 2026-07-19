@@ -13,6 +13,7 @@ from typing import Any
 
 from jarvis_common.library import fan_out_to_topic_users
 from jarvis_common.maintenance import skip_for_maintenance
+from jarvis_common.serialization import read_global_config_flag
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import PaperSourceConfig, TopicRef
@@ -185,41 +186,41 @@ async def _download_pending_pdfs(app, db_pool, sem) -> None:
 
 async def _is_auto_summarize_enabled(db_pool: Any) -> bool:
     """Read ``user_config['automation.auto_summarize_discovered']`` — defaults to False."""
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config"
-                " WHERE key = 'automation.auto_summarize_discovered' AND user_id IS NULL"
-            )
-    except Exception:
-        logger.exception("auto_pipeline: failed to read automation.auto_summarize_discovered")
-        return False
-    if row is None:
-        return False
-    # asyncpg JSONB auto-decodes — value may be bool directly
-    value = row["value"]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes")
-    return bool(value)
+    return await read_global_config_flag(
+        db_pool, "automation.auto_summarize_discovered", log_label="auto_pipeline"
+    )
+
+
+_UNSUMMARIZED_HOLDERS_SQL = """
+    SELECT ul.user_id FROM user_library ul
+    WHERE ul.paper_id = $1
+      AND NOT EXISTS (
+          SELECT 1 FROM paper_summaries s
+          WHERE s.paper_id = ul.paper_id AND s.user_id = ul.user_id
+      )
+"""
 
 
 async def _maybe_defer_summarize(db_pool, paper_id: int) -> None:
-    """Best-effort defer ``paper.summarize`` for a newly-chunked, unsummarized paper."""
-    async with db_pool.acquire() as conn:
-        already_summarized = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM paper_summaries WHERE paper_id = $1)", paper_id
-        )
-    if not already_summarized:
-        try:
-            from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+    """Best-effort defer ``paper.summarize`` once per library holder lacking a summary.
 
+    Summaries are per-user by schema and every reader binds a strict integer
+    owner, so a NULL-owned summary is unreadable. A paper nobody holds gets
+    no summary at all.
+    """
+    async with db_pool.acquire() as conn:
+        holders = await conn.fetch(_UNSUMMARIZED_HOLDERS_SQL, paper_id)
+    if not holders:
+        return
+    try:
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+        for row in holders:
             await KIND_TO_TASK["paper.summarize"].defer_async(
-                job_id=str(uuid.uuid4()), user_id=None, paper_id=paper_id
+                job_id=str(uuid.uuid4()), user_id=row["user_id"], paper_id=paper_id
             )
-        except Exception:
-            logger.exception("paper.summarize enqueue failed for paper %d", paper_id)
+    except Exception:
+        logger.exception("paper.summarize enqueue failed for paper %d", paper_id)
 
 
 async def _process_pending_papers(app, db_pool, sem) -> None:
