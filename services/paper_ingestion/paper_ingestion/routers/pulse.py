@@ -44,7 +44,7 @@ from paper_ingestion.models import (
     PulseStatsResponse,
 )
 from paper_ingestion.pulse.deck import load_history, load_last_nonempty_deck, load_today
-from paper_ingestion.pulse.training import FEATURE_NAMES
+from paper_ingestion.pulse.training import FEATURE_NAMES, load_active_classifier
 from paper_ingestion.services.paper_state_helpers import (
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
@@ -375,6 +375,7 @@ async def get_stats(
             days,
             caller_id,
         )
+    _, classifier_meta = await load_active_classifier(db_pool, user_id=caller_id)
     return PulseStatsResponse(
         window_days=days,
         decks_generated=int(row["decks_generated"] or 0),
@@ -384,6 +385,7 @@ async def get_stats(
         last_run_at=row["last_run_at"],
         last_error=row["last_error"],
         degraded_reason=row["degraded_reason"],
+        has_learned_model=bool(classifier_meta.get("available")),
     )
 
 

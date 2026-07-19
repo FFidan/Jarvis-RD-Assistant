@@ -61,6 +61,7 @@ export interface PulseStats {
   last_run_at: string | null;
   last_error: string | null;
   degraded_reason: string | null;
+  has_learned_model?: boolean;
 }
 
 export interface WhyExplanation {
