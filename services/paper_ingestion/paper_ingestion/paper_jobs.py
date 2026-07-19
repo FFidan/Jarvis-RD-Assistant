@@ -8,8 +8,10 @@ Handler signature: async (pool, http_client, payload, ctx) -> dict
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 import httpx
@@ -18,6 +20,13 @@ from jarvis_common.jobs import JobError, ProgressContext
 
 from paper_ingestion._state import get_services
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
+    from paper_ingestion.pdf_processor import PDFProcessor
+    from paper_ingestion.services.pdf_workflow import ProcessPdfResult
+    from paper_ingestion.services.summarization import SummaryGenerationResult
 
 logger = logging.getLogger(__name__)
 
@@ -267,10 +276,7 @@ async def _paper_summarize_job(
     ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Generate a quote-verified summary for a single paper."""
-    from paper_ingestion.services.summarization import (
-        SummaryGenerationResult,
-        generate_paper_summary,
-    )
+    from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_id: int = int(payload["paper_id"])
     user_id: int | None = payload.get("user_id")
@@ -408,6 +414,142 @@ _PROCESS_LIBRARY_SELECTION = """
 """
 
 
+@dataclass(frozen=True)
+class _LibraryRun:
+    """Collaborators one process-library run shares across every selected paper.
+
+    ``summarize_paper`` carries the caller's ``user_id`` bound at resolve time, so
+    no stage can generate a summary outside the requesting tenant.
+    """
+
+    pool: asyncpg.Pool
+    summarize: bool
+    pdf_processor: PDFProcessor
+    process_pdf: partial[Coroutine[Any, Any, ProcessPdfResult]]
+    summarize_paper: partial[Coroutine[Any, Any, SummaryGenerationResult]]
+
+
+@dataclass(frozen=True)
+class _PaperOutcome:
+    """One paper's contribution to the process-library result."""
+
+    downloaded: int = 0
+    processed: int = 0
+    summarized: int = 0
+    blocked: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+
+
+def _resolve_library_run(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    user_id: int,
+    summarize: bool,
+) -> _LibraryRun:
+    """Resolve the services and bind the workflow calls the stage machine needs."""
+    from paper_ingestion.services.pdf_workflow import run_process_pdf
+    from paper_ingestion.services.summarization import generate_paper_summary
+
+    services = get_services()
+    pdf_processor = services.pdf_processor
+    if pdf_processor is None:
+        raise RuntimeError("pdf_processor not initialized")
+    embedder = services.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
+    verifier = services.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
+    return _LibraryRun(
+        pool=pool,
+        summarize=summarize,
+        pdf_processor=pdf_processor,
+        process_pdf=partial(
+            run_process_pdf,
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        ),
+        summarize_paper=partial(
+            generate_paper_summary,
+            db_pool=pool,
+            http_client=http_client,
+            verifier=verifier,
+            embedder=embedder,
+            user_id=user_id,
+        ),
+    )
+
+
+async def _library_download_stage(row: Any, run: _LibraryRun) -> Any:
+    """Download a paper's PDF, persist its local path and return that path."""
+    paper_id = row["id"]
+    pdf_path_obj = await run.pdf_processor.download_pdf(row["pdf_url"], paper_id)
+    async with run.pool.acquire() as conn:
+        updated = await conn.fetchrow(
+            "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
+            "WHERE id = $2 RETURNING pdf_local_path",
+            str(pdf_path_obj),
+            paper_id,
+        )
+    if updated is None:
+        raise JobError(f"Paper {paper_id} deleted during download")
+    return updated["pdf_local_path"]
+
+
+async def _library_process_stage(
+    paper_id: int,
+    pdf_local_path: Any,
+    run: _LibraryRun,
+    sub_ctx: _SubCtx,
+) -> None:
+    """Extract, chunk and embed one paper's already-downloaded PDF."""
+    if not pdf_local_path:
+        raise JobError(f"PDF path not set for paper {paper_id}")
+    pdf_path = Path(pdf_local_path)
+    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
+        raise JobError(f"Invalid PDF path for paper {paper_id}")
+    if not pdf_path.exists():
+        raise JobError(f"PDF file missing from disk for paper {paper_id}")
+    await run.process_pdf(paper_id, pdf_path, ctx=sub_ctx)
+
+
+async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx) -> _PaperOutcome:
+    """Run download → process → summarize for one paper, isolating its failures."""
+    paper_id = row["id"]
+    is_local = row["source_type"] == "local" or row["pdf_local_path"] is not None
+    pdf_local_path = row["pdf_local_path"]
+    downloaded = 0
+    processed = 0
+    summarized = 0
+    stage = "download"
+    try:
+        if not is_local and not row["pdf_downloaded"]:
+            if not row["pdf_url"]:
+                return _PaperOutcome(blocked={"paper_id": paper_id, "reason": "no_pdf_source"})
+            pdf_local_path = await _library_download_stage(row, run)
+            downloaded = 1
+
+        if row["needs_process"]:
+            stage = "process"
+            await _library_process_stage(paper_id, pdf_local_path, run, sub_ctx)
+            processed = 1
+
+        if run.summarize and row["needs_summary"]:
+            stage = "summarize"
+            await run.summarize_paper(paper_id)
+            summarized = 1
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Library processing failed for paper %s (stage=%s)", paper_id, stage)
+        return _PaperOutcome(
+            downloaded=downloaded,
+            processed=processed,
+            summarized=summarized,
+            error={"paper_id": paper_id, "stage": stage, "error": str(exc)},
+        )
+    return _PaperOutcome(downloaded=downloaded, processed=processed, summarized=summarized)
+
+
 async def _papers_process_library_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -449,9 +591,6 @@ async def _papers_process_library_job(
             "errors": [],
         }
 
-    from paper_ingestion.services.pdf_workflow import run_process_pdf
-    from paper_ingestion.services.summarization import generate_paper_summary
-
     # Defense-in-depth: the selection is already user_library-scoped, so this
     # can only reaffirm the tenancy boundary — kept to mirror the batch clone and
     # guard against a future selection-query change widening scope.
@@ -459,16 +598,7 @@ async def _papers_process_library_job(
     async with pool.acquire() as conn:
         await assert_papers_ownership(conn, paper_ids, user_id)
 
-    services = get_services()
-    pdf_processor = services.pdf_processor
-    if pdf_processor is None:
-        raise RuntimeError("pdf_processor not initialized")
-    embedder = services.embedder
-    if embedder is None:
-        raise RuntimeError("embedder not initialized")
-    verifier = services.verifier
-    if verifier is None:
-        raise RuntimeError("verifier not initialized")
+    run = _resolve_library_run(pool, http_client, user_id, summarize)
 
     downloaded = 0
     processed = 0
@@ -482,66 +612,16 @@ async def _papers_process_library_job(
             break
         paper_id = row["id"]
         await ctx.update_progress(i / total, f"Paper {paper_id} ({i + 1}/{total})")
-        inner_start = (i / total) * 0.95
-        inner_end = ((i + 1) / total) * 0.95
+        sub_ctx = _SubCtx(ctx, (i / total) * 0.95, ((i + 1) / total) * 0.95)
 
-        is_local = row["source_type"] == "local" or row["pdf_local_path"] is not None
-        pdf_local_path = row["pdf_local_path"]
-        stage = "download"
-        try:
-            # ---- Stage 1: Download (skip for local / already downloaded) ----
-            if not is_local and not row["pdf_downloaded"]:
-                if not row["pdf_url"]:
-                    blocked.append({"paper_id": paper_id, "reason": "no_pdf_source"})
-                    continue
-                pdf_path_obj = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
-                async with pool.acquire() as conn:
-                    updated = await conn.fetchrow(
-                        "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
-                        "WHERE id = $2 RETURNING pdf_local_path",
-                        str(pdf_path_obj),
-                        paper_id,
-                    )
-                if updated is None:
-                    raise JobError(f"Paper {paper_id} deleted during download")
-                pdf_local_path = updated["pdf_local_path"]
-                downloaded += 1
-
-            # ---- Stage 2: Process ----
-            if row["needs_process"]:
-                stage = "process"
-                if not pdf_local_path:
-                    raise JobError(f"PDF path not set for paper {paper_id}")
-                pdf_path = Path(pdf_local_path)
-                if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-                    raise JobError(f"Invalid PDF path for paper {paper_id}")
-                if not pdf_path.exists():
-                    raise JobError(f"PDF file missing from disk for paper {paper_id}")
-                await run_process_pdf(
-                    paper_id,
-                    pdf_path,
-                    pool,
-                    pdf_processor,
-                    embedder,
-                    ctx=_SubCtx(ctx, inner_start, inner_end),
-                )
-                processed += 1
-
-            # ---- Stage 3: Summarize (opt-in) ----
-            if summarize and row["needs_summary"]:
-                stage = "summarize"
-                await generate_paper_summary(
-                    paper_id,
-                    pool,
-                    http_client,
-                    verifier,
-                    embedder,
-                    user_id=user_id,
-                )
-                summarized += 1
-        except Exception as exc:  # noqa: BLE001
-            errors.append({"paper_id": paper_id, "stage": stage, "error": str(exc)})
-            logger.exception("Library processing failed for paper %s (stage=%s)", paper_id, stage)
+        outcome = await _run_library_paper_stages(row, run, sub_ctx)
+        downloaded += outcome.downloaded
+        processed += outcome.processed
+        summarized += outcome.summarized
+        if outcome.blocked is not None:
+            blocked.append(outcome.blocked)
+        if outcome.error is not None:
+            errors.append(outcome.error)
 
     status = "partial" if (errors or blocked) else "ok"
     await ctx.update_progress(1.0, f"Done: {processed} processed, {summarized} summarized")
