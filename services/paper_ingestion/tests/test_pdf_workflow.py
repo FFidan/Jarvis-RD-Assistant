@@ -820,7 +820,7 @@ async def test_force_reprocess_preserves_overlapping_vectors():
 
     assert result == {"paper_id": 99, "chunk_count": 2, "status": "processed"}
 
-    # T1.2: force=True bypasses the resume skip entirely (the resume query
+    # force=True bypasses the resume skip entirely (the resume query
     # never runs — force always re-embeds every chunk).
     assert pdf_processor.process.call_args.kwargs["resume_content"] == {}
 
@@ -966,7 +966,7 @@ async def test_run_process_pdf_marks_chunked_at_on_success():
 
 
 # ---------------------------------------------------------------------------
-# T1.2: resume — skip already-embedded chunks on retry (content AND model
+# Resume: skip already-embedded chunks on retry (content AND model
 # identity); the resume map itself is built here, before pdf_processor.process
 # is called, and threaded in as the resume_content kwarg.
 # ---------------------------------------------------------------------------

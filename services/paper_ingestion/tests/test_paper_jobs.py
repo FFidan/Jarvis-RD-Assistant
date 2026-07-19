@@ -512,7 +512,7 @@ async def test_paper_analyze_job_forwards_force(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# W1-T1.1 — _papers_process_library_job: whole-library per-paper stage machine
+# _papers_process_library_job: whole-library per-paper stage machine
 # ---------------------------------------------------------------------------
 
 

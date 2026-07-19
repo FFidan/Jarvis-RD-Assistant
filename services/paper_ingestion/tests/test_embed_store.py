@@ -216,7 +216,7 @@ async def test_subsequent_batch_failure_still_raises_embedding_batch_error():
 
 
 # ---------------------------------------------------------------------------
-# T1.2: resume — skip already-embedded chunks (content + model identity)
+# Resume: skip already-embedded chunks (content + model identity)
 # ---------------------------------------------------------------------------
 
 
