@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # scripts/production-readiness-check.sh — Production Readiness Check
 #
-# Prints a summary table of key configuration checks and exits non-zero
-# if any HIGH-severity issue is found.
+# Prints a summary table of key configuration checks and exits with a
+# three-state contract so callers can tell "clean" from "warnings present":
+#   0  all checks passed (no WARN, no HIGH)
+#   2  warnings present, but no HIGH issues (advisory — safe to proceed)
+#   1  at least one HIGH-severity issue (must be fixed before production)
+# setup.sh's wrapper treats 2 as non-fatal and 1 as fatal on the production/
+# letsencrypt path (see readiness_verdict in scripts/setup_lib.sh).
 #
 # Usage:
 #   bash scripts/production-readiness-check.sh
@@ -303,7 +308,7 @@ if [ "$HAS_HIGH" -eq 1 ]; then
 elif [ "$HAS_WARN" -eq 1 ]; then
   printf '%s[WARN]%s  Production readiness check: warnings present (no HIGH issues).\n' \
     "$C_YELLOW" "$C_RESET"
-  exit 0
+  exit 2
 else
   printf '%s[OK]%s    Production readiness check: all checks passed.\n' \
     "$C_GREEN" "$C_RESET"

@@ -20,6 +20,12 @@ source "${SCRIPT_DIR}/../setup_lib.sh"
 FIXTURES="$(mktemp -d)"
 trap 'rm -rf "$FIXTURES"' EXIT
 
+# Default the WSL probe to a NON-WSL kernel string so prereq planning is
+# host-independent (a WSL dev box would otherwise flip the docker-plan cases);
+# individual cases override JARVIS_PROC_VERSION as needed.
+export JARVIS_PROC_VERSION="${FIXTURES}/proc-version-native"
+printf 'Linux version 6.8.0-generic\n' > "$JARVIS_PROC_VERSION"
+
 fail=0
 pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
@@ -91,6 +97,19 @@ case "$got" in
   ''|*[!0-9]*) printf 'FAIL: repo catalog result not numeric (%s)\n' "$got" >&2; fail=1 ;;
   *) pass "repo catalog: result is numeric (${got} GB)" ;;
 esac
+
+# === compute_model_disk_gb ===================================================
+# The model-only figure the cached-image disk escape hatch checks against (the
+# model set is pulled on EVERY run). Pull set for qwen3:14b is 14b+fast+embed =
+# 9.2+2.5+2.6 -> ceil 15; catalog-derived is rc 0, unreadable is worst-case 22
+# + rc 3. compute_required_disk_gb = _image_budget + infra(14) + this.
+got="$(export JARVIS_MODEL_CATALOG="$CATALOG"; compute_model_disk_gb qwen3:14b)" && rc=0 || rc=$?
+expect_eq "compute_model_disk_gb qwen3:14b = ceil(model set) (rc 0)" "${got}/${rc}" "15/0"
+got="$(export JARVIS_MODEL_CATALOG="${FIXTURES}/nope.json"; compute_model_disk_gb qwen3:14b 2>/dev/null)" && rc=0 || rc=$?
+expect_eq "compute_model_disk_gb unreadable catalog -> worst-case 22 (rc 3)" "${got}/${rc}" "22/3"
+# compute_required_disk_gb still equals image_budget + infra + model set.
+got="$(export JARVIS_MODEL_CATALOG="$CATALOG"; compute_required_disk_gb qwen3:14b cuda-build)" && rc=0 || rc=$?
+expect_eq "compute_required_disk_gb = 17(cuda) + 14(infra) + 15(models)" "${got}/${rc}" "46/0"
 
 # === resolve_docker_data_root ================================================
 
@@ -177,13 +196,14 @@ fi
 
 pf_src="$(sed -n '/^preflight_disk()/,/^}/p' "$SETUP_SCRIPT")"
 
-run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out>
-  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" \
+run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out> [model_gb]
+  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" MODEL_GB="${7:-8}" \
   LIB_SRC="${SCRIPT_DIR}/../setup_lib.sh" bash -c '
     set -euo pipefail
     # The real lib provides PUBLISHED_IMAGE_REPOS (the wrapper iterates it, and
     # a private copy here would drift). Source it FIRST: the stubs below must
-    # clobber its real compute_required_disk_gb/preflight_disk_lib.
+    # clobber its real compute_required_disk_gb/compute_model_disk_gb/
+    # preflight_disk_lib.
     source "$LIB_SRC"
     info() { printf "INFO %s\n" "$*"; }
     ok()   { printf "OK %s\n" "$*"; }
@@ -196,6 +216,7 @@ run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out>
       esac
     }
     compute_required_disk_gb() { printf "%s" "$REQ_GB"; return "$REQ_RC"; }
+    compute_model_disk_gb() { printf "%s" "$MODEL_GB"; }
     preflight_disk_lib() { printf "%s" "$LIB_OUT"; return "$LIB_RC"; }
     SKIP_DISK_CHECK="$SKIP"
     NI_SMART_MODEL="qwen3:8b"
@@ -210,10 +231,20 @@ case "${rc}:${out}" in
   *) printf 'FAIL: first-install shortfall not fatal (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
-out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123')" && rc=0 || rc=$?
+# Cached app images + the model pull STILL fits free space -> warn, proceed.
+out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123' 8)" && rc=0 || rc=$?
 case "${rc}:${out}" in
+  0:*WARN*model?pull?fits*) pass "cached app images + model pull fits -> warning, proceed" ;;
   0:*WARN*) pass "cached app images downgrade the shortfall to a warning" ;;
   *) printf 'FAIL: cached-image re-run was blocked (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+
+# Cached app images but the model pull does NOT fit -> still fatal (models are
+# pulled every run, so the escape hatch cannot ignore the model-set space).
+out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123' 25)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*DIE*model?set*) pass "cached images but model pull won't fit stays fatal (model-set space)" ;;
+  *) printf 'FAIL: cached-image model shortfall not fatal (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
 out="$(run_preflight 0 45 3 '25 /var/lib/docker' 1 '')" && rc=0 || rc=$?
@@ -230,8 +261,8 @@ esac
 
 out="$(run_preflight 0 45 0 '0 /var/lib/docker' 2 '')" && rc=0 || rc=$?
 case "${rc}:${out}" in
-  0:*WARN*) pass "unmeasurable free space proceeds with a warning" ;;
-  *) printf 'FAIL: unmeasurable df blocked the install (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+  0:*WARN*Docker?Desktop*) pass "unmeasurable free space explains Docker Desktop and proceeds" ;;
+  *) printf 'FAIL: unmeasurable df did not explain Docker Desktop / blocked the install (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
 out="$(run_preflight 1 45 0 '10 /var/lib/docker' 1 '')" && rc=0 || rc=$?
@@ -908,6 +939,142 @@ while IFS= read -r _row; do
     *) pass "route row '${_row%%|*}' is env-representable" ;;
   esac
 done <<< "$routes"
+
+# === registry_profile_host_ports ============================================
+# The extra host ports an active TLS edge / optional profile publishes, so the
+# port pre-check covers them (a static default list would miss 80/443/3443).
+expect_eq "letsencrypt publishes 80 and 443"       "$(registry_profile_host_ports letsencrypt)" "80 443"
+expect_eq "caddy-local publishes 3443"             "$(registry_profile_host_ports caddy-local)" "3443"
+expect_eq "observability publishes langfuse 3002"  "$(registry_profile_host_ports observability)" "3002"
+expect_eq "vllm publishes 8080"                    "$(registry_profile_host_ports vllm)" "8080"
+expect_eq "tunnel/telegram publish no host port"   "$(registry_profile_host_ports tunnel telegram)" ""
+expect_eq "no profiles -> no extra ports"          "$(registry_profile_host_ports)" ""
+expect_eq "duplicate host ports are de-duped"      "$(registry_profile_host_ports letsencrypt caddy-local)" "80 443 3443"
+
+# === compose_meets_floor =====================================================
+# The overlays merge a dev override's `deploy: !reset null`; the !reset/!override
+# tags need Docker Compose 2.24.4+, so the gate must reject older v2 and accept
+# newer. rc: 0 meets floor, 1 below, 2 unreadable.
+compose_meets_floor 2.24.4 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: exact match passes" "$rc" "0"
+compose_meets_floor v2.29.7 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: newer passes (v-prefix tolerated)" "$rc" "0"
+compose_meets_floor 2.24.3 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: 2.24.3 is below the floor" "$rc" "1"
+compose_meets_floor 2.20.0 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: older minor is below the floor" "$rc" "1"
+compose_meets_floor 1.29.2 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: v1 is below the floor" "$rc" "1"
+compose_meets_floor unknown 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: unreadable version -> rc 2" "$rc" "2"
+
+# === _wsl_without_systemd (WSL prereq guidance) ==============================
+# A WSL host (Microsoft kernel) without systemd must NOT get a docker-ce plan
+# (it would start a second daemon that systemctl cannot even enable); the manual
+# guidance points at Docker Desktop's WSL integration instead. Probes are
+# env-overridable (JARVIS_PROC_VERSION / JARVIS_SYSTEMD_DIR).
+WSL_PROC="${FIXTURES}/proc-version-wsl"
+printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$WSL_PROC"
+NO_SYSTEMD="${FIXTURES}/no-systemd-dir"   # deliberately absent
+SYSTEMD_DIR="${FIXTURES}/systemd-dir"; mkdir -p "$SYSTEMD_DIR"
+
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: WSL + no systemd -> 0" "$rc" "0"
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$SYSTEMD_DIR"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: WSL WITH systemd -> 1 (docker-ce plan is fine)" "$rc" "1"
+( export JARVIS_PROC_VERSION="$JARVIS_PROC_VERSION" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: native Linux -> 1" "$rc" "1"
+
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"
+  prereq_install_plan Linux ubuntu 1 0 0 docker >/dev/null 2>&1 ) && rc=0 || rc=$?
+expect_eq "WSL-without-systemd: docker plan is refused (rc 1)" "$rc" "1"
+wsl_guidance="$(export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; prereq_manual_guidance docker)"
+plan_has   "WSL manual guidance points at Docker Desktop WSL integration" "$wsl_guidance" 'Docker Desktop.*WSL integration'
+plan_lacks "WSL manual guidance does not push docker-ce"                  "$wsl_guidance" 'docker-ce'
+( prereq_install_plan Linux ubuntu 1 0 0 docker >/dev/null 2>&1 ) && rc=0 || rc=$?
+expect_eq "non-WSL host: docker plan is produced (rc 0)" "$rc" "0"
+
+# === python3 as a first-class prerequisite ===================================
+# python3 backs model selection + disk sizing (setup_lib helpers shell out to it
+# under set -euo pipefail), so it is a hard install-path prerequisite.
+mp_src="$(sed -n '/^missing_prereqs()/,/^}/p' "$SETUP_SCRIPT")"
+MP_BIN="$(mktemp -d "${FIXTURES}/mp.XXXXXX")"
+printf '#!/usr/bin/env bash\ncase "$1" in compose) exit 0 ;; esac\nexit 0\n' > "${MP_BIN}/docker"
+printf '#!/usr/bin/env bash\nexit 0\n' > "${MP_BIN}/openssl"
+chmod +x "${MP_BIN}/docker" "${MP_BIN}/openssl"
+got="$( eval "$mp_src"; ( export PATH="$MP_BIN"; missing_prereqs ) )"
+case "$got" in
+  *python3*) pass "missing_prereqs reports python3 when it is absent" ;;
+  *) printf 'FAIL: missing_prereqs did not report python3 (got=%s)\n' "$got" >&2; fail=1 ;;
+esac
+printf '#!/usr/bin/env bash\nexit 0\n' > "${MP_BIN}/python3"; chmod +x "${MP_BIN}/python3"
+got="$( eval "$mp_src"; ( export PATH="$MP_BIN"; missing_prereqs ) )"
+case "$got" in
+  *python3*) printf 'FAIL: missing_prereqs reported python3 though present (got=%s)\n' "$got" >&2; fail=1 ;;
+  *) pass "missing_prereqs does not report python3 when present" ;;
+esac
+py_plan="$(prereq_install_plan Linux ubuntu 1 0 0 python3)" || py_plan=""
+plan_has "python3: apt installs python3" "$py_plan" '^sudo apt-get install -y python3$'
+py_plan_fedora="$(prereq_install_plan Linux fedora 0 0 1 python3)" || py_plan_fedora=""
+plan_has "python3: dnf installs python3" "$py_plan_fedora" '^sudo dnf install -y python3$'
+plan_has "python3: manual guidance names Python 3" "$(prereq_manual_guidance python3)" 'Python 3'
+
+# === readiness_verdict =======================================================
+# The readiness exit-code -> wrapper-action map (contract: 0 clean, 2 warn, 1
+# HIGH). Pairing the exit-code flip with this consumer is what keeps a routine
+# exit-2 warning from aborting a production install.
+expect_eq "rc 0 -> all-clear"                        "$(readiness_verdict 0 production)" "ok"
+expect_eq "rc 2 -> warn (never fatal) in production" "$(readiness_verdict 2 production)" "warn"
+expect_eq "rc 2 -> warn in development"              "$(readiness_verdict 2 development)" "warn"
+expect_eq "rc 1 + production -> abort (fatal)"       "$(readiness_verdict 1 production)" "abort"
+expect_eq "rc 1 + development -> warn (dev tolerance)" "$(readiness_verdict 1 development)" "warn"
+expect_eq "unknown nonzero -> warn (surface, never silently abort)" "$(readiness_verdict 3 production)" "warn"
+
+# === setup.sh preflight/output wiring (static) ===============================
+scheck "missing_prereqs treats python3 as a prerequisite" 'missing\+=\(python3\)'
+scheck "ensure_prerequisites verifies python3"            'python3 required for model selection'
+scheck "run_doctor --check fails when python3 is absent"  'python3 missing — required for model selection'
+scheck "the compose gate pins a real 2.24.4 floor"        '^COMPOSE_MIN=2\.24\.4'
+scheck "the compose gate uses compose_meets_floor"        'compose_meets_floor "\$COMPOSE_VER" "\$COMPOSE_MIN"'
+scheck "the nvidia-toolkit probe is a first-class preflight" '^preflight_nvidia_toolkit$'
+scheck "the port pre-check reads .env port values"        '_port_or_default DASHBOARD_HOST_PORT'
+scheck "the port pre-check adds active-profile ports"     'registry_profile_host_ports'
+scheck "the readiness wrapper consumes readiness_verdict" 'readiness_verdict "\$_rc" "\$_ENV_VALUE"'
+scheck "the readiness wrapper is non-fatal on warnings (exit 2)" 'passed with warnings'
+scheck "multi-user next-steps lead with the first-admin setup link" 'Bootstrap the first admin: open the "Finish setup" link'
+
+# nvidia-toolkit is hoisted OUT of the missing-prereqs add (now a first-class,
+# non-fatal preflight), so the nested `missing+=(nvidia-toolkit)` must be gone.
+if grep -Eq 'missing\+=\(nvidia-toolkit\)' "$SETUP_SCRIPT"; then
+  printf 'FAIL: nvidia-toolkit is still nested in the missing-prereqs add\n' >&2; fail=1
+else
+  pass "nvidia-toolkit is hoisted out of the missing-prereqs add"
+fi
+# preflight_nvidia_toolkit is non-fatal by contract: its body never dies.
+pnt_src="$(sed -n '/^preflight_nvidia_toolkit()/,/^}/p' "$SETUP_SCRIPT")"
+if printf '%s\n' "$pnt_src" | grep -qE '\bdie \b|\bdie "'; then
+  printf 'FAIL: preflight_nvidia_toolkit contains a die (must be non-fatal)\n' >&2; fail=1
+else
+  pass "preflight_nvidia_toolkit is non-fatal (no die on a missing GPU runtime)"
+fi
+
+# The green "Setup complete." banner must be printed AFTER the readiness gate.
+_banner_ln="$(grep -nF 'Setup complete.' "$SETUP_SCRIPT" | tail -1 | cut -d: -f1)"
+_gate_ln="$(sline 'bash "\$_READINESS_SCRIPT"')"
+if [ -n "$_banner_ln" ] && [ -n "$_gate_ln" ] && [ "$_gate_ln" -lt "$_banner_ln" ]; then
+  pass "the green 'Setup complete.' banner is printed AFTER the readiness gate"
+else
+  printf 'FAIL: Setup complete banner (%s) not after the readiness gate (%s)\n' "$_banner_ln" "$_gate_ln" >&2; fail=1
+fi
+
+# The dependency-reversed lead step (a magic link before any admin exists) is gone.
+if grep -Eq 'Request a magic link at the sign-in page' "$SETUP_SCRIPT"; then
+  printf 'FAIL: next-steps still leads with a magic-link step that presupposes SMTP/an account\n' >&2; fail=1
+else
+  pass "next-steps no longer leads with a magic-link step before first-admin bootstrap"
+fi
+# ...and first-admin bootstrap is ordered before SMTP configuration.
+_boot_ln="$(sline 'Bootstrap the first admin')"
+_smtp_ln="$(grep -nE 'Configure SMTP in Settings' "$SETUP_SCRIPT" | tail -1 | cut -d: -f1)"
+if [ -n "$_boot_ln" ] && [ -n "$_smtp_ln" ] && [ "$_boot_ln" -lt "$_smtp_ln" ]; then
+  pass "next-steps orders first-admin bootstrap before SMTP configuration"
+else
+  printf 'FAIL: next-steps SMTP step (%s) not after bootstrap (%s)\n' "$_smtp_ln" "$_boot_ln" >&2; fail=1
+fi
 
 # =============================================================================
 

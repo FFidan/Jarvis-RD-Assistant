@@ -3,9 +3,13 @@
 # (setup.sh itself is not cleanly sourceable). Concerns:
 #   - compute_compose_file       : which compose overlays to persist into .env
 #   - compute_ollama_models      : which Ollama tags the bootstrap must pull
+#   - compute_model_disk_gb      : GB the Ollama model set pulls (every run)
 #   - compute_required_disk_gb   : GB a cold install writes to the data root
 #   - resolve_docker_data_root   : where Docker keeps images/volumes/cache
 #   - preflight_disk_lib         : free-vs-required disk measurement core
+#   - compose_meets_floor        : Docker Compose version-floor gate
+#   - registry_profile_host_ports: extra host ports an active profile publishes
+#   - readiness_verdict          : readiness exit-code -> wrapper action (0/2/1)
 #   - upsert_env_var             : idempotent in-place .env key write
 #   - print_setup_link           : click-to-finish wizard link when token exists
 #   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
@@ -168,11 +172,40 @@ strip_gpu_args() {
 
 
 
+# compose_meets_floor VERSION FLOOR -> 0 when VERSION >= FLOOR (dotted numeric,
+# an optional leading 'v' tolerated), 1 when it is older, 2 when VERSION is the
+# literal 'unknown' (unreadable — caller decides how to treat it). Used to pin a
+# real Compose floor instead of accepting any v2: the accelerator overlays merge
+# a dev override's `deploy: !reset null`, and the `!reset`/`!override` merge tags
+# require Docker Compose 2.24.4+ (Docker's compose-file merge reference).
+compose_meets_floor() {
+  local ver="${1#v}" floor="$2"
+  [ "$ver" = unknown ] && return 2
+  # Version-sort the pair: VERSION >= FLOOR exactly when FLOOR sorts first (ties
+  # keep FLOOR first, so an equal version still passes).
+  [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n 1)" = "$floor" ]
+}
+
+# _wsl_without_systemd -> 0 when running under WSL (a Microsoft kernel) with no
+# systemd as PID 1. On such a host the docker-ce + `systemctl` install plan
+# starts a SECOND daemon that shadows Docker Desktop's and cannot be enabled
+# (systemctl fails without systemd); the correct fix is to turn on Docker
+# Desktop's WSL integration instead. Probes are env-overridable for testing:
+# JARVIS_PROC_VERSION (the kernel version string) and JARVIS_SYSTEMD_DIR (a
+# present directory means systemd is running).
+_wsl_without_systemd() {
+  grep -qi microsoft "${JARVIS_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
+  [ -d "${JARVIS_SYSTEMD_DIR:-/run/systemd/system}" ] && return 1
+  return 0
+}
+
 # prereq_install_plan OS OS_ID HAS_APT HAS_BREW HAS_DNF MISSING...
 # Prints explicit package-manager commands for supported hosts, one command per
 # line. Docker comes from Docker's official repository (docker-ce +
 # docker-compose-plugin): stock distro packages miss the compose plugin on
-# Debian/Ubuntu and lag Engine releases. Root-escalation contract (setup.sh
+# Debian/Ubuntu and lag Engine releases. A WSL host without systemd gets NO
+# docker plan (return 1) — see _wsl_without_systemd; the manual guidance points
+# it at Docker Desktop's WSL integration instead. Root-escalation contract (setup.sh
 # prints the plan verbatim for consent and rewrites only LINE-LEADING sudo to
 # `sudo -n` for non-interactive runs): every line is unprivileged or starts
 # with exactly one sudo, and remote content is fetched to a temp file as the
@@ -183,26 +216,35 @@ strip_gpu_args() {
 prereq_install_plan() {
   local os="$1" os_id="$2" has_apt="$3" has_brew="$4" has_dnf="$5"
   shift 5
-  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 item
+  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 needs_python3=0 item
   for item in "$@"; do
     case "$item" in
       docker) needs_docker=1 ;;
       docker-compose) needs_compose=1 ;;
       openssl) needs_openssl=1 ;;
       nvidia-toolkit) needs_toolkit=1 ;;
+      python3) needs_python3=1 ;;
     esac
   done
+
+  # WSL without systemd: refuse to auto-plan a docker-ce install. It would stand
+  # up a second, systemctl-less daemon shadowing Docker Desktop's; the caller
+  # falls through to prereq_manual_guidance, which points at Docker Desktop's WSL
+  # integration instead.
+  if [ "$needs_docker" = "1" ] && _wsl_without_systemd; then
+    return 1
+  fi
 
   case "$os" in
     Linux)
       case "$os_id" in
         debian|ubuntu|linuxmint|pop|popos)
           [ "$has_apt" = "1" ] || return 1
-          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
+          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
           ;;
         fedora)
           [ "$has_dnf" = "1" ] || return 1
-          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
+          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
           ;;
         *) return 1 ;;
       esac
@@ -215,6 +257,9 @@ prereq_install_plan() {
       if [ "$needs_openssl" = "1" ]; then
         printf 'brew install openssl\n'
       fi
+      if [ "$needs_python3" = "1" ]; then
+        printf 'brew install python\n'
+      fi
       ;;
     *) return 1 ;;
   esac
@@ -225,7 +270,7 @@ prereq_install_plan() {
 # ${UBUNTU_CODENAME:-$VERSION_CODENAME} from /etc/os-release when it executes.
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_apt() {
-  local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5"
+  local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5" needs_python3="${6:-0}"
   local repo_base=ubuntu
   [ "$os_id" = "debian" ] && repo_base=debian
 
@@ -250,6 +295,9 @@ _prereq_plan_apt() {
   fi
   if [ "$needs_openssl" = "1" ]; then
     packages+=(openssl)
+  fi
+  if [ "$needs_python3" = "1" ]; then
+    packages+=(python3)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo apt-get install -y %s\n' "${packages[*]}"
@@ -276,7 +324,7 @@ _prereq_plan_apt() {
 # installed with one sudo (avoids the dnf4/dnf5 config-manager syntax split).
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_dnf() {
-  local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4"
+  local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4" needs_python3="${5:-0}"
 
   if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
     # Fetch the repo file straight to its root-owned destination — no /tmp hop.
@@ -291,6 +339,9 @@ _prereq_plan_dnf() {
   fi
   if [ "$needs_openssl" = "1" ]; then
     packages+=(openssl)
+  fi
+  if [ "$needs_python3" = "1" ]; then
+    packages+=(python3)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo dnf install -y %s\n' "${packages[*]}"
@@ -310,13 +361,24 @@ _prereq_plan_dnf() {
 # prereq_manual_guidance MISSING... -> human-readable fallback for unsupported
 # or non-mutating paths. Keep this free of private host paths and secrets.
 prereq_manual_guidance() {
-  local item
+  local item wsl=0
+  _wsl_without_systemd && wsl=1
+  # On WSL without systemd, docker-ce is the wrong answer for any docker/compose
+  # gap — point at Docker Desktop's WSL integration once, then suppress the
+  # docker-ce lines below.
+  if [ "$wsl" -eq 1 ]; then
+    case " $* " in
+      *" docker "*|*" docker-compose "*)
+        printf 'On WSL, enable Docker Desktop for Windows and turn on its WSL integration (Docker Desktop > Settings > Resources > WSL integration) rather than installing Docker Engine as a package, which starts a second daemon: https://docs.docker.com/desktop/wsl/\n' ;;
+    esac
+  fi
   for item in "$@"; do
     case "$item" in
-      docker) printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
-      docker-compose) printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
+      docker)         [ "$wsl" -eq 1 ] || printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
+      docker-compose) [ "$wsl" -eq 1 ] || printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
       openssl) printf 'Install openssl with your OS package manager.\n' ;;
       nvidia-toolkit) printf 'Install the NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html\n' ;;
+      python3) printf 'Install Python 3 with your OS package manager (setup uses it for model selection and disk sizing).\n' ;;
     esac
   done
   printf 'After installing Docker, start the daemon and re-run ./setup.sh --check.\n'
@@ -425,23 +487,19 @@ _image_budget_gb() {
   esac
 }
 
-# compute_required_disk_gb SMART_MODEL [VARIANT] -> echoes the whole-GB disk a
-# cold install writes to the Docker data root: the app-image budget
-# (variant-keyed, see _image_budget_gb) + infra image pulls (postgres/qdrant/
-# ollama/litellm/vector, incl. containerd blob retention) + the Ollama model
-# set compute_ollama_models will pull (per-model disk_gb from the model
-# catalog; tags missing from the catalog assume 18 GB each). Returns 0 when
-# the model sum is catalog-derived; when host python3 or the catalog is
-# unusable it echoes a worst-case-model-set total and returns 3 so callers can
-# soften a fatal check. stdout is ONLY the number — diagnostics go to stderr.
-# JARVIS_MODEL_CATALOG overrides the catalog path (testing); the default is
-# relative because setup.sh cd's to the repo root.
-compute_required_disk_gb() {
-  local smart="${1:-qwen3:8b}" variant="${2:-cuda-build}"
-  local infra_gb=14 worst_models_gb=22
+# compute_model_disk_gb SMART_MODEL -> echoes the whole-GB disk the Ollama model
+# set (compute_ollama_models: smart + fast + embed, de-duped) pulls, from the
+# model catalog's per-tag disk_gb (tags missing from the catalog assume 18 GB
+# each). The model pull runs on EVERY install — a warm re-run whose app images
+# are already cached still (re-)pulls this set — so the disk preflight must
+# charge it even when the app-image budget is already on disk. Returns 0 when
+# catalog-derived; echoes a worst-case model-set constant and returns 3 when
+# host python3 or the catalog is unusable. stdout is ONLY the number —
+# diagnostics go to stderr. JARVIS_MODEL_CATALOG overrides the catalog path.
+compute_model_disk_gb() {
+  local smart="${1:-qwen3:8b}" worst_models_gb=22
   local catalog="${JARVIS_MODEL_CATALOG:-libs/jarvis_common/jarvis_common/data/model_catalog.json}"
-  local base_gb models_gb
-  base_gb=$(( $(_image_budget_gb "$variant") + infra_gb ))
+  local models_gb
   models_gb="$(python3 - "$catalog" "$(compute_ollama_models "$smart")" 2>/dev/null <<'PY'
 import json
 import math
@@ -460,13 +518,29 @@ print(math.ceil(sum(disk_by_tag.get(t, UNKNOWN_MODEL_GB) for t in tags)))
 PY
 )" || models_gb=""
   if [ -n "$models_gb" ] && [ "$models_gb" -eq "$models_gb" ] 2>/dev/null; then
-    printf '%s' "$((base_gb + models_gb))"
+    printf '%s' "$models_gb"
     return 0
   fi
   printf '[WARN] model catalog unreadable (%s) — assuming a worst-case %s GB model set\n' \
     "$catalog" "$worst_models_gb" >&2
-  printf '%s' "$((base_gb + worst_models_gb))"
+  printf '%s' "$worst_models_gb"
   return 3
+}
+
+# compute_required_disk_gb SMART_MODEL [VARIANT] -> echoes the whole-GB disk a
+# cold install writes to the Docker data root: the app-image budget
+# (variant-keyed, see _image_budget_gb) + infra image pulls (postgres/qdrant/
+# ollama/litellm/vector, incl. containerd blob retention) + the Ollama model set
+# (compute_model_disk_gb). Returns 0 when the model sum is catalog-derived; when
+# host python3 or the catalog is unusable it echoes a worst-case total and
+# returns 3 so callers can soften a fatal check. stdout is ONLY the number.
+compute_required_disk_gb() {
+  local smart="${1:-qwen3:8b}" variant="${2:-cuda-build}"
+  local infra_gb=14 base_gb models_gb rc=0
+  base_gb=$(( $(_image_budget_gb "$variant") + infra_gb ))
+  models_gb="$(compute_model_disk_gb "$smart")" || rc=$?
+  printf '%s' "$((base_gb + models_gb))"
+  return "$rc"
 }
 
 # resolve_docker_data_root -> echoes the Docker data root, where image layers,
@@ -613,6 +687,56 @@ local-https|https|3443|localhost|fragment|secure|localhost|mkcert|experimental
 letsencrypt|https|443|domain|fragment|secure|domain|letsencrypt|supported
 tunnel|https|443|tunnel-host|fragment|secure|tunnel-host|cloudflare|supported
 ROUTES
+}
+
+# registry_profile_host_ports PROFILE... -> the extra HOST TCP ports the named
+# active profiles publish, space-separated and de-duplicated. The always-on
+# services have a fixed default port list in setup.sh, but an active TLS edge or
+# optional service binds MORE host ports; a port pre-check that ignored them
+# would green-light a port that then collides at `up`. Values mirror the
+# published `ports:` of each group's service (docker-compose.yml / overlays):
+#   letsencrypt   caddy ACME edge -> 80, 443
+#   caddy-local   local mkcert HTTPS terminator -> 3443
+#   observability langfuse -> 3002
+#   vllm          vLLM overlay -> 8080
+#   tunnel/telegram  cloudflared/telegram dial OUT — no host port published
+registry_profile_host_ports() {
+  local p out=""
+  for p in "$@"; do
+    case "$p" in
+      letsencrypt)   out="$out 80 443" ;;
+      caddy-local)   out="$out 3443" ;;
+      observability) out="$out 3002" ;;
+      vllm)          out="$out 8080" ;;
+    esac
+  done
+  # De-duplicate, order-stable (letsencrypt could otherwise repeat 443).
+  local seen="" port final=""
+  for port in $out; do
+    _env_key_in_list "$port" "$seen" && continue
+    seen="$seen $port"; final="${final:+$final }$port"
+  done
+  printf '%s' "$final"
+}
+
+# readiness_verdict RC ENVIRONMENT -> the action setup.sh's readiness wrapper
+# takes for a production-readiness-check.sh exit code, under its 0/2/1 contract:
+#   0             -> "ok"    all checks passed
+#   2             -> "warn"  warnings present; NEVER fatal, in any environment
+#   1 + production -> "abort" HIGH issues; fatal only on the production/letsencrypt path
+#   1 + other     -> "warn"  HIGH issues are advisory off the production path (dev tolerance)
+#   any other rc  -> "warn"  unknown nonzero: surface it, never silently abort
+# Pairing this with the script's exit-code flip in ONE change is what stops a
+# routine warning (e.g. missing SMTP, now exit 2) from aborting a production
+# install the moment the flip lands.
+readiness_verdict() {
+  local rc="$1" env="$2"
+  case "$rc" in
+    0) printf 'ok' ;;
+    2) printf 'warn' ;;
+    1) [ "$env" = "production" ] && printf 'abort' || printf 'warn' ;;
+    *) printf 'warn' ;;
+  esac
 }
 
 # backfill_torch_variant_from_env — give a pre-1.1 .env the TORCH_VARIANT pair it

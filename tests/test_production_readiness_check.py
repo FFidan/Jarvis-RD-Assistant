@@ -113,8 +113,10 @@ def test_weak_litellm_key_warns_in_dev() -> None:
             "POSTGRES_PASSWORD": _STRONG_POSTGRES,
         }
     )
-    # Should NOT exit 1 in development.
-    assert result.returncode == 0, "Expected exit 0 for placeholder LITELLM_MASTER_KEY in dev"
+    # A weak secret in dev is a WARN, not a HIGH: exit 2 (warnings present), never 1.
+    assert result.returncode == 2, (
+        "Expected exit 2 (warn, not HIGH) for placeholder LITELLM_MASTER_KEY in dev"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +191,10 @@ def test_weak_postgres_password_warns_in_dev() -> None:
             "LITELLM_MASTER_KEY": _STRONG_LITELLM,
         }
     )
-    assert result.returncode == 0, "Expected exit 0 for weak POSTGRES_PASSWORD in dev"
+    # A weak secret in dev is a WARN, not a HIGH: exit 2 (warnings present), never 1.
+    assert result.returncode == 2, (
+        "Expected exit 2 (warn, not HIGH) for weak POSTGRES_PASSWORD in dev"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +303,46 @@ def test_smtp_row_reports_presence_not_stdout() -> None:
     assert "stdout" not in text
 
 
-def test_warnings_present_still_exit_zero() -> None:
-    """Pin: a WARN-carrying run exits 0 (this task keeps the exit contract)."""
+# ---------------------------------------------------------------------------
+# Exit contract: 0 = clean, 2 = warnings present, 1 = HIGH issues
+# ---------------------------------------------------------------------------
+
+
+def test_warnings_present_exit_two() -> None:
+    """A WARN-carrying run (no HIGH) exits 2, so callers can tell it from clean."""
     result = _run({"ENVIRONMENT": "development"})
     combined = result.stdout + result.stderr
     assert "WARN" in combined, "expected at least one WARN row in a bare dev run"
-    assert result.returncode == 0, f"WARN-only run must exit 0, got {result.returncode}"
+    assert result.returncode == 2, f"WARN-only run must exit 2, got {result.returncode}"
+
+
+def test_clean_run_exits_zero() -> None:
+    """A run with no WARN and no HIGH exits 0."""
+    result = _run(
+        {
+            "ENVIRONMENT": "development",
+            "JARVIS_API_KEY": _STRONG_API_KEY,
+            "LITELLM_MASTER_KEY": _STRONG_LITELLM,
+            "POSTGRES_PASSWORD": _STRONG_POSTGRES,
+            "QDRANT_API_KEY": _STRONG_LITELLM,
+            "JARVIS_CONFIG_KEY": _STRONG_LITELLM,
+            "SMTP_HOST": "smtp.example.test",
+            "SMTP_FROM": "jarvis@example.test",
+        }
+    )
+    combined = result.stdout + result.stderr
+    assert "WARN" not in combined, f"expected no WARN rows, got:\n{combined}"
+    assert result.returncode == 0, f"clean run must exit 0, got {result.returncode}"
+
+
+def test_high_issue_exits_one() -> None:
+    """A HIGH issue (placeholder secret in production) exits 1."""
+    result = _run(
+        {
+            "ENVIRONMENT": "production",
+            "JARVIS_API_KEY": _STRONG_API_KEY,
+            "LITELLM_MASTER_KEY": "changeme",  # placeholder -> HIGH in production
+            "POSTGRES_PASSWORD": _STRONG_POSTGRES,
+        }
+    )
+    assert result.returncode == 1, f"HIGH-issue run must exit 1, got {result.returncode}"
