@@ -47,12 +47,18 @@ jobs:
 
       - name: Every pinned image publishes a linux/arm64 manifest
         run: |
-          # The 2026-07 field failure was an arm64 VM. Guard that every image
-          # pinned in versions.env still ships a linux/arm64 entry in its manifest
-          # list, so an arm64 install has an image to pull for each service.
+          # The 2026-07 field failure was an arm64 VM. Guard that every image an
+          # arm64 install actually pulls still ships a linux/arm64 entry in its
+          # manifest list. OLLAMA_ROCM_IMAGE is exempt: ROCm targets AMD discrete
+          # GPUs, which are amd64-only, so an arm64 host never selects the ROCm
+          # overlay and never pulls that image.
           missing=""
           while IFS='=' read -r key img; do
             case "$key" in *_IMAGE) ;; *) continue ;; esac
+            if [ "$key" = "OLLAMA_ROCM_IMAGE" ]; then
+              echo "skip: ${key} (${img}) is amd64-only by design (AMD ROCm); not pulled on arm64"
+              continue
+            fi
             if docker buildx imagetools inspect --format '{{json .Manifest}}' "$img" 2>/dev/null | grep -q 'arm64'; then
               echo "ok: ${key} (${img}) has linux/arm64"
             else
