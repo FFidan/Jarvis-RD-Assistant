@@ -18,6 +18,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jarvis_common.task_registry as task_registry
 import pytest
 from paper_ingestion.pipelines import auto_fetch as af
 
@@ -257,4 +258,132 @@ async def test_escaped_process_exception_is_logged_at_warning(monkeypatch, caplo
     assert len(process_warnings) == 1, (
         "the escaped process exception must be logged exactly once at WARNING; "
         f"got records: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# automation.auto_summarize_discovered toggle (default OFF) — best-effort
+# defer of paper.summarize for a newly-chunked, unsummarized paper.
+# ---------------------------------------------------------------------------
+
+
+def _to_process_app(conn) -> SimpleNamespace:
+    """Like _make_app, but for the process-step (one paper pending chunk)."""
+    return _make_app(conn)
+
+
+def _configure_conn_for_process_one_paper(conn, *, auto_summarize_value) -> None:
+    """Wire a single to-process paper (id=7) plus the config/EXISTS reads used
+    by the auto-summarize toggle. ``.fetch()`` drives the four positional
+    queries (sources/topics/to_download/to_process); ``.fetchrow``/``.fetchval``
+    back the toggle read and the paper_summaries EXISTS guard respectively.
+    """
+    storage = af.PDF_STORAGE_PATH
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [],  # sources
+            [],  # topics
+            [],  # to_download
+            [{"id": 7, "pdf_local_path": f"{storage}/7.pdf"}],  # to_process
+        ]
+    )
+    conn.fetchrow = AsyncMock(return_value={"value": auto_summarize_value})
+    conn.fetchval = AsyncMock(return_value=False)  # no existing paper_summaries row
+
+
+@pytest.mark.asyncio
+async def test_auto_summarize_toggle_on_defers_paper_summarize_once(monkeypatch):
+    """Toggle ON: a newly-chunked, unsummarized paper defers paper.summarize once."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    _configure_conn_for_process_one_paper(conn, auto_summarize_value=True)
+    app = _to_process_app(conn)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with (
+        patch.object(
+            af,
+            "run_process_pdf",
+            AsyncMock(return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}),
+        ),
+        patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}),
+    ):
+        await af.run_auto_pipeline(app)
+
+    mock_task.defer_async.assert_awaited_once()
+    call_kwargs = mock_task.defer_async.await_args.kwargs
+    assert call_kwargs.get("paper_id") == 7
+    assert "job_id" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_auto_summarize_toggle_off_defers_nothing(monkeypatch):
+    """Toggle OFF (default): no paper.summarize defer, even for an unsummarized paper."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    _configure_conn_for_process_one_paper(conn, auto_summarize_value=False)
+    app = _to_process_app(conn)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with (
+        patch.object(
+            af,
+            "run_process_pdf",
+            AsyncMock(return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}),
+        ),
+        patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}),
+    ):
+        await af.run_auto_pipeline(app)
+
+    mock_task.defer_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auto_summarize_defer_failure_is_swallowed(monkeypatch, caplog):
+    """A raising paper.summarize defer is logged via logger.exception and does not
+    escape to run_auto_pipeline's outer 'unhandled error' guard."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    _configure_conn_for_process_one_paper(conn, auto_summarize_value=True)
+    app = _to_process_app(conn)
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock(side_effect=RuntimeError("broker down"))
+
+    # NOTE: do not mock af.logger.error directly — Logger.exception() delegates
+    # to self.error() internally, so a mocked error() would silently swallow
+    # the record caplog is meant to observe. caplog attaches its own handler
+    # instead, leaving the real logger methods (and their delegation) intact.
+    with (
+        patch.object(
+            af,
+            "run_process_pdf",
+            AsyncMock(return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}),
+        ),
+        patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}),
+        caplog.at_level("ERROR", logger=af.logger.name),
+    ):
+        await af.run_auto_pipeline(app)
+
+    mock_task.defer_async.assert_awaited_once()  # the attempt was made
+    assert not any("unhandled error" in rec.getMessage() for rec in caplog.records), (
+        "defer failure must be swallowed inside the guarded-defer block, "
+        "never surfaced to the outer pipeline error handler"
+    )
+    enqueue_failed = [
+        rec
+        for rec in caplog.records
+        if rec.levelname == "ERROR"
+        and "paper.summarize enqueue failed for paper 7" in rec.getMessage()
+    ]
+    assert len(enqueue_failed) == 1, (
+        f"expected exactly one enqueue-failed ERROR record; got: "
+        f"{[r.getMessage() for r in caplog.records]}"
     )
