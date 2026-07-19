@@ -63,6 +63,17 @@ export function clearStoredSetupToken(): void {
   }
 }
 
+/**
+ * Extract the setup token from a URL fragment (`#setup_token=…`). The fragment
+ * form keeps the bearer out of the initial request line, so it never reaches
+ * server/proxy access logs — unlike the `?setup_token=` query form, which is
+ * still accepted for links printed before the fragment migration.
+ */
+export function readSetupTokenFromHash(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  return new URLSearchParams(raw).get('setup_token');
+}
+
 export interface StepNavProps {
   stepNumber: number;
   totalSteps: number;

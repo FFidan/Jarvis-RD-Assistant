@@ -21,7 +21,12 @@ import { useJobStore } from '@/stores/job-store';
 
 function LocationDisplay() {
   const location = useLocation();
-  return <span data-testid="location-search">{location.search}</span>;
+  return (
+    <>
+      <span data-testid="location-search">{location.search}</span>
+      <span data-testid="location-hash">{location.hash}</span>
+    </>
+  );
 }
 
 vi.mock('@/lib/api', () => ({
@@ -547,6 +552,24 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId('location-search').textContent).not.toContain('setup_token');
+    });
+    // The step query survives the strip.
+    expect(screen.getByTestId('location-search').textContent).toContain('step=1');
+  });
+
+  // The token also arrives as a URL fragment (#setup_token=…), which — unlike
+  // the query form — never reaches the wire or server access logs. It is
+  // captured and stripped from the address bar on mount.
+  it('captures setup_token from the URL fragment and strips it from the address bar on mount', async () => {
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=1#setup_token=hash-tok');
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    // The fragment token is stored for the bootstrap write…
+    await waitFor(() => {
+      expect(sessionStorage.getItem('jarvis_setup_token')).toBe('hash-tok');
+    });
+    // …and removed from the address bar so it never lingers in history.
+    await waitFor(() => {
+      expect(screen.getByTestId('location-hash').textContent).not.toContain('setup_token');
     });
     // The step query survives the strip.
     expect(screen.getByTestId('location-search').textContent).toContain('step=1');

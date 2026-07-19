@@ -96,7 +96,7 @@ export function AdminStep({
             autoComplete="off"
           />
           <p className="mt-1 text-xs text-muted-foreground">
-            Printed by ./setup.sh on the server — the line ending in /setup?setup_token=…
+            Printed by ./setup.sh on the server — the line ending in /setup#setup_token=…
           </p>
         </div>
       )}
