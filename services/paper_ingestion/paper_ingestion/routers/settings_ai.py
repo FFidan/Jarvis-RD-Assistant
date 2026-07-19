@@ -25,10 +25,6 @@ from paper_ingestion.services.ai_settings import (
 
 router = APIRouter(prefix="/api/settings/ai", tags=["settings"])
 
-# Allow the session-based admin dependency without requiring X-API-Key.
-# Mark as session-exempt so main.py can register with dependencies=[].
-router.auth_exempt = True  # type: ignore[attr-defined]
-
 _CONFIG_PATH = find_candidate_config_path()
 
 

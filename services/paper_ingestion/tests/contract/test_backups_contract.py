@@ -1,8 +1,10 @@
 """Contract tests for the admin Backup router (GET/POST /api/admin/backups).
 
-Auth: routers/backups.py is included with ``dependencies=[]`` (no global
-verify_api_key) and ``router.auth_exempt=True``; every route is gated by
-``Depends(require_admin)`` (session role=='admin' only). We seed a real
+Auth: the app-level ``verify_api_key`` runs on these routes and is satisfied by
+a valid session (it returns early once SessionMiddleware has set
+``request.state.user_id``), so no X-API-Key is sent here. Authorization is
+``Depends(require_admin)`` (session role=='admin' only) on every route except
+``GET /restore/status``, which uses ``restore_status_auth``. We seed a real
 users+sessions row so SessionMiddleware sets request.state.user_role='admin'.
 
 The backup directory + trigger sentinel are pointed at a tmp_path via the

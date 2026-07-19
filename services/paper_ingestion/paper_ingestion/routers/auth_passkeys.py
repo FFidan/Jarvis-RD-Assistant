@@ -65,9 +65,9 @@ from paper_ingestion.routers.auth import UserResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth/passkeys", tags=["auth-passkeys"])
-# Exempt from the global verify_api_key dep — enforced by the /api/auth/ path
-# check in verify_api_key. Marker attribute so future linters can audit.
-router.auth_exempt = True  # type: ignore[attr-defined]
+# Exempt from the app-level verify_api_key by the `/api/auth/` path check inside
+# it. login/* and capability are unauthenticated; register/list/delete enforce
+# the session in-handler via current_user_id_strict.
 
 RP_NAME = "JARVIS"
 _CHALLENGE_TTL_SQL = "now() + INTERVAL '5 minutes'"
