@@ -37,6 +37,7 @@ from paper_ingestion.models import (
     UserStateResponse,
 )
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
+from paper_ingestion.services.markdown_export import build_paper_markdown
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,32 @@ async def get_papers_citations(
     ordered = [rows_by_id[pid] for pid in body.paper_ids if pid in rows_by_id]
     text = build_citations(ordered, body.format)
     return _citation_response(text, body.format, "citations")
+
+
+# ---------------------------------------------------------------------------
+# Markdown knowledge export
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{paper_id}/export.md")
+@limiter.limit("30/minute")
+async def export_paper_markdown(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> Response:
+    """Return the paper's summaries, notes, cards, and extractions as Markdown."""
+    async with db_pool.acquire() as conn:
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
+        export = await build_paper_markdown(conn, paper_id, user_id)
+
+    filename = f"{_safe_filename(export.stem)}.md"
+    return Response(
+        content=export.text,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------

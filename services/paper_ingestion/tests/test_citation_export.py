@@ -8,6 +8,7 @@ pool/conn + dependency overrides for auth + db pool.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from unittest.mock import AsyncMock
 
@@ -422,4 +423,160 @@ async def test_bulk_citations_none_visible_404(asgi_client) -> None:
             "/api/papers/citations",
             json={"paper_ids": [99], "format": "ris"},
         )
+    assert resp.status_code == 404, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Markdown knowledge export
+# ---------------------------------------------------------------------------
+
+
+class _ScopedConn:
+    """Fake connection that enforces the per-user scoping contract.
+
+    Rows carrying a ``user_id`` are only returned when the query both names
+    ``user_id`` and binds the caller's id as ``$2``, so an unscoped read fails
+    here instead of silently exporting another tenant's workspace.
+    """
+
+    def __init__(self, tables: dict[str, list[dict]]) -> None:
+        self._tables = tables
+
+    _SCOPED = re.compile(r"user_id (?:=|IS NOT DISTINCT FROM) \$2")
+
+    def _select(self, sql: str, args: tuple) -> list[FakeRecord]:
+        table = next(name for name in self._tables if name in sql)
+        rows = [r for r in self._tables[table] if r["paper_id"] == args[0]]
+        if any("user_id" in r for r in rows):
+            assert self._SCOPED.search(sql), f"unscoped query for {table}: {sql}"
+            rows = [r for r in rows if r.get("user_id") == args[1]]
+        return [FakeRecord(r) for r in rows]
+
+    async def fetch(self, sql: str, *args) -> list[FakeRecord]:
+        return self._select(sql, args)
+
+    async def fetchrow(self, sql: str, *args) -> FakeRecord | None:
+        rows = self._select(sql, args)
+        return rows[0] if rows else None
+
+
+def _markdown_tables(**overrides) -> dict[str, list[dict]]:
+    tables: dict[str, list[dict]] = {
+        "papers": [dict(_paper(paper_id=5, zotero_citation_key="Key2017"), paper_id=5)],
+        "paper_summaries": [
+            {
+                "paper_id": 5,
+                "user_id": 1,
+                "summary_detailed": "A detailed summary.",
+                "methodology": "Ablation study.",
+                "limitations": "English only.",
+            }
+        ],
+        "paper_notes": [
+            {
+                "paper_id": 5,
+                "user_id": 1,
+                "user_note": "My own note.",
+                "highlight_text": "a quoted span",
+                "page_number": 3,
+            },
+            {
+                "paper_id": 5,
+                "user_id": 2,
+                "user_note": "OTHER USER SECRET NOTE",
+                "highlight_text": "OTHER USER SECRET HIGHLIGHT",
+                "page_number": 9,
+            },
+        ],
+        "cards": [
+            {"paper_id": 5, "user_id": 1, "front": "What is attention?", "back": "A weighting."},
+            {"paper_id": 5, "user_id": 2, "front": "OTHER USER SECRET CARD", "back": "nope"},
+        ],
+        "paper_extractions": [
+            {"paper_id": 5, "user_id": 1, "extractions": {"dataset": {"value": "WMT14"}}},
+            {"paper_id": 5, "user_id": 2, "extractions": {"dataset": "OTHER USER SECRET DATASET"}},
+        ],
+    }
+    return tables | overrides
+
+
+async def _build(tables: dict[str, list[dict]], user_id: int = 1):
+    from paper_ingestion.services.markdown_export import build_paper_markdown
+
+    return await build_paper_markdown(_ScopedConn(tables), 5, user_id)
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_renders_all_sections() -> None:
+    export = await _build(_markdown_tables())
+
+    assert export.stem == "attention-is-all-you-need"
+    assert "# Attention Is All You Need" in export.text
+    assert 'title: "Attention Is All You Need"' in export.text
+    assert "A detailed summary." in export.text
+    assert "### Methodology\n\nAblation study." in export.text
+    assert "### Limitations\n\nEnglish only." in export.text
+    assert "- My own note. (p. 3)\n  > a quoted span" in export.text
+    assert "### What is attention?\n\nA weighting." in export.text
+    assert "| dataset | WMT14 |" in export.text
+    assert "```bibtex\n@article{Key2017" in export.text
+    assert "<" not in export.text, "Obsidian export must be plain Markdown, no HTML"
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_excludes_another_users_workspace() -> None:
+    """The decisive tenancy assertion: user 2's rows never reach user 1's export."""
+    export = await _build(_markdown_tables(), user_id=1)
+
+    assert "My own note." in export.text
+    for secret in (
+        "OTHER USER SECRET NOTE",
+        "OTHER USER SECRET HIGHLIGHT",
+        "OTHER USER SECRET CARD",
+        "OTHER USER SECRET DATASET",
+    ):
+        assert secret not in export.text
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_placeholder_when_not_summarized() -> None:
+    from paper_ingestion.services.markdown_export import NO_SUMMARY_PLACEHOLDER
+
+    export = await _build(_markdown_tables(paper_summaries=[]))
+
+    assert NO_SUMMARY_PLACEHOLDER in export.text
+    assert "not yet been summarized" in export.text
+    assert "```bibtex" in export.text, "an unsummarized paper still exports its citation"
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_endpoint_headers(asgi_client) -> None:
+    pool, conn = make_pool_and_conn()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            FakeRecord({"discovered_by": 1}),  # assert_paper_ownership
+            _paper(paper_id=5, zotero_citation_key="Key2017"),  # papers JOIN
+            None,  # paper_summaries → placeholder path
+        ]
+    )
+    conn.fetch = AsyncMock(return_value=[])
+    client, _app = asgi_client(pool, user_id=1)
+    async with client:
+        resp = await client.get("/api/papers/5/export.md")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert resp.headers["content-disposition"] == (
+        'attachment; filename="attention-is-all-you-need.md"'
+    )
+    assert resp.text.startswith("---\n")
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_non_owner_404(asgi_client) -> None:
+    pool, conn = make_pool_and_conn()
+    conn.fetchrow = AsyncMock(return_value=None)  # assert_paper_ownership → 404
+    client, _app = asgi_client(pool, user_id=2)
+    async with client:
+        resp = await client.get("/api/papers/999/export.md")
     assert resp.status_code == 404, resp.text
