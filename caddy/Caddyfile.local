@@ -11,11 +11,11 @@
 	}
 }
 
-# Listen on the host port that's mapped to 3001 inside the container.
-# Both hostnames share the same cert (mkcert SAN: jarvis.localhost, localhost,
-# 127.0.0.1). Browsers trust it because the mkcert root CA is in the system
-# trust store.
-:3001 {
+# Listen on 3443 inside the container (published to host 127.0.0.1:3443, distinct
+# from the dashboard's own 3001). Both hostnames share the same cert (mkcert SAN:
+# jarvis.localhost, localhost, 127.0.0.1). Browsers trust it because the mkcert
+# root CA is in the system trust store.
+:3443 {
 	tls /certs/cert.pem /certs/key.pem
 
 	# Match prod hardening — HSTS belongs at the TLS terminator only.

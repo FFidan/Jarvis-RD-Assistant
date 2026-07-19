@@ -29,6 +29,7 @@ def _make_paper(
     published_date: date | None = None,
     authors: list[str] | None = None,
     external_id: str = "arxiv:0001",
+    metadata: dict | None = None,
 ) -> PaperCreate:
     return PaperCreate(
         external_id=external_id,
@@ -38,6 +39,7 @@ def _make_paper(
         abstract=abstract,
         published_date=published_date or date.today(),
         url=f"https://arxiv.org/abs/{external_id}",
+        metadata=metadata or {},
     )
 
 
@@ -49,6 +51,7 @@ def _make_profile(
     tracked_author_s2_ids: set[str] | None = None,
     negative_centroid: list[float] | None = None,
     l2_lambda: float = 0.5,
+    dampened_topics: set[int] | None = None,
 ) -> UserProfile:
     return UserProfile(
         topics=topics or [],
@@ -56,6 +59,7 @@ def _make_profile(
         tracked_author_s2_ids=tracked_author_s2_ids or set(),
         library_centroid=centroid,
         negative_centroid=negative_centroid,
+        dampened_topics=dampened_topics or set(),
         weights={
             "embedding": 0.2,
             "topic": 0.2,
@@ -77,6 +81,16 @@ def _make_profile(
 def _make_embedder(return_vecs: list[list[float]]) -> AsyncMock:
     mock = AsyncMock()
     mock.embed_texts.return_value = return_vecs
+    return mock
+
+
+# Local helper — two-call stage-1 contract: topics embed first, candidates second.
+# Mirrors the side_effect pattern in test_stage1_with_topics_max_topic_sim so the
+# candidate vector stays distinct from the topic vector (a single return_value would
+# feed the topic vector into the candidate slot, defeating orthogonal/negative cases).
+def _make_staged_embedder(topic_vecs: list[list[float]], cand_vecs: list[list[float]]) -> AsyncMock:
+    mock = AsyncMock()
+    mock.embed_texts.side_effect = [topic_vecs, cand_vecs]
     return mock
 
 
@@ -449,3 +463,92 @@ def test_llm_constants_read_from_cfg_at_call_time(monkeypatch):
     # Empty / unset PULSE_STAGE2_MODEL defaults to the capable "smart" role:
     # the "fast" role echoes the JSON schema and cannot produce structured output.
     assert _llm_model() == "smart"
+
+
+# ---------------------------------------------------------------------------
+# S2 author-id metadata shape (regression: unhashable-dict crash)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage1_author_match_with_s2_dict_metadata():
+    """s2_author_ids stored as [{"name", "authorId"}] matches by authorId without crashing."""
+    embedder = _make_embedder([[0.1, 0.2, 0.3, 0.4]])
+    profile = _make_profile(tracked_author_s2_ids={"1730375"})
+    paper = _make_paper(metadata={"s2_author_ids": [{"name": "Jane Doe", "authorId": "1730375"}]})
+
+    scored = await stage1_embedding_filter([paper], profile, embedder, top_k=5)
+
+    assert len(scored) == 1
+    assert scored[0].signals["author_bonus"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_stage1_author_match_s2_ids_mixed_shapes():
+    """Mixed dict/str/int s2_author_ids entries never crash; a string id still matches."""
+    embedder = _make_embedder([[0.1, 0.2, 0.3, 0.4]])
+    profile = _make_profile(tracked_author_s2_ids={"42"})
+    paper = _make_paper(
+        metadata={"s2_author_ids": [{"authorId": 42}, "legacy-string-id", {"name": "x"}]}
+    )
+
+    scored = await stage1_embedding_filter([paper], profile, embedder, top_k=5)
+
+    assert len(scored) == 1
+    assert scored[0].signals["author_bonus"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# L3 topic dampening (consumed at stage-1 topic similarity)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage1_dampened_topic_similarity_halved():
+    """A dampened topic's positive similarity is halved vs. the undampened profile."""
+    topic = TopicRef(id=7, name="quantum", description=None)
+    topic_vec = [0.1, 0.2, 0.3, 0.4]
+    cand_vec = [0.1, 0.2, 0.3, 0.4]
+    paper = _make_paper()
+
+    damped = await stage1_embedding_filter(
+        [paper],
+        _make_profile(topics=[topic], dampened_topics={7}),
+        _make_staged_embedder([topic_vec], [cand_vec]),
+        top_k=5,
+    )
+    full = await stage1_embedding_filter(
+        [paper],
+        _make_profile(topics=[topic]),
+        _make_staged_embedder([topic_vec], [cand_vec]),
+        top_k=5,
+    )
+
+    assert damped[0].signals["topic"] == pytest.approx(full[0].signals["topic"] * 0.5)
+
+
+@pytest.mark.asyncio
+async def test_stage1_dampening_never_raises_similarity():
+    """Dampening never RAISES a similarity: positive halves; zero and negative pass through."""
+    cases = [
+        ([0.1, 0.2, 0.3, 0.4], [0.1, 0.2, 0.3, 0.4]),  # positive cosine
+        ([0.1, 0.0, 0.0, 0.0], [0.0, 0.2, 0.0, 0.0]),  # orthogonal -> zero
+        ([-0.1, -0.2, -0.3, -0.4], [0.1, 0.2, 0.3, 0.4]),  # negative cosine
+    ]
+    topic = TopicRef(id=7, name="quantum", description=None)
+    for topic_vec, cand_vec in cases:
+        damped = await stage1_embedding_filter(
+            [_make_paper()],
+            _make_profile(topics=[topic], dampened_topics={7}),
+            _make_staged_embedder([topic_vec], [cand_vec]),
+            top_k=5,
+        )
+        full = await stage1_embedding_filter(
+            [_make_paper()],
+            _make_profile(topics=[topic]),
+            _make_staged_embedder([topic_vec], [cand_vec]),
+            top_k=5,
+        )
+        assert damped[0].signals["topic"] <= full[0].signals["topic"]
+        if full[0].signals["topic"] <= 0:
+            assert damped[0].signals["topic"] == full[0].signals["topic"]

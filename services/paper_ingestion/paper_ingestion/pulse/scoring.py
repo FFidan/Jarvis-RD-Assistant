@@ -57,6 +57,7 @@ _LLM_MAX_TOKENS = 1536  # headroom for JSON even if a model leaks reasoning befo
 _LLM_TEMPERATURE = 0.0
 _RECENCY_HALF_LIFE_DAYS = 30.0  # e-folding time for the recency decay: exp(-age_days / N)
 _AUTHOR_BONUS_WEIGHT = 0.5  # weight applied to author_bonus in the stage-1 preliminary score
+_DAMPENED_TOPIC_FACTOR = 0.5  # L3: halve a dampened topic's positive similarity; never raise it
 
 
 def _stage2_max_retries() -> int:
@@ -203,23 +204,44 @@ async def stage1_embedding_filter(
         )
         embedding_sim -= negative_penalty
 
-        # Max topic similarity
+        # Max topic similarity — L3 dampened topics have positive similarity halved
         topic_sim = 0.0
         if topic_embeddings:
-            topic_sim = max((_cosine(cand_vec, tv) for tv in topic_embeddings), default=0.0)
+            sims = (
+                (t.id, _cosine(cand_vec, tv)) for t, tv in zip(profile.topics, topic_embeddings)
+            )
+            topic_sim = max(
+                (
+                    s * _DAMPENED_TOPIC_FACTOR if s > 0.0 and tid in profile.dampened_topics else s
+                    for tid, s in sims
+                ),
+                default=0.0,
+            )
 
         # Recency decay
         recency = _recency_decay(candidate.published_date, effective_now)
 
-        # Author bonus: dual-set match — display names (lowercased) OR s2 numeric IDs
+        # Author bonus: dual-set match — display names (lowercased) OR s2 numeric IDs.
+        # s2_author_ids is stored as [{"name", "authorId"}]; tolerate legacy str/int
+        # entries too. Per-candidate isolation: one malformed entry never zeroes the run.
         author_bonus = 0.0
         if profile.tracked_author_names or profile.tracked_author_s2_ids:
-            candidate_names = {a.lower() for a in candidate.authors}
-            candidate_s2_ids = set(candidate.metadata.get("s2_author_ids", []))
-            if (candidate_names & profile.tracked_author_names) or (
-                candidate_s2_ids & profile.tracked_author_s2_ids
-            ):
-                author_bonus = 1.0
+            try:
+                candidate_names = {a.lower() for a in candidate.authors}
+                raw_ids = candidate.metadata.get("s2_author_ids", []) or []
+                candidate_s2_ids = {
+                    str(entry["authorId"])
+                    for entry in raw_ids
+                    if isinstance(entry, dict) and entry.get("authorId")
+                } | {str(entry) for entry in raw_ids if isinstance(entry, str | int)}
+                if (candidate_names & profile.tracked_author_names) or (
+                    candidate_s2_ids & profile.tracked_author_s2_ids
+                ):
+                    author_bonus = 1.0
+            except Exception:  # one malformed candidate must never zero the whole run
+                logger.warning(
+                    "stage1 author-match failed for %r", candidate.external_id, exc_info=True
+                )
 
         signals = {
             "embedding": embedding_sim,

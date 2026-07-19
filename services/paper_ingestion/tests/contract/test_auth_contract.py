@@ -20,8 +20,10 @@ pytestmark = [
 ]
 
 
-def _make_unauthenticated_client(app):
-    return _make_client(app, None)
+def _make_unauthenticated_client(app, *, base_url: str = "http://localhost"):
+    # Loopback base_url so the credential-transport gate on verify/api-key-session
+    # (which requires a loopback Host or forwarded https) is satisfied by default.
+    return _make_client(app, None, base_url=base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -575,3 +577,127 @@ async def test_sec2_409_message_names_both_env_and_wizard(
     detail = resp.json()["detail"]
     assert "OWNER_USER_ID" in detail
     assert "setup wizard" in detail, f"the error message must name the wizard path; got: {detail!r}"
+
+
+# ---------------------------------------------------------------------------
+# Credential-transport gate: verify + api-key-session refuse cleartext LAN
+# origins (non-loopback Host over plain http), but allow loopback or nginx
+# forwarded-https.
+# ---------------------------------------------------------------------------
+
+_LAN_BASE_URL = "http://192.168.1.5"
+
+
+async def _seed_login_token(conn, user_id: int) -> str:
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    await conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+        token_hash,
+        user_id,
+        datetime.now(UTC) + timedelta(minutes=15),
+    )
+    return raw_token
+
+
+async def test_verify_gate_refuses_lan_plaintext(_pi_app_with_pool, _configure_api_key):
+    """POST /api/auth/verify from a non-loopback Host over http → 403 (gate before lookup)."""
+    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+        resp = await c.post("/api/auth/verify", json={"token": "any-token-1234567890abcd"})
+
+    assert resp.status_code == 403, (
+        f"LAN plaintext verify must be refused, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "localhost" in resp.json()["detail"]
+
+
+async def test_verify_gate_allows_loopback_host(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+):
+    """POST /api/auth/verify from a loopback Host → gate passes → 200."""
+    raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/verify", json={"token": raw_token})
+
+    assert resp.status_code == 200, (
+        f"Loopback verify must pass the gate, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_verify_gate_allows_forwarded_https(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+):
+    """POST /api/auth/verify from a LAN Host but X-Forwarded-Proto https → 200."""
+    raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+        resp = await c.post(
+            "/api/auth/verify",
+            json={"token": raw_token},
+            headers={"X-Forwarded-Proto": "https"},
+        )
+
+    assert resp.status_code == 200, (
+        f"Forwarded-https verify must pass the gate, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_api_key_session_gate_refuses_lan_plaintext(
+    _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """POST /api/auth/api-key-session from a non-loopback Host over http → 403 (gate before hmac).
+
+    The gate detail names the supported routes, distinguishing it from the
+    invalid-key 403.
+    """
+    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 403, (
+        f"LAN plaintext api-key-session must be refused, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "localhost" in resp.json()["detail"]
+
+
+async def test_api_key_session_gate_allows_loopback_host(
+    _pi_app_with_pool, _configure_api_key, contract_conn, monkeypatch
+):
+    """POST /api/auth/api-key-session from a loopback Host → gate passes → 200."""
+    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    admin_id = await _seed_user_with_role(contract_conn, "gate-loopback-admin@example.com", "admin")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 200, (
+        f"Loopback api-key-session must mint, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["id"] == admin_id
+
+
+async def test_api_key_session_gate_allows_forwarded_https(
+    _pi_app_with_pool, _configure_api_key, contract_conn, monkeypatch
+):
+    """POST /api/auth/api-key-session from a LAN Host but X-Forwarded-Proto https → 200."""
+    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    admin_id = await _seed_user_with_role(contract_conn, "gate-fwd-admin@example.com", "admin")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+        resp = await c.post(
+            "/api/auth/api-key-session", json={}, headers={"X-Forwarded-Proto": "https"}
+        )
+
+    assert resp.status_code == 200, (
+        f"Forwarded-https api-key-session must mint, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["id"] == admin_id

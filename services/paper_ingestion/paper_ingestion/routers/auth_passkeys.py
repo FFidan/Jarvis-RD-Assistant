@@ -25,6 +25,7 @@ X-Forwarded-Host, so request.url/Host would be attacker-influenceable. See
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import uuid
@@ -153,6 +154,14 @@ def _app_base_origin() -> str | None:
     # http:// APP_BASE_URL rather than advertise an origin browsers block. (Loopback
     # http is trustworthy and is accepted separately in ``_origin_allowed``.)
     if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    # An IP literal (IPv4, or IPv6 with the brackets urlparse already stripped) is never a
+    # valid WebAuthn rp_id — the browser would reject the ceremony, so treat it as unusable.
+    try:
+        ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        pass
+    else:
         return None
     port = (
         f":{parsed_port}"

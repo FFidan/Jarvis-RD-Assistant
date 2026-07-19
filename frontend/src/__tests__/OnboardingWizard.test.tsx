@@ -21,7 +21,12 @@ import { useJobStore } from '@/stores/job-store';
 
 function LocationDisplay() {
   const location = useLocation();
-  return <span data-testid="location-search">{location.search}</span>;
+  return (
+    <>
+      <span data-testid="location-search">{location.search}</span>
+      <span data-testid="location-hash">{location.hash}</span>
+    </>
+  );
 }
 
 vi.mock('@/lib/api', () => ({
@@ -70,6 +75,9 @@ vi.mock('@/lib/api/pulse', () => ({
 
 const api = await import('@/lib/api');
 const pulseApi = await import('@/lib/api/pulse');
+// The barrel above is fully mocked; ApiError comes from the un-mocked core so
+// it is the same class AdminStep checks with `instanceof`.
+const { ApiError } = await import('@/lib/api/core');
 const { OnboardingWizard } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
 
@@ -549,6 +557,24 @@ describe('OnboardingWizard', () => {
     expect(screen.getByTestId('location-search').textContent).toContain('step=1');
   });
 
+  // The token also arrives as a URL fragment (#setup_token=…), which — unlike
+  // the query form — never reaches the wire or server access logs. It is
+  // captured and stripped from the address bar on mount.
+  it('captures setup_token from the URL fragment and strips it from the address bar on mount', async () => {
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=1#setup_token=hash-tok');
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    // The fragment token is stored for the bootstrap write…
+    await waitFor(() => {
+      expect(sessionStorage.getItem('jarvis_setup_token')).toBe('hash-tok');
+    });
+    // …and removed from the address bar so it never lingers in history.
+    await waitFor(() => {
+      expect(screen.getByTestId('location-hash').textContent).not.toContain('setup_token');
+    });
+    // The step query survives the strip.
+    expect(screen.getByTestId('location-search').textContent).toContain('step=1');
+  });
+
   // The captured token is forwarded to the first-run WRITE call.
   it('forwards the setup token as the X-Setup-Token arg to createFirstRunAdmin', async () => {
     const user = userEvent.setup();
@@ -622,5 +648,43 @@ describe('OnboardingWizard', () => {
     await waitFor(() => {
       expect(sessionStorage.getItem('jarvis_setup_token')).toBeNull();
     });
+  });
+
+  // A token-gate 403 while this browser holds no token (second device /
+  // incognito) surfaces an inline "Setup token" paste field.
+  it('renders a setup-token input when admin creation 403s and no token is held', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createFirstRunAdmin).mockRejectedValueOnce(
+      new ApiError(403, '{"detail":"Invalid or missing setup token"}'),
+    );
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    expect(await screen.findByLabelText(/setup token/i)).toBeInTheDocument();
+  });
+
+  // Pasting the token retries the create with it and advances on success.
+  it('retries admin creation with the pasted setup token and advances', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createFirstRunAdmin)
+      .mockRejectedValueOnce(new ApiError(403, '{"detail":"Invalid or missing setup token"}'))
+      .mockResolvedValueOnce({ id: 1, email: 'admin@example.com', role: 'admin' });
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    const tokenInput = await screen.findByLabelText(/setup token/i);
+    await user.type(tokenInput, 'pasted-tok');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.createFirstRunAdmin).mock.calls[1]?.[1]).toBe('pasted-tok');
+    });
+    expect(await screen.findByText(/Cloud LLM keys/i)).toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from jarvis_common.email import MagicLinkDelivery
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -83,7 +84,10 @@ async def test_email_change_cooldown_suppresses_second_token() -> None:
     request = _build_request(pool)
     body = AccountUpdate(email="new@example.com")
 
-    with patch("paper_ingestion.routers.account.send_magic_link", AsyncMock()):
+    with patch(
+        "paper_ingestion.routers.account.send_magic_link",
+        AsyncMock(return_value=MagicLinkDelivery.DELIVERED),
+    ):
         resp1 = await update_account(body=body, request=request, user_id=1)
         resp2 = await update_account(body=body, request=request, user_id=1)
 

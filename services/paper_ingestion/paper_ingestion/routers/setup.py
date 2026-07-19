@@ -297,12 +297,21 @@ def _require_setup_token(request: Request) -> None:
     The token is an additional bootstrap factor (closes the unauthenticated
     first-admin-takeover window). It is enforced only for unsafe methods; the
     read-only setup probes stay open. When no token is configured the gate is a
-    no-op, preserving backward-compatibility for dev/legacy installs.
+    no-op in non-production (backward-compat for dev/legacy installs) but fails
+    closed in production, mirroring the boot gate in ``validate_runtime_config``.
     """
     if request.method in _SAFE_METHODS:
         return
     expected = get_secrets_settings().jarvis_setup_token
     if expected is None:
+        if get_core_settings().environment.lower() == "production":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Setup is locked: JARVIS_SETUP_TOKEN is not configured. "
+                    "Run scripts/init-secrets.sh (or set the secret) and retry."
+                ),
+            )
         logger.warning(
             "First-admin setup is unprotected: a state-changing setup request was "
             "accepted with no JARVIS_SETUP_TOKEN configured and no admin yet. Set "

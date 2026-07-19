@@ -13,12 +13,12 @@
 #     from its flags on every run, since it optimizes for scripted/CI
 #     reprovisioning. This script optimizes for "run it again, nothing
 #     changes" — pick whichever entry point matches your workflow.)
-#   * mkcert is invoked only when present on PATH.
 #   * docker compose up -d is a no-op when the stack is already running.
 #
 # Anything user-facing this script needs to interact with lives in the web
-# wizard — this script only handles the layers Docker+TLS+secrets setup
-# the wizard cannot reach.
+# wizard — this script only handles the Docker + secrets layers the wizard
+# cannot reach. It serves http://localhost and starts no TLS profile; local or
+# public HTTPS is an explicit ./setup.sh choice.
 #
 # Compare with ./setup.sh: setup.sh is interactive and asks questions
 # (access mode, Telegram token). This script is non-interactive and defers
@@ -149,29 +149,11 @@ if [ -x scripts/gen-langfuse-keys.sh ]; then
   bash scripts/gen-langfuse-keys.sh >/dev/null
 fi
 
-# ---------------------------------------------------------------------------
-# mkcert (best-effort; skipped silently when absent)
-# ---------------------------------------------------------------------------
-if command -v mkcert >/dev/null 2>&1; then
-  info "mkcert detected — installing local CA + minting localhost cert"
-  if [ -x scripts/init-mkcert.sh ]; then
-    bash scripts/init-mkcert.sh || warn "mkcert script returned non-zero; continuing with self-signed"
-  else
-    # Fallback path (init-mkcert.sh missing). Certs must land in ./certs as
-    # cert.pem/key.pem — that is the mount Caddy's local profile and the
-    # dashboard expect (docker-compose.yml:541,772; caddy/Caddyfile.local:19).
-    mkcert -install >/dev/null 2>&1 || warn "mkcert -install failed (non-fatal)"
-    mkdir -p certs
-    mkcert -cert-file certs/cert.pem -key-file certs/key.pem \
-      jarvis.localhost localhost 127.0.0.1 ::1 >/dev/null 2>&1 \
-      || warn "mkcert localhost mint failed (non-fatal)"
-  fi
-  ok "Local TLS via mkcert ready"
-else
-  warn "mkcert not found — HTTPS will use the auto-generated self-signed cert."
-  warn "Browsers will warn on first visit. Install mkcert for trusted local TLS:"
-  warn "  https://github.com/FiloSottile/mkcert#installation"
-fi
+# This launcher serves the dashboard over plain http://localhost and engages no
+# TLS profile, so it mints no certificates: minting a cert nothing consumes only
+# invites the false belief that HTTPS is set up. Local TLS is a deliberate choice
+# via ./setup.sh --profile=local-https (caddy-local + mkcert) or a public edge
+# (letsencrypt / Cloudflare tunnel).
 
 # ---------------------------------------------------------------------------
 # Disk preflight (data-root free space vs. a cold install's footprint)
@@ -279,6 +261,19 @@ if [ "${RUNNING_CONTAINERS}" -gt 0 ]; then
   ok "Stack already has ${RUNNING_CONTAINERS} running containers — re-running 'up -d' (idempotent)"
 fi
 
+# Materialise the published images FIRST — before the 20-60 min model download —
+# so a broken ghcr pull fails in seconds instead of after the long wait. A bare
+# `up -d` would instead find them missing and SILENTLY BUILD them (`pull_policy:
+# missing` + a `build:` block) — the multi-GB torch build, and the ENOSPC, that
+# installing from prebuilt images exists to eliminate. This launcher has no
+# --build-local path, so a failed pull must fail loudly rather than fall back. No
+# profiles are engaged here, so the base set (no telegram_bot, no langfuse) starts.
+info "Pulling prebuilt images: ${PUBLISHED_SERVICES_BASE[*]}"
+if ! ${COMPOSE} pull "${PUBLISHED_SERVICES_BASE[@]}"; then
+  die "Image pull failed." \
+      "Check network access to ghcr.io, then re-run this installer. To build from source instead, use ./setup.sh --build-local"
+fi
+
 # Start Ollama alone first, then run the model pull as an attached one-off so
 # its progress streams to the terminal — buried inside a bare `up -d` the
 # 7-11 GB first pull looks like a hang (mirrors setup.sh's streamed pull).
@@ -294,7 +289,7 @@ else
   _FIRST_RUN_PULL=1
   printf '\n'
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s  Downloading models next (7-11 GB, 20-60 min).                 %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  Images pulled — downloading models next (7-11 GB, 20-60 min). %s\n' "$C_YELLOW" "$C_RESET"
   printf '%s  Pull progress streams below. This is not an error.           %s\n' "$C_YELLOW" "$C_RESET"
   printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
   printf '\n'
@@ -303,25 +298,17 @@ fi
 info "Pulling models via ollama-bootstrap..."
 ${COMPOSE} run --rm ollama-bootstrap
 
-# Materialise the published images, then forbid a build. A bare `up -d` here would
-# find them missing and SILENTLY BUILD them (`pull_policy: missing` + a `build:`
-# block) — the multi-GB torch build, and the ENOSPC, that installing from prebuilt
-# images exists to eliminate. This launcher has no --build-local path, so a failed
-# pull must fail loudly rather than fall back. No profiles are engaged here, so the
-# base set (no telegram_bot, no langfuse) is exactly what starts.
-info "Pulling prebuilt images: ${PUBLISHED_SERVICES_BASE[*]}"
-if ! ${COMPOSE} pull "${PUBLISHED_SERVICES_BASE[@]}"; then
-  die "Image pull failed." \
-      "Check network access to ghcr.io, then re-run this installer. To build from source instead, use ./setup.sh --build-local"
-fi
-
 info "Starting Docker Compose stack (${COMPOSE} up -d --no-build)"
 ${COMPOSE} up -d --no-build
 
 # ---------------------------------------------------------------------------
 # Wait for mandatory services to become healthy
 # ---------------------------------------------------------------------------
-MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard)
+# The health gate uses the same base list as setup.sh (mandatory_health_services,
+# setup_lib.sh) so the two entry points cannot drift — this launcher engages no
+# profiles, so it is exactly the always-on base (restore-uploader included, which
+# it also starts and previously left unverified).
+read -ra MANDATORY_SVCS <<< "$(mandatory_health_services "$MANDATORY_HEALTH_BASE")"
 
 printf '\n'
 info "Waiting for services to become healthy..."
@@ -367,7 +354,15 @@ printf '%s================================================================%s\n' 
   "$C_GREEN" "$C_RESET"
 printf '%sJARVIS is up.%s Open %s%s%s to finish setup.\n' \
   "${C_BOLD}" "${C_RESET}" "${C_BOLD}" "${DASHBOARD_URL}" "${C_RESET}"
+# Surface the token-carrying click-to-finish link (shared helper, setup_lib.sh)
+# so a compose install is not a bare-403 dead-end on a second device.
+print_setup_link "$DASHBOARD_URL"
 printf 'The first-run web wizard will walk you through SMTP, the admin email,\n'
 printf 'and (optionally) cloud LLM provider keys.\n'
 printf '%s================================================================%s\n' \
   "$C_GREEN" "$C_RESET"
+
+# Register this checkout with the jarvis-research lifecycle CLI so `jarvis-research`
+# (status / logs / doctor / update) is on PATH after a non-interactive install.
+# Non-fatal: a launcher it cannot write does not fail the bootstrap.
+install_cli_shim "$REPO_ROOT" || warn "Could not install the jarvis-research launcher (non-fatal)."

@@ -12,4 +12,4 @@ services:
       OLLAMA_VULKAN: "1"
     devices:
       - /dev/dri
-    group_add: ["video", "render"]
+    group_add: ["${JARVIS_VIDEO_GID:-44}", "${JARVIS_RENDER_GID:-993}"]

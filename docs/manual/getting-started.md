@@ -10,6 +10,8 @@ This page walks through everything needed to go from a fresh installation to a w
 
 JARVIS RD Assistant runs as a set of Docker Compose services. A default `./setup.sh` install pulls prebuilt images — no local build required — and during setup you choose how you will access JARVIS (localhost, LAN, Cloudflare Tunnel, or Let's Encrypt); see [Choosing how you access JARVIS](access-modes.md). Full installation instructions — Docker prerequisites, the access-mode chooser, and the first-boot checklist — are in the repository's **[DEPLOYMENT.md](../DEPLOYMENT.md)**. This manual does not duplicate those steps.
 
+Once services are healthy, `setup.sh` prints a **`Finish setup:`** link ending in `/setup#setup_token=…` — open that link (it best-effort opens itself in your browser) rather than just navigating to the dashboard URL. The token gates the first-admin bootstrap so nobody else can claim the first account, and travels as a URL fragment so it never reaches a server log. Opening the bare dashboard URL still works, but drops you into [Step 3](#step-3-create-admin-sign-in) with an extra paste step.
+
 ---
 
 ## Onboarding wizard (operator & user)
@@ -46,7 +48,9 @@ Use the **Save & test send** button to save the settings and verify delivery in 
 
 ### Step 3 — Create admin & sign in
 
-Enter the email address for the first administrator account and click **Create admin & sign in**. The system creates the account and establishes a session in the same step (no separate magic-link round-trip needed). This is the mid-flow auth boundary: steps 4–9 require an active session and run after this point.
+Enter the email address for the first administrator account and click **Create admin & sign in**. The system creates the account and establishes a session in the same step — no SMTP and no separate magic-link round-trip needed, regardless of how Step 2 went. This is the mid-flow auth boundary: steps 4–9 require an active session and run after this point.
+
+If you arrived via the `Finish setup:` link, the setup token travelled with you automatically. If you opened the dashboard directly (a second device, an incognito window) and the server has a token configured, this step shows a **Setup token** field instead — paste the token value from the end of the `./setup.sh` output line (`.../setup#setup_token=<this part>`).
 
 This step is skipped when an admin already exists (for example, when resuming a partially-completed setup after the admin was already created).
 
@@ -79,6 +83,8 @@ Pair your account with the Telegram bot to receive Pulse digests and send querie
 ### Step 9 — You’re all set
 
 Setup is complete. `setup_completed` is set to `true`. The wizard does not appear again. The page redirects to `/` (the Home page).
+
+**Before inviting anyone (operator, multi-user mode):** confirm the origin you are signed in at matches `APP_BASE_URL` and how other users will actually reach the instance — an invite link is built from that value, and passkeys require an exact-origin match. Get the origin right first; invite links sent from the wrong origin have to be resent.
 
 ---
 

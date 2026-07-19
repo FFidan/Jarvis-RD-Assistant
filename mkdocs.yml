@@ -128,6 +128,7 @@ nav:
   - Install & Operate:
       - Quickstart: readme-shim.md
       - Deployment: DEPLOYMENT.md
+      - Command line (jarvis-research): manual/cli.md
       - Requirements: REQUIREMENTS.md
       - Security: SECURITY.md
       - Risk Register: known-residual-risks.md

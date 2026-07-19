@@ -3,14 +3,23 @@
 # (setup.sh itself is not cleanly sourceable). Concerns:
 #   - compute_compose_file       : which compose overlays to persist into .env
 #   - compute_ollama_models      : which Ollama tags the bootstrap must pull
+#   - compute_model_disk_gb      : GB the Ollama model set pulls (every run)
 #   - compute_required_disk_gb   : GB a cold install writes to the data root
 #   - resolve_docker_data_root   : where Docker keeps images/volumes/cache
 #   - preflight_disk_lib         : free-vs-required disk measurement core
+#   - compose_meets_floor        : Docker Compose version-floor gate
+#   - registry_profile_host_ports: extra host ports an active profile publishes
+#   - readiness_verdict          : readiness exit-code -> wrapper action (0/2/1)
 #   - upsert_env_var             : idempotent in-place .env key write
+#   - print_setup_link           : click-to-finish wizard link when token exists
+#   - latest_stable_tag          : highest vX.Y.Z release tag on a git remote
+#   - install_cli_shim           : install the jarvis-research launcher + registry
+#   - verify_release_manifests   : registry-backed images for a release all exist
 #   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
 #   - resolve_amd_smi            : locate amd-smi (the stable AMD interface)
 #   - detect_gpu_vendor          : nvidia | amd | intel | none probe
 #   - resolve_gpu_vram_mb        : vendor-neutral total-VRAM (MB) probe
+#   - strip_gpu_args             : drop --gpu selection for the CPU-retry re-exec
 #   - _default_model_for_tier    : tier+backend -> default model id
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
@@ -41,12 +50,16 @@ resolve_amd_smi() {
 }
 
 # detect_gpu_vendor -> echoes nvidia | amd | intel | none.
-# Probe order nvidia -> amd -> intel: discrete vendor tools first (nvidia-smi
-# enumerates a GPU; amd-smi static reports one), then a bare /dev/dri render
-# node (Intel iGPU/dGPU, or an AMD card without any vendor tool installed).
-# JARVIS_DRI_DIR overrides the /dev/dri location for tests.
+# Probe order nvidia -> amd -> render node: discrete vendor tools first
+# (nvidia-smi enumerates a GPU; amd-smi static reports one), then a /dev/dri
+# render node identified by its PCI vendor id. A bare render node is NOT proof
+# of an Intel GPU — VMs expose a virtio-gpu render node (0x1af4) that has no
+# GPU acceleration path — so classify only known accelerators (0x8086 Intel,
+# 0x1002 AMD); virtio / unknown / non-PCI nodes (ARM SoCs have no vendor file)
+# stay on CPU. JARVIS_DRI_DIR / JARVIS_DRM_SYS_DIR override the device and
+# /sys/class/drm locations for tests.
 detect_gpu_vendor() {
-  local smi
+  local smi nodes vendor_file vid
   if smi="$(resolve_nvidia_smi)" && "$smi" -L 2>/dev/null | grep -q .; then
     printf 'nvidia'
     return 0
@@ -55,11 +68,38 @@ detect_gpu_vendor() {
     printf 'amd'
     return 0
   fi
-  if ls "${JARVIS_DRI_DIR:-/dev/dri}"/renderD* >/dev/null 2>&1; then
-    printf 'intel'
-    return 0
+  nodes=("${JARVIS_DRI_DIR:-/dev/dri}"/renderD*)
+  if [ -e "${nodes[0]}" ]; then
+    vendor_file="${JARVIS_DRM_SYS_DIR:-/sys/class/drm}/${nodes[0]##*/}/device/vendor"
+    if [ -r "$vendor_file" ] && read -r vid < "$vendor_file"; then
+      case "$vid" in
+        0x8086) printf 'intel'; return 0 ;;
+        0x1002) printf 'amd';   return 0 ;;
+      esac
+    fi
   fi
   printf 'none'
+}
+
+# resolve_dri_gids -> echoes "<video_gid> <render_gid>", the owning group ids of
+# the first card* and first renderD* node under ${JARVIS_DRI_DIR:-/dev/dri}.
+# The GPU overlays need NUMERIC GIDs in group_add: a group NAME is resolved
+# against the CONTAINER image's /etc/group at container start, and stock ollama
+# images ship no `render` group, so a name fails start on every host. video
+# falls back to the render GID when there is no card* node; returns 1 and echoes
+# nothing when there is no render node (the overlay cannot work without one).
+resolve_dri_gids() {
+  local dri="${JARVIS_DRI_DIR:-/dev/dri}" renders cards render_gid video_gid
+  renders=("$dri"/renderD*)
+  [ -e "${renders[0]}" ] || return 1
+  render_gid="$(stat -c %g "${renders[0]}")" || return 1
+  cards=("$dri"/card*)
+  if [ -e "${cards[0]}" ]; then
+    video_gid="$(stat -c %g "${cards[0]}")" || return 1
+  else
+    video_gid="$render_gid"
+  fi
+  printf '%s %s' "$video_gid" "$render_gid"
 }
 
 # resolve_gpu_vram_mb VENDOR -> echoes the GPU's total VRAM in MB, or returns 1
@@ -115,13 +155,60 @@ print(int(max(sizes)))
   printf '%s' "$mb"
 }
 
+# strip_gpu_args ARGS... -> echoes ARGS with any --gpu selection removed, one
+# arg per line: both the `--gpu VALUE` pair and the `--gpu=VALUE` form. setup.sh
+# rebuilds the interactive CPU-retry re-exec argv from this so its appended
+# `--gpu cpu` is the only GPU flag and the retry cannot loop back into the
+# overlay path. One arg per line (not space-joined) so a value containing spaces
+# survives intact; callers read it back with a while-read loop.
+strip_gpu_args() {
+  local a skip_val=0
+  for a in "$@"; do
+    if [ "$skip_val" -eq 1 ]; then skip_val=0; continue; fi
+    case "$a" in
+      --gpu)   skip_val=1 ;;
+      --gpu=*) ;;
+      *)       printf '%s\n' "$a" ;;
+    esac
+  done
+}
 
+
+
+# compose_meets_floor VERSION FLOOR -> 0 when VERSION >= FLOOR (dotted numeric,
+# an optional leading 'v' tolerated), 1 when it is older, 2 when VERSION is the
+# literal 'unknown' (unreadable — caller decides how to treat it). Used to pin a
+# real Compose floor instead of accepting any v2: the accelerator overlays merge
+# a dev override's `deploy: !reset null`, and the `!reset`/`!override` merge tags
+# require Docker Compose 2.24.4+ (Docker's compose-file merge reference).
+compose_meets_floor() {
+  local ver="${1#v}" floor="$2"
+  [ "$ver" = unknown ] && return 2
+  # Version-sort the pair: VERSION >= FLOOR exactly when FLOOR sorts first (ties
+  # keep FLOOR first, so an equal version still passes).
+  [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n 1)" = "$floor" ]
+}
+
+# _wsl_without_systemd -> 0 when running under WSL (a Microsoft kernel) with no
+# systemd as PID 1. On such a host the docker-ce + `systemctl` install plan
+# starts a SECOND daemon that shadows Docker Desktop's and cannot be enabled
+# (systemctl fails without systemd); the correct fix is to turn on Docker
+# Desktop's WSL integration instead. Probes are env-overridable for testing:
+# JARVIS_PROC_VERSION (the kernel version string) and JARVIS_SYSTEMD_DIR (a
+# present directory means systemd is running).
+_wsl_without_systemd() {
+  grep -qi microsoft "${JARVIS_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
+  [ -d "${JARVIS_SYSTEMD_DIR:-/run/systemd/system}" ] && return 1
+  return 0
+}
 
 # prereq_install_plan OS OS_ID HAS_APT HAS_BREW HAS_DNF MISSING...
 # Prints explicit package-manager commands for supported hosts, one command per
 # line. Docker comes from Docker's official repository (docker-ce +
 # docker-compose-plugin): stock distro packages miss the compose plugin on
-# Debian/Ubuntu and lag Engine releases. Root-escalation contract (setup.sh
+# Debian/Ubuntu and lag Engine releases. A WSL host without systemd gets NO
+# docker plan (return 1) — see _wsl_without_systemd; the manual guidance points
+# it at Docker Desktop's WSL integration instead. Root-escalation contract (setup.sh
 # prints the plan verbatim for consent and rewrites only LINE-LEADING sudo to
 # `sudo -n` for non-interactive runs): every line is unprivileged or starts
 # with exactly one sudo, and remote content is fetched to a temp file as the
@@ -132,26 +219,35 @@ print(int(max(sizes)))
 prereq_install_plan() {
   local os="$1" os_id="$2" has_apt="$3" has_brew="$4" has_dnf="$5"
   shift 5
-  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 item
+  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 needs_python3=0 item
   for item in "$@"; do
     case "$item" in
       docker) needs_docker=1 ;;
       docker-compose) needs_compose=1 ;;
       openssl) needs_openssl=1 ;;
       nvidia-toolkit) needs_toolkit=1 ;;
+      python3) needs_python3=1 ;;
     esac
   done
+
+  # WSL without systemd: refuse to auto-plan a docker-ce install. It would stand
+  # up a second, systemctl-less daemon shadowing Docker Desktop's; the caller
+  # falls through to prereq_manual_guidance, which points at Docker Desktop's WSL
+  # integration instead.
+  if [ "$needs_docker" = "1" ] && _wsl_without_systemd; then
+    return 1
+  fi
 
   case "$os" in
     Linux)
       case "$os_id" in
         debian|ubuntu|linuxmint|pop|popos)
           [ "$has_apt" = "1" ] || return 1
-          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
+          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
           ;;
         fedora)
           [ "$has_dnf" = "1" ] || return 1
-          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit"
+          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
           ;;
         *) return 1 ;;
       esac
@@ -164,6 +260,9 @@ prereq_install_plan() {
       if [ "$needs_openssl" = "1" ]; then
         printf 'brew install openssl\n'
       fi
+      if [ "$needs_python3" = "1" ]; then
+        printf 'brew install python\n'
+      fi
       ;;
     *) return 1 ;;
   esac
@@ -174,7 +273,7 @@ prereq_install_plan() {
 # ${UBUNTU_CODENAME:-$VERSION_CODENAME} from /etc/os-release when it executes.
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_apt() {
-  local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5"
+  local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5" needs_python3="${6:-0}"
   local repo_base=ubuntu
   [ "$os_id" = "debian" ] && repo_base=debian
 
@@ -199,6 +298,9 @@ _prereq_plan_apt() {
   fi
   if [ "$needs_openssl" = "1" ]; then
     packages+=(openssl)
+  fi
+  if [ "$needs_python3" = "1" ]; then
+    packages+=(python3)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo apt-get install -y %s\n' "${packages[*]}"
@@ -225,7 +327,7 @@ _prereq_plan_apt() {
 # installed with one sudo (avoids the dnf4/dnf5 config-manager syntax split).
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_dnf() {
-  local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4"
+  local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4" needs_python3="${5:-0}"
 
   if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
     # Fetch the repo file straight to its root-owned destination — no /tmp hop.
@@ -240,6 +342,9 @@ _prereq_plan_dnf() {
   fi
   if [ "$needs_openssl" = "1" ]; then
     packages+=(openssl)
+  fi
+  if [ "$needs_python3" = "1" ]; then
+    packages+=(python3)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo dnf install -y %s\n' "${packages[*]}"
@@ -259,13 +364,24 @@ _prereq_plan_dnf() {
 # prereq_manual_guidance MISSING... -> human-readable fallback for unsupported
 # or non-mutating paths. Keep this free of private host paths and secrets.
 prereq_manual_guidance() {
-  local item
+  local item wsl=0
+  _wsl_without_systemd && wsl=1
+  # On WSL without systemd, docker-ce is the wrong answer for any docker/compose
+  # gap — point at Docker Desktop's WSL integration once, then suppress the
+  # docker-ce lines below.
+  if [ "$wsl" -eq 1 ]; then
+    case " $* " in
+      *" docker "*|*" docker-compose "*)
+        printf 'On WSL, enable Docker Desktop for Windows and turn on its WSL integration (Docker Desktop > Settings > Resources > WSL integration) rather than installing Docker Engine as a package, which starts a second daemon: https://docs.docker.com/desktop/wsl/\n' ;;
+    esac
+  fi
   for item in "$@"; do
     case "$item" in
-      docker) printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
-      docker-compose) printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
+      docker)         [ "$wsl" -eq 1 ] || printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
+      docker-compose) [ "$wsl" -eq 1 ] || printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
       openssl) printf 'Install openssl with your OS package manager.\n' ;;
       nvidia-toolkit) printf 'Install the NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html\n' ;;
+      python3) printf 'Install Python 3 with your OS package manager (setup uses it for model selection and disk sizing).\n' ;;
     esac
   done
   printf 'After installing Docker, start the daemon and re-run ./setup.sh --check.\n'
@@ -374,23 +490,19 @@ _image_budget_gb() {
   esac
 }
 
-# compute_required_disk_gb SMART_MODEL [VARIANT] -> echoes the whole-GB disk a
-# cold install writes to the Docker data root: the app-image budget
-# (variant-keyed, see _image_budget_gb) + infra image pulls (postgres/qdrant/
-# ollama/litellm/vector, incl. containerd blob retention) + the Ollama model
-# set compute_ollama_models will pull (per-model disk_gb from the model
-# catalog; tags missing from the catalog assume 18 GB each). Returns 0 when
-# the model sum is catalog-derived; when host python3 or the catalog is
-# unusable it echoes a worst-case-model-set total and returns 3 so callers can
-# soften a fatal check. stdout is ONLY the number — diagnostics go to stderr.
-# JARVIS_MODEL_CATALOG overrides the catalog path (testing); the default is
-# relative because setup.sh cd's to the repo root.
-compute_required_disk_gb() {
-  local smart="${1:-qwen3:8b}" variant="${2:-cuda-build}"
-  local infra_gb=14 worst_models_gb=22
+# compute_model_disk_gb SMART_MODEL -> echoes the whole-GB disk the Ollama model
+# set (compute_ollama_models: smart + fast + embed, de-duped) pulls, from the
+# model catalog's per-tag disk_gb (tags missing from the catalog assume 18 GB
+# each). The model pull runs on EVERY install — a warm re-run whose app images
+# are already cached still (re-)pulls this set — so the disk preflight must
+# charge it even when the app-image budget is already on disk. Returns 0 when
+# catalog-derived; echoes a worst-case model-set constant and returns 3 when
+# host python3 or the catalog is unusable. stdout is ONLY the number —
+# diagnostics go to stderr. JARVIS_MODEL_CATALOG overrides the catalog path.
+compute_model_disk_gb() {
+  local smart="${1:-qwen3:8b}" worst_models_gb=22
   local catalog="${JARVIS_MODEL_CATALOG:-libs/jarvis_common/jarvis_common/data/model_catalog.json}"
-  local base_gb models_gb
-  base_gb=$(( $(_image_budget_gb "$variant") + infra_gb ))
+  local models_gb
   models_gb="$(python3 - "$catalog" "$(compute_ollama_models "$smart")" 2>/dev/null <<'PY'
 import json
 import math
@@ -409,13 +521,29 @@ print(math.ceil(sum(disk_by_tag.get(t, UNKNOWN_MODEL_GB) for t in tags)))
 PY
 )" || models_gb=""
   if [ -n "$models_gb" ] && [ "$models_gb" -eq "$models_gb" ] 2>/dev/null; then
-    printf '%s' "$((base_gb + models_gb))"
+    printf '%s' "$models_gb"
     return 0
   fi
   printf '[WARN] model catalog unreadable (%s) — assuming a worst-case %s GB model set\n' \
     "$catalog" "$worst_models_gb" >&2
-  printf '%s' "$((base_gb + worst_models_gb))"
+  printf '%s' "$worst_models_gb"
   return 3
+}
+
+# compute_required_disk_gb SMART_MODEL [VARIANT] -> echoes the whole-GB disk a
+# cold install writes to the Docker data root: the app-image budget
+# (variant-keyed, see _image_budget_gb) + infra image pulls (postgres/qdrant/
+# ollama/litellm/vector, incl. containerd blob retention) + the Ollama model set
+# (compute_model_disk_gb). Returns 0 when the model sum is catalog-derived; when
+# host python3 or the catalog is unusable it echoes a worst-case total and
+# returns 3 so callers can soften a fatal check. stdout is ONLY the number.
+compute_required_disk_gb() {
+  local smart="${1:-qwen3:8b}" variant="${2:-cuda-build}"
+  local infra_gb=14 base_gb models_gb rc=0
+  base_gb=$(( $(_image_budget_gb "$variant") + infra_gb ))
+  models_gb="$(compute_model_disk_gb "$smart")" || rc=$?
+  printf '%s' "$((base_gb + models_gb))"
+  return "$rc"
 }
 
 # resolve_docker_data_root -> echoes the Docker data root, where image layers,
@@ -476,6 +604,144 @@ PUBLISHED_IMAGE_REPOS=(
   ghcr.io/limitcycle-oss/jarvis-dashboard
 )
 
+# -----------------------------------------------------------------------------
+# PROFILE_REGISTRY — single source of truth for every optional service group.
+# -----------------------------------------------------------------------------
+# Both entry points (setup.sh, scripts/jarvis-setup.sh) read this instead of
+# keeping their own hand-maintained profile lists, which is exactly how a group
+# came to be persisted-but-not-health-checked (or started-but-not-persisted).
+# One pipe-delimited row per group; columns, in order:
+#   name              group identifier (== the compose --profile flag)
+#   overlay_file      compose file the group's services live in
+#   profile_flag      the `docker compose --profile <flag>` name (== name)
+#   persist           yes = written to COMPOSE_PROFILES so a bare `up` re-engages it
+#   extra_health_svcs space-separated services that join the mandatory health gate
+#                     when the group is active (empty = none; TLS edges are gated
+#                     by their own cert/reachability probes instead)
+#   cert_owner        who owns/terminates TLS (none|mkcert|letsencrypt|cloudflare)
+#   tier              supported | manual | experimental
+#   delivery          published | upstream-pinned | local-build — which image
+#                     source the group's distinctive image comes from. A
+#                     local-build image (jarvis/langfuse-hardened, pull_policy:
+#                     build) is never on GHCR, so an update/pull gate keying off
+#                     this column can exclude it.
+# shellcheck disable=SC2034  # consumed by the accessors below and both entry points
+PROFILE_REGISTRY=(
+  "telegram|docker-compose.yml|telegram|yes|telegram_bot|none|supported|published"
+  "tunnel|docker-compose.yml|tunnel|yes||cloudflare|supported|upstream-pinned"
+  "observability|docker-compose.yml|observability|no|langfuse|none|manual|local-build"
+  "caddy-local|docker-compose.yml|caddy-local|yes||mkcert|experimental|upstream-pinned"
+  "letsencrypt|docker-compose.yml|letsencrypt|yes||letsencrypt|supported|upstream-pinned"
+  "vllm|docker-compose.vllm.yml|vllm|no||none|manual|upstream-pinned"
+  "perf|docker-compose.perf.yml|perf|no||none|manual|published"
+)
+
+# MANDATORY_HEALTH_BASE — the always-on services both entry points must wait on.
+# Shared here so setup.sh and scripts/jarvis-setup.sh cannot drift (the drift that
+# left restore-uploader started-but-unverified by the wrapper).
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+MANDATORY_HEALTH_BASE="postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader"
+
+# registry_profiles_to_persist -> space-separated profile flags whose rows are
+# persist=yes. setup.sh intersects this with the run's active profiles to build
+# COMPOSE_PROFILES, so a bare `docker compose up` re-engages the same set.
+registry_profiles_to_persist() {
+  local row name overlay flag persist rest out=""
+  for row in "${PROFILE_REGISTRY[@]}"; do
+    IFS='|' read -r name overlay flag persist rest <<< "$row"
+    [ "$persist" = "yes" ] && out="${out:+$out }$flag"
+  done
+  printf '%s' "$out"
+}
+
+# mandatory_health_services BASE [ACTIVE_PROFILE...] -> the health-gate service
+# list: BASE (space-separated) plus each active profile's extra_health_svcs from
+# the registry, de-duplicated and order-stable. An active group's service is
+# health-checked because it was deliberately started.
+mandatory_health_services() {
+  local base="$1"; shift
+  local out="$base" p row name overlay flag persist health rest svc
+  for p in "$@"; do
+    for row in "${PROFILE_REGISTRY[@]}"; do
+      IFS='|' read -r name overlay flag persist health rest <<< "$row"
+      [ "$name" = "$p" ] || continue
+      for svc in $health; do
+        _env_key_in_list "$svc" "$out" || out="$out $svc"
+      done
+    done
+  done
+  printf '%s' "$out"
+}
+
+# route_claims -> the FIXED set of host-level ingress routes JARVIS advertises,
+# one pipe-delimited row per route. These are transport planes, NOT compose
+# profiles (a route has no --profile), so they live apart from PROFILE_REGISTRY.
+# Columns, in order:
+#   route|scheme|port|host_allowlist|setup_token_transport|cookie_policy|
+#   passkey_origin|cert_owner|tier
+# A docs-parity test consumes this set to check the deployment docs describe
+# every route's real transport, token handoff, and WebAuthn behaviour.
+route_claims() {
+  cat <<'ROUTES'
+localhost-http|http|3001|localhost|fragment|secure|localhost|none|supported
+raw-ip-lan|http|3001|lan-ip|paste|none|none|none|supported
+named-private-https|https|443|origin-host|fragment|secure|origin-host|external|supported
+local-https|https|3443|localhost|fragment|secure|localhost|mkcert|experimental
+letsencrypt|https|443|domain|fragment|secure|domain|letsencrypt|supported
+tunnel|https|443|tunnel-host|fragment|secure|tunnel-host|cloudflare|supported
+ROUTES
+}
+
+# registry_profile_host_ports PROFILE... -> the extra HOST TCP ports the named
+# active profiles publish, space-separated and de-duplicated. The always-on
+# services have a fixed default port list in setup.sh, but an active TLS edge or
+# optional service binds MORE host ports; a port pre-check that ignored them
+# would green-light a port that then collides at `up`. Values mirror the
+# published `ports:` of each group's service (docker-compose.yml / overlays):
+#   letsencrypt   caddy ACME edge -> 80, 443
+#   caddy-local   local mkcert HTTPS terminator -> 3443
+#   observability langfuse -> 3002
+#   vllm          vLLM overlay -> 8080
+#   tunnel/telegram  cloudflared/telegram dial OUT — no host port published
+registry_profile_host_ports() {
+  local p out=""
+  for p in "$@"; do
+    case "$p" in
+      letsencrypt)   out="$out 80 443" ;;
+      caddy-local)   out="$out 3443" ;;
+      observability) out="$out 3002" ;;
+      vllm)          out="$out 8080" ;;
+    esac
+  done
+  # De-duplicate, order-stable (letsencrypt could otherwise repeat 443).
+  local seen="" port final=""
+  for port in $out; do
+    _env_key_in_list "$port" "$seen" && continue
+    seen="$seen $port"; final="${final:+$final }$port"
+  done
+  printf '%s' "$final"
+}
+
+# readiness_verdict RC ENVIRONMENT -> the action setup.sh's readiness wrapper
+# takes for a production-readiness-check.sh exit code, under its 0/2/1 contract:
+#   0             -> "ok"    all checks passed
+#   2             -> "warn"  warnings present; NEVER fatal, in any environment
+#   1 + production -> "abort" HIGH issues; fatal only on the production/letsencrypt path
+#   1 + other     -> "warn"  HIGH issues are advisory off the production path (dev tolerance)
+#   any other rc  -> "warn"  unknown nonzero: surface it, never silently abort
+# Pairing this with the script's exit-code flip in ONE change is what stops a
+# routine warning (e.g. missing SMTP, now exit 2) from aborting a production
+# install the moment the flip lands.
+readiness_verdict() {
+  local rc="$1" env="$2"
+  case "$rc" in
+    0) printf 'ok' ;;
+    2) printf 'warn' ;;
+    1) [ "$env" = "production" ] && printf 'abort' || printf 'warn' ;;
+    *) printf 'warn' ;;
+  esac
+}
+
 # backfill_torch_variant_from_env — give a pre-1.1 .env the TORCH_VARIANT pair it
 # never had, echoing the variant when it writes one (nothing when there is already
 # a value, or no .env).
@@ -519,4 +785,262 @@ upsert_env_var() {
     END { if (!seen) print k "=" v }
   ' .env > "$tmp" || { rm -f "$tmp"; printf 'upsert_env_var: awk rewrite of .env failed\n' >&2; return 1; }
   mv "$tmp" .env || { rm -f "$tmp"; printf 'upsert_env_var: mv to .env failed\n' >&2; return 1; }
+}
+
+# print_setup_link -> print the click-to-finish wizard link when a setup token
+# exists. $1 = dashboard base URL (trailing slash optional). Reads
+# secrets/jarvis_setup_token.txt relative to CWD (the repo root both entry
+# points cd into). When a token is present it prints the "Finish setup:" line
+# and sets SETUP_LINK so setup.sh can best-effort open it in a browser; with no
+# token it clears SETUP_LINK and prints nothing.
+# The token rides a URL FRAGMENT (#setup_token=), never a query string: a
+# fragment is never sent to the server, so it stays out of access logs, the
+# Referer header, and reverse-proxy request lines. The wizard reads it from
+# window.location.hash.
+print_setup_link() {
+  local base="${1%/}" token
+  token="$(cat secrets/jarvis_setup_token.txt 2>/dev/null || true)"
+  SETUP_LINK=""
+  if [ -n "$token" ]; then
+    SETUP_LINK="${base}/setup#setup_token=${token}"
+    printf '  Finish setup: %s\n' "$SETUP_LINK"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Non-destructive .env rebuild
+# ---------------------------------------------------------------------------
+# JARVIS_MANAGED_SECRET_KEYS — the keys a re-run must NEVER silently rotate or
+# drop. It is the union of scripts/init-secrets.sh's generator table (the
+# openssl-minted secrets) and the operator SMTP relay settings. The merge below
+# preserves EVERY existing key regardless; this list names the ones whose loss
+# would brick a live deployment (LiteLLM credential decryption, backup
+# decryption, model HMAC, Langfuse, magic-link email) and is the canonical
+# walk-list for the byte-preservation checks. Keep in sync with the generator
+# names in scripts/init-secrets.sh.
+# shellcheck disable=SC2034  # consumed by scripts/tests + as project documentation
+JARVIS_MANAGED_SECRET_KEYS=(
+  POSTGRES_PASSWORD JARVIS_API_KEY JARVIS_CONFIG_KEY LITELLM_MASTER_KEY QDRANT_API_KEY
+  LITELLM_SALT_KEY BACKUP_ENCRYPT_KEY JARVIS_MODEL_HMAC_KEY INFRA_INGEST_KEY JARVIS_SETUP_TOKEN
+  LANGFUSE_NEXTAUTH_SECRET LANGFUSE_SALT LANGFUSE_PG_PASSWORD LANGFUSE_INIT_USER_PASSWORD
+  SMTP_HOST SMTP_USER SMTP_PASS SMTP_PORT SMTP_FROM
+)
+
+# _env_key_in_list KEY "space separated list" -> 0 if KEY is a member.
+_env_key_in_list() {
+  case " $2 " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# merge_env_file OLD_ENV TEMPLATE UPSERTS RETIRED -> merged .env on stdout.
+#
+# Rebuild an .env WITHOUT discarding operator state:
+#   * every assignment in OLD_ENV is carried forward BYTE-FOR-BYTE (unknown and
+#     operator-added keys included) unless this run owns it or it is retired;
+#   * keys this run owns (UPSERTS holds one KEY=VALUE per line — only keys whose
+#     flag/prompt was genuinely supplied) are written with the supplied value, so
+#     re-running to CHANGE a setting takes effect while its neighbours survive
+#     untouched;
+#   * keys present in TEMPLATE but absent from OLD_ENV are appended (new-in-
+#     release keys arrive), owned ones with their supplied value;
+#   * keys named in RETIRED (space-separated) are dropped — unless this run still
+#     owns them, in which case the owner wins and the key is re-emitted.
+# Values may hold =, #, +, /, spaces and quotes; a value read from UPSERTS keeps
+# every byte after the first '=', a carried-forward line is emitted verbatim.
+merge_env_file() {
+  local old_env="$1" template="$2" upserts="$3" retired="$4"
+  local line key
+
+  # 1. Carry OLD_ENV forward: verbatim, except owned upserts and retired drops.
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+      key="${BASH_REMATCH[1]}"
+      if grep -qE "^${key}=" "$upserts" 2>/dev/null; then
+        printf '%s=%s\n' "$key" "$(grep -E "^${key}=" "$upserts" | head -n 1 | cut -d= -f2-)"
+      elif _env_key_in_list "$key" "$retired"; then
+        :  # retired and not owned this run — drop
+      else
+        printf '%s\n' "$line"  # preserve operator/unknown value verbatim
+      fi
+    else
+      printf '%s\n' "$line"  # comment / blank — verbatim
+    fi
+  done < "$old_env"
+
+  # 2. Append TEMPLATE keys absent from OLD_ENV (keys new in this release).
+  local header_done=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+    key="${BASH_REMATCH[1]}"
+    grep -qE "^${key}=" "$old_env" 2>/dev/null && continue
+    _env_key_in_list "$key" "$retired" && continue
+    if [ "$header_done" -eq 0 ]; then
+      printf '\n# Added by this release (absent from your previous .env):\n'
+      header_done=1
+    fi
+    if grep -qE "^${key}=" "$upserts" 2>/dev/null; then
+      printf '%s=%s\n' "$key" "$(grep -E "^${key}=" "$upserts" | head -n 1 | cut -d= -f2-)"
+    else
+      printf '%s\n' "$line"  # template default, verbatim
+    fi
+  done < "$template"
+}
+
+# ---------------------------------------------------------------------------
+# Release helpers (shared by setup.sh, update.sh, and the CLI installer)
+# ---------------------------------------------------------------------------
+
+# latest_stable_tag [REMOTE] -> the highest STABLE release tag on REMOTE
+# (default: origin), or empty when there are none. Stable means vMAJOR.MINOR.PATCH
+# with no pre-release suffix, so vX.Y.Z-rc1 and other candidates are excluded, and
+# `sort -V` orders them versionally rather than lexically. Pure: it only reads
+# `git ls-remote`, so it is unit-testable behind a git stub.
+latest_stable_tag() {
+  local remote="${1:-origin}"
+  git ls-remote --tags --refs "$remote" 2>/dev/null \
+    | sed -n 's#.*refs/tags/##p' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V \
+    | tail -n 1
+}
+
+# _cli_shim_body -> the fixed launcher installed as jarvis-research. Logic-free by
+# design: it resolves the most recently installed JARVIS repo from the installs
+# registry and hands straight off to that repo's tracked CLI script, so upgrades
+# to the CLI ship with the repo, never with this shim.
+_cli_shim_body() {
+  cat <<'SHIM'
+#!/usr/bin/env bash
+# jarvis-research — launcher for the JARVIS research CLI. Generated by the JARVIS
+# installer; do not edit. Runs the CLI from the most recently installed JARVIS
+# repo (the top entry of the installs registry).
+set -euo pipefail
+installs="${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-research/installs"
+if [ ! -s "$installs" ]; then
+  printf 'jarvis-research: no JARVIS install is registered (%s).\n' "$installs" >&2
+  exit 1
+fi
+repo="$(head -n 1 "$installs")"
+exec "${repo}/scripts/jarvis-research.sh" --repo "$repo" "$@"
+SHIM
+}
+
+# install_cli_shim [REPO_DIR] -> install/refresh the jarvis-research launcher and
+# register REPO_DIR (default: $PWD) at the TOP of the installs registry, so the
+# shim always targets the most recently installed repo. Idempotent: a re-run with
+# an unchanged launcher and an already-top registry entry changes nothing and
+# prints nothing; it prints exactly one line whenever it writes something.
+# Target locations are overridable for testing:
+#   JARVIS_CLI_BIN_DIR     (default ~/.local/bin)
+#   JARVIS_CLI_CONFIG_DIR  (default ${XDG_CONFIG_HOME:-~/.config}/jarvis-research)
+install_cli_shim() {
+  local repo="${1:-$PWD}"
+  local bin_dir="${JARVIS_CLI_BIN_DIR:-${HOME}/.local/bin}"
+  local cfg_dir="${JARVIS_CLI_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-research}"
+  local shim="${bin_dir}/jarvis-research"
+  local installs="${cfg_dir}/installs"
+  local changed=0
+
+  mkdir -p "$bin_dir" "$cfg_dir" || return 1
+
+  # 1. Write the launcher when it is absent or stale.
+  if [ ! -f "$shim" ] || ! _cli_shim_body | cmp -s - "$shim"; then
+    _cli_shim_body > "$shim" || return 1
+    chmod +x "$shim" || return 1
+    changed=1
+  fi
+
+  # 2. Prepend REPO_DIR to the registry, de-duplicated and order-stable.
+  local rest="" tmp
+  [ -f "$installs" ] && rest="$(grep -vxF "$repo" "$installs" 2>/dev/null || true)"
+  tmp="$(mktemp)" || return 1
+  { printf '%s\n' "$repo"; [ -n "$rest" ] && printf '%s\n' "$rest"; } > "$tmp"
+  if [ ! -f "$installs" ] || ! cmp -s "$tmp" "$installs"; then
+    mv "$tmp" "$installs" || { rm -f "$tmp"; return 1; }
+    changed=1
+  else
+    rm -f "$tmp"
+  fi
+
+  [ "$changed" -eq 1 ] && printf 'Installed jarvis-research launcher: %s\n' "$shim"
+  return 0
+}
+
+# verify_release_manifests TARGET_REF [ACTIVE_PROFILE...] -> confirm every
+# registry-backed image a release needs already exists in the registry, closing
+# the window where a tag is visible but its images are not yet published.
+# TARGET_REF is a git tag (v-prefixed); image tags are NOT, so it is normalised
+# once here. Inspected set, for the ACTIVE topology:
+#   * application images at the target version (paper_ingestion carries
+#     TORCH_VARIANT_SUFFIX), plus telegram_bot when that profile is active;
+#   * the third-party pins the target ref's versions.env declares;
+#   * each active profile's distinctive third-party image whose registry
+#     `delivery` is not local-build.
+# A local-build image (jarvis/langfuse-hardened) is never on the registry, so it
+# is reported SKIPPED, never inspected. Prints PRESENT/MISSING per inspected image
+# and SKIPPED per excluded local-build image; returns 0 only when every inspected
+# image is present. Runs docker under a throwaway DOCKER_CONFIG so it never reads
+# the caller's registry credentials.
+verify_release_manifests() {
+  local target_ref="$1"; shift
+  local target_version="${target_ref#v}"
+  local ns="ghcr.io/limitcycle-oss/jarvis-"
+  local svc suffix p row name delivery
+  local versions_env img
+  local -a images=() skipped=()
+
+  # Application images (registry-backed at the target version).
+  for svc in "${PUBLISHED_SERVICES_BASE[@]}"; do
+    suffix=""
+    [ "$svc" = "paper_ingestion" ] && suffix="${TORCH_VARIANT_SUFFIX:-}"
+    images+=("${ns}${svc//_/-}:${target_version}${suffix}")
+  done
+  for p in "$@"; do
+    [ "$p" = "telegram" ] && images+=("${ns}${PUBLISHED_SERVICE_TELEGRAM//_/-}:${target_version}")
+  done
+
+  # Third-party pins declared by the target ref's versions.env.
+  versions_env="$(git show "${target_ref}:versions.env" 2>/dev/null || true)"
+  for name in POSTGRES_IMAGE OLLAMA_IMAGE QDRANT_IMAGE LITELLM_IMAGE CLOUDFLARED_IMAGE; do
+    img="$(printf '%s\n' "$versions_env" | sed -n "s/^${name}=//p" | head -n 1)"
+    [ -n "$img" ] && images+=("$img")
+  done
+
+  # Active profiles: a registry-backed profile image joins the inspected set; a
+  # local-build profile image is skipped because it is never published.
+  for p in "$@"; do
+    for row in "${PROFILE_REGISTRY[@]}"; do
+      IFS='|' read -r name _ _ _ _ _ _ delivery <<< "$row"
+      [ "$name" = "$p" ] || continue
+      if [ "$delivery" = "local-build" ]; then
+        skipped+=("jarvis/langfuse-hardened:${target_version}")
+      else
+        case "$p" in
+          caddy-local|letsencrypt)
+            img="$(printf '%s\n' "$versions_env" | sed -n 's/^CADDY_IMAGE=//p' | head -n 1)"
+            [ -n "$img" ] && images+=("$img") ;;
+        esac
+      fi
+    done
+  done
+
+  local docker_cfg rc=0 ref
+  docker_cfg="$(mktemp -d)" || return 1
+  for ref in "${images[@]}"; do
+    if DOCKER_CONFIG="$docker_cfg" docker manifest inspect "$ref" >/dev/null 2>&1; then
+      printf 'PRESENT %s\n' "$ref"
+    else
+      printf 'MISSING %s\n' "$ref"
+      rc=1
+    fi
+  done
+  if [ "${#skipped[@]}" -gt 0 ]; then
+    for ref in "${skipped[@]}"; do
+      printf 'SKIPPED %s (local build, not published)\n' "$ref"
+    done
+  fi
+  rm -rf "$docker_cfg"
+  return "$rc"
 }

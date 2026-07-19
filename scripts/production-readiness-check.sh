@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # scripts/production-readiness-check.sh — Production Readiness Check
 #
-# Prints a summary table of key configuration checks and exits non-zero
-# if any HIGH-severity issue is found.
+# Prints a summary table of key configuration checks and exits with a
+# three-state contract so callers can tell "clean" from "warnings present":
+#   0  all checks passed (no WARN, no HIGH)
+#   2  warnings present, but no HIGH issues (advisory — safe to proceed)
+#   1  at least one HIGH-severity issue (must be fixed before production)
+# setup.sh's wrapper treats 2 as non-fatal and 1 as fatal on the production/
+# letsencrypt path (see readiness_verdict in scripts/setup_lib.sh).
 #
 # Usage:
 #   bash scripts/production-readiness-check.sh
@@ -65,8 +70,8 @@ DEV_SMTP_LOG_ONLY="${DEV_SMTP_LOG_ONLY:-false}"
 DEV_CRYPTO_RELAXED="${DEV_CRYPTO_RELAXED:-false}"
 JARVIS_API_KEY="${JARVIS_API_KEY:-}"
 SMTP_HOST="${SMTP_HOST:-}"
+SMTP_FROM="${SMTP_FROM:-}"
 LETSENCRYPT_DOMAIN="${LETSENCRYPT_DOMAIN:-}"
-JARVIS_CERT_SAN="${JARVIS_CERT_SAN:-}"
 
 # Read secrets from files when the _FILE env var convention is used, otherwise
 # fall back to the plain env var (same pattern as the litellm entrypoint shim).
@@ -230,21 +235,28 @@ _check_secret "POSTGRES_PASSWORD"  "$POSTGRES_PASSWORD"  12
 _check_secret "QDRANT_API_KEY"     "$QDRANT_API_KEY"     16
 _check_secret "JARVIS_CONFIG_KEY"  "$JARVIS_CONFIG_KEY"  16
 
-# Check: SMTP configured (magic links go to stdout if not).
-if [ -z "$SMTP_HOST" ]; then
-  RESULTS+=("WARN|SMTP|WARN|SMTP_HOST not set — magic-link emails will be logged to stdout instead of delivered")
+# Check: environment SMTP presence. This reports only whether the env carries
+# a host and sender — NOT whether email can be delivered. The app layers
+# wizard-saved config over env per-field without a restart, and presence is not
+# reachability, so the effective delivery state lives in the app. This script
+# never calls the app (it runs pre-auth/pre-liveness).
+if [ -n "$SMTP_HOST" ] && [ -n "$SMTP_FROM" ]; then
+  RESULTS+=("INFO|environment SMTP presence|OK|SMTP_HOST and SMTP_FROM set in env; effective delivery state lives in the app: GET /api/setup/status")
 else
-  RESULTS+=("INFO|SMTP|OK|SMTP_HOST=${SMTP_HOST}")
+  RESULTS+=("WARN|environment SMTP presence|WARN|SMTP_HOST/SMTP_FROM not both set in env — delivery is disabled; admins can generate manual links. Effective delivery state lives in the app: GET /api/setup/status")
 fi
 
-# Check: HTTPS enabled (either LETSENCRYPT_DOMAIN set, or JARVIS_CERT_SAN non-default self-signed).
+# Check: HTTPS. When a Let's Encrypt domain is configured, probe it for real —
+# a live TLS request is the only proof HTTPS is actually serving.
 if [ -n "$LETSENCRYPT_DOMAIN" ]; then
-  RESULTS+=("INFO|HTTPS|OK|Let's Encrypt domain configured: ${LETSENCRYPT_DOMAIN}")
-elif printf '%s' "$JARVIS_CERT_SAN" | grep -qE '(DNS:|IP:)'; then
-  RESULTS+=("INFO|HTTPS|OK|Self-signed cert SAN: ${JARVIS_CERT_SAN}")
+  if _https_err="$(curl -fsS --max-time 10 "https://${LETSENCRYPT_DOMAIN}/health" 2>&1 >/dev/null)"; then
+    RESULTS+=("INFO|HTTPS|OK|HTTPS probe succeeded: https://${LETSENCRYPT_DOMAIN}/health")
+  else
+    RESULTS+=("WARN|HTTPS|WARN|HTTPS probe failed for https://${LETSENCRYPT_DOMAIN}/health: ${_https_err:-curl exited non-zero}")
+  fi
 else
   if is_production; then
-    RESULTS+=("WARN|HTTPS|WARN|No LETSENCRYPT_DOMAIN and JARVIS_CERT_SAN looks empty — HTTPS may not be active")
+    RESULTS+=("WARN|HTTPS|WARN|No LETSENCRYPT_DOMAIN set — HTTPS may not be active")
   else
     RESULTS+=("INFO|HTTPS|OK|Self-signed cert will be generated on container start (dev default)")
   fi
@@ -296,7 +308,7 @@ if [ "$HAS_HIGH" -eq 1 ]; then
 elif [ "$HAS_WARN" -eq 1 ]; then
   printf '%s[WARN]%s  Production readiness check: warnings present (no HIGH issues).\n' \
     "$C_YELLOW" "$C_RESET"
-  exit 0
+  exit 2
 else
   printf '%s[OK]%s    Production readiness check: all checks passed.\n' \
     "$C_GREEN" "$C_RESET"

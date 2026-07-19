@@ -10,8 +10,12 @@ COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 certs:
 	bash scripts/init-mkcert.sh
 
-## Bring stack up with HTTPS on https://localhost:3001 via Caddy + mkcert
+## Bring stack up with HTTPS on https://localhost:3443 via Caddy + mkcert
+## Fails loudly if the mkcert certs are absent (run `make certs` first).
 up-https:
+	@test -f certs/cert.pem && test -f certs/key.pem || { \
+	  echo "mkcert certs missing (certs/cert.pem, certs/key.pem) — run 'make certs' first (needs mkcert installed)."; \
+	  exit 1; }
 	$(COMPOSE) --profile caddy-local up -d
 
 ## Install Python dev dependencies from uv.lock (does NOT run setup.sh / docker setup)
@@ -118,6 +122,10 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/tests/test_prune_coverage.sh
 	bash scripts/tests/test_setup_lib_helpers.sh
 	bash scripts/tests/test_update_coverage.sh
+	bash scripts/tests/test_jarvis_research_cli.sh
+	bash scripts/tests/test_uninstall.sh
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/jarvis-research.sh; else echo "shellcheck not installed; skipping scripts/jarvis-research.sh lint"; fi
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/uninstall.sh; else echo "shellcheck not installed; skipping scripts/uninstall.sh lint"; fi
 	uv run pytest
 	$(MAKE) frontend-check
 

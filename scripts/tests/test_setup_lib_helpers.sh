@@ -20,6 +20,12 @@ source "${SCRIPT_DIR}/../setup_lib.sh"
 FIXTURES="$(mktemp -d)"
 trap 'rm -rf "$FIXTURES"' EXIT
 
+# Default the WSL probe to a NON-WSL kernel string so prereq planning is
+# host-independent (a WSL dev box would otherwise flip the docker-plan cases);
+# individual cases override JARVIS_PROC_VERSION as needed.
+export JARVIS_PROC_VERSION="${FIXTURES}/proc-version-native"
+printf 'Linux version 6.8.0-generic\n' > "$JARVIS_PROC_VERSION"
+
 fail=0
 pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
@@ -91,6 +97,19 @@ case "$got" in
   ''|*[!0-9]*) printf 'FAIL: repo catalog result not numeric (%s)\n' "$got" >&2; fail=1 ;;
   *) pass "repo catalog: result is numeric (${got} GB)" ;;
 esac
+
+# === compute_model_disk_gb ===================================================
+# The model-only figure the cached-image disk escape hatch checks against (the
+# model set is pulled on EVERY run). Pull set for qwen3:14b is 14b+fast+embed =
+# 9.2+2.5+2.6 -> ceil 15; catalog-derived is rc 0, unreadable is worst-case 22
+# + rc 3. compute_required_disk_gb = _image_budget + infra(14) + this.
+got="$(export JARVIS_MODEL_CATALOG="$CATALOG"; compute_model_disk_gb qwen3:14b)" && rc=0 || rc=$?
+expect_eq "compute_model_disk_gb qwen3:14b = ceil(model set) (rc 0)" "${got}/${rc}" "15/0"
+got="$(export JARVIS_MODEL_CATALOG="${FIXTURES}/nope.json"; compute_model_disk_gb qwen3:14b 2>/dev/null)" && rc=0 || rc=$?
+expect_eq "compute_model_disk_gb unreadable catalog -> worst-case 22 (rc 3)" "${got}/${rc}" "22/3"
+# compute_required_disk_gb still equals image_budget + infra + model set.
+got="$(export JARVIS_MODEL_CATALOG="$CATALOG"; compute_required_disk_gb qwen3:14b cuda-build)" && rc=0 || rc=$?
+expect_eq "compute_required_disk_gb = 17(cuda) + 14(infra) + 15(models)" "${got}/${rc}" "46/0"
 
 # === resolve_docker_data_root ================================================
 
@@ -177,13 +196,14 @@ fi
 
 pf_src="$(sed -n '/^preflight_disk()/,/^}/p' "$SETUP_SCRIPT")"
 
-run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out>
-  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" \
+run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out> [model_gb]
+  SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" MODEL_GB="${7:-8}" \
   LIB_SRC="${SCRIPT_DIR}/../setup_lib.sh" bash -c '
     set -euo pipefail
     # The real lib provides PUBLISHED_IMAGE_REPOS (the wrapper iterates it, and
     # a private copy here would drift). Source it FIRST: the stubs below must
-    # clobber its real compute_required_disk_gb/preflight_disk_lib.
+    # clobber its real compute_required_disk_gb/compute_model_disk_gb/
+    # preflight_disk_lib.
     source "$LIB_SRC"
     info() { printf "INFO %s\n" "$*"; }
     ok()   { printf "OK %s\n" "$*"; }
@@ -196,6 +216,7 @@ run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out>
       esac
     }
     compute_required_disk_gb() { printf "%s" "$REQ_GB"; return "$REQ_RC"; }
+    compute_model_disk_gb() { printf "%s" "$MODEL_GB"; }
     preflight_disk_lib() { printf "%s" "$LIB_OUT"; return "$LIB_RC"; }
     SKIP_DISK_CHECK="$SKIP"
     NI_SMART_MODEL="qwen3:8b"
@@ -210,10 +231,20 @@ case "${rc}:${out}" in
   *) printf 'FAIL: first-install shortfall not fatal (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
-out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123')" && rc=0 || rc=$?
+# Cached app images + the model pull STILL fits free space -> warn, proceed.
+out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123' 8)" && rc=0 || rc=$?
 case "${rc}:${out}" in
+  0:*WARN*model?pull?fits*) pass "cached app images + model pull fits -> warning, proceed" ;;
   0:*WARN*) pass "cached app images downgrade the shortfall to a warning" ;;
   *) printf 'FAIL: cached-image re-run was blocked (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+
+# Cached app images but the model pull does NOT fit -> still fatal (models are
+# pulled every run, so the escape hatch cannot ignore the model-set space).
+out="$(run_preflight 0 45 0 '10 /var/lib/docker' 1 'abc123' 25)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*DIE*model?set*) pass "cached images but model pull won't fit stays fatal (model-set space)" ;;
+  *) printf 'FAIL: cached-image model shortfall not fatal (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
 out="$(run_preflight 0 45 3 '25 /var/lib/docker' 1 '')" && rc=0 || rc=$?
@@ -230,8 +261,8 @@ esac
 
 out="$(run_preflight 0 45 0 '0 /var/lib/docker' 2 '')" && rc=0 || rc=$?
 case "${rc}:${out}" in
-  0:*WARN*) pass "unmeasurable free space proceeds with a warning" ;;
-  *) printf 'FAIL: unmeasurable df blocked the install (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+  0:*WARN*Docker?Desktop*) pass "unmeasurable free space explains Docker Desktop and proceeds" ;;
+  *) printf 'FAIL: unmeasurable df did not explain Docker Desktop / blocked the install (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 
 out="$(run_preflight 1 45 0 '10 /var/lib/docker' 1 '')" && rc=0 || rc=$?
@@ -411,7 +442,6 @@ EOF
 }
 
 DRI_EMPTY="${FIXTURES}/dri-empty"; mkdir -p "$DRI_EMPTY"
-DRI_INTEL="${FIXTURES}/dri-intel"; mkdir -p "$DRI_INTEL"; touch "${DRI_INTEL}/renderD128"
 
 AMD_BIN="$(make_vendor_bin fail ok)"
 NV_BIN="$(make_vendor_bin ok ok)"
@@ -428,11 +458,50 @@ expect_eq "nvidia wins the probe order even with amd-smi present" "$got" "nvidia
 got="$(vendor_env "$AMD_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
 expect_eq "amd-smi enumerating a GPU -> amd" "$got" "amd"
 
-got="$(vendor_env "$NOGPU_BIN" "$DRI_INTEL" detect_gpu_vendor)"
-expect_eq "/dev/dri render node without a discrete probe -> intel" "$got" "intel"
+# A bare /dev/dri render node is NOT proof of an Intel GPU: VMs expose a
+# virtio-gpu render node, and an ARM SoC render node has no PCI vendor file.
+# Classification keys off the render node's PCI vendor id.
+# vendor_of <vendor-id-or-empty> -> classification for a render node whose PCI
+# vendor file holds <vendor-id> (empty = no vendor file), no discrete tool present.
+vendor_of() {
+  local d s
+  d="$(mktemp -d "${FIXTURES}/dri.XXXXXX")"; touch "${d}/renderD128"
+  s="$(mktemp -d "${FIXTURES}/drm.XXXXXX")"
+  if [ -n "$1" ]; then
+    mkdir -p "${s}/renderD128/device"
+    printf '%s\n' "$1" > "${s}/renderD128/device/vendor"
+  fi
+  (export PATH="${NOGPU_BIN}:${PATH}" JARVIS_WSL_NVIDIA_SMI=/nonexistent \
+     JARVIS_DRI_DIR="$d" JARVIS_DRM_SYS_DIR="$s"; detect_gpu_vendor)
+}
+
+expect_eq "render node, PCI vendor 0x8086 (Intel) -> intel" "$(vendor_of 0x8086)" "intel"
+expect_eq "render node, PCI vendor 0x1af4 (virtio VM) -> none" "$(vendor_of 0x1af4)" "none"
+expect_eq "render node, no PCI vendor file (ARM SoC) -> none" "$(vendor_of '')" "none"
+expect_eq "render node, PCI vendor 0x1002 (AMD) -> amd" "$(vendor_of 0x1002)" "amd"
 
 got="$(vendor_env "$NOGPU_BIN" "$DRI_EMPTY" detect_gpu_vendor)"
 expect_eq "no probe answers -> none" "$got" "none"
+
+# resolve_dri_gids echoes the numeric owning-group ids of the /dev/dri nodes.
+# Assert against stat -c %g of the fixture files themselves (tmpdir owner GID —
+# no root needed).
+DRI_GIDS="${FIXTURES}/dri-gids"; mkdir -p "$DRI_GIDS"
+touch "${DRI_GIDS}/card0" "${DRI_GIDS}/renderD128"
+want_video="$(stat -c %g "${DRI_GIDS}/card0")"
+want_render="$(stat -c %g "${DRI_GIDS}/renderD128")"
+got="$(JARVIS_DRI_DIR="$DRI_GIDS" resolve_dri_gids)"
+expect_eq "resolve_dri_gids echoes '<video_gid> <render_gid>'" "$got" "${want_video} ${want_render}"
+
+DRI_RONLY="${FIXTURES}/dri-render-only"; mkdir -p "$DRI_RONLY"; touch "${DRI_RONLY}/renderD128"
+want_render="$(stat -c %g "${DRI_RONLY}/renderD128")"
+got="$(JARVIS_DRI_DIR="$DRI_RONLY" resolve_dri_gids)"
+expect_eq "resolve_dri_gids: video falls back to render GID with no card* node" "$got" "${want_render} ${want_render}"
+
+DRI_NORENDER="${FIXTURES}/dri-no-render"; mkdir -p "$DRI_NORENDER"
+got="$(JARVIS_DRI_DIR="$DRI_NORENDER" resolve_dri_gids)" && rc=0 || rc=$?
+expect_eq "resolve_dri_gids returns 1 with no renderD* node" "$rc" "1"
+expect_eq "resolve_dri_gids echoes nothing with no renderD* node" "$got" ""
 
 got="$(vendor_env "$NV_BIN" "$DRI_EMPTY" resolve_gpu_vram_mb nvidia)"
 expect_eq "resolve_gpu_vram_mb nvidia reads nvidia-smi memory.total" "$got" "24576"
@@ -481,6 +550,126 @@ expect_eq "compute_compose_file: rocm overlay" \
 expect_eq "compute_compose_file: vulkan overlay before override" \
   "$(compute_compose_file vulkan 1)" "docker-compose.yml:docker-compose.vulkan.yml:docker-compose.override.yml"
 
+# === strip_gpu_args ==========================================================
+# The CPU-retry re-exec argv is the original invocation minus any --gpu
+# selection (both the `--gpu VALUE` pair and the `--gpu=VALUE` form), so the
+# appended `--gpu cpu` is the only GPU flag and the retry cannot loop back into
+# the overlay path. Output is one surviving arg per line.
+
+expect_eq "strip_gpu_args drops the --gpu VALUE pair, keeps the rest" \
+  "$(strip_gpu_args --gpu vulkan --non-interactive)" "--non-interactive"
+expect_eq "strip_gpu_args drops the --gpu=VALUE form" \
+  "$(strip_gpu_args --gpu=rocm)" ""
+expect_eq "strip_gpu_args passes non-gpu args through unchanged (order preserved)" \
+  "$(strip_gpu_args --domain example.com --non-interactive --backend ollama)" \
+  "$(printf '%s\n' --domain example.com --non-interactive --backend ollama)"
+expect_eq "strip_gpu_args on empty args echoes nothing" \
+  "$(strip_gpu_args)" ""
+
+# === print_setup_link ========================================================
+# Prints the click-to-finish wizard link and sets SETUP_LINK when a setup token
+# exists under secrets/ relative to CWD; with no token it clears SETUP_LINK and
+# prints nothing. A trailing slash on the base must not double up before /setup.
+# The token rides a URL FRAGMENT (#setup_token=), never a query string, so it
+# never reaches server access logs / the Referer header / a proxy request line.
+
+LINK_DIR="$(mktemp -d "${FIXTURES}/setuplink.XXXXXX")"
+mkdir -p "${LINK_DIR}/secrets"
+printf 'tok123' > "${LINK_DIR}/secrets/jarvis_setup_token.txt"
+
+got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link builds SETUP_LINK from base + token" \
+  "$got" "https://jarvis.example/setup#setup_token=tok123"
+case "$got" in
+  *"?setup_token="*) printf 'FAIL: setup token rode a query string, not a fragment (got=%s)\n' "$got" >&2; fail=1 ;;
+  *) pass "print_setup_link keeps the token in a fragment, never a query string" ;;
+esac
+printed="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example")"
+case "$printed" in
+  *"Finish setup: https://jarvis.example/setup#setup_token=tok123"*)
+    pass "print_setup_link prints the finish-setup line with the link" ;;
+  *) printf 'FAIL: print_setup_link output missing the link (got=%s)\n' "$printed" >&2; fail=1 ;;
+esac
+
+got="$(cd "$LINK_DIR"; print_setup_link "https://jarvis.example/" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link: trailing slash on base does not double up before /setup" \
+  "$got" "https://jarvis.example/setup#setup_token=tok123"
+
+NOTOK_DIR="$(mktemp -d "${FIXTURES}/setuplink-notok.XXXXXX")"
+mkdir -p "${NOTOK_DIR}/secrets"
+got="$(cd "$NOTOK_DIR"; print_setup_link "https://jarvis.example" >/dev/null; printf '%s' "$SETUP_LINK")"
+expect_eq "print_setup_link clears SETUP_LINK when no token file exists" "$got" ""
+printed="$(cd "$NOTOK_DIR"; print_setup_link "https://jarvis.example")"
+case "$printed" in
+  *setup_token*) printf 'FAIL: print_setup_link leaked a setup_token with no token file (got=%s)\n' "$printed" >&2; fail=1 ;;
+  *) pass "print_setup_link prints no setup_token when the token file is absent" ;;
+esac
+
+# === access-mode / ingress helpers ===========================================
+# _is_lan_ipv4 accepts the RFC1918 address other LAN devices reach this host by and
+# rejects docker/CGNAT/link-local ranges. _append_server_name / _append_csv build
+# the accumulating nginx Host allowlist and CORS list (LAN + origin keep BOTH
+# hostnames). _public_origin_host extracts an https:// DNS hostname and refuses IP
+# literals (a raw IP is never a valid WebAuthn RP-ID / public-cert host). These
+# pure helpers live in setup.sh (before the flag parser); extract and eval them.
+ingress_src="$(sed -n '/^_is_lan_ipv4()/,/^}/p;/^_append_server_name()/,/^}/p;/^_append_csv()/,/^}/p;/^_public_origin_host()/,/^}/p' "$SETUP_SCRIPT")"
+eval "$ingress_src"
+
+_is_lan_ipv4 192.168.1.5 && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 192.168.x" "$rc" "0"
+_is_lan_ipv4 10.0.0.5     && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 10.x" "$rc" "0"
+_is_lan_ipv4 172.20.0.5   && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 172.16/12" "$rc" "0"
+_is_lan_ipv4 172.17.0.2   && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects docker bridge 172.17.x" "$rc" "1"
+_is_lan_ipv4 100.100.0.1  && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects CGNAT 100.64/10" "$rc" "1"
+_is_lan_ipv4 169.254.1.1  && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects link-local" "$rc" "1"
+_is_lan_ipv4 8.8.8.8      && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects a public IP" "$rc" "1"
+
+expect_eq "_append_server_name seeds an empty list" "$(_append_server_name '' 192.168.1.5)" "192.168.1.5"
+expect_eq "_append_server_name accumulates LAN + origin (both hostnames)" \
+  "$(_append_server_name "$(_append_server_name '' 192.168.1.5)" jarvis.example.ts.net)" \
+  "192.168.1.5 jarvis.example.ts.net"
+expect_eq "_append_server_name de-dupes" "$(_append_server_name '192.168.1.5' 192.168.1.5)" "192.168.1.5"
+expect_eq "_append_server_name skips an empty name" "$(_append_server_name 'localhost' '')" "localhost"
+
+expect_eq "_append_csv seeds an empty list" "$(_append_csv '' https://a)" "https://a"
+expect_eq "_append_csv appends comma-separated" "$(_append_csv 'https://a' https://b)" "https://a,https://b"
+expect_eq "_append_csv de-dupes" "$(_append_csv 'https://a,https://b' https://a)" "https://a,https://b"
+
+expect_eq "_public_origin_host extracts a DNS hostname" \
+  "$(_public_origin_host https://jarvis.example.ts.net)" "jarvis.example.ts.net"
+expect_eq "_public_origin_host strips port and path" \
+  "$(_public_origin_host https://jarvis.example.ts.net:8443/x)" "jarvis.example.ts.net"
+_public_origin_host https://10.0.0.5   >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses an IPv4 literal" "$rc" "1"
+_public_origin_host 'https://[::1]'    >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses a bracketed IPv6 literal" "$rc" "1"
+_public_origin_host http://jarvis.example >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses non-https" "$rc" "1"
+
+# === setup.sh access-mode / ingress wiring (static) ==========================
+
+scheck "sub_value emits DASHBOARD_SERVER_NAME" 'DASHBOARD_SERVER_NAME\)'
+scheck "the LAN arm adds the LAN IP to the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$LAN_IP"'
+scheck "the tunnel arm adds the tunnel hostname to the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$TUNNEL_HOSTNAME"'
+scheck "the LAN reachability probe targets http, not https" '_lan_probe_url="http://'
+scheck "setup.sh parses --address" '\-\-address\)'
+scheck "setup.sh parses --public-origin" '\-\-public-origin\)'
+scheck "public-origin feeds APP_BASE_URL" 'APP_BASE_URL_VALUE="\$NI_PUBLIC_ORIGIN"'
+scheck "public-origin feeds CORS_ORIGINS" '_append_csv "\$CORS_ORIGINS_OVERRIDE" "\$NI_PUBLIC_ORIGIN"'
+scheck "public-origin feeds the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$PUBLIC_ORIGIN_HOST"'
+scheck "the setup link uses a loopback/verified base" 'print_setup_link "\$SETUP_LINK_BASE"'
+# PROFILE_ARGS + COMPOSE_PROFILES are now registry-driven (no per-profile literal
+# list in setup.sh): assert the group is engaged as an ACTIVE_PROFILE, and let the
+# PROFILE_REGISTRY accessor tests below prove it persists.
+scheck "letsencrypt is engaged as an active profile" 'ACTIVE_PROFILES\+=\(letsencrypt\)'
+scheck "local-https engages the caddy-local profile" 'ACTIVE_PROFILES\+=\(caddy-local\)'
+scheck "setup.sh drives COMPOSE_PROFILES from the registry persist set" 'registry_profiles_to_persist'
+scheck "setup.sh derives the health gate from the shared registry accessor" 'mandatory_health_services'
+scheck "letsencrypt waits for the cert before advertising the URL" 'Waiting for the public certificate'
+# The setup token must never ride a raw-IP HTTP link: print_setup_link is fed a
+# loopback/verified base, never the LAN IP.
+if grep -Eq 'print_setup_link[^#]*LAN_IP' "$SETUP_SCRIPT"; then
+  printf 'FAIL: print_setup_link is called with the LAN IP (the setup token must stay on loopback)\n' >&2; fail=1
+else
+  pass "print_setup_link is never called with the LAN IP"
+fi
+
 # === setup.sh GPU wiring (static) =============================================
 
 scheck "setup.sh parses --gpu with the four overlay choices" 'cuda\|rocm\|vulkan\|cpu\) NI_GPU_OVERRIDE'
@@ -490,6 +679,12 @@ scheck "overlay selection references the ROCm overlay" 'docker-compose\.rocm\.ym
 scheck "overlay selection references the Vulkan overlay" 'docker-compose\.vulkan\.yml'
 scheck "AMD ROCm engagement is gated on /dev/kfd" 'JARVIS_KFD_DEV:-/dev/kfd'
 scheck "setup.sh persists JARVIS_GPU_VENDOR into .env" 'JARVIS_GPU_VENDOR\)'
+# GPU overlay is opt-in (default flip) with working numeric group_add + CPU recovery.
+scheck "Intel/AMD default to a CPU install (Vulkan/ROCm opt-in)" 'Vulkan acceleration is experimental; opt in'
+scheck "GPU overlay selection resolves numeric /dev/dri GIDs" 'resolve_dri_gids'
+scheck "the resolved render GID is persisted to .env" 'upsert_env_var JARVIS_RENDER_GID'
+scheck "a failed GPU overlay offers a one-keypress CPU retry via re-exec" 'exec "\$0" --gpu cpu'
+scheck "the CPU-retry prompt is gated on an interactive TTY (never non-interactive)" '\-eq 0 \] && \[ -t 0'
 
 # === setup.sh prereq wiring (static) =========================================
 
@@ -550,6 +745,336 @@ case "${rc}:${out}" in
   1:*'--domain requires a value'*) pass "--domain as the last argument still dies" ;;
   *) printf 'FAIL: --domain as last arg rc=%s out=%s\n' "$rc" "$out" >&2; fail=1 ;;
 esac
+
+# --public-origin is validated at parse time: an IP literal is refused (never a
+# valid WebAuthn origin / public-cert host); a DNS https hostname is accepted (and
+# --help then exits before any docker work, so this is safe as a subprocess).
+out="$(run_setup --public-origin https://10.0.0.5 --help)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*"https:// URL with a DNS hostname"*) pass "--public-origin https://10.0.0.5 is refused (an IP is not a valid origin)" ;;
+  *) printf 'FAIL: --public-origin IP literal not refused (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+out="$(run_setup --public-origin https://jarvis.example.ts.net --help)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "--public-origin https://jarvis.example.ts.net --help exits 0 (DNS origin accepted)"
+else
+  printf 'FAIL: valid --public-origin rejected (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1
+fi
+
+# === merge_env_file — non-destructive .env rebuild ===========================
+# A reconfigure must carry EVERY existing value forward unchanged (no rotated
+# secret, no dropped operator key), update only keys this run genuinely supplied,
+# add keys new in the release, and drop retired keys. Values here deliberately
+# carry a space, #, =, +, /, a double-quote, a single-quote, leading+trailing
+# spaces, and a CRLF terminator — the exact bytes a naive cut/quote-capturing
+# read mangles.
+MERGE_DIR="$(mktemp -d "${FIXTURES}/merge.XXXXXX")"
+MOLD="${MERGE_DIR}/old.env"
+MTMPL="${MERGE_DIR}/template.env"
+MUPS="${MERGE_DIR}/upserts.env"
+MOUT="${MERGE_DIR}/merged.env"
+
+cat > "$MOLD" <<'EOF'
+# machine-generated header — must survive verbatim
+SMTP_HOST=mail server.example
+SMTP_USER=user#name
+SMTP_PORT=587
+SMTP_FROM=jarvis@verified.dev
+LITELLM_SALT_KEY=a=b=c
+BACKUP_ENCRYPT_KEY=Zm9v+bar/baz==
+JARVIS_MODEL_HMAC_KEY=he said "hi"
+INFRA_INGEST_KEY=it's fine
+QDRANT_API_KEY=plainvalue
+MY_CUSTOM_FLAG="a b=c"
+CORS_ORIGINS=https://old.example
+JARVIS_ACCESS_MODE=localhost
+JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1
+EOF
+printf 'LANGFUSE_SALT=  spaced  \n' >> "$MOLD"
+printf 'POSTGRES_PASSWORD=crlfvalue\r\n' >> "$MOLD"
+
+cat > "$MTMPL" <<'EOF'
+SMTP_HOST=
+CORS_ORIGINS=
+NEW_RELEASE_KEY=default_new
+EOF
+
+# Owned this run: CORS_ORIGINS changes (and its new value carries a `=`, so the
+# owned read must keep every byte after the first `=`); JARVIS_ACCESS_MODE flips.
+cat > "$MUPS" <<'EOF'
+CORS_ORIGINS=https://a:1?x=1,https://b
+JARVIS_ACCESS_MODE=lan
+EOF
+
+merge_env_file "$MOLD" "$MTMPL" "$MUPS" "JARVIS_CERT_SAN" > "$MOUT"
+
+mval() { grep "^$1=" "$MOUT" | head -n 1 | cut -d= -f2- | tr -d '\r'; }
+
+# Carried-forward values survive byte-for-byte.
+expect_eq "merge preserves a value with a space"        "$(mval SMTP_HOST)"             "mail server.example"
+expect_eq "merge preserves a value with #"              "$(mval SMTP_USER)"             "user#name"
+expect_eq "merge preserves a value with ="              "$(mval LITELLM_SALT_KEY)"      "a=b=c"
+expect_eq "merge preserves a value with + and /"        "$(mval BACKUP_ENCRYPT_KEY)"    "Zm9v+bar/baz=="
+expect_eq "merge preserves a value with a double-quote" "$(mval JARVIS_MODEL_HMAC_KEY)" 'he said "hi"'
+expect_eq "merge preserves a value with a single-quote" "$(mval INFRA_INGEST_KEY)"      "it's fine"
+expect_eq "merge preserves leading+trailing spaces"     "$(mval LANGFUSE_SALT)"         "  spaced  "
+expect_eq "merge preserves a CRLF-terminated value"     "$(mval POSTGRES_PASSWORD)"     "crlfvalue"
+expect_eq "merge preserves an untouched neighbour"      "$(mval QDRANT_API_KEY)"        "plainvalue"
+
+# An unknown operator-added key survives byte-identical (whole line).
+expect_eq "merge keeps an unknown operator key verbatim" \
+  "$(grep '^MY_CUSTOM_FLAG=' "$MOUT")" 'MY_CUSTOM_FLAG="a b=c"'
+
+# SMTP_PORT / SMTP_FROM survive (dropped by the old carry-forward-list rebuild).
+expect_eq "merge keeps SMTP_PORT" "$(mval SMTP_PORT)" "587"
+expect_eq "merge keeps SMTP_FROM" "$(mval SMTP_FROM)" "jarvis@verified.dev"
+
+# An owned key updates — its separator-laden `=` value round-trips intact.
+expect_eq "merge applies an owned update with an = in the value" \
+  "$(mval CORS_ORIGINS)" "https://a:1?x=1,https://b"
+expect_eq "merge applies an owned update (access mode)" "$(mval JARVIS_ACCESS_MODE)" "lan"
+
+# A key new in the release (absent from the old .env) is appended.
+expect_eq "merge appends a template key new in this release" \
+  "$(mval NEW_RELEASE_KEY)" "default_new"
+
+# A retired key not owned this run is dropped.
+expect_eq "merge drops a retired, un-owned key" \
+  "$(grep -c '^JARVIS_CERT_SAN=' "$MOUT")" "0"
+
+# A retired key this run STILL owns wins (re-emitted) — the owner-over-retire
+# rule that lets a writer keep a key alive until the release that removes it.
+printf 'JARVIS_CERT_SAN=DNS:new\n' > "${MERGE_DIR}/ups2.env"
+merge_env_file "$MOLD" "$MTMPL" "${MERGE_DIR}/ups2.env" "JARVIS_CERT_SAN" > "${MERGE_DIR}/out2.env"
+expect_eq "merge re-emits a retired key the run still owns" \
+  "$(grep '^JARVIS_CERT_SAN=' "${MERGE_DIR}/out2.env" | cut -d= -f2-)" "DNS:new"
+
+# No-op merge (nothing owned, nothing retired, template == old) is byte-identical
+# — the guarantee the keep path relies on.
+merge_env_file "$MOLD" "$MOLD" /dev/null "" > "${MERGE_DIR}/noop.env"
+if diff -q "$MOLD" "${MERGE_DIR}/noop.env" >/dev/null; then
+  pass "no-op merge leaves the file byte-identical"
+else
+  printf 'FAIL: no-op merge changed the file\n' >&2
+  diff "$MOLD" "${MERGE_DIR}/noop.env" >&2 || true
+  fail=1
+fi
+
+# Every entry in the canonical walk-list survives a merge — the keys whose loss
+# would brick a live deployment (LiteLLM/backup decryption, model HMAC, Langfuse,
+# magic-link email). Guards the list against silent shrinkage too.
+MOLD3="${MERGE_DIR}/managed.env"
+: > "$MOLD3"
+for _mk in "${JARVIS_MANAGED_SECRET_KEYS[@]}"; do
+  printf '%s=sentinel-%s\n' "$_mk" "$_mk" >> "$MOLD3"
+done
+merge_env_file "$MOLD3" /dev/null /dev/null "" > "${MERGE_DIR}/managed.out"
+for _mk in "${JARVIS_MANAGED_SECRET_KEYS[@]}"; do
+  _mv="$(grep "^${_mk}=" "${MERGE_DIR}/managed.out" | head -n 1 | cut -d= -f2- | tr -d '\r')"
+  expect_eq "merge preserves managed key ${_mk}" "$_mv" "sentinel-${_mk}"
+done
+
+# === PROFILE_REGISTRY accessors ==============================================
+# The registry is the single source of truth for the optional service groups.
+# registry_profiles_to_persist drives COMPOSE_PROFILES; mandatory_health_services
+# drives both entry points' health gate; route_claims is the fixed ingress-route
+# spec a docs-parity test consumes.
+
+persist="$(registry_profiles_to_persist)"
+for _p in tunnel telegram caddy-local letsencrypt; do
+  if _env_key_in_list "$_p" "$persist"; then
+    pass "registry_profiles_to_persist includes ${_p}"
+  else
+    printf 'FAIL: registry_profiles_to_persist missing %s (got=%s)\n' "$_p" "$persist" >&2; fail=1
+  fi
+done
+# observability / vllm / perf are deliberately opt-in-per-run, never persisted.
+for _p in observability vllm perf; do
+  if _env_key_in_list "$_p" "$persist"; then
+    printf 'FAIL: registry_profiles_to_persist should NOT persist %s (got=%s)\n' "$_p" "$persist" >&2; fail=1
+  else
+    pass "registry_profiles_to_persist excludes ${_p} (not persisted)"
+  fi
+done
+
+# The base is returned unchanged when no group is active (the wrapper's case).
+expect_eq "mandatory_health_services returns the base with no active profiles" \
+  "$(mandatory_health_services "$MANDATORY_HEALTH_BASE")" "$MANDATORY_HEALTH_BASE"
+# restore-uploader is in the shared base (the drift the wrapper had, now killed).
+if _env_key_in_list restore-uploader "$MANDATORY_HEALTH_BASE"; then
+  pass "MANDATORY_HEALTH_BASE includes restore-uploader"
+else
+  printf 'FAIL: MANDATORY_HEALTH_BASE missing restore-uploader (got=%s)\n' "$MANDATORY_HEALTH_BASE" >&2; fail=1
+fi
+# An active group adds its own service to the gate (deliberately started ->
+# health-checked), de-duplicated and appended after the base.
+expect_eq "mandatory_health_services adds telegram_bot when telegram is active" \
+  "$(mandatory_health_services "$MANDATORY_HEALTH_BASE" telegram)" \
+  "${MANDATORY_HEALTH_BASE} telegram_bot"
+expect_eq "mandatory_health_services adds langfuse when observability is active" \
+  "$(mandatory_health_services "postgres" observability)" "postgres langfuse"
+# TLS-edge groups add nothing to the health gate (their own cert probes cover them).
+expect_eq "mandatory_health_services adds nothing for a TLS-edge group" \
+  "$(mandatory_health_services "postgres" letsencrypt caddy-local tunnel)" "postgres"
+
+# route_claims: the six fixed ingress routes, each a 9-column pipe row.
+routes="$(route_claims)"
+expect_eq "route_claims emits six ingress routes" "$(printf '%s\n' "$routes" | grep -c .)" "6"
+for _r in localhost-http raw-ip-lan named-private-https local-https letsencrypt tunnel; do
+  if printf '%s\n' "$routes" | grep -q "^${_r}|"; then
+    pass "route_claims declares the ${_r} route"
+  else
+    printf 'FAIL: route_claims missing the %s route\n' "$_r" >&2; fail=1
+  fi
+done
+# Every route row has exactly 9 columns and every token is bash/env-representable
+# (no spaces), and the token never rides a query string.
+while IFS= read -r _row; do
+  [ -n "$_row" ] || continue
+  _ncol="$(awk -F'|' '{print NF}' <<< "$_row")"
+  expect_eq "route row '${_row%%|*}' has 9 columns" "$_ncol" "9"
+  case "$_row" in
+    *" "*) printf 'FAIL: route row has a space (not env-representable): %s\n' "$_row" >&2; fail=1 ;;
+    *"?setup_token"*) printf 'FAIL: route row advertises a query-string token: %s\n' "$_row" >&2; fail=1 ;;
+    *) pass "route row '${_row%%|*}' is env-representable" ;;
+  esac
+done <<< "$routes"
+
+# === registry_profile_host_ports ============================================
+# The extra host ports an active TLS edge / optional profile publishes, so the
+# port pre-check covers them (a static default list would miss 80/443/3443).
+expect_eq "letsencrypt publishes 80 and 443"       "$(registry_profile_host_ports letsencrypt)" "80 443"
+expect_eq "caddy-local publishes 3443"             "$(registry_profile_host_ports caddy-local)" "3443"
+expect_eq "observability publishes langfuse 3002"  "$(registry_profile_host_ports observability)" "3002"
+expect_eq "vllm publishes 8080"                    "$(registry_profile_host_ports vllm)" "8080"
+expect_eq "tunnel/telegram publish no host port"   "$(registry_profile_host_ports tunnel telegram)" ""
+expect_eq "no profiles -> no extra ports"          "$(registry_profile_host_ports)" ""
+expect_eq "duplicate host ports are de-duped"      "$(registry_profile_host_ports letsencrypt caddy-local)" "80 443 3443"
+
+# === compose_meets_floor =====================================================
+# The overlays merge a dev override's `deploy: !reset null`; the !reset/!override
+# tags need Docker Compose 2.24.4+, so the gate must reject older v2 and accept
+# newer. rc: 0 meets floor, 1 below, 2 unreadable.
+compose_meets_floor 2.24.4 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: exact match passes" "$rc" "0"
+compose_meets_floor v2.29.7 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: newer passes (v-prefix tolerated)" "$rc" "0"
+compose_meets_floor 2.24.3 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: 2.24.3 is below the floor" "$rc" "1"
+compose_meets_floor 2.20.0 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: older minor is below the floor" "$rc" "1"
+compose_meets_floor 1.29.2 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: v1 is below the floor" "$rc" "1"
+compose_meets_floor unknown 2.24.4 && rc=0 || rc=$?; expect_eq "compose floor: unreadable version -> rc 2" "$rc" "2"
+
+# === _wsl_without_systemd (WSL prereq guidance) ==============================
+# A WSL host (Microsoft kernel) without systemd must NOT get a docker-ce plan
+# (it would start a second daemon that systemctl cannot even enable); the manual
+# guidance points at Docker Desktop's WSL integration instead. Probes are
+# env-overridable (JARVIS_PROC_VERSION / JARVIS_SYSTEMD_DIR).
+WSL_PROC="${FIXTURES}/proc-version-wsl"
+printf 'Linux version 5.15.0-microsoft-standard-WSL2\n' > "$WSL_PROC"
+NO_SYSTEMD="${FIXTURES}/no-systemd-dir"   # deliberately absent
+SYSTEMD_DIR="${FIXTURES}/systemd-dir"; mkdir -p "$SYSTEMD_DIR"
+
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: WSL + no systemd -> 0" "$rc" "0"
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$SYSTEMD_DIR"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: WSL WITH systemd -> 1 (docker-ce plan is fine)" "$rc" "1"
+( export JARVIS_PROC_VERSION="$JARVIS_PROC_VERSION" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; _wsl_without_systemd ) && rc=0 || rc=$?
+expect_eq "_wsl_without_systemd: native Linux -> 1" "$rc" "1"
+
+( export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"
+  prereq_install_plan Linux ubuntu 1 0 0 docker >/dev/null 2>&1 ) && rc=0 || rc=$?
+expect_eq "WSL-without-systemd: docker plan is refused (rc 1)" "$rc" "1"
+wsl_guidance="$(export JARVIS_PROC_VERSION="$WSL_PROC" JARVIS_SYSTEMD_DIR="$NO_SYSTEMD"; prereq_manual_guidance docker)"
+plan_has   "WSL manual guidance points at Docker Desktop WSL integration" "$wsl_guidance" 'Docker Desktop.*WSL integration'
+plan_lacks "WSL manual guidance does not push docker-ce"                  "$wsl_guidance" 'docker-ce'
+( prereq_install_plan Linux ubuntu 1 0 0 docker >/dev/null 2>&1 ) && rc=0 || rc=$?
+expect_eq "non-WSL host: docker plan is produced (rc 0)" "$rc" "0"
+
+# === python3 as a first-class prerequisite ===================================
+# python3 backs model selection + disk sizing (setup_lib helpers shell out to it
+# under set -euo pipefail), so it is a hard install-path prerequisite.
+mp_src="$(sed -n '/^missing_prereqs()/,/^}/p' "$SETUP_SCRIPT")"
+MP_BIN="$(mktemp -d "${FIXTURES}/mp.XXXXXX")"
+printf '#!/usr/bin/env bash\ncase "$1" in compose) exit 0 ;; esac\nexit 0\n' > "${MP_BIN}/docker"
+printf '#!/usr/bin/env bash\nexit 0\n' > "${MP_BIN}/openssl"
+chmod +x "${MP_BIN}/docker" "${MP_BIN}/openssl"
+got="$( eval "$mp_src"; ( export PATH="$MP_BIN"; missing_prereqs ) )"
+case "$got" in
+  *python3*) pass "missing_prereqs reports python3 when it is absent" ;;
+  *) printf 'FAIL: missing_prereqs did not report python3 (got=%s)\n' "$got" >&2; fail=1 ;;
+esac
+printf '#!/usr/bin/env bash\nexit 0\n' > "${MP_BIN}/python3"; chmod +x "${MP_BIN}/python3"
+got="$( eval "$mp_src"; ( export PATH="$MP_BIN"; missing_prereqs ) )"
+case "$got" in
+  *python3*) printf 'FAIL: missing_prereqs reported python3 though present (got=%s)\n' "$got" >&2; fail=1 ;;
+  *) pass "missing_prereqs does not report python3 when present" ;;
+esac
+py_plan="$(prereq_install_plan Linux ubuntu 1 0 0 python3)" || py_plan=""
+plan_has "python3: apt installs python3" "$py_plan" '^sudo apt-get install -y python3$'
+py_plan_fedora="$(prereq_install_plan Linux fedora 0 0 1 python3)" || py_plan_fedora=""
+plan_has "python3: dnf installs python3" "$py_plan_fedora" '^sudo dnf install -y python3$'
+plan_has "python3: manual guidance names Python 3" "$(prereq_manual_guidance python3)" 'Python 3'
+
+# === readiness_verdict =======================================================
+# The readiness exit-code -> wrapper-action map (contract: 0 clean, 2 warn, 1
+# HIGH). Pairing the exit-code flip with this consumer is what keeps a routine
+# exit-2 warning from aborting a production install.
+expect_eq "rc 0 -> all-clear"                        "$(readiness_verdict 0 production)" "ok"
+expect_eq "rc 2 -> warn (never fatal) in production" "$(readiness_verdict 2 production)" "warn"
+expect_eq "rc 2 -> warn in development"              "$(readiness_verdict 2 development)" "warn"
+expect_eq "rc 1 + production -> abort (fatal)"       "$(readiness_verdict 1 production)" "abort"
+expect_eq "rc 1 + development -> warn (dev tolerance)" "$(readiness_verdict 1 development)" "warn"
+expect_eq "unknown nonzero -> warn (surface, never silently abort)" "$(readiness_verdict 3 production)" "warn"
+
+# === setup.sh preflight/output wiring (static) ===============================
+scheck "missing_prereqs treats python3 as a prerequisite" 'missing\+=\(python3\)'
+scheck "ensure_prerequisites verifies python3"            'python3 required for model selection'
+scheck "run_doctor --check fails when python3 is absent"  'python3 missing — required for model selection'
+scheck "the compose gate pins a real 2.24.4 floor"        '^COMPOSE_MIN=2\.24\.4'
+scheck "the compose gate uses compose_meets_floor"        'compose_meets_floor "\$COMPOSE_VER" "\$COMPOSE_MIN"'
+scheck "the nvidia-toolkit probe is a first-class preflight" '^preflight_nvidia_toolkit$'
+scheck "the port pre-check reads .env port values"        '_port_or_default DASHBOARD_HOST_PORT'
+scheck "the port pre-check adds active-profile ports"     'registry_profile_host_ports'
+scheck "the readiness wrapper consumes readiness_verdict" 'readiness_verdict "\$_rc" "\$_ENV_VALUE"'
+scheck "the readiness wrapper is non-fatal on warnings (exit 2)" 'passed with warnings'
+scheck "multi-user next-steps lead with the first-admin setup link" 'Bootstrap the first admin: open the "Finish setup" link'
+
+# nvidia-toolkit is hoisted OUT of the missing-prereqs add (now a first-class,
+# non-fatal preflight), so the nested `missing+=(nvidia-toolkit)` must be gone.
+if grep -Eq 'missing\+=\(nvidia-toolkit\)' "$SETUP_SCRIPT"; then
+  printf 'FAIL: nvidia-toolkit is still nested in the missing-prereqs add\n' >&2; fail=1
+else
+  pass "nvidia-toolkit is hoisted out of the missing-prereqs add"
+fi
+# preflight_nvidia_toolkit is non-fatal by contract: its body never dies.
+pnt_src="$(sed -n '/^preflight_nvidia_toolkit()/,/^}/p' "$SETUP_SCRIPT")"
+if printf '%s\n' "$pnt_src" | grep -qE '\bdie \b|\bdie "'; then
+  printf 'FAIL: preflight_nvidia_toolkit contains a die (must be non-fatal)\n' >&2; fail=1
+else
+  pass "preflight_nvidia_toolkit is non-fatal (no die on a missing GPU runtime)"
+fi
+
+# The green "Setup complete." banner must be printed AFTER the readiness gate.
+_banner_ln="$(grep -nF 'Setup complete.' "$SETUP_SCRIPT" | tail -1 | cut -d: -f1)"
+_gate_ln="$(sline 'bash "\$_READINESS_SCRIPT"')"
+if [ -n "$_banner_ln" ] && [ -n "$_gate_ln" ] && [ "$_gate_ln" -lt "$_banner_ln" ]; then
+  pass "the green 'Setup complete.' banner is printed AFTER the readiness gate"
+else
+  printf 'FAIL: Setup complete banner (%s) not after the readiness gate (%s)\n' "$_banner_ln" "$_gate_ln" >&2; fail=1
+fi
+
+# The dependency-reversed lead step (a magic link before any admin exists) is gone.
+if grep -Eq 'Request a magic link at the sign-in page' "$SETUP_SCRIPT"; then
+  printf 'FAIL: next-steps still leads with a magic-link step that presupposes SMTP/an account\n' >&2; fail=1
+else
+  pass "next-steps no longer leads with a magic-link step before first-admin bootstrap"
+fi
+# ...and first-admin bootstrap is ordered before SMTP configuration.
+_boot_ln="$(sline 'Bootstrap the first admin')"
+_smtp_ln="$(grep -nE 'Configure SMTP in Settings' "$SETUP_SCRIPT" | tail -1 | cut -d: -f1)"
+if [ -n "$_boot_ln" ] && [ -n "$_smtp_ln" ] && [ "$_boot_ln" -lt "$_smtp_ln" ]; then
+  pass "next-steps orders first-admin bootstrap before SMTP configuration"
+else
+  printf 'FAIL: next-steps SMTP step (%s) not after bootstrap (%s)\n' "$_smtp_ln" "$_boot_ln" >&2; fail=1
+fi
 
 # =============================================================================
 

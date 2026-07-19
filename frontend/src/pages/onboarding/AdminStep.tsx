@@ -6,8 +6,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SetupStep } from '@/components/setup/SetupStep';
 import { createFirstRunAdmin } from '@/lib/api';
+import { ApiError } from '@/lib/api/core';
 import { useAuthStore } from '@/stores/auth-store';
 import { errorMessage } from '@/lib/errors';
+import { storeSetupToken } from './shared';
 import type { StepNavProps } from './shared';
 
 interface AdminStepProps extends StepNavProps {
@@ -24,15 +26,28 @@ export function AdminStep({
   setupToken,
 }: AdminStepProps) {
   const [email, setEmail] = useState('');
+  const [pastedToken, setPastedToken] = useState('');
   const loginWithSession = useAuthStore((s) => s.loginWithSession);
 
+  const effectiveToken = pastedToken.trim() || setupToken;
+
   const createMut = useMutation({
-    mutationFn: (adminEmail: string) => createFirstRunAdmin(adminEmail, setupToken),
+    mutationFn: (adminEmail: string) => createFirstRunAdmin(adminEmail, effectiveToken),
     onSuccess: async (res) => {
+      if (pastedToken.trim()) storeSetupToken(pastedToken.trim());
       await loginWithSession({ id: res.id, email: res.email, role: res.role as 'admin' | 'user' });
       onNext();
     },
   });
+
+  // A 403 while this browser carries no token means the server has one
+  // configured that we never received (second device / incognito) — offer a
+  // paste field so the operator can enter the line printed by ./setup.sh.
+  const needsSetupToken =
+    !setupToken &&
+    createMut.error instanceof ApiError &&
+    createMut.error.status === 403 &&
+    /token/i.test(createMut.error.detail);
 
   return (
     <SetupStep
@@ -45,7 +60,10 @@ export function AdminStep({
           <Button variant="ghost" onClick={onBack}>
             Back
           </Button>
-          <Button onClick={() => createMut.mutate(email)} disabled={!email || createMut.isPending}>
+          <Button
+            onClick={() => createMut.mutate(email)}
+            disabled={!email || createMut.isPending || (needsSetupToken && !pastedToken.trim())}
+          >
             {createMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="ml-2 h-4 w-4" />}
             Create admin & sign in
           </Button>
@@ -66,6 +84,22 @@ export function AdminStep({
           Future admins/users go through the standard magic-link invite flow.
         </p>
       </div>
+      {needsSetupToken && (
+        <div>
+          <Label htmlFor="setup-token">Setup token</Label>
+          <Input
+            id="setup-token"
+            type="text"
+            value={pastedToken}
+            onChange={(e) => setPastedToken(e.target.value)}
+            placeholder="paste the setup token"
+            autoComplete="off"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Printed by ./setup.sh on the server — the line ending in /setup#setup_token=…
+          </p>
+        </div>
+      )}
       {createMut.isError && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           {errorMessage(createMut.error, 'Could not create admin.')}

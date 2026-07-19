@@ -52,7 +52,7 @@ Generation can also happen automatically on a schedule. See [Settings](settings.
 Each card has **thumbs-up** and **thumbs-down** rating buttons:
 
 - **Thumbs up** — marks the paper as relevant. It is added to your Library and the rating feeds back into the Pulse recommendation model to surface similar papers in future decks.
-- **Thumbs down** — marks the paper as not relevant. It is hidden from future decks.
+- **Thumbs down** — marks the paper as not relevant. It is hidden from future decks. A topic that collects repeated thumbs-down (5 or more within 90 days) is dampened: its positive similarity signal is halved — never boosted — when scoring future candidates, so a topic you keep rejecting quietly stops dominating your deck.
 - **Save** — saves the paper to your Library without a quality rating.
 
 ---

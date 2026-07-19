@@ -227,6 +227,94 @@ def test_installer_scripts_pull_every_published_service(compose):
         )
 
 
+def _env_keys(svc) -> set[str]:
+    """Environment keys of a service, handling both the mapping and list forms."""
+    env = svc.get("environment", {}) or {}
+    if isinstance(env, dict):
+        return set(env.keys())
+    return {str(e).split("=", 1)[0] for e in env}
+
+
+def test_smtp_password_is_a_mounted_secret_never_plain_env(compose):
+    """Invariant: the SMTP password reaches paper_ingestion as a Docker secret
+    (SMTP_PASS_FILE -> /run/secrets/smtp_pass), never a plaintext SMTP_PASS env
+    var that ``docker inspect`` would expose. The rest of the SMTP settings are
+    env-configurable so an operator relay actually reaches the container — before
+    this the whole SMTP_* set was absent and an env-configured relay was dead.
+    """
+    assert "smtp_pass" in (compose.get("secrets") or {}), (
+        "top-level smtp_pass secret must be declared"
+    )
+
+    pi = compose["services"]["paper_ingestion"]
+    mounted = {s if isinstance(s, str) else s.get("source") for s in pi.get("secrets", [])}
+    assert "smtp_pass" in mounted, "paper_ingestion must mount the smtp_pass secret"
+
+    env = pi.get("environment", {}) or {}
+    assert env.get("SMTP_PASS_FILE") == "/run/secrets/smtp_pass", (
+        f"paper_ingestion SMTP_PASS_FILE must point at the mounted secret; "
+        f"got {env.get('SMTP_PASS_FILE')!r}"
+    )
+    for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_FROM"):
+        assert key in env, (
+            f"paper_ingestion must pass {key} so an env-configured relay reaches the app"
+        )
+
+    for name, svc in compose["services"].items():
+        assert "SMTP_PASS" not in _env_keys(svc), (
+            f"{name} exposes SMTP_PASS as a plaintext env var — use the smtp_pass Docker secret"
+        )
+
+
+GROUP_ADD_OK = re.compile(r"^(\d+|\$\{[A-Z0-9_]+:-\d+\})$")
+
+
+@pytest.mark.parametrize("overlay", ["docker-compose.vulkan.yml", "docker-compose.rocm.yml"])
+def test_overlay_group_add_entries_are_numeric(overlay):
+    """group_add NAMES resolve against the container image's /etc/group and
+    fail container start when absent (stock ollama images ship no `render`
+    group). Numeric GIDs and ${VAR:-numeric} interpolations apply without
+    any lookup."""
+    data = yaml.safe_load((REPO_ROOT / overlay).read_text())
+    for name, svc in data.get("services", {}).items():
+        for entry in svc.get("group_add", []):
+            assert GROUP_ADD_OK.match(str(entry)), (
+                f"{overlay}:{name} group_add entry {entry!r} is a bare "
+                "group name; use a numeric GID or ${VAR:-numeric}"
+            )
+
+
+def _resolved_host_port(entry) -> int:
+    """Resolve a compose `ports:` entry to its published HOST port.
+
+    Handles the short-form strings used here — ``ip:hostport:container`` and
+    ``hostport:container`` — resolving ``${VAR:-default}`` to its default first
+    (the colon inside a default would otherwise break a naive split).
+    """
+    if isinstance(entry, dict):  # long form {published: ..., target: ...}
+        return int(str(entry["published"]))
+    resolved = re.sub(r"\$\{[^}]*:-([^}]*)\}", r"\1", str(entry))
+    return int(resolved.split(":")[-2])
+
+
+def test_no_two_services_publish_the_same_host_port(compose):
+    """Invariant: no two services publish the same host port.
+
+    caddy_local (the local-https TLS terminator) and the dashboard both once
+    published host 3001, so `make up-https` — which brings up BOTH — could never
+    bind them together. Every published host port must be unique across services so
+    any enabled profile combination starts cleanly.
+    """
+    owners: dict[int, list[str]] = {}
+    for name, svc in compose["services"].items():
+        for entry in svc.get("ports", []) or []:
+            owners.setdefault(_resolved_host_port(entry), []).append(name)
+    collisions = {port: names for port, names in owners.items() if len(names) > 1}
+    assert not collisions, (
+        f"services publish colliding host ports (they cannot bind together): {collisions}"
+    )
+
+
 def _brace_block(text: str, opener: str) -> str:
     """Return the body of the first brace-delimited block whose header matches ``opener``."""
     match = re.search(opener + r"[^{]*\{", text)

@@ -32,7 +32,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import current_user_id_strict
-from jarvis_common.email import send_magic_link
+from jarvis_common.email import MagicLinkDelivery, send_magic_link
 
 from paper_ingestion.deps import limiter
 from paper_ingestion.models.account import (
@@ -234,8 +234,8 @@ async def update_account(
     if pending_send is not None:
         new_email, link = pending_send
         try:
-            await send_magic_link(new_email, link, pool=pool)
-            email_verification_sent = True
+            result = await send_magic_link(new_email, link, pool=pool)
+            email_verification_sent = result is MagicLinkDelivery.DELIVERED
         except Exception:  # noqa: BLE001 — never leak SMTP detail
             logger.exception(
                 "send_magic_link (email-change) failed for email_hash=%s",

@@ -39,7 +39,8 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 
 - Docker Engine 24+ with Compose v2, `openssl`, `git`
 - **~25–53 GB free disk space** for the first install — a one-time peak, not the ongoing footprint. The exact figure depends on your GPU tier and whether images are pulled prebuilt or built locally; see [Disk budget](docs/REQUIREMENTS.md#disk-budget).
-- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
+- GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
+- AMD (ROCm, or Vulkan without `/dev/kfd`) and Intel (Vulkan) GPUs are auto-detected and accelerate Ollama too, labeled **[Experimental]** — same tier-based model selection, lower validation confidence, and it may not accelerate on every card. Vulkan is opt-in (`./setup.sh --gpu vulkan`) and passes `/dev/dri` through by numeric render-node GIDs (`JARVIS_VIDEO_GID`/`JARVIS_RENDER_GID`, resolved from the host). `paper_ingestion` (PDF parsing, reranking) stays CPU-only on AMD/Intel regardless. See the [hardware support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/) for caveats and how to report your results.
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 - `./setup.sh --check` verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or `openssl` are missing, `./setup.sh --install-prereqs` can run the guided installer after showing the exact commands.
 - **Windows:** use WSL2 + Docker Desktop
@@ -60,6 +61,17 @@ Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Ove
 
 In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
 
+**Everyday commands.** Setup puts a `jarvis-research` launcher on your PATH for day-to-day operation from any directory:
+
+```bash
+jarvis-research status     # container status at a glance
+jarvis-research logs -f     # follow service logs
+jarvis-research doctor      # read-only health, disk, and update check
+jarvis-research update      # transactional, database-safe upgrade to the latest release
+```
+
+Full command reference → **[docs/manual/cli.md](docs/manual/cli.md)**.
+
 **Non-interactive (CI / cloud-init):**
 
 ```bash
@@ -71,7 +83,7 @@ In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigu
   --smtp-pass-file=/run/secrets/smtp_pass
 ```
 
-See `./setup.sh --help` for all flags (including `--profile=local-https` for self-signed TLS). After the first admin exists, invite teammates at **Admin → User Management**.
+See `./setup.sh --help` for all flags (including `--profile=local-https`, which starts a local Caddy edge at `https://localhost:3443` using an mkcert-issued certificate — run `make certs` first). After the first admin exists, invite teammates at **Admin → User Management**.
 
 ## What it does
 
@@ -120,6 +132,23 @@ git pull
 ```
 
 `update.sh` diffs your running containers against the versions pinned in `versions.env`, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
+
+## Uninstalling JARVIS
+
+`jarvis-research uninstall` tears the install down in four escalating tiers, each of which lists the exact resources it will touch and confirms before acting. Always preview first:
+
+```bash
+jarvis-research uninstall --dry-run --all   # enumerate a full teardown, change nothing
+```
+
+| Tier | Removes | Reversible? |
+| --- | --- | --- |
+| `1` stop | Containers and the network | Yes — `jarvis-research start` |
+| `2` app | Tier 1 + the JARVIS application images | Yes — reinstall pulls them again |
+| `3` data | Tier 2 + the named data volumes (database, vector store, caches) | **No** — back up first |
+| `4` purge | Tier 3 + third-party images (each confirmed), `.env`, `secrets/`, `shared/`, and the clone directory | **No** |
+
+Tier 3 requires typing the compose project name, and tier 4 requires exporting (or explicitly forgoing) the backup encryption key, because that key is excluded from backup archives — deleting `secrets/` without it makes every encrypted off-host backup unrecoverable. These destructive gates require typed confirmation from stdin; `--yes`/`--all` skip only the ordinary prompts, never the typed gates, so a run with closed stdin cannot complete tier 3 or 4. Full details → **[docs/manual/cli.md](docs/manual/cli.md#uninstalling)**.
 
 ## Security
 

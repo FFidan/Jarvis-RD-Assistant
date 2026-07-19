@@ -141,13 +141,13 @@ use JARVIS on that one machine, skip this section** — nothing needs to be expo
 To reach it from another device — your phone, or a laptop away from home —
 without putting it on the open internet, common options are:
 
-- **A reverse proxy with TLS** on your own domain — the Caddy `local-https` /
-  `letsencrypt` profiles (see *Deployment Modes* below).
+- **A named private HTTPS origin** — `./setup.sh --public-origin https://<host>` layers on top of your existing localhost/LAN setup and wires `APP_BASE_URL`/CORS/the Host allowlist automatically. The Tailscale walkthrough below is the reference implementation of this.
+- **A reverse proxy with TLS** on your own public domain — the Caddy `letsencrypt` profile (see *Deployment Modes* below). Note `local-https` (mkcert) is **not** a remote-access option — it is loopback-only, for a locally-trusted `https://localhost:3443` on the JARVIS machine itself.
 - **A Cloudflare Tunnel** — outbound-only, no open ports.
 - **A mesh VPN** — your devices share one private encrypted network.
 
 These are alternatives; pick whichever suits you. The walkthrough below is **one
-example** (Tailscale, a mesh VPN), not a requirement.
+example** (Tailscale, a mesh VPN), not a requirement — and shows what `--public-origin` automates under the hood.
 
 ### Example: Tailscale
 
@@ -201,16 +201,30 @@ Telegram needs no change for any of this — the bot only makes outbound calls.
 
 ## Deployment Modes
 
-| Mode | Setup time | Inbound ports | TLS story |
+| Mode | Setup time | Inbound ports | Transport |
 |---|---|---|---|
-| **Localhost** | ~5 min | none | Self-signed (localhost SAN) |
-| **LAN** | ~10 min | `3001/tcp` on LAN iface | Self-signed with LAN IP SAN |
-| **Cloudflare Tunnel** | ~30 min | *none* (outbound-only) | Self-signed origin + Cloudflare edge TLS |
-| **Let's Encrypt / Caddy** | ~15 min after DNS | `80/tcp`, `443/tcp` | Caddy ACME edge TLS |
-| **Tailscale Funnel** | ~20 min | *none* on your host | Tailscale-provisioned TLS |
-| **VPN (Tailscale/WireGuard)** | ~15 min | VPN ports only | Self-signed |
+| **Localhost** | ~5 min | none | Plain HTTP on loopback (`:3001`) |
+| **LAN** | ~10 min | `3001/tcp` on LAN iface | Plain HTTP on every interface — viewing only, see [Mode 2](#mode-2-lan) |
+| **Named private HTTPS** (`--public-origin`, e.g. Tailscale Serve) | ~10 min on top of localhost/LAN | *none* on your host | Real HTTPS at your chosen hostname; edge owns the cert |
+| **Local HTTPS** (`--profile=local-https`) | ~5 min (`make certs` first) | `3443/tcp` on loopback | mkcert-issued HTTPS, trusted only on this machine |
+| **Cloudflare Tunnel** | ~30 min | *none* (outbound-only) | HTTPS; Cloudflare edge owns the cert |
+| **Let's Encrypt / Caddy** | ~15 min after DNS | `80/tcp`, `443/tcp` | HTTPS; Caddy ACME edge owns the cert |
 
-`./setup.sh` runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); the chosen mode also sets `APP_BASE_URL` and `JARVIS_ACCESS_MODE` in `.env`. See [Choosing how you access JARVIS](manual/access-modes.md).
+`./setup.sh` runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); a named private HTTPS origin layers onto localhost/LAN via `--public-origin`. The chosen mode sets `APP_BASE_URL` and `JARVIS_ACCESS_MODE` in `.env`. See [Choosing how you access JARVIS](manual/access-modes.md).
+
+### Per-adapter trust contract
+
+Every non-localhost adapter must agree with JARVIS on five things: which hostname reaches the app, who owns the edge certificate, whether the adapter rewrites the `Host` header (which changes what `DASHBOARD_SERVER_NAME` must allowlist), and how the setup-token bootstrap and passkey ceremony behave at that origin. `setup.sh` wires the first four adapters below automatically; a custom proxy is on you to match this contract.
+
+| Adapter | Origin / hostname | Cert owner | `Host` rewrite | `APP_BASE_URL` / CORS / `DASHBOARD_SERVER_NAME` | Trusted-proxy | Cookie | Setup-token handoff | Passkey origin |
+|---|---|---|---|---|---|---|---|---|
+| Cloudflare Tunnel | `TUNNEL_HOSTNAME` you configured in Zero Trust | Cloudflare | No — original Host forwarded | Set automatically by `setup.sh` option 3 | In-network (bridge subnet); set `JARVIS_TRUST_CF_CONNECTING_IP=true` to key rate limits on `CF-Connecting-IP` | Secure | URL fragment, once the origin probes healthy | `TUNNEL_HOSTNAME` |
+| Named private HTTPS (Tailscale Serve) | Hostname you pass to `--public-origin` | The proxy (e.g. Tailscale) | No — original Host forwarded | Set automatically by `--public-origin` | Host loopback (`127.0.0.1`) — already trusted by default | Secure | URL fragment, once the edge probe (best-effort, 3 retries) succeeds; loopback until then | Exact `--public-origin` origin |
+| Let's Encrypt (Caddy) | `LETSENCRYPT_DOMAIN` | Caddy ACME | Yes — rewritten to `localhost` | Set automatically by `setup.sh` option 4 | In-network (bridge subnet), pinned Caddy IP | Secure | URL fragment, after the ACME cert-issuance gate passes (production: fatal on timeout) | `LETSENCRYPT_DOMAIN` |
+| Local HTTPS (`caddy_local`) | `localhost:3443` | mkcert (local trust store only) | Yes — rewritten to `localhost` | `CORS_ORIGINS` gains `https://localhost:3443` automatically with `--profile=local-https` | In-network (bridge subnet), pinned Caddy IP | Secure | URL fragment | `localhost` |
+| Custom reverse proxy | Whatever you configure | You | Your choice — must match what you allowlist | You must set `APP_BASE_URL`, `CORS_ORIGINS`, and `DASHBOARD_SERVER_NAME` by hand | Add your proxy's CIDR to `TRUSTED_PROXY_CIDRS` (and, if it sits outside the default bridge subnet, `TRUSTED_PROXY_HOSTS`) | Secure (requires HTTPS or `DEV_MODE=true`) | Manual — no `setup.sh` automation for this path | Exact origin in `APP_BASE_URL`; never a raw IP |
+
+Raw-IP LAN browsing is deliberately absent from this table — it carries no cookie or passkey contract at all (see [access-modes.md](manual/access-modes.md#about-lan-mode)).
 
 ---
 
@@ -218,11 +232,15 @@ Telegram needs no change for any of this — the bot only makes outbound calls.
 
 The default mode — see [Solo deployment](#solo-deployment-recommended-for-single-user) above for the commands, or run `./setup.sh` and pick option 1 at the access-mode prompt.
 
-The dashboard is at `http://localhost:3001` (default `DASHBOARD_HOST_PORT=3001`). Enable the `caddy-local` profile only when you want local HTTPS.
+The dashboard is at `http://localhost:3001` (default `DASHBOARD_HOST_PORT=3001`) — plain HTTP; loopback traffic never leaves the machine. Enable the `caddy-local` profile (`--profile=local-https`, needs `make certs` first) only when you want a locally-trusted `https://localhost:3443`.
 
-### Self-signed cert — browser acceptance
+### Bootstrapping the first admin (the setup token)
 
-On first start JARVIS generates a self-signed certificate. Accept the browser warning once: Chrome/Edge — type `thisisunsafe` (no input field); Firefox — *Advanced → Accept the Risk*; Safari — *Show Details → visit this website* (macOS prompts for your admin password).
+`scripts/init-secrets.sh` generates `JARVIS_SETUP_TOKEN` (a Docker Secret, `secrets/jarvis_setup_token.txt`) on first run. It gates the unauthenticated first-admin bootstrap endpoints via an `X-Setup-Token` header — a second factor on top of "no admin exists yet", closing the window where anyone who reaches the instance before you could create the first account. `setup.sh` prints the click-to-finish link with the token embedded in a URL **fragment** (`.../setup#setup_token=…`), never a query string — a fragment is never sent to the server, so it never lands in access logs, the `Referer` header, or a reverse proxy's request line. Links printed before this fragment migration used a `?setup_token=` query string; the wizard still accepts those for compatibility, but new links are always fragments.
+
+If the browser never received the printed link (a second device, an incognito window) the admin-creation step offers a **paste field** — enter just the token value from the end of the line `./setup.sh` printed (`.../setup#setup_token=<this part>`).
+
+In production, an unset `JARVIS_SETUP_TOKEN` fails closed: the bootstrap endpoint refuses every write until the secret exists. Outside production it warns and allows the request, for local/dev convenience.
 
 ---
 
@@ -232,20 +250,18 @@ On first start JARVIS generates a self-signed certificate. Accept the browser wa
 ./setup.sh   # pick option 2
 ```
 
-`setup.sh` sets `DASHBOARD_BIND_HOST=0.0.0.0`, detects your LAN IP, adds it to `CORS_ORIGINS` and `JARVIS_CERT_SAN`, and removes stale override files.
+`setup.sh` sets `DASHBOARD_BIND_HOST=0.0.0.0`, detects your LAN IPv4 (`--address <ipv4>` to override), and adds it to `CORS_ORIGINS` and the `DASHBOARD_SERVER_NAME` Host allowlist. This is plain HTTP — there is no certificate involved in LAN mode; see [access-modes.md → About LAN mode](manual/access-modes.md#about-lan-mode) for what raw-IP LAN access does and does not give you (viewing yes, a persisted signed-in session no).
 
 ### When your LAN IP changes
 
-DHCP can re-lease a different IP after a reboot (symptom: dashboard works on `localhost` but other devices get a cert or CORS error).
+DHCP can re-lease a different IP after a reboot (symptom: dashboard works on `localhost` but other devices get a CORS or `444`/Host-rejection error).
 
 ```bash
-# Option A — re-run setup.sh (re-detects IP, prompts to regenerate cert):
+# Re-run setup.sh — it re-detects the LAN IP and rewrites CORS_ORIGINS /
+# DASHBOARD_SERVER_NAME for the new address. No cert to regenerate.
 ./setup.sh
 
-# Option B — update .env manually, then regenerate:
-# JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1,IP:<new-LAN-IP>
-# CORS_ORIGINS=https://localhost:3001,https://<new-LAN-IP>:3001
-rm ./certs/cert.pem ./certs/key.pem && docker compose up -d dashboard
+docker compose up -d dashboard   # only needed if setup.sh did not restart it for you
 ```
 
 ### Hardening checklist before LAN exposure
@@ -360,18 +376,21 @@ Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the pub
 
 ## TLS / Certificates
 
-### Self-signed (default)
+The `dashboard` container itself never terminates TLS — it serves plain HTTP on `:3000` internally (published as `:3001` by default). TLS only exists at an edge in front of it: mkcert for local HTTPS, Caddy for Let's Encrypt, or an external provider (Cloudflare, Tailscale). `JARVIS_SKIP_SELFSIGNED_GEN` and `JARVIS_CERT_SAN` are legacy environment variables from an earlier self-signed-in-container design; the container's self-signed generation path is skipped by default and its `./certs/` mount is read-only, so neither variable has any effect on a current install.
 
-- Generated inside the `dashboard` container on first start.
-- SAN is controlled by `JARVIS_CERT_SAN` in `.env`; `setup.sh` sets this based on access mode.
-- Key + cert live in `./certs/` (bind-mount at the repo root).
-- `JARVIS_SKIP_SELFSIGNED_GEN` defaults to `true` — generation is skipped if cert files already exist.
+### Local HTTPS (mkcert)
 
-To force regeneration:
+```bash
+make certs         # installs the mkcert root CA + writes ./certs/cert.pem, ./certs/key.pem
+make up-https       # or: docker compose --profile caddy-local up -d
+```
+
+`scripts/init-mkcert.sh` (what `make certs` runs) issues a certificate for `jarvis.localhost`, `localhost`, `127.0.0.1`, and `::1` only — this is a loopback-only certificate, not usable for LAN or public access. It auto-regenerates when the existing certificate expires within 30 days; to force regeneration sooner, delete the files and re-run:
 
 ```bash
 rm ./certs/cert.pem ./certs/key.pem
-docker compose up -d dashboard
+make certs
+docker compose up -d caddy_local
 ```
 
 ### Let's Encrypt (Caddy profile)
@@ -380,23 +399,19 @@ docker compose up -d dashboard
 # .env
 LETSENCRYPT_DOMAIN=jarvis.example.com
 LETSENCRYPT_EMAIL=you@example.com
-CORS_ORIGINS=https://jarvis.example.com,https://localhost:3001
+CORS_ORIGINS=https://jarvis.example.com,http://localhost:3001
 
 docker compose --profile letsencrypt up -d caddy
 ```
 
-Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network. **Option B — host nginx + certbot:** run certbot on the host, copy the cert into `./certs/`, and set `JARVIS_SKIP_SELFSIGNED_GEN=true`.
+Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network, rewriting `Host` to `localhost`. The ACME certificate lives in the `caddy_data`/`caddy_config` named volumes, managed entirely by Caddy — there is nothing under `./certs/` to hand-edit or import for this path. `setup.sh` waits for the certificate to be issued (up to 120s) before reporting success or printing the setup link.
 
-### Importing an existing certificate
+### Importing your own certificate
 
-```bash
-docker compose stop dashboard
-cp fullchain.pem ./certs/cert.pem
-cp privkey.pem ./certs/key.pem
-chmod 600 ./certs/key.pem
-chmod 644 ./certs/cert.pem
-docker compose up -d dashboard
-```
+There is no supported "drop in a certificate" path for the dashboard container. Two options:
+
+- **Local HTTPS edge (loopback only):** overwrite `./certs/cert.pem` and `./certs/key.pem` with your own cert/key pair, then restart the edge that reads them: `docker compose up -d caddy_local`. This only affects `https://localhost:3443`.
+- **A public certificate:** use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the [custom-proxy trust contract](#per-adapter-trust-contract) — the certificate then belongs to that proxy, not to JARVIS.
 
 ---
 
@@ -448,8 +463,8 @@ Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, 
 # Local development / CI smoke test:
 ./setup.sh --non-interactive --profile=dev
 
-# Self-hosted with self-signed HTTPS (home lab):
-./setup.sh --non-interactive --domain=jarvis.local --admin-email=admin@example.com --profile=local-https
+# Local mkcert HTTPS (loopback only — run `make certs` first):
+./setup.sh --non-interactive --profile=local-https
 
 # Production with Let's Encrypt:
 printf '%s' "$MY_SMTP_PASS" > /run/secrets/smtp_pass && chmod 600 /run/secrets/smtp_pass
@@ -468,6 +483,22 @@ After setup, open the dashboard and create the initial admin in the onboarding w
 
 ## Update Workflow
 
+The recommended path is the lifecycle command, which upgrades transactionally
+and refuses unsafe states:
+
+```bash
+jarvis-research update
+```
+
+It verifies that every image for the target release is already published,
+requires a fresh, checksum-verified backup before any data-changing migration,
+stages the new images before advancing your checkout by fast-forward only, and
+waits for the stack to report healthy — resuming automatically if a run is
+interrupted, and never rolling back on its own. See
+[Command line (jarvis-research)](manual/cli.md) for resume and rollback details.
+
+You can also update by hand:
+
 ```bash
 git pull
 ./update.sh
@@ -475,7 +506,7 @@ git pull
 
 `update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass `./update.sh --build-local` to rebuild them from source), waiting up to 180 s per service. On failure it prints recovery commands for both image sets: `git checkout HEAD~1 -- versions.env && ./update.sh` rolls back the third-party pins, while the application images roll back by pinning `JARVIS_VERSION` to a previously published tag and pulling it.
 
-From v1.1.0, `update.sh` pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)). Contributors, forks, and air-gapped hosts rebuild from source with `./update.sh --build-local` (the same flag exists on `./setup.sh`).
+From v1.1.0, `update.sh` pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)). `--build-local` (the same flag exists on `./setup.sh`) rebuilds from source instead — for contributors, forks, or when a GHCR pull is unavailable. It is **not** an offline/air-gapped path: a local build still needs network access for base images, Python/OS wheels, the third-party images (postgres, ollama, caddy, …), and the Ollama model downloads.
 
 ### Upgrade notes
 
@@ -727,7 +758,8 @@ bash scripts/production-readiness-check.sh
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `NET::ERR_CERT_AUTHORITY_INVALID` even after accepting once | Cert SAN doesn't match hostname/IP | Regenerate: update `JARVIS_CERT_SAN`, `rm ./certs/cert.pem ./certs/key.pem`, restart dashboard. |
+| `NET::ERR_CERT_AUTHORITY_INVALID` on `https://localhost:3443` | mkcert root CA not installed in this browser's trust store, or the cert expired | `make certs` (re-)installs the root CA and regenerates the cert if needed, then `docker compose up -d caddy_local`. |
+| `SSL_ERROR_RX_RECORD_TOO_LONG` opening a LAN address | Browsing `https://<lan-ip>:...` — LAN mode is plain HTTP, not HTTPS | Use `http://<lan-ip>:3001`, not `https://`. For a real HTTPS family route, add `--public-origin` (see [access-modes.md](manual/access-modes.md#about-lan-mode)). |
 | API calls work from host but CORS-blocked from other devices | `CORS_ORIGINS` missing the calling origin | Add origin to `CORS_ORIGINS` in `.env`, then `docker compose up -d paper_ingestion learning_engine`. |
 | Tunnel works but dashboard 404s at `/` | Tunnel routes to wrong port | In Cloudflare Zero Trust, confirm the public hostname routes to `http://dashboard:3000`. |
 | Rate limiter 429s every request as "Cloudflare" | Behind CF but `JARVIS_TRUST_CF_CONNECTING_IP` not enabled | Set `JARVIS_TRUST_CF_CONNECTING_IP=true` and restart `paper_ingestion`/`learning_engine`. |
@@ -754,7 +786,9 @@ JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8
 
 ## Other access options
 
-- **ngrok** — set `CORS_ORIGINS=https://<subdomain>.ngrok.io` and `JARVIS_CERT_SAN` accordingly.
+Both of these are the **custom reverse proxy** row of the [trust contract table](#per-adapter-trust-contract) — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:
+
+- **ngrok** — set `CORS_ORIGINS=https://<subdomain>.ngrok.io`, add the ngrok hostname to `DASHBOARD_SERVER_NAME`, and set `APP_BASE_URL` to the ngrok URL.
 - **Traefik** — add a label-based override next to `docker-compose.yml`. Refer to Traefik's documentation.
 
 ---
