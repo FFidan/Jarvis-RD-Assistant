@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-07-06_
+_Last updated: 2026-07-19_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -10,6 +10,42 @@ Related docs:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — runtime boundaries affected by residual risks.
 - [SECURITY.md](SECURITY.md) — threat model and hardening checklist.
+
+---
+
+## v1.1.3 access-mode and setup entries
+
+### AMD/Intel Vulkan acceleration — Experimental, not Supported
+
+**Finding:** `--gpu vulkan` (and the AMD no-`/dev/kfd` fallback) passes `/dev/dri` and `OLLAMA_VULKAN=1` into the Ollama container, joining the host's `video`/`render` groups by numeric GID (`JARVIS_VIDEO_GID`/`JARVIS_RENDER_GID`, resolved from the host at install time — a group *name* would resolve against the container image's own `/etc/group`, not the host's).
+
+**Current state:** the device passthrough and env wiring are real and exercised in `docker-compose.vulkan.yml`, but validation confidence is lower than the CUDA/ROCm paths — reach and actual acceleration depend on the host's Vulkan ICD, which JARVIS does not inventory. Classified Experimental, never Supported.
+
+**Reopen criteria:** when enough field reports (`docs/manual/hardware-support-matrix.md#reporting-your-hardware`) accumulate to promote the tier, or an upstream regression is found.
+
+### Raw-IP LAN access carries no authentication contract
+
+**Finding:** the `raw-ip-lan` route (`route_claims` in `scripts/setup_lib.sh`) has `cookie_policy=none` and `passkey_origin=none` — a signed-in session cannot persist over plain `http://<lan-ip>`, and WebAuthn refuses a raw IP as an origin outright. The route is real and serves pages (`tier=supported`), but it is not, and cannot become, an authenticated route.
+
+**Why accepted:** this is a browser/WebAuthn constraint (an IP literal is never a valid relying-party ID) and a deliberate application choice (`Secure` cookies), not a gap to close. The supported path to an authenticated family route is a named private HTTPS origin (`--public-origin`) layered on top of LAN mode.
+
+**Reopen criteria:** none expected — re-open only if a browser vendor changes WebAuthn's origin rules, which JARVIS does not control.
+
+### Pre-1.1.3 setup links used a query string, not a fragment
+
+**Finding:** before this release, `print_setup_link` (`scripts/setup_lib.sh`) built the click-to-finish link as `/setup?setup_token=…` — a query string rides the request line and can land in access logs and `Referer` headers. It now builds `/setup#setup_token=…`, a URL fragment the browser never sends to the server.
+
+**Current state:** the fix is forward-only. Links already printed to a pre-1.1.3 terminal's scrollback keep the old query-string form and still work — the onboarding wizard (`frontend/src/pages/OnboardingWizard.tsx`) accepts both forms for backward compatibility — but a query-string link that was ever pasted somewhere logged (chat history, a ticket) should be treated as exposed; regenerate the token via `scripts/init-secrets.sh` if that's a concern on an instance that hasn't finished first-admin bootstrap yet.
+
+**Reopen criteria:** none — this is a completed, one-way fix; documented here for operators auditing old scrollback/logs.
+
+### Custom `JARVIS_NET_SUBNET` with a Caddy TLS profile is refused, not supported
+
+**Finding:** `local-https` and `letsencrypt` pin Caddy's container IP inside the default `10.137.241.0/24` bridge subnet, and nginx's `set_real_ip_from` (`frontend/nginx.conf`) trusts exactly that range. `setup.sh` refuses to start either Caddy profile under a non-default `JARVIS_NET_SUBNET` rather than silently starting with a broken client-IP trust boundary.
+
+**Why deferred:** making the two hard-coded literals (the Caddy `ipv4_address` and the nginx `set_real_ip_from` values) subnet-derived is a small, contained change, but no operator has hit the collision in practice yet (the guidance path — edit both literals to the custom subnet, or keep the default — is a documented one-time step).
+
+**Reopen criteria:** if subnet collisions with a Caddy profile become a recurring support question, template the two literals from `JARVIS_NET_SUBNET` instead of refusing.
 
 ---
 

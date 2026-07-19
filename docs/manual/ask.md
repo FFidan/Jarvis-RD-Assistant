@@ -37,6 +37,8 @@ Each answer message contains:
 
 > **Unverified ≠ wrong.** It means the system could not match the answer's sentences to the retrieved source passages — the answer may still be accurate, but it could not be verified against what was retrieved from your library.
 
+A sentence that cites a paper (`[Paper N]`) which does not resolve to any of the retrieved sources is marked unverified outright — there is no fuzzy fallback to "probably means one of the other sources".
+
 “Verified” is also not independent fact-checking: it describes textual support in the retrieved passages, not whether the paper or generated interpretation is scientifically correct.
 
 Click the badge to see which sentences could not be matched to a source.

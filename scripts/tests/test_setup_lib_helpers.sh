@@ -829,7 +829,7 @@ expect_eq "merge keeps an unknown operator key verbatim" \
 expect_eq "merge keeps SMTP_PORT" "$(mval SMTP_PORT)" "587"
 expect_eq "merge keeps SMTP_FROM" "$(mval SMTP_FROM)" "jarvis@verified.dev"
 
-# An owned key updates — its adversarial `=` value round-trips intact.
+# An owned key updates — its separator-laden `=` value round-trips intact.
 expect_eq "merge applies an owned update with an = in the value" \
   "$(mval CORS_ORIGINS)" "https://a:1?x=1,https://b"
 expect_eq "merge applies an owned update (access mode)" "$(mval JARVIS_ACCESS_MODE)" "lan"

@@ -113,6 +113,10 @@ Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP h
 
 **Save & send test email.** In addition to the **Save** button, a **Save & send test email** button saves the settings and immediately attempts a test delivery. An optional **Test recipient** field (defaults to the From address) lets you direct the test message to a specific address. The result — success or the exact SMTP error — is shown inline. This matches the test-send available during the onboarding wizard.
 
+**When SMTP isn't configured or delivery fails.** No magic link is ever printed to server stdout. A request that can't be delivered — no relay configured, a `DEV_SMTP_LOG_ONLY` dev instance, an SMTP error, or a link that would point at a non-loopback private host — logs only a hashed, PII-free event to Logs Live; the link and its token are never logged anywhere. To hand a user a working link when email isn't an option, use **Admin → Users → Send link** — that returns the actual sign-in URL to you (never delivers a bearer link automatically to a route that failed) so you can pass it along by hand.
+
+**The SMTP password is a Docker Secret**, not a plaintext `.env` value: `setup.sh --smtp-pass-file <path>` (or the wizard/Settings save) writes it to `secrets/smtp_pass.txt`, mounted read-only into the app containers via `SMTP_PASS_FILE`. It never appears in `docker inspect` output or shell history.
+
 ### Pulse
 
 Configure Pulse-specific settings. The panel is divided into two cards:
