@@ -311,6 +311,56 @@ async def test_request_link_email_change_token_does_not_suppress_login(
     )
 
 
+async def test_cooldown_probe_answers_per_link_kind(contract_two_users, contract_conn):
+    """``magic_link_on_cooldown`` scopes to the requested kind against a real database.
+
+    User A holds only a recent email-change token (``pending_email`` set); user B
+    holds only a recent sign-in token (``pending_email`` NULL). Each user must be
+    on cooldown for their own kind and off cooldown for the other, so an
+    email-change link can never suppress a sign-in link or vice versa.
+
+    Verified: routers/_auth_shared.py magic_link_on_cooldown (the
+    ``IS NOT NULL``/``IS NULL`` predicate selected by ``email_change``).
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    from paper_ingestion.routers._auth_shared import magic_link_on_cooldown
+
+    expires_at = datetime.now(UTC) + timedelta(minutes=15)
+
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at, pending_email)"
+        " VALUES ($1, $2, $3, $4)",
+        hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest(),
+        contract_two_users.user_a_id,
+        expires_at,
+        "changed@contract.example.com",
+    )
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+        hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest(),
+        contract_two_users.user_b_id,
+        expires_at,
+    )
+
+    a_id, b_id = contract_two_users.user_a_id, contract_two_users.user_b_id
+
+    assert await magic_link_on_cooldown(contract_conn, a_id, email_change=True) is True, (
+        "a recent email-change token must put the email-change flow on cooldown"
+    )
+    assert await magic_link_on_cooldown(contract_conn, a_id, email_change=False) is False, (
+        "a recent email-change token must NOT suppress a sign-in link"
+    )
+    assert await magic_link_on_cooldown(contract_conn, b_id, email_change=False) is True, (
+        "a recent sign-in token must put the sign-in flow on cooldown"
+    )
+    assert await magic_link_on_cooldown(contract_conn, b_id, email_change=True) is False, (
+        "a recent sign-in token must NOT suppress an email-change link"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Non-ASCII api_key body must return 403, not 500
 # ---------------------------------------------------------------------------

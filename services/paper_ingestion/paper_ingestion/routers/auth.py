@@ -38,6 +38,7 @@ from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
 from paper_ingestion.deps import limiter
+from paper_ingestion.routers._auth_shared import build_verify_link, magic_link_on_cooldown
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # single-use semantics.
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
-MAGIC_LINK_COOLDOWN = timedelta(minutes=2)
 MAX_EMAIL_LEN = 320  # RFC 5321 cap
 
 
@@ -93,20 +93,7 @@ def _audit_pool(request: Request):
 
 def _build_magic_link(request: Request, token: str) -> str:
     """Construct the URL the user clicks. Honours X-Forwarded-* via ProxyHeadersMiddleware."""
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    base = get_paper_ingestion_settings().app_base_url
-    if base:
-        return f"{base.rstrip('/')}/auth/verify?token={token}"
-    # Fallback: derive from the incoming request. ProxyHeadersMiddleware has
-    # already substituted the public scheme/host before this code runs.
-    if get_core_settings().environment == "production":
-        logger.warning(
-            "APP_BASE_URL is unset in production; the magic link is derived from the "
-            "request origin and may be wrong behind a tunnel or proxy. Set APP_BASE_URL "
-            "to the public URL."
-        )
-    return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
+    return build_verify_link(request, token, logger=logger, link_kind="magic link")
 
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -217,16 +204,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
 
     async with pool.acquire() as conn:
-        recent = await conn.fetchval(
-            "SELECT created_at FROM magic_link_tokens"
-            " WHERE user_id = $1 AND pending_email IS NULL"
-            " ORDER BY created_at DESC LIMIT 1",
-            user_id,
-        )
-        if (
-            recent is not None
-            and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
-        ):
+        if await magic_link_on_cooldown(conn, user_id, email_change=False):
             logger.info("auth_request_link_cooldown email_hash=%s", _hash_email(email_norm))
             return RequestLinkResponse(sent=True)
 

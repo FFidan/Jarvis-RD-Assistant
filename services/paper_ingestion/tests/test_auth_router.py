@@ -184,6 +184,45 @@ async def test_request_link_cooldown_probe_is_login_scoped() -> None:
     )
 
 
+def test_build_magic_link_warns_on_unset_app_base_url_in_production(monkeypatch, caplog) -> None:
+    """Production without APP_BASE_URL → the auth logger warns about the magic link.
+
+    The warning must stay on this module's logger and name the magic link, so
+    operators filtering by logger name still see it and can tell it apart from
+    the invite-link warning the admin router emits.
+    """
+    import logging
+
+    from paper_ingestion.routers.auth import _build_magic_link
+
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    request = SimpleNamespace(
+        url=SimpleNamespace(
+            replace=lambda **kw: f"https://origin/auth/verify?{kw.get('query', '')}"
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.auth"):
+        link = _build_magic_link(request, "tok123")
+
+    assert "token=tok123" in link
+    warnings = [
+        r
+        for r in caplog.records
+        if r.name == "paper_ingestion.routers.auth" and r.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1, (
+        "Expected exactly one warning on the auth logger; got "
+        f"{[(r.name, r.message) for r in caplog.records]}"
+    )
+    assert "APP_BASE_URL" in warnings[0].message
+    assert "magic link" in warnings[0].message, (
+        f"the warning must name the magic link; got: {warnings[0].message!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # enumeration resistance + swallowed-send event
 # ---------------------------------------------------------------------------
