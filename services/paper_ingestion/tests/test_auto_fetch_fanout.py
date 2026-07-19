@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.library import fan_out_to_topic_users, list_users_with_topic
-from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pipelines import auto_fetch as af
 
 
@@ -68,7 +68,7 @@ async def test_run_auto_pipeline_fans_out_per_topic(monkeypatch):
 
     # 3 fake papers from the source.
     fake_source = MagicMock()
-    fake_source.search = AsyncMock(return_value=[_make_paper(i) for i in range(3)])
+    fake_source.fetch_new_since = AsyncMock(return_value=[_make_paper(i) for i in range(3)])
 
     upsert_calls: list[int] = []
 
@@ -108,6 +108,10 @@ async def test_run_auto_pipeline_fans_out_per_topic(monkeypatch):
     assert len(fanout_calls) == 3, f"expected 3 fan-outs, got {fanout_calls}"
     # Every fan-out call carries the single configured topic_id.
     assert all(call[1] == [11] for call in fanout_calls)
+    # Discovery now goes through fetch_new_since (incremental), not search.
+    fake_source.fetch_new_since.assert_awaited_once()
+    topics_arg = fake_source.fetch_new_since.await_args.args[1]
+    assert topics_arg == [TopicRef(id=11, name="diffusion")]
 
 
 @pytest.mark.asyncio
@@ -162,7 +166,7 @@ async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
     pool.acquire = MagicMock(return_value=ctx)
 
     fake_source = MagicMock()
-    fake_source.search = AsyncMock(return_value=[_make_paper(0)])
+    fake_source.fetch_new_since = AsyncMock(return_value=[_make_paper(0)])
 
     fanout_args: list[tuple[int, list[int]]] = []
 
@@ -199,3 +203,83 @@ async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
     paper_id, topic_ids = fanout_args[0]
     assert paper_id == 42
     assert topic_ids == [10]
+
+
+@pytest.mark.asyncio
+async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
+    """With two topics, ``_discover_and_save`` calls ``fetch_new_since`` once per
+    topic (not ``source.search``), and each topic's fan-out carries its own
+    topic_id — the flat ``fetch_new_since`` result never blends topic attribution.
+    """
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [{"id": 1, "source_type": "arxiv", "enabled": True, "config": {}, "display_order": 1}],
+            [{"id": 11, "name": "diffusion"}, {"id": 12, "name": "graphs"}],
+            [],  # to_download
+            [],  # to_process
+        ]
+    )
+
+    pool = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire = MagicMock(return_value=ctx)
+
+    async def fake_fetch_new_since(since, topics, limit=100, user_id=None):
+        # One paper per call; distinct external_id per topic so upsert calls
+        # are individually traceable back to their triggering topic.
+        return [_make_paper(topics[0].id)]
+
+    fake_source = MagicMock()
+    fake_source.fetch_new_since = AsyncMock(side_effect=fake_fetch_new_since)
+
+    upsert_count = 0
+
+    async def fake_upsert(conn_arg, paper, **kw):
+        nonlocal upsert_count
+        upsert_count += 1
+        return {"id": 200 + upsert_count, "is_insert": True}
+
+    fanout_calls: list[tuple[int, list[int]]] = []
+
+    async def fake_fanout(conn_arg, *, paper_id, topic_ids):
+        fanout_calls.append((paper_id, list(topic_ids)))
+        return len(topic_ids)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=pool,
+            http_client=MagicMock(),
+            pdf_processor=MagicMock(),
+            embedder=MagicMock(),
+        )
+    )
+
+    with (
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.get_source_class",
+            return_value=lambda *a, **kw: fake_source,
+        ),
+        patch("paper_ingestion.pipelines.auto_fetch.upsert_paper", side_effect=fake_upsert),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.fan_out_to_topic_users", side_effect=fake_fanout
+        ),
+    ):
+        await af.run_auto_pipeline(app)
+
+    # One fetch_new_since call per topic — never a single fan-out-blind blast.
+    assert fake_source.fetch_new_since.await_count == 2, (
+        f"expected one call per topic, got {fake_source.fetch_new_since.await_count}"
+    )
+    called_topic_ids = sorted(
+        call.args[1][0].id for call in fake_source.fetch_new_since.await_args_list
+    )
+    assert called_topic_ids == [11, 12]
+
+    # Each topic's paper is fanned out with THAT topic's id (never blended).
+    assert len(fanout_calls) == 2
+    assert sorted(topic_ids[0] for _paper_id, topic_ids in fanout_calls) == [11, 12]

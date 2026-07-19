@@ -6,6 +6,8 @@ Called by the APScheduler job registered in ``scheduler.start_scheduler``.
 
 import asyncio
 import logging
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +15,15 @@ from jarvis_common.library import fan_out_to_topic_users
 from jarvis_common.maintenance import skip_for_maintenance
 
 from paper_ingestion.config import get_paper_ingestion_settings
-from paper_ingestion.models import PaperSourceConfig
+from paper_ingestion.models import PaperSourceConfig, TopicRef
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
 from paper_ingestion.services.pdf_workflow import run_process_pdf, upsert_paper
 from paper_ingestion.sources.registry import get_source_class
 
 logger = logging.getLogger(__name__)
+
+# Discovery lookback window — mirrors pulse.profile.PulseProfile.lookback_days' default.
+_DISCOVERY_LOOKBACK_DAYS = 7
 
 
 def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
@@ -51,12 +56,13 @@ def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
 
 
 async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
-    """For each enabled source: search per topic and save results.
+    """For each enabled source: fetch papers new since the lookback window, per topic.
 
     Returns the number of newly-inserted canonical papers. Each saved paper
     is fanned out (idempotently) to users subscribed to the matching topic.
     """
     papers_added = 0
+    since = datetime.now(UTC) - timedelta(days=_DISCOVERY_LOOKBACK_DAYS)
     for src_row in sources_rows:
         source_type = src_row["source_type"]
         try:
@@ -72,8 +78,12 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
             )
             source = source_class(config, app.state.http_client)
             for topic_id, topic_name in topic_pairs:
+                if topic_id is None:
+                    continue
                 try:
-                    results = await source.search(topic_name, max_results=20)
+                    results = await source.fetch_new_since(
+                        since, [TopicRef(id=topic_id, name=topic_name)], limit=20
+                    )
                     if results:
                         # batch save via internal function (bypasses HTTP rate limiter)
                         async with db_pool.acquire() as conn:
@@ -87,7 +97,7 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                                     # Fan out to every user subscribed to
                                     # this topic. Idempotent via
                                     # ON CONFLICT DO NOTHING.
-                                    if row and topic_id is not None:
+                                    if row:
                                         try:
                                             await fan_out_to_topic_users(
                                                 conn,
@@ -173,6 +183,45 @@ async def _download_pending_pdfs(app, db_pool, sem) -> None:
                 logger.warning("auto_pipeline: download task failed: %s", r, exc_info=r)
 
 
+async def _is_auto_summarize_enabled(db_pool: Any) -> bool:
+    """Read ``user_config['automation.auto_summarize_discovered']`` — defaults to False."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config"
+                " WHERE key = 'automation.auto_summarize_discovered' AND user_id IS NULL"
+            )
+    except Exception:
+        logger.exception("auto_pipeline: failed to read automation.auto_summarize_discovered")
+        return False
+    if row is None:
+        return False
+    # asyncpg JSONB auto-decodes — value may be bool directly
+    value = row["value"]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+async def _maybe_defer_summarize(db_pool, paper_id: int) -> None:
+    """Best-effort defer ``paper.summarize`` for a newly-chunked, unsummarized paper."""
+    async with db_pool.acquire() as conn:
+        already_summarized = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM paper_summaries WHERE paper_id = $1)", paper_id
+        )
+    if not already_summarized:
+        try:
+            from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+            await KIND_TO_TASK["paper.summarize"].defer_async(
+                job_id=str(uuid.uuid4()), user_id=None, paper_id=paper_id
+            )
+        except Exception:
+            logger.exception("paper.summarize enqueue failed for paper %d", paper_id)
+
+
 async def _process_pending_papers(app, db_pool, sem) -> None:
     """Process papers that have a PDF but haven't been chunked/embedded yet.
 
@@ -192,6 +241,7 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
                LIMIT 20"""
         )
     logger.info("auto_pipeline: %d papers to process", len(to_process))
+    auto_summarize_enabled = await _is_auto_summarize_enabled(db_pool)
 
     async def _extract_and_embed_paper(paper_id: int, pdf_path: Path) -> None:
         async with sem:
@@ -205,6 +255,8 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
                     force=False,
                 )
                 logger.info("auto_pipeline: processed paper %d", paper_id)
+                if auto_summarize_enabled:
+                    await _maybe_defer_summarize(db_pool, paper_id)
             except Exception as exc:
                 logger.warning(
                     "auto_pipeline: failed to process paper %d: %s",
@@ -259,7 +311,7 @@ async def run_auto_pipeline(app) -> None:
 
         topic_pairs = _resolve_topic_pairs(topics_rows)
 
-        # 2. For each enabled source: search per topic and save results
+        # 2. For each enabled source: fetch new-since results per topic and save
         papers_added = await _discover_and_save(app, db_pool, sources_rows, topic_pairs)
         logger.info("auto_pipeline: saved %d papers", papers_added)
 

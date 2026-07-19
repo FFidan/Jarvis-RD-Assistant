@@ -97,6 +97,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "observability.langfuse_dashboard_url",
         # Automation — auto-fetch pipeline interval (system-wide scheduler).
         "automation.fetch_interval_hours",
+        # Automation — opt-in auto-summarize for newly-discovered papers.
+        "automation.auto_summarize_discovered",
     }
 )
 
@@ -219,6 +221,8 @@ SYSTEM_KEYS: frozenset[str] = (
             "observability.langfuse_dashboard_url",
             # Automation — pipeline interval; system-wide, admin-only.
             "automation.fetch_interval_hours",
+            # Automation — auto-summarize toggle; system-wide, admin-only.
+            "automation.auto_summarize_discovered",
         }
     )
     | PROVIDER_CONFIG_KEYS
