@@ -18,6 +18,7 @@ the next increment also requires 30 more elapsed seconds.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -54,6 +55,68 @@ async def _drain(ait: AsyncIterator[str], max_items: int = 300) -> list[str]:
         if len(items) >= max_items:
             break
     return items
+
+
+def _make_prow(status: str, *, result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a raw ``procrastinate_jobs`` row as the SELECT in jobs.py shapes it.
+
+    Deliberately NOT pre-normalised: tests that exercise the abort semantics must
+    run the real ``procrastinate_row_to_jarvis_row`` mapping.
+    """
+    return {
+        "status": status,
+        "task_name": "papers.process_library",
+        "args": {"job_id": "test-job-id", "user_id": "1"},
+        "progress": None,
+        "progress_message": None,
+        "result": result,
+        "error": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+def _sse_payloads(frames: list[str]) -> list[dict[str, Any]]:
+    """Parse the JSON body of every ``data:`` frame, skipping keepalive comments."""
+    return [
+        json.loads(frame[len("data: ") :].strip()) for frame in frames if frame.startswith("data: ")
+    ]
+
+
+async def _stream_over(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drive ``stream_job_events`` over a scripted sequence of raw procrastinate rows.
+
+    The last row repeats if the stream keeps polling past the end of the script,
+    so a stream that fails to terminate is caught by the poll-count assertion
+    rather than looping forever.  Returns ``(sse_payloads, poll_count)``.
+    """
+    from jarvis_common import jobs
+
+    polls = [0]
+
+    async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+        index = min(polls[0], len(rows) - 1)
+        polls[0] += 1
+        return dict(rows[index])
+
+    async def mock_wait(_pool: Any, _jid: str, _timeout: float) -> None:
+        return None
+
+    async def not_disconnected() -> bool:
+        return False
+
+    with (
+        patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+        patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+    ):
+        frames = await _drain(
+            jobs.stream_job_events(MagicMock(), "test-job-id", is_disconnected=not_disconnected),
+            max_items=len(rows) + 5,
+        )
+    return _sse_payloads(frames), polls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +371,147 @@ async def test_adaptive_throttle_resets_idle_start_on_state_change():
             f"{first_post_ramp} (< 15 = 30 s / 2 s/tick). idle_start did not "
             f"reset on state change. Post-change intervals: {post_change[:25]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# A cancellation REQUEST is not a terminal outcome
+# ---------------------------------------------------------------------------
+
+
+class TestAbortRequestIsNotTerminal:
+    """Procrastinate's ``aborting`` is a request, not an outcome.
+
+    It is set the instant a user asks to cancel, while the handler is still
+    running. Treating it as terminal closed the SSE stream with ``result: null``
+    and threw away the handler's real final row — for ``papers.process_library``
+    that row carries the counts of everything the run *did* finish before it
+    stopped, which is the only report the user ever gets.
+    """
+
+    def test_aborting_maps_to_running(self) -> None:
+        """The request state must map to a non-terminal status."""
+        from jarvis_common.jobs import TERMINAL_STATUSES, procrastinate_status_to_jarvis
+
+        assert procrastinate_status_to_jarvis("aborting") == "running"
+        assert procrastinate_status_to_jarvis("aborting") not in TERMINAL_STATUSES
+
+    def test_genuine_abort_outcomes_stay_terminal(self) -> None:
+        """``cancelled`` (never ran) and ``aborted`` (handler stopped) are outcomes."""
+        from jarvis_common.jobs import TERMINAL_STATUSES, procrastinate_status_to_jarvis
+
+        for procrastinate_status in ("cancelled", "aborted"):
+            mapped = procrastinate_status_to_jarvis(procrastinate_status)
+            assert mapped == "cancelled"
+            assert mapped in TERMINAL_STATUSES
+
+    def test_aborting_row_reports_running_with_cancel_requested(self) -> None:
+        """The request is carried by ``cancel_requested``, not by the status."""
+        from jarvis_common.jobs import procrastinate_row_to_jarvis_row
+
+        row = procrastinate_row_to_jarvis_row(_make_prow("aborting"))
+
+        assert row["status"] == "running"
+        assert row["cancel_requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_handler_result_survives_an_abort_request(self) -> None:
+        """The stream must stay open across ``aborting`` and deliver the final result.
+
+        Real sequence for a cancelled whole-library run: the handler observes the
+        abort flag, stops early, and RETURNS a result dict, so procrastinate marks
+        the job ``succeeded``. Before the fix the stream broke at ``aborting`` and
+        this result was never sent.
+        """
+        result = {
+            "status": "cancelled",
+            "total": 40,
+            "processed": 11,
+            "errors": [{"paper_id": 7}, {"paper_id": 9}, {"paper_id": 12}],
+        }
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("aborting"),
+                _make_prow("succeeded", result=result),
+            ]
+        )
+
+        assert polls == 4, (
+            f"stream stopped after {polls} polls — an abort REQUEST must not close it "
+            "before the handler's own final row arrives"
+        )
+        assert payloads[-1]["status"] == "succeeded"
+        assert payloads[-1]["result"] == result, (
+            "the handler's accumulated counts must reach the client; "
+            f"got {payloads[-1].get('result')!r}"
+        )
+        # The abort request re-emits the row (the UI needs it — see
+        # test_abort_request_is_streamed_so_the_ui_can_show_it) but must never
+        # move the status to a terminal value before the handler is done.
+        assert [p["status"] for p in payloads] == ["running", "running", "succeeded"]
+        assert all(p["status"] not in {"cancelled", "failed"} for p in payloads), (
+            "an abort request must not be reported as a terminal outcome"
+        )
+
+    @pytest.mark.asyncio
+    async def test_abort_request_is_streamed_so_the_ui_can_show_it(self) -> None:
+        """The request must reach the client even though it does not move ``status``.
+
+        ``doing`` and ``aborting`` both map to ``running``, so ``cancel_requested``
+        is the only field that changes — it must therefore be part of the stream's
+        change-detection key AND of the emitted payload, or the row would stay
+        indistinguishable from an un-cancelled run and the click would look lost.
+        """
+        payloads, _polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("succeeded", result={"status": "cancelled"}),
+            ]
+        )
+
+        assert [(p["status"], p["cancel_requested"]) for p in payloads] == [
+            ("running", False),
+            ("running", True),
+            ("succeeded", False),
+        ]
+
+    def test_running_job_reports_no_cancel_request(self) -> None:
+        """The flag must not be raised for an ordinary running job."""
+        from jarvis_common.jobs import job_sse_payload, procrastinate_row_to_jarvis_row
+
+        payload = job_sse_payload(procrastinate_row_to_jarvis_row(_make_prow("doing")))
+
+        assert payload["status"] == "running"
+        assert payload["cancel_requested"] is False
+
+    @pytest.mark.asyncio
+    async def test_acknowledged_abort_closes_the_stream_promptly(self) -> None:
+        """A handler that really aborts leaves ``aborted`` — still terminal, no hang."""
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("aborted"),
+            ]
+        )
+
+        assert polls == 3, f"stream must stop on the aborted row, polled {polls} times"
+        assert payloads[-1]["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_start_closes_the_stream_promptly(self) -> None:
+        """A queued job cancelled before it ran goes straight to a terminal row."""
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("todo"),
+                _make_prow("cancelled"),
+            ]
+        )
+
+        assert polls == 2, f"stream must stop on the cancelled row, polled {polls} times"
+        assert [p["status"] for p in payloads] == ["queued", "cancelled"]
 
 
 # ---------------------------------------------------------------------------

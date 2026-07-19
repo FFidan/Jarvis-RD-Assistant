@@ -171,6 +171,61 @@ describe('JobsIndicator', () => {
     expect(screen.getByText('2 failed, 1 skipped of 100')).toBeInTheDocument();
   });
 
+  it('a cancel-requested job reads Cancelling and disables its cancel control', async () => {
+    // The handler keeps running until it observes the flag, so status stays
+    // `running`. Without a distinct display state the row would look untouched
+    // and the click would seem not to have registered.
+    setupStore({
+      'job-cancelling': makeJob({
+        id: 'job-cancelling',
+        kind: 'papers.process_library',
+        status: 'running',
+        cancel_requested: true,
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Cancelling…')).toBeInTheDocument();
+    expect(screen.queryByText('Running')).toBeNull();
+    // Idempotent by construction: the control cannot be clicked again.
+    expect(screen.getByRole('button', { name: /cancellation requested/i })).toBeDisabled();
+  });
+
+  it('a plain running job reads Running with an enabled cancel control', async () => {
+    // Negative control for the test above — the cancelling state must not leak
+    // onto ordinary running jobs.
+    setupStore({
+      'job-plain': makeJob({ id: 'job-plain', status: 'running' }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    expect(screen.queryByText('Cancelling…')).toBeNull();
+    expect(screen.getByRole('button', { name: /cancel job/i })).toBeEnabled();
+  });
+
+  it('a terminal cancelled job reads Cancelled, not Cancelling', async () => {
+    // The flag stays set on the final row; once the job is terminal the outcome
+    // must win over the request.
+    setupStore({
+      'job-done-cancel': makeJob({
+        id: 'job-done-cancel',
+        status: 'cancelled',
+        cancel_requested: true,
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.queryByText('Cancelling…')).toBeNull();
+  });
+
   it('a plain-ok succeeded job stays green Done with no partial line', async () => {
     setupStore({
       'job-ok': makeJob({
