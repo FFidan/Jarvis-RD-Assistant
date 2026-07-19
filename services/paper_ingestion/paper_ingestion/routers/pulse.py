@@ -52,6 +52,13 @@ from paper_ingestion.services.paper_state_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# load_active_classifier reports this when the caller has simply never trained a
+# model — the expected initial state, not a degradation, so it is not surfaced as
+# a degradation reason; genuine failures (missing scikit-learn, unloadable blob)
+# are. Reaches the debug endpoint both directly and via deck stats, which
+# pulse/job.py copies from the same probe.
+_UNTRAINED_PROBE_REASON = "no active model"
+
 router = APIRouter(
     prefix="/api/pulse",
     tags=["pulse"],
@@ -453,38 +460,45 @@ async def debug_pulse(
             deck_row["id"],
         )
 
-        # Topic-embedding sanity check
-        # NOTE: user_config pulse.* / topic.* keys are intentionally global
-        # single-tenant (one operator per JARVIS instance). Multi-tenant future:
-        # re-key as `pulse.<user_id>.weights`, `topic.<user_id>.<n>.embedding`,
-        # etc. and add a `WHERE user_id = $1` filter here.
+        # Topic-embedding sanity check — the caller's own rows plus the
+        # NULL-owned global defaults. DISTINCT ON keeps one row per key, and the
+        # NULLS LAST ordering makes the caller's row win over the global one,
+        # mirroring the precedence in pulse/profile.py.
         embed_rows = await conn.fetch(
             """
-            SELECT key, value
+            SELECT DISTINCT ON (key) key, value
             FROM user_config
             WHERE key LIKE 'topic.%.embedding'
-            """
+              AND (user_id IS NOT DISTINCT FROM $1 OR user_id IS NULL)
+            ORDER BY key, user_id NULLS LAST
+            """,
+            caller_id,
         )
-        # NOTE: pulse_models classifier is global per deployment (one classifier
-        # per JARVIS instance, trained on aggregated feedback). No user_id
-        # scoping required today. Multi-tenant future: add a `user_id` column
-        # to pulse_models + filter here if per-user classifiers ship.
-        model_row = await conn.fetchrow(
-            """
-            SELECT feature_names, metrics, trained_at
-            FROM pulse_models
-            WHERE is_active = TRUE
-            ORDER BY trained_at DESC
-            LIMIT 1
-            """
-        )
+    _, classifier_meta = await load_active_classifier(db_pool, user_id=caller_id)
 
     # Per-source candidate breakdown (from stats JSONB)
     source_counts: dict = deck_stats.get("source_counts", {})
     source_diagnostics: dict = deck_stats.get("source_diagnostics", {}) or {}
     classifier_stats = deck_stats.get("classifier", {}) or {}
-    has_model = bool(model_row) and "feature_names" in model_row
-    classifier_metrics = model_row["metrics"] if has_model else {}
+    has_model = bool(classifier_meta.get("available"))
+    classifier_metrics = classifier_meta.get("metrics") or {}
+    # The untrained reason reaches here from two sources — the probe above and
+    # the deck's own stats, which pulse/job.py copies from the same probe — so it
+    # is filtered out of both rather than either. Filtering per source rather
+    # than after an `or` chain matters: a deck generated while untrained would
+    # otherwise mask a live probe failure, collapsing the value to None and
+    # hiding a real fault.
+    degradation_reason = next(
+        (
+            reason
+            for reason in (
+                classifier_stats.get("degradation_reason"),
+                classifier_meta.get("degradation_reason"),
+            )
+            if reason and reason != _UNTRAINED_PROBE_REASON
+        ),
+        None,
+    )
 
     # Topic embedding sanity
     embed_dim_expected = EMBEDDING_DIMENSION
@@ -541,14 +555,14 @@ async def debug_pulse(
         classifier_available=has_model or bool(classifier_stats.get("available")),
         classifier_sample_count=classifier_metrics.get("sample_count")
         or classifier_stats.get("sample_count"),
-        classifier_feature_names=(model_row["feature_names"] if has_model else None)
+        classifier_feature_names=(classifier_meta.get("feature_names") if has_model else None)
         or classifier_stats.get("feature_names")
         or FEATURE_NAMES,
         classifier_auc=classifier_metrics.get("auc") if has_model else None,
         classifier_auc_degradation_reason=(
             classifier_metrics.get("auc_degradation_reason") if has_model else None
         ),
-        classifier_degradation_reason=classifier_stats.get("degradation_reason"),
+        classifier_degradation_reason=degradation_reason,
     )
 
 
