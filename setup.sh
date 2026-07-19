@@ -1191,8 +1191,10 @@ else
   1) On this computer only (recommended to start)
      Everything works here: sign-in links, passkeys (fingerprint/face/PIN).
   2) From devices on your home or lab network
-     Sign-in links work on every device. Passkeys work on this computer
-     (add option 3 or 4 later for passkeys everywhere). Your browser will
+     Sign-in links can be received on any device; a durable sign-in needs
+     a named HTTPS origin (add option 3 or 4, or --public-origin). Passkeys
+     work on this computer (add option 3 or 4 later for passkeys
+     everywhere). Your browser will
      show a one-time certificate warning per device — expected for a
      private setup.
   3) From anywhere — Cloudflare Tunnel (free, no router changes)
@@ -1448,7 +1450,7 @@ fi
 if [ "$NON_INTERACTIVE" -eq 0 ]; then
   case "$ACCESS_MODE_LABEL" in
     localhost)   info "Access mode: on this computer only — sign-in links and passkeys all work here." ;;
-    lan)         info "Access mode: home/lab network — sign-in links on every device; passkeys on this computer." ;;
+    lan)         info "Access mode: home/lab network — view from any device; a durable sign-in needs a named HTTPS origin (--public-origin); passkeys on this computer." ;;
     tunnel)      info "Access mode: anywhere via Cloudflare Tunnel — full features including passkeys." ;;
     letsencrypt) info "Access mode: anywhere via your own domain — full features including passkeys." ;;
   esac
@@ -2195,7 +2197,7 @@ if [ "$NI_MODE" = "single" ]; then
   printf '  Sign in:      open the dashboard and enter your API key.\n'
 else
   # Multi/team mode: API key login is disabled — sign in via magic link.
-  printf '  Sign in:      open the dashboard and request a magic link to your email.\n'
+  printf '  Sign in:      request a magic link by email (needs SMTP), or hand out a manual sign-in link from %s/admin/users.\n' "$DASHBOARD_URL"
   printf '                (API key login is disabled in multi-user mode)\n'
 fi
 

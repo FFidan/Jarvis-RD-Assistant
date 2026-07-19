@@ -455,7 +455,7 @@ Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, 
 
 ### Single-user vs multi-user mode
 
-`single` (default) makes the sign-in screen offer API-key login first and does not require SMTP. `multi` makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization. In either mode, signed-in users can additionally register **passkeys** (WebAuthn) for future sign-ins; passkeys are bound to the exact origin in `APP_BASE_URL` and require HTTPS for a public origin — see the [User Guide → Passkeys](manual/passkeys.md).
+`single` (default) makes the sign-in screen offer API-key login first and does not require SMTP. `multi` makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay to have JARVIS email magic links directly, or leave it unset and the Admin → Invite dialog returns a manual sign-in link to hand to each new user instead. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization. In either mode, signed-in users can additionally register **passkeys** (WebAuthn) for future sign-ins; passkeys are bound to the exact origin in `APP_BASE_URL` and require HTTPS for a public origin — see the [User Guide → Passkeys](manual/passkeys.md).
 
 ### Copy-paste examples
 
