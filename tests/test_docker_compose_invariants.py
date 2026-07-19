@@ -245,6 +245,37 @@ def test_overlay_group_add_entries_are_numeric(overlay):
             )
 
 
+def _resolved_host_port(entry) -> int:
+    """Resolve a compose `ports:` entry to its published HOST port.
+
+    Handles the short-form strings used here — ``ip:hostport:container`` and
+    ``hostport:container`` — resolving ``${VAR:-default}`` to its default first
+    (the colon inside a default would otherwise break a naive split).
+    """
+    if isinstance(entry, dict):  # long form {published: ..., target: ...}
+        return int(str(entry["published"]))
+    resolved = re.sub(r"\$\{[^}]*:-([^}]*)\}", r"\1", str(entry))
+    return int(resolved.split(":")[-2])
+
+
+def test_no_two_services_publish_the_same_host_port(compose):
+    """Invariant: no two services publish the same host port.
+
+    caddy_local (the local-https TLS terminator) and the dashboard both once
+    published host 3001, so `make up-https` — which brings up BOTH — could never
+    bind them together. Every published host port must be unique across services so
+    any enabled profile combination starts cleanly.
+    """
+    owners: dict[int, list[str]] = {}
+    for name, svc in compose["services"].items():
+        for entry in svc.get("ports", []) or []:
+            owners.setdefault(_resolved_host_port(entry), []).append(name)
+    collisions = {port: names for port, names in owners.items() if len(names) > 1}
+    assert not collisions, (
+        f"services publish colliding host ports (they cannot bind together): {collisions}"
+    )
+
+
 def _brace_block(text: str, opener: str) -> str:
     """Return the body of the first brace-delimited block whose header matches ``opener``."""
     match = re.search(opener + r"[^{]*\{", text)

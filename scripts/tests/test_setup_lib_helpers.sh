@@ -568,6 +568,66 @@ case "$printed" in
   *) pass "print_setup_link prints no setup_token when the token file is absent" ;;
 esac
 
+# === access-mode / ingress helpers ===========================================
+# _is_lan_ipv4 accepts the RFC1918 address other LAN devices reach this host by and
+# rejects docker/CGNAT/link-local ranges. _append_server_name / _append_csv build
+# the accumulating nginx Host allowlist and CORS list (LAN + origin keep BOTH
+# hostnames). _public_origin_host extracts an https:// DNS hostname and refuses IP
+# literals (a raw IP is never a valid WebAuthn RP-ID / public-cert host). These
+# pure helpers live in setup.sh (before the flag parser); extract and eval them.
+ingress_src="$(sed -n '/^_is_lan_ipv4()/,/^}/p;/^_append_server_name()/,/^}/p;/^_append_csv()/,/^}/p;/^_public_origin_host()/,/^}/p' "$SETUP_SCRIPT")"
+eval "$ingress_src"
+
+_is_lan_ipv4 192.168.1.5 && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 192.168.x" "$rc" "0"
+_is_lan_ipv4 10.0.0.5     && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 10.x" "$rc" "0"
+_is_lan_ipv4 172.20.0.5   && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 172.16/12" "$rc" "0"
+_is_lan_ipv4 172.17.0.2   && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects docker bridge 172.17.x" "$rc" "1"
+_is_lan_ipv4 100.100.0.1  && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects CGNAT 100.64/10" "$rc" "1"
+_is_lan_ipv4 169.254.1.1  && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects link-local" "$rc" "1"
+_is_lan_ipv4 8.8.8.8      && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 rejects a public IP" "$rc" "1"
+
+expect_eq "_append_server_name seeds an empty list" "$(_append_server_name '' 192.168.1.5)" "192.168.1.5"
+expect_eq "_append_server_name accumulates LAN + origin (both hostnames)" \
+  "$(_append_server_name "$(_append_server_name '' 192.168.1.5)" jarvis.example.ts.net)" \
+  "192.168.1.5 jarvis.example.ts.net"
+expect_eq "_append_server_name de-dupes" "$(_append_server_name '192.168.1.5' 192.168.1.5)" "192.168.1.5"
+expect_eq "_append_server_name skips an empty name" "$(_append_server_name 'localhost' '')" "localhost"
+
+expect_eq "_append_csv seeds an empty list" "$(_append_csv '' https://a)" "https://a"
+expect_eq "_append_csv appends comma-separated" "$(_append_csv 'https://a' https://b)" "https://a,https://b"
+expect_eq "_append_csv de-dupes" "$(_append_csv 'https://a,https://b' https://a)" "https://a,https://b"
+
+expect_eq "_public_origin_host extracts a DNS hostname" \
+  "$(_public_origin_host https://jarvis.example.ts.net)" "jarvis.example.ts.net"
+expect_eq "_public_origin_host strips port and path" \
+  "$(_public_origin_host https://jarvis.example.ts.net:8443/x)" "jarvis.example.ts.net"
+_public_origin_host https://10.0.0.5   >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses an IPv4 literal" "$rc" "1"
+_public_origin_host 'https://[::1]'    >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses a bracketed IPv6 literal" "$rc" "1"
+_public_origin_host http://jarvis.example >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses non-https" "$rc" "1"
+
+# === setup.sh access-mode / ingress wiring (static) ==========================
+
+scheck "sub_value emits DASHBOARD_SERVER_NAME" 'DASHBOARD_SERVER_NAME\)'
+scheck "the LAN arm adds the LAN IP to the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$LAN_IP"'
+scheck "the tunnel arm adds the tunnel hostname to the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$TUNNEL_HOSTNAME"'
+scheck "the LAN reachability probe targets http, not https" '_lan_probe_url="http://'
+scheck "setup.sh parses --address" '\-\-address\)'
+scheck "setup.sh parses --public-origin" '\-\-public-origin\)'
+scheck "public-origin feeds APP_BASE_URL" 'APP_BASE_URL_VALUE="\$NI_PUBLIC_ORIGIN"'
+scheck "public-origin feeds CORS_ORIGINS" '_append_csv "\$CORS_ORIGINS_OVERRIDE" "\$NI_PUBLIC_ORIGIN"'
+scheck "public-origin feeds the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$PUBLIC_ORIGIN_HOST"'
+scheck "the setup link uses a loopback/verified base" 'print_setup_link "\$SETUP_LINK_BASE"'
+scheck "letsencrypt persists its compose profile" '\-\-profile letsencrypt'
+scheck "local-https persists the caddy-local profile" '\-\-profile caddy-local'
+scheck "letsencrypt waits for the cert before advertising the URL" 'Waiting for the public certificate'
+# The setup token must never ride a raw-IP HTTP link: print_setup_link is fed a
+# loopback/verified base, never the LAN IP.
+if grep -Eq 'print_setup_link[^#]*LAN_IP' "$SETUP_SCRIPT"; then
+  printf 'FAIL: print_setup_link is called with the LAN IP (the setup token must stay on loopback)\n' >&2; fail=1
+else
+  pass "print_setup_link is never called with the LAN IP"
+fi
+
 # === setup.sh GPU wiring (static) =============================================
 
 scheck "setup.sh parses --gpu with the four overlay choices" 'cuda\|rocm\|vulkan\|cpu\) NI_GPU_OVERRIDE'
@@ -643,6 +703,21 @@ case "${rc}:${out}" in
   1:*'--domain requires a value'*) pass "--domain as the last argument still dies" ;;
   *) printf 'FAIL: --domain as last arg rc=%s out=%s\n' "$rc" "$out" >&2; fail=1 ;;
 esac
+
+# --public-origin is validated at parse time: an IP literal is refused (never a
+# valid WebAuthn origin / public-cert host); a DNS https hostname is accepted (and
+# --help then exits before any docker work, so this is safe as a subprocess).
+out="$(run_setup --public-origin https://10.0.0.5 --help)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*"https:// URL with a DNS hostname"*) pass "--public-origin https://10.0.0.5 is refused (an IP is not a valid origin)" ;;
+  *) printf 'FAIL: --public-origin IP literal not refused (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+out="$(run_setup --public-origin https://jarvis.example.ts.net --help)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "--public-origin https://jarvis.example.ts.net --help exits 0 (DNS origin accepted)"
+else
+  printf 'FAIL: valid --public-origin rejected (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1
+fi
 
 # === merge_env_file — non-destructive .env rebuild ===========================
 # A reconfigure must carry EVERY existing value forward unchanged (no rotated
@@ -725,8 +800,8 @@ expect_eq "merge appends a template key new in this release" \
 expect_eq "merge drops a retired, un-owned key" \
   "$(grep -c '^JARVIS_CERT_SAN=' "$MOUT")" "0"
 
-# A retired key this run STILL owns wins (re-emitted) — mirrors setup.sh keeping
-# JARVIS_CERT_SAN until its writer is removed.
+# A retired key this run STILL owns wins (re-emitted) — the owner-over-retire
+# rule that lets a writer keep a key alive until the release that removes it.
 printf 'JARVIS_CERT_SAN=DNS:new\n' > "${MERGE_DIR}/ups2.env"
 merge_env_file "$MOLD" "$MTMPL" "${MERGE_DIR}/ups2.env" "JARVIS_CERT_SAN" > "${MERGE_DIR}/out2.env"
 expect_eq "merge re-emits a retired key the run still owns" \

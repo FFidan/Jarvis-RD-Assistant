@@ -106,6 +106,19 @@ def test_down_volumes_only_in_isolated_ephemeral_scripts():
     )
 
 
+def test_setup_never_advertises_https_on_a_raw_lan_ip():
+    """The dashboard nginx serves plain HTTP and LAN mode is HTTP-only, so setup.sh
+    must never advertise or probe ``https://`` against the raw LAN IP. An https URL
+    on that plaintext endpoint yields SSL_ERROR_RX_RECORD_TOO_LONG, and the setup
+    token must never ride raw-IP HTTP — the tokenized link stays on loopback.
+    """
+    text = (REPO_ROOT / "setup.sh").read_text()
+    assert "https://${LAN_IP}" not in text, (
+        "setup.sh emits https:// against the raw LAN IP, but that endpoint serves "
+        "plain HTTP only — advertise/probe it over http://"
+    )
+
+
 def test_no_executed_docker_prune():
     """The install / reconfigure scripts must never auto-run a docker prune;
     printed guidance telling the operator to prune manually is fine."""

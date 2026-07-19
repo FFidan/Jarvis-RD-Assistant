@@ -10,8 +10,12 @@ COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 certs:
 	bash scripts/init-mkcert.sh
 
-## Bring stack up with HTTPS on https://localhost:3001 via Caddy + mkcert
+## Bring stack up with HTTPS on https://localhost:3443 via Caddy + mkcert
+## Fails loudly if the mkcert certs are absent (run `make certs` first).
 up-https:
+	@test -f certs/cert.pem && test -f certs/key.pem || { \
+	  echo "mkcert certs missing (certs/cert.pem, certs/key.pem) — run 'make certs' first (needs mkcert installed)."; \
+	  exit 1; }
 	$(COMPOSE) --profile caddy-local up -d
 
 ## Install Python dev dependencies from uv.lock (does NOT run setup.sh / docker setup)

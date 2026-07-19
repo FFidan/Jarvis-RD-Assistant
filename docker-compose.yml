@@ -834,8 +834,9 @@ services:
         max-file: "3"
 
   # Local-dev Caddy with mkcert certs — matches prod TLS-at-edge pattern.
-  # Activate with: `docker compose --profile caddy-local up -d`
-  # Then access https://localhost:3001 (browsers trust the mkcert root CA).
+  # Activate with: `docker compose --profile caddy-local up -d` (or `make up-https`).
+  # Then access https://localhost:3443 (browsers trust the mkcert root CA); the
+  # dashboard keeps its own host port 3001 so the two never collide.
   caddy_local:
     image: ${CADDY_IMAGE:-caddy:2.9-alpine}
     profiles: [caddy-local]
@@ -843,7 +844,7 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3443:3443"
     volumes:
       - ./caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
       - ./certs:/certs:ro
@@ -851,7 +852,7 @@ services:
       dashboard:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://localhost:3001/"]
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://localhost:3443/"]
       interval: 30s
       timeout: 10s
       retries: 3

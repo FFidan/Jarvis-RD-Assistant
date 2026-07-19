@@ -46,6 +46,12 @@
 #   --gpu cuda|rocm|vulkan|cpu
 #                             Override GPU compose-overlay selection (default:
 #                             detected from GPU vendor + container runtime).
+#   --address <ipv4>          Override the auto-detected LAN IPv4 for LAN mode.
+#   --public-origin <url>     A named private HTTPS origin (e.g. a Tailscale Serve
+#                             or trusted-TLS hostname) family devices use. Writes
+#                             APP_BASE_URL/DASHBOARD_SERVER_NAME/CORS_ORIGINS and,
+#                             once the edge is reachable, hosts the setup link.
+#                             Must be https:// with a DNS hostname (not an IP).
 #   --smtp-host <host>        SMTP relay hostname.
 #   --smtp-user <user>        SMTP relay username.
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
@@ -305,15 +311,14 @@ print(recommend_models(${_vram_mb}).summary)
   if [ -n "$host_routes" ] && printf '%s' "$host_routes" | grep -qF "$subnet_prefix"; then
     warn "Host already has a route in ${pinned_subnet} — set JARVIS_NET_SUBNET in .env to a free range before starting."
   fi
-  # When the operator overrides JARVIS_NET_SUBNET to a non-default value, the
-  # hard-coded literals in frontend/nginx.conf must also be updated manually —
-  # otherwise the rate-limit self-DoS protection silently regresses (Caddy
-  # IP no longer matches set_real_ip_from → all clients collapse to one bucket).
-  # Note: docker-compose.yml no longer contains a hardcoded gateway; Docker
-  # auto-assigns the first host in JARVIS_NET_SUBNET, so compose won't hard-fail.
-  # Network gateway is auto-assigned; set JARVIS_NET_SUBNET to change the subnet.
+  # When the operator overrides JARVIS_NET_SUBNET to a non-default value, two sets
+  # of hard-coded literals must also be updated. The gateway is auto-assigned so
+  # the default (no-caddy) stack still starts, but a caddy TLS profile pins static
+  # ipv4_address entries that are OUT of a custom subnet — compose WILL hard-fail
+  # to attach caddy/caddy_local. nginx also trusts exactly those pinned IPs, so
+  # rate limiting regresses if they drift.
   if [ -n "${JARVIS_NET_SUBNET:-}" ] && [ "$JARVIS_NET_SUBNET" != "10.137.241.0/24" ]; then
-    warn "JARVIS_NET_SUBNET overridden to ${JARVIS_NET_SUBNET}: also update frontend/nginx.conf set_real_ip_from literals to the new range, or per-client rate limiting will regress."
+    warn "JARVIS_NET_SUBNET overridden to ${JARVIS_NET_SUBNET}: before enabling a caddy TLS profile, update BOTH docker-compose.yml caddy/caddy_local 'ipv4_address' AND frontend/nginx.conf 'set_real_ip_from' to IPs inside ${JARVIS_NET_SUBNET}, or compose will fail to attach caddy and per-client rate limiting will regress."
   fi
 
   if [ "$fail" -eq 0 ]; then ok "PREFLIGHT: PASS"; else err "PREFLIGHT: FAIL — fix the items above and re-run ./setup.sh --check"; fi
@@ -457,6 +462,63 @@ cd "$SCRIPT_DIR"
 source "${SCRIPT_DIR}/scripts/setup_lib.sh"
 
 # -----------------------------------------------------------------------------
+# Access-mode / ingress helpers (pure — no docker, no network). Defined before
+# the flag parser so --public-origin can validate its value at parse time.
+# -----------------------------------------------------------------------------
+# _is_lan_ipv4 IP -> 0 when IP is a usable private LAN IPv4 (RFC1918). Rejects the
+# jarvis docker bridge subnet, the docker default bridge (172.17.x), CGNAT/Tailscale
+# (100.64.0.0/10), and link-local (169.254.x) — none of which is the address other
+# devices on the home/lab network reach this host by.
+_is_lan_ipv4() {
+  case "$1" in
+    10.137.241.*) return 1 ;;                                         # jarvis docker bridge
+    172.17.*) return 1 ;;                                             # docker default bridge
+    169.254.*) return 1 ;;                                            # link-local
+    100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 1 ;;  # 100.64/10 CGNAT
+    10.*|192.168.*) return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;                # 172.16/12 (minus .17)
+    *) return 1 ;;
+  esac
+}
+
+# _append_server_name LIST NAME -> LIST with NAME appended (space-separated),
+# skipping an empty NAME and de-duplicating. nginx's `server_name` accepts a
+# space-separated list, so the LAN, public-origin and tunnel arms compose their
+# accepted Host headers into one allowlist instead of clobbering each other.
+_append_server_name() {
+  local list="$1" name="$2"
+  [ -n "$name" ] || { printf '%s' "$list"; return 0; }
+  case " $list " in *" $name "*) printf '%s' "$list"; return 0 ;; esac
+  [ -n "$list" ] && printf '%s %s' "$list" "$name" || printf '%s' "$name"
+}
+
+# _append_csv LIST ITEM -> LIST with ITEM appended (comma-separated), skipping an
+# empty ITEM and de-duplicating. Used to compose CORS_ORIGINS across access arms.
+_append_csv() {
+  local list="$1" item="$2"
+  [ -n "$item" ] || { printf '%s' "$list"; return 0; }
+  case ",$list," in *",$item,"*) printf '%s' "$list"; return 0 ;; esac
+  [ -n "$list" ] && printf '%s,%s' "$list" "$item" || printf '%s' "$item"
+}
+
+# _public_origin_host URL -> the hostname of an https:// URL whose host is a real
+# DNS name, or non-zero when URL is not https or the host is an IP literal. A raw
+# IP is never a valid WebAuthn RP-ID and cannot obtain a public certificate, so a
+# named private-HTTPS origin must resolve to a hostname. Port/path are stripped;
+# bracketed and bare IPv6 literals are rejected (bracket support is out of scope).
+_public_origin_host() {
+  local url="$1" rest host
+  case "$url" in https://*) rest="${url#https://}" ;; *) return 1 ;; esac
+  rest="${rest%%/*}"                       # strip /path or /?query
+  case "$rest" in \[*) return 1 ;; esac    # [IPv6] literal — unsupported
+  host="${rest%%:*}"                       # strip :port (also empties bare IPv6)
+  case "$host" in
+    *[a-zA-Z]*) printf '%s' "$host" ;;     # a DNS name carries letters; IPv4 does not
+    *) return 1 ;;
+  esac
+}
+
+# -----------------------------------------------------------------------------
 # Flag parsing  (must happen after cd "$SCRIPT_DIR" so relative paths resolve)
 # -----------------------------------------------------------------------------
 NON_INTERACTIVE=0
@@ -474,6 +536,8 @@ NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
 NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
 NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
 NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
+NI_ADDRESS=""         # --address <ipv4> — overrides LAN IP auto-detection
+NI_PUBLIC_ORIGIN=""   # --public-origin <https-url> — a named private HTTPS origin
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
 BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
@@ -492,7 +556,7 @@ while [ $# -gt 0 ]; do
   # `set -u` and abort with a raw "unbound variable". Guard them centrally so the
   # message is actionable. (The --flag=value forms carry their value inline.)
   case "$1" in
-    --domain|--admin-email|--profile|--smtp-host|--smtp-user|--smtp-pass-file|--mode|--backend|--smart-model|--gpu)
+    --domain|--admin-email|--profile|--smtp-host|--smtp-user|--smtp-pass-file|--mode|--backend|--smart-model|--gpu|--address|--public-origin)
       if [ "$#" -lt 2 ] || [[ "$2" == -* ]]; then
         die "$1 requires a value." "Run: $0 --help"
       fi ;;
@@ -592,6 +656,24 @@ while [ $# -gt 0 ]; do
         cuda|rocm|vulkan|cpu) NI_GPU_OVERRIDE="$_v"; shift ;;
         *) die "Invalid --gpu '$_v'. Expected: cuda|rocm|vulkan|cpu" "Run: $0 --help" ;;
       esac ;;
+    --address)
+      NI_ADDRESS="$2"
+      case "$NI_ADDRESS" in *[!0-9.]*|'') die "--address must be an IPv4 address (e.g. 192.168.1.10)." "IPv6 is not supported for LAN mode." ;; esac
+      shift 2 ;;
+    --address=*)
+      NI_ADDRESS="${1#*=}"
+      case "$NI_ADDRESS" in *[!0-9.]*|'') die "--address must be an IPv4 address (e.g. 192.168.1.10)." "IPv6 is not supported for LAN mode." ;; esac
+      shift ;;
+    --public-origin)
+      NI_PUBLIC_ORIGIN="$2"
+      _public_origin_host "$NI_PUBLIC_ORIGIN" >/dev/null \
+        || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: --public-origin https://jarvis.example.ts.net"
+      shift 2 ;;
+    --public-origin=*)
+      NI_PUBLIC_ORIGIN="${1#*=}"
+      _public_origin_host "$NI_PUBLIC_ORIGIN" >/dev/null \
+        || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: --public-origin https://jarvis.example.ts.net"
+      shift ;;
     -h|--help)
       sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -80
       exit 0
@@ -1046,40 +1128,54 @@ CF_TRUST_OVERRIDE=""
 LAN_IP=""
 TUNNEL_HOSTNAME=""
 DASHBOARD_BIND_HOST="127.0.0.1"
-JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1"
+DASHBOARD_SERVER_NAME_VALUE=""   # accumulating nginx Host allowlist (lan + public-origin + tunnel)
 
+# detect_lan_ip -> the private LAN IPv4 other devices reach this host by, or empty.
+# Prefers the source address of the default route (the primary egress NIC) over
+# hostname -I token order, which can lead with a docker bridge or VPN address;
+# both paths skip docker/CGNAT/link-local ranges via _is_lan_ipv4.
 detect_lan_ip() {
-  local ip=""
+  local ip="" tok
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
+    if [ -n "$ip" ] && _is_lan_ipv4 "$ip"; then printf '%s' "$ip"; return 0; fi
+  fi
   if command -v hostname >/dev/null 2>&1; then
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+    for tok in $(hostname -I 2>/dev/null || true); do
+      if _is_lan_ipv4 "$tok"; then printf '%s' "$tok"; return 0; fi
+    done
   fi
-  if [ -z "$ip" ] && command -v ipconfig >/dev/null 2>&1; then
+  if command -v ipconfig >/dev/null 2>&1; then
     ip="$(ipconfig getifaddr en0 2>/dev/null || true)"
+    [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
   fi
-  printf '%s' "$ip"
+  printf ''
 }
 
 case "$access_mode" in
   1)
     ACCESS_MODE_LABEL="localhost"
     DASHBOARD_BIND_HOST="127.0.0.1"
-    JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1"
     # Binding is governed by DASHBOARD_BIND_HOST in .env; the user-owned
     # docker-compose.override.yml is never moved or overwritten by setup.
     ;;
   2)
     ACCESS_MODE_LABEL="lan"
     DASHBOARD_BIND_HOST="0.0.0.0"
-    warn "LAN mode binds the dashboard to 0.0.0.0 — reachable by every host on your network. Only use this on a trusted LAN; for untrusted networks prefer the Tailscale/tunnel option."
+    warn "LAN mode binds the dashboard to 0.0.0.0 over plain HTTP — reachable by every host on your network. Only use this on a trusted LAN; for untrusted networks prefer the Tailscale/tunnel option, or add --public-origin for a named HTTPS route."
     # Port binding is governed by DASHBOARD_BIND_HOST in .env; the user-owned
     # docker-compose.override.yml is never moved or overwritten by setup.
-    LAN_IP="$(detect_lan_ip)"
+    LAN_IP="${NI_ADDRESS:-$(detect_lan_ip)}"
     if [ -n "$LAN_IP" ]; then
-      CORS_ORIGINS_OVERRIDE="https://localhost:3001,https://${LAN_IP}:3001"
-      JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1,IP:${LAN_IP}"
-      ok "Detected LAN IP: ${LAN_IP} (will be added to CORS_ORIGINS and cert SAN)."
+      _lan_port="${DASHBOARD_HOST_PORT:-3001}"
+      CORS_ORIGINS_OVERRIDE="http://localhost:${_lan_port},http://${LAN_IP}:${_lan_port}"
+      DASHBOARD_SERVER_NAME_VALUE="$(_append_server_name "$DASHBOARD_SERVER_NAME_VALUE" "$LAN_IP")"
+      ok "Detected LAN IP: ${LAN_IP} (added to CORS_ORIGINS and the dashboard Host allowlist)."
+    elif hostname -I 2>/dev/null | grep -q ':'; then
+      die "This host advertises only IPv6 addresses; LAN mode needs an IPv4 address." \
+          "Assign an IPv4 LAN address, pass --address <ipv4>, or use the Tailscale/tunnel option."
     else
-      warn "Could not auto-detect LAN IP — you may need to edit CORS_ORIGINS and JARVIS_CERT_SAN in .env to add your machine's IP."
+      warn "Could not auto-detect a private LAN IPv4 — pass --address <ipv4>, or set DASHBOARD_SERVER_NAME and CORS_ORIGINS in .env for your machine's IP."
     fi
     ;;
   3)
@@ -1125,9 +1221,9 @@ EOF
       echo "Invalid hostname. Use lowercase letters, digits, hyphens, and dots only."
     done
     CORS_ORIGINS_OVERRIDE="https://${TUNNEL_HOSTNAME},https://localhost:3001"
-    JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1,DNS:${TUNNEL_HOSTNAME}"
+    DASHBOARD_SERVER_NAME_VALUE="$(_append_server_name "$DASHBOARD_SERVER_NAME_VALUE" "$TUNNEL_HOSTNAME")"
     CF_TRUST_OVERRIDE=true
-    ok "Tunnel hostname: ${TUNNEL_HOSTNAME} (added to CORS_ORIGINS and cert SAN)."
+    ok "Tunnel hostname: ${TUNNEL_HOSTNAME} (added to CORS_ORIGINS and the dashboard Host allowlist)."
     ok "JARVIS_TRUST_CF_CONNECTING_IP=true — rate limiting will key off the real CF-Connecting-IP header rather than the tunnel origin."
     ;;
   4)
@@ -1153,13 +1249,32 @@ EOF
       fi
       echo "Invalid email address. Enter a valid address, e.g. you@example.com."
     done
-    ok "Let's Encrypt configured for ${NI_DOMAIN}. After setup, start public TLS: docker compose --profile letsencrypt up -d caddy"
+    ok "Let's Encrypt configured for ${NI_DOMAIN}. Setup will start the public TLS edge and wait for the certificate before finishing."
     ;;
   *)
     die "Invalid choice '$access_mode'. Expected 1, 2, 3, or 4." \
         "Re-run ./setup.sh and pick a listed option."
     ;;
 esac
+
+# Named private HTTPS origin — a supported family route layered on top of the
+# localhost/LAN admin bootstrap (SSH-forward). Offer it interactively only where
+# the chosen mode has not already established a public HTTPS origin.
+if [ "$NON_INTERACTIVE" -eq 0 ] && [ -z "$NI_PUBLIC_ORIGIN" ] \
+   && { [ "$ACCESS_MODE_LABEL" = "localhost" ] || [ "$ACCESS_MODE_LABEL" = "lan" ]; }; then
+  printf '\n'
+  read -rp "Do you already have a private HTTPS hostname for this host (Tailscale Serve / trusted-TLS)? [y/N] " _po_yn
+  case "${_po_yn:-N}" in
+    y|Y)
+      while true; do
+        read -rp "Private HTTPS URL (e.g. https://jarvis.example.ts.net), or blank to skip: " _po_url
+        [ -z "$_po_url" ] && break
+        if _public_origin_host "$_po_url" >/dev/null; then NI_PUBLIC_ORIGIN="$_po_url"; break; fi
+        echo "Enter an https:// URL with a DNS hostname (an IP is not a valid origin)."
+      done
+      ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # Canonical access-mode identity, written to .env below. JARVIS_ACCESS_MODE
@@ -1177,6 +1292,29 @@ case "$ACCESS_MODE_LABEL" in
   letsencrypt) APP_BASE_URL_VALUE="https://${NI_DOMAIN}" ;;
   *)           APP_BASE_URL_VALUE="" ;;
 esac
+
+# A named private HTTPS origin layers onto any mode: it fills APP_BASE_URL when
+# the mode left it empty (localhost/LAN), and always joins the CORS list and the
+# nginx Host allowlist. The allowlist accumulates, so LAN + origin keep BOTH
+# hostnames. PUBLIC_ORIGIN_HOST is the validated hostname the edge probe targets.
+PUBLIC_ORIGIN_HOST=""
+if [ -n "$NI_PUBLIC_ORIGIN" ]; then
+  PUBLIC_ORIGIN_HOST="$(_public_origin_host "$NI_PUBLIC_ORIGIN")" \
+    || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: https://jarvis.example.ts.net"
+  [ -z "$APP_BASE_URL_VALUE" ] && APP_BASE_URL_VALUE="$NI_PUBLIC_ORIGIN"
+  DASHBOARD_SERVER_NAME_VALUE="$(_append_server_name "$DASHBOARD_SERVER_NAME_VALUE" "$PUBLIC_ORIGIN_HOST")"
+  [ -n "$CORS_ORIGINS_OVERRIDE" ] || CORS_ORIGINS_OVERRIDE="http://localhost:${DASHBOARD_HOST_PORT:-3001}"
+  CORS_ORIGINS_OVERRIDE="$(_append_csv "$CORS_ORIGINS_OVERRIDE" "$NI_PUBLIC_ORIGIN")"
+  ok "Private HTTPS origin: ${NI_PUBLIC_ORIGIN} (APP_BASE_URL, CORS_ORIGINS, and the dashboard Host allowlist updated)."
+fi
+
+# local-https serves through caddy_local at https://localhost:3443 (Host rewritten
+# to localhost for nginx), so the browser origin is that HTTPS terminator — add it
+# to CORS alongside the direct loopback port.
+if [ "$NI_PROFILE" = "local-https" ]; then
+  [ -n "$CORS_ORIGINS_OVERRIDE" ] || CORS_ORIGINS_OVERRIDE="http://localhost:${DASHBOARD_HOST_PORT:-3001}"
+  CORS_ORIGINS_OVERRIDE="$(_append_csv "$CORS_ORIGINS_OVERRIDE" "https://localhost:3443")"
+fi
 if [ "$NON_INTERACTIVE" -eq 0 ]; then
   case "$ACCESS_MODE_LABEL" in
     localhost)   info "Access mode: on this computer only — sign-in links and passkeys all work here." ;;
@@ -1257,6 +1395,28 @@ fi
 if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
   COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}telegram"
 fi
+# The TLS edges run as compose profiles so a bare `up` (and the readiness gates
+# below) start the same edge the wizard selected: local-https -> caddy_local on
+# https://localhost:3443, letsencrypt -> the ACME caddy on :443.
+if [ "$NI_PROFILE" = "local-https" ]; then
+  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}caddy-local"
+fi
+if [ "$NI_PROFILE" = "letsencrypt" ]; then
+  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}letsencrypt"
+fi
+
+# A caddy profile pins static container IPs inside JARVIS_NET_SUBNET (and nginx
+# trusts exactly those IPs), so a non-default subnet would attach-fail or silently
+# regress rate limiting. Refuse with the exact two literals to change rather than
+# start a broken edge.
+case ",$COMPOSE_PROFILES_VALUE," in
+  *,caddy-local,*|*,letsencrypt,*)
+    if [ -n "${JARVIS_NET_SUBNET:-}" ] && [ "$JARVIS_NET_SUBNET" != "10.137.241.0/24" ]; then
+      die "A caddy TLS profile cannot start under a custom JARVIS_NET_SUBNET (${JARVIS_NET_SUBNET}) without updating two hard-coded literals." \
+          "Edit docker-compose.yml (caddy/caddy_local 'ipv4_address') and frontend/nginx.conf ('set_real_ip_from') to IPs inside ${JARVIS_NET_SUBNET}, or keep the default 10.137.241.0/24."
+    fi
+    ;;
+esac
 # -----------------------------------------------------------------------------
 # 7. Write .env (tempfile + mv, macOS-safe)
 # -----------------------------------------------------------------------------
@@ -1297,7 +1457,8 @@ sub_value() {
     TELEGRAM_BOT_TOKEN)       printf '%s' "$TELEGRAM_BOT_TOKEN" ;;
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;
     DASHBOARD_BIND_HOST)      printf '%s' "$DASHBOARD_BIND_HOST" ;;
-    JARVIS_CERT_SAN)          printf '%s' "$JARVIS_CERT_SAN" ;;
+    DASHBOARD_SERVER_NAME)
+      [ -n "$DASHBOARD_SERVER_NAME_VALUE" ] && printf '%s' "$DASHBOARD_SERVER_NAME_VALUE" || return 1 ;;
     APP_BASE_URL)             printf '%s' "$APP_BASE_URL_VALUE" ;;
     JARVIS_ACCESS_MODE)       printf '%s' "$ACCESS_MODE_LABEL" ;;
     JARVIS_TRUST_CF_CONNECTING_IP) [ -n "$CF_TRUST_OVERRIDE" ] && printf '%s' "$CF_TRUST_OVERRIDE" || return 1 ;;
@@ -1353,8 +1514,9 @@ sub_value() {
 }
 
 # Keys retired in this release are dropped from a carried-forward .env unless
-# this run still owns them (see merge_env_file). JARVIS_CERT_SAN is still written
-# per access mode above, so listing it here is inert until its writer is removed.
+# this run still owns them (see merge_env_file). JARVIS_CERT_SAN's writer has been
+# removed (the dashboard nginx serves no TLS — cert-SAN was inert theater), so a
+# carried-forward .env drops it on the next reconfigure.
 RETIRED_ENV_KEYS="JARVIS_CERT_SAN"
 
 if [ -f .env ]; then
@@ -1471,6 +1633,18 @@ if [ "$USE_TUNNEL_PROFILE" -eq 1 ]; then
 fi
 if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
   PROFILE_ARGS+=(--profile telegram)
+fi
+if [ "$NI_PROFILE" = "local-https" ]; then
+  # caddy_local hard-requires mkcert certs; fail loudly rather than start an edge
+  # that cannot serve TLS.
+  if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
+    die "local-https needs locally-trusted certs, but certs/cert.pem and certs/key.pem are missing." \
+        "Generate them first: make certs   (installs the mkcert root CA), then re-run ./setup.sh --profile=local-https"
+  fi
+  PROFILE_ARGS+=(--profile caddy-local)
+fi
+if [ "$NI_PROFILE" = "letsencrypt" ]; then
+  PROFILE_ARGS+=(--profile letsencrypt)
 fi
 # USE_OBSERVABILITY_PROFILE is opt-in (env-driven, defaults to 0).  Guard
 # against the common footgun where a user runs ``USE_OBSERVABILITY_PROFILE=1
@@ -1716,55 +1890,117 @@ EOF
   exit 1
 fi
 
-# LAN reachability probe (non-fatal — just informational).
-if [ "$ACCESS_MODE_LABEL" = "lan" ] && [ -n "$LAN_IP" ]; then
-  info "Probing LAN reachability at https://${LAN_IP}:3001/health ..."
-  if curl -fkso /dev/null "https://${LAN_IP}:3001/health" 2>/dev/null; then
-    ok "LAN reachable at https://${LAN_IP}:3001"
-  else
-    warn "LAN probe failed — services may still be starting, or a firewall may be blocking port 3001."
-    warn "  Once the dashboard is up, verify with: curl -kso /dev/null https://${LAN_IP}:3001/health"
-  fi
-fi
-
 # -----------------------------------------------------------------------------
-# 12. Summary (only reached when all mandatory services are healthy)
+# 12. Readiness gates + summary (only reached when all mandatory services healthy)
 # -----------------------------------------------------------------------------
 DASHBOARD_HOST_PORT_RESOLVED="${DASHBOARD_HOST_PORT:-3001}"
+
+# The tokenized setup link mints the first admin via an X-Setup-Token header, so
+# it must never ride raw-IP plaintext (the header is sniffable on a shared LAN).
+# Its base defaults to loopback and only moves to a VERIFIED HTTPS origin below.
+# The DISPLAYED dashboard URL is separate — it may name the LAN IP the operator
+# browses to.
 DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"
-# Let's Encrypt / --domain production deploys serve TLS on the public hostname
-# (Caddy + ACME), not localhost. access_mode stays "1" (the dashboard still
-# binds locally behind Caddy), so key off the profile/domain here.
-if [ "$NI_PROFILE" = "letsencrypt" ] && [ -n "$NI_DOMAIN" ]; then
-  DASHBOARD_URL="https://${NI_DOMAIN}"
-fi
+SETUP_LINK_BASE="http://localhost:${DASHBOARD_HOST_PORT_RESOLVED}"
 case "$ACCESS_MODE_LABEL" in
   lan)
     if [ -n "$LAN_IP" ]; then
-      DASHBOARD_URL="https://${LAN_IP}:${DASHBOARD_HOST_PORT_RESOLVED}"
+      DASHBOARD_URL="http://${LAN_IP}:${DASHBOARD_HOST_PORT_RESOLVED}"
     else
-      DASHBOARD_URL="https://<this-machine-ip>:${DASHBOARD_HOST_PORT_RESOLVED}"
+      DASHBOARD_URL="http://<this-machine-ip>:${DASHBOARD_HOST_PORT_RESOLVED}"
     fi
+    # SETUP_LINK_BASE stays loopback — the token never rides raw-IP HTTP.
     ;;
   tunnel)
     if [ -n "$TUNNEL_HOSTNAME" ]; then
       DASHBOARD_URL="https://${TUNNEL_HOSTNAME}"
+      SETUP_LINK_BASE="https://${TUNNEL_HOSTNAME}"
     else
       DASHBOARD_URL="via your Cloudflare tunnel hostname"
     fi
     ;;
 esac
+if [ "$NI_PROFILE" = "local-https" ]; then
+  DASHBOARD_URL="https://localhost:3443"
+  SETUP_LINK_BASE="https://localhost:3443"
+fi
+
+# LAN reachability probe (non-fatal, informational): a success only proves the
+# service answers on THIS host — a host firewall can still block LAN peers, so
+# verify from a second device.
+if [ "$ACCESS_MODE_LABEL" = "lan" ] && [ -n "$LAN_IP" ]; then
+  _lan_probe_url="http://${LAN_IP}:${DASHBOARD_HOST_PORT_RESOLVED}/health"
+  info "Probing LAN reachability at ${_lan_probe_url} ..."
+  if curl -fso /dev/null "$_lan_probe_url" 2>/dev/null; then
+    ok "LAN reachable from this machine — verify from a second device; a host firewall can still block LAN clients."
+  else
+    warn "LAN probe did not answer yet — services may still be starting, or a host firewall may block port ${DASHBOARD_HOST_PORT_RESOLVED}."
+    warn "  Verify from another LAN device, or on this host: curl -so /dev/null ${_lan_probe_url}"
+  fi
+fi
+
+# Named private HTTPS origin edge probe (non-fatal): only host the setup link at
+# the origin once the edge actually answers; otherwise keep it on loopback and
+# print a pending-edge status so the operator finishes the edge and re-checks.
+PUBLIC_ORIGIN_VERIFIED=0
+if [ -n "$NI_PUBLIC_ORIGIN" ]; then
+  info "Probing the private HTTPS origin at ${NI_PUBLIC_ORIGIN}/health (best-effort) ..."
+  _po_attempt=0
+  while [ "$_po_attempt" -lt 3 ]; do
+    if curl -fsS --max-time 10 "${NI_PUBLIC_ORIGIN}/health" >/dev/null 2>&1; then
+      PUBLIC_ORIGIN_VERIFIED=1; break
+    fi
+    _po_attempt=$((_po_attempt + 1))
+    [ "$_po_attempt" -lt 3 ] && sleep 5
+  done
+  if [ "$PUBLIC_ORIGIN_VERIFIED" -eq 1 ]; then
+    ok "Private HTTPS origin reachable — the setup link will be hosted there."
+    SETUP_LINK_BASE="$NI_PUBLIC_ORIGIN"
+  else
+    warn "Private HTTPS origin ${NI_PUBLIC_ORIGIN} not reachable yet — keeping the setup link on loopback."
+  fi
+fi
+
+# Let's Encrypt certificate gate: the caddy edge is running under the letsencrypt
+# profile started above; wait for ACME issuance before advertising the https://
+# URL or hosting the setup link. In production a timeout is FATAL — never claim a
+# route that has not served.
+if [ "$NI_PROFILE" = "letsencrypt" ] && [ -n "$NI_DOMAIN" ]; then
+  info "Waiting for the public certificate at https://${NI_DOMAIN} (up to 120s)..."
+  _le_ok=0
+  _le_attempt=0
+  while [ "$_le_attempt" -lt 12 ]; do
+    if curl -fsS --max-time 10 "https://${NI_DOMAIN}/health" >/dev/null 2>&1; then
+      _le_ok=1; break
+    fi
+    _le_attempt=$((_le_attempt + 1))
+    [ "$_le_attempt" -lt 12 ] && sleep 10
+  done
+  if [ "$_le_ok" -eq 1 ]; then
+    ok "Public TLS is live at https://${NI_DOMAIN}."
+    DASHBOARD_URL="https://${NI_DOMAIN}"
+    SETUP_LINK_BASE="https://${NI_DOMAIN}"
+  else
+    err "Public TLS did not come up at https://${NI_DOMAIN} within the timeout."
+    err "Check that DNS resolves to this host and ports 80/443 are reachable, then inspect: docker compose logs caddy"
+    exit 1
+  fi
+fi
 
 printf '\n%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '%s   Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
+if [ -n "$NI_PUBLIC_ORIGIN" ] && [ "$PUBLIC_ORIGIN_VERIFIED" -eq 1 ]; then
+  printf '  Family URL:   %s\n' "$NI_PUBLIC_ORIGIN"
+fi
 
 # Click-to-finish setup link: carries the setup token so the wizard can complete
 # first-run setup (the token gates the bootstrap WRITE endpoints). init-secrets.sh
 # generated secrets/jarvis_setup_token.txt above. print_setup_link (setup_lib.sh)
-# is shared with scripts/jarvis-setup.sh so both entry points surface it.
-print_setup_link "$DASHBOARD_URL"
+# is shared with scripts/jarvis-setup.sh so both entry points surface it. The base
+# is loopback (or a verified HTTPS origin) — never a raw LAN IP.
+print_setup_link "$SETUP_LINK_BASE"
 if [ -n "$SETUP_LINK" ]; then
   # Best-effort: open the click-to-finish link in the operator's browser.
   # Non-fatal — a headless/server box simply skips this.
@@ -1773,6 +2009,29 @@ if [ -n "$SETUP_LINK" ]; then
   elif command -v open >/dev/null 2>&1; then
     open "$SETUP_LINK" >/dev/null 2>&1 &
   fi
+fi
+
+if [ "$ACCESS_MODE_LABEL" = "lan" ]; then
+  # Raw-IP LAN is HTTP-only and NOT an authenticated family route: Secure cookies
+  # will not persist over http://IP, and the setup token must never be entered
+  # from another device over plaintext. Point at the two real auth routes.
+  printf '\n'
+  printf '  %sFinishing first-admin setup on a plain-HTTP LAN:%s\n' "$C_BOLD" "$C_RESET"
+  printf '    - The setup link above is scoped to localhost on purpose. Finish first-admin\n'
+  printf '      setup from the server itself, or via an SSH local-forward, then open the link:\n'
+  printf '        ssh -L %s:127.0.0.1:%s user@host\n' "$DASHBOARD_HOST_PORT_RESOLVED" "$DASHBOARD_HOST_PORT_RESOLVED"
+  printf '    - Sign-ins over the raw http://%s address will not stick, and never enter the\n' "${LAN_IP:-<ip>}"
+  printf '      setup token from another device over http://IP.\n'
+  printf '    - For a durable family route add a named HTTPS origin (Tailscale Serve / trusted TLS):\n'
+  printf '        ./setup.sh --public-origin https://<host>.<tailnet>.ts.net\n'
+fi
+
+if [ -n "$NI_PUBLIC_ORIGIN" ] && [ "$PUBLIC_ORIGIN_VERIFIED" -ne 1 ]; then
+  printf '\n'
+  printf '  %sPrivate HTTPS origin CONFIGURED but NOT YET VERIFIED:%s %s\n' "$C_BOLD" "$C_RESET" "$NI_PUBLIC_ORIGIN"
+  printf '    - Finish the edge, e.g.: tailscale serve --bg --https=443 http://127.0.0.1:%s\n' "$DASHBOARD_HOST_PORT_RESOLVED"
+  printf '    - See the deployment guide, then re-check: ./setup.sh --check\n'
+  printf '    - Until then the setup link above stays on loopback (bootstrap via SSH-forward).\n'
 fi
 
 if [ "$NI_MODE" = "single" ]; then
@@ -1793,7 +2052,6 @@ fi
 printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'
-printf '  Public TLS: set LETSENCRYPT_DOMAIN and LETSENCRYPT_EMAIL, then run docker compose --profile letsencrypt up -d caddy\n'
 printf '\n'
 
 # -----------------------------------------------------------------------------
