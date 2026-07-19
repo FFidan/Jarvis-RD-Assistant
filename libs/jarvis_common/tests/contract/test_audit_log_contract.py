@@ -20,6 +20,7 @@ Supersedes: mock-unit tests asserting conn.execute called with correct SQL
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from jarvis_common.testing import SharedConnPool
@@ -127,6 +128,41 @@ async def test_log_audit_truncates_oversized_metadata(contract_conn):
     stored = row["metadata"]
     assert stored.get("_truncated") is True, f"Expected truncation marker; got: {stored}"
     assert "_size" in stored
+
+
+async def test_log_audit_stores_row_for_non_json_native_metadata_under_cap(contract_conn):
+    """Metadata under the size cap containing a datetime and a UUID still writes a row.
+
+    The size-cap guard measures bytes with ``json.dumps(default=str)``, but the
+    asyncpg JSONB codec that performs the actual INSERT is registered with plain
+    ``json.dumps`` (no ``default``), which raises on a raw ``datetime``/``UUID``.
+    A guard that approves the payload but hands the codec a still-unencodable
+    dict causes the INSERT to fail and the row to be silently dropped.
+
+    Verified: audit.py:18-39 — _cap_metadata; db_helpers.py:68-71 — init_pg_connection
+    registers the jsonb/json codecs with encoder=json.dumps (no default=str).
+    """
+    from jarvis_common.audit import log_audit
+
+    action = f"test.nonjson.{uuid.uuid4().hex[:6]}"
+    at = datetime.now(UTC)
+    the_id = uuid.uuid4()
+
+    await log_audit(
+        _pool(contract_conn),
+        action=action,
+        resource="/api/test",
+        metadata={"at": at, "id": the_id},
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT metadata FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert row is not None, "log_audit silently dropped the row (codec mismatch)"
+    stored = row["metadata"]
+    assert stored["at"] == str(at)
+    assert stored["id"] == str(the_id)
 
 
 async def test_log_audit_no_user_id_stores_null(contract_conn):
