@@ -824,11 +824,11 @@ fi
 sec_block="$(sed -n '/=== STEP 2.5:/,/=== STEP 3:/p' "$RESTORE_SCRIPT")"
 if printf '%s' "$sec_block" | grep -q 'if \[ "\$SOURCE" = "inbox" \]' \
    && printf '%s' "$sec_block" | grep -q 'resolve_secrets_archive' \
-   && printf '%s' "$sec_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && ! printf '%s' "$sec_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
    && printf '%s' "$sec_block" | grep -q 'fail_before_destruction'; then
-  pass "the secrets preflight is inbox-scoped, sets manual_steps_required, and fails before destruction"
+  pass "the secrets preflight is inbox-scoped and fails before destruction without claiming manual steps"
 else
-  printf 'FAIL: the STEP-2.5 secrets preflight is missing its inbox guard / manual_steps / fail-before-destruction\n' >&2
+  printf 'FAIL: the STEP-2.5 secrets preflight is missing its inbox guard / fail-before-destruction, or wrongly claims manual steps on a path that changed nothing\n' >&2
   fail=1
 fi
 
@@ -865,15 +865,17 @@ else
   fail=1
 fi
 # STEP 4 must capture backup.sh's exit code (not merely WARN) and gate on freshness,
-# failing before destruction with manual_steps when it is stale/failed.
+# failing before destruction when it is stale/failed. It must NOT claim manual steps
+# are required: nothing has been changed yet on that path, and the EXIT trap sets the
+# flag for real post-destruction failures.
 step4_block="$(sed -n '/=== STEP 4:/,/=== STEP 4.5:/p' "$RESTORE_SCRIPT")"
 if printf '%s' "$step4_block" | grep -q 'SAFETY_RC=' \
    && printf '%s' "$step4_block" | grep -q 'safety_backup_is_fresh "\$SAFETY_RC"' \
-   && printf '%s' "$step4_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && ! printf '%s' "$step4_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
    && printf '%s' "$step4_block" | grep -q 'fail_before_destruction'; then
-  pass "STEP 4 captures backup.sh's rc, gates on freshness, and fails before destruction with manual_steps"
+  pass "STEP 4 captures backup.sh's rc, gates on freshness, and fails before destruction without claiming manual steps"
 else
-  printf 'FAIL: STEP 4 does not capture the backup rc / gate on freshness / set manual_steps before destruction\n' >&2
+  printf 'FAIL: STEP 4 does not capture the backup rc / gate on freshness / fail before destruction, or wrongly claims manual steps on a path that changed nothing\n' >&2
   fail=1
 fi
 
