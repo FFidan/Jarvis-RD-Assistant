@@ -31,6 +31,7 @@ from jarvis_common.sse import SSE_DONE, sse_event
 from paper_ingestion.ingestion.search_scope import SearchScope
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.perf_probe import probe_span
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
 
@@ -512,15 +513,16 @@ async def prepare_cross_paper_rag(
         # 2-3. Dedup by paper (top-2 each), trim to max_papers, flatten to max_chunks
         selected_chunks = _select_chunks_by_paper(all_chunks, body.max_papers, body.max_chunks)
 
-        # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
+        # 4. Fetch paper metadata — defense-in-depth user-scope predicate.
         # Primary isolation is Qdrant's _user_scope_filter; this secondary
         # check ensures mis-tagged Qdrant payloads cannot surface another user's
         # paper metadata.  `papers` is the shared canonical corpus and has NO
         # user_id column — ownership lives in the `user_library` join table.
-        # Mirror the Qdrant user-scope filter ("payload user_id == X OR IS NULL") against the real
-        # schema: a paper is visible iff the caller is unscoped, OR owns it
-        # (user_library membership), OR it is canonical (in nobody's library →
-        # the relational equivalent of a NULL-user_id chunk).
+        # A paper is visible iff the caller is unscoped, OR it passes the
+        # canonical visibility predicate (shared corpus, i.e. discovered_by IS
+        # NULL, or discovered by the caller), OR the caller has it in their own
+        # library.  Membership in a THIRD party's library is irrelevant: a
+        # shared-corpus paper stays visible to everyone once someone shelves it.
         unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -528,10 +530,9 @@ async def prepare_cross_paper_rag(
                 " WHERE p.id = ANY($1::int[])"
                 " AND ("
                 "   $2::int IS NULL"
+                f"   OR {paper_visible_sql(2)}"
                 "   OR EXISTS (SELECT 1 FROM user_library ul"
                 "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
-                "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
-                "                  WHERE ul2.paper_id = p.id)"
                 " )"
                 " AND ($3::int[] IS NULL OR p.id = ANY($3::int[]))",
                 unique_paper_ids,
