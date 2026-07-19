@@ -317,17 +317,29 @@ ok "Disk footprint within budget (${disk_added_human} GB <= ${DISK_BUDGET_GB} GB
 # -----------------------------------------------------------------------------
 if [ "$RERUN" -eq 1 ]; then
   info "Re-running the bootstrap against the kept .env (idempotency check)..."
-  env_sha_before="$(sha256sum "$REPO_ROOT/.env" | cut -d' ' -f1)"
+  # Compared as a SORTED line set, not as file bytes. The keep path re-runs
+  # scripts/gen-langfuse-keys.sh, which rewrites its two keys by deleting and
+  # re-appending them — so the line ORDER legitimately shifts on every re-run
+  # while every key and value stays put. Sorting isolates the property that
+  # actually matters: a re-run must not rotate a secret, drop a key, or add one.
+  env_before="$(mktemp)"
+  sort "$REPO_ROOT/.env" > "$env_before"
   rerun_rc=0
   timeout "$TIMEOUT_SECONDS" "${BOOTSTRAP_CMD[@]}" || rerun_rc=$?
   if [ "$rerun_rc" -ne 0 ]; then
+    rm -f "$env_before"
     err "Bootstrap re-run with an existing .env failed (rc=${rerun_rc})."
     exit 1
   fi
-  if [ "$(sha256sum "$REPO_ROOT/.env" | cut -d' ' -f1)" != "$env_sha_before" ]; then
-    warn "The re-run modified .env — review whether that mutation is intentional."
+  if ! sort "$REPO_ROOT/.env" | diff -u "$env_before" - > "${env_before}.diff"; then
+    err "The re-run changed .env — a keep-path re-run must preserve every key and value."
+    err "Rotating a secret here silently invalidates the running deployment's data."
+    sed -n '1,40p' "${env_before}.diff" >&2
+    rm -f "$env_before" "${env_before}.diff"
+    exit 1
   fi
-  ok "Bootstrap re-run with the kept .env succeeded."
+  rm -f "$env_before" "${env_before}.diff"
+  ok "Bootstrap re-run with the kept .env succeeded and preserved every value."
 fi
 
 # -----------------------------------------------------------------------------
