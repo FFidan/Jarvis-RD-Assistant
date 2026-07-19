@@ -489,6 +489,12 @@ export async function downloadPaperCitation(paperId: number, format: CitationFor
   triggerBlobDownload(blob, filenameFromDisposition(res, `paper_${paperId}.${ext}`));
 }
 
+export async function downloadPaperMarkdown(paperId: number): Promise<void> {
+  const res = await apiFetchRaw(`/api/papers/${paperId}/export.md`);
+  const blob = await res.blob();
+  triggerBlobDownload(blob, filenameFromDisposition(res, `paper_${paperId}.md`));
+}
+
 export async function copyPaperCitation(paperId: number, format: CitationFormat): Promise<string> {
   const res = await apiFetchRaw(`/api/papers/${paperId}/citation?format=${format}`);
   return res.text();
