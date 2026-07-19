@@ -68,20 +68,30 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
   const isTerminal = job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled';
   const summary = outcomeSummary(job);
   const shownStatus = effectiveStatus(job);
+  // A cancel REQUEST does not move `status` — the handler keeps running until it
+  // observes the flag — so an in-flight cancel is its own display state: neither
+  // the `running` it still technically is, nor the `cancelled` it has not
+  // reached. Without it the row would look untouched after the click.
+  const isCancelling = job.cancel_requested === true && !isTerminal;
 
   return (
     <div className="flex flex-col gap-1 py-2 border-b last:border-b-0">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium truncate">{kindLabel(job.kind)}</span>
         <div className="flex items-center gap-1 shrink-0">
-          <span className={`text-xs ${statusColor(shownStatus)}`}>{statusLabel(shownStatus)}</span>
+          {isCancelling ? (
+            <span className="text-xs text-[var(--status-warn)]">Cancelling…</span>
+          ) : (
+            <span className={`text-xs ${statusColor(shownStatus)}`}>{statusLabel(shownStatus)}</span>
+          )}
           {isActive && (
             <Button
               variant="ghost"
               size="icon"
               className="h-5 w-5"
               onClick={() => onCancel(job.id)}
-              title="Cancel job"
+              disabled={isCancelling}
+              title={isCancelling ? 'Cancellation requested — finishing current step' : 'Cancel job'}
             >
               <X className="h-3 w-3" />
             </Button>

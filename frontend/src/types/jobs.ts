@@ -28,6 +28,12 @@ export interface JobRow {
   id: string;
   kind: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  /**
+   * A cancellation has been REQUESTED. Orthogonal to `status`: the handler runs
+   * on (status stays `running`) until it observes the flag and returns its own
+   * final result. Absent on the list endpoint, hence optional.
+   */
+  cancel_requested?: boolean;
   progress: number | null;
   progress_message: string | null;
   payload: Record<string, unknown>;

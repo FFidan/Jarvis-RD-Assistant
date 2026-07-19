@@ -114,13 +114,25 @@ PROCRASTINATE_NOTIFY_CHANNEL = "procrastinate_any_queue_v1"
 
 # Map procrastinate's status enum → JARVIS legacy status strings.
 # Source: db/migrations/052_procrastinate_schema.sql:27-35.
+#
+# ``aborting`` maps to ``running``, NOT to a terminal status: procrastinate sets
+# it the moment cancellation is *requested* while the handler is still executing.
+# It is a request, not an outcome. Mapping it to ``cancelled`` made it terminal
+# (see ``TERMINAL_STATUSES``), which closed the SSE stream with ``result: null``
+# and discarded the handler's real final row — e.g. a ``papers.process_library``
+# run that stopped early still returns its accumulated counts under a
+# ``status: "cancelled"`` result dict, and the client never saw it.
+# The request itself is not lost: ``procrastinate_row_to_jarvis_row`` still
+# raises ``cancel_requested`` for ``aborting``. Only the genuine outcomes
+# ``cancelled`` (aborted before it ever ran) and ``aborted`` (handler
+# acknowledged the abort) are terminal.
 PROCRASTINATE_STATUS_MAP: dict[str, str] = {
     "todo": "queued",
     "doing": "running",
     "succeeded": "succeeded",
     "failed": "failed",
     "cancelled": "cancelled",
-    "aborting": "cancelled",
+    "aborting": "running",
     "aborted": "cancelled",
 }
 
@@ -176,11 +188,19 @@ class _PoolListenConnection:
 
 
 def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Return the public SSE payload for a procrastinate job row."""
+    """Return the public SSE payload for a procrastinate job row.
+
+    ``cancel_requested`` is published alongside ``status`` because the two are
+    orthogonal: a job whose abort was requested keeps reporting ``running``
+    until the handler actually stops (see ``PROCRASTINATE_STATUS_MAP``), so the
+    flag is the only signal that lets the UI show a "Cancelling" state rather
+    than an indicator that looks untouched.
+    """
     event_data: dict[str, Any] = {
         "progress": row.get("progress"),
         "progress_message": row.get("progress_message"),
         "status": row["status"],
+        "cancel_requested": bool(row.get("cancel_requested")),
         "source": "procrastinate",
     }
     if row["status"] in TERMINAL_STATUSES:
@@ -210,7 +230,9 @@ def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
     Returns a dict matching the legacy Job interface (12+ keys) with an
     additional ``source`` discriminator set to ``"procrastinate"``.  The
     ``cancel_requested`` flag is synthesised from the procrastinate status so
-    callers don't need to special-case it.
+    callers don't need to special-case it. It is orthogonal to ``status``: an
+    ``aborting`` row reports ``status="running"`` (the handler has not stopped
+    yet) together with ``cancel_requested=True``.
 
     The extra keys (``id``, ``kind``, ``user_id``, ``created_at``, etc.) are
     required by ``get_unified`` so that route handlers can call
@@ -411,15 +433,25 @@ async def stream_job_events(
     to the legacy SSE payload shape via :func:`procrastinate_row_to_jarvis_row`.
     The stream terminates when the job reaches a JARVIS-terminal status
     (``succeeded`` / ``failed`` / ``cancelled``).
+
+    A cancellation *request* (procrastinate ``aborting``) is deliberately NOT
+    terminal — see ``PROCRASTINATE_STATUS_MAP`` — so the stream stays open until
+    the handler actually stops and its final row, result included, is emitted.
+    A worker that dies mid-abort cannot hang the stream forever: the
+    ``MAX_STREAM_SECONDS`` ceiling still yields ``streaming_timeout`` and exits.
     """
-    last_procrastinate_key: tuple[Any, Any, Any] | None = None
+    # The change-detection key carries ``cancel_requested`` alongside progress and
+    # status because a cancel request no longer moves ``status`` (doing → aborting
+    # both map to "running"); without it the request would never be re-emitted and
+    # the UI could not tell "Cancelling" from an untouched run.
+    last_procrastinate_key: tuple[Any, Any, Any, bool] | None = None
     loop = asyncio.get_running_loop()
     loop_start = loop.time()
     last_keepalive = loop_start
 
     poll_interval = 2.0
     idle_start: float = loop.time()
-    last_state: tuple[Any, Any, Any] | None = None
+    last_state: tuple[Any, Any, Any, bool] | None = None
 
     while True:
         if await is_disconnected():
@@ -448,6 +480,7 @@ async def stream_job_events(
                 procrastinate_row.get("progress"),
                 procrastinate_row.get("progress_message"),
                 procrastinate_row["status"],
+                bool(procrastinate_row.get("cancel_requested")),
             )
             if procrastinate_key != last_procrastinate_key:
                 last_procrastinate_key = procrastinate_key
@@ -462,6 +495,7 @@ async def stream_job_events(
             procrastinate_row.get("progress"),
             procrastinate_row.get("progress_message"),
             procrastinate_row["status"],
+            bool(procrastinate_row.get("cancel_requested")),
         )
         if current_state != last_state:
             last_state = current_state

@@ -237,6 +237,13 @@ export interface Job {
   id: string;
   kind: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  /**
+   * A cancellation has been REQUESTED. Orthogonal to `status`: the handler keeps
+   * running (status stays `running`) until it observes the flag and returns its
+   * own final result, so this is what distinguishes "Cancelling" from "Running".
+   * Optional — the list endpoint does not carry it.
+   */
+  cancel_requested?: boolean;
   progress: number;
   progress_message: string | null;
   payload?: Record<string, unknown> | null;
@@ -532,19 +539,24 @@ export const useJobStore = create<JobStore>()(
         try {
           await apiCancelJob(jobId);
         } catch (err) {
-          const msg = errorMessage(err, 'Failed to cancel job');
-          toast.error(msg);
+          toast.error(errorMessage(err, 'Failed to cancel job'));
           get().subscribe(jobId);
           return;
         }
-        get()._cleanupSubscription(jobId);
-        // Optimistically update local status
+        // A cancel is a REQUEST, not an outcome: the handler keeps running until
+        // it observes the flag, then returns its own final result — for a
+        // whole-library run, the counts of everything it did finish before
+        // stopping. Optimistically writing status 'cancelled' here would report
+        // the request as the outcome and tear the stream down before that result
+        // arrived, so record the REQUEST instead: it makes the row read
+        // "Cancelling" immediately rather than looking untouched, and the SSE
+        // stream confirms it on the next poll (the flag is part of the stream's
+        // change-detection key). Stay subscribed — and open a stream if this job
+        // had none — so the terminal frame still drives the toast, the query
+        // invalidation, and the eviction timer in _handleTerminal.
         const job = get().jobs[jobId];
-        if (job) {
-          get()._upsertJob({ ...job, status: 'cancelled' });
-          // Schedule eviction (handle tracked so removeJob/_reset can cancel it)
-          scheduleEviction(jobId, () => get().removeJob(jobId));
-        }
+        if (job) get()._upsertJob({ ...job, cancel_requested: true });
+        get().subscribe(jobId);
       },
 
       removeJob(jobId) {
