@@ -60,6 +60,17 @@ Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Ove
 
 In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
 
+**Everyday commands.** Setup puts a `jarvis-research` launcher on your PATH for day-to-day operation from any directory:
+
+```bash
+jarvis-research status     # container status at a glance
+jarvis-research logs -f     # follow service logs
+jarvis-research doctor      # read-only health, disk, and update check
+jarvis-research update      # transactional, database-safe upgrade to the latest release
+```
+
+Full command reference → **[docs/manual/cli.md](docs/manual/cli.md)**.
+
 **Non-interactive (CI / cloud-init):**
 
 ```bash

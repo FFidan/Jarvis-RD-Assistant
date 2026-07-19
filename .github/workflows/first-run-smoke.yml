@@ -90,7 +90,12 @@ jobs:
           # by the cold-install job and the wrapper leg (jarvis-setup.sh has
           # no local-build mode).
           case "${{ matrix.mode }}" in
-            dev-boot)    bash scripts/first-run-smoke.sh --integration --build-local ;;
+            dev-boot)
+              bash scripts/first-run-smoke.sh --integration --build-local
+              # Informational lifecycle-CLI check against the now-healthy stack;
+              # `|| true` keeps it from blocking the required dev-boot leg.
+              scripts/jarvis-research.sh status && scripts/jarvis-research.sh doctor || true
+              ;;
             setup-check) ./setup.sh --check ;;
             env-rerun)   bash scripts/first-run-smoke.sh --rerun --build-local ;;
             wrapper)     bash scripts/first-run-smoke.sh --wrapper ;;

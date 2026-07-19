@@ -2196,6 +2196,13 @@ else
   printf '  Sign in:      open the dashboard and request a magic link to your email.\n'
   printf '                (API key login is disabled in multi-user mode)\n'
 fi
+
+# Register this checkout with the jarvis-research lifecycle CLI. This installs the
+# `jarvis-research` launcher on PATH (status / logs / doctor / update) and records
+# this repo as the managed install. Non-fatal: an install that cannot write the
+# launcher still completes.
+install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
+
 printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'

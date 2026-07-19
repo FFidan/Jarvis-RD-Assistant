@@ -361,3 +361,8 @@ printf 'The first-run web wizard will walk you through SMTP, the admin email,\n'
 printf 'and (optionally) cloud LLM provider keys.\n'
 printf '%s================================================================%s\n' \
   "$C_GREEN" "$C_RESET"
+
+# Register this checkout with the jarvis-research lifecycle CLI so `jarvis-research`
+# (status / logs / doctor / update) is on PATH after a non-interactive install.
+# Non-fatal: a launcher it cannot write does not fail the bootstrap.
+install_cli_shim "$REPO_ROOT" || warn "Could not install the jarvis-research launcher (non-fatal)."

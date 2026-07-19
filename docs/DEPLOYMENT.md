@@ -468,6 +468,22 @@ After setup, open the dashboard and create the initial admin in the onboarding w
 
 ## Update Workflow
 
+The recommended path is the lifecycle command, which upgrades transactionally
+and refuses unsafe states:
+
+```bash
+jarvis-research update
+```
+
+It verifies that every image for the target release is already published,
+requires a fresh, checksum-verified backup before any data-changing migration,
+stages the new images before advancing your checkout by fast-forward only, and
+waits for the stack to report healthy — resuming automatically if a run is
+interrupted, and never rolling back on its own. See
+[Command line (jarvis-research)](manual/cli.md) for resume and rollback details.
+
+You can also update by hand:
+
 ```bash
 git pull
 ./update.sh
