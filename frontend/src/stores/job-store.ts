@@ -48,6 +48,7 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => readonly (readonly unk
     return paperId == null ? [] : [QUERY_KEYS.papers.detail(paperId)];
   },
   'papers.batch_process':   () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts(), QUERY_KEYS.actionItems.unprocessed()],
+  'papers.process_library': () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts(), QUERY_KEYS.actionItems.unprocessed()],
   'papers.scan_local':      () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
   'papers.batch_summarize': () => [QUERY_KEYS.papers.feedAll()],
   'extraction.single':      (j) => {
@@ -97,6 +98,24 @@ const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
 };
 const zoteroPushWarning = (status: string): string =>
   ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
+
+/**
+ * A `papers.process_library` job reaches `succeeded` even when some papers
+ * failed or were skipped (no PDF source) — the handler returns a `status`
+ * rather than raising. A green "completed" toast would misreport that, so a
+ * `partial` result gets a warning naming both counts.
+ */
+const libraryPartialWarning = (result: Job['result']): string => {
+  const r = (result ?? {}) as { total?: number; errors?: unknown[]; blocked?: unknown[] };
+  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
+  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped (no PDF source)`);
+  const detail = parts.length > 0 ? parts.join(', ') : 'no work completed';
+  return `Library processing finished - ${detail} of ${total}; open Jobs for details`;
+};
 
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -322,8 +341,16 @@ export const useJobStore = create<JobStore>()(
               job.kind === 'zotero.push_highlights'
                 ? (job.result as { status?: string } | null)?.status
                 : undefined;
+            // A whole-library run can succeed-with-failures; a `partial` status
+            // warns (naming failed + skipped) instead of a green success toast.
+            const libraryStatus =
+              job.kind === 'papers.process_library'
+                ? (job.result as { status?: string } | null)?.status
+                : undefined;
             if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
               toast.warning(zoteroPushWarning(zoteroPushStatus));
+            } else if (libraryStatus === 'partial') {
+              toast.warning(libraryPartialWarning(job.result));
             } else if (!zeroCards) {
               toast.success(`${kindLabel(job.kind)} completed`);
             }

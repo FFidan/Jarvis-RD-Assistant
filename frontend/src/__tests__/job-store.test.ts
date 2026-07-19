@@ -20,6 +20,7 @@ vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -94,7 +95,7 @@ describe('JobStore', () => {
     vi.restoreAllMocks();
     // Re-stub sonner after restoreAllMocks
     vi.mock('sonner', () => ({
-      toast: { success: vi.fn(), error: vi.fn() },
+      toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
     }));
   });
 
@@ -592,6 +593,76 @@ describe('JobStore', () => {
 
     expect(requireJob(useJobStore.getState().jobs['job-0c'], 'job-0c').status).toBe('succeeded');
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  // ----- papers.process_library: invalidation + partial honesty -----
+
+  function runLibraryTerminal(id: string, result: Record<string, unknown>) {
+    const job = makeJob({ id, kind: 'papers.process_library', status: 'running' });
+    useJobStore.setState({ jobs: { [id]: job }, activeAborts: {} });
+    const doneEvent = JSON.stringify({
+      status: 'succeeded', progress: 100, progress_message: 'Done', result,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(createMockSSEStream([`data: ${doneEvent}\n\n`]), { status: 200 }),
+    );
+    useJobStore.getState().subscribe(id);
+    return new Promise((r) => setTimeout(r, 50));
+  }
+
+  it('papers.process_library: invalidates papers-feed, feed-counts, action-items on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await runLibraryTerminal('job-lib', {
+      status: 'ok', total: 3, downloaded: 1, processed: 3, summarized: 0, blocked: [], errors: [],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
+  });
+
+  it('papers.process_library: ok result fires toast.success, never warning', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libok', {
+      status: 'ok', total: 2, downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [],
+    });
+    expect(toast.success).toHaveBeenCalledWith('Whole-library processing completed');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('papers.process_library: partial result warns naming failed + skipped, never success', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libpart', {
+      status: 'partial', total: 5, downloaded: 1, processed: 2, summarized: 0,
+      blocked: [{ paper_id: 5, reason: 'no_pdf_source' }],
+      errors: [{ paper_id: 4, stage: 'process', error: 'boom' }],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toContain('1 failed');
+    expect(msg).toContain('1 skipped');
+    expect(msg).toContain('of 5');
+  });
+
+  it('papers.process_library: blocked-only partial warns (never a green success)', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libblock', {
+      status: 'partial', total: 2, downloaded: 0, processed: 0, summarized: 0,
+      blocked: [
+        { paper_id: 10, reason: 'no_pdf_source' },
+        { paper_id: 11, reason: 'no_pdf_source' },
+      ],
+      errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toContain('2 skipped');
+    expect(msg).not.toContain('failed');
   });
 
   it('subscribe: failed terminal event fires toast.error with message', async () => {

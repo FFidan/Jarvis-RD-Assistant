@@ -32,6 +32,20 @@ function statusLabel(status: Job['status']): string {
   }
 }
 
+/**
+ * A job that reached `succeeded` but reports a `partial` result (e.g.
+ * `papers.process_library`) completed some work and left some undone. Returns a
+ * short "N failed, M skipped of T" line, or null for a plain success.
+ */
+function partialSummary(job: Job): string | null {
+  const r = (job.result ?? {}) as { status?: string; total?: number; errors?: unknown[]; blocked?: unknown[] };
+  if (job.status !== 'succeeded' || r.status !== 'partial') return null;
+  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
+  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  return `${failed} failed, ${skipped} skipped of ${total}`;
+}
+
 interface JobRowProps {
   job: Job;
   onCancel: (id: string) => void;
@@ -41,6 +55,7 @@ interface JobRowProps {
 function JobRow({ job, onCancel, onRemove }: JobRowProps) {
   const isActive = job.status === 'queued' || job.status === 'running';
   const isTerminal = job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled';
+  const partial = partialSummary(job);
 
   return (
     <div className="flex flex-col gap-1 py-2 border-b last:border-b-0">
@@ -83,6 +98,10 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
 
       {job.status === 'failed' && job.error && (
         <p className="text-xs text-destructive truncate">{job.error.message}</p>
+      )}
+
+      {partial && (
+        <p className="text-xs text-[var(--status-warn)] truncate">{partial}</p>
       )}
     </div>
   );

@@ -43,6 +43,7 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
     "paper.analyze": "paper_ingestion",
     "papers.batch_process": "paper_ingestion",
     "papers.batch_summarize": "paper_ingestion",
+    "papers.process_library": "paper_ingestion",
     "papers.scan_local": "paper_ingestion",
     "paper.summarize": "paper_ingestion",
     "citations.batch_fetch": "paper_ingestion",

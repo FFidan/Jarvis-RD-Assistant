@@ -23,6 +23,7 @@ vi.mock('@/lib/api', () => ({
   batchProcessPapers: vi.fn(),
   batchSummarizePapers: vi.fn(),
   batchExtractEntities: vi.fn(),
+  processLibrary: vi.fn(),
   getSetupStatus: vi.fn().mockResolvedValue({
     setup_completed: true,
     models_ready: true,
@@ -33,7 +34,7 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } =
+const { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities, processLibrary } =
   await import('@/lib/api');
 
 function renderHomePage() {
@@ -210,6 +211,32 @@ describe('HomePage', () => {
       await userEvent.click(screen.getByRole('button', { name: /Process PDFs/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       expect(await screen.findByText('No PDFs to process')).toBeInTheDocument();
+      expect(trackExternalJobMock).not.toHaveBeenCalled();
+    });
+
+    it('Process whole library tracks the returned durable job id', async () => {
+      vi.mocked(processLibrary).mockResolvedValue({ job_id: 'job-lib', status: 'queued' });
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Process whole library/i });
+      await userEvent.click(button);
+      expect(screen.getByText('Process your whole library?')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      await waitFor(() => expect(processLibrary).toHaveBeenCalledWith(true));
+      expect(await screen.findByText('Processing your library')).toBeInTheDocument();
+      expect(trackExternalJobMock).toHaveBeenCalledWith({
+        jobId: 'job-lib',
+        kind: 'papers.process_library',
+        payload: { limit: 10 },
+        status: 'queued',
+      });
+    });
+
+    it('Process whole library does not track a job when the library is already up to date', async () => {
+      vi.mocked(processLibrary).mockResolvedValue({ job_id: null, status: 'skipped', reason: 'library_already_processed' });
+      renderHomePage();
+      await userEvent.click(screen.getByRole('button', { name: /Process whole library/i }));
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      expect(await screen.findByText('Library already up to date')).toBeInTheDocument();
       expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
   });

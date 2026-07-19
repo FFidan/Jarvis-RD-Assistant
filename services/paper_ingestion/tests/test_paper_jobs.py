@@ -509,3 +509,265 @@ async def test_paper_analyze_job_forwards_force(tmp_path, monkeypatch):
     assert rpp_call.kwargs.get("force") is True, (
         f"run_process_pdf must be called with force=True; got kwargs={rpp_call.kwargs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# W1-T1.1 — _papers_process_library_job: whole-library per-paper stage machine
+# ---------------------------------------------------------------------------
+
+
+def _lib_row(
+    paper_id: int,
+    *,
+    source_type: str = "local",
+    pdf_url: str | None = None,
+    pdf_downloaded: bool = True,
+    pdf_local_path: str | None = None,
+    needs_process: bool = True,
+    needs_summary: bool = False,
+) -> dict:
+    """One selection row as the process-library SELECT would return it."""
+    return {
+        "id": paper_id,
+        "source_type": source_type,
+        "pdf_url": pdf_url,
+        "pdf_downloaded": pdf_downloaded,
+        "pdf_local_path": pdf_local_path,
+        "needs_process": needs_process,
+        "needs_summary": needs_summary,
+    }
+
+
+def _make_library_pool(select_rows: list[dict], update_rows: list[dict], user_id: int) -> MagicMock:
+    """Pool mock for _papers_process_library_job.
+
+    ``conn.fetch`` yields [selection rows, ownership rows]; ownership rows carry
+    ``discovered_by == user_id`` so assert_papers_ownership fast-grants without a
+    second user_library lookup. ``conn.fetchrow`` yields the post-download
+    UPDATE ... RETURNING rows in order (one per downloaded paper).
+    """
+    ownership_rows = [{"id": r["id"], "discovered_by": user_id} for r in select_rows]
+    conn = MagicMock()
+    conn.fetch = AsyncMock(side_effect=[list(select_rows), ownership_rows])
+    conn.fetchrow = AsyncMock(side_effect=list(update_rows))
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=conn)
+    return pool
+
+
+def _install_library_service_stubs(monkeypatch, *, run_process_pdf, download_pdf=None):
+    """Wire the pdf_workflow/summarization submodule stubs + svc for a library job.
+
+    Returns the summarization stub so callers can assert on generate_paper_summary.
+    """
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    _workflow_stub.run_process_pdf = run_process_pdf
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = AsyncMock()
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.pdf_processor.download_pdf = download_pdf if download_pdf is not None else AsyncMock()
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+    return _summ_stub
+
+
+@pytest.mark.asyncio
+async def test_process_library_mixed_fixture_and_idempotent_rerun(tmp_path, monkeypatch):
+    """The acceptance fixture: five papers exercising every stage-machine branch,
+    honest ``partial`` status, per-paper progress, then an idempotent rerun that
+    re-attempts ONLY the previously-failed paper (no completed stage repeats)."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    user_id = 1
+    for name in ("1", "2", "3", "4"):
+        (tmp_path / f"{name}.pdf").write_bytes(b"%PDF-1.4 stub")
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+
+    process_calls: list[int] = []
+    fail_ids = {4}
+
+    async def fake_run_process_pdf(paper_id, *args, **kwargs):
+        process_calls.append(paper_id)
+        if paper_id in fail_ids:
+            raise RuntimeError("process boom")
+        return {"status": "processed", "chunk_count": 3}
+
+    download_pdf = AsyncMock(return_value=tmp_path / "1.pdf")
+    _install_library_service_stubs(
+        monkeypatch, run_process_pdf=fake_run_process_pdf, download_pdf=download_pdf
+    )
+
+    rows = [
+        _lib_row(1, source_type="arxiv", pdf_url="https://ex/1.pdf", pdf_downloaded=False),
+        _lib_row(2, pdf_local_path=str(tmp_path / "2.pdf")),
+        _lib_row(
+            3, pdf_local_path=str(tmp_path / "3.pdf"), needs_process=False, needs_summary=False
+        ),
+        _lib_row(4, pdf_local_path=str(tmp_path / "4.pdf")),
+        _lib_row(5, source_type="arxiv", pdf_url=None, pdf_downloaded=False),
+    ]
+    pool = _make_library_pool(
+        rows, update_rows=[{"pdf_local_path": str(tmp_path / "1.pdf")}], user_id=user_id
+    )
+    ctx = _make_ctx()
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": False},
+        ctx=ctx,
+    )
+
+    assert result["status"] == "partial"
+    assert result["total"] == 5
+    assert result["downloaded"] == 1
+    assert result["processed"] == 2  # papers 1 and 2; paper 4 failed
+    assert result["summarized"] == 0
+    assert result["blocked"] == [{"paper_id": 5, "reason": "no_pdf_source"}]
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["paper_id"] == 4
+    assert result["errors"][0]["stage"] == "process"
+    # Stage machine: complete paper 3 triggered no work; download only for paper 1.
+    assert process_calls == [1, 2, 4]
+    download_pdf.assert_awaited_once_with("https://ex/1.pdf", 1)
+    # Per-paper progress emitted for every selected paper.
+    msgs = [c.args[1] for c in ctx.update_progress.await_args_list if len(c.args) > 1]
+    for pid in (1, 2, 3, 4, 5):
+        assert any(f"Paper {pid} (" in (m or "") for m in msgs), f"no progress for paper {pid}"
+
+    # ---- Second run: paper 4's failure cause removed → only paper 4 re-attempted ----
+    fail_ids.clear()
+    rerun_rows = [_lib_row(4, pdf_local_path=str(tmp_path / "4.pdf"))]
+    pool2 = _make_library_pool(rerun_rows, update_rows=[], user_id=user_id)
+    result2 = await _papers_process_library_job(
+        pool=pool2,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": False},
+        ctx=_make_ctx(),
+    )
+    assert result2["status"] == "ok"
+    assert result2["processed"] == 1
+    # Completed papers 1 and 2 are NOT re-processed; only paper 4 runs again.
+    assert process_calls == [1, 2, 4, 4]
+
+
+@pytest.mark.asyncio
+async def test_process_library_all_blocked_is_partial_not_success(tmp_path, monkeypatch):
+    """A selection where every paper lacks a PDF source: status must be
+    ``partial`` (never an unqualified success) with all entries in ``blocked``
+    and an empty ``errors``."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    run_process_pdf = AsyncMock()
+    stubs = _install_library_service_stubs(monkeypatch, run_process_pdf=run_process_pdf)
+    _ = stubs
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    user_id = 1
+    rows = [
+        _lib_row(10, source_type="arxiv", pdf_url=None, pdf_downloaded=False),
+        _lib_row(11, source_type="arxiv", pdf_url=None, pdf_downloaded=False),
+    ]
+    pool = _make_library_pool(rows, update_rows=[], user_id=user_id)
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": False},
+        ctx=_make_ctx(),
+    )
+
+    assert result["status"] == "partial"
+    assert result["errors"] == []
+    assert result["blocked"] == [
+        {"paper_id": 10, "reason": "no_pdf_source"},
+        {"paper_id": 11, "reason": "no_pdf_source"},
+    ]
+    assert result["processed"] == 0
+    assert result["downloaded"] == 0
+    svc.pdf_processor.download_pdf.assert_not_awaited()
+    run_process_pdf.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_library_summarize_stage_forwards_user_id(tmp_path, monkeypatch):
+    """With ``summarize=True`` a paper needing a summary runs the summarize stage,
+    forwarding the caller's user_id (per-user summaries)."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    (tmp_path / "20.pdf").write_bytes(b"%PDF-1.4 stub")
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    summ = _install_library_service_stubs(
+        monkeypatch,
+        run_process_pdf=AsyncMock(return_value={"status": "processed", "chunk_count": 1}),
+    )
+
+    user_id = 7
+    rows = [
+        _lib_row(
+            20, pdf_local_path=str(tmp_path / "20.pdf"), needs_process=True, needs_summary=True
+        )
+    ]
+    pool = _make_library_pool(rows, update_rows=[], user_id=user_id)
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": user_id, "summarize": True},
+        ctx=_make_ctx(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["processed"] == 1
+    assert result["summarized"] == 1
+    summ.generate_paper_summary.assert_awaited_once()
+    assert summ.generate_paper_summary.await_args.kwargs.get("user_id") == user_id
+
+
+@pytest.mark.asyncio
+async def test_process_library_empty_selection_is_ok_zero(monkeypatch):
+    """An empty selection completes cleanly as ``ok`` with zero counts."""
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    pool = _make_library_pool([], update_rows=[], user_id=1)
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": 1, "summarize": False},
+        ctx=_make_ctx(),
+    )
+    assert result == {
+        "status": "ok",
+        "total": 0,
+        "downloaded": 0,
+        "processed": 0,
+        "summarized": 0,
+        "blocked": [],
+        "errors": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_library_rejects_null_user():
+    """A NULL-user invocation is rejected — user_id is the tenancy boundary."""
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    with pytest.raises(JobError):
+        await _papers_process_library_job(
+            pool=MagicMock(),
+            http_client=MagicMock(),
+            payload={"summarize": False},  # no user_id
+            ctx=_make_ctx(),
+        )

@@ -2273,6 +2273,69 @@ async def test_process_batch_enqueues_202_with_job_id(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/papers/process-library — 202 envelope + skip contract
+# ---------------------------------------------------------------------------
+
+
+async def test_process_library_enqueues_202_with_job_id(
+    contract_two_users, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/papers/process-library returns 202 + job_id when the caller's
+    library has papers still needing a stage.
+
+    # Verified: routers/papers_bulk.py:process_library — EXISTS pre-check then
+    # defer_async, returns JobCreateResponse. paper_id_a is arxiv with
+    # chunked_at NULL and sits in user_a's user_library (testing_db.py:814-827),
+    # so the selection is non-empty.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"papers.process_library": mock_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/papers/process-library")
+
+    assert resp.status_code == 202, resp.text[:300]
+    body = resp.json()
+    assert body.get("job_id"), f"Missing job_id: {body}"
+    assert body.get("status") == "queued", f"Expected status=queued: {body}"
+    mock_task.defer_async.assert_awaited_once()
+
+
+async def test_process_library_skips_when_already_processed(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """When every library paper is already processed, no job is queued and the
+    endpoint returns the skip contract.
+
+    # Verified: routers/papers_bulk.py:process_library returns
+    # {"job_id": null, "status": "skipped", "reason": "library_already_processed"}
+    # on an empty EXISTS pre-check; the selection excludes chunked papers.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    # user_a's only library paper becomes fully processed → selection is empty.
+    await contract_conn.execute(
+        "UPDATE papers SET chunked_at = now() WHERE id = $1",
+        contract_two_users.paper_id_a,
+    )
+
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"papers.process_library": mock_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/papers/process-library")
+
+    assert resp.status_code == 202, resp.text[:300]
+    body = resp.json()
+    assert body.get("job_id") is None, f"Expected null job_id: {body}"
+    assert body.get("status") == "skipped", body
+    assert body.get("reason") == "library_already_processed", body
+    mock_task.defer_async.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # F10: daily_log.papers_read incremented by PUT /reading
 # ---------------------------------------------------------------------------
 
