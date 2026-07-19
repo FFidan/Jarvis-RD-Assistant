@@ -541,7 +541,7 @@ services:
       - backup_trigger:/backup-trigger:ro
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health\", timeout=5).read()'"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health/live\", timeout=5).read()'"]
       interval: 30s
       timeout: 10s
       retries: 3

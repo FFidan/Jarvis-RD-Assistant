@@ -16,6 +16,7 @@ import httpx
 from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.maintenance import maintenance_active, secrets_rotated_since
+from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
 from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
@@ -30,6 +31,7 @@ from telegram_bot.internal_api import start_internal_server
 from telegram_bot.scheduler import JarvisScheduler
 
 configure_logging("telegram_bot", log_level=get_core_settings().log_level)
+maybe_init_sentry("telegram_bot")
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +91,7 @@ async def post_init(application: Application) -> None:
 
     # Start internal HTTP API in the background (for reload-nudges endpoint)
     _internal_api_task = asyncio.get_running_loop().create_task(
-        start_internal_server(scheduler),
+        start_internal_server(scheduler, application.bot_data["db_pool"]),
         name="internal_api",
     )
     application.bot_data["internal_api_task"] = _internal_api_task
