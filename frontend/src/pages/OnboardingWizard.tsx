@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { markSetupCompleted, type FirstRunStatus } from '@/lib/api';
 import {
   ALL_STEPS,
   SINGLE_USER_FIRST_RUN_STEPS,
   readStoredSetupToken,
+  readSetupTokenFromHash,
   storeSetupToken,
   markFirstRunCompleted,
   type StepKind,
@@ -27,17 +28,23 @@ interface OnboardingWizardProps {
 
 export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // The setup token arrives as a URL fragment (`#setup_token=…`) so the bearer
+  // never reaches the request line / server access logs; the `?setup_token=`
+  // query form stays supported for links printed before the fragment migration.
   const setupTokenRef = useRef<string | null>(
-    searchParams.get('setup_token') ?? readStoredSetupToken(),
+    readSetupTokenFromHash(location.hash) ?? searchParams.get('setup_token') ?? readStoredSetupToken(),
   );
 
   useEffect(() => {
-    const urlToken = searchParams.get('setup_token');
+    const urlToken = readSetupTokenFromHash(location.hash) ?? searchParams.get('setup_token');
     if (!urlToken) return;
     storeSetupToken(urlToken);
+    // Strip the token from the address bar — setSearchParams replaces both the
+    // query string and the fragment — while preserving the wizard step.
     setSearchParams({ step: searchParams.get('step') ?? '1' }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
