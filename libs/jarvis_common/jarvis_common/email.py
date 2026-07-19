@@ -20,6 +20,7 @@ import os
 import time
 from dataclasses import dataclass
 from email.utils import formataddr
+from enum import StrEnum, auto
 
 import asyncpg
 
@@ -415,13 +416,28 @@ _PLAIN_BODY_TEMPLATE = (
 )
 
 
+class MagicLinkDelivery(StrEnum):
+    """Outcome of a ``send_magic_link`` call so callers act on truth, not inference."""
+
+    DELIVERED = auto()
+    DROPPED_UNCONFIGURED = auto()
+    DROPPED_DEV_LOG_ONLY = auto()
+    DROPPED_PRIVATE_HOST = auto()
+    FAILED = auto()
+
+
 async def send_magic_link(
     email: str,
     link: str,
     *,
     pool: asyncpg.Pool | None = None,
-) -> None:
-    """Deliver a magic-link email, or silently drop it when SMTP is unconfigured.
+) -> MagicLinkDelivery:
+    """Deliver a magic-link email and report the outcome as a ``MagicLinkDelivery``.
+
+    Never raises for a delivery problem: an unconfigured relay, dev-log-only
+    mode, a rejected private host, and a failed send each return a distinct
+    enum member so callers can surface a manual link instead of inferring
+    delivery from mere config presence.
 
     Parameters
     ----------
@@ -449,7 +465,8 @@ async def send_magic_link(
     # NO restart / hand-edited .env — the DB is the durable source of truth.
     smtp = await _effective_smtp(pool)
 
-    if _dev_mode() or not smtp.deliverable:
+    dev_log_only = _dev_mode()
+    if dev_log_only or not smtp.deliverable:
         # Always emit a structured log so docker-compose logs pick it up
         # even when the system_events insert fails (e.g. fresh DB).
         # NOTE: never log `link` or any fragment of it — it is a bearer token.
@@ -469,7 +486,11 @@ async def send_magic_link(
                 )
             except Exception:  # noqa: BLE001 — best-effort dev affordance
                 logger.debug("system_events emit failed (non-fatal)", exc_info=True)
-        return
+        return (
+            MagicLinkDelivery.DROPPED_DEV_LOG_ONLY
+            if dev_log_only
+            else MagicLinkDelivery.DROPPED_UNCONFIGURED
+        )
 
     # Real SMTP path. Lazy import so jarvis_common doesn't pull aiosmtplib
     # in test environments that don't need it.
@@ -504,7 +525,7 @@ async def send_magic_link(
                 "SMTP host is non-public; set ALLOW_PRIVATE_SMTP_HOST=true for an internal relay. "
                 "Magic-link send skipped."
             )
-            return
+            return MagicLinkDelivery.DROPPED_PRIVATE_HOST
 
     try:
         await aiosmtplib.send(
@@ -519,9 +540,9 @@ async def send_magic_link(
         )
     except Exception as exc:
         # Make delivery failures observable (the Logs Live tab surfaces this),
-        # then re-raise: callers swallow it for anti-enumeration, so the
-        # unauthenticated /request-link response is unchanged. Never log the
-        # raw recipient or the bearer-token link.
+        # then return FAILED so callers react without an exception. The
+        # unauthenticated /request-link response stays unchanged
+        # (anti-enumeration). Never log the raw recipient or bearer-token link.
         logger.warning(
             "magic_link_delivery_failed email_hash=%s error_class=%s",
             _hash_email(email),
@@ -542,7 +563,7 @@ async def send_magic_link(
                 )
             except Exception:  # noqa: BLE001 — observability is best-effort
                 logger.debug("system_events emit failed (non-fatal)", exc_info=True)
-        raise
+        return MagicLinkDelivery.FAILED
 
     logger.info("magic_link_sent email_hash=%s", _hash_email(email))
     if pool is not None:
@@ -557,6 +578,7 @@ async def send_magic_link(
             )
         except Exception:  # noqa: BLE001 — observability is best-effort
             logger.debug("system_events emit failed (non-fatal)", exc_info=True)
+    return MagicLinkDelivery.DELIVERED
 
 
 async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:

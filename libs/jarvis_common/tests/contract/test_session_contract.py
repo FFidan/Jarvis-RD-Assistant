@@ -61,7 +61,11 @@ def _configure_api_key(monkeypatch):
 
 
 def _client(app, cookie: str | None, *, follow_redirects: bool = False):
-    return make_contract_client(app, cookie, follow_redirects=follow_redirects)
+    # Loopback base_url so /api/auth/verify's credential-transport gate (loopback
+    # Host or forwarded https) is satisfied.
+    return make_contract_client(
+        app, cookie, base_url="http://localhost", follow_redirects=follow_redirects
+    )
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")

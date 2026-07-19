@@ -30,8 +30,8 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin
-from jarvis_common.email import send_magic_link, smtp_configured
-from jarvis_common.settings import get_secrets_settings
+from jarvis_common.email import MagicLinkDelivery, send_magic_link
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
 from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
@@ -95,6 +95,12 @@ def _build_invite_link(request: Request, token: str) -> str:
     base = get_paper_ingestion_settings().app_base_url
     if base:
         return f"{base.rstrip('/')}/auth/verify?token={token}"
+    if get_core_settings().environment == "production":
+        logger.warning(
+            "APP_BASE_URL is unset in production; the invite link is derived from the "
+            "request origin and may be wrong behind a tunnel or proxy. Set APP_BASE_URL "
+            "to the public URL."
+        )
     return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
 
 
@@ -229,11 +235,11 @@ async def invite_user(body: InviteUserBody, request: Request) -> InviteUserRespo
 
     user_id = int(user_row["id"])
     link = _build_invite_link(request, raw_token)
-    delivered = await smtp_configured(pool)
+    delivered = False
     try:
-        await send_magic_link(email_norm, link, pool=pool)
+        result = await send_magic_link(email_norm, link, pool=pool)
+        delivered = result is MagicLinkDelivery.DELIVERED
     except Exception:  # noqa: BLE001 — never expose SMTP errors
-        delivered = False
         logger.exception(
             "send_magic_link (invite) failed for email_hash=%s", _hash_email(email_norm)
         )
@@ -484,11 +490,11 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
         )
 
     link = _build_invite_link(request, raw_token)
-    delivered = await smtp_configured(pool)
+    delivered = False
     try:
-        await send_magic_link(email, link, pool=pool)
+        result = await send_magic_link(email, link, pool=pool)
+        delivered = result is MagicLinkDelivery.DELIVERED
     except Exception:  # noqa: BLE001 — never expose SMTP errors
-        delivered = False
         logger.exception("send_magic_link (sign-in) failed for user_id=%s", user_id)
 
     caller_id = getattr(request.state, "user_id", None)
@@ -499,7 +505,7 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
         user_id=str(caller_id) if caller_id is not None else None,
     )
 
-    return SendLinkResponse(sent=True, sent_link=None if delivered else link)
+    return SendLinkResponse(sent=delivered, sent_link=None if delivered else link)
 
 
 # ---------------------------------------------------------------------------
