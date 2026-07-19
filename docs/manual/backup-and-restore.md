@@ -85,6 +85,7 @@ You can roll the whole instance back to any listed restore point without leaving
 ### What happens behind the scenes
 
 - **A safety backup is taken first.** Before anything is touched, the current state is captured as a new restore point — so even a restore you regret is recoverable.
+- **The restore point is checked for tampering.** Backup points taken by this version or newer carry a signature that only your backup encryption key can produce. Whenever a restore point has one, it is re-checked before the restore starts — every time, on this server and on a fresh one alike. If it does not match, the restore point has been altered on disk, and the restore is refused outright with nothing touched: a signature that fails to verify is never overridable. A point carrying **no** signature is a separate case with its own rules — see *If your only surviving backup is an older, unsigned one* below. Deployments set up without a backup encryption key have nothing to sign with, so their restore points are neither signed nor checked.
 - **The restore is staged, not in-place.** Your chosen backup is loaded into a *separate staging database* and only **swapped in atomically** once it verifies. If anything fails before the swap, the original database was never touched and is served again automatically — the restore **self-heals** rather than leaving you with a half-restored instance. The previous database is dropped only after the swap succeeds.
 - **Older backups are fine.** A backup taken by an older version of the app is accepted and **migrated forward automatically** after the swap — no manual steps.
 - **Newer backups are refused.** If a backup was made by a newer app version than is currently running, its Restore button is disabled with a note to update first (run `./update.sh`, then retry).
@@ -101,6 +102,8 @@ If the original server is gone entirely, you can bring a **brand-new host** back
 
 **You need:** your off-site **archive set** for one backup point (all the files from that restore point's Details table) and your off-site copy of the **backup encryption key**. A wrong key fails safe — it is checked against the archives before anything destructive happens, so a typo cannot destroy the fresh install.
 
+> Recovering a fresh server requires a backup point taken by this version or newer, because it is verified by signature and older points carry none. Download a fresh off-site archive set after updating so your disaster-recovery copy is a verifiable one. Restore points on the original server are unaffected — older ones keep restoring normally there.
+
 1. **Install JARVIS on the new host** with `./setup.sh` and complete the first-admin sign-in, exactly as for a fresh install ([Getting Started](getting-started.md)).
 2. **Generate a one-time upload grant** from the Backups panel. The grant is shown once and is valid for **30 minutes** — it authorizes the browser upload and nothing else.
 3. **Upload the archive set and the key** in the browser. Uploads go to a dedicated, locked-down upload service — the key and the archive contents never pass through the app itself, and the one-time key is destroyed automatically once the restore finishes.
@@ -110,6 +113,16 @@ If the original server is gone entirely, you can bring a **brand-new host** back
 <!-- screenshot: Restore from another JARVIS section showing a staged backup set with Complete, Secrets, and Key ready badges -->
 
 For a headless server with no browser access, a command-line fallback exists — see [Deployment Guide → Off-host recovery](../DEPLOYMENT.md#off-host-total-host-loss-recovery).
+
+---
+
+## If your only surviving backup is an older, unsigned one
+
+Backup points taken before signature support carry no signature. On the original server they keep restoring normally — with a warning that they cannot be checked — right up until this version takes its **first** backup there. From that first signed backup onwards the server requires a signature on every restore, so those older unsigned points stop restoring too unless you take the deliberate override below. The switch is the arrival of signing on that server, not the age of the point you pick, so take a fresh backup after updating and keep it as your working restore point. Recovering a **fresh server** from an unsigned off-site set is refused outright, because on a new host there is nothing else to check the archives against.
+
+For the genuine disaster where an unsigned set is all that is left, an operator with terminal access on the server can accept it deliberately. It cannot be done from the browser and cannot be done by setting a flag alone: the restore must be run interactively, with `JARVIS_RESTORE_ALLOW_LEGACY=1` set **and** the phrase `I-ACCEPT-UNVERIFIED-BACKUP` typed at the prompt. The restore then logs a permanent warning that its archives were never verified.
+
+This override applies **only** when a signature is absent. It never applies to a restore point whose signature fails to verify — that is evidence of tampering, not of loss, and is always refused.
 
 ---
 

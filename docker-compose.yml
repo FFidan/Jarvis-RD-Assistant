@@ -650,6 +650,7 @@ services:
       - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
       - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
       - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
+      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro  # ro: after a schema squash db/migrations/ is empty, so that same gate falls back to this baseline floor — unmounted, the fallback reads nothing and the gate drops to a hardcoded default
       - postgres_data:/postgres-data:ro  # ro: restore.sh's disk preflight sizes the free space on the live DB volume to refuse a restore that would exhaust it (rename-swap keeps both live DBs while it reloads a transient tmp DB)
     # Loop dispatch by sentinel: a restore request runs restore.sh (rename-swap both
     # DBs + recover Qdrant behind the maintenance gate); a delete request runs

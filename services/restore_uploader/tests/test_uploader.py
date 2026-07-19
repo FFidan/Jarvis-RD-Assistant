@@ -131,7 +131,20 @@ def test_missing_grant_header_rejected(monkeypatch, tmp_path):
     assert list(inbox.iterdir()) == []
 
 
-@pytest.mark.parametrize("name", ["evil.sh", "jarvis_bad.sql", "operator_key.txt"])
+def test_manifest_signature_accepted(monkeypatch, tmp_path):
+    # An off-host restore verifies the manifest signature, so the browser upload flow
+    # must be able to deliver it alongside the manifest itself.
+    name = "manifest_20260101_120000.json.hmac"
+    with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
+        _write_grant(trigger)
+        status = _put(port, f"/restore-upload/{name}", b"0" * 64, _grant_headers())
+    assert status == 201
+    assert (inbox / name).read_bytes() == b"0" * 64
+
+
+@pytest.mark.parametrize(
+    "name", ["evil.sh", "jarvis_bad.sql", "operator_key.txt", "manifest_20260101_120000.json.hma"]
+)
 def test_disallowed_name_rejected(monkeypatch, tmp_path, name):
     with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
         _write_grant(trigger)
