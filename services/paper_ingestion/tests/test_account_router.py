@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from jarvis_common.email import MagicLinkDelivery
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -72,3 +73,56 @@ async def test_email_verification_sent_false_when_smtp_raises() -> None:
         response = await update_account(body=body, request=request, user_id=1)
 
     assert response.email_verification_sent is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        MagicLinkDelivery.DROPPED_UNCONFIGURED,
+        MagicLinkDelivery.DROPPED_DEV_LOG_ONLY,
+        MagicLinkDelivery.DROPPED_PRIVATE_HOST,
+        MagicLinkDelivery.FAILED,
+    ],
+)
+async def test_email_verification_sent_false_on_non_delivered(outcome) -> None:
+    """A non-delivered enum return must NOT read as sent (no raise to catch)."""
+    from paper_ingestion.models.account import AccountUpdate
+    from paper_ingestion.routers.account import update_account
+
+    user_row = _make_user_row()
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=[user_row, None, user_row])
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.execute = AsyncMock(return_value=None)
+    request = _build_request(pool)
+    body = AccountUpdate(email="new@example.com")
+
+    with patch(
+        "paper_ingestion.routers.account.send_magic_link",
+        AsyncMock(return_value=outcome),
+    ):
+        response = await update_account(body=body, request=request, user_id=1)
+
+    assert response.email_verification_sent is False
+
+
+@pytest.mark.asyncio
+async def test_email_verification_sent_true_on_delivered() -> None:
+    """A DELIVERED return sets email_verification_sent True."""
+    from paper_ingestion.models.account import AccountUpdate
+    from paper_ingestion.routers.account import update_account
+
+    user_row = _make_user_row()
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=[user_row, None, user_row])
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.execute = AsyncMock(return_value=None)
+    request = _build_request(pool)
+    body = AccountUpdate(email="new@example.com")
+
+    with patch(
+        "paper_ingestion.routers.account.send_magic_link",
+        AsyncMock(return_value=MagicLinkDelivery.DELIVERED),
+    ):
+        response = await update_account(body=body, request=request, user_id=1)
+
+    assert response.email_verification_sent is True

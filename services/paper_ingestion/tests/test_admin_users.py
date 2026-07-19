@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
+from jarvis_common.email import MagicLinkDelivery
 
 from tests._auth_fakes import (
     build_mock_pool,
@@ -228,9 +229,9 @@ async def test_send_link_issues_short_token_and_emails(monkeypatch) -> None:
 
     async def fake_send(email, link, *, pool=None):
         sent.append((email, link))
+        return MagicLinkDelivery.DELIVERED
 
     monkeypatch.setattr(admin_router, "send_magic_link", fake_send)
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     audit = AsyncMock()
     monkeypatch.setattr(admin_router, "log_audit", audit)
 
@@ -265,8 +266,9 @@ async def test_send_link_token_has_pending_email_null(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value={"id": 9, "email": "x@example.com"})
     conn.execute = AsyncMock()
-    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        admin_router, "send_magic_link", AsyncMock(return_value=MagicLinkDelivery.DELIVERED)
+    )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool(conn)
@@ -301,8 +303,11 @@ async def test_send_sign_in_link_returns_link_when_smtp_undeliverable(monkeypatc
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
     conn.execute = AsyncMock()
-    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        admin_router,
+        "send_magic_link",
+        AsyncMock(return_value=MagicLinkDelivery.DROPPED_UNCONFIGURED),
+    )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool(conn)
@@ -310,7 +315,7 @@ async def test_send_sign_in_link_returns_link_when_smtp_undeliverable(monkeypatc
 
     result = await admin_router.send_sign_in_link(5, request)
 
-    assert result.sent is True
+    assert result.sent is False
     assert result.sent_link is not None
     assert "token=" in result.sent_link
 
@@ -321,8 +326,9 @@ async def test_send_sign_in_link_hides_link_when_deliverable(monkeypatch) -> Non
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
     conn.execute = AsyncMock()
-    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        admin_router, "send_magic_link", AsyncMock(return_value=MagicLinkDelivery.DELIVERED)
+    )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool(conn)
@@ -372,8 +378,11 @@ async def test_invite_returns_link_when_smtp_unconfigured(monkeypatch) -> None:
     """SMTP unconfigured → the admin gets the link back to share manually."""
     monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
-    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        admin_router,
+        "send_magic_link",
+        AsyncMock(return_value=MagicLinkDelivery.DROPPED_UNCONFIGURED),
+    )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool_txn(_invite_conn())
@@ -391,8 +400,9 @@ async def test_invite_returns_link_when_smtp_unconfigured(monkeypatch) -> None:
 async def test_invite_omits_link_when_smtp_configured(monkeypatch) -> None:
     """SMTP configured + send succeeds → no link leaked in the response."""
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
-    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        admin_router, "send_magic_link", AsyncMock(return_value=MagicLinkDelivery.DELIVERED)
+    )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool_txn(_invite_conn())
@@ -414,7 +424,6 @@ async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
         raise OSError("SMTP connect refused")
 
     monkeypatch.setattr(admin_router, "send_magic_link", _failing_send)
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool_txn(_invite_conn())
@@ -425,6 +434,58 @@ async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
 
     assert result.invite_link is not None
     assert "token=" in result.invite_link
+
+
+@pytest.mark.asyncio
+async def test_invite_returns_link_when_dev_log_only_drops_delivery(monkeypatch) -> None:
+    """DEV_SMTP_LOG_ONLY drops delivery even with a configured relay → surface the link.
+
+    Config presence is not delivery: the sender returns DROPPED_DEV_LOG_ONLY, so
+    the admin must still get the manual link back.
+    """
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
+    monkeypatch.setattr(
+        admin_router,
+        "send_magic_link",
+        AsyncMock(return_value=MagicLinkDelivery.DROPPED_DEV_LOG_ONLY),
+    )
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool_txn(_invite_conn())
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    result = await admin_router.invite_user(body, request)
+
+    assert result.invite_link is not None
+    assert "token=" in result.invite_link
+
+
+@pytest.mark.asyncio
+async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
+    monkeypatch, caplog
+) -> None:
+    """Production without APP_BASE_URL → a warning naming APP_BASE_URL (link still built)."""
+    import logging
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    request = SimpleNamespace(
+        url=SimpleNamespace(
+            replace=lambda **kw: f"https://origin/auth/verify?{kw.get('query', '')}"
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.admin"):
+        link = admin_router._build_invite_link(request, "tok123")
+
+    assert "token=tok123" in link
+    assert any("APP_BASE_URL" in r.message for r in caplog.records), (
+        "Expected a warning naming APP_BASE_URL when it is unset in production"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +573,6 @@ async def test_invite_user_allowed_with_model_hmac_key(monkeypatch) -> None:
     monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
-    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool_txn(_invite_conn())

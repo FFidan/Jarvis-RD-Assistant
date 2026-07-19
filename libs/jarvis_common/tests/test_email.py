@@ -805,17 +805,17 @@ async def test_effective_smtp_absent_db_row_falls_back_to_env(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_send_magic_link_failure_emits_event_and_reraises(monkeypatch) -> None:
-    """A failing real send emits a magic_link_delivery_failed system event, then re-raises.
+async def test_send_magic_link_failure_emits_event_and_returns_failed(monkeypatch) -> None:
+    """A failing real send emits a magic_link_delivery_failed system event, then returns FAILED.
 
     The event carries email_hash + error_class (never the raw email or the
-    bearer-token link); the exception propagates so callers' own logging fires
-    (they swallow it for anti-enumeration).
+    bearer-token link); the sender returns MagicLinkDelivery.FAILED rather than
+    raising so callers react without swallowing an exception.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
     import aiosmtplib
-    from jarvis_common.email import _hash_email, send_magic_link
+    from jarvis_common.email import MagicLinkDelivery, _hash_email, send_magic_link
     from jarvis_common.settings import get_secrets_settings
 
     monkeypatch.setenv("SMTP_HOST", "mail.example.com")
@@ -830,8 +830,9 @@ async def test_send_magic_link_failure_emits_event_and_reraises(monkeypatch) -> 
 
     with patch.object(aiosmtplib, "send", failing_send):
         with patch("jarvis_common.email.log_event", new_callable=AsyncMock) as mock_log_event:
-            with pytest.raises(aiosmtplib.SMTPConnectError):
-                await send_magic_link("user@example.com", raw_link, pool=pool)
+            result = await send_magic_link("user@example.com", raw_link, pool=pool)
+
+    assert result is MagicLinkDelivery.FAILED
 
     get_secrets_settings.cache_clear()
 
@@ -853,7 +854,7 @@ async def test_send_magic_link_success_emits_sent_event(monkeypatch) -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
     import aiosmtplib
-    from jarvis_common.email import _hash_email, send_magic_link
+    from jarvis_common.email import MagicLinkDelivery, _hash_email, send_magic_link
     from jarvis_common.settings import get_secrets_settings
 
     monkeypatch.setenv("SMTP_HOST", "mail.example.com")
@@ -865,17 +866,71 @@ async def test_send_magic_link_success_emits_sent_event(monkeypatch) -> None:
 
     with patch.object(aiosmtplib, "send", new_callable=AsyncMock):
         with patch("jarvis_common.email.log_event", new_callable=AsyncMock) as mock_log_event:
-            await send_magic_link(
+            result = await send_magic_link(
                 "user@example.com", "https://example.com/verify?token=abc", pool=pool
             )
 
     get_secrets_settings.cache_clear()
 
+    assert result is MagicLinkDelivery.DELIVERED
     mock_log_event.assert_awaited_once()
     kwargs = mock_log_event.call_args.kwargs
     assert kwargs["level"] == "info"
     assert kwargs["message"] == "magic_link_sent"
     assert kwargs["context"]["email_hash"] == _hash_email("user@example.com")
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_unconfigured_returns_dropped_unconfigured(monkeypatch) -> None:
+    """No SMTP host/sender → DROPPED_UNCONFIGURED and no delivery attempt."""
+    from unittest.mock import AsyncMock, patch
+
+    import aiosmtplib
+    from jarvis_common.email import MagicLinkDelivery, send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    monkeypatch.delenv("DEV_SMTP_LOG_ONLY", raising=False)
+    get_secrets_settings.cache_clear()
+
+    with patch.object(aiosmtplib, "send", new_callable=AsyncMock) as mock_send:
+        result = await send_magic_link(
+            "user@example.com", "https://example.com/verify?token=abc", pool=None
+        )
+
+    get_secrets_settings.cache_clear()
+    assert result is MagicLinkDelivery.DROPPED_UNCONFIGURED
+    mock_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_private_host_returns_dropped_private_host(monkeypatch) -> None:
+    """A non-public relay without opt-in → DROPPED_PRIVATE_HOST and no send."""
+    from unittest.mock import AsyncMock, patch
+
+    import aiosmtplib
+    from jarvis_common.email import MagicLinkDelivery, send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.internal")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.delenv("ALLOW_PRIVATE_SMTP_HOST", raising=False)
+    monkeypatch.delenv("DEV_SMTP_LOG_ONLY", raising=False)
+    get_secrets_settings.cache_clear()
+
+    with patch.object(aiosmtplib, "send", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "jarvis_common.email._reject_non_public_host",
+            new=AsyncMock(side_effect=ValueError("non-public")),
+        ):
+            result = await send_magic_link(
+                "user@example.com", "https://example.com/verify?token=abc", pool=None
+            )
+
+    get_secrets_settings.cache_clear()
+    assert result is MagicLinkDelivery.DROPPED_PRIVATE_HOST
+    mock_send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

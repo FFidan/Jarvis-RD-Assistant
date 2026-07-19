@@ -30,7 +30,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
-from jarvis_common.email import send_magic_link
+from jarvis_common.email import MagicLinkDelivery, send_magic_link
 from jarvis_common.event_log import log_event
 from jarvis_common.owner import resolve_owner_user_id
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME, mint_session
@@ -100,7 +100,53 @@ def _build_magic_link(request: Request, token: str) -> str:
         return f"{base.rstrip('/')}/auth/verify?token={token}"
     # Fallback: derive from the incoming request. ProxyHeadersMiddleware has
     # already substituted the public scheme/host before this code runs.
+    if get_core_settings().environment == "production":
+        logger.warning(
+            "APP_BASE_URL is unset in production; the magic link is derived from the "
+            "request origin and may be wrong behind a tunnel or proxy. Set APP_BASE_URL "
+            "to the public URL."
+        )
     return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _host_is_loopback(host: str) -> bool:
+    """True iff a Host header names a loopback address (port + IPv6 brackets stripped)."""
+    host = host.strip()
+    if host.startswith("["):
+        hostname = host[1:].split("]", 1)[0]
+    elif ":" in host:
+        hostname = host.rsplit(":", 1)[0]
+    else:
+        hostname = host
+    return hostname.lower() in _LOOPBACK_HOSTS
+
+
+def _require_local_or_https(request: Request) -> None:
+    """Refuse a cleartext credential exchange from a non-loopback origin.
+
+    A loopback Host (localhost / SSH-forward) or an nginx-derived
+    ``X-Forwarded-Proto: https`` satisfies the gate. This protects the credential
+    OWNER from sending a bearer secret in cleartext over a LAN; it is a foot-gun
+    guard, not authentication — Host is client-controllable, but a forged
+    loopback Host only endangers the forging client's own secret.
+    """
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return
+    if headers.get("x-forwarded-proto", "").lower() == "https":
+        return
+    if _host_is_loopback(headers.get("host", "")):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Refusing to exchange a credential over an insecure origin. Use https, "
+            "http://localhost, or an SSH-forwarded localhost tunnel."
+        ),
+    )
 
 
 def _cookie_secure() -> bool:
@@ -196,14 +242,16 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
 
     link = _build_magic_link(request, raw_token)
     try:
-        await send_magic_link(email_norm, link, pool=pool)
+        result = await send_magic_link(email_norm, link, pool=pool)
     except Exception:  # noqa: BLE001 — never leak SMTP detail to the response
         logger.exception("send_magic_link failed for email_hash=%s", _hash_email(email_norm))
+        result = MagicLinkDelivery.FAILED
+    if result is MagicLinkDelivery.FAILED:
         # Record a server-side event so an operator can see the outage in Logs
         # Live. Suppress ANY error from the write: this unauthenticated path MUST
         # always return sent=True (its shape + timing are the anti-enumeration
         # defense), and the event is best-effort. The payload carries only a
-        # PII-free email hash.
+        # PII-free email hash. We do NOT advertise the outage to the caller.
         with contextlib.suppress(Exception):
             await log_event(
                 pool=pool,
@@ -213,8 +261,6 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
                 message="magic_link_send_failed",
                 context={"email_hash": _hash_email(email_norm)},
             )
-        # Still return sent=true: the user can re-request, and we don't want
-        # the response to advertise SMTP outage to unauthenticated callers.
 
     return RequestLinkResponse(sent=True)
 
@@ -235,6 +281,7 @@ async def verify(
     Atomicity matters: token consumption + session creation must succeed or
     fail as a unit so a token cannot be replayed if the session insert fails.
     """
+    _require_local_or_https(request)
     pool = request.app.state.db_pool
     token_hash = _hash_token(body.token)
     now = datetime.now(UTC)
@@ -360,6 +407,8 @@ async def api_key_session(
        exists OR ``API_KEY_LOGIN_ENABLED`` is true; otherwise 403 telling the
        caller to use magic-link.
     """
+    _require_local_or_https(request)
+
     from jarvis_common.auth import _CACHED_API_KEY  # noqa: PLC0415
 
     pool = request.app.state.db_pool
