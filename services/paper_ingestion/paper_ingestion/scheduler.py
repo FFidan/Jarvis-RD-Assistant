@@ -8,7 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.maintenance import skip_for_maintenance
-from jarvis_common.serialization import _coerce_bool
+from jarvis_common.serialization import _coerce_bool, read_global_config_flag
 
 from paper_ingestion.ingestion import refresh_recommendations
 from paper_ingestion.pipelines.auto_fetch import run_auto_pipeline
@@ -49,23 +49,7 @@ def _zotero_poll_job_id(user_id: int) -> str:
 
 async def _is_pulse_enabled(db_pool: Any) -> bool:
     """Read ``user_config['pulse.enabled']`` — defaults to False if missing."""
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = 'pulse.enabled' AND user_id IS NULL"
-            )
-    except Exception:
-        logger.exception("pulse: failed to read pulse.enabled config")
-        return False
-    if row is None:
-        return False
-    # asyncpg JSONB auto-decodes — value may be bool directly
-    value = row["value"]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes")
-    return bool(value)
+    return await read_global_config_flag(db_pool, "pulse.enabled", log_label="pulse")
 
 
 async def _list_active_users(db_pool: Any) -> list[int]:

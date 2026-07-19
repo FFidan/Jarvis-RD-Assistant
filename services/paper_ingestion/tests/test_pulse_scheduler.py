@@ -41,6 +41,36 @@ async def test_is_pulse_enabled_false_on_db_error(scheduler_module):
     assert await scheduler_module._is_pulse_enabled(pool) is False
 
 
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("yes", True),
+        ("1", True),
+        ("false", False),
+        ("no", False),
+        ("null", False),
+        ("", False),
+        (None, False),
+        # Fail-closed: strings outside the recognised vocabulary must NOT enable
+        # the flag. bool("maybe") is True, so a truthiness fallback here would
+        # silently switch nightly Pulse on for a value we cannot interpret.
+        ("maybe", False),
+        ("enabled", False),
+        ("TRUE ", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_is_pulse_enabled_coerces_stored_values(scheduler_module, stored, expected):
+    """Pins the shared flag reader's coercion, including its fail-closed handling
+    of unrecognised strings — the assertion that catches a fail-open regression."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": stored})
+    assert await scheduler_module._is_pulse_enabled(pool) is expected
+
+
 @pytest.mark.asyncio
 async def test_get_pulse_cron_default(scheduler_module):
     pool, conn = _make_pool_and_conn()
