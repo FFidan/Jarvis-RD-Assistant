@@ -31,12 +31,23 @@ SCRIPTS = sorted(
     if p.is_file()
 )
 
-# Files permitted to run `down -v`: each stands up a throwaway compose project.
+# Files permitted to run `down -v`: each stands up a throwaway compose project,
+# except uninstall.sh, whose data tier deliberately targets the operator's real
+# project behind typed-confirmation gates (scripts/tests/test_uninstall.sh
+# enforces the gates, containment refusals, and dry-run parity).
 _DOWN_VOL_ALLOWED_FILES = {
-    "scripts/uninstall.sh",  # future purge tool (typed-confirmation, isolated)
+    "scripts/uninstall.sh",
     "scripts/ci-smoke.sh",
     "scripts/first-run-smoke.sh",
 }
+_ISOLATION_EXEMPT_FILES = {"scripts/uninstall.sh"}
+
+
+def _isolation_required(rel: str) -> bool:
+    # Stub-harness suites under scripts/tests/ never reach a real docker
+    # daemon; their `down --volumes` mentions are assertion text.
+    return rel not in _ISOLATION_EXEMPT_FILES and not rel.startswith("scripts/tests/")
+
 
 # `down` followed (anywhere later on the same logical command) by -v/--volumes.
 _DOWN_VOL = re.compile(r"\bdown\b.*?(?:\s-v(?:\s|$)|\s--volumes\b)")
@@ -93,7 +104,7 @@ def test_down_volumes_only_in_isolated_ephemeral_scripts():
                 continue
             if not _down_vol_allowed(rel):
                 violations.append(f"{rel}:{lineno}")
-            elif not _ISOLATED.search(text):
+            elif _isolation_required(rel) and not _ISOLATED.search(text):
                 unisolated.append(f"{rel}:{lineno}")
     assert not violations, (
         "`down -v` / `down --volumes` runs against the operator's real compose "
