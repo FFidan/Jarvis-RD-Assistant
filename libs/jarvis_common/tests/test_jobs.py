@@ -515,6 +515,84 @@ class TestAbortRequestIsNotTerminal:
 
 
 # ---------------------------------------------------------------------------
+# A lookup outage (not a cancellation request) closes the stream
+# ---------------------------------------------------------------------------
+
+
+class TestLookupOutageClosesStream:
+    """A genuine infrastructure failure must close the stream, unlike an abort request.
+
+    ``JobLookupUnavailable`` from the poll's ``get_procrastinate_job_for_jarvis_id``
+    call is not the same event as procrastinate's ``aborting`` status (see
+    ``TestAbortRequestIsNotTerminal``): an abort *request* keeps the stream open
+    so the handler's final result still arrives, while a DB outage during the
+    poll must emit one error frame and terminate — it cannot self-heal by
+    waiting for a future poll the same way a handler eventually finishing can.
+    """
+
+    @pytest.mark.asyncio
+    async def test_lookup_outage_emits_error_frame_then_closes(self) -> None:
+        from jarvis_common import jobs
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        calls = [0]
+
+        async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+            calls[0] += 1
+            if calls[0] == 1:
+                return dict(_make_prow("doing"))
+            raise JobLookupUnavailable("db down")
+
+        async def mock_wait(_pool: Any, _jid: str, _timeout: float) -> None:
+            return None
+
+        async def not_disconnected() -> bool:
+            return False
+
+        with (
+            patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+            patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+        ):
+            frames = await _drain(
+                jobs.stream_job_events(
+                    MagicMock(), "test-job-id", is_disconnected=not_disconnected
+                ),
+                max_items=10,
+            )
+
+        payloads = _sse_payloads(frames)
+        assert payloads[-1] == {"error": "status_unavailable"}, (
+            f"an outage must surface as a single error frame, got {payloads[-1]!r}"
+        )
+        assert calls[0] == 2, (
+            f"the stream must stop polling immediately after the outage, polled {calls[0]} times"
+        )
+
+    @pytest.mark.asyncio
+    async def test_lookup_outage_does_not_raise_out_of_the_generator(self) -> None:
+        """An unhandled raise here would surface to the ASGI layer as an unhandled 500."""
+        from jarvis_common import jobs
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+            raise JobLookupUnavailable("db down")
+
+        async def not_disconnected() -> bool:
+            return False
+
+        with patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc):
+            frames = await _drain(
+                jobs.stream_job_events(
+                    MagicMock(), "test-job-id", is_disconnected=not_disconnected
+                ),
+                max_items=10,
+            )
+
+        assert len(frames) == 1
+        assert _sse_payloads(frames) == [{"error": "status_unavailable"}]
+
+
+# ---------------------------------------------------------------------------
 # list_jobs user_id filter SQL behaviour
 # ---------------------------------------------------------------------------
 
@@ -657,22 +735,22 @@ class _DictRecord:
 
 
 class TestProcrastinateLookupBroadExcept:
-    """A non-schema lookup failure must be logged at WARNING and return None.
+    """A non-schema lookup failure is an infrastructure outage, not a missing job.
 
     Narrow ``Undefined*`` handlers (unmigrated-schema graceful degradation) keep
-    returning None silently; only the trailing broad ``except Exception`` is
-    upgraded from a silent DEBUG swallow to a WARNING with a traceback so an
-    unexpected DB/driver error is observable. It must still return None (no
-    raise) — no caller maps this to a 503.
+    returning None silently; the trailing broad ``except Exception`` logs a
+    WARNING with a traceback (so an unexpected DB/driver error is observable)
+    and re-raises as ``JobLookupUnavailable`` so callers report 503, not the
+    404/None used for a job that genuinely does not exist.
     """
 
     @pytest.mark.asyncio
-    async def test_non_schema_error_logs_warning_and_returns_none(
+    async def test_non_schema_error_logs_warning_and_raises_lookup_unavailable(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         import logging
 
-        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+        from jarvis_common.jobs import JobLookupUnavailable, get_procrastinate_job_for_jarvis_id
 
         # conn.fetchrow raises a generic, non-Undefined* error.
         conn = MagicMock()
@@ -686,9 +764,8 @@ class TestProcrastinateLookupBroadExcept:
         pool.acquire = MagicMock(return_value=pool_cm)
 
         with caplog.at_level(logging.WARNING, logger="jarvis_common.jobs"):
-            result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
-
-        assert result is None, "Unexpected lookup error must degrade to None, not raise"
+            with pytest.raises(JobLookupUnavailable):
+                await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings, "Broad-except branch must emit a WARNING (was a silent DEBUG)"
@@ -698,6 +775,66 @@ class TestProcrastinateLookupBroadExcept:
         assert "job-xyz" in warnings[0].getMessage(), (
             "WARNING must include the jarvis_job_id for triage"
         )
+
+    @pytest.mark.asyncio
+    async def test_get_unified_propagates_lookup_unavailable(self) -> None:
+        """``get_unified`` must not swallow the outage — every caller needs it."""
+        from jarvis_common.jobs import JobLookupUnavailable, get_unified
+
+        with patch(
+            "jarvis_common.jobs.get_procrastinate_job_for_jarvis_id",
+            AsyncMock(side_effect=JobLookupUnavailable("db down")),
+        ):
+            with pytest.raises(JobLookupUnavailable):
+                await get_unified(MagicMock(), "job-xyz")
+
+    @pytest.mark.asyncio
+    async def test_migration_054_missing_fallback_still_returns_a_row(self) -> None:
+        """The ``job_progress`` join-missing fallback is schema degradation, not an outage.
+
+        It must keep returning a row (progress/progress_message as None), never
+        raise ``JobLookupUnavailable`` — that would turn a merely-unmigrated DB
+        into a false 503 on every job lookup.
+        """
+        import asyncpg
+        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+
+        raw_row = {
+            "id": 42,
+            "queue_name": "paper_ingestion",
+            "task_name": "paper.process",
+            "status": "doing",
+            "args": {"job_id": "job-xyz", "user_id": "1"},
+            "attempts": 1,
+            "progress": None,
+            "progress_message": None,
+            "result": None,
+            "error": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                asyncpg.UndefinedColumnError("job_progress.progress does not exist"),
+                _DictRecord(raw_row),
+            ]
+        )
+
+        pool_cm = MagicMock()
+        pool_cm.__aenter__ = MagicMock(return_value=_async_return(conn))
+        pool_cm.__aexit__ = MagicMock(return_value=_async_return(None))
+
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=pool_cm)
+
+        result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
+
+        assert result is not None, "migration-054-missing must still return a row, not None/raise"
+        assert result["task_name"] == "paper.process"
+        assert conn.fetchrow.call_count == 2, "must retry without the job_progress JOIN"
 
 
 # ---------------------------------------------------------------------------
