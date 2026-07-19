@@ -7,7 +7,9 @@ Each test passes crafted environment variables and asserts exit code + output.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -208,3 +210,97 @@ def test_both_weak_secrets_both_reported_in_production() -> None:
     combined = result.stdout + result.stderr
     assert "LITELLM_MASTER_KEY" in combined
     assert "POSTGRES_PASSWORD" in combined
+
+
+# ---------------------------------------------------------------------------
+# HTTPS row — real probe when a Let's Encrypt domain is configured
+# ---------------------------------------------------------------------------
+
+
+def _run_with_stub_curl(
+    env_overrides: dict[str, str], curl_exit: int, curl_stderr: str = ""
+) -> subprocess.CompletedProcess[str]:
+    """Run the script with a fake ``curl`` on PATH that exits ``curl_exit``.
+
+    The stub ignores its arguments, writes ``curl_stderr`` to stderr, and exits
+    with the requested status, so a test drives the HTTPS probe outcome without
+    any network access.
+    """
+    stub_dir = tempfile.mkdtemp()
+    curl_path = Path(stub_dir) / "curl"
+    curl_path.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s' {shlex.quote(curl_stderr)} >&2\nexit {int(curl_exit)}\n"
+    )
+    curl_path.chmod(0o755)
+    real_path = os.environ.get("PATH", "/usr/bin:/bin")
+    overrides = dict(env_overrides)
+    overrides["PATH"] = f"{stub_dir}{os.pathsep}{real_path}"
+    return _run(overrides)
+
+
+def _row(output: str, name: str) -> str:
+    """Return the summary-table row whose CHECK column starts with ``name``."""
+    for line in output.splitlines():
+        if line.startswith(name):
+            return line
+    raise AssertionError(f"No {name!r} row found in:\n{output}")
+
+
+def test_https_probe_failure_warns() -> None:
+    result = _run_with_stub_curl(
+        {"ENVIRONMENT": "production", "LETSENCRYPT_DOMAIN": "example.test"},
+        curl_exit=7,
+        curl_stderr="curl: (7) Failed to connect to example.test port 443",
+    )
+    row = _row(result.stdout, "HTTPS")
+    assert "WARN" in row, f"Expected HTTPS WARN on probe failure, got: {row}"
+    assert "probe" in row.lower(), f"Expected probe-derived WARN, got: {row}"
+    assert "Failed to connect" in row, f"Expected the curl failure named, got: {row}"
+
+
+def test_https_probe_success_is_ok() -> None:
+    result = _run_with_stub_curl(
+        {"ENVIRONMENT": "production", "LETSENCRYPT_DOMAIN": "example.test"},
+        curl_exit=0,
+    )
+    row = _row(result.stdout, "HTTPS")
+    assert "OK" in row, f"Expected HTTPS OK on probe success, got: {row}"
+    assert "WARN" not in row, f"Expected no WARN on probe success, got: {row}"
+    assert "probe" in row.lower(), f"Expected probe-derived OK, got: {row}"
+
+
+def test_cert_san_arm_removed() -> None:
+    text = _SCRIPT.read_text()
+    assert "JARVIS_CERT_SAN" not in text, "SAN string-match arm must be deleted"
+    assert "Self-signed cert SAN" not in text
+
+
+# ---------------------------------------------------------------------------
+# SMTP row — environment presence, not a delivery-readiness claim
+# ---------------------------------------------------------------------------
+
+
+def test_smtp_row_reports_presence_not_stdout() -> None:
+    result = _run(
+        {
+            "ENVIRONMENT": "development",
+            "SMTP_HOST": "smtp.example.test",
+            "SMTP_FROM": "jarvis@example.test",
+        }
+    )
+    combined = result.stdout + result.stderr
+    assert "environment SMTP presence" in combined, combined
+    assert "GET /api/setup/status" in combined, combined
+    assert "stdout" not in combined.lower(), "the stdout-delivery claim must be gone"
+    # The false claim must not survive in the script source either.
+    text = _SCRIPT.read_text()
+    assert "logged to stdout" not in text
+    assert "stdout" not in text
+
+
+def test_warnings_present_still_exit_zero() -> None:
+    """Pin: a WARN-carrying run exits 0 (this task keeps the exit contract)."""
+    result = _run({"ENVIRONMENT": "development"})
+    combined = result.stdout + result.stderr
+    assert "WARN" in combined, "expected at least one WARN row in a bare dev run"
+    assert result.returncode == 0, f"WARN-only run must exit 0, got {result.returncode}"
