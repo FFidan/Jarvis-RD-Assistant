@@ -16,6 +16,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { HealthDots } from '@/components/shared/HealthDots';
 import type { StackHealthSummary } from '@/lib/api';
 
+const { SESSION_DURATION_MS } = vi.hoisted(() => ({
+  SESSION_DURATION_MS: 30 * 24 * 60 * 60 * 1000,
+}));
+
 type AuthTestState = {
   isAuthenticated: boolean;
   authTime: number | null;
@@ -32,6 +36,7 @@ let authState: AuthTestState = {
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: (selector: (state: typeof authState) => unknown) => selector(authState),
+  SESSION_DURATION_MS,
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {

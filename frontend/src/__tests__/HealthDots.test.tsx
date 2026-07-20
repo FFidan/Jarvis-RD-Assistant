@@ -15,7 +15,11 @@ import { HealthDots } from '@/components/shared/HealthDots';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
 
-const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+// Mirrors the real auth-store export (30 days) so fixtures below reflect the
+// actual session horizon, not the retired 8-hour client-side ceiling.
+const { SESSION_DURATION_MS } = vi.hoisted(() => ({
+  SESSION_DURATION_MS: 30 * 24 * 60 * 60 * 1000,
+}));
 
 type AuthTestState = {
   isAuthenticated: boolean;
@@ -33,6 +37,7 @@ let authState: AuthTestState = {
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: (selector: (state: typeof authState) => unknown) => selector(authState),
+  SESSION_DURATION_MS,
 }));
 
 // Mock the api module so we control fetchStackHealth return values
@@ -202,6 +207,22 @@ describe('HealthDots', () => {
     expect(mockFetchStackHealth).not.toHaveBeenCalled();
     expect(expireSession).not.toHaveBeenCalled();
     expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
+  });
+
+  it('polls protected health for a 9-hour-old authenticated session', async () => {
+    authState = {
+      isAuthenticated: true,
+      authTime: Date.now() - 9 * 60 * 60 * 1000,
+      isSessionValid: () => true,
+      expireSession: vi.fn(),
+    };
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+
+    renderHealthDots();
+
+    await waitFor(() => {
+      expect(mockFetchStackHealth).toHaveBeenCalled();
+    });
   });
 
   // --- Collapsed pill ---
