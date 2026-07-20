@@ -7,7 +7,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from telegram_bot.config import _owner_headers
+from telegram_bot import services_client
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
@@ -97,13 +97,9 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        resp = await http.post(
-            f"{config.paper_ingestion_url}/api/pulse/generate",
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
+        await services_client.trigger_pulse_generation(http, config, jarvis_user_id)
     except Exception:
         logger.exception("Failed to trigger Pulse generation")
         await update.message.reply_text(
@@ -162,12 +158,7 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             http = get_http(context)
             config = get_config(context)
-            await http.post(
-                f"{config.learning_engine_url}/api/executive/focus/log",
-                json={"duration_hours": data_minutes / 60},
-                headers=_owner_headers(config, job_user_id),
-                timeout=10.0,
-            )
+            await services_client.log_focus_session(http, config, job_user_id, data_minutes / 60)
         except Exception:
             logger.exception("Failed to log focus session to backend")
 

@@ -9,7 +9,8 @@ import httpx
 from telegram import Bot
 
 from telegram_bot import owner as _owner
-from telegram_bot.config import BotConfig, _owner_headers
+from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import (
     MAX_MESSAGE_LENGTH,
     TRUNCATION_HEADROOM,
@@ -128,16 +129,8 @@ async def _fetch_digest_from_api(
     dict or None
         Parsed digest payload, or ``None`` on failure.
     """
-    headers = _owner_headers(config, user_id)
     try:
-        resp = await http_client.get(
-            f"{config.paper_ingestion_url}/api/digest/weekly",
-            params={"days": 7},
-            headers=headers,
-            timeout=90.0,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return await services_client.fetch_weekly_digest(http_client, config, user_id)
     except Exception:
         logger.exception("Failed to fetch digest from paper_ingestion API")
         return None

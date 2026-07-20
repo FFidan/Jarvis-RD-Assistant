@@ -43,10 +43,28 @@ _LE_TARGETS = [
     ("PUT", "/api/tasks/{task_id}"),
     ("GET", "/api/milestones/upcoming"),
     ("GET", "/api/stats"),
+    ("GET", "/api/review/next"),
+    ("POST", "/api/review/{card_id:int}"),
+    ("POST", "/api/executive/focus/log"),
 ]
 _PI_TARGETS = [
     ("GET", "/api/papers/feed"),
     ("POST", "/api/authors/check"),
+    ("GET", "/api/papers/{paper_id}"),
+    ("PUT", "/api/papers/{paper_id}/save"),
+    ("PUT", "/api/papers/{paper_id}/skip"),
+    ("PUT", "/api/papers/{paper_id}/reading"),
+    ("PUT", "/api/papers/{paper_id}/done"),
+    ("PUT", "/api/papers/{paper_id}/trash"),
+    ("PUT", "/api/papers/{paper_id}/restore"),
+    ("PUT", "/api/papers/{paper_id}/trash_and_reject"),
+    ("PUT", "/api/papers/{paper_id}/star"),
+    ("PUT", "/api/papers/{paper_id}/unstar"),
+    ("POST", "/api/papers/{paper_id}/feedback"),
+    ("POST", "/api/search"),
+    ("GET", "/api/pulse/today"),
+    ("POST", "/api/pulse/generate"),
+    ("GET", "/api/digest/weekly"),
 ]
 
 
