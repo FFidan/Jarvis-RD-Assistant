@@ -95,7 +95,7 @@ export const listPasskeys = () =>
 
 /** Revoke one of the current user's passkeys. Requires a session. */
 export const deletePasskey = (credentialId: string) =>
-  apiFetch<void>(`/api/auth/passkeys/${credentialId}`, { method: 'DELETE' });
+  apiFetch<void>(`/api/auth/passkeys/${encodeURIComponent(credentialId)}`, { method: 'DELETE' });
 
 /** Admin: how many passkeys a user has (recovery-planning signal). */
 export const getUserPasskeyCount = (userId: number) =>
