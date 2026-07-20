@@ -105,6 +105,7 @@ nav:
       - Getting Started: manual/getting-started.md
       - Choosing how you access JARVIS: manual/access-modes.md
       - Passkeys: manual/passkeys.md
+      - Installing the app + offline: manual/install-and-offline.md
       - My Day & Home: manual/home-my-day.md
       - Navigation: manual/navigation.md
       - Research Feed & Library: manual/research-feed.md

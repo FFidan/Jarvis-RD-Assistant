@@ -104,7 +104,7 @@ function InstallAffordance() {
     >
       <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="flex-1 text-muted-foreground">
-        Install JARVIS for offline reading
+        Install JARVIS - summaries and notes offline
       </span>
       <button
         onClick={handleInstall}

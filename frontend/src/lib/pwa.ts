@@ -8,8 +8,10 @@
  * Responsibilities (foundation only — UI lives elsewhere):
  *   - Register `/sw.js` after load (dev-safe: skipped in DEV / non-secure ctx).
  *   - Capture `beforeinstallprompt` and expose `promptInstall()` so P1d can
- *     wire a discreet "Install for offline reading" button (the button UI is
- *     P1d's concern — this module only exposes the capability + state).
+ *     wire a discreet install button (the button UI is P1d's concern — this
+ *     module only exposes the capability + state).
+ *   - Ask the browser to protect the offline cache from storage-pressure
+ *     eviction once the user is authenticated (`requestPersistentStorage()`).
  *
  * Public API (stable — P1d depends on this):
  *   - `registerServiceWorker()` — idempotent; call once from the entry.
@@ -18,6 +20,7 @@
  *     choice outcome ('accepted' | 'dismissed' | 'unavailable').
  *   - `onInstallAvailabilityChange(cb)` — subscribe to availability changes
  *     (returns an unsubscribe fn). Lets P1d reactively show/hide its button.
+ *   - `requestPersistentStorage()` — idempotent; call once, post-auth.
  */
 
 interface BeforeInstallPromptEvent extends Event {
@@ -122,4 +125,30 @@ export function registerServiceWorker(): void {
       console.warn('[pwa] service worker registration failed', err);
     });
   });
+}
+
+let persistRequested = false;
+
+/**
+ * Ask the browser not to evict the app's storage bucket (offline cache +
+ * IndexedDB outbox) under storage pressure. Best-effort and silent — the
+ * outcome is logged, never surfaced in the UI, and a denial does not change
+ * any app behavior (the offline cache still works, just without the eviction
+ * protection). Idempotent: only the first call in a page lifetime does
+ * anything; call from the entry once the user is known to be authenticated.
+ */
+export function requestPersistentStorage(): void {
+  if (persistRequested) return;
+  persistRequested = true;
+
+  if (typeof navigator === 'undefined' || !navigator.storage?.persist) return;
+
+  navigator.storage
+    .persist()
+    .then((granted) => {
+      console.info('[pwa] persistent storage', granted ? 'granted' : 'denied');
+    })
+    .catch((err: unknown) => {
+      console.warn('[pwa] persistent storage request failed', err);
+    });
 }
