@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /pulse -->
+<!-- verified-against-UI: 2026-07-20 | routes: /pulse -->
 
 # Pulse
 
@@ -22,6 +22,8 @@ Each card in the deck shows:
 - A short relevance excerpt
 - The **StaleBadge** (see below)
 - Action buttons for rating and opening the paper
+
+When JARVIS has not yet learned from enough of your feedback, the deck labels its ordering as **Basic ranking (learning from your feedback)**. Once a learned model is available, that caption is no longer shown; the rest of the deck remains usable in either state.
 
 ### WhyPopover
 

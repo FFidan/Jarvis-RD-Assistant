@@ -127,11 +127,19 @@ Solo install: the **Quickstart** above is all you need. For team/multi-user setu
 ## Updating JARVIS
 
 ```bash
-git pull
-./update.sh
+jarvis-research update
 ```
 
-`update.sh` diffs your running containers against the versions pinned in `versions.env`, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
+This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
+
+For a manual fallback, update the checkout and run the lower-level script:
+
+```bash
+git pull
+./update.sh --yes
+```
+
+`update.sh` refreshes the service images pinned in `versions.env`; it does not provide the lifecycle command's transactional migration and recovery safeguards. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
 
 ## Uninstalling JARVIS
 

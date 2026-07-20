@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.1.2**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current release: **v1.2.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
 - **Install from prebuilt images (v1.1.0).** A default `./setup.sh` pulls
@@ -46,6 +46,11 @@ change list since the v1.0.0 public baseline.
   capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction
   detection, Pulse, FSRS flashcards, notes, projects, Telegram, the multi-tenant
   model). The in-repo Markdown remains the offline source of truth.
+- **Day-one library processing.** Home can queue a whole-library workflow that
+  downloads and processes eligible papers and explicitly includes summary
+  generation. The Jobs panel shows progress, supports cancellation, reports
+  partial failed or blocked outcomes, and permits a safe rerun. It does not
+  claim automatic entity extraction.
 
 ## In progress
 
@@ -60,17 +65,15 @@ change list since the v1.0.0 public baseline.
   optional integrations, not requirements.
 - **Tablet / PWA reading-experience polish.** Refinements to offline reading,
   installable PWA affordances, and tablet layout optimizations for the already-shipped
-  information-architecture redesign so already-processed material (summaries,
-  extractions, notes) and flashcard review work seamlessly offline.
+  information-architecture redesign. Already processed summaries and notes are
+  available offline; a rating for an already-open card can queue for later,
+  while loading the next card still needs a connection.
 
 ## Planned (exploratory — no dates)
 
-- **Day-one library processing.** A clearer whole-library workflow that can
-  download, process, summarize, extract, and show progress for a real imported
-  or discovered corpus without requiring users to understand the internal
-  processing stages.
-- **Knowledge export.** Markdown-friendly exports for generated research
-  knowledge and project-centered research outputs.
+- **Knowledge export.** The first v1.2.0 slice exports a per-paper Markdown
+  document containing summaries, notes, cards, extractions, and BibTeX. Future
+  work may extend exports to answers and project-centred outputs.
 - **Per-user provider keys and routing.** Optional bring-your-own-key behavior,
   per-user routing preferences, and privacy controls for multi-user deployments.
   Current provider settings are admin-wide.

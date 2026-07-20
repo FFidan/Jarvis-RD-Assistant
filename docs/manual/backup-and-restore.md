@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-13 | routes: /admin/backups -->
+<!-- verified-against-UI: 2026-07-20 | routes: /admin/backups -->
 
 # Backup & Restore
 
@@ -53,7 +53,7 @@ Each restore point appears as a card, newest first, showing:
 - Badges for each component it covers.
 - How long it will be kept under the current retention policy.
 
-Click **Details** on a card to expand a per-file table with a **Download** button for each archive. Download a full set periodically and keep it **off-site** (together with — but separate from — your off-site key copy): off-site archives plus the off-site key are what make total-server-loss recovery possible.
+Click **Details** on a card to expand a per-file table with a **Download** button for each archive. Download a full set periodically, including the `manifest_<timestamp>.json.hmac` sidecar when present, and keep it **off-site** (together with — but separate from — your off-site key copy): off-site archives plus the off-site key are what make total-server-loss recovery possible.
 
 ### Delete a restore point
 
@@ -100,7 +100,7 @@ A clean restore lifts the maintenance window by itself. If a restore fails, the 
 
 If the original server is gone entirely, you can bring a **brand-new host** back to life from your off-site copies — end to end in the browser, with **no terminal steps after installation**.
 
-**You need:** your off-site **archive set** for one backup point (all the files from that restore point's Details table) and your off-site copy of the **backup encryption key**. A wrong key fails safe — it is checked against the archives before anything destructive happens, so a typo cannot destroy the fresh install.
+**You need:** your off-site **archive set** for one backup point (all the files from that restore point's Details table, including the required `manifest_<timestamp>.json.hmac` sidecar) and your off-site copy of the **backup encryption key**. A wrong key fails safe — it is checked against the archives before anything destructive happens, so a typo cannot destroy the fresh install.
 
 > Recovering a fresh server requires a backup point taken by this version or newer, because it is verified by signature and older points carry none. Download a fresh off-site archive set after updating so your disaster-recovery copy is a verifiable one. Restore points on the original server are unaffected — older ones keep restoring normally there.
 

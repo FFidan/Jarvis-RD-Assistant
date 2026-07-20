@@ -501,10 +501,10 @@ You can also update by hand:
 
 ```bash
 git pull
-./update.sh
+./update.sh --yes
 ```
 
-`update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass `./update.sh --build-local` to rebuild them from source), waiting up to 180 s per service. On failure it prints recovery commands for both image sets: `git checkout HEAD~1 -- versions.env && ./update.sh` rolls back the third-party pins, while the application images roll back by pinning `JARVIS_VERSION` to a previously published tag and pulling it.
+This is a manual fallback. `update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass `./update.sh --build-local` to rebuild them from source), waiting up to 180 s per service. It does not replace the lifecycle command's transactional migration and recovery safeguards. On failure it prints recovery commands for both image sets: `git checkout HEAD~1 -- versions.env && ./update.sh` rolls back the third-party pins, while the application images roll back by pinning `JARVIS_VERSION` to a previously published tag and pulling it.
 
 From v1.1.0, `update.sh` pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)). `--build-local` (the same flag exists on `./setup.sh`) rebuilds from source instead — for contributors, forks, or when a GHCR pull is unavailable. It is **not** an offline/air-gapped path: a local build still needs network access for base images, Python/OS wheels, the third-party images (postgres, ollama, caddy, …), and the Ollama model downloads.
 
@@ -675,7 +675,7 @@ docker compose exec qdrant sh -c 'curl -s -X PUT \
 
 Use this when you are recovering on a **fresh host** from an off-site copy of the backups — the original machine (and its `./secrets`) is gone. Both paths below drive the same hardened `restore.sh` in the `postgres-backup` sidecar, which — for an off-host restore — takes a safety pre-backup, runs the compat + decrypt-probe gates, restores each database via the staged swap, recovers Qdrant, **rebinds the `jarvis` role password** to the restored secret (`ALTER ROLE … WITH PASSWORD`, single-quote-safe), **materializes the restored `./secrets` on the host** (except the keys the new host is authoritative for — `qdrant_api_key`, `langfuse_pg_password`, `backup_encrypt_key`), writes a `.secrets_rotated` marker so the app services **self-restart** onto the rotated secrets, and **shreds the one-time operator key and the plaintext staging on exit**. On a clean restore the maintenance gate then lifts automatically — **there are no terminal steps after you start the restore**.
 
-**Prerequisites (either path):** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, and `manifest_<ts>.json`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above). A wrong or corrupt key fails safe: `restore.sh` proves the key decrypts the database archives before any `DROP`, so nothing is destroyed.
+**Prerequisites (either path):** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, `manifest_<ts>.json`, and `manifest_<ts>.json.hmac`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above). A wrong or corrupt key fails safe: `restore.sh` proves the key decrypts the database archives before any `DROP`, so nothing is destroyed.
 
 ##### Web-based recovery (recommended)
 

@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-07-19_
+_Last updated: 2026-07-20_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -10,6 +10,52 @@ Related docs:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — runtime boundaries affected by residual risks.
 - [SECURITY.md](SECURITY.md) — threat model and hardening checklist.
+
+---
+
+## v1.2.0 accepted boundaries
+
+### Sanitized KaTeX still needs URL and image guards
+
+**Why accepted (2026-07-20):** Markdown is sanitized before KaTeX rendering, so the HTML produced by KaTeX is not passed through the sanitizer a second time. Separate URL and image guards reduce the exposed surface.
+
+**Reopen criteria:** a sanitizer or KaTeX change bypasses either guard, or a rendered document demonstrates an unsafe URL or image load.
+
+### DNS can change after SSRF validation
+
+**Why accepted (2026-07-20):** PDF URLs are validated before fetching, but DNS rebinding can change a hostname's destination between validation and the later HTTP request.
+
+**Reopen criteria:** a supported deployment needs stronger protection against that time-of-check/time-of-use window.
+
+### API-key login gate cache is process-local
+
+**Why accepted (2026-07-20):** the supported deployment runs a single application worker, so its gate cache is local to that process.
+
+**Reopen criteria:** multi-worker application deployment becomes supported or the gate needs shared invalidation.
+
+### Telegram pairing tokens are stored in plaintext
+
+**Why accepted (2026-07-20):** pairing tokens are 128-bit, single-use, and expire after 15 minutes; plaintext storage keeps the one-time pairing check simple.
+
+**Reopen criteria:** token exposure, a longer-lived pairing flow, or a threat model that requires hashed-at-rest pairing secrets.
+
+### Setup-status endpoint exposes a deployment fingerprint
+
+**Why accepted (2026-07-20):** unauthenticated `/api/setup/status` reports first-run state, setup mode, hardware tier and vendor, access mode, model-backend state, and SMTP presence and reachability. The sign-in and setup screens need these fields before authentication, but together they reveal a deployment fingerprint.
+
+**Reopen criteria:** the response gains fields beyond that minimal wizard-required state.
+
+### Expired sessions have a 24-hour offline-review grace period
+
+**Why accepted (2026-07-20):** the grace period is intentional so an interrupted offline review session can be completed.
+
+**Reopen criteria:** the product no longer supports offline review, or the grace period becomes incompatible with the session threat model.
+
+### Backup-manifest HMAC trust boundary
+
+**Why accepted (2026-07-20):** after upgrade, signed manifest sidecars authenticate a complete archive set. This does not authenticate pre-upgrade legacy local sets, and cannot protect against an attacker who can replace both the archives and the backup secrets or signing key.
+
+**Reopen criteria:** the backup format, key custody model, or legacy-restore policy changes.
 
 ---
 
@@ -262,14 +308,12 @@ Migration 0096 set `chunked_at = NOW()` on any paper that already had at least o
 
 The following items were deliberately deferred as low-value or high-churn. Each is behavior-neutral debt, not a correctness or security risk.
 
-- **`services_client` full migration (Telegram bot).** The bot routes most product-data calls through the typed `services_client`, but some call sites still query the shared Postgres directly. The module docstring was corrected ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.
 - **`_owner_headers` promotion.** The Telegram `_owner_headers` helper stays at its current call-site location (pinned by tests); promoting it to a shared module is not worth the churn.
 - **Service-layer `HTTPException` coupling.** A few service functions raise FastAPI `HTTPException` directly rather than a domain error the router translates. Left as-is; decoupling is a broad refactor.
 - **`db_helpers` split.** `paper_ingestion`'s `db_helpers` mixes a few concerns; splitting it touches many importers for marginal gain.
 - **`JOB_HANDLER_OWNER` / `noop.test` queue.** The job-handler-owner `Literal` typing and the `noop.test` queue entry are retained as-is; tightening them is cosmetic.
 - **Redundant My-Day journal fetch.** `GET /api/my-day/journal` overlaps the nullable `journal` field already returned by the my-day-bundle; the separate fetch is kept to avoid a frontend refactor.
 - **`jarvis_common` test-code wheel exclusion.** The `jarvis_common` wheel ships its `testing_*.py` modules (~25 KB). A `packages.find` exclude is ineffective for top-level modules (only a `testing_sidecars/` subpackage would drop); a correct fix means relocating six modules into a `jarvis_common/testing/` subpackage plus updating 100+ test imports — not worth the gain. Runtime-safe regardless (zero non-test runtime imports of `jarvis_common.testing*`).
-- **`jobs.py` 503-vs-404 caller mapping.** The broad job-row-lookup failure now logs a WARNING; mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.
 
 **Intended behavior note — auth-first ordering (auth-idiom migration).** `paper_ingestion` route handlers now resolve identity via `Depends(current_user_id_strict)` (previously an imperative in-body call). Consequence: an *unauthenticated* request to a migrated endpoint now fails authentication (401) *before* request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route `analyze._analyze_stream` generator retains an imperative resolve (it is not a route and has no rate-limiter).
 
