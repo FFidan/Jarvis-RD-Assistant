@@ -12,10 +12,10 @@ There is nothing to edit by hand: setup derives the address and network settings
 
 | Mode | Where you can open JARVIS | Sign-in links (email) | Passkeys (fingerprint / face / PIN) | Transport |
 |------|--------------------------|----------------------|--------------------------------------|-----------|
-| **1. On this computer only** | The machine JARVIS runs on | ✅ | ✅ on this computer | Plain HTTP over loopback (`http://localhost:3001`) |
+| **1. On this computer only** | The machine JARVIS runs on | Yes | Yes, on this computer | Plain HTTP over loopback (`http://localhost:3001`) |
 | **2. Home or lab network** | Any device on your network | Receive on any device; durable session needs the HTTPS origin — see [About LAN mode](#about-lan-mode) | Yes, on the JARVIS computer only | Plain HTTP over your LAN (`http://<lan-ip>:3001`) — see [About LAN mode](#about-lan-mode) below |
-| **3. Cloudflare Tunnel** | Anywhere on the internet | ✅ | ✅ everywhere | HTTPS, edge TLS terminated by Cloudflare |
-| **4. Your own domain (Let's Encrypt)** | Anywhere on the internet | ✅ | ✅ everywhere | HTTPS, a real Let's Encrypt certificate |
+| **3. Cloudflare Tunnel** | Anywhere on the internet | Yes | Yes, everywhere | HTTPS, edge TLS terminated by Cloudflare |
+| **4. Your own domain (Let's Encrypt)** | Anywhere on the internet | Yes | Yes, everywhere | HTTPS, a real Let's Encrypt certificate |
 
 Whichever you pick, staying signed in works the same way everywhere a session can persist: a sign-in lasts 30 days and quietly renews while you keep using JARVIS, so you won't be logged out mid-project. Raw-IP LAN access (mode 2, browsed directly by IP) is the one exception — see below.
 
