@@ -136,7 +136,44 @@ confirm() {
 . scripts/setup_lib.sh
 
 # -----------------------------------------------------------------------------
-# 1-2. Load pinned versions
+# 1. Resolve this checkout's application image tag.
+# -----------------------------------------------------------------------------
+# An exact release tag is authoritative for release-candidate checkouts, whose
+# pyproject version intentionally remains the eventual stable version. Otherwise
+# read the project version from this checkout. The result is exported before the
+# first Compose invocation so it overrides any stale JARVIS_VERSION in .env.
+resolve_checkout_app_version() {
+  local exact_tag="" version=""
+  if command -v git >/dev/null 2>&1; then
+    exact_tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+  fi
+
+  case "$exact_tag" in
+    v[0-9]*) version="${exact_tag#v}" ;;
+    *)
+      [ -r pyproject.toml ] || return 1
+      version="$(awk '
+        /^\[project\][[:space:]]*$/ { in_project = 1; next }
+        in_project && /^\[/ { exit }
+        in_project && /^[[:space:]]*version[[:space:]]*=/ {
+          line = $0
+          if (line !~ /^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"[[:space:]]*$/) exit
+          sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*"/, "", line)
+          sub(/"[[:space:]]*$/, "", line)
+          print line
+          exit
+        }
+      ' pyproject.toml 2>/dev/null)"
+      ;;
+  esac
+
+  [ "${#version}" -le 128 ] || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || return 1
+  printf '%s' "$version"
+}
+
+# -----------------------------------------------------------------------------
+# 2. Load pinned versions
 # -----------------------------------------------------------------------------
 if [ ! -f versions.env ]; then
   die "versions.env not found in $SCRIPT_DIR." \
@@ -144,6 +181,12 @@ if [ ! -f versions.env ]; then
 fi
 # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
 set -a && . ./versions.env && set +a
+
+if ! CHECKOUT_APP_VERSION="$(resolve_checkout_app_version)"; then
+  die "Could not determine a valid application version from this checkout." \
+      "Use an exact vMAJOR.MINOR.PATCH[-PRERELEASE] tag, or fix [project].version in pyproject.toml."
+fi
+export JARVIS_VERSION="$CHECKOUT_APP_VERSION"
 
 command -v docker >/dev/null 2>&1 \
   || die "Docker not found in PATH." \
@@ -414,6 +457,14 @@ done
 # 8. Report
 # -----------------------------------------------------------------------------
 if [ "${#FAILED[@]}" -eq 0 ]; then
+  if [ "$DO_APP" -eq 1 ]; then
+    if ! upsert_env_var JARVIS_VERSION "$CHECKOUT_APP_VERSION"; then
+      err "Application services are healthy, but JARVIS_VERSION could not be recorded in .env."
+      printf '        %sFix .env permissions, then re-run ./update.sh so future Compose commands keep version %s.%s\n' \
+        "$C_YELLOW" "$CHECKOUT_APP_VERSION" "$C_RESET" >&2
+      exit 1
+    fi
+  fi
   if [ "${#UNVERIFIED[@]}" -gt 0 ]; then
     ok "Updated ${#TO_UPDATE[@]} service(s); ${#UNVERIFIED[@]} running without a healthcheck (not health-verified): ${UNVERIFIED[*]}"
   else

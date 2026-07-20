@@ -460,15 +460,13 @@ cmd_update() {
 # _resume_transaction TARGET_REF — the post-merge half (phases 9-12). Never
 # fetches, guards-mutates, merges, or re-execs.
 _resume_transaction() {
-  local target_ref="$1" target_version="${1#v}"
+  local target_ref="$1"
   MIGRATIONS_RAN="${MIGRATIONS_RAN:-0}"
   if [ -f "$PENDING_FILE_PATH" ] && [ -n "$(_txn_field backup_id)" ]; then
     MIGRATIONS_RAN=1
   fi
 
   install_cli_shim "$REPO" >/dev/null 2>&1 || true             # (9)
-  upsert_env_var JARVIS_VERSION "$target_version" \
-    || die "Could not pin JARVIS_VERSION in .env." "Run: jarvis-research doctor"
   _txn_update_phase pull
 
   info "Applying ${target_ref} — pulling images and recreating services..."  # (10)
