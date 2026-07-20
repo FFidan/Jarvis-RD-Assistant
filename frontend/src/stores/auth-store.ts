@@ -43,7 +43,7 @@ export function registerQueryClient(qc: QueryClient): void {
 // 30 days — mirrors jarvis_common/session_middleware.py SESSION_TTL. The backend
 // 401 interceptor (core.ts handleAuthFailure → logout) remains the authoritative
 // fast-path for real expiry/revocation.
-const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+export const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface SessionUser {
   id: number;

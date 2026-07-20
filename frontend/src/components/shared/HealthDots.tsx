@@ -17,9 +17,7 @@ import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { fetchStackHealth, type ServiceHealth, type StackOverall } from '@/lib/api';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
-import { useAuthStore } from '@/stores/auth-store';
-
-const CLIENT_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+import { useAuthStore, SESSION_DURATION_MS } from '@/stores/auth-store';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -129,7 +127,7 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
   const authTime = typeof selectedAuthTime === 'number' ? selectedAuthTime : null;
   const isSessionValid = typeof selectedIsSessionValid === 'function' ? selectedIsSessionValid : () => false;
   const sessionAgeMs = authTime === null ? Number.POSITIVE_INFINITY : Date.now() - authTime;
-  const healthPollingEnabled = isAuthenticated && sessionAgeMs < CLIENT_SESSION_DURATION_MS && isSessionValid();
+  const healthPollingEnabled = isAuthenticated && sessionAgeMs < SESSION_DURATION_MS && isSessionValid();
 
   const { data, isError } = useQuery({
     queryKey: QUERY_KEYS.stack.health(),
