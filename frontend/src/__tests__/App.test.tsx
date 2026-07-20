@@ -31,7 +31,9 @@ vi.mock('@/lib/api', async () => {
     verifyMagicLink: vi.fn().mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' }),
     // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
     // unauthenticated tests deterministically land on the login page.
-    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
+    fetchAccount: vi.fn().mockRejectedValue(
+      new actual.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
+    ),
   };
 });
 
@@ -44,7 +46,9 @@ const { useAuthStore } = await import('@/stores/auth-store');
 
 function renderApp(initialEntries: string[] = ['/']) {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // retryDelay: 0 keeps the bootstrap query's own retry policy (see App.tsx)
+    // from adding real exponential-backoff wait time to these tests.
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -138,5 +142,36 @@ describe('App', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
     expect(useAuthStore.getState().user).toEqual({ id: 7, email: 'a@b.com', role: 'admin' });
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+  });
+
+  it('shows an error state, not the login page, when the session probe fails with a server error', async () => {
+    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    const serverError = () =>
+      new api.ApiError(500, JSON.stringify({ detail: 'Internal Server Error' }));
+    // 1 initial attempt + 2 retries (the bootstrap query's own retry policy).
+    vi.mocked(api.fetchAccount)
+      .mockRejectedValueOnce(serverError())
+      .mockRejectedValueOnce(serverError())
+      .mockRejectedValueOnce(serverError());
+
+    renderApp();
+
+    expect(
+      await screen.findByText(/Couldn't reach the server to check your session/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+  });
+
+  it('shows the login page, not an error state, when the session probe returns 401', async () => {
+    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    vi.mocked(api.fetchAccount).mockRejectedValueOnce(
+      new api.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
+    );
+
+    renderApp();
+
+    expect(await screen.findByText('JARVIS RD Assistant')).toBeInTheDocument();
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
   });
 });
