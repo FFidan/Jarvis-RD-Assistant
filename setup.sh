@@ -521,21 +521,72 @@ _append_csv() {
   [ -n "$list" ] && printf '%s,%s' "$list" "$item" || printf '%s' "$item"
 }
 
-# _public_origin_host URL -> the hostname of an https:// URL whose host is a real
-# DNS name, or non-zero when URL is not https or the host is an IP literal. A raw
-# IP is never a valid WebAuthn RP-ID and cannot obtain a public certificate, so a
-# named private-HTTPS origin must resolve to a hostname. Port/path are stripped;
-# bracketed and bare IPv6 literals are rejected (bracket support is out of scope).
+# _public_origin_host URL -> the hostname of an origin-only https:// URL whose
+# host is a valid DNS name, or non-zero otherwise. A raw IP is never a valid
+# WebAuthn RP-ID and cannot obtain a public certificate, so a named private-HTTPS
+# origin must resolve to a hostname. A numeric TCP port is optional; paths,
+# queries, fragments, userinfo, IP literals, malformed labels, and invalid ports
+# are rejected rather than silently discarded.
 _public_origin_host() {
-  local url="$1" rest host
+  local url="$1" rest host port label remainder last_label numeric_tail
   case "$url" in https://*) rest="${url#https://}" ;; *) return 1 ;; esac
-  rest="${rest%%/*}"                       # strip /path or /?query
-  case "$rest" in \[*) return 1 ;; esac    # [IPv6] literal — unsupported
-  host="${rest%%:*}"                       # strip :port (also empties bare IPv6)
-  case "$host" in
-    *[a-zA-Z]*) printf '%s' "$host" ;;     # a DNS name carries letters; IPv4 does not
-    *) return 1 ;;
+  case "$rest" in
+    ''|*/*|*\?*|*\#*|*@*) return 1 ;;
   esac
+  case "$rest" in
+    *:*)
+      host="${rest%%:*}"
+      port="${rest#*:}"
+      case "$port" in ''|*[!0-9]*) return 1 ;; esac
+      # Strip leading zeroes before the bounded integer comparison so Bash 3.2
+      # never interprets a port such as 080 as octal.
+      while [ "${port#0}" != "$port" ]; do port="${port#0}"; done
+      [ -n "$port" ] && [ "${#port}" -le 5 ] && [ "$port" -le 65535 ] || return 1
+      ;;
+    *) host="$rest" ;;
+  esac
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  [ -n "$host" ] && [ "${#host}" -le 253 ] || return 1
+  case "$host" in
+    .*|*.|*[!a-zA-Z0-9.-]*) return 1 ;;
+    *[a-zA-Z]*) ;;
+    *) return 1 ;;                           # all-numeric host / IPv4 literal
+  esac
+  # WHATWG URL parsers treat a numeric final label as IPv4 syntax, including
+  # abbreviated and hexadecimal forms (for example 127.1 or 0x7f000001).
+  # Reject that whole class so the hostname browsers use cannot differ from the
+  # DNS name validated here. A numeric TLD is not a usable browser origin either.
+  last_label="${host##*.}"
+  case "$last_label" in *[!0-9]*) ;; *) return 1 ;; esac
+  case "$last_label" in
+    0[xX]*)
+      numeric_tail="${last_label#??}"
+      [ -n "$numeric_tail" ] || return 1
+      case "$numeric_tail" in *[!0-9a-fA-F]*) ;; *) return 1 ;; esac
+      ;;
+  esac
+  remainder="$host"
+  while [ -n "$remainder" ]; do
+    case "$remainder" in
+      *.*) label="${remainder%%.*}"; remainder="${remainder#*.}" ;;
+      *)   label="$remainder"; remainder="" ;;
+    esac
+    [ -n "$label" ] && [ "${#label}" -le 63 ] || return 1
+    case "$label" in -*|*-|*[!a-zA-Z0-9-]*) return 1 ;; esac
+  done
+  printf '%s' "$host"
+}
+
+# _resolve_public_origin_layer EXPLICIT PERSISTED -> the origin to layer onto
+# the selected access mode. A supplied --public-origin wins; otherwise a valid
+# APP_BASE_URL from the existing .env is restored so reconfiguration can rebuild
+# its CORS and Host allowlists without dropping that family route.
+_resolve_public_origin_layer() {
+  local explicit="$1" persisted="$2" candidate
+  if [ -n "$explicit" ]; then candidate="$explicit"; else candidate="$persisted"; fi
+  [ -n "$candidate" ] || return 1
+  _public_origin_host "$candidate" >/dev/null || return 1
+  printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]'
 }
 
 # -----------------------------------------------------------------------------
@@ -710,12 +761,12 @@ while [ $# -gt 0 ]; do
     --public-origin)
       NI_PUBLIC_ORIGIN="$2"
       _public_origin_host "$NI_PUBLIC_ORIGIN" >/dev/null \
-        || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: --public-origin https://jarvis.example.ts.net"
+        || die "--public-origin must be exactly https://DNS-host[:port] (no path, query, fragment, userinfo, or IP literal)." "Example: --public-origin https://jarvis.example.ts.net"
       shift 2 ;;
     --public-origin=*)
       NI_PUBLIC_ORIGIN="${1#*=}"
       _public_origin_host "$NI_PUBLIC_ORIGIN" >/dev/null \
-        || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: --public-origin https://jarvis.example.ts.net"
+        || die "--public-origin must be exactly https://DNS-host[:port] (no path, query, fragment, userinfo, or IP literal)." "Example: --public-origin https://jarvis.example.ts.net"
       shift ;;
     -h|--help)
       sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -80
@@ -1135,6 +1186,19 @@ if [ -f .env ]; then
   fi
 fi
 
+# Reconfiguration starts each access-mode accumulator from scratch. Restore a
+# previously configured named HTTPS origin before rebuilding those accumulators,
+# unless this invocation supplied a replacement. Without this seed,
+# merge_env_file preserves APP_BASE_URL itself but LAN/tunnel reconfiguration
+# silently drops the matching CORS and nginx Host allowlist entries.
+_EXISTING_APP_BASE_URL="$(existing_env_value APP_BASE_URL || true)"
+if _PUBLIC_ORIGIN_LAYER="$(_resolve_public_origin_layer "$NI_PUBLIC_ORIGIN" "$_EXISTING_APP_BASE_URL")"; then
+  if [ -z "$NI_PUBLIC_ORIGIN" ] && [ -n "$_EXISTING_APP_BASE_URL" ]; then
+    info "Keeping named private HTTPS origin from existing APP_BASE_URL: ${_EXISTING_APP_BASE_URL}"
+  fi
+  NI_PUBLIC_ORIGIN="$_PUBLIC_ORIGIN_LAYER"
+fi
+
 if [ ! -f .env.example ]; then
   die ".env.example not found in $SCRIPT_DIR." \
       "Run this script from the repo root, or: git pull"
@@ -1191,12 +1255,11 @@ else
   1) On this computer only (recommended to start)
      Everything works here: sign-in links, passkeys (fingerprint/face/PIN).
   2) From devices on your home or lab network
-     Sign-in links can be received on any device; a durable sign-in needs
-     a named HTTPS origin (add option 3 or 4, or --public-origin). Passkeys
-     work on this computer (add option 3 or 4 later for passkeys
-     everywhere). Your browser will
-     show a one-time certificate warning per device — expected for a
-     private setup.
+     The dashboard view uses plain HTTP on your trusted LAN. Other devices
+     can view it, but sign-ins there will not stay active. A durable sign-in
+     needs a named HTTPS origin (add option 3 or 4, or --public-origin).
+     Passkeys work on this computer (add option 3 or 4 later for passkeys
+     everywhere).
   3) From anywhere — Cloudflare Tunnel (free, no router changes)
      Full features everywhere incl. passkeys. Needs a free Cloudflare
      account and a tunnel token (guided).
@@ -1432,7 +1495,7 @@ esac
 PUBLIC_ORIGIN_HOST=""
 if [ -n "$NI_PUBLIC_ORIGIN" ]; then
   PUBLIC_ORIGIN_HOST="$(_public_origin_host "$NI_PUBLIC_ORIGIN")" \
-    || die "--public-origin must be an https:// URL with a DNS hostname (an IP is not a valid origin)." "Example: https://jarvis.example.ts.net"
+    || die "--public-origin must be exactly https://DNS-host[:port] (no path, query, fragment, userinfo, or IP literal)." "Example: https://jarvis.example.ts.net"
   [ -z "$APP_BASE_URL_VALUE" ] && APP_BASE_URL_VALUE="$NI_PUBLIC_ORIGIN"
   DASHBOARD_SERVER_NAME_VALUE="$(_append_server_name "$DASHBOARD_SERVER_NAME_VALUE" "$PUBLIC_ORIGIN_HOST")"
   [ -n "$CORS_ORIGINS_OVERRIDE" ] || CORS_ORIGINS_OVERRIDE="http://localhost:${DASHBOARD_HOST_PORT:-3001}"

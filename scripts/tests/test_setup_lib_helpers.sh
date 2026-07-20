@@ -609,10 +609,12 @@ esac
 # _is_lan_ipv4 accepts the RFC1918 address other LAN devices reach this host by and
 # rejects docker/CGNAT/link-local ranges. _append_server_name / _append_csv build
 # the accumulating nginx Host allowlist and CORS list (LAN + origin keep BOTH
-# hostnames). _public_origin_host extracts an https:// DNS hostname and refuses IP
-# literals (a raw IP is never a valid WebAuthn RP-ID / public-cert host). These
-# pure helpers live in setup.sh (before the flag parser); extract and eval them.
-ingress_src="$(sed -n '/^_is_lan_ipv4()/,/^}/p;/^_append_server_name()/,/^}/p;/^_append_csv()/,/^}/p;/^_public_origin_host()/,/^}/p' "$SETUP_SCRIPT")"
+# hostnames). _public_origin_host accepts an origin-only https:// DNS URL and
+# refuses IP literals or URL components beyond an optional port. The resolver
+# prefers an explicit origin, then a valid origin persisted in APP_BASE_URL.
+# These pure helpers live in setup.sh (before the flag parser); extract and eval
+# them.
+ingress_src="$(sed -n '/^_is_lan_ipv4()/,/^}/p;/^_append_server_name()/,/^}/p;/^_append_csv()/,/^}/p;/^_public_origin_host()/,/^}/p;/^_resolve_public_origin_layer()/,/^}/p' "$SETUP_SCRIPT")"
 eval "$ingress_src"
 
 _is_lan_ipv4 192.168.1.5 && rc=0 || rc=$?; expect_eq "_is_lan_ipv4 accepts 192.168.x" "$rc" "0"
@@ -636,11 +638,67 @@ expect_eq "_append_csv de-dupes" "$(_append_csv 'https://a,https://b' https://a)
 
 expect_eq "_public_origin_host extracts a DNS hostname" \
   "$(_public_origin_host https://jarvis.example.ts.net)" "jarvis.example.ts.net"
-expect_eq "_public_origin_host strips port and path" \
-  "$(_public_origin_host https://jarvis.example.ts.net:8443/x)" "jarvis.example.ts.net"
-_public_origin_host https://10.0.0.5   >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses an IPv4 literal" "$rc" "1"
-_public_origin_host 'https://[::1]'    >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses a bracketed IPv6 literal" "$rc" "1"
-_public_origin_host http://jarvis.example >/dev/null && rc=0 || rc=$?; expect_eq "_public_origin_host refuses non-https" "$rc" "1"
+expect_eq "_public_origin_host accepts and strips a numeric port" \
+  "$(_public_origin_host https://jarvis.example.ts.net:8443)" "jarvis.example.ts.net"
+expect_eq "_public_origin_host canonicalizes DNS case like browsers" \
+  "$(_public_origin_host https://Jarvis.Example.TS.Net:8443)" "jarvis.example.ts.net"
+for bad_origin in \
+  'https://jarvis.example.ts.net/x' \
+  'https://jarvis.example.ts.net?x=1' \
+  'https://jarvis.example.ts.net#fragment' \
+  'https://user@jarvis.example.ts.net' \
+  'https://10.0.0.5' \
+  'https://[::1]' \
+  'https://2001:db8::1' \
+  'https://0x7f000001' \
+  'https://0x7f.1' \
+  'https://0177.0.0.1' \
+  'https://127.1' \
+  'https://jarvis.123' \
+  'https://jarvis.0x' \
+  'https://jarvis.0X' \
+  'http://jarvis.example.ts.net' \
+  'https://-jarvis.example.ts.net' \
+  'https://jarvis..example.ts.net' \
+  'https://jarvis_example.ts.net' \
+  'https://jarvis.example.ts.net:' \
+  'https://jarvis.example.ts.net:not-a-port' \
+  'https://jarvis.example.ts.net:0' \
+  'https://jarvis.example.ts.net:65536'; do
+  _public_origin_host "$bad_origin" >/dev/null && rc=0 || rc=$?
+  expect_eq "_public_origin_host refuses ${bad_origin}" "$rc" "1"
+done
+
+if declare -F _resolve_public_origin_layer >/dev/null; then
+  persisted_origin="$(_resolve_public_origin_layer '' https://family.example.ts.net)"
+  expect_eq "persisted APP_BASE_URL becomes the named-origin layer when no replacement is supplied" \
+    "$persisted_origin" "https://family.example.ts.net"
+  expect_eq "explicit --public-origin wins over persisted APP_BASE_URL" \
+    "$(_resolve_public_origin_layer https://new.example.ts.net https://family.example.ts.net)" \
+    "https://new.example.ts.net"
+  expect_eq "the resolved origin canonicalizes DNS case like browsers" \
+    "$(_resolve_public_origin_layer https://Family.Example.TS.Net:8443 '')" \
+    "https://family.example.ts.net:8443"
+  _resolve_public_origin_layer '' 'https://family.example.ts.net/path' >/dev/null && rc=0 || rc=$?
+  expect_eq "an invalid persisted APP_BASE_URL is not restored as a named-origin layer" "$rc" "1"
+
+  persisted_host="$(_public_origin_host "$persisted_origin")"
+  expect_eq "LAN CORS keeps its HTTP routes and appends the persisted named origin" \
+    "$(_append_csv 'http://localhost:3001,http://10.0.0.17:3001' "$persisted_origin")" \
+    "http://localhost:3001,http://10.0.0.17:3001,https://family.example.ts.net"
+  expect_eq "LAN Host allowlist keeps its IP and appends the persisted named origin" \
+    "$(_append_server_name '10.0.0.17' "$persisted_host")" \
+    "10.0.0.17 family.example.ts.net"
+  expect_eq "tunnel CORS keeps its HTTPS route and appends the persisted named origin" \
+    "$(_append_csv 'https://tunnel.example.net,https://localhost:3001' "$persisted_origin")" \
+    "https://tunnel.example.net,https://localhost:3001,https://family.example.ts.net"
+  expect_eq "tunnel Host allowlist keeps both named origins" \
+    "$(_append_server_name 'tunnel.example.net' "$persisted_host")" \
+    "tunnel.example.net family.example.ts.net"
+else
+  printf 'FAIL: setup.sh does not define _resolve_public_origin_layer\n' >&2
+  fail=1
+fi
 
 # === setup.sh access-mode / ingress wiring (static) ==========================
 
@@ -653,6 +711,14 @@ scheck "setup.sh parses --public-origin" '\-\-public-origin\)'
 scheck "public-origin feeds APP_BASE_URL" 'APP_BASE_URL_VALUE="\$NI_PUBLIC_ORIGIN"'
 scheck "public-origin feeds CORS_ORIGINS" '_append_csv "\$CORS_ORIGINS_OVERRIDE" "\$NI_PUBLIC_ORIGIN"'
 scheck "public-origin feeds the Host allowlist" '_append_server_name "\$DASHBOARD_SERVER_NAME_VALUE" "\$PUBLIC_ORIGIN_HOST"'
+scheck "a reconfigure resolves its named-origin layer from persisted APP_BASE_URL" '_resolve_public_origin_layer "\$NI_PUBLIC_ORIGIN" "\$_EXISTING_APP_BASE_URL"'
+scheck "the LAN wizard truthfully identifies its plain-HTTP route" 'dashboard view uses plain HTTP'
+if grep -Fq 'certificate warning' "$SETUP_SCRIPT"; then
+  printf 'FAIL: LAN wizard still promises a certificate warning although the route is plain HTTP\n' >&2
+  fail=1
+else
+  pass "LAN wizard does not promise a certificate warning for its plain-HTTP route"
+fi
 scheck "the setup link uses a loopback/verified base" 'print_setup_link "\$SETUP_LINK_BASE"'
 # PROFILE_ARGS + COMPOSE_PROFILES are now registry-driven (no per-profile literal
 # list in setup.sh): assert the group is engaged as an ACTIVE_PROFILE, and let the
@@ -751,8 +817,13 @@ esac
 # --help then exits before any docker work, so this is safe as a subprocess).
 out="$(run_setup --public-origin https://10.0.0.5 --help)" && rc=0 || rc=$?
 case "${rc}:${out}" in
-  1:*"https:// URL with a DNS hostname"*) pass "--public-origin https://10.0.0.5 is refused (an IP is not a valid origin)" ;;
+  1:*"exactly https://DNS-host[:port]"*) pass "--public-origin https://10.0.0.5 is refused (an IP is not a valid origin)" ;;
   *) printf 'FAIL: --public-origin IP literal not refused (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+out="$(run_setup --public-origin https://jarvis.example.ts.net/path --help)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*"exactly https://DNS-host[:port]"*) pass "--public-origin path is refused with the origin-only shape" ;;
+  *) printf 'FAIL: --public-origin path did not report the origin-only shape (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
 esac
 out="$(run_setup --public-origin https://jarvis.example.ts.net --help)" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ]; then
