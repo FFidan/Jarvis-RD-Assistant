@@ -201,7 +201,9 @@ write_last_run() {
   local succeeded="false"
   local secrets_complete="false"
   if [ "$SECRETS_STATE" = "ok" ] \
-     || { [ "$SECRETS_STATE" = "skipped" ] && [ "${ENVIRONMENT:-development}" != "production" ]; }; then
+     || { [ "$SECRETS_STATE" = "skipped" ] \
+          && [ "$ENCRYPT" -eq 0 ] \
+          && [ "${ENVIRONMENT:-development}" != "production" ]; }; then
     secrets_complete="true"
   fi
   local signature_complete="false"

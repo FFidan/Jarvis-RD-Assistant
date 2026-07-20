@@ -201,7 +201,8 @@ check "records per-store outcome in .last_run.json" '"stores":\{"jarvis":'
 
 # Completion truth is single-sourced from backup.sh's real write_last_run body.
 # The manifest is mandatory, an encrypted run also requires its signature, and
-# secrets may be skipped only outside production. Qdrant remains best-effort.
+# secrets may be skipped only for an unencrypted non-production run. Qdrant
+# remains best-effort.
 COMPLETION_WLR="$(sed -n '/^write_last_run()/,/^}/p' "$BACKUP_SCRIPT")"
 last_run_json() {
   # last_run_json <secrets> <qdrant> <manifest> <signature> <environment> <encrypt>
@@ -249,9 +250,25 @@ fi
 
 lr_dev_skipped="$(last_run_json skipped skipped ok skipped development 0)"
 if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":true'; then
-  pass "non-production secrets=skipped may still be successful"
+  pass "unencrypted non-production secrets=skipped may still be successful"
 else
-  printf 'FAIL: non-production secrets=skipped was not successful (%s)\n' "$lr_dev_skipped" >&2
+  printf 'FAIL: unencrypted non-production secrets=skipped was not successful (%s)\n' "$lr_dev_skipped" >&2
+  fail=1
+fi
+
+lr_encrypted_skipped="$(last_run_json skipped skipped ok ok development 1)"
+if printf '%s' "$lr_encrypted_skipped" | grep -q '"succeeded":false'; then
+  pass "encrypted secrets=skipped cannot be recorded as a successful backup"
+else
+  printf 'FAIL: encrypted secrets=skipped was recorded as succeeded (%s)\n' "$lr_encrypted_skipped" >&2
+  fail=1
+fi
+
+lr_production_skipped="$(last_run_json skipped skipped ok skipped production 0)"
+if printf '%s' "$lr_production_skipped" | grep -q '"succeeded":false'; then
+  pass "production secrets=skipped cannot be recorded as a successful backup"
+else
+  printf 'FAIL: production secrets=skipped was recorded as succeeded (%s)\n' "$lr_production_skipped" >&2
   fail=1
 fi
 
