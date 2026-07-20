@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-05 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-07-20 | routes: /settings, /settings?section=&item= -->
 
 # Settings
 
@@ -20,7 +20,7 @@ Edit your display name and email address. Changing your email triggers a verific
 
 ### Account data export
 
-Download a ZIP of your own account data from the Account section. The export is scoped to the signed-in user and includes structured account records; it is not a shared corpus export or a PDF backup.
+Download a ZIP of your own account data from the Account section. This is the GDPR/account export: it is scoped to the signed-in user and includes structured account records, not the shared corpus or a PDF backup.
 
 ### Appearance
 
@@ -96,7 +96,7 @@ Cloud providers are configured separately in **Providers & Routing**. Adding a c
 
 ### Automation
 
-Configure the schedule for automatic background jobs: when to fetch new papers from sources, when to run Pulse deck generation, and when to run other scheduled maintenance tasks.
+Configure the schedule for automatic background jobs: when to fetch new papers from sources, when to run Pulse deck generation, and when to run other scheduled maintenance tasks. `automation.auto_summarize_discovered` controls whether newly discovered papers are summarized automatically; it is off by default. This is a deployment-wide setting managed by an administrator, while the library papers and their resulting work remain scoped to the relevant library holder.
 
 ### Extraction Templates
 
@@ -123,6 +123,8 @@ Configure Pulse-specific settings. The panel is divided into two cards:
 
 - **Schedule card** — toggle Pulse on/off, set the daily run time, and adjust the **deck size** (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.
 - **Advanced tuning card** (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations. Includes a **Recommendations enabled** toggle that controls whether personalised paper recommendations are computed at all.
+
+Repeated negative feedback for a topic dampens its positive similarity contribution to future recommendations. It never increases a negative-similarity score.
 
 ### Timer
 

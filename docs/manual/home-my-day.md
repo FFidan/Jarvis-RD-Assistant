@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-05 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-07-20 | routes: /, /my-day -->
 
 # My Day & Home
 
@@ -28,10 +28,11 @@ A **Prepare library** section queues background work for papers that are already
 
 | Operation | What it does |
 |-----------|-------------|
+| Process whole library | Queues eligible library papers for PDF download and processing, explicitly including summary generation, without requiring you to run each stage separately |
 | Process PDFs | Run text extraction and chunking for papers that have a local PDF but have not yet been processed |
 | Summarise | Generate summaries for processed papers that do not yet have summaries |
 
-Each queued operation appears in the Jobs panel while it runs. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.
+Each queued operation appears in the Jobs panel while it runs, with progress and completed, failed, or blocked counts. You can cancel a running job; completed work remains, and it is safe to run the relevant operation again for papers that were skipped or did not finish. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.
 
 Entity extraction is an administrator action and is shown only to admins after the advanced controls are opened.
 
