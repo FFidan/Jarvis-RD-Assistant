@@ -3,8 +3,10 @@
  *
  * Plain JS, served verbatim from /public (no bundler — cannot import the TS
  * classifier). The cacheability policy below is a HAND-MIRROR of
- * `frontend/src/lib/sw-cache-policy.ts` (which IS unit-tested). Keep the two
- * in sync: same safelist, same NON-GOAL denylist.
+ * `frontend/src/lib/sw-cache-policy.ts` (which IS unit-tested). A parity test
+ * (`src/__tests__/sw-cache-policy.test.ts`) reads this file as text and
+ * asserts the two SAFELIST/DENYLIST arrays are the same set of patterns, so
+ * editing either side without the other fails the test suite.
  *
  * Strategy:
  *   - App shell: cache-first for same-origin hashed static assets; a

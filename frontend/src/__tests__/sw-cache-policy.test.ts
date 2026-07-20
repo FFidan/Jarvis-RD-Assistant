@@ -6,8 +6,14 @@
  * runtime-cached. Read surfaces (library/detail/notes-read/extractions/stats)
  * MUST be cacheable.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { isCacheableApiRequest } from '@/lib/sw-cache-policy';
+import {
+  isCacheableApiRequest,
+  __SW_CACHE_SAFELIST,
+  __SW_CACHE_DENYLIST,
+} from '@/lib/sw-cache-policy';
 
 describe('isCacheableApiRequest — offline-capable READ surfaces (cacheable)', () => {
   const cacheableGets = [
@@ -104,5 +110,53 @@ describe('isCacheableApiRequest — method + non-API guards', () => {
     expect(
       isCacheableApiRequest('GET', 'https://app.example.com/api/ask/stream'),
     ).toBe(false);
+  });
+});
+
+/**
+ * `frontend/public/sw.js` is plain JS served verbatim (no bundler, cannot
+ * import this TS module) and hand-mirrors the SAFELIST/DENYLIST above. This
+ * suite reads sw.js as text, extracts its regex literals, and asserts SET
+ * EQUALITY against the exports below — so editing either side without the
+ * other fails here instead of silently drifting.
+ */
+describe('sw.js cache-policy parity', () => {
+  const swSource = readFileSync(
+    path.resolve(__dirname, '../../public/sw.js'),
+    'utf8',
+  );
+
+  function extractRegexLiterals(source: string, varName: string): string[] {
+    const startMarker = `const ${varName} = [`;
+    const start = source.indexOf(startMarker);
+    if (start === -1) {
+      throw new Error(`sw.js: ${varName} block not found`);
+    }
+    const blockStart = start + startMarker.length;
+    const blockEnd = source.indexOf('];', blockStart);
+    if (blockEnd === -1) {
+      throw new Error(`sw.js: ${varName} block is not closed with '];'`);
+    }
+    return source
+      .slice(blockStart, blockEnd)
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('/'))
+      .map((line) => line.replace(/,$/, ''));
+  }
+
+  const swSafelist = extractRegexLiterals(swSource, 'SAFELIST');
+  const swDenylist = extractRegexLiterals(swSource, 'DENYLIST');
+  const tsSafelist = __SW_CACHE_SAFELIST.map((re) => re.toString());
+  const tsDenylist = __SW_CACHE_DENYLIST.map((re) => re.toString());
+
+  it('SAFELIST: sw.js and sw-cache-policy.ts are the same set of patterns', () => {
+    expect(swSafelist).toHaveLength(tsSafelist.length);
+    expect(new Set(swSafelist)).toEqual(new Set(tsSafelist));
+  });
+
+  it('DENYLIST: sw.js and sw-cache-policy.ts are the same set of patterns', () => {
+    expect(swDenylist).toHaveLength(tsDenylist.length);
+    expect(new Set(swDenylist)).toEqual(new Set(tsDenylist));
   });
 });
