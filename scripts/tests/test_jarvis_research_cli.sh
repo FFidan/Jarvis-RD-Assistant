@@ -47,6 +47,10 @@ case "${1:-} ${2:-}" in
   "remote get-url")       printf '%s\n' "${STUB_REMOTE:-git@github.com:limitcycle-oss/jarvis-rd-assistant.git}"; exit 0 ;;
 esac
 case "${1:-}" in
+  describe)
+    [ -n "${STUB_EXACT_TAG:-}" ] || exit 1
+    printf '%s\n' "$STUB_EXACT_TAG"
+    exit 0 ;;
   rev-parse)
     # rev-parse HEAD -> head sha; rev-parse <ref> -> a per-ref sha.
     case "${2:-}" in
@@ -158,6 +162,11 @@ make_repo() {
   ln -sf "$CLI" "$dir/scripts/jarvis-research.sh"
   ln -sf "$LIB" "$dir/scripts/setup_lib.sh"
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
+  cat > "$dir/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "1.1.3"
+PYPROJECT
   cat > "$dir/versions.env" <<'VE'
 POSTGRES_IMAGE=postgres:16.8
 OLLAMA_IMAGE=ollama/ollama:0.31.2
@@ -184,7 +193,7 @@ new_env() {
   # next through run_cli's ${VAR:-default} passthrough.
   unset STUB_MIGRATIONS STUB_MIG_CONTENT MANIFEST_MISS STUB_ANCESTOR STUB_MERGE_RC \
         STUB_DIRTY STUB_BRANCH STUB_REMOTE STUB_HEALTH STUB_FAIL_STAGE_PULL \
-        STUB_NO_DAEMON STUB_TAGS STUB_RUN_STATE 2>/dev/null || true
+        STUB_NO_DAEMON STUB_TAGS STUB_RUN_STATE STUB_EXACT_TAG 2>/dev/null || true
   REPO="$ROOT/repo.$RANDOM.$RANDOM"
   CFG="$ROOT/cfg.$RANDOM.$RANDOM"
   BK="$ROOT/backups.$RANDOM.$RANDOM"
@@ -212,7 +221,7 @@ run_cli() {
     "STUB_MIGRATIONS=${STUB_MIGRATIONS:-}" "STUB_MIG_CONTENT=${STUB_MIG_CONTENT:-}"
     "MANIFEST_MISS=${MANIFEST_MISS:-}" "STUB_HEALTH=${STUB_HEALTH-healthy}"
     "STUB_FAIL_STAGE_PULL=${STUB_FAIL_STAGE_PULL:-0}" "STUB_TAGS=${STUB_TAGS:-v1.1.3}"
-    "STUB_NO_DAEMON=${STUB_NO_DAEMON:-0}")
+    "STUB_NO_DAEMON=${STUB_NO_DAEMON:-0}" "STUB_EXACT_TAG=${STUB_EXACT_TAG:-}")
   if [ "$norepo" -eq 1 ]; then
     ( cd "$REPO" && "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" ) </dev/null 2>&1
   else
@@ -457,14 +466,17 @@ fi
 new_env; register_repo; STUB_HEALTH="unhealthy"
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_HEALTH
-if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] && ! grep -q '"committed"' "$PENDING_FILE" 2>/dev/null; then
-  pass "update_commits_txn_only_after_health: failed health leaves txn pending, not committed"
+if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] \
+   && ! grep -q '"committed"' "$PENDING_FILE" 2>/dev/null \
+   && grep -qx 'JARVIS_VERSION=1.1.2' "$REPO/.env"; then
+  pass "update_commits_txn_only_after_health: failed health leaves txn pending and old pin intact"
 else
-  check_fail "update_commits_txn_only_after_health: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE")"
+  check_fail "update_commits_txn_only_after_health: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE") env=$(grep JARVIS_VERSION "$REPO/.env")"
 fi
 
 # --to targets an rc tag with the same gates.
 new_env; register_repo
+STUB_EXACT_TAG="v1.1.4-rc.1"
 out="$(run_cli update --to v1.1.4-rc.1 --yes)"; rc=$?
 if grep -q 'git merge --ff-only v1.1.4-rc.1' "$STUB_LOG" && grep -q '^JARVIS_VERSION=1.1.4-rc.1$' "$REPO/.env"; then
   pass "update_to_flag_targets_rc_with_same_gates: rc tag merged + pinned v-less"

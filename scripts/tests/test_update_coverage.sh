@@ -13,7 +13,9 @@
 #   * update.sh --yes runs promptless; all image pulls complete before any
 #     container is recreated; a pull failure prints the split recovery and exits
 #     1 with nothing recreated; a no-healthcheck service is reported, not silently
-#     counted as verified;
+#     counted as verified; checkout metadata overrides a stale .env application
+#     pin, including an exact release-candidate tag, and the new pin is persisted
+#     only after successful health checks;
 #   * latest_stable_tag excludes pre-releases and sorts versionally;
 #   * install_cli_shim is idempotent and prepend-dedups the installs registry;
 #   * verify_release_manifests strips the tag's v-prefix from image refs, passes
@@ -119,6 +121,11 @@ trap 'rm -rf "$FX" "$STUB"' EXIT
 ln -s "$UPDATE_SCRIPT" "$FX/update.sh"
 mkdir -p "$FX/scripts"
 ln -s "$LIB" "$FX/scripts/setup_lib.sh"
+cat > "$FX/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "1.2.0"
+PYPROJECT
 # Pins deliberately unequal to the stub's reported running image, so every base
 # third-party service diffs as "update available".
 cat > "$FX/versions.env" <<'VERS'
@@ -131,14 +138,29 @@ CADDY_IMAGE=caddy:test-new
 VECTOR_IMAGE=timberio/vector:test-new
 LANGFUSE_POSTGRES_IMAGE=postgres:test-new-alpine
 VERS
-# TORCH_VARIANT present so the backfill is a no-op; no telegram token.
-printf 'TORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\n' > "$FX/.env"
+# TORCH_VARIANT present so the backfill is a no-op; no telegram token. The stale
+# application pin models a manual git-pull upgrade from 1.1.3 to this checkout.
+reset_fixture_env() {
+  printf 'TORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\nJARVIS_VERSION=1.1.3\n' > "$FX/.env"
+}
+reset_fixture_env
+
+cat > "$STUB/git" <<'GIT'
+#!/usr/bin/env bash
+if [ "${1:-}" = describe ] && [ -n "${STUB_EXACT_TAG:-}" ]; then
+  printf '%s\n' "$STUB_EXACT_TAG"
+  exit 0
+fi
+exit 1
+GIT
+chmod +x "$STUB/git"
 
 # docker stub: logs pull/up/build to $DOCKER_LOG; reports the base third-party
 # and application services as running with a stale image; optional services are
 # absent (not deployed). STUB_HEALTH / STUB_RUN_STATE / STUB_FAIL_PULL tune it.
 cat > "$STUB/docker" <<'DOCKER'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_CALL_LOG"
 log() { printf '%s\n' "$*" >> "$DOCKER_LOG"; }
 running_cid() {
   case "$1" in
@@ -168,9 +190,9 @@ if [ "${1:-}" = "compose" ]; then
   case "${1:-}" in
     version) exit 0 ;;
     ps)      running_cid "${3:-}"; exit 0 ;;
-    pull)    log "pull ${*:2}"; [ "${STUB_FAIL_PULL:-0}" = 1 ] && exit 1; exit 0 ;;
-    up)      log "up ${*:2}"; exit 0 ;;
-    build)   log "build ${*:2}"; exit 0 ;;
+    pull)    log "pull ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; [ "${STUB_FAIL_PULL:-0}" = 1 ] && exit 1; exit 0 ;;
+    up)      log "up ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
+    build)   log "build ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
     *)       exit 0 ;;
   esac
 fi
@@ -180,10 +202,83 @@ chmod +x "$STUB/docker"
 
 run_update() {
   : > "$FX/docker.log"
+  : > "$FX/docker-calls.log"
   mkdir -p "$FX/home"
-  DOCKER_LOG="$FX/docker.log" HOME="$FX/home" XDG_CONFIG_HOME="$FX/home/.config" \
+  DOCKER_LOG="$FX/docker.log" DOCKER_CALL_LOG="$FX/docker-calls.log" \
+    STUB_EXACT_TAG="${STUB_EXACT_TAG:-}" STUB_FAIL_PULL="${STUB_FAIL_PULL:-0}" \
+    HOME="$FX/home" XDG_CONFIG_HOME="$FX/home/.config" \
     PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" </dev/null 2>&1
 }
+
+# --- checkout_version_overrides_stale_env_and_commits_after_health ----------
+reset_fixture_env
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
+   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env"; then
+  pass "checkout_version_overrides_stale_env: app pull/up use 1.2.0 and success persists it"
+else
+  check_fail "checkout_version_overrides_stale_env: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# A staging failure must not claim that the old deployment advanced.
+reset_fixture_env
+out="$(STUB_FAIL_PULL=1 run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+  pass "staging_failure_preserves_persisted_pin: .env remains 1.1.3"
+else
+  check_fail "staging_failure_preserves_persisted_pin: rc=$rc env=$(cat "$FX/.env") out=$out"
+fi
+
+# An exact release tag is more specific than pyproject's stable project version.
+reset_fixture_env
+out="$(STUB_EXACT_TAG=v1.2.0-rc.1 run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0-rc\.1$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0-rc.1' "$FX/.env"; then
+  pass "exact_rc_tag_wins: app images and persisted pin use 1.2.0-rc.1"
+else
+  check_fail "exact_rc_tag_wins: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# Local builds consume the same resolved tag and commit it only after bring-up.
+reset_fixture_env
+out="$(run_update --build-local --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Eq '^build .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
+   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env"; then
+  pass "build_local_uses_checkout_version: build/up use 1.2.0 and success persists it"
+else
+  check_fail "build_local_uses_checkout_version: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# Invalid or absent checkout metadata must fail before Compose is invoked and
+# must leave the deployment pin untouched.
+reset_fixture_env
+sed 's/version = "1.2.0"/version = "not valid"/' "$FX/pyproject.toml" > "$FX/pyproject.invalid"
+mv "$FX/pyproject.invalid" "$FX/pyproject.toml"
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -s "$FX/docker-calls.log" ] \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+  pass "invalid_checkout_version_fails_before_compose: no Docker call and old pin remains"
+else
+  check_fail "invalid_checkout_version_fails_before_compose: rc=$rc calls=$(cat "$FX/docker-calls.log") env=$(cat "$FX/.env") out=$out"
+fi
+rm -f "$FX/pyproject.toml"
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -s "$FX/docker-calls.log" ] \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+  pass "missing_checkout_version_fails_before_compose: no Docker call and old pin remains"
+else
+  check_fail "missing_checkout_version_fails_before_compose: rc=$rc calls=$(cat "$FX/docker-calls.log") env=$(cat "$FX/.env") out=$out"
+fi
+cat > "$FX/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "1.2.0"
+PYPROJECT
 
 # --- update_yes_runs_promptless ----------------------------------------------
 out="$(run_update --yes)"; rc=$?
