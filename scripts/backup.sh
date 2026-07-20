@@ -70,8 +70,10 @@ sign_manifest() {
     rm -f "$tmp"
     return 1
   fi
-  chmod 644 "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "${manifest}.hmac"
+  if ! chmod 644 "$tmp" 2>/dev/null || ! mv -f "$tmp" "${manifest}.hmac"; then
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # The script's tests source it to exercise the two helpers above without taking a
@@ -186,12 +188,34 @@ JARVIS_STATE="failed"
 LITELLM_STATE="failed"
 SECRETS_STATE="skipped"
 QDRANT_STATE="skipped"
+MANIFEST_STATE="failed"
+if [ "$ENCRYPT" -eq 1 ]; then
+  MANIFEST_SIGNATURE_STATE="failed"
+else
+  MANIFEST_SIGNATURE_STATE="skipped"
+fi
 
 # write_last_run — emit ${BACKUP_DIR}/.last_run.json (a dotfile, NOT an archive,
 # so the router's allowlist/globs never match it).
 write_last_run() {
   local succeeded="false"
-  [ "$JARVIS_STATE" = "ok" ] && [ "$LITELLM_STATE" = "ok" ] && succeeded="true"
+  local secrets_complete="false"
+  if [ "$SECRETS_STATE" = "ok" ] \
+     || { [ "$SECRETS_STATE" = "skipped" ] && [ "${ENVIRONMENT:-development}" != "production" ]; }; then
+    secrets_complete="true"
+  fi
+  local signature_complete="false"
+  if { [ "$ENCRYPT" -eq 0 ] && [ "$MANIFEST_SIGNATURE_STATE" = "skipped" ]; } \
+     || { [ "$ENCRYPT" -eq 1 ] && [ "$MANIFEST_SIGNATURE_STATE" = "ok" ]; }; then
+    signature_complete="true"
+  fi
+  if [ "$JARVIS_STATE" = "ok" ] \
+     && [ "$LITELLM_STATE" = "ok" ] \
+     && [ "$secrets_complete" = "true" ] \
+     && [ "$MANIFEST_STATE" = "ok" ] \
+     && [ "$signature_complete" = "true" ]; then
+    succeeded="true"
+  fi
   local enc="false"
   [ "$ENCRYPT" -eq 1 ] && enc="true"
   # skipped_maintenance distinguishes a run that intentionally stood down for an
@@ -201,7 +225,7 @@ write_last_run() {
   [ "${SKIPPED_MAINTENANCE:-0}" = "1" ] && skipped="true"
   local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
   cat > "$lr_tmp" <<JSON
-{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}"}}
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
 JSON
   mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
 }
@@ -433,16 +457,30 @@ else
 fi
 
 # --- Backup manifest ---------------------------------------------------------
+# discard_current_backup — delete only the exact timestamp being finalized, so
+# a failed manifest or signature cannot leave an apparently complete restore point.
+discard_current_backup() {
+  find "$BACKUP_DIR" -maxdepth 1 -type f \( \
+      -name "jarvis_${TIMESTAMP}.sql.gz" -o -name "jarvis_${TIMESTAMP}.sql.gz.enc" \
+      -o -name "jarvis_${TIMESTAMP}.sql.gz.tmp" -o -name "jarvis_${TIMESTAMP}.sql.gz.enc.tmp" \
+      -o -name "litellm_${TIMESTAMP}.sql.gz" -o -name "litellm_${TIMESTAMP}.sql.gz.enc" \
+      -o -name "litellm_${TIMESTAMP}.sql.gz.tmp" -o -name "litellm_${TIMESTAMP}.sql.gz.enc.tmp" \
+      -o -name "secrets_${TIMESTAMP}.tar.gz" -o -name "secrets_${TIMESTAMP}.tar.gz.enc" \
+      -o -name "secrets_${TIMESTAMP}.tar.gz.tmp" -o -name "secrets_${TIMESTAMP}.tar.gz.enc.tmp" \
+      -o -name "qdrant_*_${TIMESTAMP}.snapshot" -o -name "qdrant_*_${TIMESTAMP}.snapshot.enc" \
+      -o -name "qdrant_*_${TIMESTAMP}.snapshot.tmp" -o -name "qdrant_*_${TIMESTAMP}.snapshot.enc.tmp" \
+      -o -name "qdrant_*_${TIMESTAMP}.snapshot.raw" \
+      -o -name "manifest_${TIMESTAMP}.json" -o -name "manifest_${TIMESTAMP}.json.tmp" \
+      -o -name "manifest_${TIMESTAMP}.json.hmac" -o -name "manifest_${TIMESTAMP}.json.hmac.tmp" \
+    \) -delete
+}
+
 # write_manifest — emit ${BACKUP_DIR}/manifest_${TIMESTAMP}.json listing every
 # archive this run produced (filename, sha256, size) plus app_version and the
 # applied schema_version, so the restore UI can show per-restore-point version
 # compatibility. PLAINTEXT METADATA ONLY (filenames, hex digests, integers — no
 # secrets); it is not matched by the router's archive globs, so it is never
 # listed or downloaded as a backup.
-#
-# Failure-tolerant: a failed psql/sha256sum/write WARNs and returns 0 so it can
-# never regress an already-successful backup. Called as `write_manifest || true`
-# below, which also disables errexit for the whole function body.
 write_manifest() {
   local schema_version app_version created_at manifest manifest_tmp
   local first f base sum size
@@ -456,9 +494,9 @@ write_manifest() {
   created_at="$(date -Iseconds)"
   manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
   manifest_tmp="${manifest}.tmp"
-  {
+  if ! (
     printf '{"timestamp":"%s","app_version":"%s","schema_version":%s,"created_at":"%s","archives":[' \
-      "$TIMESTAMP" "$app_version" "$schema_version" "$created_at"
+      "$TIMESTAMP" "$app_version" "$schema_version" "$created_at" || exit 1
     first=1
     for f in "$BACKUP_DIR"/*"${TIMESTAMP}"*; do
       [ -f "$f" ] || continue
@@ -466,48 +504,84 @@ write_manifest() {
       case "$base" in
         manifest_*|*.tmp|*.raw) continue ;;
       esac
-      sum="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)" || sum=""
-      size="$(stat -c%s "$f" 2>/dev/null)" || size=0
-      [ "$first" -eq 1 ] || printf ','
+      sum="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)" || exit 1
+      printf '%s' "$sum" | grep -Eq '^[0-9a-f]{64}$' || exit 1
+      size="$(stat -c%s "$f" 2>/dev/null)" || exit 1
+      case "$size" in
+        ''|*[!0-9]*) exit 1 ;;
+      esac
+      [ "$first" -eq 1 ] || printf ',' || exit 1
       first=0
-      printf '{"filename":"%s","sha256":"%s","size_bytes":%s}' "$base" "$sum" "$size"
+      printf '{"filename":"%s","sha256":"%s","size_bytes":%s}' "$base" "$sum" "$size" || exit 1
     done
-    printf ']}'
-  } > "$manifest_tmp" 2>/dev/null || {
-    echo "[$(date -Iseconds)] WARNING: manifest write failed; continuing" >&2
+    printf ']}' || exit 1
+  ) > "$manifest_tmp" 2>/dev/null; then
+    echo "[$(date -Iseconds)] FATAL: manifest write or archive hash failed" >&2
     rm -f "$manifest_tmp"
-    return 0
-  }
-  chmod 644 "$manifest_tmp" 2>/dev/null || true
-  mv -f "$manifest_tmp" "$manifest" 2>/dev/null || {
-    echo "[$(date -Iseconds)] WARNING: manifest promote failed; continuing" >&2
+    return 1
+  fi
+  if ! chmod 644 "$manifest_tmp" 2>/dev/null || ! mv -f "$manifest_tmp" "$manifest" 2>/dev/null; then
+    echo "[$(date -Iseconds)] FATAL: manifest promote failed" >&2
     rm -f "$manifest_tmp"
-    return 0
-  }
+    return 1
+  fi
   echo "[$(date -Iseconds)] Backup manifest written to $manifest" >&2
+  return 0
 }
-write_manifest || true
 
 # publish_manifest_signature — sign the manifest this run wrote, then arm the ratchet.
 # Deployments with no backup key have nothing to sign with and are skipped here; STEP 2
-# of restore.sh skips the verification symmetrically. Never fatal — it can only run
-# after a successful backup and must not retroactively fail one. The marker is written
-# ONLY after a signature exists, so the requirement can never arm without one.
+# of restore.sh skips the verification symmetrically. The marker is written only after
+# a signature exists, so the requirement can never arm without one.
 publish_manifest_signature() {
   local manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
   [ "$ENCRYPT" -eq 1 ] || return 0
-  [ -f "$manifest" ] || return 0
+  if [ ! -f "$manifest" ]; then
+    echo "[$(date -Iseconds)] FATAL: cannot sign missing backup manifest" >&2
+    return 1
+  fi
   if ! sign_manifest "$manifest"; then
-    echo "[$(date -Iseconds)] WARNING: could not sign the backup manifest; continuing" >&2
-    return 0
+    echo "[$(date -Iseconds)] FATAL: could not sign the backup manifest" >&2
+    return 1
   fi
   echo "[$(date -Iseconds)] Backup manifest signature written to ${manifest}.hmac" >&2
-  if [ -d "$HOST_SECRETS_DIR" ] && [ ! -e "$MANIFEST_HMAC_MARKER" ]; then
-    : > "$MANIFEST_HMAC_MARKER" 2>/dev/null \
-      || echo "[$(date -Iseconds)] WARNING: could not require signed manifests in ${HOST_SECRETS_DIR}; continuing" >&2
+  if [ ! -d "$HOST_SECRETS_DIR" ]; then
+    echo "[$(date -Iseconds)] FATAL: cannot publish the signed-manifest requirement in ${HOST_SECRETS_DIR}" >&2
+    return 1
   fi
+  if [ ! -e "$MANIFEST_HMAC_MARKER" ] && ! : > "$MANIFEST_HMAC_MARKER" 2>/dev/null; then
+    echo "[$(date -Iseconds)] FATAL: could not require signed manifests in ${HOST_SECRETS_DIR}" >&2
+    return 1
+  fi
+  return 0
 }
-publish_manifest_signature || true
+
+finalize_backup() {
+  MANIFEST_STATE="failed"
+  if ! write_manifest; then
+    if ! discard_current_backup; then
+      echo "[$(date -Iseconds)] FATAL: could not discard incomplete backup ${TIMESTAMP}" >&2
+    fi
+    return 1
+  fi
+  MANIFEST_STATE="ok"
+  if [ "$ENCRYPT" -eq 1 ]; then
+    MANIFEST_SIGNATURE_STATE="failed"
+    if ! publish_manifest_signature; then
+      if ! discard_current_backup; then
+        echo "[$(date -Iseconds)] FATAL: could not discard unsigned backup ${TIMESTAMP}" >&2
+      fi
+      return 1
+    fi
+    MANIFEST_SIGNATURE_STATE="ok"
+  fi
+  return 0
+}
+
+if ! finalize_backup; then
+  echo "[$(date -Iseconds)] FATAL: backup finalization failed for timestamp ${TIMESTAMP}" >&2
+  exit 1
+fi
 
 # --- Optional S3 upload ------------------------------------------------------
 if [ -n "${BACKUP_S3_BUCKET:-}" ]; then

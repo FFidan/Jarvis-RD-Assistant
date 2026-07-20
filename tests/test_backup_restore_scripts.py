@@ -146,16 +146,32 @@ def _gate(
 # --- Script shape -----------------------------------------------------------------
 
 
-def test_backup_signs_the_manifest_after_writing_it(backup_src: str) -> None:
+def test_backup_finalization_writes_then_signs_fail_closed(backup_src: str) -> None:
     assert 'mv -f "$tmp" "${manifest}.hmac"' in backup_src
-    assert backup_src.index("\npublish_manifest_signature || true") > backup_src.index(
-        "\nwrite_manifest || true"
+    finalize = backup_src.split("finalize_backup() {", 1)[1].split("\n}\n", 1)[0]
+    assert finalize.index("if ! write_manifest; then") < finalize.index(
+        "if ! publish_manifest_signature; then"
     )
+    assert "\nif ! finalize_backup; then" in backup_src
 
 
 def test_backup_arms_the_requirement_only_after_a_signature_exists(backup_src: str) -> None:
     publish = backup_src.split("publish_manifest_signature() {", 1)[1].split("\n}\n", 1)[0]
     assert publish.index("sign_manifest") < publish.index("MANIFEST_HMAC_MARKER")
+
+
+def test_backup_signature_permission_failure_is_fatal(tmp_path: Path) -> None:
+    key = tmp_path / "backup_key"
+    key.write_text("a-backup-encryption-key\n")
+    manifest = tmp_path / f"manifest_{TS}.json"
+    manifest.write_text(f'{{"timestamp":"{TS}","archives":[]}}')
+    result = _run_bash(
+        "source scripts/backup.sh --functions-only;"
+        f' ENC_KEYFILE="{key}"; chmod() {{ return 1; }}; sign_manifest "{manifest}"'
+    )
+    assert result.returncode != 0
+    assert not (tmp_path / f"manifest_{TS}.json.hmac").exists()
+    assert not (tmp_path / f"manifest_{TS}.json.hmac.tmp").exists()
 
 
 def test_backup_retention_prunes_manifest_signatures(backup_src: str) -> None:
