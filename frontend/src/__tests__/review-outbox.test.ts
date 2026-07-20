@@ -13,14 +13,17 @@
  *   - cross-user: user B never drains / sees user A's queued reviews; foreign
  *     entries are purged on identity change.
  *   - clearReviewOutbox empties everything.
+ *   - default transport: a 503 maintenance response from the real endpoint
+ *     sets the maintenance store AND retains the queue.
  *
  * `fake-indexeddb/auto` is installed by the shared setup so idb-keyval performs
  * a real IDB round-trip here (no mock needed for the store itself). The auth
  * store is mocked so we control the active identity WITHOUT touching the real
  * auth-store module.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { clear as idbClear } from 'idb-keyval';
+import { useMaintenanceStore } from '@/stores/maintenance-store';
 
 // Mock the auth store's PUBLIC selector surface only — we never mutate the real
 // store; the outbox reads identity via useAuthStore.getState().getUser().
@@ -215,6 +218,30 @@ describe('cross-user safety (no auth-store mutation)', () => {
     });
     await drainReviewOutbox(post);
     expect(captured.every((r) => r.user_id === 1)).toBe(true);
+  });
+});
+
+describe('default transport (defaultPostBatch) — routed through apiFetch', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useMaintenanceStore.getState().clear();
+  });
+
+  it('a 503 maintenance response sets the maintenance store AND retains the queue', async () => {
+    await enqueueReview(1, 3, null);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Restore in progress' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'retry-after': '30' },
+      }),
+    );
+
+    const outcome = await drainReviewOutbox();
+
+    expect(outcome.status).toBe('deferred');
+    expect(outcome.remaining).toBe(1);
+    expect(useMaintenanceStore.getState().active).toBe(true);
+    expect(await getReviewOutbox()).toHaveLength(1);
   });
 });
 

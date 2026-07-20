@@ -14,6 +14,7 @@ import {
   searchPreview,
   fetchFeed,
   fetchFeedCounts,
+  getJournalEntry,
 } from '@/lib/api';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 
@@ -858,6 +859,57 @@ describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
     expect(summary.version).toBeUndefined();
 
     vi.useRealTimers();
+  });
+});
+
+describe('getJournalEntry — routed through apiFetch', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    useMaintenanceStore.getState().clear();
+  });
+
+  it('returns null on a 404 (no entry for that date)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Not found', { status: 404 }),
+    );
+
+    await expect(getJournalEntry('2026-01-01')).resolves.toBeNull();
+  });
+
+  it('encodes the date query param', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ id: 1, date: '2026-01-01', prompts: {}, created_at: 'x', updated_at: 'x' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await getJournalEntry('2026-01-01 +test');
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/my-day/journal?date=2026-01-01%20%2Btest',
+      expect.anything(),
+    );
+  });
+
+  it('rethrows non-404 errors instead of swallowing them', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Server error', { status: 500 }),
+    );
+
+    await expect(getJournalEntry('2026-01-01')).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('sets maintenance state on a 503 "Restore in progress" response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Restore in progress' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'retry-after': '30' },
+      }),
+    );
+
+    await expect(getJournalEntry('2026-01-01')).rejects.toBeInstanceOf(ApiError);
+    expect(useMaintenanceStore.getState().active).toBe(true);
   });
 });
 

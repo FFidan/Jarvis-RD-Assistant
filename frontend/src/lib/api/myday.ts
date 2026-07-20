@@ -1,7 +1,7 @@
 // Executive / My Day surface: quick tasks, focus logging, intent, journal,
 // yesterday rollup, open threads, account self-service, weekly digest, and the
 // aggregate My Day bundle.
-import { apiFetch, authHeaders, handleAuthFailure, ApiError } from './core';
+import { apiFetch, ApiError } from './core';
 import type {
   Task,
   MyDayResponse,
@@ -50,29 +50,14 @@ export async function getJournalEntry(
   date: string,
   options?: { signal?: AbortSignal },
 ): Promise<JournalEntry | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300_000);
-  // Combine the internal timeout signal with any caller-provided signal
-  // (e.g. TanStack Query's abort-on-unmount signal).
-  const callerSignal = options?.signal;
-  const signal = callerSignal
-    ? AbortSignal.any([controller.signal, callerSignal])
-    : controller.signal;
   try {
-    const res = await fetch(`/api/my-day/journal?date=${date}`, {
-      signal,
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders(),
-      },
-    });
-    handleAuthFailure(res.status);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new ApiError(res.status, await res.text());
-    return res.json();
-  } finally {
-    clearTimeout(timeoutId);
+    return await apiFetch<JournalEntry>(
+      `/api/my-day/journal?date=${encodeURIComponent(date)}`,
+      { signal: options?.signal },
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   }
 }
 

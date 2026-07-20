@@ -53,6 +53,7 @@ import {
   type UseStore,
 } from 'idb-keyval';
 import { useAuthStore } from '@/stores/auth-store';
+import { apiFetch } from '@/lib/api/core';
 
 /* ---- record shape (local type — types/index.ts is F0-frozen) ------------- */
 
@@ -318,26 +319,16 @@ export async function drainReviewOutbox(
 export const REVIEW_SYNC_PATH = '/api/review/sync';
 
 /**
- * Default batch transport: a credentialed POST carrying the X-API-Key (mirrors
- * the app's auth convention) + the session cookie (`credentials: 'include'`).
- * Throws on any non-OK / network failure so {@link drainReviewOutbox} can mark
- * the attempt `deferred` and retain the queue. Body shape is the contract's
+ * Default batch transport: routes through the shared {@link apiFetch} client
+ * so a 503 maintenance body sets the maintenance banner and a 401 triggers
+ * auto-logout, same as every other authenticated request. Throws `ApiError`
+ * on any non-OK / network failure so {@link drainReviewOutbox} can mark the
+ * attempt `deferred` and retain the queue. Body shape is the contract's
  * `{ reviews: QueuedReview[] }`.
  */
 async function defaultPostBatch(batch: QueuedReview[]): Promise<ReviewSyncResult> {
-  let apiKey: string;
-  try {
-    apiKey = useAuthStore.getState().getApiKey() ?? '';
-  } catch {
-    apiKey = '';
-  }
-  const res = await fetch(REVIEW_SYNC_PATH, {
+  return apiFetch<ReviewSyncResult>(REVIEW_SYNC_PATH, {
     method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
-    },
     body: JSON.stringify({
       reviews: batch.map((r) => ({
         idempotency_key: r.idempotency_key,
@@ -348,10 +339,6 @@ async function defaultPostBatch(batch: QueuedReview[]): Promise<ReviewSyncResult
       })),
     }),
   });
-  if (!res.ok) {
-    throw new Error(`review/sync: ${res.status}`);
-  }
-  return (await res.json()) as ReviewSyncResult;
 }
 
 /** Test-only: reset the in-memory fallback + cached store handle. */
