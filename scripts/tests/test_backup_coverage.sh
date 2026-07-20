@@ -199,6 +199,70 @@ rm -rf "$ops7_dir"
 check "writes .last_run.json on exit via a trap" 'trap[[:space:]]+write_last_run[[:space:]]+EXIT'
 check "records per-store outcome in .last_run.json" '"stores":\{"jarvis":'
 
+# Completion truth is single-sourced from backup.sh's real write_last_run body.
+# The manifest is mandatory, an encrypted run also requires its signature, and
+# secrets may be skipped only outside production. Qdrant remains best-effort.
+COMPLETION_WLR="$(sed -n '/^write_last_run()/,/^}/p' "$BACKUP_SCRIPT")"
+last_run_json() {
+  # last_run_json <secrets> <qdrant> <manifest> <signature> <environment> <encrypt>
+  local lr_dir lr
+  lr_dir="$(mktemp -d)"
+  lr="$(
+    BACKUP_DIR="$lr_dir" ATTEMPTED_AT=x TIMESTAMP=t \
+    JARVIS_STATE=ok LITELLM_STATE=ok SECRETS_STATE="$1" QDRANT_STATE="$2" \
+    MANIFEST_STATE="$3" MANIFEST_SIGNATURE_STATE="$4" ENVIRONMENT="$5" \
+    ENCRYPT="$6" RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 \
+    bash -c '
+      set -euo pipefail
+      '"$COMPLETION_WLR"'
+      write_last_run
+      cat "${BACKUP_DIR}/.last_run.json"
+    '
+  )"
+  rm -rf "$lr_dir"
+  printf '%s' "$lr"
+}
+
+lr_secrets_failed="$(last_run_json failed skipped ok skipped development 0)"
+if printf '%s' "$lr_secrets_failed" | grep -q '"succeeded":false'; then
+  pass "secrets=failed cannot be recorded as a successful backup"
+else
+  printf 'FAIL: secrets=failed was recorded as succeeded (%s)\n' "$lr_secrets_failed" >&2
+  fail=1
+fi
+
+lr_manifest_failed="$(last_run_json ok skipped failed skipped development 0)"
+if printf '%s' "$lr_manifest_failed" | grep -q '"succeeded":false'; then
+  pass "manifest=failed cannot be recorded as a successful backup"
+else
+  printf 'FAIL: manifest=failed was recorded as succeeded (%s)\n' "$lr_manifest_failed" >&2
+  fail=1
+fi
+
+lr_signature_failed="$(last_run_json ok skipped ok failed production 1)"
+if printf '%s' "$lr_signature_failed" | grep -q '"succeeded":false'; then
+  pass "encrypted signature=failed cannot be recorded as a successful backup"
+else
+  printf 'FAIL: encrypted signature=failed was recorded as succeeded (%s)\n' "$lr_signature_failed" >&2
+  fail=1
+fi
+
+lr_dev_skipped="$(last_run_json skipped skipped ok skipped development 0)"
+if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":true'; then
+  pass "non-production secrets=skipped may still be successful"
+else
+  printf 'FAIL: non-production secrets=skipped was not successful (%s)\n' "$lr_dev_skipped" >&2
+  fail=1
+fi
+
+lr_qdrant_failed="$(last_run_json ok failed ok skipped development 0)"
+if printf '%s' "$lr_qdrant_failed" | grep -q '"succeeded":true'; then
+  pass "Qdrant failure remains non-fatal to backup completion"
+else
+  printf 'FAIL: optional Qdrant failure made backup unsuccessful (%s)\n' "$lr_qdrant_failed" >&2
+  fail=1
+fi
+
 # N. On-demand trigger: backup.sh consumes a sentinel flag-file (written by the
 #    WebUI Backup panel) so the sidecar runs immediately, then clears it.
 check "consumes the on-demand backup-trigger sentinel" 'backup_now'
@@ -253,13 +317,13 @@ check "records the applied schema_version in the manifest" 'schema_migrations'
 check "sha256-hashes each archive for the manifest" 'sha256sum'
 check "prunes manifests with their archives" 'manifest_\*\.json'
 
-# write_manifest must run AFTER the archives exist and BEFORE the S3 upload block,
-# so the manifest reflects every archive and off-host DR carries it too.
-if awk '/^write_manifest \|\| true/{c=NR} /Optional S3 upload/{s=NR} END{exit !(c && s && c<s)}' \
+# Mandatory finalization must run AFTER the archives exist and BEFORE S3 upload,
+# so an incomplete set can never be published off-host.
+if awk '/^if ! finalize_backup; then/{c=NR} /Optional S3 upload/{s=NR} END{exit !(c && s && c<s)}' \
      "$BACKUP_SCRIPT"; then
-  pass "write_manifest runs before the S3 upload block"
+  pass "mandatory backup finalization runs before the S3 upload block"
 else
-  printf 'FAIL: write_manifest is not invoked before the S3 upload block\n' >&2
+  printf 'FAIL: mandatory backup finalization is not invoked before the S3 upload block\n' >&2
   fail=1
 fi
 
@@ -298,6 +362,128 @@ else
   fail=1
 fi
 rm -rf "$man_dir"
+
+# Finalization failures must return non-zero, record honest state, and make only
+# this run's exact timestamp non-enumerable. A neighboring restore point proves
+# cleanup cannot broaden across timestamps.
+FINALIZE_DISCARD="$(sed -n '/^discard_current_backup()/,/^}/p' "$BACKUP_SCRIPT")"
+FINALIZE_MANIFEST="$(sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT")"
+FINALIZE_PUBLISH="$(sed -n '/^publish_manifest_signature()/,/^}/p' "$BACKUP_SCRIPT")"
+FINALIZE_BACKUP="$(sed -n '/^finalize_backup()/,/^}/p' "$BACKUP_SCRIPT")"
+
+mf_dir="$(mktemp -d)"; mf_ts="20260720_120000"; mf_old="20260719_120000"
+printf 'J' > "${mf_dir}/jarvis_${mf_ts}.sql.gz"
+printf 'L' > "${mf_dir}/litellm_${mf_ts}.sql.gz"
+printf 'Q' > "${mf_dir}/qdrant_kg_entities_${mf_ts}.snapshot"
+printf 'old' > "${mf_dir}/jarvis_${mf_old}.sql.gz"
+mf_rc=0
+BACKUP_DIR="$mf_dir" TIMESTAMP="$mf_ts" ATTEMPTED_AT=x \
+JARVIS_STATE=ok LITELLM_STATE=ok SECRETS_STATE=skipped QDRANT_STATE=ok \
+MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=skipped ENVIRONMENT=development \
+ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+HOST_SECRETS_DIR="$mf_dir" MANIFEST_HMAC_MARKER="${mf_dir}/marker" \
+bash -c '
+  set -uo pipefail
+  psql() { printf "102\\n"; }
+  sha256sum() { return 1; }
+  sign_manifest() { return 0; }
+  '"$COMPLETION_WLR"'
+  '"$FINALIZE_DISCARD"'
+  '"$FINALIZE_MANIFEST"'
+  '"$FINALIZE_PUBLISH"'
+  '"$FINALIZE_BACKUP"'
+  finalize_backup
+  rc=$?
+  write_last_run
+  exit "$rc"
+' 2>/dev/null || mf_rc=$?
+if [ "$mf_rc" -ne 0 ] \
+   && [ -f "${mf_dir}/jarvis_${mf_old}.sql.gz" ] \
+   && ! find "$mf_dir" -maxdepth 1 -type f -name "*_${mf_ts}*" | grep -q . \
+   && grep -q '"manifest":"failed"' "${mf_dir}/.last_run.json" \
+   && grep -q '"succeeded":false' "${mf_dir}/.last_run.json"; then
+  pass "manifest hash failure is fatal and removes only the exact current run"
+else
+  printf 'FAIL: manifest failure was not fail-closed (rc=%s files=%s status=%s)\n' \
+    "$mf_rc" "$(find "$mf_dir" -maxdepth 1 -type f -printf '%f ' | sort)" \
+    "$(cat "${mf_dir}/.last_run.json" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -rf "$mf_dir"
+
+sf_dir="$(mktemp -d)"; sf_ts="20260720_130000"; sf_old="20260719_130000"
+printf 'J' > "${sf_dir}/jarvis_${sf_ts}.sql.gz.enc"
+printf 'L' > "${sf_dir}/litellm_${sf_ts}.sql.gz.enc"
+printf 'S' > "${sf_dir}/secrets_${sf_ts}.tar.gz.enc"
+printf 'old' > "${sf_dir}/jarvis_${sf_old}.sql.gz.enc"
+sf_rc=0
+BACKUP_DIR="$sf_dir" TIMESTAMP="$sf_ts" ATTEMPTED_AT=x \
+JARVIS_STATE=ok LITELLM_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
+MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+HOST_SECRETS_DIR="$sf_dir" MANIFEST_HMAC_MARKER="${sf_dir}/marker" \
+bash -c '
+  set -uo pipefail
+  psql() { printf "102\\n"; }
+  sign_manifest() { return 1; }
+  '"$COMPLETION_WLR"'
+  '"$FINALIZE_DISCARD"'
+  '"$FINALIZE_MANIFEST"'
+  '"$FINALIZE_PUBLISH"'
+  '"$FINALIZE_BACKUP"'
+  finalize_backup
+  rc=$?
+  write_last_run
+  exit "$rc"
+' 2>/dev/null || sf_rc=$?
+if [ "$sf_rc" -ne 0 ] \
+   && [ -f "${sf_dir}/jarvis_${sf_old}.sql.gz.enc" ] \
+   && ! find "$sf_dir" -maxdepth 1 -type f -name "*_${sf_ts}*" | grep -q . \
+   && grep -q '"manifest_signature":"failed"' "${sf_dir}/.last_run.json" \
+   && grep -q '"succeeded":false' "${sf_dir}/.last_run.json"; then
+  pass "encrypted signature failure is fatal and removes only the exact current run"
+else
+  printf 'FAIL: signature failure was not fail-closed (rc=%s files=%s status=%s)\n' \
+    "$sf_rc" "$(find "$sf_dir" -maxdepth 1 -type f -printf '%f ' | sort)" \
+    "$(cat "${sf_dir}/.last_run.json" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -rf "$sf_dir"
+
+rf_dir="$(mktemp -d)"; rf_ts="20260720_140000"
+printf 'J' > "${rf_dir}/jarvis_${rf_ts}.sql.gz.enc"
+printf 'L' > "${rf_dir}/litellm_${rf_ts}.sql.gz.enc"
+printf 'S' > "${rf_dir}/secrets_${rf_ts}.tar.gz.enc"
+rf_rc=0
+BACKUP_DIR="$rf_dir" TIMESTAMP="$rf_ts" ATTEMPTED_AT=x \
+JARVIS_STATE=ok LITELLM_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
+MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+HOST_SECRETS_DIR="$rf_dir" MANIFEST_HMAC_MARKER="${rf_dir}/missing/marker" \
+bash -c '
+  set -uo pipefail
+  psql() { printf "102\\n"; }
+  sign_manifest() { printf "signed\\n" > "${1}.hmac"; }
+  '"$COMPLETION_WLR"'
+  '"$FINALIZE_DISCARD"'
+  '"$FINALIZE_MANIFEST"'
+  '"$FINALIZE_PUBLISH"'
+  '"$FINALIZE_BACKUP"'
+  finalize_backup
+  rc=$?
+  write_last_run
+  exit "$rc"
+' 2>/dev/null || rf_rc=$?
+if [ "$rf_rc" -ne 0 ] \
+   && ! find "$rf_dir" -maxdepth 1 -type f -name "*_${rf_ts}*" | grep -q . \
+   && grep -q '"manifest_signature":"failed"' "${rf_dir}/.last_run.json"; then
+  pass "signed-manifest ratchet publication failure is fatal"
+else
+  printf 'FAIL: ratchet publication failure was not fail-closed (rc=%s status=%s)\n' \
+    "$rf_rc" "$(cat "${rf_dir}/.last_run.json" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -rf "$rf_dir"
 
 # DATA-RESTORE-PRUNE-RACE: the retention prune at the tail must be gated on
 # BACKUP_SKIP_PRUNE so restore.sh's safety pre-backup cannot delete the very
@@ -356,7 +542,8 @@ replay_guard() {
   bash -c '
     set -euo pipefail
     ATTEMPTED_AT=x TIMESTAMP=t JARVIS_STATE=failed LITELLM_STATE=failed
-    SECRETS_STATE=skipped QDRANT_STATE=skipped ENCRYPT=0 RETENTION_DAYS=7
+    SECRETS_STATE=skipped QDRANT_STATE=skipped MANIFEST_STATE=failed
+    MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=0 RETENTION_DAYS=7
     '"$MAINT_WLR"'
     trap write_last_run EXIT
     '"$MAINT_GUARD"'
