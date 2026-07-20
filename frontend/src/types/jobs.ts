@@ -24,26 +24,6 @@ export interface JobErrorPayload {
   action_link?: JobActionLink;
 }
 
-export interface JobRow {
-  id: string;
-  kind: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-  /**
-   * A cancellation has been REQUESTED. Orthogonal to `status`: the handler runs
-   * on (status stays `running`) until it observes the flag and returns its own
-   * final result. Absent on the list endpoint, hence optional.
-   */
-  cancel_requested?: boolean;
-  progress: number | null;
-  progress_message: string | null;
-  payload: Record<string, unknown>;
-  result: Record<string, unknown> | null;
-  error: JobErrorPayload | string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-}
-
 export interface GenerateJobAccepted {
   job_id: string;
   status: 'queued';

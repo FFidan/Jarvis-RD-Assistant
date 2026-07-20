@@ -109,15 +109,7 @@ export interface UserState {
   updated_at: string | null;
 }
 
-export interface UserStateResponse {
-  state: LifecycleState;
-  state_before_trash: StateBeforeTrash;
-  starred: boolean;
-  rating: number | null;
-  user_notes: string | null;
-  flagged: boolean;
-  updated_at: string | null;
-}
+export type UserStateResponse = UserState;
 
 // --- Feedback ---
 
@@ -137,17 +129,17 @@ export interface LifecyclePaperResponse {
   authors: string[];
   abstract: string | null;
   published_date: string | null;
-  url: string | null;
+  url: string;
   pdf_url: string | null;
   pdf_local_path: string | null;
   pdf_downloaded: boolean;
   discovered_at: string | null;
   priority_score: number | null;
-  citation_count: number | null;
+  citation_count: number;
   metadata: Record<string, unknown>;
   created_at: string;
   discovery_origin: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
-  user_state: UserStateResponse | null;
+  user_state: UserState | null;
   recent_feedback: RecentFeedback | null;
 }
 
