@@ -19,7 +19,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-from telegram_bot.config import _owner_headers
+from telegram_bot import services_client
 from telegram_bot.formatters import format_card_back, format_card_front
 from telegram_bot.handlers.helpers import (
     auth_check,
@@ -63,15 +63,9 @@ async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
     try:
-        resp = await http.get(
-            f"{config.learning_engine_url}/api/review/next",
-            params={"limit": 1},
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        cards = resp.json()
+        cards = await services_client.fetch_next_review_card(http, config, jarvis_user_id)
         if isinstance(cards, list) and cards:
             return cards[0]
         return None
@@ -224,6 +218,7 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not authorized:
         await query.answer()
         return ConversationHandler.END
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
 
     # Refresh cached identity — use the freshly resolved id for this request
     # rather than whatever was stored from a potentially stale prior session.
@@ -257,14 +252,9 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     next_review_str = "unknown"
     review_ok = True
     try:
-        resp = await http.post(
-            f"{config.learning_engine_url}/api/review/{card_id}",
-            json={"rating": rating},
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
+        result = await services_client.submit_review_rating(
+            http, config, jarvis_user_id, card_id, rating
         )
-        resp.raise_for_status()
-        result = resp.json()
         next_review_str = _html_escape(result.get("next_due_at", "unknown"))
     except Exception:
         logger.exception("Failed to submit review for card %s", card_id)

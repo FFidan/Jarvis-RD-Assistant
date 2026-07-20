@@ -9,7 +9,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
-from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
@@ -77,19 +76,12 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
-    headers = _owner_headers(config, jarvis_user_id)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
     if query:
         # Search via paper_ingestion API
         try:
-            resp = await http.post(
-                f"{config.paper_ingestion_url}/api/search",
-                json={"query": query},
-                headers=headers,
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            papers = resp.json()
+            papers = await services_client.search_papers(http, config, jarvis_user_id, query)
             if isinstance(papers, dict):
                 papers = papers.get("papers", [])
         except Exception:
@@ -102,14 +94,9 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         # List Library papers via feed API
         try:
-            resp = await http.get(
-                f"{config.paper_ingestion_url}/api/papers/feed",
-                params={"view": "library", "limit": 10},
-                headers=headers,
-                timeout=30.0,
+            data = await services_client.fetch_papers_feed(
+                http, config, jarvis_user_id, view="library", limit=10
             )
-            resp.raise_for_status()
-            data = resp.json()
             papers = data.get("papers", []) if isinstance(data, dict) else []
         except Exception:
             logger.exception("Failed to fetch library feed")
@@ -148,14 +135,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        resp = await http.get(
-            f"{config.learning_engine_url}/api/stats",
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        stats = resp.json()
+        stats = await services_client.fetch_stats(http, config, jarvis_user_id, timeout=15.0)
     except Exception:
         logger.exception("Failed to fetch stats")
         await update.message.reply_text("Failed to retrieve learning stats.", parse_mode="HTML")
@@ -223,15 +205,9 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        resp = await http.get(
-            f"{config.paper_ingestion_url}/api/pulse/today",
-            params={"limit": 1},
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await services_client.fetch_pulse_today(http, config, jarvis_user_id, limit=1)
         cards = data.get("cards", []) if isinstance(data, dict) else []
     except Exception:
         logger.exception("Failed to fetch pulse deck for /next")
@@ -293,15 +269,11 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        resp = await http.get(
-            f"{config.paper_ingestion_url}/api/papers/feed",
-            params={"view": "inbox", "limit": 10},
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=30.0,
+        data = await services_client.fetch_papers_feed(
+            http, config, jarvis_user_id, view="inbox", limit=10
         )
-        resp.raise_for_status()
-        data = resp.json()
     except Exception:
         logger.exception("Failed to fetch inbox feed")
         await update.message.reply_text(

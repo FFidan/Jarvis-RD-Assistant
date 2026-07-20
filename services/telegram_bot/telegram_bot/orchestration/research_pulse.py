@@ -14,7 +14,8 @@ import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot import owner as _owner
-from telegram_bot.config import BotConfig, _owner_headers
+from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_paper_card, truncate
 
 logger = logging.getLogger(__name__)
@@ -82,16 +83,8 @@ async def _deliver_pulse_to_chat(
         DB user PK. Adds ``X-Owner-User-Id`` header so the backend
         returns per-user Pulse data.
     """
-    headers = _owner_headers(config, user_id)
-
     try:
-        resp = await http_client.get(
-            f"{config.paper_ingestion_url}/api/pulse/today",
-            headers=headers,
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        body = resp.json()
+        body = await services_client.fetch_pulse_today(http_client, config, user_id)
         # /api/pulse/today returns HTTP 200 + JSON null when no deck exists for
         # today (empty state, not an error). Coalesce null/non-dict to {} so the
         # cards lookup below never dereferences None.
