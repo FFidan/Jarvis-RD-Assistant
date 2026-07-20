@@ -21,7 +21,7 @@ import type {
   JobAccepted,
   MissingFoundationalPaper,
   FetchAndProcessFoundationalResponse,
-  UserStateResponse,
+  UserState,
   BulkAction,
   FeedbackListResponse,
   DeleteFeedbackResponse,
@@ -191,8 +191,8 @@ export interface AnnotationsBody {
 }
 
 /** Update per-paper annotations (rating 1-5, user_notes, flagged). Returns the full user state. */
-export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserStateResponse> {
-  return apiFetch<UserStateResponse>(`/api/papers/${paperId}/annotations`, {
+export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserState> {
+  return apiFetch<UserState>(`/api/papers/${paperId}/annotations`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
