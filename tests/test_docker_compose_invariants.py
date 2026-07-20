@@ -5,7 +5,9 @@ Ensures critical services have proper secret mounts (e.g., langfuse tracing keys
 and that locally-built images carry explicit pull semantics.
 """
 
+import json
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -176,6 +178,41 @@ def test_jarvis_version_defaults_agree():
         f"docker-compose.yml defaults JARVIS_VERSION to {defaults[0]!r} but pyproject.toml "
         f"declares {declared.group(1)!r} — the image tags and the release version must agree"
     )
+
+
+def test_app_version_sources_agree():
+    """Every application-version source must move in one release change."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    package = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
+    package_lock = json.loads((REPO_ROOT / "frontend" / "package-lock.json").read_text())
+    uv_lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    compose_defaults = re.findall(
+        r"\$\{JARVIS_VERSION:-([^}]*)\}",
+        (REPO_ROOT / "docker-compose.yml").read_text(),
+    )
+
+    assert len(compose_defaults) == 8, (
+        "docker-compose.yml must carry exactly eight application-version defaults; "
+        f"found {len(compose_defaults)}"
+    )
+    root_packages = [
+        entry
+        for entry in uv_lock["package"]
+        if entry["name"] == pyproject["project"]["name"] and entry.get("source") == {"virtual": "."}
+    ]
+    assert len(root_packages) == 1, "uv.lock must contain one virtual root-project entry"
+
+    versions = {
+        "pyproject.toml": pyproject["project"]["version"],
+        "frontend/package.json": package["version"],
+        "frontend/package-lock.json": package_lock["version"],
+        "frontend/package-lock.json packages['']": package_lock["packages"][""]["version"],
+        "uv.lock": root_packages[0]["version"],
+    }
+    for index, version in enumerate(compose_defaults, start=1):
+        versions[f"docker-compose.yml default {index}"] = version
+
+    assert len(set(versions.values())) == 1, f"application version sources disagree: {versions}"
 
 
 def _bash_array_items(text: str, name: str) -> set[str]:
