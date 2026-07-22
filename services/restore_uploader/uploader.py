@@ -226,6 +226,16 @@ class UploadHandler(BaseHTTPRequestHandler):
         inbox = Path(_inbox_dir())
         part = inbox / f"{filename}.part"
         final = inbox / filename
+        # Redundant containment guard for the CodeQL path-injection model: the
+        # name was already strictly allowlisted in _resolve_filename (no separator
+        # can survive), so realpath stays inside the inbox and valid archive names
+        # MUST still pass. Defense-in-depth only.
+        inbox_real = os.path.realpath(inbox)
+        for candidate in (part, final):
+            if os.path.commonpath((inbox_real, os.path.realpath(candidate))) != inbox_real:
+                self.close_connection = True
+                self._deny(400, "unsafe path", filename)
+                return
         try:
             with open(part, "wb") as out:
                 written = self._stream_body(out, content_length, cap)

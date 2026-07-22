@@ -134,7 +134,7 @@ def _ip_in_cidrs(value: str | None, cidrs: list[str]) -> bool:
             if address in ipaddress.ip_network(cidr, strict=False):
                 return True
         except ValueError:
-            logger.warning("Ignoring invalid credential-transport CIDR %r", cidr)
+            logger.warning("Ignoring invalid transport-allowlist CIDR %r", cidr)
     return False
 
 

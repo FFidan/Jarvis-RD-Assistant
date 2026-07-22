@@ -108,7 +108,7 @@ def _write_docker_shim(tmp: Path, *, up_exit_code: int) -> tuple[Path, Path]:
         'case "$*" in\n'
         '  "compose version --short") echo "2.99.0" ;;\n'
         '  compose*"config --format json") '
-        "echo '{\"volumes\":{\"postgres_backups\":{\"name\":\"test_postgres_backups\"}}}' ;;\n"
+        'echo \'{"volumes":{"postgres_backups":{"name":"test_postgres_backups"}}}\' ;;\n'
         '  "volume inspect test_postgres_backups") '
         '[ -f "$volume_state" ] || exit 1 ;;\n'
         '  "volume create"*) \n'
@@ -358,8 +358,7 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
     """
     _stage_hw_tmpdir(tmp_path)
     env_before = (
-        "TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
-        f"JARVIS_API_KEY={'k' * 64}\n"
+        f"TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\nJARVIS_API_KEY={'k' * 64}\n"
     )
     (tmp_path / ".env").write_text(env_before)
     docker_bin, log = _write_docker_shim(tmp_path, up_exit_code=0)
@@ -625,9 +624,9 @@ def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
     assert any(line.startswith("sudo curl -fsSL") and keyring in line for line in plan), (
         f"signing key must be fetched straight to the root-owned keyring: {plan}"
     )
-    assert any(f"signed-by={keyring}" in line and "download.docker.com" in line for line in plan), (
-        f"apt repo must be pinned to the fetched key: {plan}"
-    )
+    assert any(
+        f"signed-by={keyring}" in line and "https://download.docker.com/" in line for line in plan
+    ), f"apt repo must be pinned to the fetched key at download.docker.com: {plan}"
     for line in plan:
         # No root-consumed file may be staged at a predictable /tmp path (CWE-377):
         # a local attacker could pre-plant it before the sudo reads it back.
