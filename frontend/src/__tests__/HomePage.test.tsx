@@ -34,8 +34,14 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities, processLibrary } =
-  await import('@/lib/api');
+const {
+  fetchDashboardMetrics,
+  batchProcessPapers,
+  batchSummarizePapers,
+  batchExtractEntities,
+  processLibrary,
+  getSetupStatus,
+} = await import('@/lib/api');
 
 function renderHomePage() {
   const queryClient = new QueryClient({
@@ -76,6 +82,28 @@ describe('HomePage', () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
+  });
+
+  it('does not request the admin-only setup status for a regular user', async () => {
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+
+    renderHomePage();
+
+    await screen.findByText('Papers');
+    expect(getSetupStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the setup-status check for administrators', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 1, email: 'admin@example.com', role: 'admin' },
+      authTime: Date.now(),
+    });
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+
+    renderHomePage();
+
+    await waitFor(() => expect(getSetupStatus).toHaveBeenCalledTimes(1));
   });
 
   it('shows skeleton loaders while loading', () => {

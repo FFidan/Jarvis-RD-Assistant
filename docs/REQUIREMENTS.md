@@ -2,7 +2,8 @@
 
 ## Runtime Environment
 
-- **Docker Engine** 24+ with Docker Compose v2
+- **Docker Engine** 24+ with Docker Compose v2.24.4+
+- **Host tools**: Python 3, `openssl`, `curl`, and `git`
 - **RAM**: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)
 - **Disk**: a cold install has a one-time peak of roughly **25–53 GB** depending on your hardware tier — see [Disk budget](#disk-budget) below. The durable footprint afterward is much smaller, plus PDFs and page snapshots that accumulate over time.
 - **GPU**: NVIDIA GPU optional (faster Ollama inference). On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported but slower. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop. GPU acceleration is enabled via the `docker-compose.gpu.yml` overlay; `setup.sh` adds it automatically when it detects the Docker nvidia runtime.
@@ -34,7 +35,14 @@ From v1.1.0, JARVIS publishes prebuilt images to GitHub Container Registry; `set
 
 **Cold-install peak = application images + 14 GB of infrastructure images + your tier's model set.** Worst case (CUDA build, top tier): 17 + 14 + 22 ≈ **53 GB**. Smallest case (GHCR pull, bottom tier): 6 + 14 + 5 ≈ **25 GB**. `setup.sh` builds/pulls the application images first, then downloads the model set, so this is a one-time additive peak, not a steady-state requirement.
 
-After a successful install, `docker builder prune -af` reclaims the local build cache. The durable footprint settles at the per-service image sizes (`paper_ingestion` ≈2.35 GB CPU / ≈6.31 GB CUDA; `learning_engine`, `telegram_bot`, and `dashboard` well under 1 GB combined) plus your model set and a PDF/page-snapshot library that grows with use.
+After a successful local build, Docker may retain builder cache. Running
+`docker builder prune -af` is optional and host-wide: it removes unused build
+cache for every project that uses the same Docker daemon, not only JARVIS. Check
+`docker builder du` first and skip the command on a shared host unless that
+broader cleanup is intended. The durable JARVIS footprint settles at the
+per-service image sizes (`paper_ingestion` ≈2.35 GB CPU / ≈6.31 GB CUDA;
+`learning_engine`, `telegram_bot`, and `dashboard` well under 1 GB combined)
+plus your model set and a PDF/page-snapshot library that grows with use.
 
 ## Python Dependencies
 
@@ -81,7 +89,7 @@ Ollama is loopback-only by default. Security posture: [docs/SECURITY.md](SECURIT
 
 | Variable | API | Notes |
 |----------|-----|-------|
-| `OPENALEX_API_KEY` | OpenAlex | Optional; improves rate limits, not required |
+| `OPENALEX_API_KEY` | OpenAlex | Required free API key; create one at [openalex.org/settings/api](https://openalex.org/settings/api) |
 | `PUBMED_API_KEY` | PubMed E-utilities | Optional; upgrades rate limit 3→10 req/s |
 
 **Optional citation management:** Zotero Web API (see variables below).
@@ -95,8 +103,8 @@ Default `litellm/config.yaml` enables Ollama-backed aliases only.
 
 | Option | Configuration |
 |--------|--------------|
-| OpenAI | Per-user encrypted key in Settings (preferred) or `OPENAI_API_KEY` in `.env` |
-| Anthropic | Per-user encrypted key in Settings (preferred) or `ANTHROPIC_API_KEY` in `.env` |
+| OpenAI | Deployment-wide encrypted key in admin Settings |
+| Anthropic | Deployment-wide encrypted key in admin Settings |
 | Local Ollama | No key — included in Docker Compose |
 | Any OpenAI-compatible API | Configure in `litellm/config.yaml` |
 
@@ -127,9 +135,8 @@ Changes require rebuilding affected Docker containers.
 | `DEV_MODE` | `false` | Bypass API key auth (dev only) |
 | `JARVIS_API_KEY` | — | Inter-service auth; required in production |
 | `SEMANTIC_SCHOLAR_API_KEY` | — | Optional; increases S2 rate limit |
-| `OPENALEX_API_KEY` | — | Optional; improves OpenAlex rate limits, not required |
+| `OPENALEX_API_KEY` | — | Required free API key; create one at [openalex.org/settings/api](https://openalex.org/settings/api) |
 | `PUBMED_API_KEY` | — | Optional NCBI key; upgrades PubMed rate limit |
-| `OPENALEX_EMAIL` | — | Optional; included in OpenAlex requests for the polite pool (blank = anonymous tier) |
 
 Zotero integration (API key, user/library ID, library type) is configured per-user
 and stored encrypted at rest via **Settings → Integrations → Zotero**, not as
@@ -143,12 +150,15 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 | Dependency | Service | Purpose |
 |------------|---------|---------|
 | `lxml>=6.1.0` | paper_ingestion | PubMed XML parsing + hardened XML in `cached_transport.py` |
+| `qdrant-client>=1.14.3,<1.15.0` | paper_ingestion | Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance |
 | `scikit-learn>=1.6.0` | paper_ingestion (optional) | Per-user logistic regression on recommendation feedback |
 
 ## Secrets & Database
 
-Secrets use Docker Secrets. Initialise locally with `bash scripts/init-secrets.sh`
-(or `scripts/jarvis-setup.sh`). Full table: [docs/DEPLOYMENT.md](DEPLOYMENT.md).
+Host credentials use Docker Secrets; database-backed integration credentials
+are encrypted under `JARVIS_CONFIG_KEY`. Initialise host secrets with
+`bash scripts/init-secrets.sh` (or `scripts/jarvis-setup.sh`). Full table:
+[docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
 Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md).
 

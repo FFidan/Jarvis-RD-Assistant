@@ -62,6 +62,9 @@ function renderApp(initialEntries: string[] = ['/']) {
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.fetchAccount).mockRejectedValue(
+      new api.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
+    );
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
   });
 
@@ -104,11 +107,23 @@ describe('App', () => {
 
   it('keeps magic-link verification mounted while auth state flips', async () => {
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
-    renderApp(['/auth/verify?token=route-flip-token']);
+    renderApp(['/auth/verify#token=route-flip-token']);
 
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
     expect(vi.mocked(api.verifyMagicLink)).toHaveBeenCalledWith('route-flip-token');
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
+  });
+
+  it('does not run account bootstrap on a magic-link landing', async () => {
+    vi.mocked(api.fetchAccount).mockRejectedValue(
+      new api.ApiError(403, JSON.stringify({ detail: 'Invalid or missing API key' })),
+    );
+
+    renderApp(['/auth/verify#token=pre-login-token']);
+
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
+    expect(vi.mocked(api.verifyMagicLink)).toHaveBeenCalledWith('pre-login-token');
+    expect(vi.mocked(api.fetchAccount)).not.toHaveBeenCalled();
   });
 
   it('hydrates a valid session cookie via /api/account without flashing the login page', async () => {

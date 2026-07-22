@@ -43,9 +43,13 @@ month?" with source-linked evidence and a workflow that makes unsupported output
 ## 2. User Stories
 
 ### 2.1 Setup and Configuration
-- Install with `./setup.sh`, complete the first-run wizard, and tune model providers through Settings.
+- Install with `./setup.sh`, open its protected finish-setup link, create the
+  first administrator, and tune model providers through Settings.
+- Add isolated passwordless family or team accounts with passkeys, emailed
+  magic links, or administrator-provided one-time links when SMTP is absent.
 - Define research topics with search terms and optional descriptions.
-- Connect Telegram bot; set briefing schedule; add or remove paper sources.
+- Optionally connect the Telegram bot; set briefing schedules; add or remove
+  paper sources.
 
 ### 2.2 Research Pulse Module
 - Receive a daily Telegram briefing on new papers matching my topics; each summary
@@ -103,25 +107,45 @@ Out of scope: general-purpose flashcard app, collaborative decks, audio/video.
 Project CRUD, milestones with due dates, Telegram deadline reminders, paper linking,
 `/tasks` and `/done` commands. v2+: Kanban, time tracking, calendar integration.
 
-Out of scope: multi-user team management, Gantt charts, budget tracking.
+Projects, milestones, tasks, and their derived output are per-user. Out of
+scope: collaborative project ownership, shared decks, and team workflow inside
+one project, plus Gantt charts and budget tracking. This boundary does not
+exclude family accounts or account isolation: multiple users can sign in to the
+same deployment while their project work remains separate.
 
 ### 3.4 Zotero Integration
 
-**Shipped:** auto-push on star+project-link; DOI dedupe; push-once; PDF attachment;
-BBT citation key fallback. Delete does not cascade.
-**Planned:** hourly Zotero → JARVIS sync; browser-clipped paper auto-ingest.
+**Shipped:** push and re-sync from JARVIS; manual and scheduled Zotero → JARVIS
+sync; personal or group library selection; DOI deduplication; citation-key
+copying; and Zotero-highlight import with explicit promotion into verified
+notes. Credentials and imported papers are per-user and private to the
+connecting user's JARVIS library. Deleting a JARVIS paper does not cascade into
+Zotero.
+
+**Planned:** Mendeley import and richer cross-library conflict handling.
 
 ### 3.5 Multi-Tenant Auth
 
-Magic-link sign-in, session cookies, Telegram pairing, admin role separation.
-Threat model: `docs/SECURITY.md` and `docs/ARCHITECTURE.md`.
+JARVIS provides passwordless family and team accounts with account isolation.
+The one-time setup token authorizes creation of the first administrator and the
+server establishes a row in `sessions` for that browser. Later sign-in uses
+magic links or passkeys bound to the exact hostname. A signed-in administrator
+can create manual invite and recovery links without SMTP; the operations API
+key remains an owner-only recovery path, not a family password. Telegram
+pairing is per-user: each account pairs its own chat. `user` and `admin` roles
+separate ordinary research work from deployment administration.
+
+Threat model and technical contract: `docs/SECURITY.md` and
+`docs/ARCHITECTURE.md`.
 
 ---
 
 ## 4. Non-Functional Requirements
 
 ### 4.1 Security
-- Provider credentials encrypted at rest (`JARVIS_CONFIG_KEY`); Docker secrets supported.
+- Database-backed provider, SMTP, Telegram, source, and Zotero credentials are
+  encrypted at rest under `JARVIS_CONFIG_KEY`; host Docker secrets remain a
+  separate configuration layer.
 - No telemetry, no external analytics, and no third-party font/CDN fetches. Only outbound connections to configured APIs and source integrations.
 - Startup validates encrypted config rows before schedulers/workers start.
 
@@ -141,8 +165,10 @@ Threat model: `docs/SECURITY.md` and `docs/ARCHITECTURE.md`.
 - Idempotent: re-running a briefing for the same date produces no duplicates.
 
 ### 4.4 Accessibility
-All core functionality accessible from Telegram without the dashboard.
-Dashboard: desktop-optimized, tablet-usable. English only in v1.
+Telegram supports briefings, review prompts, and selected quick actions. The
+dashboard is required for setup, administration, PDF reading and annotation,
+and evidence-rich research views. It is desktop-optimized and tablet-usable.
+English only in v1.
 
 ---
 
@@ -185,7 +211,7 @@ all relevant evidence. See [Methods and limitations](METHODS_AND_LIMITATIONS.md)
 
 ### 5.5 User Verification Mechanisms
 Tappable citation links; "View Evidence" PDF snapshot button; flag emoji (excluded from
-flashcard generation); raw-prompt audit trail on dashboard.
+flashcard generation).
 
 ### 5.6 Design Principle
 **Never sacrifice verification quality for speed.** Pulse cards are *discovery pointers*.
@@ -195,21 +221,27 @@ Once a Pulse-sourced paper is saved and processed, the full 4-layer pipeline app
 
 ## 6. Roadmap
 
-### 6.1 Intelligent Rescoring (planned)
-Per-user classifier on `recommendation_feedback` (≥30 ratings). Citation graph signals
-(PageRank + Adamic/Adar). BERTopic topic-trend modeling. "Missing Foundational Papers" widget.
+### 6.1 Personalization and citation signals (shipped)
+Per-user feedback can train a classifier once enough ratings exist. Pulse can
+combine classifier output with citation graph signals, and Analytics exposes a
+Missing Foundational Papers view. These signals degrade independently when
+their data or optional dependencies are unavailable.
 
-### 6.2 Zotero Phase 2 (planned)
-Group library support, annotations import, Mendeley integration.
+### 6.2 Citation-manager next steps (planned)
+Mendeley import and richer cross-library conflict handling. Personal and group
+Zotero libraries, scheduled pulls, and highlight synchronization are already
+shipped.
 
-### 6.3 Advanced Retrieval (aspirational)
-"Ask the Literature" synthesis path; multi-round RAG; metadata-aware embeddings;
-auto-populated author watchlist from starred papers.
+### 6.3 Advanced retrieval
+Cross-paper Ask, citation-graph exploration, tracked-author discovery, and
+foundational-paper suggestions are shipped. Multi-round synthesis and
+metadata-aware embeddings remain aspirational.
 
-### 6.4 Conversational Agent Layer (planning, conditional)
-Natural-language control plane over the JARVIS REST API. Agent-as-client pattern — services
-stay authoritative; the agent is never the system of record. Every claim must pass
-`QuoteVerifier` (§5). Gated behind a perf-profiling pass; see the [project roadmap](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/ROADMAP.md).
+### 6.4 Conversational control (conditional)
+A future natural-language control surface may call the existing JARVIS API,
+while the services remain authoritative and generated claims keep the same
+evidence checks as every other surface. This work requires a separate
+performance and safety decision; see the [project roadmap](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/ROADMAP.md).
 
 ### 6.5 Inspiration and Prior Art
 Discovery & Pulse design borrows ideas from (no code copied; all MIT/Apache-licensed):
@@ -230,7 +262,7 @@ Discovery & Pulse design borrows ideas from (no code copied; all MIT/Apache-lice
 The MVP is complete when a user can:
 
 1. Install with `./setup.sh` and complete the first-run web wizard.
-2. Configure topics, sources, SMTP, optional Telegram, and optional cloud providers through Settings.
+2. Configure topics, sources, optional SMTP, optional Telegram, and optional cloud providers through Settings.
 3. Discover or import papers and build a daily Pulse with cited summaries.
 4. Save, star, summarize, extract, and ask cited questions over papers from the dashboard.
 5. Review generated flashcards with FSRS scheduling.

@@ -1,28 +1,31 @@
 <!-- verified-against-UI: 2026-05-18 | routes: app-wide -->
 
-# JARVIS RD Assistant — User Manual
+# User guide
 
-JARVIS RD Assistant is a **self-hosted AI research assistant** designed for individuals and small teams who want to own their research workflow without relying on external SaaS platforms.
+This guide covers the web application after an operator has installed JARVIS.
+It is written for individual researchers, families, and small teams sharing one
+self-hosted instance.
 
 ## What it does
 
-- **Ingest papers** from arXiv, Semantic Scholar, Zotero, and other configured sources into your private library.
-- **Hybrid RAG chat** — ask questions across your entire library using a retrieval-augmented generation pipeline that combines BM25 keyword search, vector semantic search, and cross-encoder reranking.
-- **Citation and knowledge graphs** — explore how papers cite each other and how concepts connect across your corpus.
-- **Contradiction detection** — surface papers that make conflicting claims about the same topic.
-- **Pulse recommendations** — a daily deck of paper recommendations generated from your active research topics on a configurable schedule.
-- **FSRS spaced-repetition cards** — review key facts extracted from papers on a scientifically-spaced schedule.
-- **Notes and projects** — annotate papers and organise related work into named projects.
-- **Telegram integration** — receive Pulse digests and interact with your library from a Telegram bot.
-- **Multi-user** — the system supports multiple accounts with role-based access (regular users and admins).
+- Add papers from configured sources or by URL, DOI, title, or upload.
+- Search and ask questions across analyzed papers with linked citations.
+- Review citation and knowledge graphs and possible contradictions.
+- Receive scheduled Pulse recommendations for research topics.
+- Create and review spaced-repetition cards, notes, and projects.
+- Optionally connect a Telegram bot.
+- Use separate user and administrator accounts on a shared instance.
 
 ## Who this manual is for
 
-This manual is for **end users** — researchers and readers who use the web application. It covers every page in the UI, the sign-in flow, and the day-to-day research workflows.
+This guide is for researchers, family members, and small teams using an existing
+JARVIS instance. Operators should start with the [installation
+guide](../readme-shim.md), then return here for first sign-in and account setup.
 
 **Operators** (people who install and maintain the system) should also read:
 
-- [`DEPLOYMENT.md`](../DEPLOYMENT.md) — installation (prebuilt images by default), the access-mode chooser (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), Docker Compose configuration, and operations.
+- [`DEPLOYMENT.md`](../DEPLOYMENT.md) — installation, the five access choices,
+  Docker Compose configuration, and operations.
 - [`SECURITY.md`](../SECURITY.md) — hardening checklist, secret management, and known residual risks.
 
 These documents are part of the repository and are available in the **Get Started** and **Operate** sections of this site.
@@ -31,10 +34,10 @@ These documents are part of the repository and are available in the **Get Starte
 
 | Page | What it covers |
 |------|---------------|
-| [Getting Started](getting-started.md) | First-run operator bootstrap, signing in, post-login setup wizard, and the onboarding tour |
-| [Choosing how you access JARVIS](access-modes.md) | The localhost, LAN, Cloudflare Tunnel, and Let's Encrypt access modes and how to switch |
-| [Passkeys](passkeys.md) | Password-less sign-in with passkeys: registration, revocation, and magic-link recovery |
-| [Navigation](navigation.md) | AppShell layout, sidebar nav groups, TopBar controls (⌘K, Jobs, Pomodoro, theme) |
+| [First sign-in and setup](getting-started.md) | Create the first administrator, invite family, and add the first paper |
+| [Access from other devices](access-modes.md) | Choose localhost, private HTTPS, LAN diagnostics, Cloudflare, or your own domain |
+| [Passkeys](passkeys.md) | Add, remove, use, and recover from passkeys with or without email |
+| [Navigation](navigation.md) | Sidebar, search, jobs, Pomodoro timer, and appearance controls |
 | [Home & My Day](home-my-day.md) | Home dashboard, My Day page |
 | [Research Feed & Library](research-feed.md) | Inbox, Library, Discover (search), and Trash views of the feed |
 | [Paper Detail](paper-detail.md) | Three-pane paper view: metadata, full text, RAG chat |
@@ -50,23 +53,5 @@ These documents are part of the repository and are available in the **Get Starte
 | [What your hardware gets you](hardware-and-models.md) | How detected hardware maps to model recommendations |
 | [Hardware support matrix](hardware-support-matrix.md) | Supported GPU vendors and acceleration status |
 | [Telegram](telegram.md) | Pairing your Telegram account and (admin) bot-token configuration |
-| [Backup & Restore](backup-and-restore.md) | One-click restore, retention, and web-first disaster recovery (admin) |
-| [Admin Pages](admin.md) | User management, system health, audit log, backups, system logs (admin role only) |
-
-## How this manual is maintained
-
-Each page in this manual begins with an HTML comment of the form:
-
-```
-<!-- verified-against-UI: YYYY-MM-DD | routes: /path1, /path2 -->
-```
-
-This records which routes the page was last verified against and when. When the UI changes, the per-page date is bumped and any inaccurate content is corrected. If a date is more than a few months old, treat the page as a starting point and check the live UI for details.
-
-Where a screenshot would be helpful, pages contain placeholder comments of the form:
-
-```
-<!-- screenshot: <brief description of what to capture> -->
-```
-
-These placeholders make it cheap to add real screenshots later without leaving broken image references in the meantime.
+| [Backup and restore](backup-and-restore.md) | Keep off-site restore points and recover the instance (admin) |
+| [Admin and multi-user operation](admin.md) | Invite users, manage access, health, backups, and logs (admin only) |

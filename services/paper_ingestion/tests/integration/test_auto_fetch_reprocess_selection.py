@@ -1,18 +1,9 @@
-"""Behavioural regression guard for the auto-fetch 3b reprocess selection (ING-1).
+"""Behavioural guard for bounded auto-fetch embedding reconciliation.
 
-The 3b stage of ``run_auto_pipeline`` must select downloaded-but-unchunked
-papers for processing using the ``papers.chunked_at IS NULL`` marker — NOT the
-old ``NOT EXISTS (SELECT 1 FROM paper_chunks ...)`` predicate. The two diverge
-exactly on a "stuck partial" paper that has chunk rows yet was never marked
-complete (chunked_at still NULL): the new query MUST re-process it, the old
-query would WRONGLY skip it.
-
-This test drives the REAL ``run_auto_pipeline`` against a REAL (live_pg) pool so
-the actual SQL runs, and observes which paper ids ``run_process_pdf`` is invoked
-for. It asserts on SELECTION BEHAVIOUR (which ids ran), never on query text
-(TS-02). It is non-tautological: P1 carries paper_chunks rows + chunked_at NULL,
-so it is selected only under ``chunked_at IS NULL`` and would be dropped if the
-query reverted to ``NOT EXISTS paper_chunks`` — flipping the P1 assertion red.
+The processing stage prioritizes an unfinished paper even when partial chunk
+rows already exist. It also includes a bounded completed-paper candidate so the
+workflow can detect vectors lost from Qdrant. This test runs the shipped query
+against PostgreSQL and observes the paper IDs passed to ``run_process_pdf``.
 
 Run (Docker PostgreSQL required)::
 
@@ -64,16 +55,12 @@ async def _seed_paper(conn, *, external_id: str, chunked_at, with_chunk: bool) -
 
 
 @pytest.mark.asyncio
-async def test_reprocess_selects_unmarked_paper_with_chunks(test_db_pool, monkeypatch):
-    """3b reprocesses a paper iff chunked_at IS NULL, even if it already has chunks.
+async def test_reprocess_selects_unmarked_and_completed_probe_candidates(test_db_pool, monkeypatch):
+    """Incomplete work and a bounded completed candidate both reach the workflow.
 
     Discriminating seed:
-      P1 — downloaded, HAS a paper_chunks row, chunked_at NULL  → MUST reprocess.
-           (The old ``NOT EXISTS paper_chunks`` query would skip P1 because it
-           has chunks; only ``chunked_at IS NULL`` selects it. This is what makes
-           the test fail on a revert rather than pass either way.)
-      P2 — downloaded, HAS a paper_chunks row, chunked_at set → MUST skip.
-           (Confirms the "marked complete → excluded" direction.)
+      P1 — downloaded, partial chunks, chunked_at NULL: finish processing.
+      P2 — downloaded, chunks complete, chunked_at set: probe vector health.
     """
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
 
@@ -110,4 +97,4 @@ async def test_reprocess_selects_unmarked_paper_with_chunks(test_db_pool, monkey
         "though it already has paper_chunks rows; a NOT EXISTS-chunks query "
         "would wrongly skip it"
     )
-    assert p2_id not in processed_ids, "3b must skip the completed paper (chunked_at set)"
+    assert p2_id in processed_ids, "3b must probe bounded completed papers for lost vectors"

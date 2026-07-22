@@ -65,18 +65,28 @@ def test_litellm_db_backed_model_management_wiring() -> None:
     assert compose["secrets"]["litellm_salt_key"]["file"] == "./secrets/litellm_salt_key.txt"
 
 
-def test_litellm_healthcheck_probes_liveliness_not_readiness() -> None:
-    """litellm's healthcheck must ignore DB state.
+def test_litellm_healthcheck_preserves_recovery_startup_and_liveliness() -> None:
+    """LiteLLM health must allow restore review and ignore database readiness.
 
     With a configured DATABASE_URL, /health/readiness returns 503 whenever
-    postgres is unreachable — a postgres blip would mark litellm unhealthy and
-    deadlock every service gating on ``litellm: service_healthy``.
+    PostgreSQL is unreachable. During restore review, the intentionally paused
+    provider listener must still allow recovery-dependent services to start.
     """
     compose = _load_compose()
-    probe = compose["services"]["litellm"]["healthcheck"]["test"][1]
+    healthcheck = compose["services"]["litellm"]["healthcheck"]["test"]
+    entrypoint = (REPO_ROOT / "scripts" / "litellm-entrypoint.sh").read_text(encoding="utf-8")
+    healthcheck_body = entrypoint.split("litellm_healthcheck() {", 1)[1].split("\n}", 1)[0]
 
-    assert "/health/liveliness" in probe
-    assert "/health/readiness" not in probe
+    assert healthcheck == [
+        "CMD",
+        "sh",
+        "/usr/local/bin/litellm-entrypoint.sh",
+        "--healthcheck",
+    ]
+    assert healthcheck_body.index("litellm_restore_hold_active") < healthcheck_body.index(
+        "/health/liveliness"
+    )
+    assert "/health/readiness" not in healthcheck_body
 
 
 def test_litellm_db_init_creates_database_idempotently() -> None:

@@ -34,7 +34,6 @@ SEMANTIC_SCHOLAR_API_KEY    semantic_scholar_api_key    routers/search_helpers.p
                                                          sources/semantic_scholar_source.py
 PUBMED_API_KEY              pubmed_api_key              sources/pubmed_source.py
 OPENALEX_API_KEY            openalex_api_key            sources/openalex_source.py
-OPENALEX_EMAIL              openalex_email              sources/openalex_source.py
 INFRA_INGEST_KEY            infra_ingest_key            routers/infra_events.py
 INFRA_INGEST_KEY_FILE       infra_ingest_key_file       routers/infra_events.py
 TELEGRAM_BOT_TOKEN          telegram_bot_token          routers/system.py
@@ -256,16 +255,8 @@ class PaperIngestionSettings(JarvisCommonSettings):
     )
     openalex_api_key: SecretStr | None = Field(
         default=None,
-        description="OpenAlex API key (OPENALEX_API_KEY).  Optional.",
+        description="Required OpenAlex API key (OPENALEX_API_KEY).",
     )
-    openalex_email: str = Field(
-        default="",
-        description=(
-            "Email address included in OpenAlex API requests for polite-pool "
-            "access (OPENALEX_EMAIL).  Blank = anonymous tier."
-        ),
-    )
-
     # --- Infrastructure ingest key --------------------------------------
     # infra_ingest_key and infra_ingest_key_file are read via PaperIngestionSettings
     # in routers/infra_events.py.  Mirrors the dual-source pattern used for

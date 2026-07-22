@@ -29,6 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 UPDATE_SCRIPT="${REPO_ROOT}/update.sh"
 LIB="${REPO_ROOT}/scripts/setup_lib.sh"
+LIFECYCLE_HELPER="${REPO_ROOT}/scripts/backup-lifecycle.sh"
 
 fail=0
 pass_n=0
@@ -57,9 +58,13 @@ if [ -z "$psr_src" ]; then
 fi
 eval "$psr_src"
 
-# The full third-party set update.sh builds for a default run (the always-on
-# services plus the DR backup sidecar).
+# Representative third-party services for split-recovery classification,
+# including the optional cloudflared edge.
 TP_SET="postgres ollama qdrant litellm cloudflared postgres-backup"
+PREVIOUS_APP_VERSION=1.1.3
+SCRIPT_DIR=/srv/jarvis-family
+BUILD_LOCAL=0
+APP_PROFILE_ARGS=(--profile telegram --profile tunnel)
 run_recovery() { THIRD_PARTY_SET="$TP_SET" print_split_recovery "$@"; }
 has()  { printf '%s' "$1" | grep -q "$2"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 ($1)"; fi; }
@@ -69,8 +74,15 @@ lack() { if has "$1" "$2"; then check_fail "$3 ($1)"; else pass "$3"; fi; }
 out="$(run_recovery dashboard)"
 lack "$out" 'Third-party services' "app-only: no third-party/versions.env block"
 want "$out" 'Application services'  "app-only: prints the application/JARVIS_VERSION block"
-want "$out" 'JARVIS_VERSION=<previous-version> docker compose pull dashboard' \
-  "app-only: JARVIS_VERSION line names the app service"
+want "$out" 'Application-image recovery (not a full release rollback)' \
+  "app-only: labels the bounded recovery honestly"
+want "$out" 'Repository: /srv/jarvis-family' \
+  "app-only: names the repository where commands must run"
+want "$out" 'JARVIS_VERSION=1.1.3 docker compose --profile telegram --profile tunnel pull dashboard' \
+  "app-only: exact previous pin and active profiles reach the app service"
+lack "$out" '<previous-version>' "app-only: never prints a placeholder version"
+want "$out" 'do not move the Git checkout or restore stored data' \
+  "app-only: scopes image recovery away from Git and data"
 want "$out" 'docker compose logs --tail=200 dashboard' "app-only: trailing logs line lists the full set"
 
 # --- third-party-only: FAILED=(postgres) -------------------------------------
@@ -78,6 +90,7 @@ out="$(run_recovery postgres)"
 want "$out" 'Third-party services' "third-party-only: prints the third-party/versions.env block"
 lack "$out" 'Application services' "third-party-only: no application/JARVIS_VERSION block"
 lack "$out" 'JARVIS_VERSION='      "third-party-only: no JARVIS_VERSION line at all"
+want "$out" 'cd /srv/jarvis-family' "third-party-only: recovery command is scoped to its repository"
 
 # --- reconciled third-party (postgres-backup) classifies as third-party -------
 out="$(run_recovery postgres-backup)"
@@ -104,12 +117,73 @@ fi
 want "$out" 'docker compose logs --tail=200 dashboard postgres' \
   "mixed: trailing logs line lists the full (both) failed set"
 
+# If the persisted pin is unavailable, recovery must stop short of inventing an
+# executable version placeholder.
+PREVIOUS_APP_VERSION=""
+out="$(run_recovery dashboard)"
+lack "$out" 'JARVIS_VERSION=' "missing old pin: no speculative image command"
+lack "$out" '<previous-version>' "missing old pin: no placeholder version"
+want "$out" 'could not be read safely from .env' \
+  "missing old pin: explains why no image command was printed"
+PREVIOUS_APP_VERSION=1.1.3
+
+# --build-local does not promise that an old registry image exists. It may only
+# re-use a previous local image when that exact tag is still cached.
+BUILD_LOCAL=1
+out="$(run_recovery dashboard)"
+lack "$out" 'docker compose --profile telegram --profile tunnel pull dashboard' \
+  "local-build recovery: does not pull a potentially unpublished app tag"
+want "$out" 'still cached locally' \
+  "local-build recovery: states the cache precondition"
+BUILD_LOCAL=0
+
+# The command-line help must not call source builds air-gapped: base images and
+# package/build inputs still have to exist locally or remain reachable.
+out="$(bash "$UPDATE_SCRIPT" --help)"; rc=$?
+if [ "$rc" -eq 0 ]; then pass "update help exits 0"; else check_fail "update help exits rc=$rc"; fi
+lack "$out" 'air-gapped' "update help: does not promise an air-gapped build"
+want "$out" 'base images and build inputs must be cached or reachable' \
+  "update help: states the actual source-build prerequisite"
+
 # fail_with_recovery exits 1 after printing the split recovery.
 fwr_src="$(sed -n '/^fail_with_recovery() {/,/^}/p' "$UPDATE_SCRIPT")"
 # shellcheck disable=SC2329  # err is called indirectly by the eval'd fail_with_recovery
 ( eval "$fwr_src"; err() { :; }; THIRD_PARTY_SET="$TP_SET" \
     fail_with_recovery "boom" "hint" dashboard >/dev/null 2>&1 ); rc=$?
 if [ "$rc" -eq 1 ]; then pass "fail_with_recovery exits 1"; else check_fail "fail_with_recovery did not exit 1 (rc=$rc)"; fi
+out="$(
+  eval "$fwr_src"
+  err() { :; }
+  UPDATE_MANAGED_TRANSACTION=1
+  THIRD_PARTY_SET="$TP_SET"
+  fail_with_recovery "boom" "hint" dashboard 2>&1
+)"; rc=$?
+if [ "$rc" -eq 1 ] && ! has "$out" 'Application-image recovery'; then
+  pass "managed transaction defers recovery to the lifecycle CLI"
+else
+  check_fail "managed transaction duplicated direct recovery: rc=$rc out=<<<$out>>>"
+fi
+
+DIRECT_UPDATE_CLEANUP_FN="$(sed -n '/^_cleanup_direct_update_lifecycle() {/,/^}/p' "$UPDATE_SCRIPT")"
+for mutation_expected in "0 clear" "1 retain"; do
+  mutation="${mutation_expected%% *}"
+  expected="${mutation_expected#* }"
+  out="$(
+    set +e
+    eval "$DIRECT_UPDATE_CLEANUP_FN"
+    UPDATE_LIFECYCLE_OWNED=1
+    UPDATE_MUTATION_STARTED="$mutation"
+    SCRIPT_DIR=/tmp/update-fixture
+    finish_lifecycle_operation() { printf '%s\n' "$3"; }
+    false
+    _cleanup_direct_update_lifecycle
+  )" && rc=0 || rc=$?
+  if [ "$out" = "$expected" ] && [ "$rc" -eq 1 ]; then
+    pass "direct update failed lifecycle exit uses ${expected} after mutation=${mutation}"
+  else
+    check_fail "direct update lifecycle cleanup: mutation=$mutation action=$out rc=$rc"
+  fi
+done
 
 # =============================================================================
 # update.sh full-run harness (stubbed docker + throwaway fixture repo).
@@ -121,6 +195,8 @@ trap 'rm -rf "$FX" "$STUB"' EXIT
 ln -s "$UPDATE_SCRIPT" "$FX/update.sh"
 mkdir -p "$FX/scripts"
 ln -s "$LIB" "$FX/scripts/setup_lib.sh"
+cp "$LIFECYCLE_HELPER" "$FX/scripts/backup-lifecycle.sh"
+printf 'services: {}\nvolumes:\n  postgres_backups:\n' > "$FX/docker-compose.yml"
 cat > "$FX/pyproject.toml" <<'PYPROJECT'
 [project]
 name = "jarvis-rd-assistant"
@@ -156,19 +232,48 @@ GIT
 chmod +x "$STUB/git"
 
 # docker stub: logs pull/up/build to $DOCKER_LOG; reports the base third-party
-# and application services as running with a stale image; optional services are
-# absent (not deployed). STUB_HEALTH / STUB_RUN_STATE / STUB_FAIL_PULL tune it.
+# and application services as running with a stale image. Optional ingress
+# services exist only when named in STUB_ACTIVE_INGRESS. STUB_HEALTH,
+# STUB_RUN_STATE, and STUB_FAIL_PULL tune the remaining behavior.
 cat > "$STUB/docker" <<'DOCKER'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_CALL_LOG"
 log() { printf '%s\n' "$*" >> "$DOCKER_LOG"; }
 running_cid() {
   case "$1" in
-    postgres|ollama|qdrant|litellm|cloudflared|postgres-backup) printf 'cid-%s\n' "$1" ;;
+    postgres|ollama|qdrant|litellm|postgres-backup) printf 'cid-%s\n' "$1" ;;
     paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) printf 'cid-%s\n' "$1" ;;
+    caddy|caddy_local|cloudflared)
+      case " ${STUB_ACTIVE_INGRESS:-} " in *" $1 "*) printf 'cid-%s\n' "$1" ;; esac ;;
     *) : ;;
   esac
 }
+case "${1:-}" in
+  info) [ "${STUB_NO_DAEMON:-0}" = 1 ] && exit 1; exit 0 ;;
+  volume)
+    case "${2:-}" in
+      inspect)
+        if printf '%s\n' "$@" | grep -q -- '--format'; then
+          project="$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+          printf '%s|postgres_backups\n' "$project"
+        fi
+        exit 0 ;;
+    esac
+    exit 0 ;;
+  run)
+    raw_args=("$@")
+    for ((i=0; i<${#raw_args[@]}; i++)); do
+      if [ "${raw_args[$i]}" = /tmp/backup-lifecycle.sh ]; then
+        helper_args=("${raw_args[@]:$((i + 1))}")
+        if [ "${helper_args[0]:-}" = update-promoted-status ] \
+           && [ "${STUB_DEAD_GUARD:-0}" != 1 ]; then
+          exit 0
+        fi
+        exit 1
+      fi
+    done
+    exit 0 ;;
+esac
 if [ "${1:-}" = "inspect" ]; then
   shift; fmt=""
   while [ $# -gt 0 ]; do
@@ -182,16 +287,28 @@ if [ "${1:-}" = "inspect" ]; then
   exit 0
 fi
 if [ "${1:-}" = "compose" ]; then
+  printf 'compose-env file=%s project=%s profiles=%s separator=%s envfiles=%s disable=%s\n' \
+    "${COMPOSE_FILE-<unset>}" "${COMPOSE_PROJECT_NAME-<unset>}" \
+    "${COMPOSE_PROFILES-<unset>}" "${COMPOSE_PATH_SEPARATOR-<unset>}" \
+    "${COMPOSE_ENV_FILES-<unset>}" "${COMPOSE_DISABLE_ENV_FILE-<unset>}" \
+    >> "$DOCKER_CALL_LOG"
   shift; args=()
   while [ $# -gt 0 ]; do
-    case "$1" in --profile) shift 2 ;; *) args+=("$1"); shift ;; esac
+    case "$1" in
+      --profile|--project-directory|--env-file|-p|-f) shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac
   done
   set -- "${args[@]:-}"
   case "${1:-}" in
     version) exit 0 ;;
+    config)
+      project="$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+      printf '{"volumes":{"postgres_backups":{"name":"%s_postgres_backups"}}}\n' "$project"
+      exit 0 ;;
     ps)      running_cid "${3:-}"; exit 0 ;;
     pull)    log "pull ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; [ "${STUB_FAIL_PULL:-0}" = 1 ] && exit 1; exit 0 ;;
-    up)      log "up ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
+    up)      log "network-up DASHBOARD_IP=${JARVIS_DASHBOARD_IP:-<unset>}"; log "up ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
     build)   log "build ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
     *)       exit 0 ;;
   esac
@@ -201,14 +318,46 @@ DOCKER
 chmod +x "$STUB/docker"
 
 run_update() {
+  local stdin_data="${STUB_UPDATE_INPUT:-}"
   : > "$FX/docker.log"
   : > "$FX/docker-calls.log"
   mkdir -p "$FX/home"
   DOCKER_LOG="$FX/docker.log" DOCKER_CALL_LOG="$FX/docker-calls.log" \
     STUB_EXACT_TAG="${STUB_EXACT_TAG:-}" STUB_FAIL_PULL="${STUB_FAIL_PULL:-0}" \
+    STUB_ACTIVE_INGRESS="${STUB_ACTIVE_INGRESS:-}" \
+    STUB_DEAD_GUARD="${STUB_DEAD_GUARD:-0}" STUB_NO_DAEMON="${STUB_NO_DAEMON:-0}" \
+    STUB_REPO="$FX" \
+    JARVIS_UPDATE_VOLUME_GUARD_ID="${JARVIS_UPDATE_VOLUME_GUARD_ID:-0123456789abcdef0123456789abcdef}" \
     HOME="$FX/home" XDG_CONFIG_HOME="$FX/home/.config" \
-    PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" </dev/null 2>&1
+    PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" <<<"$stdin_data" 2>&1
 }
+
+# Durable update text is not proof that its detached sidecar lease is alive.
+# The preflight may query Docker, but a dead holder must refuse before any
+# service or configuration mutation.
+reset_fixture_env
+dead_guard_id=0123456789abcdef0123456789abcdef
+before_env="$(cat "$FX/.env")"
+out="$(STUB_DEAD_GUARD=1 JARVIS_UPDATE_VOLUME_GUARD_ID="$dead_guard_id" run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && ! grep -Eq '(^| )(pull|up|build)( |$)' "$FX/docker.log" \
+   && [ "$(cat "$FX/.env")" = "$before_env" ]; then
+  pass "dead inherited update lease refuses before service or config mutation"
+else
+  check_fail "dead inherited update lease escaped admission: rc=$rc calls=$(cat "$FX/docker-calls.log") out=<<<$out>>>"
+fi
+
+# A stopped daemon is diagnosed before the Docker-backed lifecycle helper runs.
+reset_fixture_env
+before_env="$(cat "$FX/.env")"
+out="$(STUB_NO_DAEMON=1 run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'Docker daemon is not reachable' \
+   && ! grep -q '/tmp/backup-lifecycle.sh' "$FX/docker-calls.log" \
+   && [ "$(cat "$FX/.env")" = "$before_env" ]; then
+  pass "direct update reports a stopped Docker daemon before lifecycle admission"
+else
+  check_fail "direct update daemon ordering: rc=$rc calls=$(cat "$FX/docker-calls.log") out=<<<$out>>>"
+fi
 
 # --- checkout_version_overrides_stale_env_and_commits_after_health ----------
 reset_fixture_env
@@ -220,6 +369,99 @@ if [ "$rc" -eq 0 ] \
   pass "checkout_version_overrides_stale_env: app pull/up use 1.2.0 and success persists it"
 else
   check_fail "checkout_version_overrides_stale_env: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# Caller-exported Compose selectors must never redirect a direct update away
+# from the fixture repository. The repo's own .env remains Compose's source.
+reset_fixture_env
+export COMPOSE_FILE=/tmp/foreign-compose.yml
+export COMPOSE_PROJECT_NAME=foreign-project
+export COMPOSE_PROFILES=foreign-profile
+export COMPOSE_PATH_SEPARATOR=';'
+export COMPOSE_ENV_FILES=/tmp/foreign.env
+export COMPOSE_DISABLE_ENV_FILE=1
+out="$(run_update --yes)"; rc=$?
+unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR
+unset COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'compose-env file=<unset> project=<unset> profiles=<unset> separator=<unset> envfiles=<unset> disable=<unset>' "$FX/docker-calls.log"; then
+  pass "direct update clears caller Compose selectors before every Docker Compose call"
+else
+  check_fail "direct update leaked caller Compose selectors: rc=$rc calls=$(cat "$FX/docker-calls.log") out=<<<$out>>>"
+fi
+
+# A default install has no cloudflared container. It must stay out of the status
+# table and update plan instead of appearing as a red, not-running service.
+reset_fixture_env
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! printf '%s\n' "$out" | grep -Eq '^cloudflared[[:space:]]' \
+   && ! grep -q 'cloudflared' "$FX/docker.log"; then
+  pass "absent_cloudflared_is_silent: default install neither lists nor updates it"
+else
+  check_fail "absent_cloudflared_is_silent: rc=$rc log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# A v1.2 update changes the pinned ingress source addresses. Every active edge
+# must be version-reconciled and recreated with dashboard.
+reset_fixture_env
+out="$(STUB_ACTIVE_INGRESS='caddy caddy_local cloudflared' run_update --yes)"; rc=$?
+dashboard_up="$(grep '^up ' "$FX/docker.log" | grep 'dashboard' | tail -1)"
+if [ "$rc" -eq 0 ] \
+   && grep '^pull ' "$FX/docker.log" | grep -q 'cloudflared' \
+   && printf '%s' "$dashboard_up" | grep -q 'cloudflared' \
+   && printf '%s' "$dashboard_up" | grep -q 'caddy' \
+   && printf '%s' "$dashboard_up" | grep -q 'caddy_local'; then
+  pass "active_ingress_reconciled_with_dashboard: active cloudflared is pulled and recreated in the cohort"
+else
+  check_fail "active_ingress_reconciled_with_dashboard: rc=$rc line=<<<$dashboard_up>>> log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# Declining the application refresh must be authoritative. A third-party-only
+# recreate uses --no-deps so an active edge cannot pull dashboard into the
+# operation through its Compose dependency.
+reset_fixture_env
+out="$(STUB_ACTIVE_INGRESS='cloudflared' STUB_UPDATE_INPUT=$'y\nn' run_update)"; rc=$?
+third_party_up="$(grep '^up ' "$FX/docker.log" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] \
+   && printf '%s' "$third_party_up" | grep -q -- '--no-deps' \
+   && printf '%s' "$third_party_up" | grep -q 'cloudflared' \
+   && ! printf '%s' "$third_party_up" | grep -q 'dashboard'; then
+  pass "third_party_only_recreate_does_not_expand_into_declined_application_services"
+else
+  check_fail "third-party-only dependency boundary: rc=$rc up=<<<$third_party_up>>> out=<<<$out>>>"
+fi
+
+# A pre-v1.2 install may have a custom bridge subnet but none of the exact
+# ingress addresses introduced in v1.2. The update must derive, persist, and
+# export those addresses before any pull or recreate resolves Compose.
+reset_fixture_env
+printf 'JARVIS_NET_SUBNET=10.42.8.0/24\n' >> "$FX/.env"
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qx 'JARVIS_NET_GATEWAY_IP=10.42.8.1' "$FX/.env" \
+   && grep -qx 'JARVIS_CADDY_IP=10.42.8.251' "$FX/.env" \
+   && grep -qx 'JARVIS_CADDY_LOCAL_IP=10.42.8.252' "$FX/.env" \
+   && grep -qx 'JARVIS_DASHBOARD_IP=10.42.8.253' "$FX/.env" \
+   && grep -qx 'JARVIS_CLOUDFLARED_IP=10.42.8.254' "$FX/.env" \
+   && grep -qx 'network-up DASHBOARD_IP=10.42.8.253' "$FX/docker.log"; then
+  pass "legacy_custom_subnet_backfill: exact ingress addresses exist before recreate"
+else
+  check_fail "legacy_custom_subnet_backfill: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# A subnet smaller than /27 cannot hold the pinned ingress cohort. Refuse the
+# update before pulling or recreating anything instead of producing a partial
+# network migration.
+reset_fixture_env
+printf 'JARVIS_NET_SUBNET=10.42.8.0/28\n' >> "$FX/.env"
+out="$(run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && ! grep -Eq '^(pull|up) ' "$FX/docker.log" \
+   && printf '%s' "$out" | grep -q 'IPv4 /27 or larger'; then
+  pass "invalid_ingress_subnet_aborts_before_mutation"
+else
+  check_fail "invalid_ingress_subnet_aborts_before_mutation: rc=$rc log=$(cat "$FX/docker.log") out=$out"
 fi
 
 # A staging failure must not claim that the old deployment advanced.
@@ -338,10 +580,10 @@ fi
 # --- die_paths_print_recovery (pull failure) ---------------------------------
 out="$(STUB_FAIL_PULL=1 run_update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] \
-   && printf '%s' "$out" | grep -q 'Recovery — the two image sets roll back differently' \
+   && printf '%s' "$out" | grep -q 'Recovery is limited to the failed image services' \
    && printf '%s' "$out" | grep -q 'Third-party services' \
    && ! grep -q '^up ' "$FX/docker.log"; then
-  pass "die_paths_print_recovery: pull failure prints split recovery, exits 1, recreates nothing"
+  pass "die_paths_print_recovery: pull failure prints bounded recovery, exits 1, recreates nothing"
 else
   check_fail "die_paths_print_recovery: rc=$rc out=$out log=$(cat "$FX/docker.log")"
 fi
@@ -367,6 +609,11 @@ TAGS
 fi
 exit 0
 GIT
+mkstub "$GITSTUB" sort <<'SORT'
+#!/usr/bin/env bash
+printf 'GNU sort -V must not be required\n' >&2
+exit 99
+SORT
 got="$(PATH="$GITSTUB:$PATH" latest_stable_tag origin)"
 if [ "$got" = "v1.10.0" ]; then
   pass "latest_stable_tag_sorts_versionally: v1.10.0 > v1.9.0"

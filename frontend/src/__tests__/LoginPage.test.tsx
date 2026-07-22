@@ -9,7 +9,7 @@
  *   reachable but the server rejects it once more than one account exists.
  * - setup_mode and smtp_configured absent -> magic-link
  *   is the default (safe fallback, no behavior change).
- * - "Use API key instead" toggle reveals the API-key form.
+ * - Multi-user API-key copy identifies the configured owner's recovery path.
  * - 422 from requestMagicLink surfaces as an email-validation message.
  * - The page renders a <main> landmark.
  * - Errors are announced via role="alert".
@@ -258,14 +258,16 @@ describe('LoginPage', () => {
   // Toggle behaviour
   // ---------------------------------------------------------------------------
 
-  it('toggles to the API-key form on click', async () => {
+  it('labels API-key login as owner recovery in multi-user mode', async () => {
     const user = userEvent.setup();
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
 
-    await user.click(screen.getByRole('button', { name: /use api key instead/i }));
+    await user.click(await screen.findByRole('button', { name: /instance owner recovery/i }));
     const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toBeInTheDocument();
     expect(input).toHaveAttribute('type', 'password');
+    expect(screen.getByText(/only the configured instance owner/i)).toBeInTheDocument();
+    expect(screen.getByText(/family members use a passkey or sign-in link/i)).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------
@@ -275,16 +277,16 @@ describe('LoginPage', () => {
   it('renders the backend 403 multi-tenant-disabled message instead of bouncing', async () => {
     const user = userEvent.setup();
     storeLastError =
-      'API-key login disabled for multi-tenant deployments; use magic-link';
+      'API-key recovery is reserved for the configured instance owner; use a passkey or sign-in link';
     loginMock.mockResolvedValueOnce(false);
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
 
-    await user.click(screen.getByRole('button', { name: /use api key instead/i }));
+    await user.click(await screen.findByRole('button', { name: /instance owner recovery/i }));
     const input = screen.getByPlaceholderText(/Your API key/i);
     await user.type(input, 'some-api-key-value');
     await user.click(screen.getByRole('button', { name: /^sign in$/i }));
 
-    expect(await screen.findByText(/use magic-link/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/use a passkey or sign-in link/i);
   });
 
   // ---------------------------------------------------------------------------
@@ -294,7 +296,7 @@ describe('LoginPage', () => {
   it('API-key input opts out of browser credential storage', async () => {
     const user = userEvent.setup();
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
-    await user.click(await screen.findByRole('button', { name: /use api key instead/i }));
+    await user.click(await screen.findByRole('button', { name: /instance owner recovery/i }));
     const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toHaveAttribute('autocomplete', 'off');
   });

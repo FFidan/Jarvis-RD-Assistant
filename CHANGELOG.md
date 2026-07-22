@@ -5,10 +5,106 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 **Release-history note:** This changelog is retrospective. The repository remained private through the pre-v1.0.0 tags; all entries before v1.0.0 describe private development and hardening milestones.
 Wording such as "public-ready", "public-readiness", or "public-launch groundwork" in older entries means preparation for the v1.0.0 public launch, not earlier public availability.
+Historical sharing language describes the behavior of the release in which it
+appears. The current contract is the [Source-aware paper
+visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
+references to a globally shared corpus must not be read as current behavior.
 
 ## Unreleased
 
-_No unreleased changes yet._
+The v1.2.0 candidate is under review. These notes describe the current source
+tree, not a published release.
+
+### Added
+- **Whole-library processing.** An admin can queue eligible papers for download,
+  analysis, and summary generation in one job, with per-paper progress and a
+  partial result when some papers fail or are skipped.
+- **Paper knowledge export.** A paper can be exported as Markdown with its
+  summary, notes, cards, structured extractions, and BibTeX citation.
+- **Scheduled discovery.** Each enabled source checks a rolling seven-day
+  window for every configured topic, and administrators can opt in to automatic
+  summaries for discovered papers.
+- **Ranking-model status.** Pulse reports whether its learned ranking model is
+  active instead of leaving the operator to infer it from results.
+- **Explicit instance ownership.** Upgrades with one live administrator assign
+  that account automatically; ambiguous multi-admin upgrades provide a host
+  repair command, and database-managed owners can transfer safely in Admin.
+
+### Changed
+- **Safer lifecycle operations.** Backup manifests bind every archive in a
+  restore point; update transactions resume after interruption; uninstall is
+  scoped to the registered Compose project; and recovery points are verified
+  before a data-changing update proceeds.
+- **Clearer family access.** Remote setup and sign-in require a verified named
+  HTTPS address. Plain LAN HTTP exposes only `/health/jarvis`. Guided Tailscale
+  setup can install the client with explicit consent on supported Linux hosts;
+  private HTTPS, Cloudflare Tunnel, and Let's Encrypt paths report only what
+  their checks prove. Cloudflare also has a non-interactive token-file path, so
+  its credential never needs to appear in shell arguments. Multi-user installs
+  can use privately shared one-time links when SMTP is not configured. A failed
+  access-route change now restores and verifies the previous live dashboard and
+  JARVIS-owned edge, not only its configuration file.
+- **Hardware-aware defaults.** NVIDIA acceleration is selected when its runtime
+  is ready, AMD uses ROCm only when the required device is available, and other
+  AMD or Intel hosts stay on the supported CPU path unless Vulkan is selected
+  explicitly.
+- **Complete disaster-recovery sets.** Current restore points include the PDF
+  object store and exactly the three keys coupled to restored data. Restores
+  revoke transient sign-in state, preserve durable identities, rotate vector
+  visibility state, and quarantine off-host integration credentials until an
+  authenticated operator reviews them.
+- **Source-aware paper visibility.** Only papers promoted by trusted server
+  adapters are public. Local uploads, client-supplied batches, personal or group
+  Zotero imports, unknown provenance, and ambiguous legacy Zotero rows remain
+  private unless explicitly added to a user's library. Feed, graph, citation,
+  summary, vector-search, and Ask paths use the same persisted rule.
+- **Audited frontend toolchain.** Transitive YAML and glob parsers are locked to
+  patched releases, and the existing Security workflow rejects future
+  high-severity npm audit findings.
+
+### Fixed
+- **Shared papers survive user deletion.** Removing a paper from one person's
+  library no longer removes canonical data or another person's work.
+- **Embedding repair covers stale and missing vectors.** Existing chunks are
+  reconciled without downloading and parsing the PDF again.
+- **Partial jobs no longer read as complete.** The Jobs panel labels partial
+  outcomes separately and keeps their completed and failed counts visible.
+- **Cross-reference visibility matches Ask.** Summaries and cross-paper
+  retrieval now use the same persisted public-or-caller-library rule.
+
+## v1.1.3 (2026-07-19)
+
+A maintenance release for safer installation and day-to-day operation.
+
+### Added
+- **`jarvis-research` operations command.** Installs can be checked, started,
+  stopped, repaired, updated, and uninstalled from any directory. Updates stage
+  images before advancing the checkout, require a verified restore point before
+  a data-changing migration, and resume from an interrupted phase.
+- **Contained uninstall.** Four explicit tiers cover stop, application images,
+  data, and full purge. Destructive tiers enumerate their targets, require typed
+  confirmation, and offer to export the backup encryption key first.
+
+### Changed
+- **Setup re-runs preserve local configuration.** Existing environment values,
+  operator additions, secrets, data, and user-owned Compose overrides are kept;
+  newly required keys are added without rebuilding the file from scratch.
+- **Access output matches the deployed route.** LAN mode prints plain HTTP,
+  local HTTPS uses its own port, a named private HTTPS origin can be configured,
+  and Let's Encrypt success waits for a working certificate endpoint.
+- **Hardware fallback is explicit.** NVIDIA runtime checks, numeric GPU device
+  groups, CPU fallback, and disk and port preflight checks fail with actionable
+  guidance instead of leaving a half-started install.
+
+### Fixed
+- Setup tokens travel in URL fragments and production refuses first-admin
+  creation when the token is missing.
+- Admin invites return a manual one-time link when email delivery is unavailable.
+- Passkeys are not offered for numeric IP origins, and authentication secrets
+  are refused over non-loopback plaintext HTTP.
+- Citation verification rejects references to sources that were never supplied;
+  card generation preserves literal braces in paper text; and Pulse accepts
+  structured tracked-author identifiers.
 
 ## v1.1.2 (2026-07-16)
 
@@ -642,6 +738,4 @@ A six-week audit-and-remediation pass closed roughly 120 findings ahead of the e
 
 ## Early private foundations (v0.1 – v0.4.1)
 
-The v0.1 through v0.4.1 entries summarize the earliest private milestones. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 consolidation.
-
-
+The v0.1 through v0.4.1 entries summarize the earliest private milestones. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed an independent security and quality review before the v0.5.0 consolidation.

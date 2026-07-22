@@ -1,134 +1,180 @@
-<!-- verified-against-UI: 2026-07-19 | routes: setup.sh (terminal chooser), /auth/verify, /settings?section=account -->
+<!-- verified-against-UI: 2026-07-20 | routes: setup.sh (terminal chooser), /auth/verify, /settings?section=account -->
 
-# Choosing how you access JARVIS
+# Choose how to access JARVIS
 
-The very first question `./setup.sh` asks is **"How will you access JARVIS?"** Your answer decides where you can open the dashboard and which sign-in options each device gets. This page explains the choices in plain language, and gives you the two real ways to reach JARVIS from another device — a bootstrap route and a durable family route — so you can pick confidently.
+`./setup.sh` asks where you want to use JARVIS. The choice controls which devices can reach it and whether sign-in and passkeys are safe to use.
 
-There is nothing to edit by hand: setup derives the address and network settings from your answer and writes them itself.
+Setup writes the matching JARVIS configuration. It does not silently create external accounts, change DNS, open router ports, or alter a firewall.
 
----
+## Access choices
 
-## The four modes at a glance
+| Choice | Use it when | Address | Sign-in and passkeys |
+|---|---|---|---|
+| **1. This computer only** | You use JARVIS on its host | `http://localhost:3001` | Yes |
+| **2. LAN diagnostics** | You need to check reachability from the same network | `http://<lan-ip>:3001/health/jarvis` | No; this address serves only the health check |
+| **3. Private Tailscale network** | Family or team devices should have private, authenticated access | A named `https://…ts.net` address | Yes |
+| **4. Cloudflare Tunnel** | You need a protected internet route without opening router ports | Your configured HTTPS hostname | Yes |
+| **5. Own domain with Let's Encrypt** | Your domain points to this host and port 443 is reachable | Your HTTPS domain | Yes |
 
-| Mode | Where you can open JARVIS | Sign-in links (email) | Passkeys (fingerprint / face / PIN) | Transport |
-|------|--------------------------|----------------------|--------------------------------------|-----------|
-| **1. On this computer only** | The machine JARVIS runs on | Yes | Yes, on this computer | Plain HTTP over loopback (`http://localhost:3001`) |
-| **2. Home or lab network** | Any device on your network | Receive on any device; durable session needs the HTTPS origin — see [About LAN mode](#about-lan-mode) | Yes, on the JARVIS computer only | Plain HTTP over your LAN (`http://<lan-ip>:3001`) — see [About LAN mode](#about-lan-mode) below |
-| **3. Cloudflare Tunnel** | Anywhere on the internet | Yes | Yes, everywhere | HTTPS, edge TLS terminated by Cloudflare |
-| **4. Your own domain (Let's Encrypt)** | Anywhere on the internet | Yes | Yes, everywhere | HTTPS, a real Let's Encrypt certificate |
+For most installations, start with choice 1. Choose 3 when other trusted devices need to sign in. Choices 4 and 5 publish a route beyond the local network and require more operator setup.
 
-Whichever you pick, staying signed in works the same way everywhere a session can persist: a sign-in lasts 30 days and quietly renews while you keep using JARVIS, so you won't be logged out mid-project. Raw-IP LAN access (mode 2, browsed directly by IP) is the one exception — see below.
+## What setup handles
 
----
+For every choice, setup configures the repository-owned services, allowed hosts,
+browser origins, and displayed links. It reports a route as ready only after
+the route-specific check passes.
 
-## What each mode means
+Some work remains outside JARVIS:
 
-### 1) On this computer only (recommended to start)
+- Tailscale account creation and browser sign-in.
+- Cloudflare account, tunnel, hostname, and access-policy setup.
+- Domain purchase, DNS, router, and firewall changes.
 
-JARVIS is reachable only from the machine it is installed on, at `http://localhost:3001`. Nothing is opened to your network or the internet. Everything works here: sign-in links, passkeys, the lot. This is the safest default, and you lose nothing by starting here — you can re-run setup and move to any other mode whenever you're ready.
+Setup explains these requirements at the relevant choice. On supported Linux
+hosts it previews the official Tailscale package commands and asks before
+running them. It can also ask before `sudo tailscale up`. If installation or
+sign-in is unavailable, declined, or fails, setup keeps localhost working.
 
-Want HTTPS on this machine too (a locally-trusted certificate, no browser warning)? Run `./setup.sh --profile=local-https` — it starts a local Caddy edge at `https://localhost:3443` using a certificate from [mkcert](https://github.com/FiloSottile/mkcert) (installed to your system trust store by `make certs`).
+## Choice 1: this computer only
 
-### 2) From devices on your home or lab network
+Open `http://localhost:3001` on the machine running JARVIS. Setup and everyday sign-in work there because browsers treat localhost as a secure context.
 
-The dashboard becomes reachable from other devices on the same network — your laptop on the sofa, a tablet in the lab — at `http://<your-lan-ip>:3001` (setup detects and prints your address, and checks it is reachable at the end).
+This is also the recovery route if a remote access method stops working.
 
-Setup will remind you of this too: LAN mode binds the dashboard to every interface over **plain HTTP**, reachable by every host on your network — use it only on a network you trust. See [About LAN mode](#about-lan-mode) for what this does and does not give you, and for the two real ways to get a durable, authenticated family route on top of it.
+## Choice 2: LAN diagnostics
 
-### 3) From anywhere — Cloudflare Tunnel
+Setup prints the host's private network health address, for example
+`http://10.0.0.17:3001/health/jarvis`, and probes it. A successful local probe
+shows only that the listener answered on the JARVIS host. Test the same address
+from another LAN device to check VM networking and firewall access.
 
-Gives JARVIS a real web address (like `jarvis.yourname.com`) reachable from anywhere, without opening any ports on your router. Full features everywhere, including passkeys — Cloudflare terminates a proper trusted certificate at your tunnel address.
+That is the only page available to another device on the raw LAN route. Every
+other path returns HTTP 403, including the dashboard, setup, sign-in, cookies,
+and passkeys. Removing the `s` from an HTTPS dashboard link therefore does not
+open the app.
 
-You'll need a **free Cloudflare account** and a tunnel token; setup guides you through both. Because a tunnel exposes your JARVIS to the internet, setup first asks you to configure **Zero Trust access policies** in your Cloudflare dashboard and to type `I understand` before it continues — a deliberate speed bump, since this is the step that takes your instance public. It then asks for the public hostname you configured so everything lines up automatically.
+If JARVIS runs in a VM, the address belongs to the VM. Other devices can reach it only when the VM network and host firewall allow that connection.
 
-### 4) From anywhere — your own domain with Let's Encrypt
+## Choice 3: private Tailscale network
 
-Like the tunnel, but using a domain you own that points directly at your machine. Setup asks for your **domain** and an **admin email** (Let's Encrypt sends certificate-expiry notices there), waits for the certificate to be issued, and only then reports success — JARVIS never claims an HTTPS route that isn't actually serving yet. Full features everywhere, including passkeys.
+Install Tailscale on each family device. On the JARVIS host, setup:
 
-This mode needs your domain's DNS pointing at the machine and **port 443 reachable** from the internet — typically a port-forward on your router or a machine with a public address. If that sounds like homework, option 3 gets you the same result with no router changes.
+1. Uses an existing client or, on supported Linux hosts, previews the package
+   commands and asks before installing it. Non-interactive installation requires
+   `--install-prereqs`.
+2. Detects whether the client is signed in. If not, interactive setup can ask
+   permission to run `sudo tailscale up` so you can complete Tailscale's browser
+   sign-in.
+3. Configures persistent Tailscale Serve to forward HTTPS to the host-only
+   JARVIS listener at `127.0.0.1:3003`, preserving a configured custom port.
+4. Verifies the exact JARVIS health marker. Setup prints a remote setup link only
+   after that check passes; otherwise it keeps the usable localhost link and
+   tells you what to retry.
 
----
+Automatic client installation covers Debian, Ubuntu, Linux Mint, Pop!_OS, and
+Fedora hosts with systemd. macOS, unsupported distributions, and WSL without
+systemd receive manual instructions. Any missing, declined, or failed step falls
+back to localhost without exposing the dashboard on the LAN. Setup exits
+nonzero until the selected Tailscale address passes its health check.
 
-## About LAN mode
+Run `./setup.sh --tailscale` to select this choice without the access chooser.
+On an existing installation, also accept the overwrite prompt or add
+`--overwrite-env` so the route actually changes.
+`--public-origin https://host.example` remains the advanced route for an HTTPS
+proxy you manage yourself. Setup does not configure that proxy; it checks the
+exact JARVIS health marker and exits nonzero until the address works.
 
-Mode 2 binds the dashboard to `0.0.0.0` and serves plain HTTP on your network. That gets you two things and explicitly **not** a third:
+## Choice 4: Cloudflare Tunnel
 
-- **Viewing works.** Any device on the LAN can open `http://<lan-ip>:3001` and use the app once a session already exists on that device.
-- **The one-time setup link is not for this.** The click-to-finish link setup prints always stays on `http://localhost` — the setup token rides that link, and a bearer token must never cross a shared network in plaintext. Finish first-admin setup from the server itself, or forward the port over SSH:
+You provide the Cloudflare tunnel token and HTTPS hostname after creating the
+account and tunnel. Protect the main hostname with an Access **Allow** policy.
+Then create a second, more-specific Access application for exactly
+`your-hostname/health/jarvis` with **Bypass / Everyone**. Cloudflare evaluates
+the specific path first. Bypass removes Access enforcement and logging for that
+path, so do not widen it: the endpoint is safe to expose only because it returns
+the fixed text `jarvis-rd-assistant` and no user, setup-token, or system details.
+See Cloudflare's [application-path precedence](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)
+and [Bypass policy](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/).
+The token is not echoed while you paste it. Setup first checks that the tunnel
+has an active Cloudflare connection, then checks the public hostname for the
+exact marker.
 
-  ```bash
-  ssh -L 3001:127.0.0.1:3001 user@host
-  ```
+For unattended setup, pass `--profile=tunnel`, `--tunnel-ack`,
+`--tunnel-hostname`, and `--tunnel-token-file`. The token itself stays out of the
+command line.
 
-  then open the forwarded `http://localhost:3001` link.
+A Cloudflare Access page means the exact health-path Bypass application is
+missing. A web-application firewall challenge means only that path still needs a
+narrow challenge exception. Neither proves that the tunnel reaches JARVIS. A
+wrong marker means the hostname points to another application; DNS and TLS
+failures are reported separately. Setup does not print a remote setup link and
+exits nonzero until the exact marker is verified.
 
-- **Signed-in sessions do not persist over the raw IP.** Session cookies are `Secure`, so they are dropped by the browser on plain `http://<ip>` — a sign-in there will not stick, and passkeys cannot be registered against a numeric IP at all (WebAuthn requires a real hostname; see [Passkeys vs sign-in links](#passkeys-vs-sign-in-links)). Raw-IP LAN is a fine way to *view* JARVIS from a second device with a link someone hands you, but it is not an authenticated family route.
+## Choice 5: own domain with Let's Encrypt
 
-For a durable, authenticated route to other devices, add a named private HTTPS origin on top of LAN (or localhost) mode:
+You provide a domain and certificate email. Before running setup, point the domain at the host and make port 443 reachable. Setup waits for the selected HTTPS route before advertising it.
 
-```bash
-./setup.sh --public-origin https://<host>.<tailnet>.ts.net
-```
+If you do not control DNS and router access, use Tailscale or Cloudflare instead.
 
-The reference walkthrough is [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) — install Tailscale on the host, run `tailscale serve --bg --https=443 http://127.0.0.1:3001`, and pass that HTTPS URL to `--public-origin`. Setup adds the hostname to `APP_BASE_URL`, `CORS_ORIGINS`, and the dashboard's Host allowlist, then probes the origin; once it answers, the click-to-finish setup link is hosted there instead of loopback, and sign-ins and passkeys work exactly like modes 3 and 4. Any other named-HTTPS proxy that terminates TLS and forwards to the dashboard works the same way — Tailscale Serve is simply the easiest to set up.
+## Sign-in links and passkeys
 
----
+Email is optional. A signed-in administrator can create a 24-hour invite link or a 15-minute sign-in link and share it through a private channel.
 
-## Passkeys vs sign-in links
+Passkeys work on localhost and on the final named HTTPS address. Register them only after opening that final address. They do not work on a raw numeric LAN address.
 
-JARVIS offers two everyday ways to sign in (plus API-key login for single-user installs — unaffected by any of this):
-
-- **Sign-in links** (magic links by email) work wherever a session can persist — every mode except raw-IP LAN browsing (see above). They are always your fallback.
-- **Passkeys** — fingerprint, face, or device PIN — are the fastest option, but browsers only allow them on a proper origin: `localhost` on the JARVIS machine itself, or the exact HTTPS origin configured in `APP_BASE_URL` (modes 3, 4, or a named private origin). A numeric network address (`http://192.168.x.x`) is never a valid passkey origin, and enrolling a passkey only works at the **final** origin you'll actually sign in from — not a temporary one.
-
-You don't need to remember any of this: the sign-in page checks what your current address supports and only shows the passkey button where it will actually work — elsewhere it shows a short note instead. You can add and manage your passkeys under **Settings → Account → Passkeys**.
-
----
+Keep at least two recovery methods for the administrator account: another
+passkey, working email, another signed-in administrator, or the instance
+owner's operations API key. Passkeys remain bound to their hostname after a
+restore or access-route change. See [Passkeys and account recovery](passkeys.md).
 
 ## Support tiers
 
-| Tier | Routes | What it means |
-|---|---|---|
-| **Supported** | localhost HTTP, named private HTTPS (Tailscale Serve or equivalent), Let's Encrypt, Cloudflare Tunnel | Fully tested, gets the standard hardening and cookie/passkey behavior. |
-| **Experimental** | Local HTTPS (`--profile=local-https`, mkcert at `:3443`); AMD/Intel Vulkan or ROCm GPU acceleration | Works, lower validation confidence — report issues. |
-| **Manual** | Custom reverse proxy (Traefik, ngrok, host nginx, …) | Works if you satisfy the [trust-boundary contract](../DEPLOYMENT.md#per-adapter-trust-contract) yourself — JARVIS does not configure or verify a proxy it didn't set up. |
-| **Unsupported for sign-in** | Raw-IP LAN browsing | Viewing only — see [About LAN mode](#about-lan-mode). No persistent session, no passkeys. |
+| Tier | Routes |
+|---|---|
+| **Supported** | localhost HTTP, guided Tailscale HTTPS, Let's Encrypt, Cloudflare Tunnel |
+| **Experimental** | local HTTPS with mkcert; Vulkan GPU acceleration |
+| **Manual** | a reverse proxy you configure and verify yourself |
+| **Diagnostics only** | raw-IP LAN HTTP |
 
-The table below is generated from the same route registry the app enforces (`route_claims` in `scripts/setup_lib.sh`); a docs test keeps the two in lockstep so this page can never claim a tier or behavior the code doesn't grant.
+The following table is checked against `route_claims` in `scripts/setup_lib.sh`:
 
 <!-- route-claims:begin -->
 | route | scheme | port | host_allowlist | setup_token_transport | cookie_policy | passkey_origin | cert_owner | tier |
 |---|---|---|---|---|---|---|---|---|
 | localhost-http | http | 3001 | localhost | fragment | secure | localhost | none | supported |
-| raw-ip-lan | http | 3001 | lan-ip | paste | none | none | none | supported |
-| named-private-https | https | 443 | origin-host | fragment | secure | origin-host | external | supported |
+| raw-ip-lan | http | 3001 | lan-ip | none | none | none | none | diagnostics-only |
+| named-private-https | https | 443 | origin-host | fragment | secure | origin-host | external | manual |
+| tailscale-serve | https | 443 | tailnet-host | fragment | secure | tailnet-host | tailscale | supported |
 | local-https | https | 3443 | localhost | fragment | secure | localhost | mkcert | experimental |
 | letsencrypt | https | 443 | domain | fragment | secure | domain | letsencrypt | supported |
 | tunnel | https | 443 | tunnel-host | fragment | secure | tunnel-host | cloudflare | supported |
 <!-- route-claims:end -->
 
-`tier` above is the route's own support classification (an unauthenticated `http://` view of the raw LAN route is "supported" because it works as designed) — it is a different axis from **cookie_policy**/**passkey_origin**, which is why raw-IP LAN shows `none`/`none`: the route serves pages, it just cannot carry a signed-in session.
+The raw LAN route is supported only for its exact health endpoint. Its `none`
+values mean it cannot carry setup, the dashboard, a session, or a passkey
+ceremony.
 
----
+## Change the access method later
 
-## Switching modes later
-
-Re-run setup and give a different answer to the first question:
+Run setup again and replace the selected access settings:
 
 ```bash
 ./setup.sh
 ```
 
-That's the whole procedure. Your papers, notes, settings, and accounts are untouched — only the access configuration changes. Setup handles the follow-through for you:
+When setup reports that `.env` already exists, choose **Overwrite**, then select
+the new access route. For an unattended run, include `--overwrite-env` with the
+route flags. Running setup without accepting overwrite starts the existing
+configuration unchanged.
 
-- It re-derives `CORS_ORIGINS` and the dashboard's Host allowlist for the new mode, accumulating rather than dropping — a named private origin you configured earlier stays allowed alongside a new LAN or tunnel choice.
-- Moving up to mode 3 or 4 walks you through the extra pieces (Cloudflare consent + token, or domain + admin email) right in the flow.
-- If you're adding `--profile=local-https`, generate the mkcert certificate first with `make certs` — setup tells you if it's missing.
+Papers, accounts, and unrelated operator settings remain in place. Setup
+accepts a replacement route only after it verifies that exact endpoint. If a
+later check fails, it restores and verifies the previous route; the next run
+also resumes recovery after an interruption. If automated recovery cannot be
+proved, setup stops and prints exact manual commands instead of claiming
+success. A manually managed `--public-origin` is not carried to a different
+route automatically; provide it again if you still want it. See [Changing
+access routes safely](../DEPLOYMENT.md#changing-access-routes-safely) for the
+operator procedure.
 
-A common path: start with mode 1 on day one, switch to mode 2 when you want JARVIS on your tablet, and add a named private HTTPS origin (or move to mode 3 or 4) for a durable route away from home — picking up passkeys on every device along the way.
-
----
-
-## What comes next
-
-New here? [Getting Started](getting-started.md) covers the onboarding wizard and your first sign-in. For operator-level detail — ports, the full trust-contract table per adapter, and TLS specifics — see [DEPLOYMENT.md](../DEPLOYMENT.md).
+Continue with [First sign-in and setup](getting-started.md). Operator details are in [Deployment and remote access](../DEPLOYMENT.md).

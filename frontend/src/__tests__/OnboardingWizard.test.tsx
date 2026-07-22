@@ -78,7 +78,7 @@ const pulseApi = await import('@/lib/api/pulse');
 // The barrel above is fully mocked; ApiError comes from the un-mocked core so
 // it is the same class AdminStep checks with `instanceof`.
 const { ApiError } = await import('@/lib/api/core');
-const { OnboardingWizard } = await import('@/pages/OnboardingWizard');
+const { OnboardingWizard, isRemotePlainHttp } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
 
 type FirstRun = {
@@ -148,6 +148,14 @@ describe('OnboardingWizard', () => {
       paired_at: null,
     });
     vi.mocked(api.fetchConfig).mockResolvedValue([]);
+  });
+
+  it('treats raw-IP HTTP as diagnostics while preserving localhost HTTP', () => {
+    expect(isRemotePlainHttp({ protocol: 'http:', hostname: '10.0.0.17' })).toBe(true);
+    expect(isRemotePlainHttp({ protocol: 'http:', hostname: 'jarvis.lan' })).toBe(true);
+    expect(isRemotePlainHttp({ protocol: 'http:', hostname: 'localhost' })).toBe(false);
+    expect(isRemotePlainHttp({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(false);
+    expect(isRemotePlainHttp({ protocol: 'https:', hostname: 'jarvis.example.ts.net' })).toBe(false);
   });
 
 
@@ -236,6 +244,8 @@ describe('OnboardingWizard', () => {
     );
 
     expect(await screen.findByText('SMTP relay')).toBeInTheDocument();
+    expect(screen.getByText(/one-time sign-in links/i)).toHaveTextContent(/Admin → Users/);
+    expect(screen.queryByText(/stdout/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Create your admin account')).not.toBeInTheDocument();
     expect(screen.getByText('Step 2 of 9')).toBeInTheDocument();
   });
@@ -299,6 +309,14 @@ describe('OnboardingWizard', () => {
     });
     // Advanced to the next step (Cloud LLM keys).
     expect(await screen.findByText(/Cloud LLM keys/i)).toBeInTheDocument();
+  });
+
+  it('admin step explains the no-SMTP family invite and passkey path', async () => {
+    renderWizard({ configured: false, setup_completed: false, setup_mode: 'multi' }, false, '/?step=3');
+
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+    expect(screen.getByText(/one-time sign-in link/i)).toHaveTextContent(/without email/i);
+    expect(screen.getByText(/one-time sign-in link/i)).toHaveTextContent(/passkey/i);
   });
 
   // (c) configured=true skips the admin step → step 3 is Cloud, not Admin.

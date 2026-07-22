@@ -41,6 +41,66 @@ class _PollConfig:
     last_version: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ZoteroLibraryNamespace:
+    """Identify one remote Zotero library without exposing its credentials.
+
+    Parameters
+    ----------
+    library_type : {"user", "group"}
+        Zotero API library kind.
+    remote_id : str
+        Zotero user or group identifier for that remote library.
+
+    Raises
+    ------
+    ValueError
+        If the kind or remote identifier is invalid.
+    """
+
+    library_type: Literal["user", "group"]
+    remote_id: str
+
+    def __post_init__(self) -> None:
+        if self.library_type not in {"user", "group"}:
+            raise ValueError("Zotero library type must be 'user' or 'group'")
+        if not self.remote_id.strip():
+            raise ValueError("Zotero remote library ID must not be empty")
+
+    def external_id(self, item_key: str) -> str:
+        """Return the canonical paper identity for an item in this library.
+
+        Parameters
+        ----------
+        item_key : str
+            Zotero item key within the remote library.
+
+        Returns
+        -------
+        str
+            Namespace-qualified external paper identifier.
+
+        Raises
+        ------
+        ValueError
+            If ``item_key`` is empty.
+        """
+        if not item_key.strip():
+            raise ValueError("Zotero item key must not be empty")
+        return f"zotero:{self.library_type}:{self.remote_id}:{item_key}"
+
+
+def _namespace_from_poll_config(config: _PollConfig) -> _ZoteroLibraryNamespace:
+    """Resolve a validated remote-library namespace from polling config."""
+    if config.library_type == "group":
+        if config.group_id is None:
+            raise ValueError("Zotero group polling requires group_id")
+        return _ZoteroLibraryNamespace("group", str(config.group_id))
+    if config.library_type == "user":
+        return _ZoteroLibraryNamespace("user", config.user_id)
+    raise ValueError(f"Unsupported Zotero library type: {config.library_type!r}")
+
+
 async def _load_poll_config(
     db_pool: asyncpg.Pool, polling_user_id: int | None
 ) -> _PollConfig | dict[str, str]:
@@ -100,14 +160,30 @@ class _ParsedZoteroItem:
 
 
 def _parse_zotero_item(
-    data: dict[str, Any], outer_item: dict[str, Any]
+    data: dict[str, Any],
+    outer_item: dict[str, Any],
+    namespace: _ZoteroLibraryNamespace,
 ) -> _ParsedZoteroItem | None:
-    """Project a Zotero item into ingestion inputs (pure, no I/O).
+    """Project a Zotero item into namespace-safe ingestion inputs.
 
-    ``data`` is the nested ``item["data"]`` dict; ``outer_item`` is the
-    top-level Zotero API response so the ``outer_item.get("key", "")`` key
-    fallback is preserved. Returns ``None`` for items that originated in
-    JARVIS (Extra contains ``jarvis_paper_id=``).
+    Parameters
+    ----------
+    data : dict[str, Any]
+        Nested Zotero ``item["data"]`` object.
+    outer_item : dict[str, Any]
+        Top-level Zotero API item used for the item-key fallback.
+    namespace : _ZoteroLibraryNamespace
+        Remote library that owns the item key.
+
+    Returns
+    -------
+    _ParsedZoteroItem | None
+        Parsed ingestion value, or ``None`` for an item exported by JARVIS.
+
+    Notes
+    -----
+    Zotero item keys are unique only inside one remote library. The generated
+    external ID therefore includes both the library kind and remote ID.
     """
     item_key: str = data.get("key", outer_item.get("key", ""))
 
@@ -138,7 +214,7 @@ def _parse_zotero_item(
         metadata["doi"] = doi
 
     paper_create = PaperCreate(
-        external_id=f"zotero:{item_key}",
+        external_id=namespace.external_id(item_key),
         source_type=SourceType.ZOTERO,
         title=title or f"Zotero item {item_key}",
         authors=authors,
@@ -159,7 +235,10 @@ def _parse_zotero_item(
 
 
 def _safe_parse_zotero_item(
-    data: dict[str, Any], outer_item: dict[str, Any], item_key: str
+    data: dict[str, Any],
+    outer_item: dict[str, Any],
+    item_key: str,
+    namespace: _ZoteroLibraryNamespace,
 ) -> _ParsedZoteroItem | None:
     """Call _parse_zotero_item, returning None (and logging) on validation failure.
 
@@ -167,7 +246,7 @@ def _safe_parse_zotero_item(
     poll_zotero_library's branch count (PLR0912).
     """
     try:
-        return _parse_zotero_item(data, outer_item)
+        return _parse_zotero_item(data, outer_item, namespace)
     except (ValidationError, ValueError):
         logger.warning(
             "Zotero poll: skipping malformed item %s — parse failed",
@@ -256,11 +335,128 @@ async def _link_existing_by_doi(
     return None
 
 
+async def _configured_namespace_for_user(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    user_id: int,
+) -> _ZoteroLibraryNamespace | None:
+    """Read one linked user's effective remote Zotero library namespace."""
+    rows = await conn.fetch(
+        """SELECT DISTINCT ON (key) key, value
+           FROM user_config
+           WHERE key = ANY($2::text[])
+             AND (user_id = $1 OR user_id IS NULL)
+           ORDER BY key, user_id IS NULL""",
+        user_id,
+        ["zotero.group_id", "zotero.library_type", "zotero.user_id"],
+    )
+    values = {str(row["key"]): row["value"] for row in rows}
+    library_type = values.get("zotero.library_type", "user")
+    remote_id = (
+        values.get("zotero.group_id")
+        if library_type == "group"
+        else values.get("zotero.user_id")
+    )
+    if library_type not in {"user", "group"} or remote_id is None:
+        return None
+    try:
+        return _ZoteroLibraryNamespace(library_type, str(remote_id))
+    except ValueError:
+        return None
+
+
+async def _migrate_unambiguous_legacy_identity(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    *,
+    item_key: str,
+    namespace: _ZoteroLibraryNamespace,
+) -> None:
+    """Rename one legacy Zotero paper only when its remote owner is certain.
+
+    Parameters
+    ----------
+    conn : asyncpg.Connection | asyncpg.pool.PoolConnectionProxy
+        Connection participating in the caller's ingestion transaction.
+    item_key : str
+        Current Zotero item key.
+    namespace : _ZoteroLibraryNamespace
+        Remote namespace expected by the current poll.
+
+    Notes
+    -----
+    Legacy identifiers omitted the remote library. A row is renamed only when
+    it has at least one linked user, every linked user resolves to the same
+    namespace as the current poll, and the destination is free. Every ambiguous
+    case is left private and the normal namespaced upsert creates or reuses the
+    correct row.
+    """
+    legacy_external_id = f"zotero:{item_key}"
+    destination_external_id = namespace.external_id(item_key)
+    rows = await conn.fetch(
+        """SELECT p.id,
+                  ARRAY(
+                      SELECT l.user_id
+                      FROM paper_user_zotero_links l
+                      WHERE l.paper_id = p.id
+                      ORDER BY l.user_id
+                  ) AS linked_user_ids,
+                  EXISTS(
+                      SELECT 1 FROM papers destination
+                      WHERE destination.external_id = $2
+                  ) AS destination_exists
+           FROM papers p
+           WHERE p.external_id = $1
+           FOR UPDATE""",
+        legacy_external_id,
+        destination_external_id,
+    )
+    if not rows:
+        return
+
+    legacy = rows[0]
+    linked_user_ids = [int(user_id) for user_id in legacy["linked_user_ids"]]
+    if legacy["destination_exists"] or not linked_user_ids:
+        logger.warning(
+            "Legacy Zotero identity retained because its remote library cannot be migrated safely"
+        )
+        return
+
+    linked_namespaces = {
+        await _configured_namespace_for_user(conn, linked_user_id)
+        for linked_user_id in linked_user_ids
+    }
+    if linked_namespaces != {namespace}:
+        logger.warning(
+            "Legacy Zotero identity retained because linked remote libraries are ambiguous"
+        )
+        return
+
+    try:
+        # The savepoint contains a possible concurrent unique-key race without
+        # aborting the surrounding item-ingestion transaction.
+        async with conn.transaction():
+            await conn.execute(
+                """UPDATE papers
+                   SET external_id = $2
+                   WHERE id = $1
+                     AND external_id = $3
+                     AND NOT EXISTS (
+                         SELECT 1 FROM papers destination
+                         WHERE destination.external_id = $2
+                     )""",
+                int(legacy["id"]),
+                destination_external_id,
+                legacy_external_id,
+            )
+    except asyncpg.UniqueViolationError:
+        logger.info("Concurrent Zotero identity migration kept the existing namespaced row")
+
+
 async def _ingest_new_item(
     db_pool: asyncpg.Pool,
     paper_create: PaperCreate,
     item_key: str,
     polling_user_id: int | None,
+    namespace: _ZoteroLibraryNamespace,
 ) -> bool:
     """Upsert a new paper, mirror it into the polling user's library, store the
     Zotero link, and enqueue ``paper.analyze`` for brand-new papers.
@@ -269,10 +465,14 @@ async def _ingest_new_item(
     insert), ``False`` otherwise. Raises on DB/enqueue failure so the caller
     can pin the cursor.
     """
-    async with db_pool.acquire() as conn:
-        # Insert canonical, then mirror into the polling user's library
-        # so the imported item appears in *their* feed.
-        # ``discovered_by`` keeps the audit trail.
+    async with db_pool.acquire() as conn, conn.transaction():
+        await _migrate_unambiguous_legacy_identity(
+            conn,
+            item_key=item_key,
+            namespace=namespace,
+        )
+        # Upsert the namespace-qualified private paper, then add exact library
+        # membership for the polling user. ``discovered_by`` is audit-only.
         row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
         paper_id = row["id"]
         is_new_paper = bool(row["is_insert"])
@@ -367,6 +567,7 @@ async def _process_poll_batch(
     db_pool: asyncpg.Pool,
     items: list[dict[str, Any]],
     polling_user_id: int | None,
+    namespace: _ZoteroLibraryNamespace,
 ) -> _PollBatch:
     """Link or ingest each new item, stopping at the per-cycle enqueue cap."""
     new_count = 0
@@ -399,14 +600,18 @@ async def _process_poll_batch(
 
         # Not linked → project into ingestion inputs.  Malformed items return
         # None from the safe helper (parse failure logged there).
-        parsed = _safe_parse_zotero_item(data, outer_item, item_key)
+        parsed = _safe_parse_zotero_item(data, outer_item, item_key, namespace)
         if parsed is None:
             failed_keys.append(item_key)
             continue
 
         try:
             if await _ingest_new_item(
-                db_pool, parsed.paper_create, parsed.item_key, polling_user_id
+                db_pool,
+                parsed.paper_create,
+                parsed.item_key,
+                polling_user_id,
+                namespace,
             ):
                 enqueued_count += 1
         except Exception:
@@ -440,6 +645,11 @@ async def poll_zotero_library(
     if isinstance(config, dict):
         return config
     last_version = config.last_version
+    try:
+        namespace = _namespace_from_poll_config(config)
+    except ValueError:
+        logger.warning("Zotero poll: remote library identity is incomplete")
+        return {"status": "invalid_config"}
 
     client = ZoteroClient(
         api_key=config.api_key,
@@ -455,7 +665,7 @@ async def poll_zotero_library(
         logger.error("Zotero poll: fetch_items_since failed", exc_info=True)
         return {"status": "error", "message": "fetch failed"}
 
-    batch = await _process_poll_batch(db_pool, items, polling_user_id)
+    batch = await _process_poll_batch(db_pool, items, polling_user_id, namespace)
 
     # If any items failed, log a summary error and pin the cursor so the next
     # poll retries the entire batch from the same starting version.

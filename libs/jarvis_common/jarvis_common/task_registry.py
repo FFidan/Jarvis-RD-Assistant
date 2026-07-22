@@ -1,43 +1,10 @@
-"""Procrastinate task registry — owns the App factory + registration API.
+"""Shared Procrastinate application, task registry, and dispatch adapter.
 
-The Procrastinate cutover is complete as of 2026-05-03. The Procrastinate worker is wired into both
-``paper_ingestion`` and ``learning_engine`` service lifespans via
-``app.run_worker_async()``. All enqueue paths use these tasks; the legacy
-``worker_loop`` has been removed.
-
-Dependency inversion:
-    jarvis_common owns the procrastinate ``App`` factory and exposes
-    ``register_tasks(app, mapping, queue)`` to receive kind→handler dicts
-    from each service. Each service registers its own tasks during lifespan
-    startup (before the worker is started) via its ``_task_register`` module:
-
-        paper_ingestion/_task_register.py  → 18 kinds on "paper_ingestion" queue
-        learning_engine/_task_register.py  → 2 kinds on "learning_engine" queue
-
-    jarvis_common no longer imports paper_ingestion or learning_engine.
-
-Each task body is a thin dispatcher that calls the existing legacy handler
-via ``ProcrastinateJobContextShim`` (see ``_ctx_shim.py``). The legacy
-handler signature is::
-
-    async def handler(
-        pool: asyncpg.Pool,
-        http_client: httpx.AsyncClient,
-        payload: dict[str, Any],
-        ctx: ProgressContext,
-    ) -> dict[str, Any]
-
-so each task forwards exactly that.
-
-KIND_TO_TASK is a sealed ``MappingProxyType`` view populated at runtime as
-services call ``register_tasks``.  It is used by ``jobs_router.create_job``
-for procrastinate dispatch.  Use it read-only; writes go through ``register_tasks``.
-
-Connector choice: ``procrastinate.contrib.aiopg.AiopgConnector`` (matches
-``procrastinate[aiopg]>=0.49`` declared in root ``pyproject.toml`` and in
-``services/*/requirements.txt``). Note that the top-level alias
-``procrastinate.AiopgConnector`` was removed in 3.x — the import path is
-``procrastinate.contrib.aiopg``.
+Services provide runtime dependencies and register their async handlers before
+workers start. Generated tasks adapt those handlers to Procrastinate, expose a
+read-only kind-to-task mapping, and retry outbound-quarantine failures without
+marking the job complete. The connector is configured by service lifespan code;
+importing this module does not open a database connection.
 """
 
 from __future__ import annotations
@@ -55,6 +22,7 @@ from jarvis_common._ctx_shim import make_ctx_shim
 from jarvis_common.event_log import log_event
 from jarvis_common.jobs import JobError
 from jarvis_common.logging_config import correlation_id_var
+from jarvis_common.maintenance import OutboundEgressBlockedError, skip_for_maintenance
 from jarvis_common.settings import get_jobs_settings
 
 if TYPE_CHECKING:
@@ -62,6 +30,11 @@ if TYPE_CHECKING:
     import httpx
 
 logger = logging.getLogger(__name__)
+_RESTORE_BLOCK_RETRY = procrastinate.RetryStrategy(
+    max_attempts=None,
+    wait=30,
+    retry_exceptions={OutboundEgressBlockedError},
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,9 +43,9 @@ class TaskDependencies:
 
     Parameters
     ----------
-    pool:
+    pool : asyncpg.Pool
         Async PostgreSQL pool shared with the FastAPI service instance.
-    http_client:
+    http_client : httpx.AsyncClient
         Shared HTTP client owned by the service lifespan.
 
     """
@@ -92,25 +65,15 @@ class TaskDependencies:
 app = procrastinate.App(connector=AiopgConnector())
 
 
-# ---------------------------------------------------------------------------
-# Module-level dependency injection
-# ---------------------------------------------------------------------------
-#
-# The legacy handlers expect ``(pool, http_client, payload, ctx)``. Procrastinate
-# tasks only receive ``(context, **payload)``. To bridge the gap, services set
-# the pool + http_client refs during lifespan startup *before* the worker is
-# started; each task body reads them from module scope at dispatch time.
-#
-# This is identical in spirit to how the legacy ``run_job`` (jobs.py:584)
-# threads pool + http_client through the worker loop, just hoisted to module
-# scope instead of being a function argument.
 class TaskRegistry:
-    """Register Procrastinate tasks without hiding runtime dependencies in globals.
+    """Register handler-backed tasks for one Procrastinate application.
 
-    The class is intentionally small: it owns the task map and the service
-    dependencies needed by the generated task wrappers. Module-level functions
-    below delegate to a default instance so existing imports keep working while
-    newer call sites can depend on this explicit object directly.
+    Parameters
+    ----------
+    procrastinate_app : procrastinate.App
+        Application that owns the registered tasks.
+    task_map : dict[str, Any] | None
+        Mutable mapping that receives each registered task by kind.
     """
 
     def __init__(
@@ -129,11 +92,30 @@ class TaskRegistry:
         pool: asyncpg.Pool,
         http_client: httpx.AsyncClient,
     ) -> None:
-        """Set the runtime collaborators read by this registry's task wrappers."""
+        """Set the runtime collaborators used by task handlers.
+
+        Parameters
+        ----------
+        pool : asyncpg.Pool
+            Database pool shared with task handlers.
+        http_client : httpx.AsyncClient
+            HTTP client shared with task handlers.
+        """
         self._dependencies = TaskDependencies(pool=pool, http_client=http_client)
 
     def require_dependencies(self) -> TaskDependencies:
-        """Return configured runtime collaborators or raise a startup-order error."""
+        """Return the configured runtime collaborators.
+
+        Returns
+        -------
+        TaskDependencies
+            Database and HTTP clients used by task handlers.
+
+        Raises
+        ------
+        RuntimeError
+            If dependencies have not been configured.
+        """
         if self._dependencies is None:
             raise RuntimeError(
                 "task_registry: set_dependencies(pool, http_client) must be called "
@@ -146,20 +128,41 @@ class TaskRegistry:
         mapping: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
         queue: str,
     ) -> None:
-        """Register kind→handler entries as tasks on this registry's app.
+        """Register handlers as restore-aware tasks on this registry's app.
 
-        For each ``(kind, handler)`` pair, this registers a
-        ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper and
-        stores the resulting task object in ``kind_to_task`` for API dispatch.
+        Parameters
+        ----------
+        mapping : dict[str, Callable]
+            Task kind to asynchronous handler mapping.
+        queue : str
+            Procrastinate queue assigned to every generated task.
+
+        Notes
+        -----
+        Each wrapper checks maintenance and outbound quarantine before resolving
+        runtime dependencies. ``OutboundEgressBlockedError`` alone receives an
+        unlimited retry budget with a 30-second wait; the task is never treated
+        as successfully completed while egress remains prohibited. Generated
+        task objects are stored in ``kind_to_task`` for API dispatch.
         """
         for kind, handler in mapping.items():
             # Capture handler in default arg to avoid late-binding closure bugs.
-            @self.app.task(name=kind, queue=queue, pass_context=True)
+            @self.app.task(
+                name=kind,
+                queue=queue,
+                pass_context=True,
+                retry=_RESTORE_BLOCK_RETRY,
+            )
             async def _task_wrapper(
                 context: procrastinate.JobContext,
                 _h: Callable[..., Awaitable[dict[str, Any]]] = handler,
+                _task_kind: str = kind,
                 **payload: Any,
             ) -> dict[str, Any]:
+                if skip_for_maintenance(f"task {_task_kind}"):
+                    raise OutboundEgressBlockedError(
+                        "background task is blocked by temporary restore state"
+                    )
                 return await _run_legacy_handler(
                     context,
                     payload,
@@ -181,8 +184,7 @@ _TASK_MAP: dict[str, Any] = {}
 KIND_TO_TASK: MappingProxyType[str, Any] = MappingProxyType(_TASK_MAP)
 _DEFAULT_REGISTRY = TaskRegistry(app, task_map=_TASK_MAP)
 
-# Backward-compatible mirrors for tests and legacy direct imports. New code
-# should use ``TaskRegistry`` / ``TaskDependencies`` instead.
+# Module-level adapters delegate to the default registry.
 _pool: asyncpg.Pool | None = None
 _http_client: httpx.AsyncClient | None = None
 
@@ -191,12 +193,19 @@ def set_dependencies(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
 ) -> None:
-    """Set the pool + http_client refs read by every task dispatcher.
+    """Set the runtime collaborators used by the default task registry.
 
-    Must be called by each service's lifespan BEFORE the procrastinate worker
-    is started. Calling it more than once is allowed (last writer wins).
-    Calling it is NOT required for tasks to be registered — registration
-    happens at service startup via ``register_tasks``.
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Database pool shared with task handlers.
+    http_client : httpx.AsyncClient
+        HTTP client shared with task handlers.
+
+    Notes
+    -----
+    Services configure these dependencies before starting their worker. A later
+    call replaces both collaborators.
     """
     global _pool, _http_client
     _pool = pool
@@ -292,16 +301,12 @@ async def _run_legacy_handler(
 # Registration API
 # ---------------------------------------------------------------------------
 #
-# Services call ``register_tasks`` during lifespan startup (BEFORE the worker
-# starts) to declare their kind→handler mapping.  For each entry, a
-# ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper is
-# registered on the shared ``app`` and the task object is inserted into
-# ``KIND_TO_TASK`` for ``jobs_router.create_job`` to dispatch.
+# Services call ``register_tasks`` during startup, before the worker starts.
+# ``TaskRegistry.register_tasks`` constructs tasks and configures retries; the
+# module-level function delegates to the default registry.
 #
-# The noop.test task is special: it is registered unconditionally so the
-# procrastinate App always carries it (test infrastructure needs it), but
-# it is only added to KIND_TO_TASK when JARVIS_ENABLE_TEST_JOBS=1, preventing
-# production exposure via the create_job API.
+# The decorator always adds noop.test to the Procrastinate app. KIND_TO_TASK only
+# exposes it when JARVIS_ENABLE_TEST_JOBS=1.
 
 
 def register_tasks(
@@ -309,25 +314,22 @@ def register_tasks(
     mapping: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
     queue: str,
 ) -> None:
-    """Register kind→handler entries as procrastinate tasks on ``procrastinate_app``.
-
-    For each ``(kind, handler)`` pair this registers a
-    ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper and inserts
-    the resulting task object into the internal ``_TASK_MAP`` backing
-    ``KIND_TO_TASK`` so ``jobs_router.create_job`` can dispatch via
-    ``task.defer_async``.
-
-    Must be called **before** ``procrastinate_app.run_worker_async()`` is started.
+    """Register handlers through the default restore-aware task registry.
 
     Parameters
     ----------
-    procrastinate_app:
+    procrastinate_app : procrastinate.App
         The shared procrastinate ``App`` instance from this module.
-    mapping:
-        Dict mapping JARVIS job kind strings to legacy handler callables.
-    queue:
-        The procrastinate queue name for this service (e.g. ``"paper_ingestion"``).
+    mapping : dict[str, Callable]
+        Task kind to async handler mapping.
+    queue : str
+        Procrastinate queue assigned to every generated task.
 
+    Notes
+    -----
+    Call this before the worker starts. The generated tasks use the maintenance
+    and quarantine behavior documented by :meth:`TaskRegistry.register_tasks`,
+    including retrying ``OutboundEgressBlockedError`` without completing the job.
     """
     if procrastinate_app is _DEFAULT_REGISTRY.app:
         registry = _DEFAULT_REGISTRY
@@ -345,25 +347,38 @@ def register_tasks(
 # Test-only: noop.test
 # ---------------------------------------------------------------------------
 #
-# noop_task is decorated @app.task at module-import time (always registered with
-# procrastinate). Insertion into _TASK_MAP is gated on JARVIS_ENABLE_TEST_JOBS=1.
-#
-# Two gate evaluations in sequence:
-# 1. Module-import time: _TASK_MAP["noop.test"] = noop_task if env set at import.
-# 2. Service startup, in services/<svc>/_task_register.py: re-checks env in case
-#    it was set after import. This is the canonical path; the import-time gate
-#    is a fallback for legacy direct imports.
+# The decorator always registers noop.test with Procrastinate. The task map only
+# exposes it when JARVIS_ENABLE_TEST_JOBS=1. Service registrars check the setting
+# again because environment configuration may be loaded after this module.
 
 
 @app.task(name="noop.test", queue="paper_ingestion", pass_context=True)
 async def noop_task(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    """No-op smoke-test task. Gated on JARVIS_ENABLE_TEST_JOBS=1."""
+    """Return the supplied payload when test jobs are enabled.
+
+    Parameters
+    ----------
+    context : procrastinate.JobContext
+        Procrastinate execution context. The task does not modify it.
+    **payload : Any
+        Values to echo in the result.
+
+    Returns
+    -------
+    dict[str, Any]
+        Success status and the supplied payload.
+
+    Raises
+    ------
+    RuntimeError
+        If ``JARVIS_ENABLE_TEST_JOBS`` is not enabled.
+    """
     if not get_jobs_settings().test_jobs_enabled:
         raise RuntimeError("noop.test invoked but JARVIS_ENABLE_TEST_JOBS is unset")
     return {"ok": True, "echo": payload}
 
 
-# Gate noop.test on the test-jobs toggle so production envs are unaffected.
+# Add noop.test to the dispatch map only when test jobs are enabled.
 if get_jobs_settings().test_jobs_enabled:
     _TASK_MAP["noop.test"] = noop_task
 

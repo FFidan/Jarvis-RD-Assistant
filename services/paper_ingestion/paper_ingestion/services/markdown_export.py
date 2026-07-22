@@ -151,9 +151,9 @@ async def build_paper_markdown(
 ) -> PaperMarkdown:
     """Render one paper's summary, notes, cards, extractions, and BibTeX as Markdown.
 
-    The caller must have asserted ownership of *paper_id*; every workspace read
-    below is additionally scoped to *user_id* so a shared canonical paper never
-    exports another user's content.
+    The caller must have established access to *paper_id*. Every workspace read
+    below is additionally scoped to *user_id* so one paper record never causes
+    another user's derived content to be exported.
     """
     resolved_uid = await _resolve_zotero_user_id(conn, user_id)
     paper_row = await conn.fetchrow(_PAPER_SQL, paper_id, resolved_uid)

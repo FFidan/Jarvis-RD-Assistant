@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException
+from jarvis_common.owner import OwnerIdentity
 
 from tests._auth_fakes import (
     build_mock_pool,
@@ -24,6 +25,15 @@ _NOW = datetime.now(UTC)
 _build_mock_pool = build_mock_pool
 _build_mock_pool_txn = build_mock_pool_with_txn
 _build_request = build_request_admin
+
+
+@pytest.fixture(autouse=True)
+def _missing_owner_configuration(monkeypatch):
+    monkeypatch.setattr(
+        admin_router,
+        "resolve_owner_identity",
+        AsyncMock(return_value=OwnerIdentity(source="none", state="missing")),
+    )
 
 
 def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
@@ -45,17 +55,23 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
 async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=_user_row(id=5))
-    pool = _build_mock_pool(conn)
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {**_user_row(id=5), "deleted_at": _NOW},
+            _user_row(id=5),
+        ]
+    )
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
 
     result = await admin_router.restore_user(5, request)
 
     assert result.id == 5
-    sql = conn.fetchrow.await_args.args[0]
-    assert "deleted_at = NULL" in sql
-    assert "deleted_at IS NOT NULL" in sql
-    assert "30 days" in sql
+    select_sql = conn.fetchrow.await_args_list[0].args[0]
+    update_sql = conn.fetchrow.await_args_list[1].args[0]
+    assert "30 days" in select_sql
+    assert "deleted_at = NULL" in update_sql
+    assert "deleted_at IS NOT NULL" in update_sql
 
 
 @pytest.mark.asyncio
@@ -63,7 +79,7 @@ async def test_restore_not_found_or_past_grace_raises_404(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=None)
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
 
     with pytest.raises(HTTPException) as exc:
@@ -146,11 +162,12 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
 
 
 def _patch_audit(monkeypatch) -> list[dict]:
-    """Replace admin_router.log_audit with an async recorder; return the list."""
+    """Record both best-effort and transaction-bound audit calls."""
     calls: list[dict] = []
 
     async def _recorder(pool, **kw):
         calls.append(kw)
 
     monkeypatch.setattr(admin_router, "log_audit", _recorder)
+    monkeypatch.setattr(admin_router, "log_audit_strict", _recorder)
     return calls

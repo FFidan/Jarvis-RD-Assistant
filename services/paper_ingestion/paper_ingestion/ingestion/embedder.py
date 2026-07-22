@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import asyncio  # noqa: F401  (retained: monkeypatch target embedder.asyncio.sleep)
 import logging
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import httpx
 import tiktoken
@@ -38,6 +40,7 @@ from qdrant_client import AsyncQdrantClient
 from paper_ingestion.ingestion.chunking import chunk_text as _chunk_text
 from paper_ingestion.ingestion.embed_store import (  # noqa: F401
     EmbeddingBatchError,
+    EmbeddingRunContext,
     EmbeddingStoreMixin,
 )
 
@@ -65,7 +68,11 @@ from paper_ingestion.ingestion.embedding_config import (  # noqa: F401
 from paper_ingestion.ingestion.search import EmbeddingSearchMixin
 from paper_ingestion.models import ChunkForEmbedding
 
+if TYPE_CHECKING:
+    import asyncpg
+
 logger = logging.getLogger(__name__)
+VisibilityGenerationProvider = Callable[[], Awaitable[str]]
 
 
 class Embedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
@@ -77,18 +84,52 @@ class Embedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
         Shared HTTP client for LiteLLM API calls.
     qdrant_client : AsyncQdrantClient
         Async Qdrant client instance.
+    db_pool : asyncpg.Pool | None
+        Database pool used to resolve the current vector-visibility generation.
+    visibility_generation_provider : VisibilityGenerationProvider | None
+        Optional injection seam for isolated tests and maintenance callers.
     """
 
     def __init__(
         self,
         http_client: httpx.AsyncClient,
         qdrant_client: AsyncQdrantClient,
+        *,
+        db_pool: asyncpg.Pool | None = None,
+        visibility_generation_provider: VisibilityGenerationProvider | None = None,
     ) -> None:
         self.http_client = http_client
         self.qdrant = qdrant_client
         self._encoding = tiktoken.get_encoding("cl100k_base")
         self._collection_ensured = False
         self._collection_lock = asyncio.Lock()
+        self._db_pool = db_pool
+        self._visibility_generation_provider = visibility_generation_provider
+
+    async def current_visibility_generation(self) -> str:
+        """Return the deployment's current vector-visibility generation.
+
+        Returns
+        -------
+        str
+            Validated 32-character checkpoint generation.
+
+        Raises
+        ------
+        RuntimeError
+            If neither an injected provider nor a database pool can resolve the
+            checkpoint. User-facing search converts this to a fail-closed
+            all-zero filter; production writes require a successful value.
+        """
+        if self._visibility_generation_provider is not None:
+            return await self._visibility_generation_provider()
+        if self._db_pool is None:
+            raise RuntimeError("Vector visibility generation provider is unavailable")
+        from paper_ingestion.ingestion.payload_schema import (  # noqa: PLC0415
+            current_visibility_generation,
+        )
+
+        return await current_visibility_generation(self._db_pool)
 
     def chunk_text(
         self,

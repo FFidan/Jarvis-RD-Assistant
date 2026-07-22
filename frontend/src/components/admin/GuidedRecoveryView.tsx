@@ -1,21 +1,14 @@
 /**
- * Guided recovery view — the live panel an admin watches through a restore.
- *
- * Driven entirely by the token-authenticated restore-status poll so it keeps
- * showing progress even while the restore drops/recreates the databases (the point
- * where the admin's own session dies) — the initiating admin never sees a blank 503.
- * It renders, in priority order: a degraded "still restoring" note when the poll is
- * briefly unreachable, a terminal failure with the exact next action, a "one more
- * step" notice for a restore held in maintenance, an auto-recovering note while a
- * crash-recovery reconciles, otherwise the live step list. The wrapper is an
- * `aria-live` region so step changes are announced to assistive tech.
+ * Render the highest-priority recovery state and the current restore steps.
+ * Quarantine and recovery errors take precedence over polling, failure, manual
+ * action, and progress states. The live region announces state changes.
  */
 import type { RestoreStatus } from '@/lib/api/backups';
 
-const STEP_GLYPH: Record<string, string> = {
-  done: '✓',
-  failed: '✗',
-  running: '…',
+const STEP_LABEL: Record<string, string> = {
+  done: 'Done',
+  failed: 'Failed',
+  running: 'Active',
 };
 
 export function GuidedRecoveryView({
@@ -23,6 +16,11 @@ export function GuidedRecoveryView({
   pollError,
   status,
   manualStepsNotice,
+  quarantine,
+  quarantineRestoreId,
+  recoveryIssue,
+  acknowledgementPending,
+  onAcknowledge,
   onDismissFailed,
   onDismissManual,
 }: {
@@ -30,6 +28,11 @@ export function GuidedRecoveryView({
   pollError: boolean;
   status: RestoreStatus | undefined;
   manualStepsNotice: string | null;
+  quarantine: RestoreStatus['quarantine'];
+  quarantineRestoreId: string | null;
+  recoveryIssue: string | null;
+  acknowledgementPending: boolean;
+  onAcknowledge: (() => void) | null;
   onDismissFailed: () => void;
   onDismissManual: () => void;
 }) {
@@ -41,7 +44,65 @@ export function GuidedRecoveryView({
       aria-live="polite"
       className="rounded-md border p-4 space-y-3"
     >
-      {restoringTimestamp !== null && pollError ? (
+      {quarantine === 'unreadable' ? (
+        <div data-testid="restore-quarantine" className="space-y-2">
+          <div className="text-sm font-medium text-destructive">
+            Restore review state needs host attention
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Outbound connections remain blocked because the restore review record cannot be read.
+            Inspect the record on the host. After reviewing every connection, run{' '}
+            <code>jarvis-research restore acknowledge &lt;restore-id&gt;</code> with the exact restore
+            ID.
+          </p>
+        </div>
+      ) : quarantine === 'awaiting_review' ? (
+        <div data-testid="restore-quarantine" className="space-y-3">
+          <div>
+            <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+              Review restored connections
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Local reads are available, but outbound use of restored database credentials stays
+              blocked until this review is acknowledged.
+            </p>
+          </div>
+          {quarantineRestoreId && (
+            <p className="text-xs text-muted-foreground">
+              Restore ID: <span className="font-mono">{quarantineRestoreId}</span>
+            </p>
+          )}
+          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+            <li>SMTP and sign-in email delivery</li>
+            <li>Telegram bot access and notifications</li>
+            <li>AI model providers and observability</li>
+            <li>Zotero and scholarly-source credentials</li>
+            <li>Pulse, digest, and other scheduled deliveries</li>
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            The destination host&apos;s files and infrastructure credentials were not replaced. Data
+            keys and database-stored settings came from the backup.
+          </p>
+          {recoveryIssue && (
+            <p className="text-sm text-amber-700 dark:text-amber-400">{recoveryIssue}</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            If this tab&apos;s restore session is unavailable, sign in as the configured owner or run{' '}
+            <code>jarvis-research restore acknowledge &lt;restore-id&gt;</code> on the host. Other
+            administrators cannot acknowledge this review.
+          </p>
+          {onAcknowledge && (
+            <button
+              type="button"
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+              onClick={onAcknowledge}
+              disabled={acknowledgementPending}
+            >
+              Acknowledge review
+            </button>
+          )}
+        </div>
+      ) : restoringTimestamp !== null && pollError ? (
         <div data-testid="restore-degraded" className="space-y-1">
           <div className="text-sm font-medium text-amber-700 dark:text-amber-400">Restoring…</div>
           <p className="text-sm text-muted-foreground">
@@ -97,8 +158,8 @@ export function GuidedRecoveryView({
           <ol className="space-y-1">
             {status.steps.map((step) => (
               <li key={step.name} className="flex items-center gap-2 text-sm">
-                <span aria-hidden className="w-4 text-center">
-                  {STEP_GLYPH[step.status] ?? '•'}
+                <span aria-hidden className="w-12 text-xs text-muted-foreground">
+                  {STEP_LABEL[step.status] ?? 'Pending'}
                 </span>
                 <span className={step.status === 'done' ? 'text-muted-foreground' : undefined}>
                   {step.name}

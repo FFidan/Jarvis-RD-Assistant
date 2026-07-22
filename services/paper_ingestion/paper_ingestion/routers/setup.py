@@ -44,6 +44,7 @@ from email.utils import formataddr
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from jarvis_common.audit import log_audit_strict
 from jarvis_common.crypto import encrypt_secret
 from jarvis_common.email import (
     _effective_smtp,
@@ -53,6 +54,7 @@ from jarvis_common.email import (
     smtp_tls_flags,
 )
 from jarvis_common.email import smtp_configured as _smtp_configured_probe
+from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
 from jarvis_common.serialization import _coerce_bool
@@ -61,7 +63,7 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
-from paper_ingestion.routers.auth import _hash_email
+from paper_ingestion.routers.auth import _hash_email, _require_local_or_https
 from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
 
 logger = logging.getLogger(__name__)
@@ -106,7 +108,8 @@ class SetupStatusResponse(BaseModel):
     # GPU vendor: the setup-written JARVIS_GPU_VENDOR (host truth) when
     # present, else inferred in-container (nvidia | amd | intel | none).
     gpu_vendor: str = "none"
-    # Access mode written by setup.sh (localhost | lan | tunnel | letsencrypt).
+    # Access mode written by setup.sh
+    # (localhost | lan | tailscale | tunnel | letsencrypt).
     # Lets the frontend explain in-product which sign-in capabilities work here.
     access_mode: str = "localhost"
     recommended_backend: str | None = None
@@ -330,6 +333,7 @@ async def require_unconfigured_or_admin(request: Request) -> None:
     DB the wizard surface flips into admin-only; before then it is wide open
     so the operator can complete first-run setup.
     """
+    _require_local_or_https(request)
     pool = request.app.state.db_pool
     admins = await _admin_count(pool)
     if admins == 0:
@@ -610,12 +614,32 @@ async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
 
 
 async def _send_test_email(body: SmtpBody, recipient: str, password: str | None) -> str | None:
-    """Best-effort SMTP test send. Returns None on success, error string on failure.
+    """Send a best-effort SMTP probe without leaking or using quarantined credentials.
 
     ``password`` is resolved by the caller: ``body.password`` when the operator
     re-typed it, otherwise the stored (effective) password so the test button
     works against an already-saved relay without re-entering the secret.
+
+    Parameters
+    ----------
+    body : SmtpBody
+        Validated relay settings supplied by the setup route.
+    recipient : str
+        Operator-approved address that receives the probe message.
+    password : str or None
+        Effective relay password, if configured.
+
+    Returns
+    -------
+    str or None
+        ``None`` when the relay accepts the message; otherwise a sanitized
+        validation, quarantine, dependency, or connection error.
     """
+    try:
+        ensure_outbound_egress_allowed("setup SMTP test delivery")
+    except OutboundEgressBlockedError:
+        return "SMTP delivery is disabled until restored credentials are reviewed."
+
     if not get_core_settings().allow_private_smtp_host:
         try:
             await _reject_non_public_host(body.host)
@@ -649,6 +673,7 @@ async def _send_test_email(body: SmtpBody, recipient: str, password: str | None)
 
     use_tls, start_tls = smtp_tls_flags(body.port)
     try:
+        ensure_outbound_egress_allowed("setup SMTP test delivery")
         await aiosmtplib.send(
             message,
             hostname=body.host,
@@ -659,6 +684,8 @@ async def _send_test_email(body: SmtpBody, recipient: str, password: str | None)
             start_tls=start_tls,
             timeout=SMTP_TEST_TIMEOUT_SECONDS,
         )
+    except OutboundEgressBlockedError:
+        return "SMTP delivery is disabled until restored credentials are reviewed."
     except Exception as exc:  # noqa: BLE001
         logger.warning("setup smtp test_send failed: %s", exc, exc_info=True)
         return "SMTP connection failed — check host, port, and credentials."
@@ -765,6 +792,9 @@ async def create_first_admin(
     browser; forcing email round-trip here creates a usability cliff in dev
     mode where SMTP is not yet configured (chicken-and-egg).
     """
+    # Reject an untrusted/plaintext transport before opening the transaction or
+    # touching the setup token. Host and X-Forwarded-* cannot satisfy this gate.
+    _require_local_or_https(request)
     pool = request.app.state.db_pool
     email_norm = body.email.lower().strip()
     now = datetime.now(UTC)
@@ -822,6 +852,14 @@ async def create_first_admin(
                 "ON CONFLICT (user_id, key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()",
                 OWNER_USER_ID_CONFIG_KEY,
                 user_id,
+            )
+
+            await log_audit_strict(
+                conn,
+                action="admin.owner.bootstrap",
+                resource=OWNER_USER_ID_CONFIG_KEY,
+                user_id=str(user_id),
+                metadata={"source": "first_admin"},
             )
 
             await mint_session(conn, response, user_id, now=now)

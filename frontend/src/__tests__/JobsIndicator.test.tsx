@@ -82,7 +82,7 @@ describe('JobsIndicator', () => {
     expect(screen.getByText('Scanning Contradictions')).toBeInTheDocument();
   });
 
-  it('renders an amber partial line for a succeeded whole-library job (status still Done)', async () => {
+  it('labels a partially completed whole-library job and exposes its incomplete counts', async () => {
     setupStore({
       'job-lib': makeJob({
         id: 'job-lib',
@@ -99,9 +99,11 @@ describe('JobsIndicator', () => {
     render(<JobsIndicator />);
     await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
 
-    expect(screen.getByText('1 failed, 1 skipped of 5')).toBeInTheDocument();
-    // The status pill still reads Done — partial detail is additive, not a failure.
-    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getByText('Partial')).toBeInTheDocument();
+    expect(screen.queryByText('Done')).toBeNull();
+    expect(
+      screen.getByRole('status', { name: 'Incomplete: 1 failed, 1 skipped of 5' }),
+    ).toBeInTheDocument();
   });
 
   it('renders the blocked-only partial line (no failures)', async () => {
@@ -154,7 +156,7 @@ describe('JobsIndicator', () => {
         kind: 'papers.process_library',
         status: 'succeeded',
         result: {
-          status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+          status: 'cancelled', total: 100, remaining: 97, downloaded: 0, processed: 3, summarized: 0,
           blocked: [{ paper_id: 9, reason: 'no_pdf_source' }],
           errors: [
             { paper_id: 7, stage: 'process', error: 'boom' },
@@ -168,7 +170,26 @@ describe('JobsIndicator', () => {
     await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
 
     expect(screen.getByText('Cancelled')).toBeInTheDocument();
-    expect(screen.getByText('2 failed, 1 skipped of 100')).toBeInTheDocument();
+    expect(screen.getByText('2 failed, 1 skipped, 97 not processed of 100')).toBeInTheDocument();
+  });
+
+  it('shows untouched papers when cancellation stops a library run early', async () => {
+    setupStore({
+      'job-libcancelremaining': makeJob({
+        id: 'job-libcancelremaining',
+        kind: 'papers.process_library',
+        status: 'succeeded',
+        result: {
+          status: 'cancelled', total: 3, examined: 2, remaining: 1,
+          downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [],
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('0 failed, 0 skipped, 1 not processed of 3')).toBeInTheDocument();
   });
 
   it('a cancel-requested job reads Cancelling and disables its cancel control', async () => {

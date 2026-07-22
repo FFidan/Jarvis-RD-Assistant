@@ -474,8 +474,8 @@ async def test_baseline_jsonb_columns_are_jsonb_and_roundtrip_object(
 
 
 # ---------------------------------------------------------------------------
-# Invariant 080 — user-deletion CASCADE on owned data; papers.discovered_by is
-# the explicit non-cascade exception (shared-corpus model).
+# Invariant 080 — user-deletion CASCADE on user data; papers.discovered_by is
+# the explicit non-cascade exception because it stores audit attribution.
 # Re-homed from: test_migration_080.py:37-71 (mock-only today — UPGRADED to a
 # real schema test).
 # Re-home form: schema-introspection (FK delete_rule == CASCADE × 17 + papers

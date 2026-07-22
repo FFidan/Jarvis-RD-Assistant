@@ -1,4 +1,4 @@
-"""Tests for SetupStatusResponse hw_tier / backend extensions (Task 18)."""
+"""Tests for setup status, SMTP checks, and hardware/backend reporting."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import asyncpg
 import paper_ingestion.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.settings import get_secrets_settings
 from jarvis_common.testing import make_pool_and_conn
 from starlette.datastructures import Headers
@@ -44,11 +45,95 @@ def _build_request(
     *,
     method: str = "POST",
     headers: dict[str, str] | None = None,
+    raw_peer: str = "127.0.0.1",
+    client_host: str = "127.0.0.1",
+    scheme: str = "http",
 ) -> SimpleNamespace:
     state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=state)
     hdrs = Headers({"x-setup-token": _SETUP_TOKEN} if headers is None else headers)
-    return SimpleNamespace(app=app, state=state, cookies={}, method=method, headers=hdrs)
+    return SimpleNamespace(
+        app=app,
+        state=state,
+        cookies={},
+        method=method,
+        headers=hdrs,
+        scope={RAW_CLIENT_SCOPE_KEY: (raw_peer, 51234)},
+        client=SimpleNamespace(host=client_host, port=51234),
+        url=SimpleNamespace(scheme=scheme),
+    )
+
+
+@pytest.mark.asyncio
+async def test_setup_write_transport_rejects_forged_headers_from_public_peer() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(
+        pool,
+        headers={
+            "x-setup-token": _SETUP_TOKEN,
+            "host": "localhost",
+            "x-forwarded-for": "127.0.0.1",
+            "x-forwarded-proto": "https",
+        },
+        raw_peer="203.0.113.7",
+        client_host="127.0.0.1",
+        scheme="https",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.require_unconfigured_or_admin(request)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_setup_write_transport_allows_pinned_dashboard_https() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(
+        pool,
+        raw_peer="10.137.241.253",
+        client_host="198.51.100.20",
+        scheme="https",
+    )
+
+    await setup_router.require_unconfigured_or_admin(request)
+
+
+@pytest.mark.asyncio
+async def test_setup_write_transport_allows_host_loopback_gateway() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(
+        pool,
+        raw_peer="10.137.241.253",
+        client_host="10.137.241.1",
+        scheme="http",
+    )
+
+    await setup_router.require_unconfigured_or_admin(request)
+
+
+@pytest.mark.asyncio
+async def test_setup_write_transport_rejects_sibling_container() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(
+        pool,
+        raw_peer="10.137.241.6",
+        client_host="127.0.0.1",
+        scheme="https",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.require_unconfigured_or_admin(request)
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -640,6 +725,30 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
     assert captured_recipient[0] == "bot@example.com", (
         f"Bootstrap mode must force recipient=from_email; got {captured_recipient[0]!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_smtp_test_send_refuses_quarantine_before_network(monkeypatch, tmp_path) -> None:
+    """A quarantined SMTP test returns a review error without calling the relay."""
+    import aiosmtplib
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    send = AsyncMock()
+    monkeypatch.setattr(aiosmtplib, "send", send)
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        test_send=True,
+    )
+
+    error = await setup_router._send_test_email(body, "owner@example.com", "restored-secret")
+
+    assert error == "SMTP delivery is disabled until restored credentials are reviewed."
+    send.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

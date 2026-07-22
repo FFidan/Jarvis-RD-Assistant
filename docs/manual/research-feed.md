@@ -31,7 +31,13 @@ The Library contains all **saved** papers — those you have explicitly kept or 
 **Scope selector** at the top of the list toggles between:
 
 - **My library** — papers you have personally saved or interacted with.
-- **All discovered** — every paper the system has seen, including those saved by other users on your instance.
+- **Public + mine** — papers verified through the server's public scholarly
+  sources, together with private papers in your own library. It never includes
+  another user's private upload or personal integration merely because it
+  exists on the same instance.
+
+See [Source-aware paper visibility](../SECURITY.md#source-aware-paper-visibility)
+for the canonical source matrix.
 
 **State filter chips** allow you to narrow by reading state:
 
@@ -64,7 +70,7 @@ The Search surface combines full-text keyword search with cross-source discovery
 
 The Trash surface lists papers you have soft-deleted. Each paper has a **Restore** button that returns it to the Library. Papers in the Trash are not shown in any other surface.
 
-**Hard-delete** — a confirmation modal lets you permanently delete individual papers from the Trash. This action is irreversible: all associated chunks, embeddings, and user state are removed.
+**Hard-delete** — a confirmation modal permanently removes a paper from your library, including your notes, summaries, highlights, and other private activity. This cannot be undone. A public paper record and its processed search content may remain; the web action is not a system-wide delete.
 
 ---
 

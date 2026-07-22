@@ -43,6 +43,7 @@ from paper_ingestion.models import (
     KeyFinding,
     SummaryResponse,
 )
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services.pdf_workflow import advisory_lock
 from paper_ingestion.services.summarization_models import (
     CondensedDigest,
@@ -548,11 +549,10 @@ async def _find_cross_references(
 ) -> list[CrossReference]:
     """Find related papers via semantic similarity over chunk vectors.
 
-    Scoped to the REQUESTING user so the cross-ref search never surfaces
-    another tenant's chunks; system jobs without a requester fall back to the
-    paper owner (``discovered_by``).  The requester's own ``user_library`` is
-    threaded as ``library_paper_ids`` (PI-RAG-001) so shared-corpus papers
-    embedded by another user stay reachable.
+    A requesting user supplies the authorization context. A trusted background
+    job without that context uses the paper's discovery attribution only to
+    select a bounded library context; that audit field never grants access by
+    itself. Public papers remain searchable regardless of who embedded them.
 
     Returns ``[]`` when the semantic path is unavailable, fails, or finds
     nothing — honest empty beats keyword-overlap false links.
@@ -564,8 +564,8 @@ async def _find_cross_references(
         "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
     )
     abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
-    owner_id = abstract_row["discovered_by"] if abstract_row else None
-    scope_user_id = requester_id if requester_id is not None else owner_id
+    attribution_user_id = abstract_row["discovered_by"] if abstract_row else None
+    scope_user_id = requester_id if requester_id is not None else attribution_user_id
 
     library_paper_ids: list[int] | None = None
     if scope_user_id is not None:
@@ -594,24 +594,14 @@ async def _find_cross_references(
     deduped = deduplicate_by_paper_id(results or [])
     sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
 
-    # Final relational visibility filter mirroring rag/streaming.py's Qdrant
-    # user-scope predicate VERBATIM so the two isolation checks cannot drift:
-    # a candidate is visible iff the caller is unscoped, OR owns it via
-    # user_library, OR it is canonical (in NOBODY's library — the shared corpus,
-    # visible to every user).  The `$2 IS NULL` branch is dead here (scope_user_id
-    # is non-None under the guard) but kept for byte-parity with streaming.py.
+    # Qdrant is only a candidate source. Reapply the relational visibility
+    # authority before persisting cross-references.
     if scope_user_id is not None and sorted_results:
         candidate_ids = [r["paper_id"] for r in sorted_results]
         visible_rows = await conn.fetch(
             "SELECT p.id FROM papers p"
             " WHERE p.id = ANY($1::int[])"
-            " AND ("
-            "   $2::int IS NULL"
-            "   OR EXISTS (SELECT 1 FROM user_library ul"
-            "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
-            "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
-            "                  WHERE ul2.paper_id = p.id)"
-            " )",
+            f" AND {paper_visible_sql(2)}",
             candidate_ids,
             scope_user_id,
         )

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from jarvis_common.testing import SharedConnPool
@@ -183,3 +184,55 @@ async def test_log_audit_no_user_id_stores_null(contract_conn):
     )
     assert row is not None
     assert row["user_id"] is None
+
+
+async def test_log_audit_strict_uses_the_supplied_connection(contract_conn):
+    """Security-critical callers can join the audit insert to their transaction."""
+    from jarvis_common.audit import log_audit_strict
+
+    action = f"test.strict.{uuid.uuid4().hex[:8]}"
+    await log_audit_strict(
+        contract_conn,
+        action=action,
+        resource="owner.user_id",
+        user_id="17",
+        metadata={"reason": "owner_transfer"},
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT user_id, resource, metadata FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert row is not None
+    assert row["user_id"] == "17"
+    assert row["resource"] == "owner.user_id"
+    assert row["metadata"] == {"reason": "owner_transfer"}
+
+
+async def test_log_audit_strict_propagates_insert_failure():
+    from jarvis_common.audit import log_audit_strict
+
+    conn = AsyncMock()
+    conn.execute.side_effect = RuntimeError("audit unavailable")
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await log_audit_strict(conn, action="owner.transfer", resource="owner.user_id")
+
+
+async def test_log_audit_strict_rolls_back_with_caller_transaction(contract_conn):
+    from jarvis_common.audit import log_audit_strict
+
+    action = f"test.strict.rollback.{uuid.uuid4().hex[:8]}"
+    with pytest.raises(RuntimeError, match="force rollback"):
+        async with contract_conn.transaction():
+            await log_audit_strict(
+                contract_conn,
+                action=action,
+                resource="owner.user_id",
+            )
+            raise RuntimeError("force rollback")
+
+    assert (
+        await contract_conn.fetchval("SELECT COUNT(*) FROM audit_log WHERE action = $1", action)
+        == 0
+    )

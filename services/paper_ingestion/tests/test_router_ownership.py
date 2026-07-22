@@ -1,15 +1,10 @@
-"""Ownership wiring smoke tests for paper-touching routers.
+"""Visibility-policy wiring smoke tests for paper-touching routers.
 
-Verifies (a) single-user mode (caller user_id=None) is unchanged — endpoints
-return their normal status; (b) the WHERE filter for cross-paper SQL is
-present in the rendered query and evaluates to TRUE in single-user mode (so
-all rows are returned).
-
-The 4-quadrant ownership matrix (NULL caller, NULL paper, owner match,
-owner mismatch) is exhaustively tested in
+Verifies that single-paper guards and cross-paper queries consistently use the
+persisted public-or-library policy. The policy matrix itself is tested in
 ``libs/jarvis_common/tests/test_ownership.py`` and
-``services/paper_ingestion/tests/test_jobs_sse_ownership.py`` —
-this module focuses only on the new router wiring sites.
+``libs/jarvis_common/tests/test_ownership_canonical_invariant.py``; this module
+focuses on router wiring.
 """
 
 from __future__ import annotations
@@ -60,13 +55,8 @@ def _app():
 
 
 @pytest.mark.asyncio
-async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
-    """POST /api/summarize/{paper_id} returns 202 for a paper the caller owns.
-
-    Cross-user isolation: there is no permissive single-user mode anymore — the
-    resolver yields a real user and ownership is always enforced. A canonical
-    (NULL ``discovered_by``) paper fast-grants, so the endpoint still queues.
-    """
+async def test_rag_summarize_paper_passes_for_visible_paper(_app, monkeypatch):
+    """POST /api/summarize/{paper_id} returns 202 for a visible paper."""
     app, conn = _app
 
     # Stub out paper.summarize task so we don't need a real DB / procrastinate
@@ -78,8 +68,7 @@ async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "paper.summarize", mock_task)
 
-    # Ownership probe: canonical paper (NULL discovered_by) → fast-grant.
-    conn.fetchrow.return_value = {"discovered_by": None}
+    conn.fetchrow.return_value = {"id": 42, "is_visible": True}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -89,7 +78,7 @@ async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "queued"
-    # Ownership IS enforced now (the leak is closed): the probe ran.
+    # Visibility is enforced before enqueueing.
     conn.fetchrow.assert_awaited()
 
 
@@ -99,12 +88,8 @@ async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatch):
-    """POST /api/papers/{paper_id}/extract returns 202 for an owned paper.
-
-    Cross-user isolation: ownership is always enforced; a canonical paper
-    (NULL ``discovered_by``) fast-grants so the job still queues.
-    """
+async def test_extractions_extract_paper_passes_for_visible_paper(_app, monkeypatch):
+    """POST /api/papers/{paper_id}/extract returns 202 for a visible paper."""
     from unittest.mock import AsyncMock, MagicMock
 
     import jarvis_common.task_registry as task_registry
@@ -115,7 +100,7 @@ async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatc
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "extraction.single", mock_task)
 
-    conn.fetchrow.return_value = {"discovered_by": None}
+    conn.fetchrow.return_value = {"id": 42, "is_visible": True}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -137,16 +122,12 @@ async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_search_relevance_score_passes_for_owned_paper(_app):
-    """POST /api/relevance-score returns 200 for an owned paper + healthy embedder.
-
-    Cross-user isolation: ownership is always enforced; the first fetchrow is the
-    ownership probe (canonical paper → fast-grant), then paper + topic.
-    """
+async def test_search_relevance_score_passes_for_visible_paper(_app):
+    """POST /api/relevance-score returns 200 for a visible paper and healthy embedder."""
     app, conn = _app
 
     conn.fetchrow.side_effect = [
-        {"discovered_by": None},  # ownership probe → canonical, fast-grant
+        {"id": 7, "is_visible": True},
         FakeRecord(title="Test Paper", abstract="An abstract."),
         FakeRecord(query_terms=["agents"]),
     ]
@@ -201,11 +182,7 @@ async def test_feed_list_papers_includes_user_filter_in_query(_app):
         resp = await client.get("/api/papers/feed")
 
     assert resp.status_code == 200, resp.text
-    # In single-user mode (current_user_id_or_none → None), the
-    # feed query takes the canonical-corpus fallback FROM clause — no
-    # user_library JOIN, no legacy `p.user_id IS NULL` predicate. The
-    # rendered SQL must root on `FROM papers p` and contain neither legacy
-    # owner nor renamed-audit references.
+    # The rendered SQL must not use legacy paper ownership fields.
     feed_queries = [q for q in captured_queries if " FROM papers p" in q]
     assert feed_queries, f"feed query never issued: {captured_queries}"
     for q in feed_queries:
@@ -219,12 +196,16 @@ async def test_feed_list_papers_includes_user_filter_in_query(_app):
 
 
 @pytest.mark.asyncio
-async def test_discovery_similar_papers_passes_in_single_user_mode(_app):
-    """GET /api/similar/{paper_id} returns 200 in single-user mode."""
+async def test_discovery_similar_papers_passes_for_visible_seed(_app):
+    """GET /api/similar/{paper_id} returns 200 for a visible seed paper."""
     app, conn = _app
 
-    # fetchrow returns paper metadata (ownership check is short-circuited)
-    conn.fetchrow.return_value = FakeRecord(id=42, title="Seed Paper", abstract="Seed abstract.")
+    conn.fetchrow.return_value = FakeRecord(
+        id=42,
+        title="Seed Paper",
+        abstract="Seed abstract.",
+        is_visible=True,
+    )
     conn.fetch.return_value = []  # no enrichment rows
 
     embedder = MagicMock()
@@ -250,7 +231,12 @@ async def test_discovery_similar_enrichment_query_includes_user_filter(_app):
     """The metadata-enrichment SELECT must scope by user_id."""
     app, conn = _app
 
-    conn.fetchrow.return_value = FakeRecord(id=42, title="Seed", abstract="Abstract.")
+    conn.fetchrow.return_value = FakeRecord(
+        id=42,
+        title="Seed",
+        abstract="Abstract.",
+        is_visible=True,
+    )
 
     captured_queries: list[str] = []
 
@@ -278,13 +264,12 @@ async def test_discovery_similar_enrichment_query_includes_user_filter(_app):
         resp = await client.get("/api/similar/42")
 
     assert resp.status_code == 200, resp.text
-    # Canonical-corpus: discovery enrichment SELECT no longer
-    # scopes by the audit column. The query rooted on `FROM
-    # papers` should not reference user_id / discovered_by predicates.
+    # Enrichment uses the same persisted public-or-library predicate.
     enrich_queries = [q for q in captured_queries if "FROM papers" in q]
     assert enrich_queries, f"enrichment never queried: {captured_queries}"
     for q in enrich_queries:
-        assert "user_id" not in q, f"legacy user_id predicate leaked: {q}"
+        assert "visibility_scope = 'public'" in q
+        assert "user_library" in q
         assert "discovered_by" not in q, f"audit column must not gate access: {q}"
 
 
@@ -318,10 +303,8 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
         resp = await client.post("/api/papers/batch-summarize")
 
     assert resp.status_code == 202, resp.text
-    # Canonical-corpus: in single-user mode the batch-summarize SQL
-    # selects unsummarized papers from the canonical corpus directly (no
-    # legacy `p.user_id IS NULL OR p.user_id = $N` predicate; no rename
-    # leak either). The query is rooted on `FROM papers p`.
+    # The batch selection is rooted on papers and must not use legacy owner or
+    # audit columns as an authorization shortcut.
     bs_queries = [q for q in captured_queries if "FROM papers p" in q]
     assert bs_queries, f"batch_summarize never queried: {captured_queries}"
     for q in bs_queries:
@@ -332,19 +315,14 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
 # ---------------------------------------------------------------------------
 # PI-LIB-03: process_batch and batch_extract_papers use assert_papers_ownership
 # (batch call) instead of a per-paper loop.  Tests verify:
-#   (a) a batch containing any non-owned paper is rejected with 403 before enqueue
-#   (b) a batch where ALL papers are owned (fast-grant: discovered_by=caller)
-#       is accepted and the job is queued.
+#   (a) any private paper outside the library is rejected before enqueue;
+#   (b) a batch whose rows all satisfy the central predicate is queued.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_process_batch_rejects_non_owned_paper(_app, monkeypatch):
-    """POST /api/papers/process_batch: a non-owned paper in the batch → 403.
-
-    Wires conn.fetch so assert_papers_ownership sees a paper owned by user 2
-    (discovered_by=2) with no matching user_library row for the caller (user 1).
-    The endpoint must return 403 without ever calling KIND_TO_TASK.defer_async.
+async def test_process_batch_rejects_private_paper_outside_library(_app, monkeypatch):
+    """POST /api/papers/process_batch rejects an invisible private paper.
 
     # Verified: papers_bulk.py:141 — assert_papers_ownership (batch) called once.
     """
@@ -361,12 +339,7 @@ async def test_process_batch_rejects_non_owned_paper(_app, monkeypatch):
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "papers.batch_process", mock_task)
 
-    # First fetch: papers table lookup → paper 99 discovered_by=2 (not the caller).
-    # Second fetch: user_library lookup → empty (user 1 has no library entry for 99).
-    conn.fetch.side_effect = [
-        [{"id": 99, "discovered_by": 2}],  # papers.id + discovered_by
-        [],  # user_library: empty → ownership denied
-    ]
+    conn.fetch.return_value = [{"id": 99, "is_visible": False}]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -383,14 +356,8 @@ async def test_process_batch_rejects_non_owned_paper(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
-    """POST /api/papers/process_batch: a paper owned by the caller (fast-grant) → 202/job queued.
-
-    discovered_by matches the caller (user 1) → assert_papers_ownership short-circuits
-    the user_library lookup and the job is enqueued.
-
-    # Verified: papers_bulk.py:141 — assert_papers_ownership fast-grants caller-owned papers.
-    """
+async def test_process_batch_accepts_visible_paper(_app, monkeypatch):
+    """POST /api/papers/process_batch queues a batch whose paper is visible."""
     import jarvis_common.task_registry as task_registry
 
     app, conn = _app
@@ -403,8 +370,7 @@ async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "papers.batch_process", mock_task)
 
-    # Paper discovered_by=1 (the caller) → fast-grant; no user_library query needed.
-    conn.fetch.return_value = [{"id": 42, "discovered_by": 1}]
+    conn.fetch.return_value = [{"id": 42, "is_visible": True}]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -422,12 +388,8 @@ async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_extract_papers_rejects_non_owned_paper(_app, monkeypatch):
-    """POST /extractions/batch: a non-owned paper in the batch → 403.
-
-    Mirrors the process_batch test: user 1 requests batch extraction for paper 77
-    which is discovered_by=2 and not in user 1's library.  The endpoint must return
-    403 without enqueuing the extraction job.
+async def test_batch_extract_papers_rejects_private_paper_outside_library(_app, monkeypatch):
+    """POST /extractions/batch rejects an invisible private paper.
 
     # Verified: extractions.py:308 — assert_papers_ownership (batch) called once.
     """
@@ -439,13 +401,7 @@ async def test_batch_extract_papers_rejects_non_owned_paper(_app, monkeypatch):
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "extraction.batch", mock_task)
 
-    # current_user_id_strict is already pinned to 1 by the _app fixture.
-    # First fetch: papers lookup → paper 77 discovered_by=2.
-    # Second fetch: user_library → empty.
-    conn.fetch.side_effect = [
-        [{"id": 77, "discovered_by": 2}],
-        [],
-    ]
+    conn.fetch.return_value = [{"id": 77, "is_visible": False}]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -462,11 +418,8 @@ async def test_batch_extract_papers_rejects_non_owned_paper(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_extract_papers_accepts_owned_paper(_app, monkeypatch):
-    """POST /extractions/batch: caller-owned paper (fast-grant) → 200/job queued.
-
-    # Verified: extractions.py:308 — assert_papers_ownership fast-grants caller-owned papers.
-    """
+async def test_batch_extract_papers_accepts_visible_paper(_app, monkeypatch):
+    """POST /extractions/batch queues a batch whose paper is visible."""
     import jarvis_common.task_registry as task_registry
 
     app, conn = _app
@@ -475,8 +428,7 @@ async def test_batch_extract_papers_accepts_owned_paper(_app, monkeypatch):
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "extraction.batch", mock_task)
 
-    # discovered_by=1 matches the caller → fast-grant.
-    conn.fetch.return_value = [{"id": 55, "discovered_by": 1}]
+    conn.fetch.return_value = [{"id": 55, "is_visible": True}]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

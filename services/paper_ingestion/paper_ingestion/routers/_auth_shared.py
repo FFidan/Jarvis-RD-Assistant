@@ -7,6 +7,7 @@ must stay identical across the three routers.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 from fastapi import Request
 from jarvis_common.settings import get_core_settings
@@ -49,8 +50,9 @@ def build_verify_link(
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     base = get_paper_ingestion_settings().app_base_url
+    fragment = urlencode({"token": token})
     if base:
-        return f"{base.rstrip('/')}/auth/verify?token={token}"
+        return f"{base.rstrip('/')}/auth/verify#{fragment}"
     if get_core_settings().environment == "production":
         logger.warning(
             "APP_BASE_URL is unset in production; the %s is derived from the "
@@ -58,4 +60,5 @@ def build_verify_link(
             "to the public URL.",
             link_kind,
         )
-    return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
+    verify_url = str(request.url.replace(path="/auth/verify", query=""))
+    return f"{verify_url}#{fragment}"

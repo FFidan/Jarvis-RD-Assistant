@@ -21,6 +21,132 @@ pytestmark = [
 ]
 
 
+async def _shelve_paper(conn, user_id: int, paper_id: int) -> None:
+    """Grant access through the production user-library boundary."""
+    await conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')
+           ON CONFLICT (user_id, paper_id) DO NOTHING""",
+        user_id,
+        paper_id,
+    )
+
+
+async def _seed_relationship_visibility_pair(
+    conn,
+    *,
+    audit_user_id: int,
+    target_name: str,
+    relationship_type: str,
+) -> tuple[str, str]:
+    """Seed equivalent public and unshelved-private KG relationships."""
+    public_paper_id, private_paper_id = await conn.fetchrow(
+        """WITH inserted AS (
+               INSERT INTO papers (
+                   external_id, source_type, title, authors, url,
+                   discovered_by, visibility_scope
+               ) VALUES
+                   ($1, 'arxiv', 'Visible relationship', ARRAY['A'], $2, $5, 'public'),
+                   ($3, 'local', 'Hidden relationship', ARRAY['A'], $4, $5, 'private')
+               RETURNING id, visibility_scope
+           )
+           SELECT
+               max(id) FILTER (WHERE visibility_scope = 'public') AS public_id,
+               max(id) FILTER (WHERE visibility_scope = 'private') AS private_id
+           FROM inserted""",
+        f"kg-rel-public-{relationship_type}",
+        f"https://example.test/kg-rel-public-{relationship_type}",
+        f"kg-rel-private-{relationship_type}",
+        f"https://example.test/kg-rel-private-{relationship_type}",
+        audit_user_id,
+    )
+    visible_name = f"visible-{relationship_type}"
+    hidden_name = f"hidden-{relationship_type}"
+    entity_rows = await conn.fetch(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES
+               ($1, $2, 'method', 1),
+               ($3, $4, 'method', 1),
+               ($5, $6, 'dataset', 2)
+           RETURNING id, name""",
+        visible_name,
+        visible_name,
+        hidden_name,
+        hidden_name,
+        target_name,
+        target_name.lower(),
+    )
+    entity_ids = {row["name"]: row["id"] for row in entity_rows}
+    await conn.executemany(
+        "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, $3)",
+        [
+            (public_paper_id, entity_ids[visible_name], audit_user_id),
+            (private_paper_id, entity_ids[hidden_name], audit_user_id),
+        ],
+    )
+    await conn.executemany(
+        """INSERT INTO entity_relationships (
+               source_entity_id, target_entity_id, relationship_type,
+               paper_id, confidence
+           ) VALUES ($1, $2, $3, $4, 1.0)""",
+        [
+            (
+                entity_ids[visible_name],
+                entity_ids[target_name],
+                relationship_type,
+                public_paper_id,
+            ),
+            (
+                entity_ids[hidden_name],
+                entity_ids[target_name],
+                relationship_type,
+                private_paper_id,
+            ),
+        ],
+    )
+    return visible_name, hidden_name
+
+
+@pytest.mark.parametrize(
+    ("query", "target_name", "relationship_type"),
+    [
+        ("What methods are used on VIS-GLUE?", "VIS-GLUE", "used_on"),
+        ("What outperforms VIS-BM25?", "VIS-BM25", "outperforms"),
+    ],
+)
+async def test_relationship_query_branches_enforce_persisted_visibility(
+    query: str,
+    target_name: str,
+    relationship_type: str,
+    contract_conn,
+    contract_two_users,
+) -> None:
+    """Special relationship queries hide an unshelved private edge.
+
+    The production query runs against real PostgreSQL. Both relationship rows
+    carry the same audit identity; only persisted public scope makes one
+    visible, proving that provenance cannot authorize either special branch.
+    """
+    from paper_ingestion.extraction.entities import query_knowledge_graph
+
+    visible_name, hidden_name = await _seed_relationship_visibility_pair(
+        contract_conn,
+        audit_user_id=contract_two_users.user_b_id,
+        target_name=target_name,
+        relationship_type=relationship_type,
+    )
+
+    results = await query_knowledge_graph(
+        contract_conn,
+        query,
+        user_id=contract_two_users.user_a_id,
+    )
+
+    method_names = {row["method_name"] for row in results}
+    assert visible_name in method_names
+    assert hidden_name not in method_names
+
+
 # ---------------------------------------------------------------------------
 # A47: GET /api/knowledge-graph — graph nodes/edges scoped to user's papers
 # ---------------------------------------------------------------------------
@@ -57,11 +183,20 @@ async def test_a47_get_graph_no_cross_user_entity_leak(
     _configure_api_key,
     contract_conn,
 ):
-    """Covers map row A47: entities scoped — user B's seed entity not visible to user A.
+    """Covers map row A47: a private B-library entity is hidden from user A.
 
-    Verified: knowledge_graph.py:148-150 get_knowledge_graph(user_id=user_id) scoping.
+    Extraction attribution is deliberately assigned to A to prove that it is
+    not an access grant.
     """
-    # Seed an entity linked to user B's paper only
+    private_b_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers
+                  (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-contract-private-b', 'local', 'Private B paper', ARRAY['Author'],
+                   'https://kg-b.test/private', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await _shelve_paper(contract_conn, contract_two_users.user_b_id, private_b_paper_id)
     entity_id = await contract_conn.fetchval(
         """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
            VALUES ('kg-contract-b-only', 'kg-contract-b-only', 'concept', 1)
@@ -71,9 +206,9 @@ async def test_a47_get_graph_no_cross_user_entity_leak(
         """INSERT INTO paper_entities (paper_id, entity_id, user_id)
            VALUES ($1, $2, $3)
            ON CONFLICT DO NOTHING""",
-        contract_two_users.paper_id_a,  # use paper_id_a but link to user_b_id
+        private_b_paper_id,
         entity_id,
-        contract_two_users.user_b_id,
+        contract_two_users.user_a_id,
     )
 
     # User A should NOT see an entity scoped to user_b_id
@@ -116,9 +251,9 @@ async def test_a48_list_entities_user_scoped_no_cross_user_leak(
     _configure_api_key,
     contract_conn,
 ):
-    """Covers map row A48: user A's entity list does not include user B-only entities.
+    """Covers map row A48: A cannot list an entity from B's private library.
 
-    Verified: knowledge_graph.py:231-243 WHERE pe.user_id IS NOT DISTINCT FROM $3.
+    The extraction attribution row is not the authorization boundary.
     """
     # Seed an entity linked only to user B
     entity_id = await contract_conn.fetchval(
@@ -134,6 +269,7 @@ async def test_a48_list_entities_user_scoped_no_cross_user_leak(
            RETURNING id""",
         contract_two_users.user_b_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_b_id, b_paper_id)
     await contract_conn.execute(
         """INSERT INTO paper_entities (paper_id, entity_id, user_id)
            VALUES ($1, $2, $3)
@@ -451,6 +587,7 @@ async def test_kg_extract_entities_persists_user_scoped(
            RETURNING id""",
         contract_two_users.user_a_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_a_id, paper_id)
     await contract_conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)
@@ -835,6 +972,7 @@ async def test_kg_w2_extract_entities_llm_boundary_via_faux_litellm(
            RETURNING id""",
         contract_two_users.user_a_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_a_id, paper_id)
     await contract_conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)
@@ -920,9 +1058,10 @@ async def test_tenant03_constraint_allows_per_user_rows_on_shared_paper(
     """
     # Seed a shared paper owned by user A
     paper_id = await contract_conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               discovered_by, visibility_scope)
            VALUES ('tenant03-constraint-paper', 'arxiv', 'Constraint Test Paper TENANT-03',
-                   ARRAY['Author'], 'https://tenant03-c.test/paper', $1)
+                   ARRAY['Author'], 'https://tenant03-c.test/paper', $1, 'public')
            RETURNING id""",
         contract_two_users.user_a_id,
     )
@@ -1058,6 +1197,7 @@ async def test_tenant03_endpoint_per_user_extraction_own_papers(
            RETURNING id""",
         contract_two_users.user_a_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_a_id, paper_a_id)
     await contract_conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)
@@ -1072,6 +1212,7 @@ async def test_tenant03_endpoint_per_user_extraction_own_papers(
            RETURNING id""",
         contract_two_users.user_b_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_b_id, paper_b_id)
     await contract_conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)
@@ -1226,6 +1367,7 @@ async def test_extract_entities_paper_count_incremented_once_on_reextraction(
            RETURNING id""",
         contract_two_users.user_a_id,
     )
+    await _shelve_paper(contract_conn, contract_two_users.user_a_id, paper_id)
     await contract_conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)
@@ -1355,6 +1497,7 @@ async def _seed_kg_paper_with_chunk(conn, user_id: int, external_id: str) -> int
         f"https://kg-adv.test/{external_id}",
         user_id,
     )
+    await _shelve_paper(conn, user_id, paper_id)
     await conn.execute(
         """INSERT INTO paper_chunks
                (paper_id, chunk_index, content, page_number, start_char, end_char)

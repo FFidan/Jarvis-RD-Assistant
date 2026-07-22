@@ -1,13 +1,8 @@
-"""Tests for _langfuse_lifespan_hook — OBSERVABILITY_ENABLED gate.
+"""Verify Langfuse startup configuration and warning behavior.
 
-Covers three gate behaviours of :func:`jarvis_common.llm_client._langfuse_lifespan_hook`:
-1. No-op when OBSERVABILITY_ENABLED is false (the default).
-2. No-op when enabled but host/keys are missing.
-3. Constructs Langfuse when all three (host, pk, sk) are present and enabled.
-4. Per-call warning flood is suppressed when Langfuse is unconfigured (F17).
-
-The hook is the FIRST task in app startup, runs before DB migrations, and must
-NEVER raise regardless of configuration state.
+The startup hook leaves tracing disabled when observability is off or credentials
+are incomplete. With complete configuration it constructs the client and its
+quarantine-aware exporter. Configuration failures remain non-fatal.
 """
 
 from __future__ import annotations
@@ -100,8 +95,8 @@ def test_noop_when_enabled_but_keys_missing(monkeypatch: pytest.MonkeyPatch) -> 
 def test_constructs_when_enabled_and_keys_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hook must construct Langfuse when enabled and all three credentials are set.
 
-    The constructed kwargs must include host, public_key (plain str), and
-    secret_key (plain str) — no SecretStr objects passed to Langfuse.
+    The constructed arguments must include ``base_url``, plain-string keys,
+    and the quarantine-aware span exporter.
     Keys flow via SecretsSettings (_FILE-aware path), not JarvisCommonSettings.
     """
     seen: dict[str, object] = {}
@@ -126,9 +121,10 @@ def test_constructs_when_enabled_and_keys_present(monkeypatch: pytest.MonkeyPatc
 
     lc._langfuse_lifespan_hook()
 
-    assert seen.get("host") == "http://langfuse.test"
+    assert seen.get("base_url") == "http://langfuse.test"
     assert seen.get("public_key") == "pk-real"
     assert seen.get("secret_key") == "sk-real"
+    assert isinstance(seen.get("span_exporter"), lc._QuarantineAwareSpanExporter)
 
 
 def test_no_per_call_warning_flood_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:

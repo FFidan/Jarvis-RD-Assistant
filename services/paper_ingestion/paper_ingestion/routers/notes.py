@@ -209,10 +209,10 @@ async def promote_zotero_note(
     was wasteful and prevented test injection.
     """
     async with db_pool.acquire() as conn:
-        # PI-A: authorship scope — a shared-corpus paper (discovered_by IS NULL)
-        # makes assert_paper_ownership pass for any caller, so the note fetch
-        # must itself be scoped to the owning user. Mirrors update_note /
-        # delete_note (exact user_id match, 404-on-miss, single-tenant guard).
+        # A persisted-public paper can be visible to every caller, so the note
+        # fetch must independently remain scoped to its owning user. This
+        # mirrors update_note/delete_note (exact user_id match, opaque miss,
+        # and the trusted single-user compatibility path).
         if user_id is not None:
             note = await conn.fetchrow(
                 "SELECT * FROM paper_notes WHERE id = $1 AND user_id = $2",

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.config import get_jarvis_common_settings
 
 logger = logging.getLogger(__name__)
@@ -16,8 +17,9 @@ logger = logging.getLogger(__name__)
 # Trusted proxy CIDRs loaded once at import time.
 # Default trusts loopback only, so a container on a Docker bridge cannot spoof
 # X-Forwarded-For to control the rate-limit key. Deployments behind a reverse
-# proxy must set TRUSTED_PROXY_CIDRS to their bridge subnet (the compose default
-# tracks JARVIS_NET_SUBNET); a non-empty value overrides this list exclusively.
+# proxy must allowlist only that proxy's exact source address. Compose derives
+# the dashboard proxy's pinned /32 from JARVIS_DASHBOARD_IP; a non-empty value
+# overrides this list exclusively.
 _DEFAULT_PROXY_CIDRS = [
     "127.0.0.0/8",
 ]
@@ -56,60 +58,117 @@ def _is_trusted(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(addr in net for net in _TRUSTED_PROXIES)
 
 
+def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return a parsed IP address, or ``None`` for malformed input."""
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def _test_double_peer(request: Request) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return an explicit peer from a scope-less request test double."""
+    client_host = request.client.host if request.client else None
+    return _parse_ip(client_host) if isinstance(client_host, str) else None
+
+
+def _stashed_raw_peer(scope: object) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the raw peer stashed on a production ASGI scope."""
+    if not isinstance(scope, dict) or RAW_CLIENT_SCOPE_KEY not in scope:
+        return None
+    raw_peer = scope[RAW_CLIENT_SCOPE_KEY]
+    if not isinstance(raw_peer, tuple | list) or not raw_peer or not isinstance(raw_peer[0], str):
+        return None
+    return _parse_ip(raw_peer[0])
+
+
+def _transport_peer(
+    request: Request,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the authoritative transport peer, or ``None`` when it is unsafe.
+
+    Real ASGI requests have a ``scope`` dict and must carry the snapshot written
+    by ``RawClientStashMiddleware``. A missing or malformed snapshot fails
+    closed because proxy middleware may already have rewritten
+    ``request.client``. Tiny unit-test doubles without an ASGI scope retain a
+    safe compatibility path that treats their explicit client as the peer.
+    """
+    scope = getattr(request, "scope", None)
+    if scope is None:
+        return _test_double_peer(request)
+    return _stashed_raw_peer(scope)
+
+
+def _trusted_cf_ip(request: Request) -> str | None:
+    """Return a validated Cloudflare client IP when its provenance is trusted."""
+    if (
+        not get_jarvis_common_settings().trust_cf_connecting_ip
+        or request.headers.get("X-Jarvis-CF-Ingress") != "1"
+    ):
+        return None
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if not cf_ip:
+        return None
+    candidate = cf_ip.strip()
+    if _parse_ip(candidate) is not None:
+        return candidate
+    # malformed → fall through to XFF validation below. Log: with trust opted
+    # in, a malformed value is an operational anomaly (misconfigured proxy or a
+    # forging attempt) worth surfacing.
+    logger.warning(
+        "Malformed CF-Connecting-IP header ignored (not a single IP): %r",
+        candidate,
+    )
+    return None
+
+
+def _xff_client_ip(request: Request, fallback: str) -> str:
+    """Return the first untrusted XFF hop, or the authoritative fallback."""
+    xff = request.headers.get("X-Forwarded-For")
+    if not xff:
+        return fallback
+    hops = [hop.strip() for hop in xff.split(",") if hop.strip()]
+    for hop in reversed(hops):
+        ip = _parse_ip(hop)
+        if ip is None:
+            # Malformed hop — attacker-controlled string; do NOT use it as a
+            # rate-limit key (distinct forged strings would let one source bypass
+            # per-IP limits). Fall back to the socket peer instead.
+            return fallback
+        if not _is_trusted(ip):
+            return hop
+    # All hops were trusted proxies — fall back to socket peer.
+    return fallback
+
+
 def _real_ip(request: Request) -> str:
-    """Return the real client IP using Werkzeug-style right-to-left XFF walk.
+    """Return a client IP without trusting headers from an untrusted transport.
 
     Algorithm:
-    1. If JARVIS_TRUST_CF_CONNECTING_IP=true and CF-Connecting-IP header is set, use it.
-       (The header is only trusted when the operator has explicitly opted in,
-        preventing LAN attackers from forging it when Cloudflare is not in the path.)
-    2. Else walk X-Forwarded-For right-to-left, skipping contiguous trusted proxies
+    1. Parse the stashed raw socket peer. Missing or malformed production stash
+       data returns ``unknown`` instead of falling back to a rewritten client.
+    2. If the raw peer is not trusted, ignore all forwarding headers and use it.
+    3. Use CF-Connecting-IP only when Cloudflare trust is enabled and nginx
+       marked ingress from that trusted peer.
+    4. Else walk X-Forwarded-For right-to-left, skipping contiguous trusted proxies
        at the tail.  Return the first non-trusted entry (the real client).
        (A left-to-right walk let a LAN attacker prepend a fake IP and
         bypass rate limiting; right-to-left is immune to that spoofing.)
-    3. If all entries in XFF are trusted (pathological), return request.client.host.
-    4. If no XFF header, return request.client.host.
+    5. If the header is absent, malformed, or contains only trusted hops, use
+       the authoritative transport peer.
     """
-    # CF-Connecting-IP only trusted when operator explicitly enables it,
-    # and only when it is a single well-formed IP. A malformed value (e.g. a
-    # forged comma-separated list) must not be trusted — fall through to the
-    # validated XFF walk instead of crashing or honouring the bad value.
-    if get_jarvis_common_settings().trust_cf_connecting_ip:
-        cf_ip = request.headers.get("CF-Connecting-IP")
-        if cf_ip:
-            candidate = cf_ip.strip()
-            try:
-                ipaddress.ip_address(candidate)
-            except ValueError:
-                # malformed → fall through to XFF validation below.
-                # Log: with trust opted in, a malformed value is an operational
-                # anomaly (misconfigured proxy or a forging attempt) worth surfacing.
-                logger.warning(
-                    "Malformed CF-Connecting-IP header ignored (not a single IP): %r",
-                    candidate,
-                )
-            else:
-                return candidate
+    transport_peer = _transport_peer(request)
+    if transport_peer is None:
+        return "unknown"
 
-    xff = request.headers.get("X-Forwarded-For")
-    if not xff:
-        return request.client.host if request.client else "unknown"
+    transport_peer_text = str(transport_peer)
+    if not _is_trusted(transport_peer):
+        return transport_peer_text
 
-    # Parse and walk right-to-left.
-    hops = [h.strip() for h in xff.split(",") if h.strip()]
-    for hop in reversed(hops):
-        try:
-            ip = ipaddress.ip_address(hop)
-        except ValueError:
-            # Malformed hop — attacker-controlled string; do NOT use it as a
-            # rate-limit key (distinct forged strings would let one source bypass
-            # per-IP limits).  Fall back to the socket peer instead.
-            return request.client.host if request.client else "unknown"
-        if not _is_trusted(ip):
-            return hop
-
-    # All hops were trusted proxies — fall back to socket peer.
-    return request.client.host if request.client else "unknown"
+    cf_ip = _trusted_cf_ip(request)
+    if cf_ip is not None:
+        return cf_ip
+    return _xff_client_ip(request, transport_peer_text)
 
 
 def _user_or_ip_key(request: Request) -> str:

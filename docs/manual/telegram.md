@@ -4,6 +4,10 @@
 
 JARVIS RD Assistant integrates with Telegram so you can receive Pulse digests and stay connected to your library from a mobile device. Each user pairs their personal Telegram account individually; the Telegram bot itself is configured by an admin.
 
+The bot is optional and runs only when the `telegram` Compose profile is
+enabled. Saving a token does not start a profile that was omitted during setup;
+an operator must enable the profile and start the service on the JARVIS host.
+
 ---
 
 ## Who can do what
@@ -49,9 +53,16 @@ The bot token is the server-level credential that authorises JARVIS to send and 
 
 1. Navigate to **Settings → Integrations → Bot Token** (admin only).
 2. Enter the new bot token from the Telegram BotFather.
-3. Save. The change takes effect immediately; a service restart is not required.
+3. Save. The value is encrypted in the deployment database and is never shown
+   again.
+4. Restart the `telegram_bot` service. The bot reads its token when the
+   container starts, so a replacement is not active before that restart.
 
 All users on the instance share a single bot configured with this token. Each user's account is linked to the bot individually via the pairing flow above.
+
+If the `telegram` Compose profile is disabled, the bot service does not start
+and pairing codes cannot be consumed. Re-run setup with Telegram selected, or
+enable the persisted profile on the host, before asking users to pair.
 
 ---
 

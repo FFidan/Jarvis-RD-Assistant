@@ -20,6 +20,7 @@ from paper_ingestion.deps import (
     limiter,
 )
 from paper_ingestion.pdf_processor import check_pdf_path_safe
+from paper_ingestion.services.pdf_workflow import download_and_store_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["analyze"])
@@ -102,16 +103,12 @@ async def _analyze_stream(
             yield sse_event({"type": "step", "step": "downloading", "status": "completed"})
         else:
             # Download outside any transaction
-            pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
-            # Update DB (short query)
-            async with db_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
-                    "WHERE id = $2 RETURNING id, source_type, pdf_url, pdf_downloaded,"
-                    " pdf_local_path",
-                    str(pdf_path),
-                    paper_id,
-                )
+            row = await download_and_store_pdf(
+                db_pool,
+                pdf_processor,
+                row["pdf_url"],
+                paper_id,
+            )
             yield sse_event({"type": "step", "step": "downloading", "status": "completed"})
     except Exception as exc:
         logger.error("Download failed for paper %d: %s", paper_id, exc, exc_info=True)

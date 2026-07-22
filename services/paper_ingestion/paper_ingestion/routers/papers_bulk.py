@@ -162,21 +162,28 @@ async def process_library(
 ) -> dict[str, object]:
     """Enqueue one ``papers.process_library`` job for the caller's whole library.
 
-    The job selects every paper in the caller's ``user_library`` still needing a
-    stage (download → process → opt-in summarize) and runs them in one durable
-    job with honest partial reporting. When the library needs nothing, no job is
-    queued and the skip contract ``{"job_id": null, "status": "skipped",
-    "reason": "library_already_processed"}`` is returned instead. Poll progress
-    via ``GET /api/jobs/{job_id}``.
+    The job processes the caller's ``user_library`` in bounded pages for download,
+    processing, vector reconciliation, and opt-in summaries. Completed papers stay
+    eligible for a cheap Qdrant identity probe because PostgreSQL alone cannot prove
+    their vectors still match. An empty library returns the skip contract
+    ``{"job_id": null, "status": "skipped", "reason":
+    "library_already_processed"}``. Poll progress via ``GET /api/jobs/{job_id}``.
     """
     _ = request  # required by @limiter.limit; not used in body
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    from paper_ingestion.paper_jobs import _PROCESS_LIBRARY_SELECTION  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import (  # noqa: PLC0415
+        _PROCESS_LIBRARY_PAGE_SIZE,
+        _PROCESS_LIBRARY_SELECTION,
+    )
 
     async with db_pool.acquire() as conn:
         has_work = await conn.fetchval(
-            f"SELECT EXISTS ({_PROCESS_LIBRARY_SELECTION})", user_id, summarize
+            f"SELECT EXISTS ({_PROCESS_LIBRARY_SELECTION})",
+            user_id,
+            summarize,
+            _PROCESS_LIBRARY_PAGE_SIZE,
+            0,
         )
     if not has_work:
         return {"job_id": None, "status": "skipped", "reason": "library_already_processed"}

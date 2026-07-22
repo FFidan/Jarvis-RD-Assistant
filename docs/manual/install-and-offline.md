@@ -1,14 +1,14 @@
 <!-- verified-against-UI: 2026-07-19 | routes: app-wide -->
 
-# Installing the app + what works offline
+# Install the web app and use it offline
 
 JARVIS is a Progressive Web App: you can install it like a native app on your
-phone, tablet, or computer, and a slice of your library stays usable when
-your connection drops.
+phone, tablet, or computer. Previously loaded parts of the library remain
+available when the device loses its connection.
 
 The offline cache requires a secure browser context: use HTTPS, or access
-JARVIS as `localhost` on the machine where it runs. Plain HTTP access through a
-LAN IP address does not enable the service worker. See
+JARVIS as `localhost` on the machine where it runs. A plain LAN IP exposes only
+`/health/jarvis`, not the web app, and cannot install a service worker. See
 [Choosing how you access JARVIS](access-modes.md) for the supported options.
 
 ---
@@ -23,8 +23,8 @@ banner appears near the top of the app, below the connectivity banner.
 1. Click **Install**.
 2. Confirm in the browser's own install prompt.
 
-JARVIS now opens as its own app — in its own window, with its own icon —
-instead of a browser tab. If you dismiss the banner, it stays dismissed on
+JARVIS then opens in its own window with its own icon. If you dismiss the
+banner, it stays dismissed on
 that device; you can still install later from the browser's own menu (for
 example Chrome's "Install app" item, usually behind the three-dot menu or an
 icon in the address bar).

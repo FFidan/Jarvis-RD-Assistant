@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Dry-run or apply rotation for encrypted user_config rows.
 
-Reads DATABASE_URL, OLD_JARVIS_CONFIG_KEY, and NEW_JARVIS_CONFIG_KEY from the
-environment. By default this validates decryptability and reports counts only.
-Use ``--apply`` to write re-encrypted ciphertexts in a single transaction.
+Reads the database connection and old/new Fernet keys from direct environment
+variables or mounted secret files. By default this validates decryptability and
+reports counts only. Use ``--apply`` to write re-encrypted ciphertexts in a
+single transaction.
 """
 
 from __future__ import annotations
@@ -11,9 +12,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from pathlib import Path
+from urllib.parse import quote
 
 import asyncpg
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 class ScriptError(RuntimeError):
@@ -27,10 +30,77 @@ def _required_env(name: str) -> str:
     return value
 
 
-async def _rotate(*, apply: bool) -> None:
-    database_url = _required_env("DATABASE_URL")
-    old_key = _required_env("OLD_JARVIS_CONFIG_KEY").encode("ascii")
-    new_key = _required_env("NEW_JARVIS_CONFIG_KEY").encode("ascii")
+def _required_secret(name: str) -> str:
+    """Read a required value from ``NAME`` or the file named by ``NAME_FILE``."""
+    value = os.environ.get(name, "")
+    if value:
+        return value
+
+    file_name = os.environ.get(f"{name}_FILE", "")
+    if not file_name:
+        raise ScriptError(f"{name} or {name}_FILE is required")
+    try:
+        value = Path(file_name).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ScriptError(f"cannot read {name}_FILE: {exc}") from exc
+    if not value:
+        raise ScriptError(f"{name}_FILE is empty")
+    return value
+
+
+def _database_url() -> str:
+    """Resolve a direct URL or build one from a mounted Postgres password."""
+    direct = os.environ.get("DATABASE_URL", "")
+    if direct:
+        return direct
+
+    password_file = os.environ.get("POSTGRES_PASSWORD_FILE", "")
+    if not password_file:
+        raise ScriptError("DATABASE_URL or POSTGRES_PASSWORD_FILE is required")
+    try:
+        password = Path(password_file).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ScriptError(f"cannot read POSTGRES_PASSWORD_FILE: {exc}") from exc
+    if not password:
+        raise ScriptError("POSTGRES_PASSWORD_FILE is empty")
+
+    user = quote(os.environ.get("POSTGRES_USER", "jarvis"), safe="")
+    database = quote(os.environ.get("POSTGRES_DB", "jarvis"), safe="")
+    host = os.environ.get("POSTGRES_HOST", "postgres")
+    port = os.environ.get("POSTGRES_PORT", "5432")
+    return f"postgresql://{user}:{quote(password, safe='')}@{host}:{port}/{database}"
+
+
+def _classify_key_state(
+    ciphertexts: list[bytes], old_fernet: Fernet, new_fernet: Fernet
+) -> tuple[str, int]:
+    """Classify all encrypted rows against the old and staged keys."""
+    if not ciphertexts:
+        return "empty", 0
+
+    old_valid = True
+    new_valid = True
+    for ciphertext in ciphertexts:
+        try:
+            old_fernet.decrypt(ciphertext)
+        except InvalidToken:
+            old_valid = False
+        try:
+            new_fernet.decrypt(ciphertext)
+        except InvalidToken:
+            new_valid = False
+
+    if old_valid and not new_valid:
+        return "old", len(ciphertexts)
+    if new_valid and not old_valid:
+        return "new", len(ciphertexts)
+    return "ambiguous", len(ciphertexts)
+
+
+async def _rotate(*, apply: bool, probe_state: bool = False) -> None:
+    database_url = _database_url()
+    old_key = _required_secret("OLD_JARVIS_CONFIG_KEY").encode("ascii")
+    new_key = _required_secret("NEW_JARVIS_CONFIG_KEY").encode("ascii")
     old_fernet = Fernet(old_key)
     new_fernet = Fernet(new_key)
 
@@ -45,13 +115,21 @@ async def _rotate(*, apply: bool) -> None:
                 ORDER BY key, id
                 """
             )
-            updates: list[tuple[bytes, int]] = []
+            ciphertexts: list[bytes] = []
             for row in rows:
                 encrypted_value = row["encrypted_value"]
                 if isinstance(encrypted_value, memoryview):
                     encrypted_value = encrypted_value.tobytes()
-                ciphertext = bytes(encrypted_value).decode("ascii")
-                plaintext = old_fernet.decrypt(ciphertext.encode("ascii"))
+                ciphertexts.append(bytes(encrypted_value))
+
+            if probe_state:
+                state, count = _classify_key_state(ciphertexts, old_fernet, new_fernet)
+                print(f"JARVIS_ROTATION_STATE={state} ROWS={count}")
+                return
+
+            updates: list[tuple[bytes, int]] = []
+            for row, ciphertext in zip(rows, ciphertexts, strict=True):
+                plaintext = old_fernet.decrypt(ciphertext)
                 updates.append((new_fernet.encrypt(plaintext), row["id"]))
 
             if apply:
@@ -76,8 +154,8 @@ async def _rotate(*, apply: bool) -> None:
 def main() -> None:
     """Parse ``--apply`` flag and run the config-key rotation.
 
-    Reads ``DATABASE_URL``, ``OLD_JARVIS_CONFIG_KEY``, and
-    ``NEW_JARVIS_CONFIG_KEY`` from the environment.
+    Reads ``DATABASE_URL`` or ``POSTGRES_PASSWORD_FILE`` plus the old/new key
+    variables (each of which also supports the ``_FILE`` convention).
 
     Raises
     ------
@@ -85,9 +163,15 @@ def main() -> None:
         If any required environment variable is missing.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="write rotated ciphertexts")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="write rotated ciphertexts")
+    mode.add_argument(
+        "--probe-state",
+        action="store_true",
+        help="report whether all rows use the old key, new key, neither, or no key",
+    )
     args = parser.parse_args()
-    asyncio.run(_rotate(apply=args.apply))
+    asyncio.run(_rotate(apply=args.apply, probe_state=args.probe_state))
 
 
 if __name__ == "__main__":

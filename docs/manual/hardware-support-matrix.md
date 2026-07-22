@@ -2,9 +2,10 @@
 
 # Hardware support matrix
 
-JARVIS auto-detects your GPU vendor at first boot and engages the matching acceleration
-overlay. Not every combination gets the same level of support — this page is the honest
-picture, including what "Experimental" means and what to expect on Windows.
+JARVIS always has a supported CPU path. Setup enables NVIDIA CUDA when the
+Docker runtime is ready and enables AMD ROCm only when the host exposes the
+required `/dev/kfd` device. Other AMD and Intel hosts stay on CPU unless you
+select the experimental Vulkan path.
 
 ---
 
@@ -12,25 +13,43 @@ picture, including what "Experimental" means and what to expect on Windows.
 
 |  | CUDA (NVIDIA) | ROCm (AMD) | Vulkan (AMD / Intel) | CPU |
 |---|---|---|---|---|
-| **Ollama** (default backend) | Supported | [Experimental] | [Experimental] | Supported |
+| **Ollama** (default backend) | Supported | Experimental | Experimental | Supported |
 | **vLLM** (advanced, opt-in overlay) | Supported | Not yet available | Not available | Unsupported |
 
 - **Ollama** is the default local inference backend and ships in the base stack.
 - **vLLM** is an opt-in overlay for advanced throughput comparisons (`docker-compose.vllm.yml`, `--profile vllm`); it currently ships an NVIDIA-only image. AMD ROCm images exist upstream but are not wired into JARVIS yet.
 - **CPU** is always available as the fallback tier and needs no overlay.
 
+## What setup selects
+
+| Host | Default selection | Optional selection |
+|---|---|---|
+| NVIDIA with Container Toolkit | CUDA | CPU with `./setup.sh --gpu cpu` |
+| NVIDIA without a ready runtime | CPU, with setup guidance | CUDA after installing the toolkit |
+| AMD with `/dev/kfd` | ROCm | CPU or Vulkan |
+| AMD without `/dev/kfd` | CPU | Vulkan with `./setup.sh --gpu vulkan` |
+| Intel | CPU | Vulkan with `./setup.sh --gpu vulkan` |
+| macOS | CPU inside Docker | None |
+
+Setup records the selected Compose overlay so normal starts and updates keep the
+same choice. A failed experimental overlay offers a CPU retry instead of leaving
+the install unusable.
+
 ---
 
 ## Validation tiers
 
-We label each cell above using three honest tiers instead of a single "works/doesn't":
+The table uses these validation labels:
 
 - **Supported** — the default, actively used path; validated on real hardware.
-- **[Experimental]** — the overlay and vendor-detection logic exist and are exercised by automated CI (compose config validation and a no-GPU boot-fallback smoke test on every release). This proves the plumbing is correct; it does not prove inference is fast or correct on your specific card — no CI runner has a real AMD or Intel GPU attached.
+- **Experimental** — the overlay and vendor-detection logic pass Compose and
+  no-GPU fallback checks, but CI has no physical AMD or Intel GPU runner.
 - **Community-reported** — a JARVIS user with matching hardware confirmed it works, via a [hardware compatibility report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml).
 - **Untested** — neither CI wiring nor a community report exists yet for that specific card.
 
-We do not run paid cloud-GPU validation for AMD or Intel hardware. CI-wiring validation plus community reports are the honest, sustainable alternative — please [file a report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml) if you run JARVIS on AMD or Intel silicon; it directly improves this page for the next person.
+We do not run cloud-GPU validation for AMD or Intel hardware. If you use one,
+[file a hardware report](https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml)
+with the model, driver, selected overlay, and result.
 
 ---
 

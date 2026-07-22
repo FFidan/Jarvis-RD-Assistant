@@ -10,6 +10,7 @@ so pdf_workflow.py:310 handles them uniformly via resume logic.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,8 @@ import pytest
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+from paper_ingestion.ingestion.embed_store import EmbeddingRunContext
 
 
 # ---------------------------------------------------------------------------
@@ -200,12 +203,22 @@ async def test_subsequent_batch_failure_still_raises_embedding_batch_error():
 
     embedder.embed_texts = AsyncMock(side_effect=_embed_texts_side_effect)
     embedder.qdrant.upsert = AsyncMock()  # upsert succeeds for first batch
+    completed_batches: list[tuple[int, int]] = []
+
+    async def _record_progress(completed: int, total: int) -> None:
+        completed_batches.append((completed, total))
 
     # Use batch_size=1 so two chunks → two separate batches
     chunks = _make_chunks(n=2)
 
     with pytest.raises(EmbeddingBatchError) as exc_info:
-        await embedder.embed_and_store(paper_id=7, chunks=chunks, user_id=2, batch_size=1)
+        await embedder.embed_and_store(
+            paper_id=7,
+            chunks=chunks,
+            user_id=2,
+            batch_size=1,
+            run_context=EmbeddingRunContext(progress_callback=_record_progress),
+        )
 
     err = exc_info.value
     # First batch completed
@@ -213,6 +226,7 @@ async def test_subsequent_batch_failure_still_raises_embedding_batch_error():
     assert len(err.completed_point_ids) == 1
     assert isinstance(err.__cause__, RuntimeError)
     assert "second batch failure" in str(err.__cause__)
+    assert completed_batches == [(1, 2)]
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +269,10 @@ async def test_embed_and_store_resume_skips_already_persisted_chunks():
     embedder.qdrant.upsert = AsyncMock()
 
     ids = await embedder.embed_and_store(
-        paper_id=9, chunks=chunks, batch_size=2, resume_content=resume_content
+        paper_id=9,
+        chunks=chunks,
+        batch_size=2,
+        run_context=EmbeddingRunContext(resume_content=resume_content),
     )
 
     embedder.embed_texts.assert_awaited_once_with(["chunk 2", "chunk 3"])
@@ -263,6 +280,85 @@ async def test_embed_and_store_resume_skips_already_persisted_chunks():
     # Skipped chunks must not be re-upserted.
     upserted = embedder.qdrant.upsert.await_args.kwargs["points"]
     assert len(upserted) == 2
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_reports_each_persisted_or_resumed_batch_once():
+    """Batch progress advances only after durable upsert or a valid full skip."""
+    from paper_ingestion.ingestion.embedding_config import EMBEDDING_DIMENSION
+
+    embedder = _make_embedder()
+    chunks = _make_chunks(n=4)
+    embedder.embed_texts = AsyncMock(
+        return_value=[[0.0] * EMBEDDING_DIMENSION for _ in range(2)]
+    )
+    embedder.qdrant.upsert = AsyncMock()
+    completed_batches: list[tuple[int, int]] = []
+
+    async def _record_progress(completed: int, total: int) -> None:
+        completed_batches.append((completed, total))
+
+    await embedder.embed_and_store(
+        paper_id=10,
+        chunks=chunks,
+        batch_size=2,
+        run_context=EmbeddingRunContext(
+            resume_content={0: "chunk 0", 1: "chunk 1"},
+            progress_callback=_record_progress,
+        ),
+    )
+
+    assert completed_batches == [(1, 2), (2, 2)]
+    embedder.embed_texts.assert_awaited_once_with(["chunk 2", "chunk 3"])
+    embedder.qdrant.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_progress_callback_failure_preserves_persisted_batch_for_resume():
+    """Observer failure after upsert still exposes the durable batch to callers."""
+    from paper_ingestion.ingestion.embed_store import EmbeddingBatchError, chunk_point_id
+    from paper_ingestion.ingestion.embedding_config import EMBEDDING_DIMENSION
+
+    embedder = _make_embedder()
+    chunks = _make_chunks(n=2)
+    embedder.embed_texts = AsyncMock(
+        return_value=[[0.0] * EMBEDDING_DIMENSION for _ in chunks]
+    )
+    embedder.qdrant.upsert = AsyncMock()
+
+    async def _fail_progress(_completed: int, _total: int) -> None:
+        raise RuntimeError("progress backend unavailable")
+
+    with pytest.raises(EmbeddingBatchError) as exc_info:
+        await embedder.embed_and_store(
+            paper_id=11,
+            chunks=chunks,
+            batch_size=2,
+            run_context=EmbeddingRunContext(progress_callback=_fail_progress),
+        )
+
+    err = exc_info.value
+    expected_ids = [chunk_point_id(11, chunk.chunk_index) for chunk in chunks]
+    assert err.completed_chunks == chunks
+    assert err.completed_point_ids == expected_ids
+    assert isinstance(err.__cause__, RuntimeError)
+    assert "progress backend unavailable" in str(err.__cause__)
+    embedder.qdrant.upsert.assert_awaited_once()
+
+    resume_content = {chunk.chunk_index: chunk.content for chunk in err.completed_chunks}
+    embedder.embed_texts = AsyncMock()
+    embedder.qdrant.upsert = AsyncMock()
+
+    point_ids = await embedder.embed_and_store(
+        paper_id=11,
+        chunks=chunks,
+        batch_size=2,
+        run_context=EmbeddingRunContext(resume_content=resume_content),
+    )
+
+    assert point_ids == expected_ids
+    embedder.embed_texts.assert_not_awaited()
+    embedder.qdrant.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -280,9 +376,46 @@ async def test_embed_and_store_resume_reembeds_changed_content():
     embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION])
     embedder.qdrant.upsert = AsyncMock()
 
-    ids = await embedder.embed_and_store(paper_id=3, chunks=chunks, resume_content=resume_content)
+    ids = await embedder.embed_and_store(
+        paper_id=3,
+        chunks=chunks,
+        run_context=EmbeddingRunContext(resume_content=resume_content),
+    )
 
     embedder.embed_texts.assert_awaited_once_with(["chunk 0"])
     assert ids == [chunk_point_id(3, 0), chunk_point_id(3, 1)]
     upserted = embedder.qdrant.upsert.await_args.kwargs["points"]
     assert len(upserted) == 1
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_persists_content_identity_in_vector_payload():
+    """Stored vectors carry content identity and complete visibility metadata."""
+    from paper_ingestion.ingestion.embedding_config import (
+        EMBEDDING_DIMENSION,
+        EMBEDDING_MODEL_NAME,
+    )
+    from paper_ingestion.ingestion.payload_schema import VectorVisibility
+
+    embedder = _make_embedder()
+    embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION])
+    embedder.qdrant.upsert = AsyncMock()
+
+    await embedder.embed_and_store(
+        paper_id=8,
+        chunks=_make_chunks(n=1),
+        user_id=3,
+        visibility=VectorVisibility(
+            source_type="arxiv",
+            visibility_scope="public",
+            visibility_generation="3" * 32,
+        ),
+    )
+
+    point = embedder.qdrant.upsert.await_args.kwargs["points"][0]
+    expected = hashlib.sha256(f"{EMBEDDING_MODEL_NAME}\0chunk 0".encode()).hexdigest()
+    assert point.payload["embedding_fingerprint"] == expected
+    assert point.payload["source_type"] == "arxiv"
+    assert point.payload["visibility_scope"] == "public"
+    assert point.payload["visibility_generation"] == "3" * 32
+    assert embedder.qdrant.upsert.await_args.kwargs["wait"] is True

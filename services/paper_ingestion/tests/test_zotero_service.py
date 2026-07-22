@@ -979,6 +979,11 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
     monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
     monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
     monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        _zotero_poll,
+        "_migrate_unambiguous_legacy_identity",
+        AsyncMock(),
+    )
 
     # One uniform conn for every acquire: .fetch → config rows (for _get_zotero_config),
     # .execute → no-op (version persist). upsert/resolve/library/state are monkeypatched,
@@ -1122,7 +1127,7 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
 
     enqueued_keys: list[str] = []
 
-    async def _spy_ingest(db_pool, paper_create, item_key, polling_user_id):
+    async def _spy_ingest(db_pool, paper_create, item_key, polling_user_id, namespace):
         enqueued_keys.append(item_key)
         return True
 
@@ -2621,15 +2626,16 @@ async def test_push_highlights_for_paper_scopes_export_to_owner_user():
     assert mock_zotero.create_item.await_count == 2
 
 
-async def test_push_highlights_job_allows_visible_not_owned_public_paper():
-    """Job authz parity: re-validation passes for a public-source paper the caller
-    can view but does not own (discovered by another user, not in the caller's
-    library), matching the loosened router authz. The export then runs scoped to
-    the caller's own highlights."""
+async def test_push_highlights_job_allows_persisted_public_paper():
+    """Job re-validation accepts a persisted-public paper.
+
+    Highlight loading remains scoped to the caller, so public paper visibility
+    cannot expose another user's annotations.
+    """
     from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
 
     visible_conn = _make_conn(
-        fetchrow=FakeRecord({"source_type": "arxiv", "discovered_by": 999, "in_library": False})
+        fetchrow=FakeRecord({"source_type": "arxiv"})
     )
     pool = _make_pool(visible_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
@@ -2656,9 +2662,7 @@ async def test_push_highlights_job_404s_foreign_private_paper():
 
     from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
 
-    private_conn = _make_conn(
-        fetchrow=FakeRecord({"source_type": "local", "discovered_by": 999, "in_library": False})
-    )
+    private_conn = _make_conn(fetchrow=None)
     pool = _make_pool(private_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     ctx = AsyncMock()
@@ -2780,10 +2784,20 @@ async def test_zotero_sync_annotations_job_revalidates_ownership_before_sync():
 
 
 def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin():
-    from paper_ingestion.integrations.zotero_service import _parse_zotero_item
+    from paper_ingestion.integrations.zotero_service import (
+        _parse_zotero_item,
+        _ZoteroLibraryNamespace,
+    )
+
+    namespace = _ZoteroLibraryNamespace("user", "123456")
 
     # jarvis-origin skip uses data["extra"]
-    assert _parse_zotero_item({"extra": "jarvis_paper_id=42", "key": "ABC"}, {}) is None
+    assert (
+        _parse_zotero_item(
+            {"extra": "jarvis_paper_id=42", "key": "ABC"}, {}, namespace
+        )
+        is None
+    )
 
     # key resolved from data first; fallback to outer_item["key"]
     parsed_with_data_key = _parse_zotero_item(
@@ -2794,6 +2808,7 @@ def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin()
             "creators": [{"firstName": "Ada", "lastName": "Lovelace"}, {"lastName": "Hopper"}],
         },
         {"key": "OUTER"},  # outer_item; data["key"] takes precedence
+        namespace,
     )
     assert parsed_with_data_key is not None
     assert parsed_with_data_key.item_key == "ITEMKEY"
@@ -2807,6 +2822,118 @@ def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin()
     parsed_outer_key = _parse_zotero_item(
         {"title": "Fallback title"},
         {"key": "OUTERKEY"},
+        namespace,
     )
     assert parsed_outer_key is not None
     assert parsed_outer_key.item_key == "OUTERKEY"
+
+
+def test_zotero_external_ids_are_scoped_to_the_remote_library():
+    """The same item key in two remote libraries creates distinct identities."""
+    from paper_ingestion.integrations.zotero_service import (
+        _parse_zotero_item,
+        _ZoteroLibraryNamespace,
+    )
+
+    item = {"key": "SHARED", "title": "Shared key"}
+    personal = _parse_zotero_item(
+        item,
+        {},
+        _ZoteroLibraryNamespace("user", "123456"),
+    )
+    group = _parse_zotero_item(
+        item,
+        {},
+        _ZoteroLibraryNamespace("group", "987654"),
+    )
+
+    assert personal is not None
+    assert group is not None
+    assert personal.paper_create.external_id == "zotero:user:123456:SHARED"
+    assert group.paper_create.external_id == "zotero:group:987654:SHARED"
+    assert personal.paper_create.external_id != group.paper_create.external_id
+
+
+async def test_legacy_zotero_identity_is_renamed_only_for_one_matching_namespace():
+    """Every linked owner must resolve to the current namespace before rename."""
+    from paper_ingestion.integrations._zotero_poll import (
+        _migrate_unambiguous_legacy_identity,
+        _ZoteroLibraryNamespace,
+    )
+
+    conn = _make_conn()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [
+                FakeRecord(
+                    {
+                        "id": 17,
+                        "linked_user_ids": [1, 2],
+                        "destination_exists": False,
+                    }
+                )
+            ],
+            [
+                FakeRecord({"key": "zotero.library_type", "value": "user"}),
+                FakeRecord({"key": "zotero.user_id", "value": "123456"}),
+            ],
+            [
+                FakeRecord({"key": "zotero.library_type", "value": "user"}),
+                FakeRecord({"key": "zotero.user_id", "value": "123456"}),
+            ],
+        ]
+    )
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    await _migrate_unambiguous_legacy_identity(
+        conn,
+        item_key="SHARED",
+        namespace=_ZoteroLibraryNamespace("user", "123456"),
+    )
+
+    conn.execute.assert_awaited_once()
+    assert conn.execute.await_args is not None
+    assert conn.execute.await_args.args[1:] == (
+        17,
+        "zotero:user:123456:SHARED",
+        "zotero:SHARED",
+    )
+
+
+async def test_legacy_zotero_identity_stays_private_when_linked_namespaces_disagree():
+    """Ambiguous legacy rows are preserved instead of merging remote libraries."""
+    from paper_ingestion.integrations._zotero_poll import (
+        _migrate_unambiguous_legacy_identity,
+        _ZoteroLibraryNamespace,
+    )
+
+    conn = _make_conn()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [
+                FakeRecord(
+                    {
+                        "id": 17,
+                        "linked_user_ids": [1, 2],
+                        "destination_exists": False,
+                    }
+                )
+            ],
+            [
+                FakeRecord({"key": "zotero.library_type", "value": "user"}),
+                FakeRecord({"key": "zotero.user_id", "value": "123456"}),
+            ],
+            [
+                FakeRecord({"key": "zotero.library_type", "value": "group"}),
+                FakeRecord({"key": "zotero.group_id", "value": 987654}),
+            ],
+        ]
+    )
+
+    await _migrate_unambiguous_legacy_identity(
+        conn,
+        item_key="SHARED",
+        namespace=_ZoteroLibraryNamespace("user", "123456"),
+    )
+
+    conn.execute.assert_not_awaited()

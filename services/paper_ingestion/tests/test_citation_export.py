@@ -337,7 +337,7 @@ async def test_get_citation_returns_bibtex_with_headers(asgi_client) -> None:
     pool, conn = make_pool_and_conn()
     conn.fetchrow = AsyncMock(
         side_effect=[
-            FakeRecord({"discovered_by": 1}),  # assert_paper_ownership
+            FakeRecord({"id": 5, "is_visible": True}),
             _paper(paper_id=5, zotero_citation_key="Key2017"),  # papers SELECT *
         ]
     )
@@ -354,7 +354,9 @@ async def test_get_citation_returns_bibtex_with_headers(asgi_client) -> None:
 @pytest.mark.asyncio
 async def test_get_citation_ris_content_type(asgi_client) -> None:
     pool, conn = make_pool_and_conn()
-    conn.fetchrow = AsyncMock(side_effect=[FakeRecord({"discovered_by": 1}), _paper(paper_id=5)])
+    conn.fetchrow = AsyncMock(
+        side_effect=[FakeRecord({"id": 5, "is_visible": True}), _paper(paper_id=5)]
+    )
     client, _app = asgi_client(pool, user_id=1)
     async with client:
         resp = await client.get("/api/papers/5/citation?format=ris")
@@ -554,7 +556,7 @@ async def test_markdown_export_endpoint_headers(asgi_client) -> None:
     pool, conn = make_pool_and_conn()
     conn.fetchrow = AsyncMock(
         side_effect=[
-            FakeRecord({"discovered_by": 1}),  # assert_paper_ownership
+            FakeRecord({"id": 5, "is_visible": True}),
             _paper(paper_id=5, zotero_citation_key="Key2017"),  # papers JOIN
             None,  # paper_summaries → placeholder path
         ]

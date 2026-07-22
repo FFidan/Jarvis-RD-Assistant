@@ -9,9 +9,11 @@
 #     the happy path, a reload failure, a tmp-verify failure, and a post-swap-verify
 #     failure (-> revert), asserting production is untouched or fully restored;
 #   * stages EVERY mid-swap crash boundary (for BOTH DBs) as a stranded DB catalog +
-#     .restore_swap_state.json, runs the REAL `restore.sh --recover` inside the
+#     private restore-swap state, runs the REAL `restore.sh --recover` inside the
 #     container, and asserts each end state is untouched-original OR completed-
 #     restore — never a reachable half-swap;
+#   * stages every durable PDF swap phase and proves recovery finishes forward
+#     without replacing the stable PDF storage root;
 #   * checks the disk preflight blocks a tight disk and passes a roomy one.
 #
 # SAFETY: it ONLY ever touches a throwaway `--rm` postgres container (unique name,
@@ -24,8 +26,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESTORE_SH="${SCRIPT_DIR}/../restore.sh"
-IMAGE="${SWAP_TEST_IMAGE:-postgres:16.8}"
-CNAME="jarvis-restore-swap-test-$$"
+IMAGE="${SWAP_TEST_IMAGE:-postgres:16.8@sha256:301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae}"
+CNAME="jarvis-restore-swap-test-${BASHPID}-${RANDOM}"
 WORK="$(mktemp -d)"
 
 pass=0; fail=0
@@ -52,8 +54,18 @@ if [ ! -r "$RESTORE_SH" ]; then printf 'FAIL: cannot read %s\n' "$RESTORE_SH" >&
 docker rm -f "$CNAME" >/dev/null 2>&1 || true
 docker run -d --name "$CNAME" --rm -e POSTGRES_PASSWORD=swaptest "$IMAGE" >/dev/null \
   || { printf 'FAIL: could not start %s\n' "$IMAGE" >&2; exit 1; }
-for _ in $(seq 1 30); do docker exec "$CNAME" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
-docker exec "$CNAME" pg_isready -U postgres >/dev/null 2>&1 \
+# The official image briefly starts a temporary bootstrap server, then stops it
+# before execing the final postgres process as PID 1. A bare pg_isready can catch
+# that transient server and race the shutdown below. Require both final PID 1
+# and readiness so the harness cannot report an application failure for an
+# entrypoint transition.
+_final_postgres_ready() {
+  docker exec "$CNAME" sh -c \
+    '[ "$(cat /proc/1/comm 2>/dev/null)" = "postgres" ] && pg_isready -U postgres' \
+    >/dev/null 2>&1
+}
+for _ in $(seq 1 30); do _final_postgres_ready && break; sleep 1; done
+_final_postgres_ready \
   || { printf 'FAIL: throwaway container never became ready\n' >&2; exit 1; }
 printf 'engine: %s (%s)\n' "$IMAGE" "$(docker exec "$CNAME" psql -U postgres -tAc 'show server_version' 2>/dev/null)"
 
@@ -127,7 +139,8 @@ make_archive() { # $1=outfile  $2=is_jarvis  $3=good(1)/no-schema(0)  $4=corrupt
 extract_fn() { sed -n "/^$1()/,/^}/p" "$RESTORE_SH"; }
 FN_SRC="$(for f in _json_escape write_swap_state clear_swap_state read_swap_db \
                    db_exists verify_db_structural psql_admin decrypt_or_passthrough \
-                   revert_swap reconcile_leftover restore_one_db_swap; do
+                   purge_restored_auth_state revert_swap reconcile_leftover \
+                   restore_one_db_swap; do
   extract_fn "$f"; printf '\n'
 done)"
 eval "$FN_SRC"
@@ -228,14 +241,17 @@ unset -f psql write_status   # end of the sourced-function part
 docker cp "$RESTORE_SH" "${CNAME}:/usr/local/bin/restore.sh" >/dev/null
 docker exec "$CNAME" chmod +x /usr/local/bin/restore.sh >/dev/null 2>&1 || true
 
-stage_trigger() { docker exec "$CNAME" sh -c 'rm -rf /tmp/trig; mkdir -p /tmp/trig /run/secrets; printf dummy > /run/secrets/postgres_password'; }
-write_state()   { docker exec "$CNAME" sh -c "printf '%s' '$1' > /tmp/trig/.restore_swap_state.json"; }
+stage_trigger() { docker exec "$CNAME" sh -c 'rm -rf /tmp/trig /tmp/backups /tmp/pdf-storage; mkdir -p /tmp/trig /tmp/backups/.lifecycle /tmp/pdf-storage /run/secrets; printf dummy > /run/secrets/postgres_password'; }
+write_state()   { docker exec "$CNAME" sh -c "printf '%s' '$1' > /tmp/backups/.lifecycle/restore-swap-state.json"; }
 touch_trig()    { docker exec "$CNAME" sh -c "touch /tmp/trig/$1"; }
 has_trig()      { docker exec "$CNAME" sh -c "[ -f /tmp/trig/$1 ]"; }
+has_state()     { docker exec "$CNAME" sh -c '[ -f /tmp/backups/.lifecycle/restore-swap-state.json ]'; }
 run_recover()   {
   docker exec \
-    -e BACKUP_TRIGGER_DIR=/tmp/trig -e PGHOST=/var/run/postgresql -e PGUSER=postgres \
+    -e BACKUP_TRIGGER_DIR=/tmp/trig -e BACKUP_DIR=/tmp/backups \
+    -e PGHOST=/var/run/postgresql -e PGUSER=postgres \
     -e PGDATABASE=jarvis -e LITELLM_DATABASE=litellm \
+    -e HOST_SECRETS_DIR=/tmp/trig -e PDF_STORAGE_DIR=/tmp/pdf-storage \
     "$CNAME" /usr/local/bin/restore.sh --recover >/dev/null 2>&1
 }
 # maint_state -> "lifted" | "held" (held = .destructive still present after recover)
@@ -251,7 +267,7 @@ write_state '{"db":"jarvis","phase":"reload_tmp"}'; touch_trig .maintenance
 run_recover
 if [ "$(tag_of jarvis)" = "ORIGINAL" ] && connectable jarvis \
    && ! dbex jarvis_restore_tmp && ! dbex jarvis_pre_restore \
-   && ! has_trig .restore_swap_state.json && [ "$(maint_state)" = "lifted" ]; then
+   && ! has_state && [ "$(maint_state)" = "lifted" ]; then
   ok "A/jarvis reload_tmp crash (no window): stale tmp dropped, ORIGINAL untouched, maintenance LIFTED"
 else
   no "A/jarvis wrong (jarvis=$(tag_of jarvis) tmp=$(dbex jarvis_restore_tmp && echo y||echo n) maint=$(maint_state))"
@@ -277,7 +293,7 @@ write_state '{"db":"litellm","phase":"swapping_in"}'; touch_trig .maintenance; t
 run_recover
 if [ "$(tag_of litellm)" = "RESTORED" ] && connectable litellm \
    && ! dbex litellm_restore_tmp && ! dbex litellm_pre_restore \
-   && ! has_trig .restore_swap_state.json && [ "$(maint_state)" = "held" ]; then
+   && ! has_state && [ "$(maint_state)" = "held" ]; then
   ok "B-forward/litellm between-renames: completed forward to RESTORED, pre dropped, maintenance HELD"
 else
   no "B-forward/litellm wrong (litellm=$(tag_of litellm) tmp=$(dbex litellm_restore_tmp && echo y||echo n) pre=$(dbex litellm_pre_restore && echo y||echo n) maint=$(maint_state))"
@@ -292,7 +308,7 @@ write_state '{"db":"jarvis","phase":"swapping_in"}'; touch_trig .maintenance; to
 run_recover
 if [ "$(tag_of jarvis)" = "ORIGINAL" ] && connectable jarvis \
    && ! dbex jarvis_restore_tmp && ! dbex jarvis_pre_restore \
-   && ! has_trig .restore_swap_state.json && [ "$(maint_state)" = "held" ]; then
+   && ! has_state && [ "$(maint_state)" = "held" ]; then
   ok "B-revert/jarvis between-renames+bad-tmp: verify failed -> REVERT to ORIGINAL, connectable, maintenance HELD"
 else
   no "B-revert/jarvis wrong (jarvis=$(tag_of jarvis) connectable=$(connectable jarvis && echo y||echo n) tmp=$(dbex jarvis_restore_tmp && echo y||echo n) pre=$(dbex jarvis_pre_restore && echo y||echo n) maint=$(maint_state))"
@@ -308,7 +324,7 @@ write_state '{"db":"jarvis","phase":"verified"}'; touch_trig .maintenance; touch
 run_recover
 if [ "$(tag_of jarvis)" = "RESTORED" ] && connectable jarvis \
    && ! dbex jarvis_pre_restore && ! dbex jarvis_restore_tmp \
-   && ! has_trig .restore_swap_state.json && [ "$(maint_state)" = "held" ]; then
+   && ! has_state && [ "$(maint_state)" = "held" ]; then
   ok "C/jarvis post-rename-in pre-drop: verified RESTORED, pre_restore dropped, maintenance HELD"
 else
   no "C/jarvis wrong (jarvis=$(tag_of jarvis) pre=$(dbex jarvis_pre_restore && echo y||echo n) maint=$(maint_state))"
@@ -351,10 +367,75 @@ else
 fi
 
 # =============================================================================
-# PART 3 — disk preflight (blocks a tight disk, passes a roomy one). The df target
+# PART 3 — PDF transaction recovery finishes forward from every journal phase
+#          without replacing the stable bind-root directory.
+# =============================================================================
+sec "PART 3: PDF swap recovery across every durable phase"
+
+stage_pdf_phase() { # <move_old|move_new|verify|cleanup> <32-hex run id>
+  local phase="$1" run_id="$2"
+  stage_trigger
+  docker exec "$CNAME" sh -ec "
+    stage=/tmp/pdf-storage/.restore-stage-${run_id}
+    old=/tmp/pdf-storage/.restore-old-${run_id}
+    mkdir -m 700 \"\$stage\" \"\$old\"
+    printf '%s' OLD-LIVE > /tmp/pdf-storage/1.pdf
+    printf '%s' NEW-ONE > \"\$stage/1.pdf\"
+    printf '%s' NEW-TWO > \"\$stage/2.pdf\"
+    : > \"\$stage/.inventory.tsv\"
+    for name in 1.pdf 2.pdf; do
+      size=\$(stat -c%s \"\$stage/\$name\")
+      sha=\$(sha256sum \"\$stage/\$name\" | cut -d' ' -f1)
+      printf '%s\\t%s\\t%s\\n' \"\$name\" \"\$size\" \"\$sha\" >> \"\$stage/.inventory.tsv\"
+    done
+    case '${phase}' in
+      move_old) ;;
+      move_new) mv /tmp/pdf-storage/1.pdf \"\$old/1.pdf\" ;;
+      verify|cleanup)
+        mv /tmp/pdf-storage/1.pdf \"\$old/1.pdf\"
+        mv \"\$stage/1.pdf\" \"\$stage/2.pdf\" /tmp/pdf-storage/
+        ;;
+      *) exit 2 ;;
+    esac
+    printf '%s' '{\"version\":2,\"resource\":\"pdfs\",\"run_id\":\"${run_id}\",\"phase\":\"${phase}\"}' \
+      > /tmp/backups/.lifecycle/restore-swap-state.json
+    touch /tmp/trig/.maintenance
+  "
+}
+
+pdf_fingerprint() {
+  docker exec "$CNAME" sh -c 'find /tmp/pdf-storage -regextype posix-extended -mindepth 1 -maxdepth 1 -type f -regex '\''.*/[0-9]+\.pdf'\'' -printf '\''%f\n'\'' | sort | while IFS= read -r name; do printf "%s=%s\n" "$name" "$(cat "/tmp/pdf-storage/$name")"; done'
+}
+
+run_pdf_recovery_case() { # <phase> <32-hex run id>
+  local phase="$1" run_id="$2" inode_before inode_after expected
+  expected="$(printf '1.pdf=NEW-ONE\n2.pdf=NEW-TWO')"
+  stage_pdf_phase "$phase" "$run_id"
+  inode_before="$(docker exec "$CNAME" stat -c '%d:%i' /tmp/pdf-storage)"
+  run_recover
+  inode_after="$(docker exec "$CNAME" stat -c '%d:%i' /tmp/pdf-storage)"
+  if [ "$(pdf_fingerprint)" = "$expected" ] \
+     && [ "$inode_after" = "$inode_before" ] \
+     && ! has_state \
+     && ! docker exec "$CNAME" test -e "/tmp/pdf-storage/.restore-stage-${run_id}" \
+     && ! docker exec "$CNAME" test -e "/tmp/pdf-storage/.restore-old-${run_id}" \
+     && [ "$(maint_state)" = "lifted" ]; then
+    ok "PDF ${phase}: recovery finished forward, verified exact files, and preserved the stable root inode"
+  else
+    no "PDF ${phase}: recovery did not finish cleanly (files='$(pdf_fingerprint)' inode=${inode_before}->${inode_after} state=$(has_state && echo present || echo clear) maint=$(maint_state))"
+  fi
+}
+
+run_pdf_recovery_case move_old 11111111111111111111111111111111
+run_pdf_recovery_case move_new 22222222222222222222222222222222
+run_pdf_recovery_case verify   33333333333333333333333333333333
+run_pdf_recovery_case cleanup  44444444444444444444444444444444
+
+# =============================================================================
+# PART 4 — disk preflight (blocks a tight disk, passes a roomy one). The df target
 #          is stubbed so the real arithmetic + threshold are exercised deterministic.
 # =============================================================================
-sec "PART 3: preflight_disk_or_fail threshold"
+sec "PART 4: preflight_disk_or_fail threshold"
 PRE_SRC="$(extract_fn preflight_disk_or_fail; printf '\n'; extract_fn fail_before_destruction)"
 make_archive "${WORK}/pf_jarvis.sql.gz" 1 1 0
 make_archive "${WORK}/pf_litellm.sql.gz" 0 1 0

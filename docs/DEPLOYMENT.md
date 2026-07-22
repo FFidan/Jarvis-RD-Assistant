@@ -1,6 +1,7 @@
 # Deployment Guide
 
-JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
+JARVIS is a self-hosted research assistant. This document covers installation,
+remote access, TLS, service configuration, and troubleshooting.
 
 For first-time setup, start with [README.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/README.md) Quickstart. If the two conflict, this file is canonical.
 
@@ -9,7 +10,8 @@ For first-time setup, start with [README.md](https://github.com/limitcycle-oss/j
 ## Solo deployment (recommended for single-user)
 
 Use the installer for first-time setup. It generates secrets, asks how you will
-access JARVIS (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), selects
+access JARVIS (localhost, LAN diagnostics, Tailscale, Cloudflare Tunnel, or
+Let's Encrypt), selects
 single-user or multi-user mode, detects GPU support, pulls the prebuilt
 application images, starts the stack, and opens the first-run wizard.
 
@@ -27,11 +29,9 @@ Required `.env` vars (`setup.sh` or `init-secrets.sh` generates any that are bla
 | Var | Purpose |
 |---|---|
 | `JARVIS_API_KEY` | 32-byte hex; gates the REST API + dashboard login |
-| `JARVIS_CONFIG_KEY` | Fernet key; encrypts user_config secrets at rest |
+| `JARVIS_CONFIG_KEY` | Fernet key; encrypts database-backed integration settings at rest |
 | `LITELLM_MASTER_KEY` | 32-byte hex; gates LiteLLM admin endpoints |
 | `JARVIS_MODEL_HMAC_KEY` | 64-hex; HMAC-signs Pulse classifier pickle blobs; **auto-generated** — do not hand-edit |
-
-Optional: `JARVIS_CONFIG_KEY_OLD` — enables zero-downtime crypto rotation via MultiFernet.
 
 Health checks:
 
@@ -74,7 +74,7 @@ A service restart is required when changing these.
 
 arXiv rate-limits to ~1 req/3 s; repeated manual Pulse runs can return HTTP 429. A zero-card run with `degraded_reason` means the job completed but every source was empty, rate-limited, or misconfigured. If arXiv returns 429, wait the `Retry-After` window (≥30 s) before retrying. Use Settings → Pulse → Diagnostics for production troubleshooting; `/api/pulse/debug` is dev-mode only (`DEV_MODE=true`).
 
-OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a key but an NCBI key raises the rate limit.
+OpenAlex requires the free `OPENALEX_API_KEY`; create one at [openalex.org/settings/api](https://openalex.org/settings/api). PubMed works without a key but an NCBI key raises the rate limit.
 
 ---
 
@@ -138,93 +138,104 @@ By default the dashboard is reachable only on the machine it runs on
 answers only to a `Host` allowlist (`DASHBOARD_SERVER_NAME`, below). **If you only
 use JARVIS on that one machine, skip this section** — nothing needs to be exposed.
 
-To reach it from another device — your phone, or a laptop away from home —
-without putting it on the open internet, common options are:
+To reach it from another device, re-run `./setup.sh`, accept the **Overwrite**
+prompt, and select the access route you want. An unattended reconfiguration must
+include `--overwrite-env`; without either confirmation, setup starts the existing
+configuration unchanged. Setup configures the JARVIS settings, service profiles,
+and health checks for the new choice:
 
-- **A named private HTTPS origin** — `./setup.sh --public-origin https://<host>` layers on top of your existing localhost/LAN setup and wires `APP_BASE_URL`/CORS/the Host allowlist automatically. The Tailscale walkthrough below is the reference implementation of this.
+- **Guided private HTTPS** uses Tailscale Serve on the same host and keeps the
+  dashboard bound to loopback. Setup uses an existing client or offers an
+  explicit-consent package install on supported Linux hosts, can ask before
+  `sudo tailscale up`, configures Serve, and verifies the final endpoint.
 - **A reverse proxy with TLS** on your own public domain — the Caddy `letsencrypt` profile (see *Deployment Modes* below). Note `local-https` (mkcert) is **not** a remote-access option — it is loopback-only, for a locally-trusted `https://localhost:3443` on the JARVIS machine itself.
 - **A Cloudflare Tunnel** — outbound-only, no open ports.
-- **A mesh VPN** — your devices share one private encrypted network.
+- **A mesh VPN with your own proxy** is a manual adapter; provide a named HTTPS
+  origin and satisfy the trust contract below.
 
-These are alternatives; pick whichever suits you. The walkthrough below is **one
-example** (Tailscale, a mesh VPN), not a requirement — and shows what `--public-origin` automates under the hood.
+### Changing access routes safely
+
+Setup treats an access change as one operation and accepts the replacement only
+after its exact endpoint passes the health and production-readiness checks. If
+a later step fails, setup restores and verifies the last working dashboard and
+owned access route. Running setup again resumes that recovery after an
+interruption. If recovery cannot be verified automatically, setup stops and
+prints exact commands rather than reporting success; follow those commands from
+the same checkout, then rerun setup to complete verification. Do not delete the
+retained recovery data or edit generated configuration while recovery is
+pending.
+
+A proxy supplied with `--public-origin` remains operator-owned. Setup can
+restore the dashboard settings and verify that address, but it does not
+reconfigure the proxy itself.
 
 ### Example: Tailscale
 
-Tailscale is a zero-config mesh VPN (WireGuard) that is free for personal use. Install it on the JARVIS host and on your phone, sign both into the same account, and the dashboard becomes reachable over the private tailnet with **zero open inbound ports** — reached by a stable MagicDNS name (e.g. `my-host.my-tailnet.ts.net`). See <https://tailscale.com>.
+Install Tailscale on family devices, then choose the guided private-HTTPS option
+in `./setup.sh`. If the host client is missing on Debian, Ubuntu, Linux Mint,
+Pop!_OS, or Fedora with systemd, setup prints the official package-repository
+commands and asks before running them. Non-interactive installation requires
+`--install-prereqs`. macOS, unsupported distributions, and WSL without systemd
+receive manual installation guidance instead.
 
-> **Scope of the steps below:** they assume the **default single-host setup** —
-> dashboard on plain-HTTP loopback `:3001`, Tailscale running on the **same host**
-> (on WSL2: inside the same distro as Docker, not the Windows host). If you front
-> the app with Caddy (`local-https`/`letsencrypt`), use Caddy's domain for remote
-> access instead. Adjust the port if you changed `DASHBOARD_HOST_PORT`.
+If the client is signed out, interactive setup asks before `sudo tailscale up`;
+Tailscale handles the browser sign-in. JARVIS never handles those credentials.
 
-**1. Install Tailscale and join the tailnet** on both the host and the client:
+After authentication, setup sends Tailscale Serve to the host-only listener at
+`127.0.0.1:3003` (or the persisted `DASHBOARD_TRUSTED_HOST_PORT`) and probes the
+named HTTPS address for JARVIS's exact health marker. A missing client,
+cancelled sign-in, or failed Serve command leaves localhost working but exits
+nonzero so an unfinished private route is not reported as complete.
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh   # on the host (Linux/WSL2)
-sudo tailscale up
-```
-
-Install the Tailscale app on the phone and sign in to the same account.
-
-**2. Allow the host's tailnet name.** The dashboard nginx rejects (`444`) any
-`Host` it doesn't recognise (`localhost`/`127.0.0.1` by default; the Caddy
-profiles rewrite `Host`→`localhost`). Add your MagicDNS name so access isn't
-refused — a `444` surfaces as a `502` through a proxy:
-
-```bash
-echo 'DASHBOARD_SERVER_NAME=<host>.<tailnet>.ts.net' >> .env
-docker compose up -d dashboard
-```
-
-**3. Expose the dashboard on the tailnet** — two ways:
-
-- **`tailscale serve`** (clean HTTPS URL, keeps the loopback bind):
-
-  ```bash
-  sudo tailscale set --operator=$(whoami)   # one-time: run `serve` without sudo
-  tailscale serve --bg --https=443 http://127.0.0.1:3001
-  ```
-
-  Then open `https://<host>.<tailnet>.ts.net` (no port). Requires HTTPS enabled
-  in the Tailscale admin console (Settings → Features → HTTPS Certificates).
-
-- **Direct port** (simpler): also set `DASHBOARD_BIND_HOST=0.0.0.0`, run
-  `docker compose up -d dashboard`, and open
-  `http://<host>.<tailnet>.ts.net:3001`. Binds the port on all interfaces —
-  fine on a private tailnet, looser than `serve`.
-
-Telegram needs no change for any of this — the bot only makes outbound calls.
+`--public-origin https://<host>` remains the non-interactive/manual adapter for
+an HTTPS proxy that the operator already configured. Setup does not install or
+configure that proxy, but it verifies the exact JARVIS health marker and exits
+nonzero until the address reaches this installation.
 
 ---
 
 ## Deployment Modes
 
-| Mode | Setup time | Inbound ports | Transport |
+| Mode | Additional route work | Inbound ports | Transport |
 |---|---|---|---|
-| **Localhost** | ~5 min | none | Plain HTTP on loopback (`:3001`) |
-| **LAN** | ~10 min | `3001/tcp` on LAN iface | Plain HTTP on every interface — viewing only, see [Mode 2](#mode-2-lan) |
-| **Named private HTTPS** (`--public-origin`, e.g. Tailscale Serve) | ~10 min on top of localhost/LAN | *none* on your host | Real HTTPS at your chosen hostname; edge owns the cert |
-| **Local HTTPS** (`--profile=local-https`) | ~5 min (`make certs` first) | `3443/tcp` on loopback | mkcert-issued HTTPS, trusted only on this machine |
-| **Cloudflare Tunnel** | ~30 min | *none* (outbound-only) | HTTPS; Cloudflare edge owns the cert |
-| **Let's Encrypt / Caddy** | ~15 min after DNS | `80/tcp`, `443/tcp` | HTTPS; Caddy ACME edge owns the cert |
+| **Localhost** | None after the base install | none | Plain HTTP on loopback (`:3001`) |
+| **LAN diagnostics** | Firewall or VM-network check when needed | `3001/tcp` on LAN iface | Plain HTTP; remote clients can request only `/health/jarvis` |
+| **Guided private HTTPS** (Tailscale Serve) | Depends on account sign-in | none on your host | Real HTTPS at the tailnet hostname; Tailscale owns the certificate |
+| **Local HTTPS** (`--profile=local-https`) | Setup creates and trusts a local certificate | `3443/tcp` on loopback | mkcert-issued HTTPS, trusted only by browsers in the same OS trust stores |
+| **Cloudflare Tunnel** | Depends on account, hostname, and policy setup | *none* (outbound-only) | HTTPS; Cloudflare edge owns the cert |
+| **Let's Encrypt / Caddy** | Starts after DNS and inbound ports are ready | `80/tcp`, `443/tcp` | HTTPS; Caddy ACME edge owns the cert |
 
-`./setup.sh` runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); a named private HTTPS origin layers onto localhost/LAN via `--public-origin`. The chosen mode sets `APP_BASE_URL` and `JARVIS_ACCESS_MODE` in `.env`. See [Choosing how you access JARVIS](manual/access-modes.md).
+The first base install normally spends 20–60 minutes downloading container
+images and AI models. Route setup is additional; later starts reuse those files.
 
-### Per-adapter trust contract
+`./setup.sh` defaults to localhost. The interactive chooser also offers guided
+private HTTPS, LAN diagnostics, Cloudflare Tunnel, and Let's Encrypt. The
+selected route sets `APP_BASE_URL`, the host allowlist, and
+`JARVIS_ACCESS_MODE`; no hand-edited environment file is required. See [Access
+from other devices](manual/access-modes.md).
 
-Every non-localhost adapter must agree with JARVIS on five things: which hostname reaches the app, who owns the edge certificate, whether the adapter rewrites the `Host` header (which changes what `DASHBOARD_SERVER_NAME` must allowlist), and how the setup-token bootstrap and passkey ceremony behave at that origin. `setup.sh` wires the first four adapters below automatically; a custom proxy is on you to match this contract.
+### Ingress and adapter contract
+
+The dashboard container has two listeners. Container port `3000`, normally
+published as host port `3001`, serves the full app only to localhost; remote LAN
+clients get only `/health/jarvis`. Trusted HTTPS edges use container port `3002`.
+Tailscale reaches that listener through host loopback port `3003`.
+
+Each remote adapter must also agree with JARVIS on the public hostname,
+certificate owner, `Host` handling, setup-token handoff, and passkey origin.
+Setup configures the listed adapters; a custom proxy must meet the same rules.
 
 | Adapter | Origin / hostname | Cert owner | `Host` rewrite | `APP_BASE_URL` / CORS / `DASHBOARD_SERVER_NAME` | Trusted-proxy | Cookie | Setup-token handoff | Passkey origin |
 |---|---|---|---|---|---|---|---|---|
-| Cloudflare Tunnel | `TUNNEL_HOSTNAME` you configured in Zero Trust | Cloudflare | No — original Host forwarded | Set automatically by `setup.sh` option 3 | In-network (bridge subnet); set `JARVIS_TRUST_CF_CONNECTING_IP=true` to key rate limits on `CF-Connecting-IP` | Secure | URL fragment, once the origin probes healthy | `TUNNEL_HOSTNAME` |
-| Named private HTTPS (Tailscale Serve) | Hostname you pass to `--public-origin` | The proxy (e.g. Tailscale) | No — original Host forwarded | Set automatically by `--public-origin` | Host loopback (`127.0.0.1`) — already trusted by default | Secure | URL fragment, once the edge probe (best-effort, 3 retries) succeeds; loopback until then | Exact `--public-origin` origin |
-| Let's Encrypt (Caddy) | `LETSENCRYPT_DOMAIN` | Caddy ACME | Yes — rewritten to `localhost` | Set automatically by `setup.sh` option 4 | In-network (bridge subnet), pinned Caddy IP | Secure | URL fragment, after the ACME cert-issuance gate passes (production: fatal on timeout) | `LETSENCRYPT_DOMAIN` |
-| Local HTTPS (`caddy_local`) | `localhost:3443` | mkcert (local trust store only) | Yes — rewritten to `localhost` | `CORS_ORIGINS` gains `https://localhost:3443` automatically with `--profile=local-https` | In-network (bridge subnet), pinned Caddy IP | Secure | URL fragment | `localhost` |
-| Custom reverse proxy | Whatever you configure | You | Your choice — must match what you allowlist | You must set `APP_BASE_URL`, `CORS_ORIGINS`, and `DASHBOARD_SERVER_NAME` by hand | Add your proxy's CIDR to `TRUSTED_PROXY_CIDRS` (and, if it sits outside the default bridge subnet, `TRUSTED_PROXY_HOSTS`) | Secure (requires HTTPS or `DEV_MODE=true`) | Manual — no `setup.sh` automation for this path | Exact origin in `APP_BASE_URL`; never a raw IP |
+| Cloudflare Tunnel | `TUNNEL_HOSTNAME` configured in Zero Trust | Cloudflare | No — original Host forwarded | Set automatically by `setup.sh` option 4 | Pinned `cloudflared` container reaches the trusted ingress | Secure | URL fragment only after active-tunnel and exact-app checks pass | `TUNNEL_HOSTNAME` |
+| Tailscale Serve | Tailnet hostname detected after `tailscale up` | Tailscale | No — original Host forwarded | Set automatically by `setup.sh` option 3 or `--tailscale` | Host loopback reaches the trusted ingress on `${DASHBOARD_TRUSTED_HOST_PORT:-3003}` | Secure | URL fragment only after the exact-app check passes | Exact tailnet hostname |
+| Let's Encrypt (Caddy) | `LETSENCRYPT_DOMAIN` | Caddy ACME | Yes — rewritten to `localhost` | Set automatically by `setup.sh` option 5 | Pinned Caddy container reaches the trusted ingress | Secure | URL fragment after the certificate and exact-app gates pass | `LETSENCRYPT_DOMAIN` |
+| Local HTTPS (`caddy_local`) | `https://localhost:3443` | mkcert (local trust store only) | Preserved as `localhost:3443` | `CORS_ORIGINS` gains `https://localhost:3443` automatically with `--profile=local-https` | Pinned local Caddy container reaches the trusted ingress | Secure | URL fragment | Exact `https://localhost:3443` origin |
+| Custom reverse proxy | Whatever you configure | You | Your choice — must match what you allowlist | Pass its existing HTTPS origin with `--public-origin`; you own the proxy configuration | Forward only through a trusted ingress you have explicitly constrained | Secure (requires HTTPS) | Manual; setup does not install or authenticate the proxy | Exact origin in `APP_BASE_URL`; never a raw IP |
 
-Raw-IP LAN browsing is deliberately absent from this table — it carries no cookie or passkey contract at all (see [access-modes.md](manual/access-modes.md#about-lan-mode)).
+Raw-IP LAN browsing is absent because it is not an app route. It exposes only
+`/health/jarvis`; all other remote requests return HTTP 403. See [LAN
+diagnostics](manual/access-modes.md#choice-2-lan-diagnostics).
 
 ---
 
@@ -232,13 +243,22 @@ Raw-IP LAN browsing is deliberately absent from this table — it carries no coo
 
 The default mode — see [Solo deployment](#solo-deployment-recommended-for-single-user) above for the commands, or run `./setup.sh` and pick option 1 at the access-mode prompt.
 
-The dashboard is at `http://localhost:3001` (default `DASHBOARD_HOST_PORT=3001`) — plain HTTP; loopback traffic never leaves the machine. Enable the `caddy-local` profile (`--profile=local-https`, needs `make certs` first) only when you want a locally-trusted `https://localhost:3443`.
+The dashboard is at `http://localhost:3001` (default
+`DASHBOARD_HOST_PORT=3001`). Loopback traffic never leaves the machine, and
+browsers treat localhost as a secure context for passkeys. Choose
+`--profile=local-https` only when you also want a locally trusted
+`https://localhost:3443`; setup installs the supported tools with your consent
+and prepares the certificate before starting the edge.
 
 ### Bootstrapping the first admin (the setup token)
 
 `scripts/init-secrets.sh` generates `JARVIS_SETUP_TOKEN` (a Docker Secret, `secrets/jarvis_setup_token.txt`) on first run. It gates the unauthenticated first-admin bootstrap endpoints via an `X-Setup-Token` header — a second factor on top of "no admin exists yet", closing the window where anyone who reaches the instance before you could create the first account. `setup.sh` prints the click-to-finish link with the token embedded in a URL **fragment** (`.../setup#setup_token=…`), never a query string — a fragment is never sent to the server, so it never lands in access logs, the `Referer` header, or a reverse proxy's request line. Links printed before this fragment migration used a `?setup_token=` query string; the wizard still accepts those for compatibility, but new links are always fragments.
 
-If the browser never received the printed link (a second device, an incognito window) the admin-creation step offers a **paste field** — enter just the token value from the end of the line `./setup.sh` printed (`.../setup#setup_token=<this part>`).
+If the browser never received the printed link, the admin-creation step can
+accept the token value from the end of the line
+`.../setup#setup_token=<this part>`. Use that field only on localhost or a
+verified named HTTPS route. Setup and authentication writes are refused over
+non-loopback plain HTTP.
 
 In production, an unset `JARVIS_SETUP_TOKEN` fails closed: the bootstrap endpoint refuses every write until the secret exists. Outside production it warns and allows the request, for local/dev convenience.
 
@@ -250,59 +270,89 @@ In production, an unset `JARVIS_SETUP_TOKEN` fails closed: the bootstrap endpoin
 ./setup.sh   # pick option 2
 ```
 
-`setup.sh` sets `DASHBOARD_BIND_HOST=0.0.0.0`, detects your LAN IPv4 (`--address <ipv4>` to override), and adds it to `CORS_ORIGINS` and the `DASHBOARD_SERVER_NAME` Host allowlist. This is plain HTTP — there is no certificate involved in LAN mode; see [access-modes.md → About LAN mode](manual/access-modes.md#about-lan-mode) for what raw-IP LAN access does and does not give you (viewing yes, a persisted signed-in session no).
+`setup.sh` sets `DASHBOARD_BIND_HOST=0.0.0.0`, detects the LAN IPv4
+(`--address <ipv4>` overrides it), and adds it to the dashboard allowlist. This
+is plain HTTP with no certificate. From another device, only `/health/jarvis`
+is available; the dashboard and every setup, sign-in, cookie, and passkey path
+return HTTP 403. Use guided private HTTPS for family access.
 
 ### When your LAN IP changes
 
-DHCP can re-lease a different IP after a reboot (symptom: dashboard works on `localhost` but other devices get a CORS or `444`/Host-rejection error).
+DHCP can assign a different IP after a reboot. The localhost app may still work
+while the old LAN health address stops responding.
 
 ```bash
-# Re-run setup.sh — it re-detects the LAN IP and rewrites CORS_ORIGINS /
-# DASHBOARD_SERVER_NAME for the new address. No cert to regenerate.
+# Re-run setup.sh, accept Overwrite, and choose LAN diagnostics again.
 ./setup.sh
-
-docker compose up -d dashboard   # only needed if setup.sh did not restart it for you
 ```
 
-### Hardening checklist before LAN exposure
+### Network precautions
 
-Set in `.env` (`setup.sh` enforces the first two for option 2; verify the rest):
-
-```
-ENVIRONMENT=production
-DEV_MODE=false
-JARVIS_API_KEY=<at least 32 chars: openssl rand -hex 32>
-JARVIS_CONFIG_KEY=<Fernet key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
-```
-
-`DEV_MODE=true` is a meta-flag that promotes granular dev flags (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless explicitly overridden. None are permitted when `ENVIRONMENT=production` — startup will crash if any is `true`.
+Use LAN diagnostics only on a trusted network. This mode intentionally keeps
+`ENVIRONMENT=development` because authenticated routes remain blocked; it writes
+the generated API key, encryption key, CORS origins, and host allowlist needed
+for the diagnostic endpoint. Setup does not change the host firewall; allow port
+3001 only on the intended private interface if a firewall blocks it.
 
 ### Rate-limit client-IP trust (automatic)
 
-JARVIS pins the internal Docker network to `10.137.241.0/24` and assigns Caddy fixed IPs within it. nginx trusts only those IPs plus `127.0.0.1` — no operator step required.
+JARVIS pins the internal Docker network to `10.137.241.0/24` and derives the
+trusted dashboard and edge peers from that subnet. Browser-supplied forwarding
+headers are discarded at the direct ingress; only the separate trusted edge may
+assert HTTPS.
 
-**Subnet collision:** if `10.137.241.0/24` conflicts with your LAN, `setup.sh --check` warns. Set `JARVIS_NET_SUBNET=<a free /24>` and update `frontend/nginx.conf`'s two `set_real_ip_from` literals.
+**Subnet collision:** if the default conflicts with another local network,
+`setup.sh --check` warns. Set `JARVIS_NET_SUBNET` to a free IPv4 `/27` or larger
+network and re-run setup. Setup and update derive the gateway and the highest
+four usable addresses; do not edit Compose or nginx.
 
-**`TRUSTED_PROXY_CIDRS`** — Python-layer variable for the XFF walk. Add load-balancer CIDRs only if you place an additional external proxy in front of the stack. RFC-1918 and `127.0.0.0/8` are always trusted.
+**`TRUSTED_PROXY_CIDRS`** — Python-layer variable for the XFF walk. The standard
+stack trusts loopback and the derived dashboard `/32`. Add another CIDR only
+when an external proxy with that exact source address reaches the services.
 
 ### Encrypted config key rotation
 
-Provider keys stored through Settings are encrypted with `JARVIS_CONFIG_KEY`. Dry-run first:
+Database-backed integration settings stored through Settings are encrypted with
+`JARVIS_CONFIG_KEY`. Provider, SMTP, and Telegram-bot settings are
+deployment-wide; Zotero credentials are per-user. Host Docker secrets are a
+separate configuration layer.
+Rotation is a maintenance task, not part of a routine update. Before starting,
+open **Admin → Backups**, run a backup, and wait until it is marked **Complete**
+and **Encrypted**. Keep the matching backup encryption key somewhere off the
+server.
+
+From the repository root, run:
 
 ```bash
-DATABASE_URL=postgresql://jarvis:<password>@localhost:5432/jarvis \
-OLD_JARVIS_CONFIG_KEY=<old-fernet-key> \
-NEW_JARVIS_CONFIG_KEY=<new-fernet-key> \
-python scripts/rotate_config_key.py
+bash scripts/rotate-config-key.sh
 ```
 
-Add `--apply` after the dry run validates every row. The script runs in a transaction and never logs plaintext or ciphertext.
+The script validates every encrypted Settings row before it asks for
+confirmation. It then opens a short maintenance window, rotates all rows in one
+database transaction, updates both `.env` and the Docker secret file, restarts
+the affected services, and waits for them to become healthy. Key values are read
+from files rather than placed in command arguments.
+
+If the command is interrupted or reports an error, do not delete its recovery
+files and do not edit either key store by hand. Resolve the reported Docker or
+service problem, then run the same command again; it resumes from the recorded
+phase. Use `bash scripts/rotate-config-key.sh --yes` only in automation where a
+current verified backup already exists, because it skips the confirmation
+prompt.
+
+On success, the script removes its temporary recovery files. On failure, it
+keeps them and prints the safe resume command.
 
 ### Docker Secrets
 
 JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a `_FILE`-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in `secrets/` at the repo root (gitignored); `setup.sh` creates and populates them on first run. Each file is mode `644` inside a mode `700` `secrets/` directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.
 
 **Operator-provisioned secrets** (create manually if not using `setup.sh`):
+
+The host SMTP fallback is `secrets/smtp_pass.txt`. It is separate from the
+deployment-wide encrypted SMTP row saved through Settings; the Settings value
+takes effect without a service restart, while changing the host fallback
+requires restarting its service consumers.
 
 | Secret name | `_FILE` env var | Purpose |
 |---|---|---|
@@ -320,12 +370,21 @@ JARVIS supports Docker Secrets for sensitive credentials. Each is read from a fi
 **Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
 `langfuse_init_pk`, `langfuse_init_sk` — Langfuse SDK keys injected into app services. `langfuse_pg_password`, `langfuse_nextauth_secret`, `langfuse_salt` — internal Langfuse service credentials.
 
+To rotate the JARVIS API key without exposing it in shell history, generate a
+replacement file and then restart every running consumer:
+
 ```bash
-# To rotate a secret manually:
-echo -n '<new-value>' > secrets/jarvis_api_key.txt
-chmod 644 secrets/jarvis_api_key.txt
-docker compose up -d paper_ingestion learning_engine
+install -m 644 /dev/null secrets/jarvis_api_key.txt.next
+openssl rand -hex 32 > secrets/jarvis_api_key.txt.next
+mv secrets/jarvis_api_key.txt.next secrets/jarvis_api_key.txt
+docker compose restart paper_ingestion learning_engine
+if docker compose ps --status running --services | grep -qx telegram_bot; then
+  docker compose restart telegram_bot
+fi
 ```
+
+The old API key stops working after those services restart. Update any external
+client that uses it before ending your current local session.
 
 ### Web UI configuration
 
@@ -343,49 +402,126 @@ For multi-user (team) deployment and the full trust boundary, see [docs/SECURITY
 
 ---
 
-## Mode 3 — Cloudflare Tunnel
+## Choice 4 — Cloudflare Tunnel
 
 Exposes JARVIS over an outbound tunnel — no inbound port needed. Edge TLS is terminated by Cloudflare.
 
-**Prerequisites:** A Cloudflare account with a configured tunnel ([Zero Trust dashboard](https://one.dash.cloudflare.com/)).
+**Prerequisites:** a Cloudflare account, a tunnel and public hostname in the
+[Zero Trust dashboard](https://one.dash.cloudflare.com/), and these two Access
+applications:
+
+1. Protect the main hostname (for example `jarvis.example.com/*`) with your
+   normal **Allow** policy.
+2. Add a more-specific application for exactly
+   `jarvis.example.com/health/jarvis` with **Bypass / Everyone**. Cloudflare
+   evaluates the more-specific path first. Bypass disables Access enforcement
+   and Access logging for that path, so use it only here: this endpoint returns
+   the fixed text `jarvis-rd-assistant` and no account, setup-token, or health
+   details. Never bypass `/*` or any API path.
+
+See Cloudflare's documentation for
+[path-specific applications](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)
+and the [Bypass policy](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/).
+Setup cannot create or authenticate the Cloudflare account or policies.
+
+Run `./setup.sh`, accept **Overwrite** for an existing installation, and choose
+**Cloudflare Tunnel**. Setup reads the tunnel token without echoing it, stores it
+as a Docker secret, starts the profile, and verifies both an active tunnel
+connection and the public hostname.
+
+For unattended setup, put the token in an owner-readable file and pass only its
+path:
 
 ```bash
-echo -n '<your-tunnel-token>' > secrets/cloudflare_tunnel_token.txt
-chmod 644 secrets/cloudflare_tunnel_token.txt
-docker compose --profile tunnel up -d
+./setup.sh --non-interactive --profile=tunnel --tunnel-ack \
+  --tunnel-hostname=jarvis.example.com \
+  --tunnel-token-file=/secure/path/cloudflare-token
 ```
 
-`setup.sh` option 3 writes the token and brings the tunnel profile up automatically. The `cloudflared` container reads the token from `/run/secrets/cloudflare_tunnel_token`.
-
 ```bash
-docker compose ps cloudflared          # should be "healthy" or "running"
+docker compose ps cloudflared               # should show Up
+docker compose exec -T dashboard \
+  curl -fsS http://cloudflared:2000/ready    # proves an active edge connection
 docker compose logs --tail=20 cloudflared   # look for "Connection established"
 ```
 
-Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the public hostname to route to `http://dashboard:3000`. Set `JARVIS_TRUST_CF_CONNECTING_IP=true` in `.env` only if you lock access to Cloudflare IPs.
+Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the
+public hostname to route to `http://dashboard:3002`. Tunnel setup enables client
+IP handling automatically. Do not hand-set `JARVIS_TRUST_CF_CONNECTING_IP` for a
+different proxy: nginx accepts Cloudflare's client header only on the trusted
+listener and only from the pinned `cloudflared` container.
+
+The external probe expects JARVIS's exact health marker. DNS or TLS failure,
+the wrong application, and a Cloudflare Access or WAF challenge are reported as
+different states. An Access page means the exact health-path application or its
+Bypass policy is missing; a WAF challenge means that exact path still needs a
+narrow challenge exception. Neither response proves that the tunnel reaches
+JARVIS, so setup keeps the token-bearing finish link on localhost and exits
+nonzero until the marker itself is returned.
 
 ---
 
-## Mode 4 — Tailscale Funnel / VPN
+## Other private-network adapters
 
-**Tailscale Funnel** — outbound-only, edge TLS terminated by Tailscale. Not wired into `setup.sh`. See [Tailscale Funnel docs](https://tailscale.com/kb/1223/funnel/).
+**Tailscale Funnel** is an internet-facing adapter distinct from the guided
+private Serve route. It is not configured by JARVIS. See the [Tailscale Funnel
+documentation](https://tailscale.com/kb/1223/funnel/) and satisfy the custom
+proxy contract below.
 
-**VPN (Tailscale / WireGuard)** — mesh your devices onto one network and keep JARVIS in localhost mode. Simplest and most secure option for a small set of trusted devices.
+**Another VPN or reverse proxy** can work if it provides a named HTTPS origin
+and forwards only to the trusted loopback ingress. A VPN that merely exposes
+plain `http://<ip>:3001` provides diagnostics, not JARVIS authentication.
 
 ---
 
 ## TLS / Certificates
 
-The `dashboard` container itself never terminates TLS — it serves plain HTTP on `:3000` internally (published as `:3001` by default). TLS only exists at an edge in front of it: mkcert for local HTTPS, Caddy for Let's Encrypt, or an external provider (Cloudflare, Tailscale). `JARVIS_SKIP_SELFSIGNED_GEN` and `JARVIS_CERT_SAN` are legacy environment variables from an earlier self-signed-in-container design; the container's self-signed generation path is skipped by default and its `./certs/` mount is read-only, so neither variable has any effect on a current install.
+The `dashboard` container does not terminate TLS. It serves plain HTTP on two
+internal listeners: `:3000` for localhost and the health-only LAN route, and
+`:3002` for trusted HTTPS edges. Host port `3001` maps to `:3000`; Tailscale
+Serve reaches `:3002` through host loopback port `3003`. Caddy, Cloudflare, or
+Tailscale owns the certificate before forwarding to the trusted listener.
+
+`JARVIS_SKIP_SELFSIGNED_GEN` and `JARVIS_CERT_SAN` belong to an older design.
+Current dashboard containers skip self-signed generation and mount `./certs/`
+read-only, so those variables do not enable HTTPS.
 
 ### Local HTTPS (mkcert)
 
 ```bash
-make certs         # installs the mkcert root CA + writes ./certs/cert.pem, ./certs/key.pem
-make up-https       # or: docker compose --profile caddy-local up -d
+./setup.sh --profile=local-https
 ```
 
-`scripts/init-mkcert.sh` (what `make certs` runs) issues a certificate for `jarvis.localhost`, `localhost`, `127.0.0.1`, and `::1` only — this is a loopback-only certificate, not usable for LAN or public access. It auto-regenerates when the existing certificate expires within 30 days; to force regeneration sooner, delete the files and re-run:
+Setup shows the package plan and asks before installing mkcert and its browser
+trust dependency. For a non-interactive cold install, add
+`--non-interactive --install-prereqs`. It then runs `scripts/init-mkcert.sh`,
+which idempotently installs the local CA trust and issues a certificate for `jarvis.localhost`,
+`localhost`, `127.0.0.1`, and `::1` only. This is a loopback-only certificate,
+not usable for LAN or public access. Setup advertises `https://localhost:3443`
+only after the exact JARVIS marker validates both against that mkcert CA and the
+host's normal trust store; otherwise it exits nonzero with the localhost HTTP
+fallback. The script auto-regenerates when the existing certificate expires
+within 30 days.
+
+Trust stays inside the operating system where setup ran. A CA created in WSL
+does not trust a Windows browser, and a CA created inside a VM does not trust a
+browser outside the VM; mkcert trust does not cross that boundary. Use the
+default `http://localhost:3001` inside the same OS, or guided private HTTPS for
+family devices.
+
+For setup through SSH or on a headless VM, the installer prints an HTTP
+localhost finish link for the outside browser and the exact SSH command that
+forwards it to the dashboard's loopback HTTP port. HTTP stays inside the
+encrypted SSH connection; it is not exposed on the LAN. Keep the address as
+printed instead of importing the VM's local CA into another computer.
+
+The local HTTPS edge sends `Strict-Transport-Security: max-age=0`, which clears
+any earlier policy instead of enabling HSTS. Browsers apply HSTS to a hostname
+across ports, so a positive policy received from `https://localhost:3443` would
+also rewrite the supported `http://localhost:3001` fallback and send it to the
+wrong TLS port.
+
+`make certs` remains the advanced repair command. To force early regeneration:
 
 ```bash
 rm ./certs/cert.pem ./certs/key.pem
@@ -406,12 +542,18 @@ docker compose --profile letsencrypt up -d caddy
 
 Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network, rewriting `Host` to `localhost`. The ACME certificate lives in the `caddy_data`/`caddy_config` named volumes, managed entirely by Caddy — there is nothing under `./certs/` to hand-edit or import for this path. `setup.sh` waits for the certificate to be issued (up to 120s) before reporting success or printing the setup link.
 
+The public Caddy edge sends a one-year HSTS policy for the configured hostname
+only. JARVIS does not enable `includeSubDomains` or browser preload: either choice
+belongs to the domain owner and is safe only after every affected hostname
+already supports HTTPS. Preload submission is a separate browser-vendor process,
+not a Caddy setting.
+
 ### Importing your own certificate
 
 There is no supported "drop in a certificate" path for the dashboard container. Two options:
 
 - **Local HTTPS edge (loopback only):** overwrite `./certs/cert.pem` and `./certs/key.pem` with your own cert/key pair, then restart the edge that reads them: `docker compose up -d caddy_local`. This only affects `https://localhost:3443`.
-- **A public certificate:** use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the [custom-proxy trust contract](#per-adapter-trust-contract) — the certificate then belongs to that proxy, not to JARVIS.
+- **A public certificate:** use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the [custom-proxy trust contract](#ingress-and-adapter-contract) — the certificate then belongs to that proxy, not to JARVIS.
 
 ---
 
@@ -419,25 +561,41 @@ There is no supported "drop in a certificate" path for the dashboard container. 
 
 `setup.sh` supports `--non-interactive` for CI pipelines and cloud-init scripts. Run `./setup.sh --help` for the full flag reference.
 
+Use `./setup.sh --non-interactive` for a complete unattended installation: it
+owns access-mode selection, prerequisites, TLS profiles, and route verification.
+`scripts/jarvis-setup.sh` is a local-only compatibility bootstrap for older CI
+jobs. It serves plain HTTP on localhost, does not configure remote access or TLS,
+and expects host prerequisites to be present.
+
 ### Pre-flight check
 
 ```bash
 ./setup.sh --check
 ```
 
-Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, `openssl`, GPU toolkit (informational), and `.env` presence. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs packages, writes `.env`, or starts services, even if `--install-prereqs` is also present.
+Read-only and idempotent. Verifies Docker Engine, Docker Compose v2.24.4 or
+newer, `openssl`, `curl`, Python 3, GPU toolkit (informational), and `.env`
+presence. With `--profile=local-https`, it also checks mkcert and browser trust
+tooling. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs
+packages, writes `.env`, or starts services, even if `--install-prereqs` is also
+present.
 
 `setup.sh` verifies the Docker *daemon* is reachable (`docker info`), not just that the `docker` binary is installed — both in `./setup.sh --check` and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, `DOCKER_HOST` misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.
 
 ### Guided prerequisite installation
 
-If Docker, the Docker Compose v2 plugin, or `openssl` are missing, normal interactive setup prints the exact package-manager commands it can run and asks for consent before touching the host. Automated installs never prompt: use `--install-prereqs` only after reviewing the printed commands, or install the prerequisites manually and re-run `./setup.sh --check`.
+If Docker Engine, Docker Compose v2.24.4 or newer, `openssl`, `curl`, Python 3,
+or the selected route's host tools are missing, setup prints the package-manager
+commands it can run before changing the host. Local HTTPS adds mkcert and the
+OS browser-trust package. After showing the plan, setup can install the missing
+packages on supported hosts. Interactive setup asks for consent. Non-interactive
+setup runs the plan only with `--install-prereqs`.
 
 ```bash
 # Preflight only; never installs packages
 ./setup.sh --check
 
-# Review the guided install plan without running it
+# Non-interactive install; writes configuration, downloads files, and starts JARVIS
 ./setup.sh --non-interactive --profile=dev
 
 # Interactive setup; prompts before running supported apt/Homebrew commands
@@ -447,11 +605,25 @@ If Docker, the Docker Compose v2 plugin, or `openssl` are missing, normal intera
 ./setup.sh --non-interactive --install-prereqs --profile=dev
 ```
 
-The guided installer supports common Debian/Ubuntu-style `apt-get` hosts and macOS Homebrew. Unsupported distributions, hosts without the needed package manager, and Docker Desktop/daemon startup issues receive manual guidance instead of automatic package changes. Docker may still need to be started manually, and Linux users may need to log out and back in after Docker group changes.
+`--check` is the only read-only setup mode. A non-interactive run without
+`--install-prereqs` refuses missing host packages, but otherwise performs the
+installation.
+
+General prerequisites support Debian/Ubuntu-style `apt-get`, Fedora `dnf`, and
+macOS Homebrew where applicable. For an unsupported host or package, setup
+stops with manual installation guidance instead of guessing. Tailscale
+installation is limited to supported apt/dnf Linux hosts with systemd. macOS,
+unsupported distributions, and WSL without systemd receive manual Tailscale
+guidance. A non-interactive install still cannot complete account sign-in: run
+`sudo tailscale up`, then rerun setup with `--tailscale`.
 
 Re-runs: running `./setup.sh` with an existing `.env` and declining the overwrite prompt no longer exits with services stopped — it keeps your `.env` (secrets, database, and model selection untouched) and starts the stack with it via `docker compose up -d`, honouring the `COMPOSE_FILE` and `COMPOSE_PROFILES` values persisted in `.env`. New installs write `COMPOSE_PROFILES=<selection>` (for example `telegram`, `tunnel`) into `.env`; for older `.env` files without it, setup derives the telegram profile from a non-empty `TELEGRAM_BOT_TOKEN` and prints a notice.
 
-Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, `--profile <dev|local-https|letsencrypt>` (default `dev`; `letsencrypt` requires `--domain` + `--admin-email`), `--smtp-host/--smtp-user/--smtp-pass-file`. Run `./setup.sh --help` for the full reference. `TELEGRAM_BOT_TOKEN` in the environment enables Telegram automatically.
+Key flags include `--mode <single|multi>`, `--tailscale`,
+`--install-prereqs`, `--domain <host>`, `--admin-email <email>`, and
+`--profile <dev|local-https|tunnel|letsencrypt>`. Run `./setup.sh --help` for the full
+reference. `TELEGRAM_BOT_TOKEN` in the environment enables Telegram
+automatically.
 
 ### Single-user vs multi-user mode
 
@@ -463,50 +635,41 @@ Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, 
 # Local development / CI smoke test:
 ./setup.sh --non-interactive --profile=dev
 
-# Local mkcert HTTPS (loopback only — run `make certs` first):
-./setup.sh --non-interactive --profile=local-https
+# Local mkcert HTTPS (loopback only; installs reviewed prerequisites if needed):
+./setup.sh --non-interactive --install-prereqs --profile=local-https
 
 # Production with Let's Encrypt:
-printf '%s' "$MY_SMTP_PASS" > /run/secrets/smtp_pass && chmod 600 /run/secrets/smtp_pass
+umask 077
+printf '%s' "$MY_SMTP_PASS" > ./smtp-password.txt
 ./setup.sh --non-interactive \
   --domain=jarvis.example.com \
   --admin-email=ops@example.com \
   --profile=letsencrypt \
   --smtp-host=smtp.resend.com \
   --smtp-user=resend \
-  --smtp-pass-file=/run/secrets/smtp_pass
+  --smtp-pass-file=./smtp-password.txt
+rm ./smtp-password.txt
 ```
 
-After setup, open the dashboard and create the initial admin in the onboarding wizard. Once signed in as an admin, invite additional users at `https://jarvis.example.com/admin/users`.
+After setup, open the exact **Finish setup** link printed by the installer. It
+carries the one-time token needed to create the initial admin; opening the bare
+dashboard URL does not. Once signed in as an admin, invite additional users at
+`https://jarvis.example.com/admin/users`.
 
 ---
 
 ## Update Workflow
 
-The recommended path is the lifecycle command, which upgrades transactionally
-and refuses unsafe states:
+Use the lifecycle command:
 
 ```bash
 jarvis-research update
 ```
 
-It verifies that every image for the target release is already published,
-requires a fresh, checksum-verified backup before any data-changing migration,
-stages the new images before advancing your checkout by fast-forward only, and
-waits for the stack to report healthy — resuming automatically if a run is
-interrupted, and never rolling back on its own. See
-[Command line (jarvis-research)](manual/cli.md) for resume and rollback details.
-
-You can also update by hand:
-
-```bash
-git pull
-./update.sh --yes
-```
-
-This is a manual fallback. `update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass `./update.sh --build-local` to rebuild them from source), waiting up to 180 s per service. It does not replace the lifecycle command's transactional migration and recovery safeguards. On failure it prints recovery commands for both image sets: `git checkout HEAD~1 -- versions.env && ./update.sh` rolls back the third-party pins, while the application images roll back by pinning `JARVIS_VERSION` to a previously published tag and pulling it.
-
-From v1.1.0, `update.sh` pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see [Disk budget](REQUIREMENTS.md#disk-budget)). `--build-local` (the same flag exists on `./setup.sh`) rebuilds from source instead — for contributors, forks, or when a GHCR pull is unavailable. It is **not** an offline/air-gapped path: a local build still needs network access for base images, Python/OS wheels, the third-party images (postgres, ollama, caddy, …), and the Ollama model downloads.
+It verifies the target release, protects data-changing migrations with a signed
+restore point, and can resume an interrupted run. The [command-line
+guide](manual/cli.md#how-update-works) is the canonical update runbook, including
+the constrained manual fallback and rollback rules.
 
 ### Upgrade notes
 
@@ -532,6 +695,15 @@ re-assigns any pre-existing product rows with a NULL owner to the single admin
 account. This is automatic and non-destructive; it only runs when exactly one
 admin user exists (the normal single-tenant state).
 
+**Instance-owner migration (0105).** An upgraded instance with exactly one live
+administrator assigns that account as the owner automatically. An instance with
+two or more live administrators remains deliberately unresolved. After startup,
+run `jarvis-research owner status`; if repair is required, choose the account
+explicitly with `jarvis-research owner set <admin-email>`. The Admin → Users page
+then marks the owner, protects it from demotion or removal, and permits a
+database-managed owner to transfer to another live administrator after exact
+email confirmation.
+
 Makefile shortcuts for development:
 
 ```bash
@@ -546,201 +718,32 @@ make up-build            # full docker compose up -d --build
 
 ## Backup + Restore
 
-### Backup
+The default stack takes encrypted restore points daily. Administrators can run,
+download, retain, and restore them under **Admin → Backups**. Keep a copy of
+`secrets/backup_encrypt_key.txt` off the server and separate from downloaded
+archives; the key is not included in the archive it unlocks.
 
-`scripts/backup.sh` runs by default in the `postgres-backup` sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated `backup_encrypt_key`; if you back up externally, opt out with `docker compose stop postgres-backup`.
+The [backup and restore guide](manual/backup-and-restore.md) is the canonical
+runbook for backup contents, same-host restore, fresh-host browser recovery,
+headless recovery, and failure handling.
 
-Admins can list, download, trigger an on-demand backup, and restore from any listed backup point in the WebUI at **Admin → Backups**. The on-demand backup button signals the sidecar to run immediately. Restore can be performed either from the admin UI (one-click) or from the host command line (manual, for situations where the app itself cannot run).
+### Restore capability boundaries
 
-JARVIS state lives in more than one place, so each run captures **all four** of the durable stores (per-store files are timestamped together so a single run is internally consistent):
+The standard stack separates request handling from destructive restore work:
 
-| Store | Output (in `/backups`) | Notes |
-|---|---|---|
-| `jarvis` Postgres DB | `jarvis_<ts>.sql.gz[.enc]` | Papers, users, config, jobs |
-| `litellm` Postgres DB | `litellm_<ts>.sql.gz[.enc]` | API keys, virtual keys, spend ledger |
-| Qdrant vectors | `qdrant_<collection>_<ts>.snapshot[.enc]` | One per collection via Qdrant's snapshot REST API; **best-effort** — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed |
-| `secrets/` directory | `secrets_<ts>.tar.gz[.enc]` | The Docker-secret source files — without these an encrypted DB backup cannot be decrypted |
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `BACKUP_DIR` | `/backups` | Where archives are written inside the container |
-| `BACKUP_RETENTION_DAYS` | `7` | Prune interval (applies to every store above) |
-| `BACKUP_S3_BUCKET` | empty | Optional S3 destination (skipped if unset; uploads every archive) |
-| `BACKUP_INTERVAL_SECONDS` | `86400` | Sleep between backup runs |
-| `BACKUP_ENCRYPT_KEYFILE` | `/run/secrets/backup_encrypt_key` | When the file is non-empty, DB dumps, Qdrant snapshots, and the secrets archive are encrypted at rest (`.enc` suffix) |
-| `LITELLM_DATABASE` | `litellm` | Name of the LiteLLM DB to dump |
-| `QDRANT_URL` | `http://qdrant:6333` | Qdrant base URL for the snapshot API |
-| `QDRANT_API_KEYFILE` | `/run/secrets/qdrant_api_key` | Qdrant API key (sent as the `api-key` header) |
-| `SECRETS_DIR` | `/secrets` | Read-only mount of the host `./secrets` dir to archive |
-
-The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created it, so the same credentials dump both DBs. A failed `pg_dump` aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and `./secrets` source are already wired into the `postgres-backup` sidecar in `docker-compose.yml`. S3 credentials: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or IAM instance role) scoped to `s3:PutObject`.
-
-> **In production (`ENVIRONMENT=production`) the backup hard-fails if `BACKUP_ENCRYPT_KEYFILE` is unset** — the script exits immediately and no secrets archive is written. In non-production the secrets archive is skipped (not written in the clear) and the script logs a warning. Set `BACKUP_ENCRYPT_KEYFILE` (the default already points at the `backup_encrypt_key` Docker Secret) before running in production.
-
-> **Store the backup encryption key OFF-SITE, separately from the `.enc`
-> archives.** The secrets archive is encrypted with `backup_encrypt_key` and
-> that key is **excluded** from the archive (it is not packed inside the file
-> it unlocks). After total host loss you can only decrypt the off-site `.enc`
-> backups if you also kept a copy of `backup_encrypt_key` somewhere else
-> (a password manager, a sealed envelope, a separate cloud secret). Losing the
-> key makes every encrypted backup permanently unrecoverable.
-
-### Restore
-
-#### One-click restore (admin UI)
-
-From **Admin → Backups**, choose a backup set from the archive table and click **Restore**. Type **RESTORE** in the confirmation dialog to proceed. The sidecar:
-
-1. Takes a **safety pre-backup** of the current live data before making any destructive change.
-2. Checks the backup against the running app version. A **newer** backup is refused (update the app first with `./update.sh`); an **older** backup is accepted and migrated forward automatically after it is swapped in.
-3. Loads each database into a **staging database behind a maintenance gate** (the app returns "restore in progress" to all users while this runs) and **swaps it in atomically** once it verifies. If anything fails before the swap, the original database is left untouched and served again automatically — the restore self-heals rather than leaving a half-restored database. The previous database is dropped only after the swap succeeds.
-4. Recovers the Qdrant search index best-effort — if the Qdrant step fails, the database restore still completes. The search index re-embeds automatically from the restored data on next use; no paper data is lost.
-
-After a clean restore the maintenance gate lifts automatically. All users are signed out (the session store was replaced) and will need to sign in again.
-
-**Security posture:** the app container holds no new privilege — it only writes a small JSON sentinel file to the `backup_trigger` volume. All database work (the staged reload, the atomic swap, and Qdrant recovery) runs exclusively inside the already-privileged `postgres-backup` sidecar. The `/backups` volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.
-
-**Residual risk:** a compromised admin browser session can trigger a restore, replacing live data with the chosen backup point (a safety pre-backup is always taken first, so the prior state remains recoverable). See [SECURITY.md](SECURITY.md) and `docs/known-residual-risks.md` for the full residual-risk register.
-
----
-
-#### Manual restore (last resort)
-
-> **Prefer the sidecar-driven restore.** The `postgres-backup` sidecar runs independently of the app, so even when the app cannot start you can trigger a restore by writing `/backup-trigger/.restore_request.json` (a `local` source for same-host archives already in `/backups`, or an `inbox` source for an off-site set — see [Off-host recovery](#off-host-total-host-loss-recovery)). That path keeps the safety pre-backup, the staged atomic swap, and the automatic forward-migration of older backups. The raw steps below **bypass all of those protections** — use them only if the sidecar itself is unavailable.
-
-Use the steps below as a last resort — for example, after a total host failure where you are starting fresh on a new machine and cannot run the sidecar. This procedure does the database work by hand from the host.
-
-**Step 0 — decrypt** (if the archive ends in `.enc`):
-
-```bash
-openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d \
-  -kfile ./secrets/backup_encrypt_key.txt \
-  -in <archive>.enc -out <archive>   # then use the plain file below
-```
-
-The decryption flags match what `scripts/backup.sh` uses (`-aes-256-cbc -pbkdf2 -iter 600000`). Repeat for each `.enc` archive before using it.
-
-> **Key dependency warning:** the `jarvis` DB stores provider/model credentials encrypted with `JARVIS_CONFIG_KEY`; the LiteLLM DB stores its model keys encrypted with `LITELLM_SALT_KEY`. Restoring a DB dump without the **same key that encrypted it** leaves those secrets undecryptable. Always restore the matching `secrets/` archive (or confirm the keys are already in place) before starting the stack.
-
-**Step 1 — `secrets/`** (restore before starting the stack, so the right keys are in place):
-
-```bash
-# Review the contents first — this overwrites live key files.
-tar -tzf secrets_YYYYMMDD_HHMMSS.tar.gz
-tar -xzf secrets_YYYYMMDD_HHMMSS.tar.gz -C ./secrets
-```
-
-**Step 2 — Postgres (`jarvis` and `litellm`)**:
-
-```bash
-docker compose stop paper_ingestion learning_engine
-docker compose exec postgres psql -U jarvis -d postgres \
-  -c 'DROP DATABASE jarvis;' -c 'CREATE DATABASE jarvis OWNER jarvis;'
-gunzip -c /path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz | \
-  docker compose exec -T postgres psql -U jarvis -d jarvis
-docker compose exec postgres psql -U jarvis -d postgres \
-  -c 'DROP DATABASE litellm;' -c 'CREATE DATABASE litellm OWNER jarvis;'
-gunzip -c /path/to/litellm_YYYYMMDD_HHMMSS.sql.gz | \
-  docker compose exec -T postgres psql -U jarvis -d litellm
-docker compose up -d paper_ingestion learning_engine
-```
-
-**Step 3 — Qdrant** — stop the container first so the snapshot restore doesn't race an active index write:
-
-```bash
-# JARVIS uses TWO Qdrant collections — restore both.
-docker compose stop qdrant
-docker compose cp qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/paper_chunks.snapshot
-docker compose cp qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/kg_entities.snapshot
-docker compose start qdrant
-
-# Recover paper_chunks (paper embeddings):
-docker compose exec qdrant sh -c 'curl -s -X PUT \
-  -H "api-key: $(cat /run/secrets/qdrant_api_key)" \
-  "http://localhost:6333/collections/paper_chunks/snapshots/recover" \
-  -H "Content-Type: application/json" \
-  -d "{\"location\":\"file:///qdrant/snapshots/paper_chunks.snapshot\"}"'
-
-# Recover kg_entities (knowledge-graph entities):
-docker compose exec qdrant sh -c 'curl -s -X PUT \
-  -H "api-key: $(cat /run/secrets/qdrant_api_key)" \
-  "http://localhost:6333/collections/kg_entities/snapshots/recover" \
-  -H "Content-Type: application/json" \
-  -d "{\"location\":\"file:///qdrant/snapshots/kg_entities.snapshot\"}"'
-```
-
----
-
-#### Off-host / total-host-loss recovery
-
-Use this when you are recovering on a **fresh host** from an off-site copy of the backups — the original machine (and its `./secrets`) is gone. Both paths below drive the same hardened `restore.sh` in the `postgres-backup` sidecar, which — for an off-host restore — takes a safety pre-backup, runs the compat + decrypt-probe gates, restores each database via the staged swap, recovers Qdrant, **rebinds the `jarvis` role password** to the restored secret (`ALTER ROLE … WITH PASSWORD`, single-quote-safe), **materializes the restored `./secrets` on the host** (except the keys the new host is authoritative for — `qdrant_api_key`, `langfuse_pg_password`, `backup_encrypt_key`), writes a `.secrets_rotated` marker so the app services **self-restart** onto the rotated secrets, and **shreds the one-time operator key and the plaintext staging on exit**. On a clean restore the maintenance gate then lifts automatically — **there are no terminal steps after you start the restore**.
-
-**Prerequisites (either path):** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, `manifest_<ts>.json`, and `manifest_<ts>.json.hmac`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above). A wrong or corrupt key fails safe: `restore.sh` proves the key decrypts the database archives before any `DROP`, so nothing is destroyed.
-
-##### Web-based recovery (recommended)
-
-1. **Bring up a fresh stack** on the new host (`./setup.sh`) and complete first-admin sign-in.
-2. From the **Backups** panel, generate a **one-time upload grant** and, in the browser, upload the archive set and the backup encryption key, then trigger the inbox restore from the UI. Uploads go to the dedicated `restore-uploader` ingress (grant-gated, inbox-only); the operator key and the archive bytes never transit the application. See [Backup & restore](manual/backup-and-restore.md) for the click-through.
-3. Watch progress in the guided restore view. When it completes, the stack has reconciled its secrets, database role, and services and returned to service — no shell access required.
-
-##### Command-line fallback (constrained environments)
-
-For a headless host with no browser access, write the request yourself. The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** into the sidecar at `/restore-inbox` (never under the read-only `/secrets` mount).
-
-1. **Bring up a fresh stack** on the new host (`./setup.sh` / `docker compose up -d`).
-2. **Place the archive set into the inbox** — copy it from your off-site store, or pull one timestamp's set from S3 with the built-in helper (aws-guarded; a no-op with a notice if `aws`/`BACKUP_S3_BUCKET` are absent):
-
-   ```bash
-   # Option A — copy a local off-site set into the volume:
-   docker compose cp ./offsite/. postgres-backup:/restore-inbox/
-
-   # Option B — pull one timestamp's set from S3 into the inbox:
-   docker compose exec -e BACKUP_PULL_TS=<ts> -e BACKUP_PULL_DEST=/restore-inbox \
-     postgres-backup /usr/local/bin/backup.sh
-   ```
-
-3. **Place the one-time backup key** into the inbox as the file **`operator_key`** (fixed name), then write the restore trigger:
-
-   ```bash
-   docker compose cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
-   docker compose exec postgres-backup sh -c \
-     'printf "{\"source\":\"inbox\",\"timestamp\":\"<ts>\"}" > /backup-trigger/.restore_request.json'
-   ```
-
-   The sidecar's poll loop runs `restore.sh` within a few seconds. Watch progress in `/backup-trigger/.restore_status.json` (or the sidecar logs). On a clean restore it rebinds the role, materializes `./secrets`, self-restarts the app services, and lifts the maintenance gate on its own — nothing further to run. Do **not** wipe the Postgres data volume afterward, or the role rebind is lost.
-
-4. **Only if the restore fails after the destructive step** does the stack stay at HTTP 503, holding the durable `.destructive` sentinel (which — unlike the soft `.maintenance` sentinel — never auto-expires). Recover from the safety backup the sidecar took first, then clear both sentinels explicitly:
-
-   ```bash
-   docker compose exec postgres-backup rm -f /backup-trigger/.maintenance /backup-trigger/.destructive
-   ```
-
-Once recovery is confirmed, remove the archive set from the inbox. The operator key is one-time — `restore.sh` shreds `/restore-inbox/operator_key` (and the plaintext staging) on every clean or recorded-failure exit.
-
----
-
-#### Sentinel cleanup reference
-
-The app returns HTTP 503 during and after a restore via two sentinel files in the `backup_trigger` volume:
-
-| Sentinel | Env var | Default path | Expiry |
-|---|---|---|---|
-| Soft | `MAINTENANCE_SENTINEL` | `/backup-trigger/.maintenance` | Auto-expires after `MAINTENANCE_MAX_AGE_S` (default 1800 s) |
-| Durable | `MAINTENANCE_DESTRUCTIVE_SENTINEL` | `/backup-trigger/.destructive` | Never auto-expires; written at the DROP boundary |
-
-**Any clean restore clears both sentinels automatically** — same-host one-click, off-host inbox, and older-than-code restores alike. An off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the maintenance gate lifts. No operator action is needed in the success case.
-
-**Only a restore that fails after the destructive step** leaves the stack at HTTP 503, holding the durable `.destructive` sentinel:
-
-| Situation | Required step before clearing |
+| Service | Restore-related access |
 |---|---|
-| Crash/failure after the DROP boundary | Restore from the safety backup the sidecar took before the destructive step, then clear both sentinels |
+| `paper_ingestion` | Reads backup archives, writes the small request/status trigger volume, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket. |
+| `postgres-backup` | The backup sidecar owns database reloads, PDF swaps, Qdrant snapshot staging, and the narrow writable host-secret mount used for the three restored data keys. |
+| `restore-uploader` | Writes only allowlisted uploads to the restore inbox and reads a hashed, expiring upload grant from the trigger volume. It has no database credentials, application secrets, or Docker socket. |
 
-Once the required step is done, clear both sentinels:
+Learning Engine and Telegram receive the maintenance trigger read-only. None of
+the three restore roles above mounts the Docker socket; the optional Vector log
+collector's separate read-only Docker socket is unrelated to restore authority.
 
-```bash
-docker compose exec postgres-backup rm -f /backup-trigger/.maintenance /backup-trigger/.destructive
-```
+Do not restore with raw database drops, archive extraction, or volume deletion.
+Those paths bypass the signed manifest, safety backup, staged swap, and secret
+reconciliation. Use the linked runbook even when the web app cannot start.
 
 ---
 
@@ -758,35 +761,39 @@ bash scripts/production-readiness-check.sh
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `NET::ERR_CERT_AUTHORITY_INVALID` on `https://localhost:3443` | mkcert root CA not installed in this browser's trust store, or the cert expired | `make certs` (re-)installs the root CA and regenerates the cert if needed, then `docker compose up -d caddy_local`. |
-| `SSL_ERROR_RX_RECORD_TOO_LONG` opening a LAN address | Browsing `https://<lan-ip>:...` — LAN mode is plain HTTP, not HTTPS | Use `http://<lan-ip>:3001`, not `https://`. For a real HTTPS family route, add `--public-origin` (see [access-modes.md](manual/access-modes.md#about-lan-mode)). |
-| API calls work from host but CORS-blocked from other devices | `CORS_ORIGINS` missing the calling origin | Add origin to `CORS_ORIGINS` in `.env`, then `docker compose up -d paper_ingestion learning_engine`. |
-| Tunnel works but dashboard 404s at `/` | Tunnel routes to wrong port | In Cloudflare Zero Trust, confirm the public hostname routes to `http://dashboard:3000`. |
-| Rate limiter 429s every request as "Cloudflare" | Behind CF but `JARVIS_TRUST_CF_CONNECTING_IP` not enabled | Set `JARVIS_TRUST_CF_CONNECTING_IP=true` and restart `paper_ingestion`/`learning_engine`. |
+| `NET::ERR_CERT_AUTHORITY_INVALID` on `https://localhost:3443` | The browser is outside the VM/WSL environment, or trust is missing on the JARVIS host | Outside the VM, use setup's SSH command and exact HTTP localhost finish link. On the JARVIS host itself, re-run `./setup.sh --profile=local-https`; for manual repair, run `make certs`, then `docker compose up -d caddy_local`. |
+| `SSL_ERROR_RX_RECORD_TOO_LONG` opening a LAN address | The browser is trying HTTPS against the plain-HTTP diagnostic port | Check `http://<lan-ip>:3001/health/jarvis`. Use guided private HTTPS for the app. |
+| A LAN health check works but the dashboard returns 403 | This is the intended raw-LAN boundary | Open `http://localhost:3001` on the host or the named HTTPS address printed by setup. |
+| Tunnel works but dashboard 404s at `/` | Tunnel routes to wrong port | In Cloudflare Zero Trust, confirm the public hostname routes to `http://dashboard:3002`. |
+| Tunnel traffic is rate-limited as one proxy client | The current installation was not completed with the Cloudflare Tunnel choice, or its pinned ingress settings are stale | Re-run `./setup.sh`, accept **Overwrite**, and choose Cloudflare Tunnel again. Do not hand-edit `JARVIS_TRUST_CF_CONNECTING_IP`. |
 | Rate limiter buckets by proxy IP instead of client | Upstream proxy not in `TRUSTED_PROXY_CIDRS` | Add the proxy CIDR to `TRUSTED_PROXY_CIDRS`. |
-| Pinned subnet `10.137.241.0/24` collides with LAN | `setup.sh --check` warns | Set `JARVIS_NET_SUBNET=<free /24>` and update `frontend/nginx.conf` `set_real_ip_from` literals. |
-| LAN device pings host but `curl -k https://<IP>:3001` hangs | `DASHBOARD_BIND_HOST=127.0.0.1` | Run `setup.sh` mode 2, or set `DASHBOARD_BIND_HOST=0.0.0.0` and restart dashboard. |
-| `setup.sh` Cloudflare Tunnel mode stops at the Zero-Trust warning | You have not acknowledged that a tunnel exposes the instance | Configure your Cloudflare Zero-Trust access policy first, then type `I understand` at the prompt (or pass `--tunnel-ack` for a non-interactive install). The old `JARVIS_TUNNEL_ACK_ZT_CONFIGURED` env hand-edit has been removed. |
+| Pinned subnet `10.137.241.0/24` collides with LAN | `setup.sh --check` warns | Set `JARVIS_NET_SUBNET` to a free IPv4 `/27` or larger network, re-run setup, and accept **Overwrite**; setup derives the addresses. |
+| LAN device pings host but `curl http://<IP>:3001/health/jarvis` fails | The dashboard remains loopback-bound or a firewall blocks port 3001 | Re-run setup, accept **Overwrite**, and choose LAN diagnostics; if it still fails, allow port 3001 only on the trusted LAN interface. |
+| `setup.sh` Cloudflare Tunnel mode stops at the Zero-Trust warning | You have not acknowledged that a tunnel exposes the instance | Configure your Cloudflare Zero-Trust access policy first, then type `I understand`. For unattended setup, use `--profile=tunnel` with `--tunnel-ack`, `--tunnel-hostname`, and `--tunnel-token-file`. The old environment hand-edit is no longer used. |
 | Settings → "Models & Preferences" shows "No config entries" | DB initialized before default config rows were seeded | `docker compose restart paper_ingestion`, then verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — expect 3 rows. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Model not pulled or config read-only | Pull the model from Settings → Models first. The default smart model is `qwen3:8b` (16 GB VRAM tier). |
-| Pulse generates 0 cards but job shows "done" | All enabled sources returned zero candidates, were rate-limited, or are unconfigured | Open Settings → Pulse → Diagnostics. For OpenAlex set `OPENALEX_EMAIL`; for arXiv wait `Retry-After` (≥30 s). |
+| Pulse generates 0 cards but job shows "done" | All enabled sources returned zero candidates, were rate-limited, or are unconfigured | Open Settings → Pulse → Diagnostics. For OpenAlex set `OPENALEX_API_KEY`; for arXiv wait `Retry-After` (≥30 s). |
 | Embedding dimension mismatch on startup | Qdrant collection dimension doesn't match the active embedding model | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560`, pull the model, then run `REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed` if the collection dimension is still wrong. |
 | Re-embedding too slow | `scripts/reembed.py` defaults to the HTTP-bound LiteLLM path | Switch to local backend: `REEMBED_BACKEND=local python -m scripts.reembed` (requires sentence-transformers). Benchmark first with `REEMBED_BENCHMARK=true`. |
-| `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | Postgres bakes the password into its data volume on first init; a later `.env` change is not applied to an existing volume | Reset the volume: `docker compose down && docker volume rm <project>_postgres_data && docker compose up -d` — this destroys local DB data. The `<project>` prefix is your compose project name (the repo directory name by default; visible in `docker compose ps`). Run `setup.sh` afterwards if you need the GPU overlay re-engaged. |
-| `docker compose build`/`up` fails with "no space left on device" during install | Docker's data root ran out of space — the cold-install peak can reach several tens of GB depending on hardware tier; see [Disk budget](REQUIREMENTS.md#disk-budget) | Check free space on the data root (not `/`): `df -h $(docker info -f '{{ .DockerRootDir }}')`. Reclaim the local build cache: `docker builder prune -af`. If the data root lives on an LVM volume with spare space in the volume group, grow it: `sudo lvextend -r -L +20G <lv-path>`. Re-run `./setup.sh` — cached images are kept, so a re-run only needs the remaining gap. |
+| `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | An existing database still uses the original password | Do not delete the database volume. Restore the matching secret from your backup or revert the accidental change, then run `jarvis-research doctor`. Use the guided restore if the original secret is unavailable. |
+| `docker compose build`/`up` fails with "no space left on device" during install | Docker's data root ran out of space | Check the path printed by `docker info -f '{{ .DockerRootDir }}'` and free or add space through the host's Docker storage controls. Then re-run `./setup.sh`; already downloaded layers are reused. |
 | `docker compose build` prints `pull access denied for jarvis/paper_ingestion` (or a sibling service) before building | Cosmetic — Compose probes the registry for the pinned tag before falling back to a local build | Harmless; ignore it. From v1.1.0 the application images are prebuilt on GHCR and `docker-compose.yml` sets `pull_policy: missing` on them (only the locally-built Langfuse wrapper uses `pull_policy: build`), so this message is only seen on pre-1.1.0 installs or a `--build-local` build. |
 
 ---
 
 ## API reference
 
-JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8011). All routes (except `/health` and `/health/live`) require an `X-API-Key` header. Full interactive documentation is at `/docs` on each service.
+JARVIS exposes REST APIs on `paper_ingestion` (:8010) and `learning_engine`
+(:8011). Product routes use a browser session; internal operations routes use
+the API key; setup and health endpoints have narrower route-specific gates.
+Interactive OpenAPI documentation is available at `/docs` on each service to a
+local operator.
 
 ---
 
 ## Other access options
 
-Both of these are the **custom reverse proxy** row of the [trust contract table](#per-adapter-trust-contract) — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:
+Both of these are the **custom reverse proxy** row of the [trust contract table](#ingress-and-adapter-contract) — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:
 
 - **ngrok** — set `CORS_ORIGINS=https://<subdomain>.ngrok.io`, add the ngrok hostname to `DASHBOARD_SERVER_NAME`, and set `APP_BASE_URL` to the ngrok URL.
 - **Traefik** — add a label-based override next to `docker-compose.yml`. Refer to Traefik's documentation.

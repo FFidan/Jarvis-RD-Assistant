@@ -239,7 +239,7 @@ async def test_hybrid_user_scoped_threads_user_id_into_queries():
     semantic_scope = search_global.await_args.kwargs.get("scope")
     assert semantic_scope is not None
     assert semantic_scope.user_id == 7
-    assert semantic_scope.library_paper_ids == [1, 42]
+    assert semantic_scope.library_paper_ids == (1, 42)
 
 
 @pytest.mark.asyncio
@@ -257,4 +257,4 @@ async def test_hybrid_global_search_does_not_fetch_library_scope():
     semantic_scope = search_global.await_args.kwargs.get("scope")
     assert semantic_scope is not None
     assert semantic_scope.user_id is None
-    assert semantic_scope.library_paper_ids is None
+    assert semantic_scope.library_paper_ids == ()

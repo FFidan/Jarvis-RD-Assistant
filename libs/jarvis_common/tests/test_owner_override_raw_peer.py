@@ -52,7 +52,8 @@ from jarvis_common.testing_contract_apps import configure_contract_api_key
 # Compose-default allowlist shape: loopback + the jarvis bridge subnet
 # (OWNER_OVERRIDE_ALLOWED_CIDRS tracks JARVIS_NET_SUBNET in docker-compose.yml).
 BRIDGE_NET = "10.137.241.0/24"
-BRIDGE_IP = "10.137.241.5"  # the telegram bot container's socket peer
+BRIDGE_IP = "10.137.241.6"  # representative dynamic bridge peer (for example, telegram bot)
+DASHBOARD_IP = "10.137.241.253"  # the only bridge peer trusted to normalize proxy headers
 ATTACKER_IP = "203.0.113.7"  # TEST-NET-3: a public, non-allowlisted peer
 BROWSER_IP = "198.51.100.20"  # TEST-NET-2: a public browser behind nginx
 
@@ -341,8 +342,8 @@ async def test_app_without_stash_middleware_falls_back_to_client_check(
 # ---------------------------------------------------------------------------
 # owner-override proxy-trust bypass: the PRODUCTION proxy-trust
 # value (the settings default, NOT "*") must un-mask an nginx-relayed browser.
-# Verified: libs/jarvis_common/jarvis_common/settings.py:107 — trusted_proxy_hosts
-#   default is now the numeric "127.0.0.0/8,10.137.241.0/24". The pre-fix default
+# Verified: libs/jarvis_common/jarvis_common/settings.py — trusted_proxy_hosts
+#   defaults to loopback plus the dashboard's exact pinned address. The pre-fix default
 #   was the hostname literal "dashboard", which uvicorn's _TrustedHosts can never
 #   match against the numeric bridge peer, so ProxyHeadersMiddleware never
 #   rewrote scope["client"] and guard (b) wrongly trusted a relayed browser.
@@ -353,6 +354,13 @@ def _settings_default_proxy_hosts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """The proxy-trust list production uses when compose sets no override."""
     monkeypatch.delenv("TRUSTED_PROXY_HOSTS", raising=False)
     return get_core_settings().trusted_proxy_hosts_list
+
+
+def test_production_proxy_trust_is_dashboard_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    proxy_hosts = _settings_default_proxy_hosts(monkeypatch)
+
+    assert "10.137.241.253/32" in proxy_hosts
+    assert "10.137.241.0/24" not in proxy_hosts
 
 
 async def test_browser_relayed_rejected_under_production_proxy_trust(
@@ -375,7 +383,7 @@ async def test_browser_relayed_rejected_under_production_proxy_trust(
     with configure_contract_api_key(monkeypatch) as key:
         app = _build_factory_app(_StubUsersPool(), trusted_proxy_hosts=proxy_hosts)
         headers = {**_bot_headers(key, OWNER_USER_ID), "X-Forwarded-For": BROWSER_IP}
-        async with _asgi_client(app, raw_peer=BRIDGE_IP) as client:
+        async with _asgi_client(app, raw_peer=DASHBOARD_IP) as client:
             resp = await client.get("/whoami", headers=headers)
     assert resp.status_code == 403, (
         "an nginx-relayed browser (public XFF) must be rejected under the "

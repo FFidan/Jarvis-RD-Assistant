@@ -1,14 +1,15 @@
-"""API key authentication shared across JARVIS services."""
+"""Shared API-key, session, and restore-session authentication."""
 
 import hashlib
 import hmac
 import ipaddress
-import json
 import logging
 import os
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import asyncpg
 from fastapi import Depends, HTTPException, Request
@@ -16,6 +17,7 @@ from fastapi.security import APIKeyHeader
 
 from jarvis_common.audit import log_audit
 from jarvis_common.event_log import log_event
+from jarvis_common.paths import read_regular_json_file
 from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ _WEAK_SECRET_SUBSTRINGS = (
 
 
 def _is_weak_secret(value: str) -> bool:
-    """True if ``value`` is empty or a known placeholder/skeleton secret.
+    """Return whether ``value`` is empty or a known placeholder secret.
 
     Mirrors ``_is_weak_secret`` in scripts/production-readiness-check.sh: an
     exact (case-sensitive) match against a small denylist, plus a
@@ -125,71 +127,224 @@ def refresh_api_key_cache() -> None:
     _CACHED_API_KEY = _load_api_key()
 
 
-# --- Restore-status one-time bearer token (one-click restore) ----------------
-# The admin Backup panel's restore endpoint mints a one-time token and persists
-# ONLY its sha256 + expiry to this sentinel-plane file (same RW trigger volume as
-# the maintenance sentinels; written by the app, read here). It lets the admin who
-# initiated a restore keep polling GET /api/admin/backups/restore/status after the
-# restore has rewritten the sessions table: the session-cookie DB lookup fails mid
-# restore, so a valid bearer token is the ONLY credential that survives — validated
-# DB-free so the global front door does not reject the progress poll.
+# --- Restore-scoped browser recovery token ----------------------------------
+# The Backup panel returns the raw token once and stores only its v2 hash,
+# expiry, restore ID, source, and request timestamp in the trigger volume. The
+# browser may reuse it to poll the same restore after restored sessions vanish.
+# An inbox-bound token may also authenticate the exact acknowledgement route,
+# which revalidates it against quarantine and consumes it atomically.
 RESTORE_STATUS_PATH = "/api/admin/backups/restore/status"
+RESTORE_ACKNOWLEDGE_PATH = "/api/admin/backups/restore/acknowledge"
 _RESTORE_STATUS_TOKEN_FILENAME = ".restore_status_token.json"
 
 
+@dataclass(frozen=True, slots=True)
+class RestoreStatusTokenRecord:
+    """Validated database-independent record for one restore session.
+
+    Attributes
+    ----------
+    sha256 : str
+        Lowercase hash of the raw token. The raw value is never persisted on
+        the server; the initiating browser may retain it in session storage.
+    expires_at : datetime
+        Aware expiry instant used for both polling and acknowledgement auth.
+    restore_id : str
+        Lowercase 128-bit identifier generated for this restore request.
+    source : {"local", "inbox"}
+        ``local`` for same-host rollback or ``inbox`` for off-host recovery.
+    requested_at : str
+        Original aware timestamp string also written into the restore request and
+        later quarantine record.
+
+    Notes
+    -----
+    Parsing validates this record's schema, timestamps, and allowed source. The
+    bearer helpers authenticate a presented raw token against ``sha256``; the
+    acknowledgement route performs the final binding to durable quarantine.
+
+    """
+
+    sha256: str
+    expires_at: datetime
+    restore_id: str
+    source: Literal["local", "inbox"]
+    requested_at: str
+
+
 def restore_status_token_file() -> Path:
-    """Path of the restore-status bearer-token sentinel (env-resolved at call time)."""
+    """Resolve the restore-session record path from the active trigger directory.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the version-two hashed token record. Resolution happens per call so
+        isolated tests and alternate deployments can set ``BACKUP_TRIGGER_DIR``.
+
+    """
     trigger_dir = os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")
     return Path(trigger_dir) / _RESTORE_STATUS_TOKEN_FILENAME
 
 
-def _valid_restore_status_hash() -> str | None:
-    """Return the stored, unexpired restore-status token hash, or None.
+def _parse_restore_status_token_record(data: object) -> RestoreStatusTokenRecord:
+    """Validate and convert a decoded restore-session record.
 
-    DB-FREE: reads only the sentinel-plane hash file. Returns None on a missing /
-    malformed / non-object / expired token file — and never raises — so the caller
-    degrades to the normal session / API-key checks.
+    Parameters
+    ----------
+    data : object
+        JSON value read from the restore-session record.
+
+    Returns
+    -------
+    RestoreStatusTokenRecord
+        Validated, unexpired version-two record.
+
+    Raises
+    ------
+    TypeError
+        If a field has an invalid type.
+    ValueError
+        If the schema, identifier, source, or timestamp is invalid.
+
     """
-    try:
-        data = json.loads(restore_status_token_file().read_text())
-    except (OSError, ValueError):
-        return None
-    # Non-object JSON (a list/number/string/null) has no ``.get`` — treat any
-    # shape other than an object as an invalid token file rather than raising.
-    if not isinstance(data, dict):
-        return None
+    expected = {
+        "version",
+        "sha256",
+        "expires_at",
+        "restore_id",
+        "source",
+        "requested_at",
+    }
+    if not isinstance(data, dict) or set(data) != expected:
+        raise ValueError("invalid restore-session schema")
+
     stored_hash = data.get("sha256")
     expires_at = data.get("expires_at")
-    if not isinstance(stored_hash, str) or not isinstance(expires_at, str):
-        return None
-    try:
-        if datetime.now(UTC) > datetime.fromisoformat(expires_at):
-            return None
-    except (ValueError, TypeError):
-        # ValueError: malformed ISO string. TypeError: a naive timestamp is not
-        # comparable to the aware ``now(UTC)``. Either way the token is unusable.
-        return None
-    return stored_hash
+    restore_id = data.get("restore_id")
+    source = data.get("source")
+    requested_at = data.get("requested_at")
+    if (
+        not isinstance(stored_hash, str)
+        or not isinstance(expires_at, str)
+        or not isinstance(restore_id, str)
+        or not isinstance(source, str)
+        or not isinstance(requested_at, str)
+    ):
+        raise TypeError("restore-session fields must be strings")
+    if (
+        data.get("version") != 2
+        or re.fullmatch(r"[0-9a-f]{64}", stored_hash) is None
+        or re.fullmatch(r"[0-9a-f]{32}", restore_id) is None
+        or source not in {"local", "inbox"}
+    ):
+        raise ValueError("invalid restore-session field")
+
+    expiry = datetime.fromisoformat(expires_at)
+    requested = datetime.fromisoformat(requested_at)
+    if expiry.tzinfo is None or requested.tzinfo is None:
+        raise ValueError("restore-session timestamps must include time zones")
+    if datetime.now(UTC) > expiry or requested >= expiry:
+        raise ValueError("restore-session timestamps are outside their valid interval")
+    return RestoreStatusTokenRecord(
+        sha256=stored_hash,
+        expires_at=expiry,
+        restore_id=restore_id,
+        source=cast(Literal["local", "inbox"], source),
+        requested_at=requested_at,
+    )
 
 
-def restore_status_bearer_valid(request: Request) -> bool:
-    """Return True iff the request carries a valid, unexpired restore-status token.
+def read_restore_status_token_record() -> RestoreStatusTokenRecord | None:
+    """Return the stored, unexpired restore-session record, or ``None``.
 
-    DB-FREE by construction: reads only the sentinel-plane hash file (never the
-    database), sha256s the presented bearer token, and constant-time compares it
-    to the stored hash. A non-bearer ``Authorization`` header or a missing /
-    expired / malformed token file yields False (the caller then falls through to
-    the normal session / API-key checks). Never raises.
+    Validation does not access the database and fails closed: linked, oversized,
+    missing, malformed, expired, or schema-drifted state is unusable and never
+    raises through the authentication boundary.
+
+    Returns
+    -------
+    RestoreStatusTokenRecord or None
+        The exact version-two record when every field and timestamp is valid and the
+        expiry is still in the future; otherwise ``None``.
+
+    Notes
+    -----
+    Parsing alone does not authenticate a browser or bind the record to current
+    quarantine. The bearer helpers perform the hash comparison. Acknowledgement
+    must then re-read the record under the restore-state lock, match the current
+    off-host quarantine, and consume it before clearing quarantine.
+
     """
+    try:
+        data = read_regular_json_file(restore_status_token_file())
+        return _parse_restore_status_token_record(data)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _restore_bearer_valid(
+    request: Request,
+    *,
+    required_source: Literal["local", "inbox"] | None = None,
+) -> bool:
+    """Validate the presented bearer against the current restore-session record."""
     header = request.headers.get("Authorization", "")
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:
         return False
-    stored_hash = _valid_restore_status_hash()
-    if stored_hash is None:
+    token_record = read_restore_status_token_record()
+    if token_record is None or (
+        required_source is not None and token_record.source != required_source
+    ):
         return False
     presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return hmac.compare_digest(presented, stored_hash)
+    return hmac.compare_digest(presented, token_record.sha256)
+
+
+def restore_status_bearer_valid(request: Request) -> bool:
+    """Return whether the request carries a valid restore-session token.
+
+    The check reads only the trigger-volume hash record, computes the presented
+    token's SHA-256 digest, and compares it in constant time. Missing, expired,
+    malformed, or non-bearer input returns ``False`` without raising.
+
+    Parameters
+    ----------
+    request : Request
+        Request whose ``Authorization`` header may carry the raw bearer.
+
+    Returns
+    -------
+    bool
+        Whether the header matches the current unexpired restore session.
+
+    """
+    return _restore_bearer_valid(request)
+
+
+def restore_acknowledgement_bearer_valid(request: Request) -> bool:
+    """Validate a bearer against the current inbox-bound restore session.
+
+    Parameters
+    ----------
+    request : Request
+        Request whose bearer is checked without database access.
+
+    Returns
+    -------
+    bool
+        Whether the current token is valid, unexpired, and bound to an
+        off-host restore.
+
+    Notes
+    -----
+    This helper does not inspect the HTTP method or path. :func:`verify_api_key`
+    restricts its use to the exact acknowledgement request. Route authorization
+    still binds the restore ID and request timestamp to quarantine and consumes
+    the token record under the shared restore-state lock.
+
+    """
+    return _restore_bearer_valid(request, required_source="inbox")
 
 
 # System ``user_config`` row (user_id NULL) that lets an admin flip the
@@ -239,63 +394,80 @@ async def api_key_login_enabled(conn: asyncpg.Connection) -> bool:
 
 
 async def verify_api_key(request: Request, api_key: str | None = Depends(_api_key_header)) -> None:
-    """Validate API key.
+    """Enforce application-wide request authentication.
 
-    SECURITY: DEV_MODE only bypasses auth when JARVIS_API_KEY is *not set*.
-    If a key is configured, it is always enforced — even in DEV_MODE.
-    Uses the module-level cached key (_CACHED_API_KEY) to avoid re-reading
-    the secret on every request.
+    Parameters
+    ----------
+    request : fastapi.Request
+        Incoming request whose path, method, session state, and restore bearer
+        determine how it is authenticated.
+    api_key : str or None
+        Optional ``X-API-Key`` value injected by FastAPI.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        With status 403 when no permitted exception, valid browser session,
+        configured API key, or development-mode fallback authorizes the request.
+
+    Notes
+    -----
+    Health, infrastructure-event, sign-in, first-run setup, and
+    ``GET /api/account`` requests use their route-specific authorization.
+    Restore status and inbox acknowledgement accept an exact restore token
+    without database access. A configured API key is enforced in every environment; the
+    module-level cache avoids reading the secret on every request.
+
     """
     jarvis_api_key = _CACHED_API_KEY
     core = get_core_settings()
     if request.url.path in _HEALTH_PATHS:
         return
-    # /infra-events authenticates via X-Infra-Key (separate secret from
-    # JARVIS_API_KEY) so the Vector sidecar doesn't need the main API key.
-    # The endpoint enforces its own auth via _check_auth().
+    # Infrastructure events authenticate with their dedicated X-Infra-Key.
     if request.url.path == "/infra-events" or request.url.path.startswith("/infra-events/"):
         return
-    # /api/auth/* IS the auth bootstrap surface — magic-link request, magic-link
-    # verify, and logout. They cannot themselves require API-key auth without
-    # locking out brand-new users who haven't been issued a key yet.
+    # Sign-in, verification, and logout routes perform their own authentication.
     # These endpoints have their own validation (token TTL + single-use).
     if request.url.path.startswith("/api/auth/"):
         return
-    # /api/setup/* IS the first-run bootstrap surface — the FirstRunGate polls
-    # /api/setup/status on every boot with no credentials in hand, and the
-    # wizard's create-first-admin / system-check / configure-smtp routes run
-    # before any session or API-key is established in the browser. Route-level
-    # `require_unconfigured_or_admin` is the real gate: open until an admin
-    # exists, admin-only after. Without this exemption, FirstRunGate 403s and
-    # the whole UI hangs on the loading spinner.
+    # The dashboard uses this endpoint to resolve its current browser session.
+    # The route requires current_user_id_strict, so anonymous requests receive
+    # 401 without reading account data. Mutating methods still require the
+    # standard API or session authentication.
+    if request.url.path == "/api/account" and request.method == "GET":
+        return
+    # Setup routes permit initial configuration before a browser session exists,
+    # then require an administrator after setup completes.
     if request.url.path.startswith("/api/setup/"):
         return
-    # The restore-status progress poll may arrive with a one-time bearer token
-    # instead of a session/API-key when an in-flight restore has torn down the
-    # admin's session store. Accept a valid token DB-free here so the front door
-    # does not reject the poll; a non-bearer request still falls through to the
-    # session/API-key enforcement below (defense in depth — never opens the path).
-    if request.url.path == RESTORE_STATUS_PATH and restore_status_bearer_valid(request):
+    # Restore status accepts a token from either source. Acknowledgement accepts
+    # only an inbox-bound token, then revalidates and consumes it against the
+    # current quarantine record.
+    request_method = getattr(request, "method", "").upper()
+    restore_token_request = (
+        request_method == "GET"
+        and request.url.path == RESTORE_STATUS_PATH
+        and restore_status_bearer_valid(request)
+    ) or (
+        request_method == "POST"
+        and request.url.path == RESTORE_ACKNOWLEDGE_PATH
+        and restore_acknowledgement_bearer_valid(request)
+    )
+    if restore_token_request:
         return
-    # A valid browser session is sufficient to pass this
-    # global front-door gate. SessionMiddleware (ASGI middleware, runs BEFORE
-    # router dependencies) sets request.state.user_id (int) only for a
-    # non-revoked, non-expired session whose user is not deleted; an
-    # expired/revoked/deleted-user session leaves it unset and falls through to
-    # the X-API-Key/403 path below. This gate only decides "allowed past the
-    # front door"; identity/authz is still enforced per-route downstream by
-    # current_user_id_strict / require_admin (which read role/identity
-    # independently — a session passing here confers no ops/admin rights).
+    # SessionMiddleware sets user_id only for a live, unexpired session whose
+    # user still exists. Routes independently resolve the user's identity and
+    # role; a browser session does not grant operations or administrator access.
     if getattr(getattr(request, "state", None), "user_id", None) is not None:
         return
-    # If a real key is configured, always enforce it (even in DEV_MODE)
+    # A configured API key is enforced in every environment.
     if jarvis_api_key:
         if not hmac.compare_digest(
             (api_key or "").encode("utf-8", "replace"),
             jarvis_api_key.encode("utf-8", "replace"),
         ):
-            # Emit an auth-failure event; failures indicate a potential probe or
-            # misconfigured client. Successes are NOT logged (too noisy per-request).
+            # Record failures as potential probes or client misconfiguration.
+            # Successful checks are omitted to avoid per-request log noise.
             try:
                 _pool = _request_db_pool(request)
                 if _pool is not None:
@@ -321,8 +493,8 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # No key configured — fall back to dev_auth_bypass check
     if core.dev_auth_bypass:
         logger.warning(
-            "DEV_AUTH_BYPASS=true AND no JARVIS_API_KEY set — ALL authentication "
-            "bypassed on %s. DO NOT USE IN PRODUCTION.",
+            "DEV_AUTH_BYPASS=true with no JARVIS_API_KEY bypasses authentication "
+            "on %s; this configuration is unsafe for production.",
             request.url.path,
         )
         return
@@ -333,23 +505,23 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
 
 
 async def require_admin(request: Request) -> None:
-    """FastAPI dependency — admin-only. Requires an explicit admin session.
+    """Require an explicit administrator session.
 
-    Reads ``request.state.user_role`` set by
-    :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
-    session cookie is present.
-
-    API-key-only callers (no session ⇒ ``user_role`` absent) are NOT
-    admins. The JARVIS_API_KEY is an ops credential, not an admin bearer. Only
-    a browser session with ``role == 'admin'`` passes; everything else — no
-    session, or a non-admin session — gets 403. For ops endpoints the bot/cron
-    legitimately reach with only X-API-Key, use
-    :func:`require_admin_or_api_key`.
+    Parameters
+    ----------
+    request : Request
+        Request whose session middleware state contains the authenticated role.
 
     Raises
     ------
-    fastapi.HTTPException
-        403 unless the caller has a session with ``role == 'admin'``.
+    HTTPException
+        If the request has no administrator session.
+
+    Notes
+    -----
+    An operations API key alone is not an administrator credential. Operations
+    endpoints that intentionally support that key use
+    :func:`require_admin_or_api_key`.
 
     """
     role = getattr(request.state, "user_role", None)
@@ -358,15 +530,23 @@ async def require_admin(request: Request) -> None:
 
 
 async def require_admin_or_api_key(request: Request) -> None:
-    """FastAPI dependency — admin session OR ops API-key caller.
+    """Allow an administrator session or a verified operations API-key caller.
 
-    The previous (lax) ``require_admin`` semantics: callers with no session
-    role present (API-key-only: Telegram bot, cron) pass through; only a
-    browser session with an explicit non-admin role is rejected with 403.
+    Parameters
+    ----------
+    request : Request
+        Request whose session role, when present, must be ``"admin"``.
 
-    Use ONLY on ops endpoints that the bot/cron hit with X-API-Key alone
-    (``verify_api_key`` still gates the key itself). User-data routes must
-    never depend on this — use :func:`current_user_id_strict` there.
+    Raises
+    ------
+    HTTPException
+        If an authenticated browser session has a non-administrator role.
+
+    Notes
+    -----
+    :func:`verify_api_key` validates API-key callers before this dependency.
+    User-data routes use :func:`current_user_id_strict` instead.
+
     """
     role = getattr(request.state, "user_role", None)
     if role is not None and role != "admin":
@@ -450,7 +630,7 @@ _OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"
 # ProxyHeadersMiddleware rewrites ``scope["client"]`` in place from
 # X-Forwarded-For. By the time a route dependency runs, ``request.client``
 # already reflects the (caller-controllable) XFF chain — only this stash still
-# holds the actual socket peer (audit M5).
+# holds the actual socket peer for authorization and audit.
 RAW_CLIENT_SCOPE_KEY = "jarvis.raw_client"
 
 
@@ -611,14 +791,14 @@ async def current_user_id_with_owner_override(
     # bridge IP → allowed) while rejecting a forged X-Forwarded-For from a
     # non-allowlisted peer (raw peer = attacker IP) AND the nginx-relayed
     # browser path (rewritten client = public browser IP). Strictly tighter
-    # than either check alone (audit M5).
+    # than either check alone.
     client_ip = request.client.host if request.client else None
     raw_ip, raw_stashed = _raw_socket_ip(request)
     if not raw_stashed:
         # Stash absent ⇒ app built without configure_middleware_and_errors
         # (no RawClientStashMiddleware — e.g. minimal test apps). Those apps
         # install no ProxyHeadersMiddleware either, so request.client IS the
-        # raw socket peer: fall back to the single pre-M5 check on it.
+        # raw socket peer: fall back to the single direct-peer check on it.
         raw_ip = client_ip
     if not (_ip_in_allowlist(client_ip) and _ip_in_allowlist(raw_ip)):
         logger.warning(
@@ -686,9 +866,8 @@ async def current_user_id_with_owner_override(
                 user_id=str(override_uid),
                 metadata={
                     "client_ip": client_ip or "unknown",
-                    # M5: also record the raw socket peer so the audit trail
-                    # distinguishes the real transport source from the
-                    # (XFF-rewritable) client address.
+                    # Record the raw socket peer so the audit trail distinguishes
+                    # the transport source from the XFF-rewritable client address.
                     "raw_client_ip": raw_ip or "unknown",
                 },
             )
@@ -717,22 +896,23 @@ async def current_user_id_strict_with_owner_override(
 async def get_current_user_id(
     user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> int:
-    """Declarative ``Depends`` wrapper for :func:`current_user_id_strict_with_owner_override`.
+    """Return the caller identity resolved by the declared FastAPI dependency.
 
-    CC-03: route handlers historically resolved the caller identity
-    imperatively::
+    Parameters
+    ----------
+    user_id : int
+        Identity supplied by :func:`current_user_id_strict_with_owner_override`.
 
-        user_id = await current_user_id_strict_with_owner_override(
-            request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-        )
+    Returns
+    -------
+    int
+        Authenticated caller identity.
 
-    That pattern (a) hides the auth requirement from the OpenAPI schema and
-    (b) hand-extracts the ``X-API-Key`` header instead of letting the
-    ``APIKeyHeader`` security scheme do it. This thin wrapper lets handlers
-    declare ``user_id: int = Depends(get_current_user_id)`` instead: identical
-    runtime behaviour (same session → X-Owner-User-Id resolution, same
-    401/403), but the dependency is now visible in the generated spec and the
-    API-key header is sourced through the declared security scheme.
+    Notes
+    -----
+    Declaring this wrapper through ``Depends`` exposes the API-key security
+    scheme in OpenAPI while preserving session and owner-override resolution.
+
     """
     return user_id
 
@@ -901,14 +1081,31 @@ def validate_production_config() -> None:
 async def validate_runtime_config(
     pool: Any, *, environment: str, setup_token_set: bool, model_hmac_ok: bool
 ) -> None:
-    """Post-pool boot gate: hard-fail on live-DB states the env-only
-    ``validate_production_config`` cannot see ([A] multi-user without a real
-    Pulse HMAC key, [B] a production box with no admin and no setup token,
-    [C] a multi-user production box with no deliverable SMTP relay).
+    """Validate authentication requirements that depend on database state.
 
-    Caller passes pre-read env signals (``setup_token_set``, ``model_hmac_ok``)
-    so this stays free of settings imports. A fresh pre-migration DB is skipped
-    by the caller's UndefinedTableError guard.
+    Parameters
+    ----------
+    pool : Any
+        Database pool used to count active users and administrators and inspect
+        effective SMTP configuration.
+    environment : str
+        Runtime environment name; production applies the first-admin safeguard.
+    setup_token_set : bool
+        Whether first-admin setup requires the configured host token.
+    model_hmac_ok : bool
+        Whether the Pulse model-signing key satisfies the multi-user minimum.
+
+    Raises
+    ------
+    RuntimeError
+        If a multi-user deployment lacks a valid model-signing key, or a
+        production deployment has neither an administrator nor a setup token.
+
+    Notes
+    -----
+    An unprotected non-production first-admin window and unavailable SMTP on a
+    multi-user production deployment are logged as warnings.
+
     """
     env = environment.lower()
     async with pool.acquire() as conn:

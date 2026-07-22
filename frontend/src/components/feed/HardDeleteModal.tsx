@@ -96,7 +96,7 @@ function HardDeleteModalSingle({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
-      toast.success('Paper deleted');
+      toast.success('Paper removed from your library');
       onOpenChange(false);
       onDeleted?.();
     },
@@ -112,8 +112,10 @@ function HardDeleteModalSingle({
         <AlertDialogHeader>
           <AlertDialogTitle>Permanently delete this paper?</AlertDialogTitle>
           <AlertDialogDescription>
-            &quot;{paperTitle}&quot; will be removed from JARVIS, including all chunks,
-            summaries, notes, and pulse history. This cannot be undone.
+            &quot;{paperTitle}&quot; will be removed from your library along with your
+            summaries, notes, highlights, and other private activity. Shared search content may
+            remain available for reuse, so this does not remove the paper system-wide. This cannot
+            be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -151,8 +153,8 @@ function HardDeleteModalBulk({
     : `Permanently delete ${count} papers?`;
 
   const body = count === 1
-    ? 'This paper will be permanently removed from JARVIS, including all chunks, summaries, notes, and pulse history. This action cannot be undone.'
-    : `This action cannot be undone. ${count} papers will be permanently removed from the database and search index.`;
+    ? 'This paper will be removed from your library along with your private notes, summaries, and activity. Shared search content may remain available for reuse, so this does not remove the paper system-wide. This cannot be undone.'
+    : `${count} papers will be removed from your library along with your private notes, summaries, and activity. Shared search content may remain available for reuse, so this does not remove these papers system-wide. This cannot be undone.`;
 
   function handleConfirm() {
     setOpen(false);

@@ -4,11 +4,10 @@ Uses NCBI E-utilities (https://www.ncbi.nlm.nih.gov/books/NBK25497/):
 - ``esearch.fcgi`` — converts a search query into a list of PMIDs.
 - ``efetch.fcgi`` — retrieves full PubMed XML records for a list of PMIDs.
 
-The NCBI API is usable without a key at 3 requests/second.  Providing a
+The NCBI API is usable without a key at 3 requests/second. Providing a
 ``PUBMED_API_KEY`` environment variable (or ``api_key`` in source config)
-upgrades the rate limit to 10 requests/second.  Since no key is strictly
-required for baseline operation, this source is **shipped enabled by default**
-(migration 018 sets ``enabled=TRUE``).
+upgrades the rate limit to 10 requests/second. The source supports unauthenticated
+requests and is enabled by default.
 
 XML parsing uses ``sources._xml_safe`` (shared XXE-safe lxml wrapper) for robust,
 namespace-aware handling.
@@ -35,6 +34,7 @@ if TYPE_CHECKING:
     import asyncpg
 
 import httpx
+from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
@@ -221,6 +221,12 @@ class PubMedSource(PaperSource):
     ----------
     source_type : str
         Always ``"pubmed"``.
+
+    Notes
+    -----
+    Network methods propagate ``OutboundEgressBlockedError`` while restored
+    credentials await review; quarantine is not reported as an empty provider
+    result.
     """
 
     source_type = "pubmed"
@@ -283,13 +289,20 @@ class PubMedSource(PaperSource):
         -------
         list[str]
             PMID strings, or ``[]`` on HTTP errors / XML parse errors.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before the request.
         """
+        ensure_outbound_egress_allowed("PubMed search")
         await self._rate_limit()
         params = self._base_params()
         params.update({"term": term, "retmax": retmax})
         if extra:
             params.update(extra)
         try:
+            ensure_outbound_egress_allowed("PubMed search")
             response = await self.http_client.get(
                 ESEARCH_URL, params=params, headers=self._ncbi_headers(), timeout=30.0
             )
@@ -330,13 +343,20 @@ class PubMedSource(PaperSource):
         list[PaperCreate]
             Parsed papers.  Individual parse failures are skipped with a
             warning; HTTP or XML errors return ``[]``.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before a non-empty fetch.
         """
         if not pmids:
             return []
+        ensure_outbound_egress_allowed("PubMed record fetch")
         await self._rate_limit()
         params = self._base_params()
         params["id"] = ",".join(pmids)
         try:
+            ensure_outbound_egress_allowed("PubMed record fetch")
             response = await self.http_client.get(
                 EFETCH_URL, params=params, headers=self._ncbi_headers(), timeout=60.0
             )
@@ -464,13 +484,20 @@ class PubMedSource(PaperSource):
             Topics to include.  An empty list triggers a single undirected date query.
         limit : int
             Maximum total papers to return.
-        user_id : int | None
-            Forwarded to per-user rate-limit slots and ``source_run_history`` rows.
+        user_id : int or None
+            Caller identity for per-user rate limiting and run history, when
+            available.
 
         Returns
         -------
         list[PaperCreate]
             Papers published after *since*. Returns ``[]`` on HTTP errors.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before or during a scheduled
+            request.
         """
         # Startup grace — lets containers finish their warm-up before first burst.
         await self.apply_startup_grace()
@@ -515,6 +542,8 @@ class PubMedSource(PaperSource):
                 candidate_count += len(fetched)
                 if len(papers) >= limit:
                     break
+        except OutboundEgressBlockedError:
+            raise
         except Exception as _exc:
             logger.warning("pubmed: fetch_new_since failed", exc_info=True)
             # PubMed has only two terminal paths: _esearch/_efetch swallow

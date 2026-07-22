@@ -15,6 +15,8 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from jarvis_common.testing import make_pool_and_conn  # noqa: E402
+from jarvis_common.jobs import JobError  # noqa: E402
+from paper_ingestion.pdf_processor import PDFPublishBlockedError  # noqa: E402
 from paper_ingestion.routers import pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
@@ -24,6 +26,21 @@ def _request_with_state(**state_values):
     """Build a minimal request object with app.state members."""
     state = SimpleNamespace(**state_values)
     return SimpleNamespace(app=SimpleNamespace(state=state))
+
+
+def _pdf_router_app(*, pool, processor=None, user_id: int | None = 1):
+    """Build a minimal ASGI app around the real PDF router."""
+    from fastapi import FastAPI
+    from jarvis_common import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool, get_pdf_processor
+
+    app = FastAPI()
+    app.include_router(pdf.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[current_user_id_strict] = lambda: user_id
+    if processor is not None:
+        app.dependency_overrides[get_pdf_processor] = lambda: processor
+    return app
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
@@ -48,13 +65,16 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
         citation_count=0,
         metadata={},
         created_at="2026-03-11T00:00:00Z",
+        is_visible=True,
     )
     pool, _ = make_pool_and_conn(conn=conn)
-    processor = AsyncMock()
-    processor.download_pdf.side_effect = httpx.HTTPStatusError(
-        "bad gateway",
-        request=httpx.Request("GET", "https://arxiv.org/pdf/1.pdf"),
-        response=httpx.Response(502),
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "bad gateway",
+            request=httpx.Request("GET", "https://arxiv.org/pdf/1.pdf"),
+            response=httpx.Response(502),
+        )
     )
 
     with pytest.raises(HTTPException, match="PDF download failed") as exc_info:
@@ -67,6 +87,43 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
         )
 
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_maps_restore_race_to_503():
+    """A restore that starts during download should produce a retryable response."""
+    conn = AsyncMock()
+    conn.fetchrow.return_value = FakeRecord(
+        id=1,
+        title="Paper",
+        external_id="arxiv:1",
+        source_type="arxiv",
+        authors=["Ada"],
+        abstract="A paper",
+        published_date=None,
+        url="https://arxiv.org/abs/1",
+        pdf_url="https://arxiv.org/pdf/1.pdf",
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at="2026-03-11T00:00:00Z",
+        is_visible=True,
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(
+        side_effect=PDFPublishBlockedError("PDF maintenance is active")
+    )
+
+    app = _pdf_router_app(pool=pool, processor=processor)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/download-pdf/1")
+
+    assert response.status_code == 503
+    assert "restore" in response.json()["detail"].lower()
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
@@ -85,6 +142,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
         id=1,
         pdf_downloaded=True,
         pdf_local_path=str(outside_file),
+        is_visible=True,
     )
     pool, _ = make_pool_and_conn(conn=conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
@@ -126,6 +184,7 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
         id=1,
         pdf_downloaded=True,
         pdf_local_path=str(paper_path),
+        is_visible=True,
     )
     pool, _ = make_pool_and_conn(conn=conn)
     processor = MagicMock()
@@ -354,6 +413,7 @@ async def test_process_pdf_dev_mode_exposes_error_detail(tmp_path, monkeypatch):
         id=1,
         pdf_downloaded=True,
         pdf_local_path=str(paper_path),
+        is_visible=True,
     )
     pool, _ = make_pool_and_conn(conn=conn)
     processor = MagicMock()
@@ -458,6 +518,69 @@ async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monk
     )
 
     add_to_library.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_returns_503_and_rolls_back_when_publish_is_blocked(tmp_path, monkeypatch):
+    """A restore race must be a retryable API error, not a partial paper."""
+    import io
+
+    storage_dir = tmp_path / "pdfs"
+    storage_dir.mkdir()
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(
+        "paper_ingestion.pdf_processor.maintenance_active",
+        lambda: True,
+    )
+
+    pdf_content = b"%PDF-1.7\n" + b"x" * 100
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    app = _pdf_router_app(pool=pool, user_id=None)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/upload-pdf",
+            files={"file": ("paper.pdf", io.BytesIO(pdf_content), "application/pdf")},
+            data={"title": "Blocked Upload", "authors": "", "abstract": ""},
+        )
+
+    assert response.status_code == 503
+    assert "restore" in response.json()["detail"].lower()
+    assert conn.fetchrow.await_count == 1
+    assert not list(storage_dir.glob("_upload_*.pdf"))
+    assert not list(storage_dir.glob("[0-9]*.pdf"))
+
+
+@pytest.mark.asyncio
+async def test_scan_local_pdfs_raises_job_error_when_publish_is_blocked(tmp_path, monkeypatch):
+    """A restore race must fail the scan job instead of looking like a bad PDF."""
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    (scan_dir / "paper.pdf").write_bytes(b"%PDF-1.7\ncontent")
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)
+    conn.execute = AsyncMock()
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    monkeypatch.setattr(local_pdfs, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(
+        "paper_ingestion.pdf_processor.maintenance_active",
+        lambda: True,
+    )
+
+    with pytest.raises(JobError, match="restore"):
+        await local_pdfs.scan_local_pdf_directory(pool, scan_dir=str(scan_dir))
+
+    assert conn.fetchrow.await_count == 1
+    assert not list(storage_dir.glob("_importing_*.pdf"))
+    assert not list(storage_dir.glob("[0-9]*.pdf"))
 
 
 # ---------------------------------------------------------------------------

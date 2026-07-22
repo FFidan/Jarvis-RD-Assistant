@@ -193,10 +193,10 @@ describe('PulseDeck', () => {
             },
             openalex: {
               status: 'unconfigured',
-              message: 'OpenAlex needs contact settings.',
+              message: 'OpenAlex requires an API key.',
               status_code: null,
               retry_after_s: null,
-              settings_hint: 'Set OPENALEX_EMAIL for polite pool access.',
+              settings_hint: 'Set OPENALEX_API_KEY for OpenAlex access.',
             },
           },
         },
@@ -207,7 +207,7 @@ describe('PulseDeck', () => {
 
     expect(await screen.findByText(/arxiv rate limit reached/i)).toBeInTheDocument();
     expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
-    expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
+    expect(screen.getByText(/set OPENALEX_API_KEY/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
   });
 

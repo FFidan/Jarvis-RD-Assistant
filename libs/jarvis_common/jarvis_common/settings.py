@@ -98,13 +98,18 @@ class CoreSettings(BaseSettings):
     # Comma-separated CIDRs/IPs of trusted reverse-proxy hops for
     # ProxyHeadersMiddleware. uvicorn matches the immediate socket peer against
     # this list and only then rewrites scope["client"] from X-Forwarded-For.
-    # It MUST be numeric (loopback + bridge subnet): a bare hostname literal like
+    # It MUST be numeric (loopback + the dashboard proxy): a bare hostname literal like
     # "dashboard" can never match a numeric peer, so the rewrite that un-masks an
     # nginx-relayed browser's real IP never fires and the X-Owner-User-Id guard
-    # (auth.py) would trust a relayed browser request. The compose deploy widens
-    # this via TRUSTED_PROXY_HOSTS (tracks JARVIS_NET_SUBNET). Parsed at the use
+    # (auth.py) would trust a relayed browser request. Compose sets this via
+    # TRUSTED_PROXY_HOSTS to the dashboard's pinned bridge address. Parsed at the use
     # site — pydantic-settings would otherwise JSON-decode a list-typed field.
-    trusted_proxy_hosts: str = "127.0.0.0/8,10.137.241.0/24"
+    trusted_proxy_hosts: str = "127.0.0.0/8,10.137.241.253/32"
+    # Client addresses allowed to exchange setup/auth credentials over HTTP
+    # after the request has traversed the pinned dashboard proxy. The bridge
+    # gateway represents a connection originating on the Docker host itself;
+    # remote LAN addresses and sibling containers are intentionally excluded.
+    trusted_local_client_cidrs: str = "127.0.0.0/8,::1/128,10.137.241.1/32"
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
     # Deny-by-default: loopback only. The compose deploy injects the docker
     # bridge range (OWNER_OVERRIDE_ALLOWED_CIDRS tracks JARVIS_NET_SUBNET), so a
@@ -116,11 +121,10 @@ class CoreSettings(BaseSettings):
     # returns 503. Operator must explicitly opt in by setting the env var,
     # e.g. INFRA_INGEST_ALLOWED_CIDRS="127.0.0.1/8,::1/128".
     infra_ingest_allowed_cidrs: str = ""
-    # Explicit owner user for the API-key→session mint.
-    # When set, that user id is bound to the minted session. When unset, the
-    # endpoint resolves the lowest-id non-deleted admin user. Never synthesises
-    # or auto-creates a user.
-    owner_user_id: int | None = None
+    # Advanced host override for deployment ownership. Keep the raw text here:
+    # the owner resolver must distinguish a malformed authoritative value from
+    # a missing value instead of making all CoreSettings consumers fail to load.
+    owner_user_id: str | None = None
     # Single-tenant gate opt-in. The endpoint mints only
     # when exactly one non-deleted user exists OR this flag is explicitly true
     # (operator opt-in for a small multi-user-but-single-owner deployment).
@@ -148,6 +152,14 @@ class CoreSettings(BaseSettings):
     def _resolve_file_indirection(cls, values):
         return _resolve_env_file_indirection(values, cls.model_fields)
 
+    @field_validator("owner_user_id", mode="before")
+    @classmethod
+    def _normalise_owner_user_id(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     @model_validator(mode="after")
     def _validate_proxy_trust(self) -> CoreSettings:
         """Warn + ignore a literal ``"*"`` in ``trusted_proxy_hosts`` outside dev mode.
@@ -162,11 +174,11 @@ class CoreSettings(BaseSettings):
         if self.trusted_proxy_hosts.strip() == "*" and not self.dev_mode:
             _logger.warning(
                 "TRUSTED_PROXY_HOSTS='*' is not allowed outside dev mode "
-                "(IP-spoofing risk); resetting to the loopback+bridge default "
-                "'127.0.0.0/8,10.137.241.0/24'. Set DEV_MODE=true or list "
+                "(IP-spoofing risk); resetting to the loopback+dashboard default "
+                "'127.0.0.0/8,10.137.241.253/32'. Set DEV_MODE=true or list "
                 "specific proxy CIDRs."
             )
-            object.__setattr__(self, "trusted_proxy_hosts", "127.0.0.0/8,10.137.241.0/24")
+            object.__setattr__(self, "trusted_proxy_hosts", "127.0.0.0/8,10.137.241.253/32")
         return self
 
     @model_validator(mode="after")
@@ -193,6 +205,11 @@ class CoreSettings(BaseSettings):
     def trusted_proxy_hosts_list(self) -> list[str]:
         """Return ``trusted_proxy_hosts`` split on commas, ignoring empties."""
         return [h.strip() for h in self.trusted_proxy_hosts.split(",") if h.strip()]
+
+    @property
+    def trusted_local_client_cidrs_list(self) -> list[str]:
+        """Return local HTTP client CIDRs split on commas, ignoring empties."""
+        return [h.strip() for h in self.trusted_local_client_cidrs.split(",") if h.strip()]
 
 
 class RerankerSettings(BaseSettings):

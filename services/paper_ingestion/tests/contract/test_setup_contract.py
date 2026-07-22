@@ -30,6 +30,7 @@ Carve-out: A135 creates a real session row but cookies are not followed
 
 from __future__ import annotations
 
+import httpx
 import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
@@ -100,6 +101,33 @@ async def setup_client(contract_conn, monkeypatch):
             async with make_contract_client(app, None) as client:
                 client.headers["X-Setup-Token"] = _SETUP_TOKEN
                 yield client
+    finally:
+        app.state.limiter.enabled = True
+        get_secrets_settings.cache_clear()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def setup_app(contract_conn, monkeypatch):
+    """Real setup app/pool wiring for controlled raw-peer transport tests."""
+    from jarvis_common import verify_api_key
+    from jarvis_common.settings import get_secrets_settings
+    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
+    get_secrets_settings.cache_clear()
+    shared = SharedConnPool(contract_conn)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
+            ),
+        ):
+            yield app
     finally:
         app.state.limiter.enabled = True
         get_secrets_settings.cache_clear()
@@ -357,6 +385,31 @@ async def test_setup_write_without_token_is_forbidden_over_http(setup_client):
         f"Expected 403 for a bootstrap setup WRITE without a valid token; "
         f"got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+async def test_setup_admin_rejects_plaintext_lan_even_with_token_and_forged_headers(setup_app):
+    """The transport gate runs before the first-admin transaction."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=setup_app, client=("203.0.113.7", 51234)),
+        base_url="http://192.168.1.5",
+        headers={"X-Setup-Token": _SETUP_TOKEN},
+    ) as client:
+        status_resp = await client.get("/api/setup/status")
+        admin_resp = await client.post(
+            "/api/setup/admin",
+            json={"email": "plaintext-admin@example.com"},
+            headers={
+                "Host": "localhost",
+                "Forwarded": "for=127.0.0.1;proto=https",
+                "X-Forwarded-For": "127.0.0.1",
+                "X-Forwarded-Proto": "https",
+                "X-Real-IP": "127.0.0.1",
+            },
+        )
+
+    assert status_resp.status_code == 200
+    assert admin_resp.status_code == 403, admin_resp.text
+    assert "HTTPS" in admin_resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +726,13 @@ async def test_create_first_admin_writes_owner_config_row(setup_client, contract
     assert owner_value == user_id, (
         f"owner.user_id row must equal the new admin id {user_id}; got {owner_value!r}"
     )
+    audit = await contract_conn.fetchrow(
+        "SELECT user_id, resource, metadata FROM audit_log WHERE action = 'admin.owner.bootstrap'"
+    )
+    assert audit is not None
+    assert audit["user_id"] == str(user_id)
+    assert audit["resource"] == "owner.user_id"
+    assert audit["metadata"] == {"source": "first_admin"}
 
 
 async def test_first_admin_owner_row_rolls_back_with_session_failure(
@@ -709,6 +769,38 @@ async def test_first_admin_owner_row_rolls_back_with_session_failure(
         "rollback-admin@example.com",
     )
     assert user_row is None, "users row must roll back with the failed transaction"
+
+
+async def test_first_admin_rolls_back_when_mandatory_owner_audit_fails(
+    setup_client, contract_conn, monkeypatch
+):
+    """Bootstrap ownership and its security audit are one atomic mutation."""
+    import contextlib
+
+    from paper_ingestion.routers import setup as setup_router
+
+    async def _fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(setup_router, "log_audit_strict", _fail_audit, raising=False)
+    with contextlib.suppress(Exception):
+        await setup_client.post(
+            "/api/setup/admin",
+            json={"email": "audit-rollback-admin@example.com"},
+        )
+
+    assert (
+        await contract_conn.fetchval(
+            "SELECT id FROM users WHERE email = 'audit-rollback-admin@example.com'"
+        )
+        is None
+    )
+    assert (
+        await contract_conn.fetchval(
+            "SELECT value FROM user_config WHERE user_id IS NULL AND key = 'owner.user_id'"
+        )
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------

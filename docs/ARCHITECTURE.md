@@ -117,7 +117,7 @@ HTTP client.
 ## Authentication And Ownership
 
 - **Magic-link + passkey auth** — magic-link sign-in uses the `users`,
-  `magic_link_tokens`, and `user_sessions` tables (see `db/init.sql`); optional
+  `magic_link_tokens`, and `sessions` tables (see `db/init.sql`); optional
   WebAuthn passkeys are stored in `webauthn_credentials` (migration 0102), bound
   to the exact `APP_BASE_URL` origin with user verification required.
   `jarvis_common.auth` resolves the caller user from a session cookie; sessions
@@ -137,9 +137,10 @@ HTTP client.
 - **IDOR guards** — router endpoints that read by PK assert ownership before
   returning data. The defensive `_resolve_request_user_id` helper tolerates
   mocked requests for test harnesses.
-- **Per-user secrets** — Zotero, SMTP, and other per-user credentials are stored
-  encrypted via `jarvis_common.crypto` (MultiFernet, `JARVIS_CONFIG_KEY`); user
-  config lives in `user_config` with JSONB values.
+- **Encrypted settings** — Zotero credentials are per-user. SMTP, Telegram bot,
+  and cloud-provider settings are deployment-wide administrator settings. Their
+  secret values are encrypted via `jarvis_common.crypto` under
+  `JARVIS_CONFIG_KEY`; scope is enforced by the `user_config` key registry.
 - **Admin bootstrap** — the onboarding wizard creates the admin account mid-flow
   (the admin-create step establishes the session, after which the remaining
   post-auth steps complete); the admin can invite additional users via the
@@ -177,31 +178,39 @@ flow — the token is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
 `/pair`. The legacy dashboard-code pairing path is no longer active.
-The `TELEGRAM_CHAT_ID` env var remains a supported optional outbound override
-(used when set; the DB pairing flow is the fallback) — see
-`telegram_bot/config.py`.
+The legacy `TELEGRAM_CHAT_ID` environment variable is not an authorization or
+delivery fallback. Pairing records are the only user-to-chat identity source.
 
-### Canonical Corpus And user_library
+### Paper visibility and `user_library`
 
-The canonical corpus schema (see `db/init.sql`):
+The paper schema (see `db/init.sql`) separates provenance from authorization:
 
-- `papers.discovered_by` records who first introduced a canonical paper.
+- `papers.visibility_scope` is the persisted `public` or `private`
+  authorization scope. Only trusted server-owned arXiv, Semantic Scholar,
+  OpenAlex, and PubMed adapters may promote a row to public.
+- `papers.discovered_by`, `source_type`, and `discovery_origin` are descriptive
+  provenance and audit fields; they never grant access.
 - `user_library(user_id, paper_id, added_via)` records personal library
   membership.
-- Feed queries default to `user_library` membership for "My library" and expose
-  a deliberate `scope=corpus` mode for "All discovered" while keeping
-  `paper_user_state` overlays scoped to the caller.
-- User-initiated uploads and manual project links add the paper to the caller's
-  `user_library` in the same transaction. API-key-only single-user calls keep
-  the legacy `user_id=NULL` behavior.
-- In corpus scope, the Library surface maps to the `all_non_trash` predicate:
-  it means "all canonical papers except trash", not caller library membership.
+- The central policy admits a paper when it is public or is present in the
+  caller's `user_library`. Feed, direct reads, graph queries, summaries,
+  citations, and RAG reuse that policy.
+- The Library UI calls this broader view **Public + mine**. Its internal
+  `scope=corpus` request name is retained for API compatibility; it does not
+  include another user's private imports.
+- Local uploads, unverified citation batches, personal or group Zotero imports,
+  unknown provenance, and ambiguous legacy Zotero identities stay private.
+- Authenticated vector retrieval additionally requires the current visibility
+  generation and a relational policy recheck, so stale or missing vector
+  metadata fails closed by under-fetching.
+
+The canonical source matrix is [Source-aware paper
+visibility](SECURITY.md#source-aware-paper-visibility).
 
 ### Residual Risks
 
-See [known-residual-risks.md](known-residual-risks.md) for the full register of
-accepted deferrals, including IDOR regression coverage scope and RAG/search path
-isolation.
+See [known-residual-risks.md](known-residual-risks.md) for the current register
+of accepted deferrals and their explicit reopen criteria.
 
 ## Persistence
 

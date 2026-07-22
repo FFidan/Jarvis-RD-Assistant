@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Rocket, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getSetupStatus } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 
 /**
@@ -13,14 +14,17 @@ import { useUIStore } from '@/stores/ui-store';
  */
 export function SetupBanner() {
   const navigate = useNavigate();
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin');
   const { setupBannerDismissed, dismissSetupBanner } = useUIStore();
 
   const { data } = useQuery({
     queryKey: QUERY_KEYS.setup.status(),
     queryFn: getSetupStatus,
+    enabled: isAdmin,
     staleTime: 30_000,
   });
 
+  if (!isAdmin) return null;
   if (setupBannerDismissed) return null;
   if (!data || data.setup_completed !== false) return null;
 

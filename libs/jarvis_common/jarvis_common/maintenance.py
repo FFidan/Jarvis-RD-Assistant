@@ -1,25 +1,18 @@
-"""Sentinel-driven maintenance-mode middleware (P6 one-click restore).
+"""Restore maintenance and post-restore outbound-quarantine enforcement.
 
-Two sentinels gate serving while the postgres-backup sidecar runs a restore --
-no docker.sock needed, and every exempt-allowlist path keeps serving under both:
+The age-limited ``.maintenance`` marker returns ``503`` with ``Retry-After``
+for non-exempt requests while a restore prepares to change data. A stale soft
+marker is ignored after ``MAINTENANCE_MAX_AGE_S`` so a pre-destructive crash
+cannot leave the service unavailable indefinitely.
 
-* The soft ``.maintenance`` sentinel is the age-expiring anti-brick for the
-  PRE-destruction quiesce window: while it exists and is fresher than
-  ``MAINTENANCE_MAX_AGE_S`` (default 1800s) each non-exempt request gets
-  ``503`` + ``Retry-After``; older than the max age it is ignored so a crashed
-  restore can never brick the stack permanently.
-* The durable ``.destructive`` sentinel (``MAINTENANCE_DESTRUCTIVE_SENTINEL``)
-  is never heartbeated and never auto-expires: restore.sh touches it at the DB
-  DROP boundary and removes it only on the same clean / pre-DROP-failure lift
-  that clears ``.maintenance``. While present each non-exempt request gets
-  ``503`` regardless of age, so a SIGKILLed restore that left a half-restored
-  DB stays fail-closed until an operator clears it.
+The durable ``.destructive`` marker begins at the first database drop, receives
+no heartbeat, and never expires automatically. It is removed only after a clean
+restore or a failure before data changed; otherwise requests remain fail-closed
+until recovery completes. Independently, ``.outbound-quarantine.json`` can keep
+credential-bearing egress disabled after local reads resume.
 
-An absent sentinel pair means normal serving. The middleware is pure-ASGI (it
-mirrors
-:class:`jarvis_common.app_factory.RawClientStashMiddleware`): on the
-non-maintenance path it calls ``self.app(scope, receive, send)`` unchanged, so
-SSE/streaming routes are never buffered.
+The ASGI middleware forwards non-maintenance requests without buffering, which
+preserves streaming responses.
 """
 
 from __future__ import annotations
@@ -27,23 +20,23 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from jarvis_common.paths import read_regular_json_file
+
 logger = logging.getLogger(__name__)
 
-# Paths a mid-restore browser reload must still reach: the health probe, the
-# restore-progress poll, the pre-auth setup-status read that drives the app
-# shell on load, and static assets. The front end renders identity from its
-# persisted store (App.tsx: isAuthenticated/isSessionValid are client-side
-# reads), so the only bootstrap *server* read is GET /api/setup/status -- the
-# data routes are intentionally NOT exempt and return a degraded 503 during a
-# restore. (The progress poll surviving the brief DB-down window inside a
-# restore is a separate Gate-P6 concern of the status endpoint + the FE poll,
-# not of this allowlist.)
+# Mid-restore reloads retain health, progress, setup-status, and static-asset
+# access. Data routes remain unavailable. Restore-status authentication is
+# enforced separately, and acknowledgement becomes reachable only after both
+# maintenance markers are clear.
 DEFAULT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/health",
     "/api/admin/backups/restore/status",
@@ -59,12 +52,80 @@ _DEFAULT_MAX_AGE_S = 1800
 # Retry-After advertised to clients: short so a polling progress view re-checks
 # promptly, rather than the full staleness window.
 _RETRY_AFTER_S = 30
+_QUARANTINE_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_QUARANTINE_RECOVERY_ROUTES = frozenset(
+    {
+        ("POST", "/api/admin/backups/restore/acknowledge"),
+        ("POST", "/api/auth/api-key-session"),
+        ("POST", "/api/auth/verify"),
+        ("POST", "/api/auth/passkeys/capability"),
+        ("POST", "/api/auth/passkeys/login/begin"),
+        ("POST", "/api/auth/passkeys/login/finish"),
+        ("POST", "/api/auth/logout"),
+    }
+)
+_QUARANTINE_DETAIL = "This restored deployment is read-only until outbound credentials are reviewed"
 # Off-host restore rotation marker: restore.sh writes an integer epoch here after it
 # rebinds the postgres role + materializes ./secrets, so each postgres-connecting
 # service can self-restart onto the rotated secrets (mirrors the sentinel-path resolve).
 SECRETS_ROTATED_MARKER = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".secrets_rotated"
 )
+
+
+class OutboundQuarantineStateError(ValueError):
+    """Raised when an existing quarantine record is not trustworthy."""
+
+
+class OutboundEgressBlockedError(RuntimeError):
+    """Raised when restored credentials remain quarantined.
+
+    Background tasks retry this error. Network sinks also raise it if quarantine
+    becomes active after an earlier request or scheduler check.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundQuarantineState:
+    """Validated non-secret state for one completed off-host restore.
+
+    Attributes
+    ----------
+    restore_id : str
+        Lowercase identifier shared with the restore request and browser token.
+    source : str
+        Always ``inbox``; same-host restores never create or clear quarantine.
+    requested_at : str
+        Original aware restore-request timestamp.
+    completed_at : str
+        Aware timestamp recorded before destructive maintenance was lifted.
+    review_state : str
+        Exact state marker ``awaiting_review``.
+    """
+
+    restore_id: str
+    source: str
+    requested_at: str
+    completed_at: str
+    review_state: str
+
+
+def outbound_quarantine_file() -> Path:
+    """Resolve the quarantine sentinel beside the active restore trigger dir.
+
+    Returns
+    -------
+    pathlib.Path
+        Environment override when set, otherwise the record in the active
+        ``BACKUP_TRIGGER_DIR``.
+    """
+    trigger_dir = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger"))
+    return Path(
+        os.environ.get(
+            "OUTBOUND_QUARANTINE_SENTINEL",
+            str(trigger_dir / ".outbound-quarantine.json"),
+        )
+    )
 
 
 def maintenance_active() -> bool:
@@ -74,6 +135,11 @@ def maintenance_active() -> bool:
     and max age: the durable destructive sentinel is active regardless of age;
     the soft sentinel is active only while fresher than the max age. Never
     raises — an unreadable soft sentinel means "not active".
+
+    Returns
+    -------
+    bool
+        Whether HTTP and background work must remain paused for restore.
     """
     destructive_path = os.environ.get(
         "MAINTENANCE_DESTRUCTIVE_SENTINEL", _DEFAULT_DESTRUCTIVE_SENTINEL_PATH
@@ -89,16 +155,99 @@ def maintenance_active() -> bool:
     return time.time() - mtime <= max_age_s
 
 
-def secrets_rotated_since(started_at: float) -> bool:
-    """Return ``True`` iff the secrets-rotation marker is newer than ``started_at``.
+def outbound_quarantine_active() -> bool:
+    """Return ``True`` when a restore has not yet cleared outbound quarantine.
 
-    :data:`SECRETS_ROTATED_MARKER` carries an integer epoch written by restore.sh
-    after an off-host restore rebinds the postgres role + materializes ./secrets. A
-    service whose process started before that epoch holds pre-rotation secrets (compose
-    file-secrets are per-inode bind mounts read once at start) and must restart to
-    reload them. Never raises — a missing/malformed/unreadable marker means "no
-    rotation to react to" (``False``); self-limiting because a restarted process's
-    ``started_at`` exceeds the marker epoch, so it does not re-exit.
+    Quarantine is intentionally independent of maintenance: a successful off-host
+    restore may resume local reads while all credential-bearing egress remains
+    blocked pending review. Existence is the fail-closed authority; malformed or
+    unreadable content must never silently re-enable outbound work.
+
+    Returns
+    -------
+    bool
+        ``True`` for every existing directory entry, including dangling links or
+        malformed records. Only a bound restore session, the configured owner,
+        or ``jarvis-research restore acknowledge <restore-id>`` can remove it.
+    """
+    return os.path.lexists(outbound_quarantine_file())
+
+
+def read_outbound_quarantine() -> OutboundQuarantineState | None:
+    """Read and validate the durable non-secret off-host restore record.
+
+    Absence means no quarantine. Any existing state that is unreadable, linked,
+    malformed, or outside the exact schema raises so callers remain fail-closed.
+
+    Returns
+    -------
+    OutboundQuarantineState or None
+        Validated current state, or ``None`` only when no directory entry exists.
+
+    Raises
+    ------
+    OutboundQuarantineStateError
+        If an existing record cannot be trusted. Callers must not treat this as
+        absence or permit egress.
+    """
+    path = outbound_quarantine_file()
+    if not os.path.lexists(path):
+        return None
+    try:
+        data = read_regular_json_file(path)
+    except (OSError, ValueError, TypeError) as exc:
+        raise OutboundQuarantineStateError("quarantine state is unreadable") from exc
+    expected = {
+        "version",
+        "restore_id",
+        "source",
+        "requested_at",
+        "completed_at",
+        "review_state",
+    }
+    if not isinstance(data, dict) or set(data) != expected:
+        raise OutboundQuarantineStateError("quarantine state has an invalid shape")
+    restore_id = data["restore_id"]
+    if not isinstance(restore_id, str) or re.fullmatch(r"[0-9a-f]{32}", restore_id) is None:
+        raise OutboundQuarantineStateError("quarantine restore ID is invalid")
+    try:
+        requested = datetime.fromisoformat(data["requested_at"])
+        completed = datetime.fromisoformat(data["completed_at"])
+    except (TypeError, ValueError) as exc:
+        raise OutboundQuarantineStateError("quarantine timestamps are invalid") from exc
+    if (
+        data["version"] != 1
+        or data["source"] != "inbox"
+        or data["review_state"] != "awaiting_review"
+        or requested.tzinfo is None
+        or completed.tzinfo is None
+        or requested.astimezone(UTC) > completed.astimezone(UTC)
+    ):
+        raise OutboundQuarantineStateError("quarantine state is inconsistent")
+    return OutboundQuarantineState(
+        restore_id=restore_id,
+        source=data["source"],
+        requested_at=data["requested_at"],
+        completed_at=data["completed_at"],
+        review_state=data["review_state"],
+    )
+
+
+def secrets_rotated_since(started_at: float) -> bool:
+    """Return whether mounted secrets changed after a service started.
+
+    The shared marker contains the Unix timestamp of the latest refresh. A
+    missing, unreadable, or malformed marker is treated as no newer refresh.
+
+    Parameters
+    ----------
+    started_at : float
+        Process start time expressed as a Unix epoch.
+
+    Returns
+    -------
+    bool
+        Whether a newer valid marker requires the service to reload secrets.
     """
     try:
         epoch = float(SECRETS_ROTATED_MARKER.read_text().strip())
@@ -107,23 +256,68 @@ def secrets_rotated_since(started_at: float) -> bool:
     return epoch > started_at
 
 
-def skip_for_maintenance(job_label: str) -> bool:
-    """Entry guard for background writers: log-and-signal a skip during a restore.
+def ensure_outbound_egress_allowed(operation_label: str) -> None:
+    """Refuse a credential-bearing sink while outbound quarantine exists.
 
-    Schedulers, the procrastinate worker loop, and the telegram bot bypass
-    :class:`MaintenanceMiddleware` (HTTP-only), so each background writer calls
-    this at entry and returns early when it is ``True`` — performing no DB write
-    while a restore holds a sentinel. Reads :func:`maintenance_active` directly
-    (cheap ``os.stat``; never raises).
+    Call this immediately before opening a network connection or handing a
+    restored credential to another process. The existence check is deliberately
+    separate from record parsing: malformed, unreadable, and linked directory
+    entries remain a fail-closed authority.
+
+    Parameters
+    ----------
+    operation_label : str
+        Non-secret operation name used only in the server log.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If any outbound-quarantine directory entry exists.
+    """
+    if not outbound_quarantine_active():
+        return
+    logger.info("block %s: outbound quarantine awaiting restore review", operation_label)
+    raise OutboundEgressBlockedError(
+        "outbound egress is disabled pending restored credential review"
+    )
+
+
+def skip_for_maintenance(job_label: str) -> bool:
+    """Return whether background work must pause.
+
+    Restore maintenance and outbound quarantine both pause background work.
+    Credential-bearing network calls also use
+    :func:`ensure_outbound_egress_allowed` immediately before sending data.
+    Any quarantine entry is active, including one with malformed contents.
+
+    Parameters
+    ----------
+    job_label : str
+        Non-secret label included in the skip log.
+
+    Returns
+    -------
+    bool
+        Whether the caller must return without doing background work.
     """
     if maintenance_active():
         logger.info("skip %s: maintenance in progress", job_label)
+        return True
+    if outbound_quarantine_active():
+        logger.info("skip %s: outbound quarantine awaiting restore review", job_label)
         return True
     return False
 
 
 class MaintenanceMiddleware:
-    """Return ``503`` while a fresh maintenance sentinel exists (pure-ASGI)."""
+    """Enforce restore maintenance and post-restore read-only HTTP policy.
+
+    The soft sentinel expires by age; the destructive sentinel never expires.
+    Health checks, initial setup, static assets, and progress polling remain
+    reachable. During outbound quarantine, safe reads remain available but
+    mutations return ``503`` except for owner sign-in, logout, and restore
+    acknowledgement. Network-call checks also protect work accepted earlier.
+    """
 
     def __init__(
         self,
@@ -134,6 +328,22 @@ class MaintenanceMiddleware:
         max_age_s: int | None = None,
         exempt_prefixes: tuple[str, ...] | None = None,
     ) -> None:
+        """Configure sentinel locations and exact maintenance exemptions.
+
+        Parameters
+        ----------
+        app : ASGIApp
+            Downstream ASGI application.
+        sentinel_path : str or None
+            Optional soft-maintenance sentinel override.
+        destructive_sentinel_path : str or None
+            Optional durable destructive-phase sentinel override.
+        max_age_s : int or None
+            Maximum age of the soft sentinel before it is ignored.
+        exempt_prefixes : tuple[str, ...] or None
+            Prefixes that remain available during maintenance; outbound
+            quarantine still applies its independent exact mutation policy.
+        """
         self.app = app
         self.sentinel_path = (
             sentinel_path
@@ -157,22 +367,45 @@ class MaintenanceMiddleware:
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Handle one ASGI request under the current maintenance policy.
+
+        Parameters
+        ----------
+        scope : Scope
+            ASGI connection scope.
+        receive : Receive
+            ASGI event receiver.
+        send : Send
+            ASGI event sender.
+
+        Returns
+        -------
+        None
+            Returns after forwarding the request or sending a maintenance
+            response.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         path: str = scope["path"]
+        method = scope.get("method", "GET").upper()
+        if (
+            outbound_quarantine_active()
+            and method not in _QUARANTINE_SAFE_METHODS
+            and (method, path) not in _QUARANTINE_RECOVERY_ROUTES
+        ):
+            await self._send_quarantined(send)
+            return
+
         if path.startswith(self.exempt_prefixes):
             await self.app(scope, receive, send)
             return
 
-        # Durable fail-closed: the destructive-phase sentinel is NEVER heartbeated
-        # and NEVER auto-expires. restore.sh touches it once the DROP window opens
-        # and removes it ONLY on the same clean / pre-DROP-failure lift that clears
-        # .maintenance. If present -> 503 with no age gate: a SIGKILLed restore that
-        # left a half-restored DB stays 503 until an operator clears it. (The soft
-        # .maintenance 1800s expiry remains the anti-brick for the PRE-destruction
-        # quiesce window only.)
+        # The destructive marker never expires or receives heartbeats. It begins
+        # at the first database drop and is cleared only by a clean restore or a
+        # failure before data changed. While present, every non-exempt request
+        # remains unavailable regardless of marker age.
         if os.path.exists(self.destructive_sentinel_path):
             await self._send_unavailable(send)
             return
@@ -199,6 +432,21 @@ class MaintenanceMiddleware:
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"retry-after", str(_RETRY_AFTER_S).encode()),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _send_quarantined(send: Send) -> None:
+        body = json.dumps({"detail": _QUARANTINE_DETAIL}).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [
+                    (b"content-type", b"application/json"),
                     (b"content-length", str(len(body)).encode()),
                 ],
             }

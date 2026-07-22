@@ -1,11 +1,8 @@
 name: Lifecycle smoke
 
-# Release smoke for the lifecycle paths the cold-install smoke never reaches:
-# the TLS profile, an interrupted update, and the uninstall dry run.
-#
-# Manual dispatch only, and informational for now: the legs perform full cold
-# installs and are not yet part of any required gate. Promote a leg to a
-# required check once it has run green across a few releases.
+# Manual GitHub-hosted checks for TLS, interrupted update recovery, uninstall
+# planning, and destructive restore. A passing restore leg is required release
+# evidence; the other legs remain broader lifecycle diagnostics.
 on:
   workflow_dispatch:
     inputs:
@@ -13,7 +10,7 @@ on:
         description: Which leg to run
         type: choice
         default: all
-        options: [all, tls, update, uninstall]
+        options: [all, tls, update, uninstall, restore]
         required: false
 
 permissions:
@@ -27,13 +24,14 @@ jobs:
   lifecycle-smoke:
     name: Lifecycle smoke (${{ inputs.leg }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # the update leg resolves release tags from origin
 
       - name: Install mkcert
+        if: inputs.leg == 'all' || inputs.leg == 'tls'
         # libnss3-tools is not optional: the CA root is always absent on a fresh
         # runner, so init-mkcert.sh always calls `mkcert -install`, which needs
         # certutil from that package and aborts the tls leg without it.
@@ -54,9 +52,7 @@ jobs:
           if [ "$LEG" != "all" ]; then
             args+=(--leg "$LEG")
           fi
-          # The exit code is captured directly, never through a pipe: an implicit
-          # step shell is `bash -e` WITHOUT pipefail, so `script | tee` would
-          # report tee's status and mask a failing leg.
+          # Preserve the smoke script's status while still writing a complete log.
           rc=0
           bash scripts/lifecycle-smoke.sh "${args[@]}" > lifecycle-smoke.log 2>&1 || rc=$?
           cat lifecycle-smoke.log
@@ -64,7 +60,7 @@ jobs:
 
       - name: Upload the smoke log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lifecycle-smoke-log
           path: lifecycle-smoke.log

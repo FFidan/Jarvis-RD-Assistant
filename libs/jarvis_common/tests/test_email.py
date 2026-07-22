@@ -1,14 +1,8 @@
-"""Tests for jarvis_common.email template rendering and dev-mode fallback.
+"""Email rendering, delivery outcomes, and credential-safety tests.
 
-Guards the BE-04 fix: `_PLAIN_BODY_TEMPLATE` must use ``str.replace`` (not
-``str.format``) so that URLs containing ``{`` / ``}`` characters (e.g. query
-params with template-like tokens) are included verbatim in the email body
-without raising ``KeyError`` / ``IndexError`` from the format DSL.
-
-Also pins the no-send dev-mode fallback behaviour (Task T0.4): when SMTP is
-unconfigured, ``send_magic_link`` records only a SHA-256 hash of the email in
-``system_events``; it does NOT log the raw link (a bearer token) or any
-fragment of it to stdout or any other sink.
+Magic-link URLs containing brace characters must remain byte-for-byte intact.
+When SMTP is unavailable or outbound use is quarantined, delivery is suppressed
+without logging the raw link or recipient address.
 """
 
 from __future__ import annotations
@@ -41,12 +35,12 @@ def test_plain_body_normal_url() -> None:
 
 
 # ---------------------------------------------------------------------------
-# URLs with brace characters (BE-04 regression guard)
+# URLs with brace characters
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# Dev-mode / no-SMTP fallback characterization (Task T0.4)
+# Development-mode and unconfigured-SMTP behavior
 # ---------------------------------------------------------------------------
 
 
@@ -117,11 +111,77 @@ async def test_send_magic_link_no_smtp_does_not_deliver(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_magic_link_drops_without_loading_smtp_during_quarantine(
+    monkeypatch, tmp_path
+) -> None:
+    """Quarantine is a non-raising delivery outcome and performs no SMTP work."""
+    from unittest.mock import AsyncMock
+
+    from jarvis_common import email as email_mod
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.write_text("not json")
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    effective = AsyncMock()
+    monkeypatch.setattr(email_mod, "_effective_smtp", effective)
+
+    outcome = await email_mod.send_magic_link(
+        "user@example.com", "https://example.com/auth/verify#token=secret"
+    )
+
+    assert outcome is email_mod.MagicLinkDelivery.DROPPED_QUARANTINED
+    effective.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_smtp_probe_reports_quarantine_without_loading_credentials(
+    monkeypatch, tmp_path
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from jarvis_common import email as email_mod
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    effective = AsyncMock()
+    monkeypatch.setattr(email_mod, "_effective_smtp", effective)
+
+    reachable, issue = await email_mod.probe_smtp_reachable()
+
+    assert reachable is False
+    assert issue == "Mail delivery is disabled until restored credentials are reviewed."
+    effective.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_smtp_status_never_claims_bearer_links_are_logged(monkeypatch) -> None:
+    """Operator guidance must point to the admin manual-link flow, not logs."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    for name in ("SMTP_HOST", "SMTP_FROM", "SMTP_USER", "SMTP_PASS"):
+        monkeypatch.delenv(name, raising=False)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(None)
+
+    assert deliverable is False
+    issue_text = " ".join(issues).lower()
+    assert "server log" not in issue_text
+    assert "stdout" not in issue_text
+    assert "administrator" in issue_text
+    assert "sign-in link" in issue_text
+
+    get_secrets_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_smtp_configured_public_fn_returns_false_without_smtp(monkeypatch) -> None:
     """smtp_configured() public wrapper returns False when no SMTP env or DB rows.
 
-    Pins the public API surface introduced in Task T0.4 so callers (e.g.
-    /api/setup/status) can probe SMTP state without touching private helpers.
+    Callers such as ``/api/setup/status`` can probe SMTP state without touching
+    private helpers.
     """
     from jarvis_common.email import smtp_configured
     from jarvis_common.settings import get_secrets_settings
@@ -982,10 +1042,8 @@ async def test_send_magic_link_passes_timeout(monkeypatch) -> None:
 def test_plain_body_brace_url_rendered_verbatim(link: str) -> None:
     """URLs containing ``{…}`` tokens must appear verbatim in the rendered body.
 
-    Before the BE-04 fix the body was built with ``_PLAIN_BODY_TEMPLATE.format(link=link)``.
-    While CPython's single-pass ``str.format`` does not re-scan substituted values,
-    using ``str.replace`` is semantically correct (no format-DSL interpretation) and
-    eliminates the risk entirely.  This test verifies the safe path is in place.
+    Rendering uses literal replacement, so URL content is never interpreted as
+    part of a formatting expression.
     """
     body = _render_body(link)
     assert link in body, (

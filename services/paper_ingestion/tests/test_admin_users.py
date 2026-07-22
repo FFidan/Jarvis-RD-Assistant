@@ -19,6 +19,7 @@ import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
 from jarvis_common.email import MagicLinkDelivery
+from jarvis_common.owner import OwnerIdentity
 
 from tests._auth_fakes import (
     build_mock_pool,
@@ -35,6 +36,15 @@ _NOW = datetime.now(UTC)
 _build_mock_pool = build_mock_pool
 _build_mock_pool_txn = build_mock_pool_with_txn
 _build_request = build_request_admin
+
+
+@pytest.fixture(autouse=True)
+def _missing_owner_configuration(monkeypatch):
+    monkeypatch.setattr(
+        admin_router,
+        "resolve_owner_identity",
+        AsyncMock(return_value=OwnerIdentity(source="none", state="missing")),
+    )
 
 
 def _user_row(
@@ -204,7 +214,7 @@ async def test_soft_delete_last_admin_blocked() -> None:
 async def test_unauthenticated_cannot_reach_admin() -> None:
     """No session = no user_role = 403."""
     conn = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool)  # no role, no user_id
     with pytest.raises(HTTPException) as exc:
         await admin_router.require_admin(request)
@@ -480,14 +490,17 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
 
     request = SimpleNamespace(
         url=SimpleNamespace(
-            replace=lambda **kw: f"https://origin/auth/verify?{kw.get('query', '')}"
+            replace=lambda **kw: (
+                "https://origin/auth/verify" + (f"?{kw['query']}" if kw.get("query") else "")
+            )
         )
     )
 
     with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.admin"):
         link = admin_router._build_invite_link(request, "tok123")
 
-    assert "token=tok123" in link
+    assert link == "https://origin/auth/verify#token=tok123"
+    assert "?token=" not in link
     warnings = [
         r
         for r in caplog.records
@@ -624,20 +637,30 @@ async def test_restore_user_allowed_with_model_hmac_key(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(
-        return_value={
-            "id": 7,
-            "email": "bob@example.com",
-            "role": "user",
-            "created_at": _NOW,
-            "last_login_at": None,
-        }
+        side_effect=[
+            {
+                "id": 7,
+                "email": "bob@example.com",
+                "role": "user",
+                "created_at": _NOW,
+                "last_login_at": None,
+                "deleted_at": _NOW,
+            },
+            {
+                "id": 7,
+                "email": "bob@example.com",
+                "role": "user",
+                "created_at": _NOW,
+                "last_login_at": None,
+            },
+        ]
     )
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
 
     result = await admin_router.restore_user(7, request)
     assert result.id == 7
     assert result.email == "bob@example.com"
-    conn.fetchrow.assert_awaited_once()
+    assert conn.fetchrow.await_count == 2

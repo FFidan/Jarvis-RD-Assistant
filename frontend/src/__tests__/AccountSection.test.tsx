@@ -5,14 +5,14 @@
  *  - Profile render (display_name, email, role, dates)
  *  - display_name edit (save + cancel)
  *  - Email-change flow (request → sent banner; cancel path)
- *  - ?confirm_email_token query-param → confirmEmailChange called → success banner + param stripped
+ *  - #confirm_email_token fragment (plus legacy query form) → confirmation + token stripped
  *  - Error states for both mutations
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AccountSection } from '@/components/settings/AccountSection';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,11 @@ const ACCOUNT = {
 // ---------------------------------------------------------------------------
 
 function renderAccountSection(initialSearch = '') {
+  function LocationProbe() {
+    const location = useLocation();
+    return <span data-testid="account-location">{location.search}{location.hash}</span>;
+  }
+
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -56,6 +61,7 @@ function renderAccountSection(initialSearch = '') {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/settings${initialSearch}`]}>
         <AccountSection />
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -216,9 +222,19 @@ describe('AccountSection', () => {
     await waitFor(() => expect(screen.getByText(/Email already in use/i)).toBeInTheDocument());
   });
 
-  // --- ?confirm_email_token query-param flow ---
+  // --- #confirm_email_token fragment flow + legacy query compatibility ---
 
-  it('calls confirmEmailChange when ?confirm_email_token is present', async () => {
+  it('calls confirmEmailChange from a fragment and strips the bearer from the address', async () => {
+    mockConfirmEmailChange.mockImplementation(() => new Promise(() => {}));
+    renderAccountSection('#confirm_email_token=fragment-tok-123');
+
+    await waitFor(() => expect(mockConfirmEmailChange).toHaveBeenCalledWith('fragment-tok-123'));
+    await waitFor(() => {
+      expect(screen.getByTestId('account-location')).not.toHaveTextContent('fragment-tok-123');
+    });
+  });
+
+  it('still calls confirmEmailChange when the legacy query parameter is present', async () => {
     mockConfirmEmailChange.mockResolvedValue({ ...ACCOUNT, email: 'confirmed@example.com' });
     renderAccountSection('?confirm_email_token=test-tok-123');
 

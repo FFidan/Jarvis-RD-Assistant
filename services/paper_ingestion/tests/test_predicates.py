@@ -20,22 +20,22 @@ def test_excluded_state_sql_value():
 
 
 def test_paper_visible_sql_default_alias():
-    """Default alias is ``p`` and the param index is interpolated verbatim."""
-    assert paper_visible_sql(2) == "(p.discovered_by IS NULL OR p.discovered_by = $2)"
+    """The service wrapper preserves the shared builder's default alias."""
+    from jarvis_common.paper_visibility import paper_visibility_sql
+
+    assert paper_visible_sql(2) == paper_visibility_sql(2)
 
 
 def test_paper_visible_sql_custom_alias_and_index():
-    """A custom alias (e.g. the unaliased table name) and index are honoured."""
-    assert (
-        paper_visible_sql(3, alias="papers")
-        == "(papers.discovered_by IS NULL OR papers.discovered_by = $3)"
-    )
+    """The service wrapper forwards a trusted alias and placeholder index."""
+    from jarvis_common.paper_visibility import paper_visibility_sql
+
+    assert paper_visible_sql(3, alias="papers") == paper_visibility_sql(3, alias="papers")
 
 
 def test_paper_visible_sql_matches_kg_inline_fragment():
-    """Emitted SQL is byte-identical to the fragment KG queries used inline."""
-    assert paper_visible_sql(2) == "(p.discovered_by IS NULL OR p.discovered_by = $2)"
-    assert paper_visible_sql(1) == "(p.discovered_by IS NULL OR p.discovered_by = $1)"
+    """Every caller receives the same policy with only its placeholder changed."""
+    assert paper_visible_sql(2).replace("$2", "$1") == paper_visible_sql(1)
 
 
 def test_view_predicates_library_unchanged():

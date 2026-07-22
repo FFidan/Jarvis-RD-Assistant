@@ -1,20 +1,7 @@
-"""Unit tests for jarvis_common.task_registry.
+"""Behavioral tests for task registration and dependency wiring.
 
-These tests assert structural properties only:
-  - ``register_tasks`` registers kind→handler entries on ``app.tasks``.
-  - ``KIND_TO_TASK`` is populated by ``register_tasks`` calls.
-  - Queue names passed to ``register_tasks`` are honoured by registered tasks.
-  - The JobContext shim exposes the legacy contract (``update_progress``,
-    ``is_cancelled``, ``job_id``).
-  - Importing ``task_registry`` without first calling ``set_dependencies``
-    is fine; the runtime check fires only when a task body executes.
-
-Note: tasks are no longer registered at module import time. They are
-registered by each service during lifespan startup via ``register_tasks``.
-The structural tests below use a fresh ``procrastinate.App`` instance to avoid
-polluting the module-level singleton.
-
-No DB / connector / network calls are exercised — that is Step 2 part 2.
+The suite uses isolated Procrastinate applications and in-memory collaborators;
+it does not open database or network connections.
 """
 
 from __future__ import annotations
@@ -26,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# register_tasks API — tasks registered on demand
+# Task registration
 # ---------------------------------------------------------------------------
 
 
@@ -122,26 +109,46 @@ def test_register_tasks_handler_closure() -> None:
     assert default_b is handler_b, "task_b should be bound to handler_b"
 
 
+@pytest.mark.asyncio
+async def test_registered_task_retries_without_running_handler_during_restore(monkeypatch) -> None:
+    """Every generated task wrapper fails closed before resolving dependencies."""
+    import procrastinate
+    from jarvis_common import task_registry
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+    handler = AsyncMock(return_value={"ok": True})
+    registry = task_registry.TaskRegistry(fresh_app)
+    monkeypatch.setattr(task_registry, "skip_for_maintenance", lambda _label: True)
+
+    registry.register_tasks({"test.egress": handler}, queue="test_queue")
+    task = fresh_app.tasks["test.egress"]
+
+    with pytest.raises(OutboundEgressBlockedError, match="restore state"):
+        await task.func(SimpleNamespace(), job_id="job-1")
+
+    handler.assert_not_awaited()
+    assert task.retry_strategy.max_attempts is None
+    assert task.retry_strategy.wait == 30
+    assert task.retry_strategy.retry_exceptions == {OutboundEgressBlockedError}
+
+
 # ---------------------------------------------------------------------------
-# At import time app.tasks has only noop.test + builtin tasks
+# Importing the registry does not add service tasks
 # ---------------------------------------------------------------------------
 
 
 def test_no_service_tasks_at_import_time() -> None:
-    """jarvis_common no longer registers service tasks at import.
-
-    The module-level app should contain only the ``noop.test`` task and
-    procrastinate's builtin tasks immediately after import — no paper_ingestion
-    or learning_engine tasks.
-    """
+    """Importing the registry leaves service tasks unregistered."""
     from jarvis_common.jobs import JOB_HANDLER_OWNER
     from jarvis_common.task_registry import app
 
     user_task_names = {name for name, task in app.tasks.items() if task.queue not in ("builtin",)}
-    # noop.test is registered unconditionally; service kinds are NOT registered.
+    # The decorator registers noop.test; service registrars add all other tasks.
     for kind in JOB_HANDLER_OWNER:
         assert kind not in user_task_names, (
-            f"kind {kind!r} should NOT be in app.tasks at import time "
+            f"kind {kind!r} should not be in app.tasks at import time "
             f"(tasks are registered lazily by each service)"
         )
 
@@ -167,11 +174,7 @@ def test_queue_for_kind_matches_owner_map() -> None:
 
 
 def test_queue_assignments_match_owner_map() -> None:
-    """The REAL register_*_tasks must bind every task's queue to JOB_HANDLER_OWNER.
-
-    Drives the actual service registrars (not a hand-built mapping) so a queue
-    literal that drifts from the owner map fails here.
-    """
+    """Bind every registered service task to its declared owner queue."""
     import procrastinate
     from jarvis_common.jobs import JOB_HANDLER_OWNER
     from learning_engine._task_register import register_learning_engine_tasks
@@ -193,14 +196,12 @@ def test_queue_assignments_match_owner_map() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shim implements the legacy JobContext surface
+# Context adapter behavior
 # ---------------------------------------------------------------------------
 
 
 def test_ctx_shim_implements_jobcontext_protocol() -> None:
-    """The shim must expose ``job_id``, ``update_progress``, ``is_cancelled``
-    matching the legacy ``jarvis_common.jobs.JobContext`` shape.
-    """
+    """Expose the job identifier, progress callback, and cancellation check."""
     from jarvis_common._ctx_shim import ProcrastinateJobContextShim, make_ctx_shim
 
     shim = make_ctx_shim(None, job_id="job-abc")
@@ -223,7 +224,7 @@ def test_ctx_shim_implements_jobcontext_protocol() -> None:
 
 @pytest.mark.asyncio
 async def test_ctx_shim_methods_runnable() -> None:
-    """The Step 2 stub bodies must execute without raising."""
+    """The context shim methods execute without external dependencies."""
     from jarvis_common._ctx_shim import make_ctx_shim
 
     shim = make_ctx_shim(None, job_id="job-xyz")
@@ -232,7 +233,7 @@ async def test_ctx_shim_methods_runnable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# set_dependencies is not required at import time
+# Dependencies are required only when a task runs
 # ---------------------------------------------------------------------------
 
 
@@ -247,20 +248,17 @@ def test_set_dependencies_then_called_pre_worker() -> None:
     assert hasattr(task_registry, "register_tasks"), (
         "register_tasks must be exported for service startup hooks"
     )
-    # Tasks are registered lazily by each service — NOT at import time.
-    # Only builtin tasks + noop.test exist immediately after import.
+    # Each service registers its tasks during startup.
     assert "noop.test" in task_registry.app.tasks or all(
         t.queue == "builtin" for t in task_registry.app.tasks.values()
     ), "unexpected non-builtin tasks at import time (check for accidental static registration)"
 
 
 def test_require_dependencies_raises_before_set() -> None:
-    """The task-body guard raises a clear RuntimeError when dependencies are
-    not yet set. We test the guard directly to avoid running the worker.
-    """
+    """Raise a clear error when task dependencies have not been set."""
     import jarvis_common.task_registry as task_registry
 
-    # Snapshot + reset module-level deps
+    # Preserve module state while exercising the unset case.
     saved_pool = task_registry._pool
     saved_http = task_registry._http_client
     task_registry._pool = None
@@ -426,9 +424,10 @@ def test_isolated_registrations_do_not_bleed() -> None:
         def __init__(self) -> None:
             self.tasks: dict[str, object] = {}
 
-        def task(self, *, name: str, queue: str, pass_context: bool):
+        def task(self, *, name: str, queue: str, pass_context: bool, retry):
             def _deco(fn):
                 fn.queue = queue
+                fn.retry_strategy = retry
                 self.tasks[name] = fn
                 return fn
 
@@ -452,11 +451,7 @@ def test_isolated_registrations_do_not_bleed() -> None:
 
 
 def test_kind_to_task_is_immutable() -> None:
-    """KIND_TO_TASK must not accept direct writes (MappingProxyType semantics).
-
-    Guard invariant: KIND_TO_TASK is a MappingProxyType backed by _TASK_MAP.
-    Direct writes raise TypeError; all mutations must go through register_tasks.
-    """
+    """Reject direct writes to the read-only task mapping."""
     import jarvis_common.task_registry as tr
 
     with pytest.raises(TypeError):
@@ -464,16 +459,12 @@ def test_kind_to_task_is_immutable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# register_tasks dependency propagation via public setter (not private attr)
+# Dependency propagation for additional app instances
 # ---------------------------------------------------------------------------
 
 
 def test_register_tasks_propagates_dependencies_via_set_dependencies() -> None:
-    """When ``_DEFAULT_REGISTRY`` has dependencies set, ``register_tasks`` with a
-    different app must copy them onto the new registry via ``set_dependencies``
-    (the public API), resulting in ``require_dependencies()`` returning matching
-    pool/http_client objects.
-    """
+    """Keep configured dependencies available when registering another app."""
     from unittest.mock import MagicMock
 
     import jarvis_common.task_registry as tr
@@ -486,7 +477,7 @@ def test_register_tasks_propagates_dependencies_via_set_dependencies() -> None:
     pool = MagicMock(name="pool")
     http_client = MagicMock(name="http_client")
 
-    # Snapshot and install deps on _DEFAULT_REGISTRY directly.
+    # Preserve the default registry while supplying dependencies for the test.
     saved_deps = tr._DEFAULT_REGISTRY._dependencies
     tr._DEFAULT_REGISTRY._dependencies = TaskDependencies(pool=pool, http_client=http_client)
     try:
@@ -496,9 +487,7 @@ def test_register_tasks_propagates_dependencies_via_set_dependencies() -> None:
 
         tr.register_tasks(fresh_app, mapping={"dep.test_copy": _dummy}, queue="test_q")
 
-        # Build the new registry the same way register_tasks does to inspect it.
-        # We can't reach the registry object directly; instead verify via KIND_TO_TASK
-        # that registration succeeded, and verify the default registry's deps are intact.
+        # The default registry retains the same dependency objects.
         deps = tr._DEFAULT_REGISTRY.require_dependencies()
         assert deps.pool is pool
         assert deps.http_client is http_client
@@ -508,9 +497,7 @@ def test_register_tasks_propagates_dependencies_via_set_dependencies() -> None:
 
 
 def test_register_tasks_no_error_when_default_dependencies_none() -> None:
-    """When ``_DEFAULT_REGISTRY._dependencies`` is None, ``register_tasks`` with a
-    different app must NOT raise and must NOT copy a None onto the new registry.
-    """
+    """Register another app when no default dependencies are configured."""
     import jarvis_common.task_registry as tr
     import procrastinate
     from procrastinate.contrib.aiopg import AiopgConnector
@@ -524,7 +511,6 @@ def test_register_tasks_no_error_when_default_dependencies_none() -> None:
         async def _dummy(_pool, _http, _payload, _ctx):
             return {}
 
-        # Must not raise even though no dependencies are set.
         tr.register_tasks(fresh_app, mapping={"dep.test_none": _dummy}, queue="test_q")
     finally:
         tr._DEFAULT_REGISTRY._dependencies = saved_deps

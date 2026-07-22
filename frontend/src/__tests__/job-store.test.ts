@@ -104,10 +104,6 @@ describe('JobStore', () => {
     // so vi.resetAllMocks() is required here to prevent cross-test mock queue bleed.
     vi.resetAllMocks();
     vi.restoreAllMocks();
-    // Re-stub sonner after restoreAllMocks
-    vi.mock('sonner', () => ({
-      toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-    }));
   });
 
   afterEach(() => {
@@ -692,7 +688,7 @@ describe('JobStore', () => {
   it('papers.process_library: cancelled result still names failures accrued before the stop', async () => {
     const { toast } = await import('sonner');
     await runLibraryTerminal('job-libcancelerr', {
-      status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+      status: 'cancelled', total: 100, remaining: 96, downloaded: 0, processed: 3, summarized: 0,
       blocked: [{ paper_id: 9, reason: 'no_pdf_source' }],
       errors: [
         { paper_id: 7, stage: 'process', error: 'boom' },
@@ -706,7 +702,19 @@ describe('JobStore', () => {
     expect(msg).toMatch(/cancelled/i);
     expect(msg).toContain('2 failed');
     expect(msg).toContain('1 skipped');
-    expect(msg).toContain('100');
+    expect(msg).toContain('96 not processed');
+  });
+
+  it('papers.process_library: partial result names papers not reached', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libremaining', {
+      status: 'partial', total: 5, examined: 2, remaining: 3,
+      downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    expect(warnCall[0] as string).toContain('3 not processed');
   });
 
   it('subscribe: failed terminal event fires toast.error with message', async () => {

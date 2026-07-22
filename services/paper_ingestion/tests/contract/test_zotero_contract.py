@@ -57,11 +57,7 @@ async def _zotero_app(contract_conn):
 
 
 async def _seed_user_and_paper(conn, *, email: str, title: str) -> tuple[int, int]:
-    """Insert one user + one paper discovered by that user; return (user_id, paper_id).
-
-    Uses ``discovered_by`` (not the removed ``user_id`` column) per the canonical
-    corpus ownership semantics in assert_paper_ownership (db_helpers.py:235).
-    """
+    """Insert one user and one private paper in that user's library."""
     user_id = await conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         email,
@@ -76,6 +72,12 @@ async def _seed_user_and_paper(conn, *, email: str, title: str) -> tuple[int, in
         title,
         user_id,
     )
+    await conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        paper_id,
+    )
     return int(user_id), int(paper_id)
 
 
@@ -86,20 +88,8 @@ async def _seed_user_and_paper(conn, *, email: str, title: str) -> tuple[int, in
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_ownership_check_passes_for_own_paper(contract_conn):
-    """assert_paper_ownership does NOT raise when caller == discovered_by.
-
-    Collapses: the positive ownership path of test_get_paper_zotero_state_checks_ownership
-    — exercises the real SQL in assert_paper_ownership (db_helpers.py:235) instead of
-    monkeypatching it.
-
-    NOTE: The full GET /api/papers/{id}/zotero route is NOT exercised here because
-    the papers table in the contract DB (init.sql baseline) does not include the
-    zotero_item_key / zotero_citation_key / zotero_last_pushed_at columns — those
-    are legacy migration-only columns not yet folded into init.sql.
-    STALE-CITATION: zotero router fetchrow("SELECT zotero_item_key …") fails
-    against the contract schema. Scoped to ownership layer only.
-    """
+async def test_visibility_check_passes_for_library_paper(contract_conn):
+    """The real SQL guard accepts a private paper in the caller's library."""
     from jarvis_common.db_helpers import assert_paper_ownership
 
     user_id, paper_id = await _seed_user_and_paper(
@@ -108,27 +98,23 @@ async def test_ownership_check_passes_for_own_paper(contract_conn):
         title="ZZZ-ZOTERO-CONTRACT Ownership Pass",
     )
 
-    # Must not raise — caller is the owner (discovered_by == user_id)
     await assert_paper_ownership(contract_conn, paper_id, user_id)
 
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_ownership_check_passes_for_canonical_paper(contract_conn):
-    """assert_paper_ownership does NOT raise for discovered_by IS NULL (shared corpus).
-
-    A paper with no discovered_by is a shared/canonical paper readable by all
-    authenticated users — this is the D4 ownership rule (db_helpers.py:295-299).
-    """
+async def test_visibility_check_passes_for_persisted_public_paper(contract_conn):
+    """The real SQL guard accepts persisted-public scope without membership."""
     from jarvis_common.db_helpers import assert_paper_ownership
 
-    # Seed a canonical paper with discovered_by = NULL.
     paper_id = await contract_conn.fetchval(
         """
-        INSERT INTO papers (external_id, source_type, title, authors, url)
+        INSERT INTO papers (
+            external_id, source_type, title, authors, url, visibility_scope
+        )
         VALUES ('arxiv:zotero-canonical-001', 'arxiv',
                 'ZZZ-ZOTERO-CONTRACT Canonical Paper',
-                ARRAY['System'], 'https://example.com/canonical')
+                ARRAY['System'], 'https://example.com/canonical', 'public')
         RETURNING id
         """,
     )
@@ -139,7 +125,6 @@ async def test_ownership_check_passes_for_canonical_paper(contract_conn):
         "zotero-reader@test.invalid",
     )
 
-    # assert_paper_ownership must pass even though reader_id != discovered_by.
     await assert_paper_ownership(contract_conn, int(paper_id), int(reader_id))
 
 

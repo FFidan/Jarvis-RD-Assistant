@@ -12,6 +12,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.net import parse_retry_after
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -74,7 +75,13 @@ async def _zotero_request_with_retry(
 
     The caller still owns ``raise_for_status()`` — this helper only retries;
     it does not promote 429 into an exception.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials await review before the first request or retry.
     """
+    ensure_outbound_egress_allowed("Zotero API request")
     resp = await http.request(method, url, **kwargs)
     if resp.status_code != 429:
         return resp
@@ -90,23 +97,16 @@ async def _zotero_request_with_retry(
         delay,
     )
     await asyncio.sleep(delay)
+    ensure_outbound_egress_allowed("Zotero API retry")
     return await http.request(method, url, **kwargs)
 
 
 def validate_bbt_base_url(url: str | None = None) -> None:
     """Validate BBT_BASE_URL at startup to block unsafe schemes or private IPs.
 
-    Raises ``ValueError`` if the URL has an unsupported scheme (not http/https)
-    or if the hostname resolves to a private/loopback IP address and is not in
-    the explicit allow-list (``_BBT_ALLOWED_PRIVATE_HOSTS``).
-
-    ``host.docker.internal`` is intentionally allowed because it is the
-    standard Docker-Desktop hostname for reaching the host machine from inside
-    a container — it is not a general SSRF vector in a controlled Docker env.
-
     Parameters
     ----------
-    url:
+    url : str or None
         The BBT base URL to validate. Defaults to ``bbt_base_url`` from
         settings (resolved lazily at call time, not at import time).
 
@@ -115,6 +115,11 @@ def validate_bbt_base_url(url: str | None = None) -> None:
     ValueError
         If the URL scheme is unsupported or the host is a private IP not in
         the explicit allowlist.
+
+    Notes
+    -----
+    ``host.docker.internal`` is explicitly allowed so a container can reach a
+    Zotero Better BibTeX service running on its Docker Desktop host.
     """
     if url is None:
         url = get_paper_ingestion_settings().bbt_base_url
@@ -164,6 +169,14 @@ def _read_pdf_for_upload(pdf_path: str) -> tuple[bytes, str, int, int]:
 
 
 class ZoteroClient:
+    """Credential-bound client for one personal or group Zotero library.
+
+    All Zotero Web API, attachment-upload, and Better BibTeX calls re-check the
+    shared outbound-quarantine authority at their network boundary. Callers may
+    construct the client while quarantined, but construction never grants
+    permission to use the restored API key.
+    """
+
     def __init__(
         self,
         api_key: str,
@@ -176,17 +189,17 @@ class ZoteroClient:
 
         Parameters
         ----------
-        api_key:
+        api_key : str
             Zotero Web API key with read/write library access.
-        user_id:
+        user_id : str
             Numeric Zotero user ID (from zotero.org/settings/keys).
-        library_type:
+        library_type : {"user", "group"}
             ``"user"`` for a personal library (default) or ``"group"`` for a
             group library.  When ``"group"``, ``group_id`` must be provided.
-        group_id:
+        group_id : int or None
             Numeric Zotero group ID.  Required when ``library_type="group"``;
             must be a positive integer.  Ignored when ``library_type="user"``.
-        http_client:
+        http_client : httpx.AsyncClient or None
             Optional shared ``httpx.AsyncClient`` to reuse across calls.
         """
         if library_type not in ("user", "group"):
@@ -265,21 +278,33 @@ class ZoteroClient:
 
         ``item_key`` must already exist as an ``imported_file`` attachment item.
 
-        1. **Authorize** — ``POST {base}/items/{KEY}/file`` (form-urlencoded,
-           ``If-None-Match: *`` for a new file) carrying ``md5``/``filename``/
-           ``filesize``/``mtime`` (milliseconds)/``params=1``. The 200 response is
-           either ``{"exists": 1}`` (identical file already stored → done) or the
-           upload parameters ``{url, contentType, prefix, suffix, uploadKey}``.
-        2. **Upload bytes** — ``POST`` the concatenation ``prefix + bytes + suffix``
-           to the Stage-1 ``url`` (S3, not api.zotero.org). This request carries the
-           Stage-1 ``contentType`` and **no Zotero auth/version headers**, and
-           bypasses the Zotero-host 429 retry wrapper (which is host-specific).
-        3. **Register** — ``POST {base}/items/{KEY}/file`` with ``upload=<uploadKey>``
-           and the same precondition; success is ``204 No Content``.
+        Parameters
+        ----------
+        item_key : str
+            Key of the existing Zotero attachment item.
+        pdf_path : str
+            Local path of the PDF to upload.
 
-        Returns ``None`` on success (including the ``{"exists": 1}`` short-circuit).
-        Raises ``httpx.HTTPStatusError`` on any Zotero-host failure (412/413/428/429);
-        the caller maps these to a status (413 == storage quota exceeded).
+        Returns
+        -------
+        None
+            Success, including the ``{"exists": 1}`` short-circuit.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before any of the three
+            outbound stages.
+        httpx.HTTPStatusError
+            If a Zotero or object-storage request fails. The caller maps status
+            413 to storage-quota exhaustion.
+
+        Notes
+        -----
+        The Zotero protocol first authorizes the file and returns either an
+        already-present result or object-storage upload parameters. The client
+        then uploads the bytes without Zotero credentials and registers the
+        returned upload key with Zotero.
         """
         file_bytes, md5_hex, filesize, mtime_ms = await asyncio.to_thread(
             _read_pdf_for_upload, pdf_path
@@ -310,6 +335,7 @@ class ZoteroClient:
 
         # Stage 2 — upload bytes to S3. No Zotero headers; plain client POST so the
         # Zotero-host 429 retry wrapper is bypassed. 2xx (201) == success.
+        ensure_outbound_egress_allowed("Zotero attachment upload")
         upload = await self._http.post(
             auth["url"],
             content=auth["prefix"].encode("utf-8") + file_bytes + auth["suffix"].encode("utf-8"),
@@ -416,9 +442,19 @@ class ZoteroClient:
     async def fetch_bbt_citation_key(self, item_key: str) -> str | None:
         """Try to get Better BibTeX citation key from local BBT plugin.
 
-        Returns None if unavailable (BBT not installed or not running).
+        Parameters
+        ----------
+        item_key : str
+            Zotero item key to resolve.
+
+        Returns
+        -------
+        str or None
+            Citation key when available. Missing BBT, request failures, invalid
+            responses, and outbound quarantine all map to ``None``.
         """
         try:
+            ensure_outbound_egress_allowed("Better BibTeX request")
             encoded_key = urllib.parse.quote(item_key, safe="")
             bbt_base = get_paper_ingestion_settings().bbt_base_url
             resp = await self._http.get(
@@ -480,11 +516,25 @@ class ZoteroClient:
 
         Parameters
         ----------
-        item_key:
+        item_key : str
             Zotero item key whose children should be fetched.
-        item_type:
+        item_type : str
             Zotero child ``itemType`` filter. Defaults to ``annotation`` for
             imported PDF highlights/comments.
+
+        Returns
+        -------
+        list[dict]
+            Child items in Zotero pagination order.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before a request.
+        httpx.HTTPStatusError
+            If Zotero rejects a page request.
+        RuntimeError
+            If pagination exceeds the configured item limit.
         """
         all_items: list[dict] = []
         start = 0
@@ -517,8 +567,16 @@ class ZoteroClient:
         return all_items
 
     async def test_connection(self) -> bool:
-        """Verify API key and user ID are valid. Returns True on success."""
+        """Verify that the configured API key and library identity are accepted.
+
+        Returns
+        -------
+        bool
+            ``True`` only for a successful Zotero response. Request failures and
+            outbound quarantine return ``False`` without propagating details.
+        """
         try:
+            ensure_outbound_egress_allowed("Zotero credential test")
             resp = await self._http.get(
                 f"{self._base}/items?limit=1",
                 headers=self._headers(),

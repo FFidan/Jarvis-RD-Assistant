@@ -128,6 +128,65 @@ sync_secret() {
   fi
 }
 
+# Data-encryption keys travel with a restored database.  When a restore has
+# already installed one of these files, the file is authoritative and .env is
+# reconciled to it.  Host credentials continue to use sync_secret above, where
+# the target host's .env remains authoritative.
+sync_data_key() {
+  local key="$1" filename="$2" generator="$3"
+  local file="secrets/${filename}" value="" file_size=""
+
+  if [ -e "$file" ] || [ -L "$file" ]; then
+    if [ -L "$file" ]; then
+      warn "${file} is a symbolic link — refusing to use it as a restored data key."
+      FAILED=1
+      return
+    fi
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+      warn "${file} is not a small regular data-key file — refusing to use it."
+      FAILED=1
+      return
+    fi
+    # `stat -c` is GNU-only. POSIX wc works on Linux and stock macOS; strip its
+    # padded whitespace, then validate before any file content is imported.
+    if ! file_size="$(LC_ALL=C wc -c < "$file" 2>/dev/null)"; then
+      warn "${file} could not be measured safely — refusing to use it."
+      FAILED=1
+      return
+    fi
+    file_size="${file_size//[[:space:]]/}"
+    case "$file_size" in
+      ''|*[!0-9]*)
+        warn "${file} has an unreadable size — refusing to use it."
+        FAILED=1
+        return
+        ;;
+    esac
+    if [ "$file_size" -eq 0 ]; then
+      warn "${file} contains no usable data key — refusing to use it."
+      FAILED=1
+      return
+    fi
+    if [ "$file_size" -gt 4096 ]; then
+      warn "${file} is not a small regular data-key file — refusing to use it."
+      FAILED=1
+      return
+    fi
+    value="$(tr -d '\r\n' < "$file")"
+    if [ -z "$value" ]; then
+      warn "${file} contains no usable data key — refusing to use it."
+      FAILED=1
+      return
+    fi
+    upsert_env_var "$key" "$value"
+    chmod "$SECRET_FILE_MODE" "$file"
+    info "${file} is authoritative; ${key} in .env is in sync."
+    return
+  fi
+
+  sync_secret "$key" "$filename" "$generator"
+}
+
 # ---------------------------------------------------------------------------
 # Auto-generated secrets
 # ---------------------------------------------------------------------------
@@ -143,7 +202,7 @@ sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # Without it litellm falls back to the master key as salt, so a master-key
 # rotation would brick every encrypted DB row — pin a dedicated salt instead;
 # never rotate this key manually.
-sync_secret LITELLM_SALT_KEY   litellm_salt_key.txt   "openssl rand -hex 32"
+sync_data_key LITELLM_SALT_KEY litellm_salt_key.txt "openssl rand -hex 32"
 sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
 # INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.
@@ -155,12 +214,12 @@ sync_secret INFRA_INGEST_KEY   infra_ingest_key.txt   "openssl rand -hex 32"
 # regenerate when an existing value is present.  ``openssl rand -base64 32``
 # emits 32 random bytes as standard base64; Fernet's urlsafe decoder accepts it
 # (it only maps -_ to +/, leaving +/ intact), so it is a valid JARVIS_CONFIG_KEY.
-sync_secret JARVIS_CONFIG_KEY  jarvis_config_key.txt  "openssl rand -base64 32 | tr -d '\\n'"
+sync_data_key JARVIS_CONFIG_KEY jarvis_config_key.txt "openssl rand -base64 32 | tr -d '\\n'"
 
 # JARVIS_MODEL_HMAC_KEY signs the Pulse classifier pickle blobs (HMAC-SHA256).
 # Mandatory in production (auth.py / pulse/training.py refuse to start without
 # it); 32 bytes hex = 64 chars, comfortably above the 32-char minimum.
-sync_secret JARVIS_MODEL_HMAC_KEY jarvis_model_hmac_key.txt "openssl rand -hex 32"
+sync_data_key JARVIS_MODEL_HMAC_KEY jarvis_model_hmac_key.txt "openssl rand -hex 32"
 
 # ---------------------------------------------------------------------------
 # Langfuse observability (--profile observability)

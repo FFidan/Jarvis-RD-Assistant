@@ -24,13 +24,12 @@ logger = logging.getLogger(__name__)
 _TXN_LINE_RE = re.compile(r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", re.IGNORECASE)
 
 # db/init.sql is the full schema baseline through migration 101; db/migrations/
-# holds 0102 (WebAuthn credential storage) on top, so the passkey build requires
-# schema 102 and the floor below fail-closes a database still stuck at 101.
+# holds the required post-baseline migrations through 0106.
 _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 102
+_REQUIRED_CODE_SCHEMA_FALLBACK = 106
 
 
 def _schema_version_path() -> Path:

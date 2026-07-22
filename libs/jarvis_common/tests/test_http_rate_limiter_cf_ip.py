@@ -26,6 +26,10 @@ class _FakeRequest:
 
     headers: dict[str, str] = field(default_factory=dict)
     client: _FakeClient | None = field(default_factory=_FakeClient)
+    # ``None`` models a narrow unit-test double with no ASGI scope. Production
+    # requests always expose a dict; an empty dict therefore models a missing
+    # RawClientStashMiddleware snapshot and must fail closed.
+    scope: dict[str, object] | None = None
 
 
 @dataclass
@@ -43,10 +47,97 @@ def cf_trust_enabled(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_valid_cf_connecting_ip_is_honoured(cf_trust_enabled) -> None:
-    """A single well-formed CF-Connecting-IP is still returned verbatim."""
-    req = _FakeRequest(headers={"CF-Connecting-IP": "198.51.100.7"})
+    """The raw trusted peer proves provenance; CF identity keys the limit.
+
+    This models production middleware order: RawClientStashMiddleware records
+    nginx's socket address, then ProxyHeadersMiddleware rewrites
+    ``request.client`` from X-Forwarded-For before SlowAPI calls ``_real_ip``.
+    """
+    req = _FakeRequest(
+        headers={
+            "CF-Connecting-IP": "198.51.100.7",
+            "X-Jarvis-CF-Ingress": "1",
+        },
+        client=_FakeClient(host="203.0.113.80"),
+        scope={"jarvis.raw_client": ("127.0.0.1", 43120)},
+    )
 
     assert cf_trust_enabled._real_ip(req) == "198.51.100.7"
+
+
+@pytest.mark.parametrize("marker", [None, "0", "true", "1, 1"])
+def test_cf_header_without_exact_ingress_marker_is_ignored(cf_trust_enabled, marker) -> None:
+    """Caddy, Tailscale, and raw ingress cannot promote a forged CF header."""
+    headers = {"CF-Connecting-IP": "198.51.100.7"}
+    if marker is not None:
+        headers["X-Jarvis-CF-Ingress"] = marker
+    req = _FakeRequest(
+        headers=headers,
+        client=_FakeClient(host="127.0.0.1"),
+        scope={"jarvis.raw_client": ("127.0.0.1", 43120)},
+    )
+
+    assert cf_trust_enabled._real_ip(req) == "127.0.0.1"
+
+
+def test_cf_marker_from_untrusted_raw_socket_peer_is_ignored(cf_trust_enabled) -> None:
+    """A forged XFF rewrite cannot make an untrusted socket peer trusted."""
+    req = _FakeRequest(
+        headers={
+            "CF-Connecting-IP": "198.51.100.7",
+            "X-Jarvis-CF-Ingress": "1",
+        },
+        # ProxyHeadersMiddleware has already rewritten this to a trusted value.
+        client=_FakeClient(host="127.0.0.1"),
+        # RawClientStashMiddleware retained the actual sibling-container peer.
+        scope={"jarvis.raw_client": ("172.31.9.9", 43120)},
+    )
+
+    assert cf_trust_enabled._real_ip(req) == "172.31.9.9"
+
+
+def test_xff_from_untrusted_raw_socket_peer_is_ignored(cf_trust_enabled) -> None:
+    """An untrusted transport peer cannot select a key through forwarded headers."""
+    req = _FakeRequest(
+        headers={"X-Forwarded-For": "198.51.100.44, 127.0.0.1"},
+        # ProxyHeadersMiddleware already rewrote the visible client.
+        client=_FakeClient(host="127.0.0.1"),
+        # The outer middleware retained the real, untrusted transport peer.
+        scope={"jarvis.raw_client": ("172.31.9.9", 43120)},
+    )
+
+    assert cf_trust_enabled._real_ip(req) == "172.31.9.9"
+
+
+def test_cf_marker_without_raw_peer_stash_is_ignored(cf_trust_enabled) -> None:
+    """Cloudflare provenance fails closed if the outer stash middleware is absent."""
+    req = _FakeRequest(
+        headers={
+            "CF-Connecting-IP": "198.51.100.7",
+            "X-Jarvis-CF-Ingress": "1",
+        },
+        client=_FakeClient(host="127.0.0.1"),
+        scope={},
+    )
+
+    assert cf_trust_enabled._real_ip(req) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "raw_peer",
+    [None, (), (1234, 43120), ("not-an-ip", 43120)],
+)
+def test_forwarding_headers_with_malformed_raw_peer_fail_closed(
+    cf_trust_enabled, raw_peer: object
+) -> None:
+    """Malformed production stash data cannot fall back to a rewritten client."""
+    req = _FakeRequest(
+        headers={"X-Forwarded-For": "198.51.100.44, 127.0.0.1"},
+        client=_FakeClient(host="127.0.0.1"),
+        scope={"jarvis.raw_client": raw_peer},
+    )
+
+    assert cf_trust_enabled._real_ip(req) == "unknown"
 
 
 def test_malformed_cf_connecting_ip_falls_through_to_xff(
@@ -62,9 +153,12 @@ def test_malformed_cf_connecting_ip_falls_through_to_xff(
         headers={
             # Two IPs — invalid for a single-IP parse; an attacker could forge this.
             "CF-Connecting-IP": "1.2.3.4, 5.6.7.8",
+            "X-Jarvis-CF-Ingress": "1",
             # XFF: 8.8.8.8 (public client) -> 127.0.0.1 (trusted loopback hop).
             "X-Forwarded-For": "8.8.8.8, 127.0.0.1",
-        }
+        },
+        client=_FakeClient(host="127.0.0.1"),
+        scope={"jarvis.raw_client": ("127.0.0.1", 43120)},
     )
 
     # Falls through to XFF; right-to-left walk skips the trusted loopback hop and
@@ -137,13 +231,14 @@ def test_garbage_cf_connecting_ip_falls_through_to_socket_peer(
 ) -> None:
     """A non-IP CF-Connecting-IP with no XFF falls back to the socket peer."""
     req = _FakeRequest(
-        headers={"CF-Connecting-IP": "not-an-ip"},
-        client=_FakeClient(host="203.0.113.42"),
+        headers={"CF-Connecting-IP": "not-an-ip", "X-Jarvis-CF-Ingress": "1"},
+        client=_FakeClient(host="127.0.0.1"),
+        scope={"jarvis.raw_client": ("127.0.0.1", 43120)},
     )
 
     # No XFF header → after the bad CF value is rejected, fall to request.client.host.
     with caplog.at_level("WARNING", logger=cf_trust_enabled.logger.name):
-        assert cf_trust_enabled._real_ip(req) == "203.0.113.42"
+        assert cf_trust_enabled._real_ip(req) == "127.0.0.1"
 
     warnings = [
         rec

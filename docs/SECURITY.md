@@ -12,11 +12,14 @@ JARVIS uses three distinct credential types with strictly bounded authority:
 
 | Identity | Credential | Scope | Accesses user research data? |
 |---|---|---|---|
-| **Ops** | `JARVIS_API_KEY` (X-API-Key header) | Service-to-service calls (Telegram bot, cron jobs, health checks) | No — ops callers get no `user_id` from the session layer; user-data routes reject them with 401 |
+| **Ops / owner recovery** | `JARVIS_API_KEY` (X-API-Key header) | Service-to-service calls and a gated session exchange for the configured instance owner | Only after the owner exchange mints that administrator's normal scoped session; the bare key has no user identity |
 | **User** | Magic-link session cookie (`jarvis_session`) | Own data only — the session layer injects `user_id` into every request; `current_user_id_strict` enforces it | Yes — own rows only |
 | **Admin** | Session cookie with `role = admin` | Manages users via `/admin/users`, views the audit log at `/api/admin/audit-log`; **no access to other users' research data** | No cross-user data access — admin role controls ops, not data |
 
-The `JARVIS_API_KEY` is an ops secret, not a user password. Anyone who holds it can call service endpoints but cannot read or write another user's papers, cards, or settings — the user-data layer requires a valid session identity.
+The `JARVIS_API_KEY` is an operations secret, not a family password. It can
+mint a normal session for the configured owner on localhost or HTTPS, including
+on a multi-user instance. It cannot mint sessions for other users. User-data
+routes still require the identity carried by a session.
 
 The session layer uses **rolling (sliding) expiry** (`session_middleware.py`). A signed-in session is valid for 30 days (`SESSION_TTL`); each time it is used its expiry rolls forward another 30 days, but at most once per day (`SESSION_RENEW_AFTER`) so a busy user triggers a single database write per day rather than one per request. Renewal is a single atomic `UPDATE` whose `WHERE` clause is the security boundary: it renews only rows that are **not revoked** and **not already expired**, so neither a revoked session nor a grace-resolved one can extend itself. When a renewal happens the response re-issues the `Set-Cookie`, so the browser and the database row move together and never disagree on when the session ends.
 
@@ -44,66 +47,57 @@ See `docs/known-residual-risks.md` for the full residual-risk register.
 
 JARVIS supports passkey sign-in and per-device credential management alongside the magic-link flow.
 
-- **Origin binding.** The allowed WebAuthn origin is derived from the operator-configured `APP_BASE_URL` (the same value that drives the access-mode conduit) and matched **exactly** — the server never trusts a `request.url`-derived origin, and `rp_id` is the matched hostname. A configured **public** origin must be HTTPS; loopback and other secure-context origins are allowed for local installs.
+- **Origin binding.** A named WebAuthn origin is derived from the
+  operator-configured `APP_BASE_URL` and matched **exactly**; the server never
+  trusts a request-derived origin, and the RP ID is the matched hostname. A
+  configured non-loopback origin must be HTTPS. Local installs additionally
+  allow only `localhost` and `jarvis.localhost`, on their served HTTP or HTTPS
+  ports.
 - **User verification (UV) is required** for both registration and login. A login that fails UV is rejected **without** revoking the credential, so a failed verification cannot be used to lock a user out of their own passkey.
 - **Replay / one-finish.** Each challenge is claimed with a single `DELETE … RETURNING`, so a replayed or concurrently double-finished ceremony resolves exactly once.
 - **Cloned-authenticator detection.** An authenticator presenting a signature counter that is nonzero and less-than-or-equal-to the stored value is treated as cloned: the credential is revoked and all of its sessions are ended in the same transaction. Authenticators that legitimately never increment their counter (counter stays 0) continue to work.
-- **Revocation.** Deleting one credential ends only that credential's sessions; an admin revoke-all ends every passkey session. The magic-link recovery path is always available, so losing a device never locks an account out.
-- **Honest availability.** A capability endpoint reports whether this origin can run passkey ceremonies, so the UI only offers passkeys where they will actually work; a raw-IP LAN install keeps magic-link sign-in and rolling sessions instead of showing a button that cannot succeed.
+- **Revocation.** Deleting one credential ends only that credential's sessions;
+  an admin revoke-all ends every passkey session. Recovery requires working
+  email, a manual link from a signed-in administrator, or the owner-only API-key
+  exchange. Operators should verify one of those paths before removing the last
+  administrator passkey.
+- **Availability signal.** A capability endpoint reports whether the current
+  origin can run a passkey ceremony. Raw-IP LAN HTTP serves only
+  `/health/jarvis`; every other remote path returns HTTP 403. Remote users need
+  a named HTTPS origin.
 
 ---
 
-## Data Sharing Boundary
+## Source-aware paper visibility
 
-This section states the committed data-sharing model for a JARVIS instance.
-The enforcement point is `assert_paper_ownership` / `assert_papers_ownership`
-in `libs/jarvis_common/jarvis_common/db_helpers.py`.
+Paper access is determined by the persisted `visibility_scope` and explicit
+library membership. Provenance fields such as `source_type` and
+`discovered_by` remain useful for audit and display, but they do not grant
+access. An authenticated user can retrieve a paper only when it is persisted as
+`public` or the user has explicitly added it to their own library.
 
-### What is shared (corpus layer)
+| Origin | Persisted scope | Who can retrieve it? |
+|---|---|---|
+| **Verified server source** — arXiv, Semantic Scholar, OpenAlex, or PubMed through the server-owned adapter | Public | Every authenticated user on the instance |
+| **Local PDF upload** | Private | Only users who explicitly add the paper to their library |
+| **Unverified client batch** — including request-supplied citation metadata | Private | Only users who explicitly add the paper to their library |
+| **Personal or group Zotero** import | Private | Only the connecting user unless another user independently adds the same paper |
+| **Ambiguous legacy Zotero** identity | Private | Excluded from other users; it remains unlinked until a user explicitly shelves it or its namespace can be resolved safely |
+| **Unknown or unattributed** provenance | Private | Excluded unless a user explicitly adds the paper to their library |
 
-The following data is **shared across all authenticated users on an instance**:
+The same rule applies to feed results, direct paper reads, citations, graph
+views, summaries, and single- or cross-paper Ask. Full-text chunks and vectors
+do not widen it: authenticated vector retrieval also requires the current
+visibility generation, and the relational database rechecks every candidate.
+Missing or stale generation metadata therefore causes temporary under-fetch,
+never broader access.
 
-- Paper metadata (title, authors, abstract, publication date, DOI, source).
-- Full-text chunks and embeddings stored in Qdrant.
-- Citation graph edges and knowledge-graph entities derived from those papers.
-- Papers discovered by instance-level feeds: Pulse recommender, background
-  scheduler, and Zotero group syncs.  These have ``papers.discovered_by IS NULL``
-  (audit column only; no functional role).
-
-A paper with ``discovered_by IS NULL`` is a system/instance paper and is
-accessible to every authenticated user without requiring a ``user_library``
-membership row.  This reflects instance configuration (feed settings, Pulse
-model), not any individual user's behavior.
-
-Citation metadata surfaced in RAG answers (e.g. the title/authors of a cited
-paper) is drawn from this shared corpus layer by design — citations name public
-scholarly works, so a cited paper's bibliographic detail may appear in any
-user's answer even if that paper is not in their own ``user_library``. No
-per-user activity (library membership, notes, ratings) crosses this boundary.
-
-### What is strictly per-user (activity/output layer)
-
-The following is **never cross-visible** — every query is scoped to
-``user_id`` and no cross-user join is permitted:
-
-- Library membership (``user_library`` rows).
-- Paper read-state and ratings.
-- Notes and annotations.
-- Flashcards and card decks.
-- Projects, tasks, and project–paper associations.
-- Daily intent and Pulse preference signals.
-- Structured extractions-of-record.
-- Magic-link identity, session cookies, and user config values.
-
-Every product row in the database carries a non-NULL `user_id` — there is no
-NULL-owned product data. Single-tenant deployments are treated as multi-tenant
-with one user; ownership is enforced by the same server-side scoping that
-applies in the multi-user case.
-
-The corpus is a shared resource; the intellectual work on top of it is private
-(comparable to a shared scholarly library with per-user workspaces).
-Regression coverage lives in
-`libs/jarvis_common/tests/test_ownership_canonical_invariant.py`.
+Private activity and output remain user-scoped regardless of a paper's
+visibility: library membership, read state, ratings, notes, annotations,
+flashcards, projects and tasks, Pulse preferences, structured extractions,
+account settings, and sessions are never shared between users. Administrators
+manage the deployment but do not gain access to another user's private research
+through their role.
 
 ---
 
@@ -120,7 +114,7 @@ in `auth.py`).
 | `DEV_AUTH_BYPASS` | All authentication is bypassed when no `JARVIS_API_KEY` is configured (no key and no session required). |
 | `DEV_ERROR_DETAIL` | Raw exception detail is included in API error responses (information leakage). |
 | `DEV_CORS_OPEN` | `Access-Control-Allow-Origin` is opened to `*` instead of the `CORS_ORIGINS` allowlist. |
-| `DEV_SMTP_LOG_ONLY` | Magic-link emails are written to stdout/logs instead of being delivered via SMTP. |
+| `DEV_SMTP_LOG_ONLY` | SMTP delivery is suppressed. Logs and the event stream receive only a SHA-256 recipient hash and non-secret status metadata; the address, bearer link, and token are never logged. |
 | `DEV_CRYPTO_RELAXED` | Fernet key validation and HMAC key entropy requirements are relaxed. |
 
 `DEV_MODE=true` is a meta-flag: it promotes any of the five that were not
@@ -134,10 +128,9 @@ explicitly set in the environment. An explicit env var always wins.
 |---|---|---|
 | `JARVIS_API_KEY` | Ops API key — gates all non-auth, non-health backend endpoints. Min 32 chars; enforced at startup. | Yes (startup refuses if absent or < 32 chars) |
 | `JARVIS_CONFIG_KEY` | Fernet key for `user_config.encrypted_value` at-rest encryption. | Yes (startup refuses if absent) |
-| `JARVIS_CONFIG_KEY_OLD` | Previous Fernet key — enables zero-downtime rotation via MultiFernet. Set during key rotation; remove after. | No (rotation only) |
 | `JARVIS_MODEL_HMAC_KEY` | Dedicated HMAC-SHA256 key for Pulse classifier pickle signing (see below). Min 32 chars. | Yes (startup refuses if absent; derivation from `JARVIS_API_KEY` is refused in production) |
 | `LITELLM_SALT_KEY` | Salt key LiteLLM uses to encrypt model credentials (cloud provider API keys) stored in its admin database. Auto-generated into `secrets/litellm_salt_key.txt` by `scripts/init-secrets.sh`; delivered as a Docker secret. **Never rotate** — LiteLLM decrypts stored credentials with this exact key, and without a dedicated salt LiteLLM falls back to the master key, so a master-key rotation would brick every encrypted row. | Yes (the litellm container refuses to start without it) |
-| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for magic-link delivery. Without these, single-user installs can still use API-key login. Multi-user magic-link email is not deliverable until SMTP is configured and tested. Explicit empty-string SMTP secret values are rejected at settings load; leave fields unset when SMTP is intentionally disabled. | Strongly recommended for multi-user mode |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for automatic magic-link delivery. Without them, an administrator can still create a 24-hour invitation or 15-minute recovery link and share it privately. Explicit empty-string secret values are rejected; leave the fields unset when email is intentionally disabled. | Optional; recommended when users need self-service recovery |
 | `SMTP_REPLY_TO` | Optional Reply-To address for sign-in emails. When set, email clients route replies here instead of the From address. Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
 | `SMTP_FROM_NAME` | Optional sender display name shown in the From header (e.g. `JARVIS RD`). Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
 | `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
@@ -206,12 +199,15 @@ second writer implementing its own scoping.
 
 ### Config Key Rotation
 
-To rotate `JARVIS_CONFIG_KEY` without downtime:
-
-1. Set `JARVIS_CONFIG_KEY_OLD=<old key>` and `JARVIS_CONFIG_KEY=<new key>`.
-2. Run `scripts/rotate_config_key.py --apply` (dry-run first without `--apply`).
-3. Restart services.
-4. Remove `JARVIS_CONFIG_KEY_OLD` from the environment.
+The standard Docker deployment rotates `JARVIS_CONFIG_KEY` during a short
+maintenance window. The old and new keys are mounted into a one-off application
+container as files; `scripts/rotate_config_key.py` first validates every row and
+then re-encrypts them in one database transaction. Run
+`bash scripts/rotate-config-key.sh` from the repository root: the wrapper updates
+both the Docker secret file and `.env`, waits for healthy services, and can
+resume safely after an interruption. Follow [Encrypted config key
+rotation](DEPLOYMENT.md#encrypted-config-key-rotation); do not replace only one
+of those two files by hand.
 
 ---
 
@@ -241,25 +237,40 @@ The IP-allowlist call sites are:
   CIDR posture is the boundary.
 
 **Deployment requirement:** keep `trusted_proxy_hosts` scoped to the actual
-reverse-proxy hop(s). Do NOT set `trusted_proxy_hosts="*"` in any production
-deployment. The setting is exposed via `TRUSTED_PROXY_HOSTS` in
-`CoreSettings`; its default is the numeric range
-`127.0.0.0/8,10.137.241.0/24` (loopback plus the Docker bridge subnet,
-tracking `JARVIS_NET_SUBNET` — see `libs/jarvis_common/jarvis_common/settings.py`
-and the `TRUSTED_PROXY_HOSTS` line in `docker-compose.yml`'s environment
-block), which is correct for the standard single-host stack. It must be
-numeric: uvicorn's `ProxyHeadersMiddleware` matches the immediate socket peer
-against this list before it will rewrite `scope["client"]` from
-`X-Forwarded-For`, and a hostname literal like `dashboard` can never match a
-numeric peer address — the rewrite would never fire and the `X-Owner-User-Id`
-guard could be tricked into trusting a relayed browser request. In this
-stack, the trusted hop is the dashboard (nginx) container, not Caddy — Caddy
-terminates the public edge and proxies to `dashboard:3000`, and it is
-dashboard's nginx that makes the proxied connection to the app. As a second
-layer, that nginx also strips any browser-supplied `X-Owner-User-Id` header
-before proxying, so only the container-internal caller (which never
-traverses nginx) can set it. Override the default only when deploying behind
-a different proxy fleet.
+reverse-proxy hop. Do not set `trusted_proxy_hosts="*"` in production. In the
+standard stack, the application trusts only loopback and the dashboard
+container's derived `/32` address. Nginx, in turn, accepts forwarded HTTPS
+metadata only on its separate trusted-ingress listener and only from the
+derived host gateway, Caddy, local Caddy, and Cloudflare Tunnel addresses.
+The public/LAN listener discards browser-supplied forwarding metadata.
+Cloudflare client addresses are honoured only when the request arrives on the
+trusted listener from the pinned `cloudflared` container and nginx marks that
+ingress as Cloudflare-owned. Direct and LAN callers cannot opt in by sending
+`CF-Connecting-IP` or `X-Forwarded-For` themselves.
+
+| Boundary | Mapping | Remote behavior |
+|---|---|---|
+| Raw/local listener | container `3000`, host `3001` | Localhost gets the app; LAN clients get only `/health/jarvis`, with HTTP 403 everywhere else |
+| Trusted-edge listener | container `3002` | Only the derived gateway and pinned TLS edge containers are accepted |
+| Tailscale host ingress | host loopback `127.0.0.1:3003` to container `3002` | Tailscale Serve terminates HTTPS before forwarding |
+
+These values are numeric because uvicorn matches the immediate socket peer
+before applying `X-Forwarded-For`. Setup and update accept an IPv4 `/27` or
+larger network and derive the gateway and highest four usable addresses from
+`JARVIS_NET_SUBNET`; a custom subnet does not require Compose or nginx edits.
+Nginx also strips any browser-supplied `X-Owner-User-Id` header before proxying;
+only the container-internal caller that does not traverse nginx can set it.
+Override the defaults only for a proxy topology whose exact peers you control.
+
+### Transport header scope
+
+The loopback mkcert edge sends `Strict-Transport-Security: max-age=0` to clear
+rather than enable HSTS, because browsers store that policy for the `localhost`
+hostname across ports. A positive policy from port 3443 would break the supported
+plain-HTTP fallback on port 3001. The public Caddy edge sets a one-year policy
+for its configured hostname only; it does not claim sibling hostnames or browser
+preload. Operators who make either broader commitment must first ensure that
+every affected hostname already supports HTTPS.
 
 ---
 
@@ -297,7 +308,8 @@ remain no-ops.
 ## Vulnerability Disclosure
 
 Reporting a vulnerability is documented in the repository's top-level
-[`SECURITY.md`](../SECURITY.md) policy (private GitHub Security Advisories;
+[`SECURITY.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md)
+policy (private GitHub Security Advisories;
 acknowledgement within 5 business days). Do not open public GitHub issues for
 security reports.
 
@@ -313,21 +325,21 @@ access could forge a blob and trigger RCE.
 
 ### Configuration
 
-The HMAC key is resolved at call time, in this order:
+The HMAC key is resolved at call time:
 
-1. **`JARVIS_MODEL_HMAC_KEY`** (preferred) — a dedicated secret used solely for
+1. **`JARVIS_MODEL_HMAC_KEY`** — a dedicated secret used solely for
    signing model blobs. Generate with `openssl rand -hex 32`. Keeping this
    separate from `JARVIS_API_KEY` means a compromise of the HTTP bearer does
-   not also let an attacker forge model blobs, and vice versa.
-2. **Derived from `JARVIS_API_KEY`** — when `JARVIS_MODEL_HMAC_KEY` is unset,
-   the signing key is `sha256(b"model-signing:" + JARVIS_API_KEY)`. The
-   `model-signing:` prefix domain-separates this key from any direct use of
-   the bearer.
+   not also let an attacker forge model blobs, and vice versa. This dedicated
+   key is mandatory in production and in every multi-user deployment.
+2. **Derived from `JARVIS_API_KEY`** — a backward-compatible fallback allowed
+   only in single-user, non-production mode. The signing key is
+   `sha256(b"model-signing:" + JARVIS_API_KEY)`; the prefix domain-separates it
+   from direct use of the bearer.
 
-If neither is set, `_hmac_key()` raises `RuntimeError`. In production
-(`ENVIRONMENT=production`), `validate_production_config()` — called at lifespan
-startup — refuses to start unless at least one of the two paths above is
-configured.
+If the allowed key is absent, `_hmac_key()` raises `RuntimeError`. Production
+startup and the multi-user gate refuse a missing or short dedicated key; they
+never accept the derived fallback.
 
 ### Key Rotation
 
@@ -366,33 +378,35 @@ topology changes.
 
 ---
 
-## One-click Restore — Security Posture
+## Restore boundary
 
-The admin Backups panel (v1.0.0+) allows an admin to restore the instance to a previous backup point from the browser.
+The application does not perform database restores. An active administrator
+must type **RESTORE**; the app then writes a request to the `backup_trigger`
+volume. The `postgres-backup` sidecar takes the safety backup, verifies the
+selected restore point, loads staging databases, and performs the swap. The app
+mounts backup archives read-only, and the operations API key cannot start a
+restore.
 
-**Privilege boundary:** the app container gains no new operating-system privilege. On restore request, it writes a small JSON sentinel file to the `backup_trigger` volume (a minimal RW mount shared only with the backup sidecar). All database work runs exclusively inside the `postgres-backup` sidecar, which already holds the elevated database credentials it needs for scheduled backups. The restore loads the archive into a **staging database and swaps it in atomically** (renaming the previous database aside), rather than dropping the live database first; if any step before the swap fails, the original database is left untouched and served again automatically, and the previous database is dropped only after the swap succeeds. The `/backups` volume remains read-only to the app container; the app cannot read or overwrite backup archives.
+A failure before the swap leaves the live databases in place. Once the swap
+begins, a failure keeps the service in maintenance until the operator recovers
+from the safety restore point. Restoring a point from a newer application
+version is refused.
 
-**Access controls:**
+A compromised admin session can still request a destructive rollback. Typed
+confirmation and the safety point reduce accidents, not a deliberate admin
+action. See the [risk register](known-residual-risks.md).
 
-- Restore can only be triggered by an **active admin browser session**. The ops API key (`JARVIS_API_KEY`) cannot trigger a restore.
-- A **typed confirmation** (the word RESTORE) is required before the sentinel is written.
-- A **safety pre-backup** is taken before any data is modified. If the restore fails after the destructive step, the safety backup appears in the admin panel and can be used to recover.
-- A **NEWER-version block** prevents restoring a backup that was made by a newer app version than is currently running — the operator must update the app first.
+### Fresh-host uploads
 
-**Residual risk:** an attacker who compromises an admin browser session can trigger a restore, causing data loss (current state is overwritten with the backup). This is equivalent to the existing risk of any admin action that modifies instance state. The safety pre-backup and typed confirmation reduce accidental-trigger risk; they do not prevent a deliberate action by a compromised admin account. For the full residual-risk register, see [docs/known-residual-risks.md](known-residual-risks.md).
+Browser uploads go to the dedicated `restore-uploader` container, not the
+application. It can write only to `restore_inbox` and can read only the hashed,
+expiring upload grant from `backup_trigger`. It has no database credentials,
+Docker socket, or host-secret mount. A restore still requires the separate
+admin confirmation.
 
-### Off-host (cross-host) restore — Security Posture
-
-Off-host disaster recovery (recovering on a fresh host from off-site backups) is now **web-first**: after `./setup.sh` and first-admin sign-in, the operator uploads the archive set and the one-time key from the browser and triggers the restore from the UI, which reconciles secrets, the database role, and services automatically. The scp/terminal runbook in [DEPLOYMENT.md](DEPLOYMENT.md) remains as a fallback for constrained environments. The browser path is served by a **dedicated `restore-uploader` container**, a new but deliberately bounded surface:
-
-- **Grant-gated, stdlib-only ingress.** The uploader is a small standard-library service that mounts only the restore inbox (read-write) and the trigger volume (read-only). It holds no database credentials, no Docker socket, and no host secrets. Every upload requires an admin-minted, hash-stored, 30-minute grant.
-- **The key and archive bytes never transit the application.** The operator's backup-encryption key and the uploaded archives are consumed by the privileged sidecar, not the app container. Possession of an unexpired grant allows writing (encrypted, inert) files into the inbox only — an actual restore still requires the admin-typed RESTORE trigger, and the sidecar's decrypt-probe rejects anything the operator key cannot open.
-
-The same already-privileged `postgres-backup` sidecar runs the same `restore.sh` regardless of whether the request came from the browser or the runbook. It is the only restore path that touches secrets, so it is hardened specifically:
-
-- **The backup encryption key is held out-of-band and is one-time.** The operator drops it into the writable `restore_inbox` volume as `operator_key` for a single restore. `restore.sh` **shreds** it (`shred -u`, falling back to `rm`) on every clean or recorded-failure exit, so a failed restore never leaves the key on the volume. A `SIGKILL` of the sidecar cannot run the exit trap; the next run shreds any leftover before re-staging.
-- **No write is ever attempted against the read-only `/secrets` mount.** On a fresh host the script cannot and does not write `/secrets` (it stays `:ro`). The **rw `restore_inbox`** volume is the only writable cross-host secrets-staging surface, and it is never mounted under `/secrets`.
-- **Plaintext secrets are shredded after use.** The script decrypts the secrets archive only into a `chmod 700` staging dir under the inbox, reads the role password to rebind the database role, and then **shreds the staged files (`shred` per file) and removes the staging on exit** (a bare `rm` would leave block-level residue on a journaling/overlay filesystem). A `SIGKILL` mid-restore can leave staged plaintext until the next run shreds it. Materializing the host `./secrets` for the app is a separate, explicit operator step.
-- **A wrong key fails safe.** The operator key is validated (present + non-empty) before any destructive step, and the pre-`DROP` decrypt probe proves it actually decrypts the database archives before anything is dropped — so a wrong or corrupt key destroys nothing.
-- **Role-password rebind is a parameterized-safe SQL literal.** The restored password is embedded in `ALTER ROLE … WITH PASSWORD` with single quotes doubled, so a password containing a quote cannot break the statement or inject SQL.
-- **Same-host rollback is unchanged and never touches secrets.** The one-click (`local`) path leaves `./secrets` read-only and the live config key in place; all of the above applies only to the `inbox` path.
+The backup sidecar checks the signed archive set and proves that the supplied
+key can decrypt it before the swap. It removes the one-time key and plaintext
+staging on normal and recorded-failure exits; a forced `SIGKILL` can delay that
+cleanup until the next run. Same-host restores do not use the inbox key. The
+[backup and restore guide](manual/backup-and-restore.md) contains both browser
+and headless recovery procedures.

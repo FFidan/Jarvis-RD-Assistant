@@ -19,6 +19,7 @@ from paper_ingestion.models import (
     DiscoveryResultItem,
     SimilarPaperResult,
 )
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
 router = APIRouter(prefix="/api", tags=["discovery"])
@@ -66,6 +67,11 @@ async def find_similar_papers(
         title = paper_row["title"]
         abstract = paper_row["abstract"] or ""
         query_text = f"{title}. {abstract}"
+        library_rows = await conn.fetch(
+            "SELECT paper_id FROM user_library WHERE user_id = $1",
+            user_id,
+        )
+        library_paper_ids = [int(row["paper_id"]) for row in library_rows]
 
         if embedder is None or embedder.qdrant is None:
             raise HTTPException(status_code=503, detail="Search service unavailable")
@@ -76,6 +82,7 @@ async def find_similar_papers(
                 paper_id_filter=paper_id,
                 score_threshold=0.6,
                 user_id=user_id,
+                library_paper_ids=library_paper_ids,
             )
         except QdrantUnavailableError as exc:
             raise HTTPException(status_code=503, detail="Search service unavailable") from exc
@@ -90,15 +97,13 @@ async def find_similar_papers(
         # Enrich with paper metadata (batch query to avoid N+1)
         paper_ids = [r["paper_id"] for r in sorted_results]
         if paper_ids:
-            # Papers are global; no per-paper owner filter remains. The
-            # seed-paper ownership check above already enforces "you may
-            # only discover from your own seeds".
             meta_rows = await conn.fetch(
-                """SELECT id, title, authors, url FROM papers
-                   WHERE id = ANY($1::int[])""",
+                "SELECT p.id, p.title, p.authors, p.url FROM papers p"
+                " WHERE p.id = ANY($1::int[])"
+                f" AND {paper_visible_sql(2)}",
                 paper_ids,
+                user_id,
             )
-            _ = user_id  # retained for future per-library scoping
             meta_map = {row["id"]: row for row in meta_rows}
         else:
             meta_map = {}
@@ -152,7 +157,7 @@ async def discover_papers(
     """
     if body.paper_ids and len(body.paper_ids) > 200:
         raise HTTPException(status_code=400, detail="paper_ids cannot exceed 200 items")
-    # Validate that all seed paper IDs exist + are owned by the caller
+    # Validate that all seed papers exist and are visible to the caller.
     async with db_pool.acquire() as conn:
         for paper_id in body.paper_ids:
             await assert_paper_ownership(conn, paper_id, user_id)
@@ -183,14 +188,13 @@ async def discover_papers(
     # Enrich with paper metadata
     paper_ids = [r["paper_id"] for r in results]
     async with db_pool.acquire() as conn:
-        # Papers are global; ownership of seed papers is enforced upstream
-        # via assert_paper_ownership.
         meta_rows = await conn.fetch(
-            """SELECT id, title, authors, url FROM papers
-               WHERE id = ANY($1::int[])""",
+            "SELECT p.id, p.title, p.authors, p.url FROM papers p"
+            " WHERE p.id = ANY($1::int[])"
+            f" AND {paper_visible_sql(2)}",
             paper_ids,
+            user_id,
         )
-    _ = user_id
     meta_map = {row["id"]: row for row in meta_rows}
 
     enriched: list[dict] = []

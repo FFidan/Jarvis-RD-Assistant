@@ -1,42 +1,21 @@
 #!/usr/bin/env bash
-# scripts/lifecycle-smoke.sh — release smoke for the lifecycle paths the
-# cold-install smoke never reaches.
+# Hosted lifecycle checks that complement the cold-install smoke test.
 #
-# scripts/first-run-smoke.sh proves ONE path: a clean machine reaching a healthy
-# stack over plain HTTP on localhost. Three lifecycle surfaces ship untested by
-# it, and each is a path an operator takes on a bad day:
+#   tls        Installs the local HTTPS profile and verifies a backend route with
+#              the generated certificate chain.
+#   update     Interrupts image staging, then verifies that retry resumes and
+#              completes the recorded update.
+#   uninstall  Verifies that the tier-3 dry run accurately inventories the
+#              volumes and images it would remove without changing the fixture.
+#   restore    Runs the isolated encrypted backup and destructive restore contract.
 #
-#   tls        The TLS profile. `--profile=local-https` fronts the dashboard with
-#              Caddy on https://localhost:3443 using mkcert-issued certs. This
-#              leg installs that profile non-interactively and proves the edge
-#              serves a real backend route over a cert that validates against the
-#              mkcert root CA — not merely that something answers on 3443.
-#
-#   update     An interrupted update. `jarvis-research update` writes a pending
-#              transaction BEFORE it stages images, precisely so a pull that dies
-#              mid-flight leaves a resumable record instead of a half-updated
-#              checkout. This leg injects a pull failure at that exact phase,
-#              asserts the transaction survives with the checkout unadvanced,
-#              then clears the injection and asserts the retry runs to
-#              completion and clears the transaction.
-#
-#   uninstall  The uninstall dry run. Tier 3 is the first tier that deletes data
-#              volumes, so what an operator needs from the dry run is an accurate
-#              inventory of what a real run would destroy. This leg asserts the
-#              CONTENT of the emitted plan: that it carries the volume-removing
-#              teardown rather than the volume-sparing one, that it names every
-#              application image the deployment is actually running, and that it
-#              stops short of the tier-4 purge steps. A plan that quietly stopped
-#              enumerating any of that fails the leg.
-#
-# ISOLATION: every leg runs under its own ephemeral compose project name
-# (jarvis-lifecycle-<leg>-<pid>) and tears that project down on exit. No leg ever
-# touches the default project, so a developer's running stack is never at risk.
+# Each cold-install leg owns an ephemeral Compose project. The restore contract
+# generates, validates, and cleans up its own project independently.
 #
 # Usage:
-#   bash scripts/lifecycle-smoke.sh [--leg tls|update|uninstall]... [--timeout N]
+#   bash scripts/lifecycle-smoke.sh [--leg tls|update|uninstall|restore]... [--timeout N]
 #
-#   --leg NAME       Run only this leg. Repeatable. Default: all three.
+#   --leg NAME       Run only this leg. Repeatable. Default: all four.
 #   --timeout N      Per-install budget in seconds (default 3600). A cold install
 #                    pulls several GB, so a clean machine legitimately needs
 #                    20-60 minutes.
@@ -76,14 +55,14 @@ while [ $# -gt 0 ]; do
     *) err "Unknown argument: $1"; echo; show_help; exit 2 ;;
   esac
 done
-[ "${#LEGS[@]}" -eq 0 ] && LEGS=(tls update uninstall)
+[ "${#LEGS[@]}" -eq 0 ] && LEGS=(tls update uninstall restore)
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
 for leg in "${LEGS[@]}"; do
   case "$leg" in
-    tls|update|uninstall) ;;
-    *) err "Unknown leg '${leg}' (expected: tls, update, or uninstall)"; exit 2 ;;
+    tls|update|uninstall|restore) ;;
+    *) err "Unknown leg '${leg}' (expected: tls, update, uninstall, or restore)"; exit 2 ;;
   esac
 done
 
@@ -206,11 +185,9 @@ _run_leg_tls_body() {
     return 1
   fi
 
-  # The assertion that matters: a REAL backend route served through the TLS edge,
-  # validated against the mkcert root CA. --cacert (never -k) is what makes this a
-  # cert assertion; /health/paper_ingestion (never /health, which the dashboard
-  # does not route and the SPA fallback would answer 200 for regardless) is what
-  # makes it a liveness assertion.
+  # Verify a backend route through the TLS edge against the mkcert root CA.
+  # --cacert checks the certificate chain, and the service health route avoids
+  # a false success from the dashboard's SPA fallback.
   local url="https://localhost:3443/health/paper_ingestion"
   info "Verifying ${url} over the mkcert chain..."
   local served=0
@@ -311,11 +288,10 @@ run_leg_update() {
     err "The update succeeded despite the injected pull failure — the fault was not injected."
     return 1
   fi
-  # A non-zero exit alone proves nothing: the update dies before it ever stages
-  # images when the target carries a data-changing migration and no fresh backup
-  # exists. Only the staging abort is the fault this leg injected, so match it.
+  # Require the injected staging failure rather than accepting an unrelated
+  # prerequisite or safety-backup failure.
   if ! grep -q "Staging images for ${latest} failed" "$injected_log"; then
-    err "The update failed, but NOT at the injected staging phase (rc=${rc}) — this leg proves nothing about the transaction:"
+    err "The update did not fail at the injected staging phase (rc=${rc}):"
     tail -n 40 "$injected_log" >&2
     return 1
   fi
@@ -452,17 +428,46 @@ run_leg_uninstall() {
   fi
   assert_tier3_plan "$plan" "$project" || return 1
 
-  # Secondary, and deliberately weak. A dry run cannot reach a docker mutation by
-  # construction: uninstall.sh's _step prints `PLAN <label>` and returns without
-  # invoking its arguments, and the dry-run branch of its main body skips the
-  # preview and the confirmation gates outright. So this diff proves only that
-  # enumerating the plan is itself side-effect-free — it does NOT prove the
-  # destructive path is contained, and it cannot. The plan-content assertions
-  # above are what give this leg its bite.
+  # Confirm that enumerating the dry-run plan is side-effect-free. The content
+  # assertions above independently verify what the destructive tier would target.
   project_state "$project" > "$after"
   if ! diff -u "$before" "$after" > "${scratch}/state.diff"; then
     err "Enumerating the tier-3 plan changed the deployment. Containers/volumes before vs after:"
     cat "${scratch}/state.diff" >&2
+    return 1
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Leg: restore
+# -----------------------------------------------------------------------------
+run_leg_restore() {
+  local log rc=0 project_lines
+  new_scratch
+  log="${SCRATCH}/restore-roundtrip.log"
+
+  info "Running the isolated encrypted restore round trip..."
+  env -u COMPOSE_PROJECT_NAME bash scripts/tests/test_restore_roundtrip.sh --release-gate \
+    > "$log" 2>&1 || rc=$?
+  cat "$log"
+
+  if grep -q '^SKIP:' "$log"; then
+    err "The required restore check reported SKIP."
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    err "The restore round trip exited non-zero (rc=${rc})."
+    return 1
+  fi
+
+  project_lines="$(grep -Ec '^fixture project: jarvis-rt-[0-9a-f]{16}$' "$log" || true)"
+  if [ "$project_lines" -ne 1 ]; then
+    err "The restore round trip did not report exactly one generated fixture project."
+    return 1
+  fi
+  if ! grep -Eq '^RESTORE ROUND-TRIP: PASS=[1-9][0-9]*  FAIL=0$' "$log"; then
+    err "The restore round trip did not report a passing summary."
     return 1
   fi
   return 0

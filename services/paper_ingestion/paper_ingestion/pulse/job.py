@@ -48,7 +48,7 @@ from paper_ingestion.pulse.scoring import (
     stage3_combine,
 )
 from paper_ingestion.pulse.training import FEATURE_NAMES, classifier_scores
-from paper_ingestion.services.pdf_workflow import upsert_paper
+from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ async def _persist_pipeline(
                             # for the deck owner is recorded when the user
                             # accepts the card (rate=save) via the
                             # /api/pulse/rate endpoint.
-                            await upsert_paper(conn, card.paper)
+                            await upsert_verified_public_paper(conn, card.paper)
                         successes += 1
                     except Exception as exc:  # per-card: roll back savepoint, keep outer txn alive
                         logger.warning(

@@ -13,7 +13,12 @@ from jarvis_common.jobs import JobError
 from jarvis_common.library import add_to_library
 
 from paper_ingestion.config import get_paper_ingestion_settings
-from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH
+from paper_ingestion.pdf_processor import (
+    MAX_PDF_SIZE,
+    PDF_STORAGE_PATH,
+    PDFPublishBlockedError,
+    pdf_publish_operation,
+)
 
 LOCAL_PDF_SCAN_DIR = get_paper_ingestion_settings().local_pdf_scan_dir
 
@@ -33,8 +38,9 @@ async def scan_local_pdf_directory(
     db_pool:
         asyncpg Pool used for all DB operations.
     user_id:
-        When provided, newly imported papers are attributed to this user
-        (``discovered_by``) and added to their library (``user_library``).
+        When provided, record this user as the import initiator and add the
+        paper to their library. Discovery attribution is audit metadata; the
+        library row grants access to this private-by-default import.
     scan_dir:
         Override the configured scan directory (used in tests).
 
@@ -113,42 +119,47 @@ async def scan_local_pdf_directory(
                 continue
 
             try:
-                async with file_conn.transaction():
-                    row = await file_conn.fetchrow(
-                        """
-                        INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                            url, metadata, discovered_by, discovery_origin)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
-                        RETURNING *
-                        """,
-                        external_id,
-                        "local",
-                        title,
-                        [],
-                        None,
-                        f"local://{file_hash}",
-                        {},
-                        user_id,
-                    )
-                    paper_id = row["id"]
-                    if user_id is not None:
-                        await add_to_library(
-                            file_conn,
-                            user_id=user_id,
-                            paper_id=paper_id,
-                            added_via="manual_save",
+                async with pdf_publish_operation(storage_path) as publication:
+                    async with file_conn.transaction():
+                        row = await file_conn.fetchrow(
+                            """
+                            INSERT INTO papers (external_id, source_type, title, authors, abstract,
+                                                url, metadata, discovered_by, discovery_origin)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
+                            RETURNING *
+                            """,
+                            external_id,
+                            "local",
+                            title,
+                            [],
+                            None,
+                            f"local://{file_hash}",
+                            {},
+                            user_id,
                         )
-                    final_path = storage_path / f"{paper_id}.pdf"
-                    dest_path.rename(final_path)
-                    dest_path = final_path
-                    await file_conn.execute(
-                        """
-                        UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
-                        WHERE id = $2
-                        """,
-                        str(dest_path),
-                        paper_id,
-                    )
+                        paper_id = row["id"]
+                        if user_id is not None:
+                            await add_to_library(
+                                file_conn,
+                                user_id=user_id,
+                                paper_id=paper_id,
+                                added_via="manual_save",
+                            )
+                        final_path = storage_path / f"{paper_id}.pdf"
+                        await publication.promote(dest_path, final_path)
+                        await file_conn.execute(
+                            """
+                            UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
+                            WHERE id = $2
+                            """,
+                            str(final_path),
+                            paper_id,
+                        )
+            except PDFPublishBlockedError as exc:
+                dest_path.unlink(missing_ok=True)
+                raise JobError(
+                    "The PDF scan paused because a restore is in progress. Try again shortly."
+                ) from exc
             except Exception:
                 dest_path.unlink(missing_ok=True)
                 skipped += 1

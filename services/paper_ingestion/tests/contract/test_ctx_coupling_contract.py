@@ -93,6 +93,7 @@ def _local_smart_deployments(deployments: list) -> list:
     ]
 
 
+@pytest.mark.integration
 async def test_num_ctx_write_delivers_and_updates_budget_reader(
     contract_conn, ctx_client, monkeypatch
 ):

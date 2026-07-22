@@ -75,6 +75,19 @@ async def _seed_plain_user(conn, email: str) -> tuple[int, str]:
     return int(user_id), str(session_id)
 
 
+async def _set_database_owner(conn, user_id: int) -> None:
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    await conn.execute(
+        """
+        INSERT INTO user_config (user_id, key, value)
+        VALUES (NULL, $1, to_jsonb($2::bigint))
+        """,
+        OWNER_USER_ID_CONFIG_KEY,
+        user_id,
+    )
+
+
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def admin_client(contract_conn):
     """ASGI client authenticated as an admin via a real session cookie.
@@ -217,6 +230,24 @@ async def test_a4_list_users_returns_non_deleted_users(admin_client, contract_co
     for user in body:
         for field in ("id", "email", "role", "created_at"):
             assert field in user, f"Missing field {field!r} in user record: {user}"
+
+
+async def test_a4_list_users_marks_only_the_valid_instance_owner(admin_client, contract_conn):
+    owner_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+    member_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "owner-list-member@example.com",
+    )
+    await _set_database_owner(contract_conn, owner_id)
+
+    response = await admin_client.get("/api/admin/users")
+
+    assert response.status_code == 200, response.text
+    records = {record["id"]: record for record in response.json()}
+    assert records[owner_id]["is_owner"] is True
+    assert records[member_id]["is_owner"] is False
+    assert {record["owner_source"] for record in records.values()} == {"database"}
+    assert {record["owner_state"] for record in records.values()} == {"valid"}
 
 
 async def test_a4_list_users_non_admin_gets_403(plain_client):
@@ -473,6 +504,26 @@ async def test_a6_update_role_404_on_nonexistent_user(admin_client):
     )
 
 
+async def test_promoting_configured_non_admin_owner_requires_explicit_repair(
+    admin_client, contract_conn
+):
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "configured-member-owner@example.com",
+    )
+    await _set_database_owner(contract_conn, target_id)
+
+    response = await admin_client.patch(
+        f"/api/admin/users/{target_id}/role",
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "owner" in response.json()["detail"].lower()
+    persisted_role = await contract_conn.fetchval("SELECT role FROM users WHERE id = $1", target_id)
+    assert persisted_role == "user"
+
+
 # ---------------------------------------------------------------------------
 # A7: DELETE /api/admin/users/{id} — admin soft-deletes a user
 # ---------------------------------------------------------------------------
@@ -569,6 +620,24 @@ async def test_demote_non_last_admin_succeeds(admin_client, contract_conn):
     assert db_role == "user", f"Demoted admin must be 'user' in DB; got {db_role!r}"
 
 
+async def test_configured_owner_cannot_be_demoted_before_transfer(admin_client, contract_conn):
+    owner_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "protected-owner-demote@example.com",
+    )
+    await _set_database_owner(contract_conn, owner_id)
+
+    response = await admin_client.patch(
+        f"/api/admin/users/{owner_id}/role",
+        json={"role": "user"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "transfer ownership" in response.json()["detail"].lower()
+    persisted_role = await contract_conn.fetchval("SELECT role FROM users WHERE id = $1", owner_id)
+    assert persisted_role == "admin"
+
+
 async def test_delete_last_admin_returns_400_and_keeps_row(admin_client, contract_conn):
     """Deleting the sole surviving admin is refused with 400; the row is not soft-deleted.
 
@@ -606,6 +675,22 @@ async def test_delete_non_last_admin_succeeds(admin_client, contract_conn):
         "SELECT deleted_at FROM users WHERE id = $1", second_admin_id
     )
     assert deleted_at is not None, "Non-last admin must be soft-deleted in DB"
+
+
+async def test_configured_owner_cannot_be_deleted_before_transfer(admin_client, contract_conn):
+    owner_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "protected-owner-delete@example.com",
+    )
+    await _set_database_owner(contract_conn, owner_id)
+
+    response = await admin_client.delete(f"/api/admin/users/{owner_id}")
+
+    assert response.status_code == 409, response.text
+    assert "transfer ownership" in response.json()["detail"].lower()
+    assert (
+        await contract_conn.fetchval("SELECT deleted_at FROM users WHERE id = $1", owner_id) is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +752,212 @@ async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn)
     )
 
 
+async def test_restoring_configured_deleted_admin_owner_requires_explicit_repair(
+    admin_client, contract_conn, monkeypatch
+):
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "configured-deleted-owner@example.com",
+    )
+    await contract_conn.execute("UPDATE users SET deleted_at = NOW() WHERE id = $1", target_id)
+    await _set_database_owner(contract_conn, target_id)
+
+    response = await admin_client.post(f"/api/admin/users/{target_id}/restore")
+
+    assert response.status_code == 409, response.text
+    assert "owner" in response.json()["detail"].lower()
+    assert (
+        await contract_conn.fetchval("SELECT deleted_at FROM users WHERE id = $1", target_id)
+        is not None
+    )
+
+
+# ---------------------------------------------------------------------------
+# Instance-owner transfer and strict owner-mutation audit
+# ---------------------------------------------------------------------------
+
+
+async def test_owner_transfer_is_atomic_audited_and_not_replayable(admin_client, contract_conn):
+    current_owner_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+    target_email = "next-owner@example.com"
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        target_email,
+    )
+    await _set_database_owner(contract_conn, current_owner_id)
+
+    response = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={"target_user_id": target_id, "confirmation": target_email},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "source": "database",
+        "state": "valid",
+        "user_id": target_id,
+    }
+    stored_owner = await contract_conn.fetchval(
+        "SELECT value #>> '{}' FROM user_config WHERE user_id IS NULL AND key = 'owner.user_id'"
+    )
+    assert stored_owner == str(target_id)
+    audit = await contract_conn.fetchrow(
+        "SELECT user_id, action, resource, metadata FROM audit_log "
+        "WHERE action = 'admin.owner.transfer' ORDER BY id DESC LIMIT 1"
+    )
+    assert audit is not None
+    assert audit["user_id"] == str(current_owner_id)
+    assert audit["resource"] == "owner.user_id"
+    assert audit["metadata"]["previous_owner_user_id"] == current_owner_id
+    assert audit["metadata"]["new_owner_user_id"] == target_id
+
+    replay = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={"target_user_id": target_id, "confirmation": target_email},
+    )
+    assert replay.status_code == 403, replay.text
+
+
+async def test_owner_transfer_rejects_environment_managed_owner(
+    admin_client, contract_conn, monkeypatch
+):
+    current_owner_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "environment-transfer-target@example.com",
+    )
+    monkeypatch.setenv("OWNER_USER_ID", str(current_owner_id))
+
+    response = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={
+            "target_user_id": target_id,
+            "confirmation": "environment-transfer-target@example.com",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert "OWNER_USER_ID" in response.json()["detail"]
+
+
+async def test_owner_transfer_rejects_non_owner_caller(admin_client, contract_conn):
+    configured_owner_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "configured-owner@example.com",
+    )
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "non-owner-transfer-target@example.com",
+    )
+    await _set_database_owner(contract_conn, configured_owner_id)
+
+    response = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={
+            "target_user_id": target_id,
+            "confirmation": "non-owner-transfer-target@example.com",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+
+
+async def test_owner_transfer_validates_target_and_confirmation(admin_client, contract_conn):
+    current_owner_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+    member_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "member-transfer-target@example.com",
+    )
+    await _set_database_owner(contract_conn, current_owner_id)
+
+    non_admin = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={
+            "target_user_id": member_id,
+            "confirmation": "member-transfer-target@example.com",
+        },
+    )
+    assert non_admin.status_code == 400, non_admin.text
+
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "confirmed-transfer-target@example.com",
+    )
+    mismatch = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={"target_user_id": target_id, "confirmation": "wrong@example.com"},
+    )
+    assert mismatch.status_code == 400, mismatch.text
+
+    self_transfer = await admin_client.post(
+        "/api/admin/owner/transfer",
+        json={
+            "target_user_id": current_owner_id,
+            "confirmation": "admin-contract-test@example.com",
+        },
+    )
+    assert self_transfer.status_code == 400, self_transfer.text
+
+
+async def test_owner_transfer_rolls_back_when_strict_audit_fails(admin_client, contract_conn):
+    current_owner_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+    target_email = "audit-failure-transfer@example.com"
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        target_email,
+    )
+    await _set_database_owner(contract_conn, current_owner_id)
+
+    with (
+        patch(
+            "paper_ingestion.routers.admin.log_audit_strict",
+            new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
+        ),
+        pytest.raises(RuntimeError, match="audit unavailable"),
+    ):
+        await admin_client.post(
+            "/api/admin/owner/transfer",
+            json={"target_user_id": target_id, "confirmation": target_email},
+        )
+
+    stored_owner = await contract_conn.fetchval(
+        "SELECT value #>> '{}' FROM user_config WHERE user_id IS NULL AND key = 'owner.user_id'"
+    )
+    assert stored_owner == str(current_owner_id)
+
+
+@pytest.mark.parametrize("operation", ["role", "delete"])
+async def test_owner_sensitive_user_mutation_rolls_back_when_strict_audit_fails(
+    operation, admin_client, contract_conn
+):
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        f"audit-failure-{operation}@example.com",
+    )
+
+    with (
+        patch(
+            "paper_ingestion.routers.admin.log_audit_strict",
+            new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
+        ),
+        pytest.raises(RuntimeError, match="audit unavailable"),
+    ):
+        if operation == "role":
+            await admin_client.patch(
+                f"/api/admin/users/{target_id}/role",
+                json={"role": "user"},
+            )
+        else:
+            await admin_client.delete(f"/api/admin/users/{target_id}")
+
+    row = await contract_conn.fetchrow(
+        "SELECT role, deleted_at FROM users WHERE id = $1", target_id
+    )
+    assert row["role"] == "admin"
+    assert row["deleted_at"] is None
+
+
 # ---------------------------------------------------------------------------
 # A14: GET /api/admin/audit-log — admin views global audit log
 # ---------------------------------------------------------------------------
@@ -720,7 +1011,7 @@ _AUDIT_COLS = (
 )
 
 
-def test_build_audit_query_no_filters():
+async def test_build_audit_query_no_filters():
     """No filters: a single LIMIT placeholder and no user-supplied bound values."""
     sql, params = _build_audit_query(None, None, 50)
     assert params == [51]
@@ -728,7 +1019,7 @@ def test_build_audit_query_no_filters():
     assert sql.startswith(_AUDIT_COLS)
 
 
-def test_build_audit_query_before_id_only():
+async def test_build_audit_query_before_id_only():
     """before_id is bound as a param (never interpolated); LIMIT is the second placeholder."""
     sql, params = _build_audit_query(100, None, 50)
     assert params == [100, 51]
@@ -736,21 +1027,21 @@ def test_build_audit_query_before_id_only():
     assert sql.startswith(_AUDIT_COLS)
 
 
-def test_build_audit_query_action_prefix_only():
+async def test_build_audit_query_action_prefix_only():
     """action_prefix is escaped and bound as a param; LIMIT is the second placeholder."""
     sql, params = _build_audit_query(None, "user.login", 10)
     assert params == ["user.login%", 11]
     assert sql.count("$") == 2
 
 
-def test_build_audit_query_both_filters():
+async def test_build_audit_query_both_filters():
     """Both filters bind in order: before_id, action_prefix, then LIMIT."""
     sql, params = _build_audit_query(100, "user.login", 10)
     assert params == [100, "user.login%", 11]
     assert sql.count("$") == 3
 
 
-def test_build_audit_query_action_prefix_special_chars_are_escaped():
+async def test_build_audit_query_action_prefix_special_chars_are_escaped():
     """%, _, and backslash in action_prefix are LIKE-escaped in the bound param."""
     sql, params = _build_audit_query(None, "admin%_op\\x", 5)
     # Each special char must be escaped with a leading backslash; the value is a

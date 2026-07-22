@@ -1,13 +1,13 @@
-"""Per-user library helpers (canonical-corpus refactor).
+"""Per-user paper-library membership helpers.
 
 A user's "library" is the set of papers they have explicitly accepted into
 their working set. Membership is recorded in the ``user_library`` table
-introduced by migration 072. Engagement (reading-list state) implies
-membership via the migration backfill, but ongoing writes go through the
-helpers below so attribution (``added_via``) stays accurate.
+in the ``user_library`` table. Engagement (reading-list state) implies
+membership, while ongoing writes go through the helpers below so attribution
+(``added_via``) stays accurate.
 
 Acceptable ``added_via`` values mirror the CHECK constraint on
-``user_library.added_via`` (see ``db/migrations/072_canonical_corpus.sql``).
+``user_library.added_via``.
 The validation is duplicated here as a defence-in-depth so misuse fails fast
 instead of bouncing off a Postgres constraint with a less-helpful message.
 """

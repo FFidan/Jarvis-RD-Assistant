@@ -343,20 +343,13 @@ async def test_test_zotero_connection_returns_user_visible_detail_on_decrypt_err
 
 
 @pytest.mark.asyncio
-async def test_push_highlights_allows_visible_not_owned_public_paper(_app):
-    """A public-source (arXiv) paper discovered by another user and not in the
-    caller's library is now exportable (202) — view-level authz matches the
-    create/list-highlights router (view => annotate => export). Previously this
-    enforced ownership and returned 403."""
+async def test_push_highlights_allows_persisted_public_paper(_app):
+    """A persisted-public paper is exportable under the shared read policy."""
     import jarvis_common.task_registry as task_registry
     from tests.conftest import FakeRecord
 
     app, conn = _app
-    # Public-source paper, foreign discoverer, absent from caller's library →
-    # visible to any authenticated user under assert_paper_pdf_visible.
-    conn.fetchrow.return_value = FakeRecord(
-        {"source_type": "arxiv", "discovered_by": 999, "in_library": False}
-    )
+    conn.fetchrow.return_value = FakeRecord({"source_type": "arxiv"})
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
@@ -381,19 +374,12 @@ async def test_push_highlights_allows_visible_not_owned_public_paper(_app):
         ("post", "/api/zotero/sync-annotations/7"),
     ],
 )
-async def test_ownership_endpoints_still_403_on_foreign_public_paper(_app, method, path):
-    """Regression: the four ownership-gated Zotero endpoints keep the stricter
-    ownership check. A public-source paper owned by another user and not in the
-    caller's library is still 403, even though it is now exportable via
-    push-highlights — only highlight export was loosened to view level."""
+async def test_zotero_endpoints_reject_private_paper_outside_library(_app, method, path):
+    """Zotero endpoints reject a private paper outside the caller's library."""
     from tests.conftest import FakeRecord
 
     app, conn = _app
-    # Foreign paper: discovered by another user (999), absent from the caller's
-    # library → ownership denied. fetchval answers the existence probe (truthy)
-    # and the library-membership probe (None) by inspecting the query.
-    conn.fetchrow.return_value = FakeRecord({"discovered_by": 999})
-    conn.fetchval.side_effect = lambda query, *a: None if "user_library" in query else 7
+    conn.fetchrow.return_value = FakeRecord({"id": 7, "is_visible": False})
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

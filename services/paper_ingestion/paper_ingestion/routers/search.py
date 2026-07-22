@@ -63,7 +63,7 @@ from paper_ingestion.routers.search_helpers import (
     _store_preferred_library_match,
     _TitleYearLibraryCandidate,
 )
-from paper_ingestion.services.pdf_workflow import upsert_paper
+from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 from paper_ingestion.services.source_helper import get_source_for_type, get_sources_for_types
 
 logger = logging.getLogger(__name__)
@@ -208,7 +208,7 @@ async def _persist_search_results(
     async with db_pool.acquire() as conn:
         for paper in deduped:
             paper.discovery_origin = "user_initiated"
-            row = await upsert_paper(conn, paper, discovered_by=user_id)
+            row = await upsert_verified_public_paper(conn, paper, discovered_by=user_id)
             if user_id is not None:
                 await add_to_library(
                     conn,

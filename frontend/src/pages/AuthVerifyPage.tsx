@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { SessionUser } from '@/stores/auth-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { ApiError, verifyMagicLink } from '@/lib/api';
@@ -9,7 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 /**
  * Handles the magic-link landing URL.
  *
- * URL shape: /auth/verify?token=<urlsafe-32>
+ * URL shape: /auth/verify#token=<urlsafe-32>. The old query-token shape is
+ * still accepted so links issued before this change keep working.
  *
  * Behavior:
  * - On mount, POST the token to /api/auth/verify.
@@ -75,12 +76,32 @@ export function __resetVerifyDedupeForTests(): void {
 }
 
 export function AuthVerifyPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { loginWithSession, isAuthenticated, isSessionValid } = useAuthStore();
   const [status, setStatus] = useState<'verifying' | 'error'>('verifying');
   const [errorMsg, setErrorMsg] = useState('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tokenRef = useRef(
+    new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
+      .get('token') ?? searchParams.get('token'),
+  );
+
+  useEffect(() => {
+    const tokenInAddress =
+      new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
+        .get('token') ?? searchParams.get('token');
+    if (!tokenInAddress) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('token');
+    // Replacing the search params also clears the fragment. Keep the token in
+    // memory just long enough to exchange it, never in browser history.
+    setSearchParams(next, { replace: true });
+    // The initial URL is captured exactly once; subsequent router updates must
+    // not replace the in-memory single-use token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated && isSessionValid()) {
@@ -88,7 +109,7 @@ export function AuthVerifyPage() {
       return;
     }
 
-    const token = searchParams.get('token');
+    const token = tokenRef.current;
     if (!token) {
       navigate('/login?error=Missing+token', { replace: true });
       return;
@@ -121,7 +142,7 @@ export function AuthVerifyPage() {
       cancelled = true;
       if (timerRef.current !== null) clearTimeout(timerRef.current);
     };
-  }, [isAuthenticated, isSessionValid, loginWithSession, navigate, searchParams]);
+  }, [isAuthenticated, isSessionValid, loginWithSession, navigate]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">

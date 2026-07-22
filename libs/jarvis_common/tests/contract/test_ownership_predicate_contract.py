@@ -1,11 +1,8 @@
-"""Predicate-direct contract tests for assert_paper_ownership (A251).
+"""Real-PostgreSQL contracts for the central paper visibility guard.
 
 Tests call the helper directly with a real DB connection (contract_conn),
-bypassing the HTTP layer. Covers the three access paths defined by the D4
-canonical-corpus ownership decision.
-
-Verified: libs/jarvis_common/jarvis_common/db_helpers.py:234-307 at HEAD.
-Survivor-of an earlier consolidation: per-handler IDOR ownership-mock tests in test_audit_idor_sweep.py.
+bypassing the HTTP layer. They cover library membership, rejection outside the
+library, missing rows, and the explicit trusted-internal bypass.
 """
 
 from __future__ import annotations
@@ -19,11 +16,8 @@ pytestmark = [
 ]
 
 
-async def test_a251_assert_paper_ownership_owner_no_exception(contract_two_users, contract_conn):
-    """A251: owner calling assert_paper_ownership on their own paper → no exception.
-
-    Verified: db_helpers.py:289 — discovered_by == user_id fast-grant path.
-    """
+async def test_a251_library_member_no_exception(contract_two_users, contract_conn):
+    """A caller with explicit library membership passes the guard."""
     from fastapi import HTTPException
     from jarvis_common.db_helpers import assert_paper_ownership
 
@@ -35,14 +29,11 @@ async def test_a251_assert_paper_ownership_owner_no_exception(contract_two_users
             contract_two_users.user_a_id,
         )
     except HTTPException as exc:
-        pytest.fail(f"Owner got unexpected HTTPException {exc.status_code}: {exc.detail}")
+        pytest.fail(f"Library member got HTTPException {exc.status_code}: {exc.detail}")
 
 
-async def test_a251_assert_paper_ownership_non_owner_raises_403(contract_two_users, contract_conn):
-    """A251: non-owner (not in user_library) calling assert_paper_ownership → 403.
-
-    Verified: db_helpers.py:302-307 — user_library check fails → HTTPException(403).
-    """
+async def test_a251_private_paper_outside_library_raises_403(contract_two_users, contract_conn):
+    """A private paper outside the caller's library is rejected with 403."""
     from fastapi import HTTPException
     from jarvis_common.db_helpers import assert_paper_ownership
 
@@ -76,19 +67,70 @@ async def test_a251_assert_paper_ownership_nonexistent_paper_raises_404(
 async def test_a251_assert_paper_ownership_single_user_mode_skips_check(
     contract_two_users, contract_conn
 ):
-    """A251: user_id=None (single-user mode) → no check, no exception for any paper.
-
-    Verified: db_helpers.py:270-271 — early return when user_id is None.
-    """
+    """A ``None`` caller preserves the explicit trusted-internal bypass."""
     from fastapi import HTTPException
     from jarvis_common.db_helpers import assert_paper_ownership
 
     try:
-        # user B's paper accessed with user_id=None (single-user mode) — allowed
+        # Trusted internal access intentionally bypasses end-user authorization.
         await assert_paper_ownership(
             contract_conn,
             contract_two_users.paper_id_a,
             user_id=None,
         )
     except HTTPException as exc:
-        pytest.fail(f"Single-user mode should skip ownership check, got {exc.status_code}")
+        pytest.fail(f"Trusted internal mode should skip the check, got {exc.status_code}")
+
+
+async def test_batch_guard_uses_the_same_visibility_policy(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """Batch authorization accepts public/library rows and rejects other private rows.
+
+    The call uses real PostgreSQL rows so it proves the shared predicate's
+    behavioral consequence, including duplicate input normalization and the
+    precedence of a missing-row 404 over an unauthorized-row 403.
+    """
+    from fastapi import HTTPException
+    from jarvis_common.db_helpers import assert_papers_ownership
+
+    public_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, visibility_scope
+           ) VALUES (
+               'ownership-batch-public', 'arxiv', 'Batch public', ARRAY['A'],
+               'https://example.test/ownership-batch-public', 'public'
+           ) RETURNING id"""
+    )
+    private_other_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url,
+               discovered_by, visibility_scope
+           ) VALUES (
+               'ownership-batch-private', 'local', 'Batch private', ARRAY['A'],
+               'https://example.test/ownership-batch-private', $1, 'private'
+           ) RETURNING id""",
+        contract_two_users.user_b_id,
+    )
+
+    await assert_papers_ownership(
+        contract_conn,
+        [public_id, contract_two_users.paper_id_a, public_id],
+        contract_two_users.user_a_id,
+    )
+    with pytest.raises(HTTPException) as forbidden:
+        await assert_papers_ownership(
+            contract_conn,
+            [public_id, private_other_id],
+            contract_two_users.user_a_id,
+        )
+    assert forbidden.value.status_code == 403
+
+    with pytest.raises(HTTPException) as missing:
+        await assert_papers_ownership(
+            contract_conn,
+            [private_other_id, 999_999_999],
+            contract_two_users.user_a_id,
+        )
+    assert missing.value.status_code == 404

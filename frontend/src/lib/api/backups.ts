@@ -4,7 +4,7 @@ import { apiFetch, apiFetchRaw, triggerBlobDownload } from './core';
 
 export interface BackupEntry {
   filename: string;
-  store: 'jarvis' | 'litellm' | 'secrets' | 'qdrant';
+  store: 'jarvis' | 'litellm' | 'pdfs' | 'secrets' | 'qdrant';
   size_bytes: number;
   modified_at: string;
   encrypted: boolean;
@@ -32,6 +32,8 @@ export interface RestorePoint {
   stores: BackupEntry['store'][];
   qdrant_collections: string[];
   complete: boolean;
+  has_pdfs: boolean;
+  legacy_missing_pdfs: boolean;
   encrypted: boolean;
   total_size_bytes: number;
   files: RestorePointFile[];
@@ -46,6 +48,7 @@ export interface RestoreRequest {
   timestamp: string;
   confirm: string;
   source: RestoreSource;
+  allow_missing_pdfs: boolean;
 }
 
 /** One off-host restore point staged in the restore_inbox (sidecar-authored manifest). */
@@ -54,6 +57,8 @@ export interface InboxRestorePoint {
   complete: boolean;
   has_secrets: boolean;
   has_key: boolean;
+  has_pdfs: boolean;
+  legacy_missing_pdfs: boolean;
 }
 
 export interface RestoreStatus {
@@ -66,6 +71,27 @@ export interface RestoreStatus {
   error: string | null;
   manual_steps_required: boolean;
   phase: string | null;
+  restore_id: string | null;
+  source: RestoreSource | null;
+  quarantine: 'none' | 'awaiting_review' | 'unreadable';
+}
+
+export interface RestoreRequestResponse {
+  status: string;
+  status_token: string;
+  restore_id: string;
+  source: RestoreSource;
+  expires_at: string;
+}
+
+/** Tab-scoped restore session used to resume one exact restore after reload. */
+export interface RestoreRecoveryRecord {
+  version: 1;
+  restore_id: string;
+  source: RestoreSource;
+  status_token: string;
+  expires_at: string;
+  target_timestamp: string;
 }
 
 export interface RestoreLastRun {
@@ -106,31 +132,55 @@ export async function downloadBackup(name: string): Promise<void> {
 }
 
 /**
- * Start a one-click restore from the named restore point. `confirm` gates the
- * destructive op; `source` selects the local /backups set (default) or the off-host
- * inbox. Returns the one-time status bearer token so the progress poll can survive
- * the restore tearing down the admin session (pass it to {@link getRestoreStatus}).
+ * Start a restore from the named restore point. `confirm` authorizes the
+ * destructive operation; `source` selects the local /backups set (default) or the off-host
+ * inbox. `allowMissingPdfs` requests the older-backup compatibility path; the
+ * restore service rechecks authenticity before changing data. Returns the
+ * restore-session token and its exact server expiry so progress polling survives
+ * replacement of the admin session (pass the token to
+ * {@link getRestoreStatus}).
  */
 export const requestRestore = (
   timestamp: string,
   confirm: string,
   source: RestoreSource = 'local',
+  allowMissingPdfs = false,
 ) =>
-  apiFetch<{ status: string; status_token?: string }>('/api/admin/backups/restore', {
+  apiFetch<RestoreRequestResponse>('/api/admin/backups/restore', {
     method: 'POST',
-    body: JSON.stringify({ timestamp, confirm, source } satisfies RestoreRequest),
+    body: JSON.stringify({
+      timestamp,
+      confirm,
+      source,
+      allow_missing_pdfs: allowMissingPdfs,
+    } satisfies RestoreRequest),
   });
 
 /**
- * Poll the live restore progress (state machine + per-step status). When a one-time
- * bearer `token` is supplied it authorizes the poll DB-free, so it keeps returning
- * progress through the DB swap that drops the admin's session; without a token it
- * falls back to the cookie/API-key path (which dies mid-swap).
+ * Poll live restore progress, quarantine state, and per-step status. A supplied
+ * restore-session `token` authorizes polling without the database while session
+ * rows are replaced; otherwise the request uses its cookie or API key.
  */
 export const getRestoreStatus = (token?: string) =>
   apiFetch<RestoreStatus>(
     '/api/admin/backups/restore/status',
     token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+  );
+
+/** Clear one exact off-host quarantine after the operator reviews restored connections. */
+export const acknowledgeRestore = (
+  restoreId: string,
+  source: 'inbox',
+  confirm: string,
+  token?: string,
+) =>
+  apiFetch<{ status: 'acknowledged'; restore_id: string }>(
+    '/api/admin/backups/restore/acknowledge',
+    {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: JSON.stringify({ restore_id: restoreId, source, confirm }),
+    },
   );
 
 /** List off-host restore points staged in the restore_inbox (sidecar-authored). */

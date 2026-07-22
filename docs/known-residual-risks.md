@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-07-22_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -63,19 +63,25 @@ Related docs:
 
 ### AMD/Intel Vulkan acceleration — Experimental, not Supported
 
-**Finding:** `--gpu vulkan` (and the AMD no-`/dev/kfd` fallback) passes `/dev/dri` and `OLLAMA_VULKAN=1` into the Ollama container, joining the host's `video`/`render` groups by numeric GID (`JARVIS_VIDEO_GID`/`JARVIS_RENDER_GID`, resolved from the host at install time — a group *name* would resolve against the container image's own `/etc/group`, not the host's).
+**Finding:** the opt-in `--gpu vulkan` path passes `/dev/dri` and `OLLAMA_VULKAN=1` into the Ollama container, joining the host's `video`/`render` groups by numeric GID (`JARVIS_VIDEO_GID`/`JARVIS_RENDER_GID`, resolved from the host at install time — a group *name* would resolve against the container image's own `/etc/group`, not the host's).
 
 **Current state:** the device passthrough and env wiring are real and exercised in `docker-compose.vulkan.yml`, but validation confidence is lower than the CUDA/ROCm paths — reach and actual acceleration depend on the host's Vulkan ICD, which JARVIS does not inventory. Classified Experimental, never Supported.
 
 **Reopen criteria:** when enough field reports (`docs/manual/hardware-support-matrix.md#reporting-your-hardware`) accumulate to promote the tier, or an upstream regression is found.
 
-### Raw-IP LAN access carries no authentication contract
+### Raw-IP LAN access is health-check only
 
-**Finding:** the `raw-ip-lan` route (`route_claims` in `scripts/setup_lib.sh`) has `cookie_policy=none` and `passkey_origin=none` — a signed-in session cannot persist over plain `http://<lan-ip>`, and WebAuthn refuses a raw IP as an origin outright. The route is real and serves pages (`tier=supported`), but it is not, and cannot become, an authenticated route.
+**Finding:** the `raw-ip-lan` route (`route_claims` in `scripts/setup_lib.sh`)
+has no setup-token, cookie, or passkey contract. Nginx serves only the static
+`/health/jarvis` marker to remote LAN clients and returns HTTP 403 for every
+other path.
 
-**Why accepted:** this is a browser/WebAuthn constraint (an IP literal is never a valid relying-party ID) and a deliberate application choice (`Secure` cookies), not a gap to close. The supported path to an authenticated family route is a named private HTTPS origin (`--public-origin`) layered on top of LAN mode.
+**Why accepted:** this gives operators a narrow reachability check without
+turning plain LAN HTTP into an application origin. Family access uses a named
+private HTTPS route configured by setup.
 
-**Reopen criteria:** none expected — re-open only if a browser vendor changes WebAuthn's origin rules, which JARVIS does not control.
+**Reopen criteria:** only if the raw-LAN route is proposed for application use;
+that would require a new transport and authentication design.
 
 ### Pre-1.1.3 setup links used a query string, not a fragment
 
@@ -84,16 +90,6 @@ Related docs:
 **Current state:** the fix is forward-only. Links already printed to a pre-1.1.3 terminal's scrollback keep the old query-string form and still work — the onboarding wizard (`frontend/src/pages/OnboardingWizard.tsx`) accepts both forms for backward compatibility — but a query-string link that was ever pasted somewhere logged (chat history, a ticket) should be treated as exposed; regenerate the token via `scripts/init-secrets.sh` if that's a concern on an instance that hasn't finished first-admin bootstrap yet.
 
 **Reopen criteria:** none — this is a completed, one-way fix; documented here for operators auditing old scrollback/logs.
-
-### Custom `JARVIS_NET_SUBNET` with a Caddy TLS profile is refused, not supported
-
-**Finding:** `local-https` and `letsencrypt` pin Caddy's container IP inside the default `10.137.241.0/24` bridge subnet, and nginx's `set_real_ip_from` (`frontend/nginx.conf`) trusts exactly that range. `setup.sh` refuses to start either Caddy profile under a non-default `JARVIS_NET_SUBNET` rather than silently starting with a broken client-IP trust boundary.
-
-**Why deferred:** making the two hard-coded literals (the Caddy `ipv4_address` and the nginx `set_real_ip_from` values) subnet-derived is a small, contained change, but no operator has hit the collision in practice yet (the guidance path — edit both literals to the custom subnet, or keep the default — is a documented one-time step).
-
-**Reopen criteria:** if subnet collisions with a Caddy profile become a recurring support question, template the two literals from `JARVIS_NET_SUBNET` instead of refusing.
-
----
 
 ## OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR
 
@@ -127,18 +123,6 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 ---
 
-## Auth hardening deferrals
-
-### Migration live-fixture test deferred
-
-One schema migration uses a defensive PL/pgSQL constraint-name lookup. The
-live-fixture migration test covering this path is deferred to a future hardening
-pass with proper ephemeral-Postgres test infra.
-
-**Reopen criteria:** when a migration test harness with a real ephemeral Postgres instance is available.
-
----
-
 ## Telegram / security hardening deferrals
 
 ### In-memory bot rate limits
@@ -166,8 +150,10 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 with an amber warning plus an in-place test-send action.
 
 **Residual surface:** An instance with SMTP intentionally unset cannot deliver
-magic-link email. Single-user installs can still use API-key login; multi-user
-operators should configure and test SMTP before inviting users.
+magic-link email. A signed-in administrator can still create a 24-hour invite
+link or a 15-minute sign-in link and share it through a private channel.
+Multi-user access therefore remains usable, but account recovery depends on an
+active administrator or the owner recovery key until SMTP is configured.
 
 **Bootstrap-window note:** During the first-run wizard, before any admin account
 exists, the SMTP test-send endpoint is unauthenticated; the test recipient is
@@ -213,18 +199,6 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ## Further known residual risks
 
-### Cross-user isolation gate excludes RAG/search paths
-
-**Finding:** the 52-scenario cross-user isolation release gate covers the core task/project/paper/user data paths but excludes the RAG and search endpoints (`/api/ask*`, `/api/search*`, `/api/similar`, and the generation pipeline) because those require a live Ollama and Qdrant instance.
-
-**Current coverage:** `test_rag_contract.py` exercises these paths at unit/contract granularity with mocked backends. Ownership isolation at the HTTP boundary (auth headers, user-scoped Qdrant collections) is enforced by the same middleware that the gate exercises on the covered paths, giving reasonable indirect assurance.
-
-**Why deferred:** a full live two-user RAG-path isolation test needs both inference and vector services healthy in CI, which adds significant environment complexity.
-
-**Reopen criteria:** when a multi-user deployment scenario is targeted, or when the Qdrant collection-isolation logic changes.
-
----
-
 ### `/api/papers/process_batch` uses an underscore in the path
 
 **Finding:** `/api/papers/process_batch` uses an underscore separator while peer routes use hyphens.
@@ -245,14 +219,13 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-### Minor un-hoisted duplications (low priority)
+### Unused router-factory parameter (low priority)
 
-Two small consolidation items accepted as low-priority code-quality debt:
+One consolidation item remains as low-priority code-quality debt:
 
 - `build_jobs_router(service_name=…)` accepts a `service_name` parameter that no code path currently uses. Retained to avoid touching every call-site; remove when the router is next refactored.
-- One inline copy of the paper-visibility SQL predicate remains at `paper_ingestion/services/summarization.py`; the other copies were hoisted to a shared `paper_visible_sql()` helper. Hoist this last copy when that file is next edited.
 
-**Reopen criteria:** any of the above files are touched in a refactor — opportunistic cleanup at that point.
+**Reopen criteria:** the router factory or its call sites are refactored.
 
 ---
 
@@ -284,23 +257,20 @@ The context-coupling contract test (`services/paper_ingestion/tests/contract/tes
 
 ---
 
-### Partial-chunk papers not re-embedded by migration 0096
-
-Migration 0096 set `chunked_at = NOW()` on any paper that already had at least one chunk row, marking it as fully processed. Papers that had only a partial chunk set (for example, due to an interrupted embedding run) were silently promoted to "done" by this one-time stamp. The migration was a deliberate tradeoff to avoid a full re-embed storm at upgrade time.
-
-**Current behavior (HEAD):** the auto-pipeline and pdf-processing path pick up papers where `chunked_at IS NULL` (see `services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py:186` and `services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:289`), so any future partial-chunk paper (for example from a new interrupted run) will be reprocessed on the next pipeline cycle.
-
-**Remaining gap from migration 0096:** pre-existing partial-chunk papers that migration 0096 promoted to "done" have a non-NULL `chunked_at` and will not be automatically re-embedded. An optional post-release operator reconcile can identify them (heuristic: non-contiguous chunk index sequences) and reset `chunked_at = NULL` to trigger reprocessing. No migration is needed — this is a manual operational step.
-
-**Reopen criteria:** if a significant number of degraded search results are traced to partial embeddings, run the reconcile.
-
----
-
 ### Restore destructive-sentinel: SIGKILL mitigation and operator-clear requirement
 
-`scripts/restore.sh` writes a durable `.destructive` sentinel at the DB DROP boundary (line 178: `touch "$MAINTENANCE_DESTRUCTIVE"`), before any DROP or data modification. While this sentinel is present, the app returns HTTP 503 on all non-exempt routes regardless of sentinel age (see `libs/jarvis_common/jarvis_common/maintenance.py:11–16`). This means a SIGKILL mid-restore no longer leaves the stack silently serving a half-restored database.
+`scripts/restore.sh` writes a durable `.destructive` sentinel before the first
+database drop. While this sentinel is present, the app returns HTTP 503 on all
+non-exempt routes regardless of sentinel age. A `SIGKILL` mid-restore therefore
+cannot leave the stack serving a partly restored database.
 
-**Operator action required to resume:** on any **clean** restore — same-host one-click, off-host inbox, or older-than-code — `restore.sh` clears both the `.maintenance` and `.destructive` sentinels automatically (an off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the gate lifts). Only a restore that **fails after the destructive drop** exits still in maintenance, holding the durable `.destructive` sentinel; the operator recovers from the safety pre-backup and then clears both sentinels manually — see DEPLOYMENT.md for the runbook.
+**Operator action required to resume:** a clean same-host, inbox, or older-version
+restore clears both maintenance markers automatically. A failure after the
+first drop keeps `.destructive` in place. For a same-host restore, recover from
+the safety restore point. For an inbox restore on a fresh host, correct the
+reported cause and retry the signed off-site set. Do not clear the marker until
+the databases and services have been checked; a successful retry clears it
+automatically. See the [backup and restore guide](manual/backup-and-restore.md).
 
 ---
 
@@ -321,9 +291,17 @@ The following items were deliberately deferred as low-value or high-churn. Each 
 
 ## Deferred theming / test-hygiene items
 
-- **Pytest non-fatal warnings.** Pytest emits non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
 - **Dark-mode destructive text contrast.** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.
 
-## Deferred multi-admin attribution item
+## Ambiguous legacy derived-output ownership
 
-- **Multi-admin legacy-data attribution (single-admin deployments unaffected).** Migration 0094 re-owns NULL-`user_id` rows on `paper_extractions`/`paper_entities`/zotero `paper_notes` to the single admin ONLY on single-tenant boxes (mirrors 0092). On a multi-admin box with pre-existing data: (a) historical Zotero notes keep their original `discovered_by` attribution (only forward syncs are attributed to the syncing user); (b) the entity batch-backfill (`knowledge_graph.py`) attributes to `papers.discovered_by`, which for system papers (`discovered_by IS NULL`) writes read-invisible NULL-user entity rows — the user-triggered single-paper extract correctly stamps the requesting user. Acceptable for the single-operator deployment norm; revisit if a true multi-admin instance with legacy data is targeted.
+Migration 0094 can assign historical NULL-owned notes and structured
+extractions only when an upgraded instance has exactly one administrator. On a
+pre-baseline installation with multiple administrators, ambiguous legacy rows
+remain unassigned and therefore inaccessible instead of being guessed into one
+user's workspace. New writes always carry the initiating user's identity, and
+paper visibility no longer depends on `discovered_by`.
+
+**Reopen criteria:** an operator needs to recover ambiguous pre-baseline output
+from a multi-administrator installation; attribution then requires a deliberate
+data-specific migration rather than a global default.

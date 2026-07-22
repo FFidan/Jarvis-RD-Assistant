@@ -117,6 +117,21 @@ export interface AdminUser {
   last_login_at: string | null;
   deleted_at?: string | null;
   invite_link?: string | null;
+  is_owner?: boolean;
+  owner_source?: 'none' | 'database' | 'environment' | null;
+  owner_state?:
+    | 'missing'
+    | 'invalid_value'
+    | 'missing_or_deleted_user'
+    | 'non_admin_user'
+    | 'valid'
+    | null;
+}
+
+export interface OwnerIdentity {
+  source: 'database' | 'environment';
+  state: 'valid';
+  user_id: number;
 }
 
 /** List users, including soft-deleted ones still within the 30-day restore
@@ -145,6 +160,13 @@ export const deleteUser = (userId: number) =>
 /** Restore a soft-deleted user within the 30-day grace. Requires admin role. */
 export const restoreUser = (userId: number) =>
   apiFetch<AdminUser>(`/api/admin/users/${userId}/restore`, { method: 'POST' });
+
+/** Transfer database-managed ownership to another live administrator. */
+export const transferOwner = (targetUserId: number, confirmation: string) =>
+  apiFetch<OwnerIdentity>('/api/admin/owner/transfer', {
+    method: 'POST',
+    body: JSON.stringify({ target_user_id: targetUserId, confirmation }),
+  });
 
 export const sendSignInLink = (userId: number) =>
   apiFetch<{ sent: boolean; sent_link?: string | null }>(

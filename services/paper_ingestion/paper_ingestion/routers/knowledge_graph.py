@@ -24,6 +24,7 @@ from paper_ingestion.extraction.entities import (
     get_knowledge_graph,
     query_knowledge_graph,
 )
+from paper_ingestion.extraction.entities_sql import visible_entity_paper_count_sql
 from paper_ingestion.models import (
     BatchEntityExtractResponse,
     EntityDetailResponse,
@@ -57,10 +58,9 @@ async def batch_extract_entities(
 ) -> dict[str, int]:
     """Backfill entity extraction for all summarized papers."""
     async with db_pool.acquire() as conn:
-        # Get papers with summaries but no entities. ``discovered_by`` is the
-        # per-paper owner under the canonical-corpus design (mig 042); we
-        # stamp that user onto every paper_entities row written by this job
-        # so the KG read endpoints can scope correctly.
+        # Preserve the initiating-user attribution on rows created by this
+        # administrative backfill. Authorization is derived from paper scope,
+        # not from this audit field.
         rows = await conn.fetch(
             """SELECT p.id, p.discovered_by FROM papers p
                JOIN paper_summaries ps ON p.id = ps.paper_id
@@ -207,14 +207,14 @@ async def list_entities(
         if entity_type:
             if user_id is not None:
                 rows = await conn.fetch(
-                    """SELECT e.* FROM entities e
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                              e.description, e.metadata, e.embedding_id,
+                              {visible_entity_paper_count_sql("e.id", 4)} AS paper_count,
+                              e.created_at
+                       FROM entities e
                        WHERE e.entity_type = $1
-                         AND EXISTS (
-                             SELECT 1 FROM paper_entities pe
-                             WHERE pe.entity_id = e.id
-                               AND pe.user_id IS NOT DISTINCT FROM $4
-                         )
-                       ORDER BY e.paper_count DESC LIMIT $2 OFFSET $3""",
+                         AND {visible_entity_paper_count_sql("e.id", 4)} > 0
+                       ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
                     entity_type,
                     limit,
                     offset,
@@ -231,13 +231,13 @@ async def list_entities(
         else:
             if user_id is not None:
                 rows = await conn.fetch(
-                    """SELECT e.* FROM entities e
-                       WHERE EXISTS (
-                           SELECT 1 FROM paper_entities pe
-                           WHERE pe.entity_id = e.id
-                             AND pe.user_id IS NOT DISTINCT FROM $3
-                       )
-                       ORDER BY e.paper_count DESC LIMIT $1 OFFSET $2""",
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                              e.description, e.metadata, e.embedding_id,
+                              {visible_entity_paper_count_sql("e.id", 3)} AS paper_count,
+                              e.created_at
+                       FROM entities e
+                       WHERE {visible_entity_paper_count_sql("e.id", 3)} > 0
+                       ORDER BY paper_count DESC LIMIT $1 OFFSET $2""",
                     limit,
                     offset,
                     user_id,
@@ -274,45 +274,32 @@ async def get_entity_detail(
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
     async with db_pool.acquire() as conn:
-        entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
-        if not entity:
-            raise HTTPException(404, f"Entity {entity_id} not found")
-
-        # Scope visibility: when a session user is present, verify the entity
-        # is visible to them (has at least one paper_entities row for their
-        # user_id).  Server-to-server callers (user_id=None) are unscoped.
         if user_id is not None:
-            visible = await conn.fetchval(
-                """SELECT 1 FROM paper_entities
-                   WHERE entity_id = $1 AND user_id IS NOT DISTINCT FROM $2
-                   LIMIT 1""",
+            entity = await conn.fetchrow(
+                f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                           e.description, e.metadata, e.embedding_id,
+                           {visible_entity_paper_count_sql("e.id", 2)} AS paper_count,
+                           e.created_at
+                    FROM entities e
+                    WHERE e.id = $1
+                      AND {visible_entity_paper_count_sql("e.id", 2)} > 0""",
                 entity_id,
                 user_id,
             )
-            if not visible:
-                raise HTTPException(404, f"Entity {entity_id} not found")
+        else:
+            entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
+        if not entity:
+            raise HTTPException(404, f"Entity {entity_id} not found")
 
-        # Scope edges to caller-visible papers under the canonical-corpus
-        # rule (mirrors list_contradictions' user_library EXISTS +
-        # discovered_by-NULL predicate). Server-to-server callers
-        # (user_id=None) are unscoped, matching the entity/papers branches
-        # above. A NULL ``paper_id`` (paper deleted → ON DELETE SET NULL) is
-        # unattributable and stays visible.
+        # Authenticated edges require a surviving caller-visible source paper.
         if user_id is not None:
             rels = await conn.fetch(
                 f"""SELECT * FROM entity_relationships er
                    WHERE (source_entity_id = $1 OR target_entity_id = $1)
-                     AND (
-                         er.paper_id IS NULL
-                         OR EXISTS (
-                             SELECT 1 FROM papers p
-                             WHERE p.id = er.paper_id
-                               AND {paper_visible_sql(2)}
-                         )
-                         OR EXISTS (
-                             SELECT 1 FROM user_library ul
-                             WHERE ul.paper_id = er.paper_id AND ul.user_id = $2
-                         )
+                     AND EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE p.id = er.paper_id
+                           AND {paper_visible_sql(2)}
                      )
                    ORDER BY confidence DESC""",
                 entity_id,
@@ -326,16 +313,18 @@ async def get_entity_detail(
                 entity_id,
             )
 
-        # Scope the "papers that mention this entity" list to the caller's
-        # own paper_entities rows to prevent paper enumeration.
+        # Mention rows are extraction attribution. Scope their papers through
+        # the same persisted public-or-library policy and coalesce duplicate
+        # extraction rows per paper.
         if user_id is not None:
             papers = await conn.fetch(
-                """SELECT p.id, p.title, pe.mention_count
+                f"""SELECT p.id, p.title, MAX(pe.mention_count) AS mention_count
                    FROM paper_entities pe
                    JOIN papers p ON p.id = pe.paper_id
                    WHERE pe.entity_id = $1
-                     AND pe.user_id IS NOT DISTINCT FROM $2
-                   ORDER BY pe.mention_count DESC""",
+                     AND {paper_visible_sql(2)}
+                   GROUP BY p.id, p.title
+                   ORDER BY mention_count DESC""",
                 entity_id,
                 user_id,
             )

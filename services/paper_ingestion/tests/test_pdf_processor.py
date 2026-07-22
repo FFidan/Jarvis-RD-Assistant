@@ -10,8 +10,12 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import ipaddress
+import os
 import socket
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -25,9 +29,12 @@ from paper_ingestion.pdf_processor import (
     ALLOWED_PDF_DOMAINS,
     MAX_PDF_PAGES,
     MAX_PDF_SIZE,
+    PDFPublishBlockedError,
     PDFProcessor,
     _validate_pdf_url,
     check_pdf_path_safe,
+    pdf_publish_operation,
+    publish_pdf,
     quote_to_rects,
 )
 
@@ -45,6 +52,243 @@ def _fake_getaddrinfo(ip_str: str) -> list[tuple[Any, ...]]:
 def _mixed_getaddrinfo(public_ip: str, private_ip: str) -> list[tuple[Any, ...]]:
     """Return two getaddrinfo results: one public IP and one private IP (DNS rebinding)."""
     return _fake_getaddrinfo(public_ip) + _fake_getaddrinfo(private_ip)
+
+
+# ---------------------------------------------------------------------------
+# PDF publication lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_publish_pdf_preserves_staged_and_existing_files_during_maintenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Maintenance refusal must happen before replacing either file."""
+    staged = tmp_path / "_upload_abc.pdf"
+    final = tmp_path / "17.pdf"
+    staged.write_bytes(b"%PDF-1.7\nnew")
+    final.write_bytes(b"%PDF-1.7\nold")
+    monkeypatch.setattr(pdf_processor, "maintenance_active", lambda: True)
+
+    with pytest.raises(PDFPublishBlockedError, match="maintenance"):
+        await publish_pdf(staged, final)
+
+    assert staged.read_bytes() == b"%PDF-1.7\nnew"
+    assert final.read_bytes() == b"%PDF-1.7\nold"
+
+
+@pytest.mark.asyncio
+async def test_publish_pdf_checks_maintenance_after_contended_lock_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restore that starts while a publisher waits must still block promotion."""
+    staged = tmp_path / "7.tmp"
+    final = tmp_path / "7.pdf"
+    staged.write_bytes(b"%PDF-1.7\nnew")
+    final.write_bytes(b"%PDF-1.7\nold")
+
+    lock_path = tmp_path / ".publish.lock"
+    lock_fd = os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o644)
+    real_flock = fcntl.flock
+    real_flock(lock_fd, fcntl.LOCK_EX)
+
+    lock_attempted = threading.Event()
+    maintenance_calls: list[bool] = []
+    maintenance_started = False
+
+    def tracked_flock(fd: int, operation: int) -> None:
+        if operation & fcntl.LOCK_EX:
+            lock_attempted.set()
+        real_flock(fd, operation)
+
+    def maintenance_is_active() -> bool:
+        maintenance_calls.append(maintenance_started)
+        return maintenance_started
+
+    monkeypatch.setattr(pdf_processor.fcntl, "flock", tracked_flock)
+    monkeypatch.setattr(pdf_processor, "maintenance_active", maintenance_is_active)
+
+    task = asyncio.create_task(publish_pdf(staged, final))
+    try:
+        assert await asyncio.to_thread(lock_attempted.wait, 1.0)
+        assert maintenance_calls == []
+        maintenance_started = True
+        real_flock(lock_fd, fcntl.LOCK_UN)
+        with pytest.raises(PDFPublishBlockedError, match="maintenance"):
+            await task
+    finally:
+        real_flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        if not task.done():
+            task.cancel()
+
+    assert maintenance_calls == [True]
+    assert staged.exists()
+    assert final.read_bytes() == b"%PDF-1.7\nold"
+
+
+@pytest.mark.asyncio
+async def test_publish_pdf_uses_existing_read_only_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 0644-style sidecar lock must not require write access from the app."""
+    staged = tmp_path / "8.tmp"
+    final = tmp_path / "8.pdf"
+    staged.write_bytes(b"%PDF-1.7\nnew")
+    lock_path = tmp_path / ".publish.lock"
+    lock_path.touch(mode=0o644)
+    lock_path.chmod(0o444)
+    monkeypatch.setattr(pdf_processor, "maintenance_active", lambda: False)
+
+    await publish_pdf(staged, final)
+
+    assert not staged.exists()
+    assert final.read_bytes() == b"%PDF-1.7\nnew"
+
+
+@pytest.mark.asyncio
+async def test_publish_pdf_rejects_replaced_lock_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publisher must not proceed while holding an unlinked lock inode."""
+    staged = tmp_path / "9.tmp"
+    final = tmp_path / "9.pdf"
+    staged.write_bytes(b"%PDF-1.7\nnew")
+    final.write_bytes(b"%PDF-1.7\nold")
+
+    lock_path = tmp_path / ".publish.lock"
+    lock_fd = os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o644)
+    real_flock = fcntl.flock
+    real_flock(lock_fd, fcntl.LOCK_EX)
+    lock_attempted = threading.Event()
+
+    def tracked_flock(fd: int, operation: int) -> None:
+        if operation & fcntl.LOCK_EX:
+            lock_attempted.set()
+        real_flock(fd, operation)
+
+    monkeypatch.setattr(pdf_processor.fcntl, "flock", tracked_flock)
+    monkeypatch.setattr(pdf_processor, "maintenance_active", lambda: False)
+
+    task = asyncio.create_task(publish_pdf(staged, final))
+    try:
+        assert await asyncio.to_thread(lock_attempted.wait, 1.0)
+        lock_path.unlink()
+        lock_path.touch(mode=0o644)
+        real_flock(lock_fd, fcntl.LOCK_UN)
+        with pytest.raises(RuntimeError, match="lock changed"):
+            await task
+    finally:
+        real_flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        if not task.done():
+            task.cancel()
+
+    assert staged.exists()
+    assert final.read_bytes() == b"%PDF-1.7\nold"
+
+
+@pytest.mark.asyncio
+async def test_publish_pdf_rejects_symlink_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lock opener must never follow a storage-root symlink."""
+    staged = tmp_path / "10.tmp"
+    final = tmp_path / "10.pdf"
+    outside = tmp_path / "outside.lock"
+    staged.write_bytes(b"%PDF-1.7\nnew")
+    outside.touch()
+    (tmp_path / ".publish.lock").symlink_to(outside)
+    monkeypatch.setattr(pdf_processor, "maintenance_active", lambda: False)
+
+    with pytest.raises(OSError):
+        await publish_pdf(staged, final)
+
+    assert staged.exists()
+    assert not final.exists()
+
+
+@pytest.mark.asyncio
+async def test_publish_operation_keeps_restore_out_until_failure_cleanup_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delayed DB failure must clean its file before restore can swap PDFs."""
+    staged = tmp_path / "_upload_11.pdf"
+    final = tmp_path / "11.pdf"
+    staged.write_bytes(b"%PDF-1.7\nrequest")
+    monkeypatch.setattr(pdf_processor, "maintenance_active", lambda: False)
+
+    lock_attempted = threading.Event()
+    lock_acquired = threading.Event()
+
+    def restore_after_lock() -> None:
+        lock_fd = os.open(tmp_path / ".publish.lock", os.O_RDONLY)
+        try:
+            lock_attempted.set()
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            lock_acquired.set()
+            final.write_bytes(b"%PDF-1.7\nrestored")
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+    restore_thread: threading.Thread | None = None
+    with pytest.raises(RuntimeError, match="database commit failed"):
+        async with pdf_publish_operation(tmp_path) as publication:
+            await publication.promote(staged, final)
+            restore_thread = threading.Thread(target=restore_after_lock)
+            restore_thread.start()
+            assert await asyncio.to_thread(lock_attempted.wait, 1.0)
+            assert not await asyncio.to_thread(lock_acquired.wait, 0.1)
+            raise RuntimeError("database commit failed")
+
+    assert restore_thread is not None
+    await asyncio.to_thread(restore_thread.join, 1.0)
+    assert not restore_thread.is_alive()
+    assert lock_acquired.is_set()
+    assert final.read_bytes() == b"%PDF-1.7\nrestored"
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_cleans_staged_file_when_publish_is_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The download caller must use the guarded publisher and clean its temp file."""
+
+    async def fake_stream_bytes(chunk_size: int = 65536):  # type: ignore[override]
+        yield b"%PDF-1.7\nnew"
+
+    head_response = MagicMock(status_code=200)
+    head_response.raise_for_status = MagicMock()
+    stream_response = MagicMock()
+    stream_response.raise_for_status = MagicMock()
+    stream_response.aiter_bytes = fake_stream_bytes
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=stream_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+    http_client = MagicMock()
+    http_client.request = AsyncMock(return_value=head_response)
+    http_client.stream = MagicMock(return_value=stream_cm)
+
+    final = tmp_path / "23.pdf"
+    final.write_bytes(b"%PDF-1.7\nold")
+    publish = AsyncMock(side_effect=PDFPublishBlockedError("PDF maintenance is active"))
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(pdf_processor, "publish_pdf", publish)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda h, p: _fake_getaddrinfo("151.101.1.1"))
+
+    processor = PDFProcessor(http_client=http_client, embedder=MagicMock())
+    with pytest.raises(PDFPublishBlockedError, match="maintenance"):
+        await processor.download_pdf("https://arxiv.org/pdf/test.pdf", paper_id=23)
+
+    publish.assert_awaited_once()
+    staged, published_final = publish.await_args.args
+    assert published_final == final
+    assert staged.parent == tmp_path
+    assert staged.name.startswith(".23.download-")
+    assert staged.suffix == ".tmp"
+    assert final.read_bytes() == b"%PDF-1.7\nold"
+    assert not staged.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +815,107 @@ def test_chunk_text_page_bounded_reindex_and_pages() -> None:
     assert [c.chunk_index for c in chunks] == list(range(len(chunks)))  # unique + monotonic
     assert all(c.page_number in (1, 2) for c in chunks)
     assert {c.page_number for c in chunks} == {1, 2}  # both pages produced chunks
+
+
+@pytest.mark.asyncio
+async def test_process_reports_phases_only_after_their_real_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Progress events follow extraction, chunking, and persisted vector batches."""
+    from paper_ingestion.models import ChunkForEmbedding
+
+    timeline: list[str] = []
+    chunk = ChunkForEmbedding(
+        chunk_index=0,
+        content="chunk",
+        page_number=1,
+        start_char=0,
+        end_char=5,
+    )
+
+    async def _extract(_pdf_path: Path):
+        timeline.append("extraction complete")
+        return "full text", [(0, 9, 1)]
+
+    def _snapshots(_pdf_path: Path, _paper_id: int):
+        timeline.append("snapshots complete")
+        return []
+
+    def _chunk(_text: str, _anchors: list[tuple[int, int, int]]):
+        timeline.append("chunking complete")
+        return [chunk]
+
+    async def _embed(
+        _paper_id: int,
+        _chunks: list[ChunkForEmbedding],
+        *,
+        user_id: int | None,
+        visibility,
+        run_context,
+    ):
+        assert user_id is None
+        assert visibility is None
+        assert run_context.resume_content == {}
+        assert run_context.progress_callback is not None
+        timeline.append("embedding started")
+        await run_context.progress_callback(1, 1)
+        return ["point-1"]
+
+    async def _record_progress(
+        phase: str,
+        completed: int,
+        total: int,
+    ) -> None:
+        timeline.append(f"progress:{phase}:{completed}/{total}")
+
+    embedder = MagicMock()
+    embedder.chunk_text = MagicMock(side_effect=_chunk)
+    embedder.embed_and_store = AsyncMock(side_effect=_embed)
+    processor = PDFProcessor(http_client=MagicMock(), embedder=embedder)
+    monkeypatch.setattr(pdf_processor, "extract_text", _extract)
+    monkeypatch.setattr(processor, "generate_snapshots", _snapshots)
+
+    await processor.process(
+        Path("/tmp/paper.pdf"),
+        14,
+        progress_callback=_record_progress,
+    )
+
+    assert timeline == [
+        "extraction complete",
+        "progress:extracted:1/1",
+        "snapshots complete",
+        "chunking complete",
+        "progress:chunked:1/1",
+        "embedding started",
+        "progress:embedding:1/1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_does_not_report_an_unfinished_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extraction failure cannot be advertised as extracted."""
+    events: list[tuple[str, int, int]] = []
+
+    async def _fail_extraction(_pdf_path: Path):
+        raise RuntimeError("extraction failed")
+
+    async def _record_progress(phase: str, completed: int, total: int) -> None:
+        events.append((phase, completed, total))
+
+    processor = PDFProcessor(http_client=MagicMock(), embedder=MagicMock())
+    monkeypatch.setattr(pdf_processor, "extract_text", _fail_extraction)
+
+    with pytest.raises(RuntimeError, match="extraction failed"):
+        await processor.process(
+            Path("/tmp/paper.pdf"),
+            15,
+            progress_callback=_record_progress,
+        )
+
+    assert events == []
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ break ``app.openapi()``. Body annotations must remain concrete types.
 import logging
 import secrets
 from datetime import UTC, datetime
+from urllib.parse import urlencode
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -58,15 +59,20 @@ def _build_email_confirm_link(request: Request, token: str) -> str:
     """URL the user clicks to confirm an email change.
 
     Same derivation strategy as ``auth._build_magic_link`` (honours
-    ``APP_BASE_URL`` / ProxyHeaders) but targets the account confirm route
-    instead of ``/auth/verify``.
+    ``APP_BASE_URL`` / ProxyHeaders), but lands on the existing account pane.
+    The bearer token rides a fragment, which browsers do not send in request
+    lines or Referer headers.
     """
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     base = get_paper_ingestion_settings().app_base_url
+    query = "section=account&item=profile"
+    fragment = urlencode({"confirm_email_token": token})
     if base:
-        return f"{base.rstrip('/')}/account/confirm-email?token={token}"
-    return str(request.url.replace(path="/account/confirm-email", query=f"token={token}"))
+        settings_url = f"{base.rstrip('/')}/settings?{query}"
+    else:
+        settings_url = str(request.url.replace(path="/settings", query=query))
+    return f"{settings_url}#{fragment}"
 
 
 def _row_to_account(row) -> AccountResponse:

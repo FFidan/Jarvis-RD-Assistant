@@ -7,11 +7,13 @@ even when the same email is requested twice in quick succession.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -36,7 +38,7 @@ def _build_request(pool: MagicMock, url_path: str = "/api/auth/request-link") ->
     app = SimpleNamespace(state=state)
     url = SimpleNamespace(
         path=url_path,
-        replace=lambda **kw: "http://test/auth/verify?token=t",
+        replace=lambda **kw: "http://test/auth/verify",
     )
     return SimpleNamespace(
         url=url,
@@ -91,9 +93,17 @@ async def test_request_link_cooldown_skips_second_insert() -> None:
     with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()):
         with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
             # First call — should INSERT.
-            resp1 = await request_link(body=body, request=request)
+            resp1 = await request_link(
+                body=body,
+                request=request,
+                background_tasks=BackgroundTasks(),
+            )
             # Second call — should skip INSERT.
-            resp2 = await request_link(body=body, request=request)
+            resp2 = await request_link(
+                body=body,
+                request=request,
+                background_tasks=BackgroundTasks(),
+            )
 
     assert isinstance(resp1, RequestLinkResponse)
     assert resp1.sent is True
@@ -132,9 +142,17 @@ async def test_request_link_cooldown_logs_info_on_suppression() -> None:
                 "paper_ingestion.routers.auth.logger",
             ) as mock_logger:
                 # First call — normal INSERT path.
-                await request_link(body=body, request=request)
+                await request_link(
+                    body=body,
+                    request=request,
+                    background_tasks=BackgroundTasks(),
+                )
                 # Second call — cooldown path should log.
-                await request_link(body=body, request=request)
+                await request_link(
+                    body=body,
+                    request=request,
+                    background_tasks=BackgroundTasks(),
+                )
 
     # Verify logger.info was called with the cooldown message at least once.
     info_calls = [
@@ -173,7 +191,11 @@ async def test_request_link_cooldown_probe_is_login_scoped() -> None:
 
     with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()):
         with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
-            await request_link(body=body, request=request)
+            await request_link(
+                body=body,
+                request=request,
+                background_tasks=BackgroundTasks(),
+            )
 
     cooldown_probes = [
         q for q in fetchval_queries if "magic_link_tokens" in q and "created_at" in q
@@ -200,14 +222,17 @@ def test_build_magic_link_warns_on_unset_app_base_url_in_production(monkeypatch,
 
     request = SimpleNamespace(
         url=SimpleNamespace(
-            replace=lambda **kw: f"https://origin/auth/verify?{kw.get('query', '')}"
+            replace=lambda **kw: (
+                "https://origin/auth/verify" + (f"?{kw['query']}" if kw.get("query") else "")
+            )
         )
     )
 
     with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.auth"):
         link = _build_magic_link(request, "tok123")
 
-    assert "token=tok123" in link
+    assert link == "https://origin/auth/verify#token=tok123"
+    assert "?token=" not in link
     warnings = [
         r
         for r in caplog.records
@@ -226,6 +251,55 @@ def test_build_magic_link_warns_on_unset_app_base_url_in_production(monkeypatch,
 # ---------------------------------------------------------------------------
 # enumeration resistance + swallowed-send event
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_link_known_and_unknown_return_before_delayed_sender() -> None:
+    """SMTP latency stays outside both known and unknown request paths."""
+    from paper_ingestion.routers.auth import RequestLinkBody, request_link
+
+    known_pool, known_conn = make_pool_and_conn(
+        fetchrow_return={"id": 7},
+        fetchval_return=None,
+    )
+    known_conn.execute = AsyncMock(return_value=None)
+    unknown_pool, unknown_conn = make_pool_and_conn(fetchrow_return=None)
+    unknown_conn.execute = AsyncMock(return_value=None)
+    known_tasks = BackgroundTasks()
+    unknown_tasks = BackgroundTasks()
+    sender_release = asyncio.Event()
+
+    async def _delayed_sender(*args, **kwargs):
+        await sender_release.wait()
+        return None
+
+    with patch(
+        "paper_ingestion.routers.auth.send_magic_link",
+        AsyncMock(side_effect=_delayed_sender),
+    ) as send_mock:
+        with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
+            known = await asyncio.wait_for(
+                request_link(
+                    body=RequestLinkBody(email="known@example.com"),
+                    request=_build_request(known_pool),
+                    background_tasks=known_tasks,
+                ),
+                timeout=1.0,
+            )
+            unknown = await asyncio.wait_for(
+                request_link(
+                    body=RequestLinkBody(email="ghost@example.com"),
+                    request=_build_request(unknown_pool),
+                    background_tasks=unknown_tasks,
+                ),
+                timeout=1.0,
+            )
+
+    assert known.sent is True
+    assert unknown.sent is True
+    send_mock.assert_not_awaited()
+    assert len(known_tasks.tasks) == 1
+    assert unknown_tasks.tasks == []
 
 
 @pytest.mark.asyncio
@@ -249,7 +323,11 @@ async def test_request_link_unknown_email_sent_true_no_insert() -> None:
     with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()) as send_mock:
         with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
             with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
-                resp = await request_link(body=body, request=request)
+                resp = await request_link(
+                    body=body,
+                    request=request,
+                    background_tasks=BackgroundTasks(),
+                )
 
     assert isinstance(resp, RequestLinkResponse)
     assert resp.sent is True
@@ -264,8 +342,7 @@ async def test_request_link_unknown_email_sent_true_no_insert() -> None:
 
 @pytest.mark.asyncio
 async def test_request_link_send_failure_writes_event_and_returns_sent() -> None:
-    """A swallowed send failure writes exactly ONE auth/magic_link_send_failed
-    event and STILL returns {sent: true} (enumeration/timing defense intact)."""
+    """The queued delivery task records a PII-safe SMTP failure event."""
     from paper_ingestion.routers.auth import RequestLinkBody, RequestLinkResponse, request_link
 
     pool, conn = make_pool_and_conn(fetchrow_return={"id": 7}, fetchval_return=None)
@@ -273,6 +350,7 @@ async def test_request_link_send_failure_writes_event_and_returns_sent() -> None
 
     request = _build_request(pool)
     body = RequestLinkBody(email="relaydown@example.com")
+    background_tasks = BackgroundTasks()
 
     with patch(
         "paper_ingestion.routers.auth.send_magic_link",
@@ -280,7 +358,13 @@ async def test_request_link_send_failure_writes_event_and_returns_sent() -> None
     ):
         with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
             with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
-                resp = await request_link(body=body, request=request)
+                resp = await request_link(
+                    body=body,
+                    request=request,
+                    background_tasks=background_tasks,
+                )
+                event_mock.assert_not_awaited()
+                await background_tasks()
 
     assert isinstance(resp, RequestLinkResponse)
     assert resp.sent is True
@@ -311,8 +395,14 @@ async def test_request_link_cooldown_writes_no_send_failed_event() -> None:
     with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()) as send_mock:
         with patch("paper_ingestion.routers.auth.log_audit", AsyncMock()):
             with patch("paper_ingestion.routers.auth.log_event", AsyncMock()) as event_mock:
-                resp = await request_link(body=body, request=request)
+                background_tasks = BackgroundTasks()
+                resp = await request_link(
+                    body=body,
+                    request=request,
+                    background_tasks=background_tasks,
+                )
 
     assert resp.sent is True
     send_mock.assert_not_awaited()
     event_mock.assert_not_awaited()
+    assert background_tasks.tasks == []

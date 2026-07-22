@@ -8,9 +8,13 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.2.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current stable release: **v1.1.3**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
+- **Safer install and maintenance (v1.1.3).** Setup re-runs preserve local
+  configuration and data, access-mode output matches the route that is actually
+  served, and the `jarvis-research` command provides checked updates, health
+  diagnostics, bounded repair, and a contained uninstall flow.
 - **Install from prebuilt images (v1.1.0).** A default `./setup.sh` pulls
   multi-architecture application images from the container registry instead of
   building them locally, ending the multi-gigabyte PyTorch/CUDA build that could
@@ -32,9 +36,10 @@ change list since the v1.0.0 public baseline.
   recommender that learns from your ratings.
 - **Knowledge retention.** Anki-style spaced-repetition flashcards (FSRS),
   notes, structured extractions, projects, and a daily-intent workflow.
-- **Shared canonical corpus + private workspace.** The bibliographic corpus is
-  shared across users on an instance; all user activity and intellectual
-  output is strictly private (see the SECURITY.md "Data Sharing Boundary").
+- **Deduplicated papers + private workspaces.** JARVIS avoids duplicating a
+  paper that multiple users save while keeping library state and intellectual
+  output private. Current visibility details live in the SECURITY.md
+  source-aware matrix.
 - **Researcher-grade model plane + trust polish.** Per-hardware model selection
   that actually takes effect, optional admin-wide cloud providers for the `smart`
   and `fast` roles, full-coverage summaries with verified quotes, and a
@@ -46,14 +51,16 @@ change list since the v1.0.0 public baseline.
   capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction
   detection, Pulse, FSRS flashcards, notes, projects, Telegram, the multi-tenant
   model). The in-repo Markdown remains the offline source of truth.
-- **Day-one library processing.** Home can queue a whole-library workflow that
-  downloads and processes eligible papers and explicitly includes summary
-  generation. The Jobs panel shows progress, supports cancellation, reports
-  partial failed or blocked outcomes, and permits a safe rerun. It does not
-  claim automatic entity extraction.
 
 ## In progress
 
+- **v1.2.0 candidate.** The candidate adds whole-library processing, incremental
+  discovery with optional automatic summaries, per-paper Markdown knowledge
+  export, visible Pulse ranking-model status, repair for stale or missing
+  embeddings, complete PDF-aware restore sets, explicit instance ownership, and
+  persisted source-aware paper visibility. Release review is still in progress;
+  none of this is listed as shipped until the stable tag and images are
+  published from `main`.
 - **First-hour local-first polish.** Tighten the early experience so a fresh
   install is more honest and immediately useful: first-party assets only, clearer
   library-preparation actions, current public version wording, and an onboarding
@@ -71,9 +78,8 @@ change list since the v1.0.0 public baseline.
 
 ## Planned (exploratory — no dates)
 
-- **Knowledge export.** The first v1.2.0 slice exports a per-paper Markdown
-  document containing summaries, notes, cards, extractions, and BibTeX. Future
-  work may extend exports to answers and project-centred outputs.
+- **Broader knowledge export.** Future releases may add export bundles for
+  answers and project-centred outputs.
 - **Per-user provider keys and routing.** Optional bring-your-own-key behavior,
   per-user routing preferences, and privacy controls for multi-user deployments.
   Current provider settings are admin-wide.
@@ -101,9 +107,9 @@ change list since the v1.0.0 public baseline.
 
 ## Not planned
 
-- Per-tenant private *corpus* partitioning. The corpus is intentionally a
-  shared scholarly library; isolation is at the activity/output layer. See the
-  SECURITY.md "Data Sharing Boundary" for the rationale.
+- Public self-registration or a single family-wide password. Accounts are
+  invited by an administrator, and recovery stays bound to a user or the
+  configured instance owner.
 
 ---
 

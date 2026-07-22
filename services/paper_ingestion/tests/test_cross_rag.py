@@ -267,114 +267,124 @@ async def test_rerank_floor_backend_default_drops_and_degrades(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# PI-RAG-001: cross-paper RAG scope widen — filter-construction proof
-#
-# A secondary-library owner (caller B) must be able to retrieve chunks for a
-# SHARED-corpus paper P that another user (A) originally embedded (P's chunks
-# carry user_id=A in their Qdrant payload), because P is in B's user_library.
-# The widening adds a third `should` branch: paper_id IN <B's library>.
-#
-# SECURITY INVARIANT (non-negotiable): the widening is keyed ONLY on the
-# caller's own library membership.  A paper Q private to A (in A's library,
-# NOT B's) must NEVER appear in the widened branch for caller B.
+# Vector filter construction: current generation AND persisted public scope or
+# explicit caller-library membership. Source labels, discoverer audit values,
+# and legacy vector owners have no authorization role.
 # ---------------------------------------------------------------------------
 
 
-def test_user_scope_filter_widens_to_callers_library_only():
-    """`_user_scope_filter(B, library_paper_ids)` adds a paper_id IN-branch.
-
-    Revert-proof: if the widening is dropped, the third `should` branch
-    disappears and the P-membership assertion fails.  If the widening ever
-    keyed on something other than the supplied (caller's-own) library list,
-    Q (not supplied) would leak into the branch and the negative assertion
-    fails.
-    """
-    from qdrant_client.models import FieldCondition, MatchAny, MatchValue
+def test_user_scope_filter_is_generation_and_persisted_scope_authority():
+    """Private access widens only to the caller's supplied library paper IDs."""
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
     from paper_ingestion.ingestion.embedding_config import _user_scope_filter
 
     caller_b = 2
-    shared_paper_p = 100  # in B's library (A processed it; chunks payload user_id=A)
-    private_paper_q = 200  # in A's library ONLY — must NOT enter B's widened branch
+    library_paper = 100
+    other_private_paper = 200
+    generation = "1" * 32
 
-    # B's library contains only P (NOT Q).
-    flt = _user_scope_filter(caller_b, library_paper_ids=[shared_paper_p])
+    flt = _user_scope_filter(
+        caller_b,
+        library_paper_ids=[library_paper],
+        visibility_generation=generation,
+    )
     assert flt is not None
+    assert len(flt.must) == 2
+    generation_condition = flt.must[0]
+    assert isinstance(generation_condition, FieldCondition)
+    assert generation_condition.key == "visibility_generation"
+    assert isinstance(generation_condition.match, MatchValue)
+    assert generation_condition.match.value == generation
 
-    user_id_branches = [
-        c
-        for c in flt.should
-        if getattr(c, "key", None) == "user_id"
-        and isinstance(getattr(c, "match", None), MatchValue)
-    ]
-    assert any(c.match.value == caller_b for c in user_id_branches), (
-        "base scope must still match the caller's own user_id"
-    )
+    access = flt.must[1]
+    assert isinstance(access, Filter)
+    assert len(access.should) == 2
+    public = access.should[0]
+    assert isinstance(public, FieldCondition)
+    assert public.key == "visibility_scope"
+    assert public.match.value == "public"
 
-    paper_id_branches = [
-        c
-        for c in flt.should
-        if isinstance(c, FieldCondition)
-        and c.key == "paper_id"
-        and isinstance(getattr(c, "match", None), MatchAny)
-    ]
-    assert len(paper_id_branches) == 1, (
-        "widening must add exactly one paper_id MatchAny `should` branch"
-    )
-    widened_ids = set(paper_id_branches[0].match.any)
-    assert shared_paper_p in widened_ids, (
-        "P (in B's library) MUST be in the widened branch — else B under-fetches"
-    )
-    assert private_paper_q not in widened_ids, (
-        "Q (NOT in B's library) MUST NOT be in B's widened branch — leak guard"
-    )
+    private_library = access.should[1]
+    assert isinstance(private_library, Filter)
+    private_conditions = {
+        condition.key: condition for condition in private_library.must if isinstance(condition, FieldCondition)
+    }
+    assert private_conditions["visibility_scope"].match.value == "private"
+    assert isinstance(private_conditions["paper_id"].match, MatchAny)
+    assert set(private_conditions["paper_id"].match.any) == {library_paper}
+    assert other_private_paper not in private_conditions["paper_id"].match.any
+
+    all_keys = {
+        condition.key
+        for condition in [generation_condition, public, *private_library.must]
+        if isinstance(condition, FieldCondition)
+    }
+    assert "source_type" not in all_keys
+    assert "user_id" not in all_keys
 
 
-def test_user_scope_filter_no_widening_without_library_ids():
-    """No paper_id `should` branch is added when library_paper_ids is absent/empty.
-
-    Preserves the legacy (user_id==X OR is_null) base scope and the
-    single-tenant `None` path.
-    """
-    from qdrant_client.models import FieldCondition, MatchAny
+def test_user_scope_filter_with_empty_library_keeps_only_public_scope():
+    """An authenticated caller without memberships receives public vectors only."""
+    from qdrant_client.models import FieldCondition, Filter
 
     from paper_ingestion.ingestion.embedding_config import _user_scope_filter
 
-    # Unscoped (single-tenant) path unchanged.
-    assert _user_scope_filter(None) is None
+    flt = _user_scope_filter(5, library_paper_ids=[], visibility_generation="2" * 32)
+    assert flt is not None
+    access = flt.must[1]
+    assert isinstance(access, Filter)
+    assert len(access.should) == 1
+    assert isinstance(access.should[0], FieldCondition)
+    assert access.should[0].key == "visibility_scope"
+    assert access.should[0].match.value == "public"
 
-    for lib in (None, []):
-        flt = _user_scope_filter(5, library_paper_ids=lib)
-        assert flt is not None
-        assert not any(
-            isinstance(c, FieldCondition)
-            and c.key == "paper_id"
-            and isinstance(getattr(c, "match", None), MatchAny)
-            for c in flt.should
-        ), "no widening branch should exist without library_paper_ids"
+
+def test_missing_generation_fails_closed_while_internal_scope_is_explicit():
+    """Missing checkpoint metadata cannot fall back to an unscoped query."""
+    from qdrant_client.models import FieldCondition, MatchValue
+
+    from paper_ingestion.ingestion.embedding_config import _user_scope_filter
+
+    assert _user_scope_filter(None) is None
+    flt = _user_scope_filter(22, library_paper_ids=[], visibility_generation=None)
+    assert flt is not None
+    generation = flt.must[0]
+    assert isinstance(generation, FieldCondition)
+    assert generation.key == "visibility_generation"
+    assert isinstance(generation.match, MatchValue)
+    assert generation.match.value == "0" * 32
 
 
 # ---------------------------------------------------------------------------
-# Shared-corpus visibility: the DB-side backstop, exercised against real
+# Persisted visibility: the DB-side backstop, exercised against real
 # Postgres so the predicate itself is evaluated (a mock pool would return rows
 # regardless of the SQL and prove nothing).
 #
-# `papers` is the canonical shared corpus: `discovered_by IS NULL` means
-# "belongs to everybody".  Shelving such a paper is a private act by one user
-# and must not remove it from anyone else's cross-paper answers.  A paper
-# somebody actually discovered stays private to that discoverer plus whoever
-# shelved it.
+# A persisted-public paper remains visible regardless of library membership.
+# Private papers require an explicit row in the requesting user's library;
+# discovery attribution is not authorization.
 # ---------------------------------------------------------------------------
 
 
-async def _seed_paper(conn, external_id: str, discovered_by: int | None) -> int:
+async def _seed_paper(
+    conn,
+    external_id: str,
+    *,
+    visibility_scope: str,
+    discovered_by: int | None = None,
+) -> int:
     return await conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url,
+               discovered_by, visibility_scope
+           )
            VALUES ($1, 'arxiv', 'Shared Corpus Paper', ARRAY['Author'],
-                   'https://shared.test/paper', $2)
+                   'https://shared.test/paper', $2, $3)
            RETURNING id""",
         external_id,
         discovered_by,
+        visibility_scope,
     )
 
 
@@ -406,25 +416,29 @@ def _chunk(paper_id: int, score: float) -> dict:
 @pytest.mark.contract
 @pytest.mark.real_auth
 @pytest.mark.asyncio(loop_scope="session")
-async def test_shared_corpus_paper_stays_visible_after_another_user_shelves_it(
+async def test_public_paper_stays_visible_after_another_user_shelves_it(
     contract_two_users,
     contract_conn,
 ):
-    """A canonical paper shelved only by user A still reaches user B's answers.
+    """A persisted-public paper shelved only by A still reaches B's answers.
 
     B never shelved it, so the caller's-library branch cannot admit it; only
-    the shared-corpus branch can.  If that branch is missing, the metadata
+    the public-scope branch can. If that branch is missing, the metadata
     fetch drops the row, the chunk is filtered out, and B degrades to
     no-results — silently losing a paper the whole install is meant to share.
     """
     from jarvis_common.testing import SharedConnPool
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
 
-    canonical_id = await _seed_paper(contract_conn, "shared-canonical", None)
-    await _shelve(contract_conn, contract_two_users.user_a_id, canonical_id)
+    public_id = await _seed_paper(
+        contract_conn,
+        "shared-public",
+        visibility_scope="public",
+    )
+    await _shelve(contract_conn, contract_two_users.user_a_id, public_id)
 
     result = await prepare_cross_paper_rag(
-        _embedder_returning([_chunk(canonical_id, 0.9)]),
+        _embedder_returning([_chunk(public_id, 0.9)]),
         SharedConnPool(contract_conn),
         CrossPaperAskRequest(question="How does attention work?", decompose=False),
         AsyncMock(),
@@ -432,21 +446,21 @@ async def test_shared_corpus_paper_stays_visible_after_another_user_shelves_it(
     )
 
     assert isinstance(result, CrossPaperRagPrep), (
-        f"B must still receive the shared-corpus paper; got {result!r}"
+        f"B must still receive the persisted-public paper; got {result!r}"
     )
-    assert {s["paper_id"] for s in result.sources} == {canonical_id}
+    assert {s["paper_id"] for s in result.sources} == {public_id}
 
 
 @pytest.mark.contract
 @pytest.mark.real_auth
 @pytest.mark.asyncio(loop_scope="session")
-async def test_papers_discovered_by_another_user_stay_out_of_the_callers_answers(
+async def test_private_papers_outside_library_stay_out_of_cross_paper_answers(
     contract_two_users,
     contract_conn,
 ):
-    """Papers A discovered never reach B, shelved by A or shelved by nobody.
+    """Private papers outside B's library never reach B's answer.
 
-    The canonical control paper proves the pipeline actually reached the
+    The persisted-public control proves the pipeline reached the
     metadata fetch — without it, an empty source list would also be produced
     by any earlier short-circuit.
     """
@@ -454,10 +468,24 @@ async def test_papers_discovered_by_another_user_stay_out_of_the_callers_answers
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
 
     user_a = contract_two_users.user_a_id
-    shelved_by_a = await _seed_paper(contract_conn, "private-shelved", user_a)
+    shelved_by_a = await _seed_paper(
+        contract_conn,
+        "private-shelved",
+        visibility_scope="private",
+        discovered_by=user_a,
+    )
     await _shelve(contract_conn, user_a, shelved_by_a)
-    unshelved = await _seed_paper(contract_conn, "private-unshelved", user_a)
-    control = await _seed_paper(contract_conn, "shared-control", None)
+    unshelved = await _seed_paper(
+        contract_conn,
+        "private-unshelved",
+        visibility_scope="private",
+        discovered_by=user_a,
+    )
+    control = await _seed_paper(
+        contract_conn,
+        "public-control",
+        visibility_scope="public",
+    )
 
     result = await prepare_cross_paper_rag(
         _embedder_returning(
@@ -471,7 +499,7 @@ async def test_papers_discovered_by_another_user_stay_out_of_the_callers_answers
 
     assert isinstance(result, CrossPaperRagPrep), f"the control paper must survive; got {result!r}"
     assert {s["paper_id"] for s in result.sources} == {control}, (
-        "only the shared-corpus paper is visible to B"
+        "only the persisted-public paper is visible to B"
     )
 
 

@@ -14,6 +14,11 @@ import { requestMagicLink, ApiError, getFirstRunStatus } from '@/lib/api';
 
 const PASSKEY_PROMO_DISMISS_KEY = 'jarvis-passkey-promo-dismissed';
 
+function isRemotePlainHttp(location: Pick<Location, 'protocol' | 'hostname'>): boolean {
+  const loopback = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+  return location.protocol === 'http:' && !loopback.has(location.hostname.toLowerCase());
+}
+
 /**
  * Magic-link login surface — SMTP-aware.
  *
@@ -25,8 +30,8 @@ const PASSKEY_PROMO_DISMISS_KEY = 'jarvis-passkey-promo-dismissed';
  *   tab remains available but annotated to explain that email is not configured.
  * - smtp_configured=false, multi mode -> magic-link tab stays primary with an
  *   honest notice: links cannot be delivered until an admin configures SMTP.
- *   The API-key tab is still reachable but API-key login is rejected by the
- *   backend once more than one account exists (unless API_KEY_LOGIN_ENABLED=true).
+ *   The API-key tab remains available as the configured instance owner's
+ *   recovery path; family members use a passkey or one-time sign-in link.
  * - setup_mode absent and smtp_configured absent (fetch failed / older backend) ->
  *   magic-link tab stays primary (safe fallback, no behavior change for
  *   existing installs).
@@ -68,8 +73,7 @@ export function LoginPage() {
       return;
     }
     // In multi-user mode without SMTP, stay on magic-link so the honest notice
-    // is visible. The API-key tab is reachable but the backend rejects it once
-    // more than one account exists (unless API_KEY_LOGIN_ENABLED=true).
+    // is visible. The API-key tab remains the configured owner's recovery path.
     // In single-user mode without SMTP, default to API-key (the working path).
     if (smtpConfigured === false && !isMultiMode) {
       setMode('api-key');
@@ -180,6 +184,22 @@ export function LoginPage() {
       </p>
     ) : null;
 
+  if (isRemotePlainHttp(window.location)) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>Use the private HTTPS address</CardTitle>
+            <CardDescription>
+              This plain-HTTP LAN address is for status checks only. Open the verified
+              Tailscale or named-HTTPS address before entering a sign-in link or API key.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
@@ -188,7 +208,9 @@ export function LoginPage() {
           <CardDescription>
             {mode === 'magic-link'
               ? 'Enter your email to receive a sign-in link'
-              : 'Enter your API key to continue'}
+              : isMultiMode
+                ? 'Recover the configured owner account with its API key'
+                : 'Enter your API key to continue'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -232,13 +254,13 @@ export function LoginPage() {
                   setInfo('');
                 }}
               >
-                Use API key instead
+                {isMultiMode ? 'Instance owner recovery' : 'Use API key instead'}
               </button>
             </form>
           ) : (
             <form onSubmit={handleApiKeySubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="apiKey">API Key</Label>
+                <Label htmlFor="apiKey">{isMultiMode ? 'Owner API key' : 'API Key'}</Label>
                 <Input
                   id="apiKey"
                   type="password"
@@ -253,6 +275,12 @@ export function LoginPage() {
                   disabled={loading}
                 />
               </div>
+              {isMultiMode && (
+                <p className="text-xs text-muted-foreground">
+                  Only the configured instance owner can use this recovery key. Family
+                  members use a passkey or sign-in link.
+                </p>
+              )}
               {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Verifying...' : 'Sign In'}

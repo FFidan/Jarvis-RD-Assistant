@@ -226,10 +226,10 @@ class TestMissingResolver:
 
     def test_route_allowlist_exempts(self) -> None:
         """An exact path in ROUTE_ALLOWLIST is not flagged."""
-        rel = "services/paper_ingestion/paper_ingestion/routers/snapshots.py"
+        rel = "services/paper_ingestion/paper_ingestion/routers/backups.py"
         src = (
-            "@router.get('/{paper_id}/{page}')\n"
-            "async def get_snapshot(request: Request, paper_id: int, page: int):\n"
+            "@router.post('/restore/acknowledge')\n"
+            "async def acknowledge_restore(request: Request):\n"
             "    return None\n"
         )
         assert _missing_resolver(_parse(src), rel) == []

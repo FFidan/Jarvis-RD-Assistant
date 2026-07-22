@@ -4,6 +4,7 @@ import logging
 
 import asyncpg
 import httpx
+from jarvis_common.maintenance import outbound_quarantine_active
 from jarvis_common.settings import get_secrets_settings, get_telegram_settings
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
@@ -20,7 +21,16 @@ logger = logging.getLogger(__name__)
 
 
 async def reload_telegram_nudges() -> None:
-    """Best-effort POST to telegram_bot /internal/reload-nudges."""
+    """Ask the Telegram service to reload nudges when outbound use is allowed.
+
+    The best-effort hook returns without loading credentials while quarantine is
+    active, when no Telegram service URL is configured, or after an HTTP failure.
+    It never propagates a network error to the settings-write caller.
+    """
+    if outbound_quarantine_active():
+        logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
+        return
+
     telegram_url = get_telegram_settings().url_or_none
     if not telegram_url:
         logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
@@ -28,6 +38,9 @@ async def reload_telegram_nudges() -> None:
     api_key_secret = get_secrets_settings().jarvis_api_key
     api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
     try:
+        if outbound_quarantine_active():
+            logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
+            return
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{telegram_url}/internal/reload-nudges",

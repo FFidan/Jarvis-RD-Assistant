@@ -26,9 +26,14 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from jarvis_common.audit import log_audit
+from jarvis_common.audit import log_audit, log_audit_strict
 from jarvis_common.auth import require_admin
 from jarvis_common.email import MagicLinkDelivery, send_magic_link
+from jarvis_common.owner import (
+    OWNER_USER_ID_CONFIG_KEY,
+    OwnerIdentity,
+    resolve_owner_identity,
+)
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
@@ -58,6 +63,9 @@ class UserRecord(BaseModel):
     created_at: datetime
     last_login_at: datetime | None
     deleted_at: datetime | None = None
+    is_owner: bool = False
+    owner_source: str | None = None
+    owner_state: str | None = None
 
 
 class InviteUserResponse(UserRecord):
@@ -84,19 +92,54 @@ class UpdateRoleBody(BaseModel):
     role: Annotated[str, Field(pattern="^(user|admin)$")]
 
 
+class TransferOwnerBody(BaseModel):
+    target_user_id: Annotated[int, Field(gt=0)]
+    confirmation: Annotated[EmailStr, Field(max_length=MAX_EMAIL_LEN)]
+
+
+class OwnerIdentityResponse(BaseModel):
+    source: str
+    state: str
+    user_id: int | None
+
+
 def _build_invite_link(request: Request, token: str) -> str:
     """Construct the magic-link URL for an invited user."""
     return build_verify_link(request, token, logger=logger, link_kind="invite link")
 
 
-def _row_to_user(row: dict) -> UserRecord:  # type: ignore[type-arg]
+def _row_to_user(
+    row: dict,  # type: ignore[type-arg]
+    owner: OwnerIdentity | None = None,
+) -> UserRecord:
+    user_id = int(row["id"])
     return UserRecord(
-        id=int(row["id"]),
+        id=user_id,
         email=row["email"],
         role=row["role"],
         created_at=row["created_at"],
         last_login_at=row["last_login_at"],
         deleted_at=row.get("deleted_at"),
+        is_owner=bool(owner and owner.is_valid and owner.user_id == user_id),
+        owner_source=owner.source if owner else None,
+        owner_state=owner.state if owner else None,
+    )
+
+
+def _owner_change_blocked(identity: OwnerIdentity, user_id: int) -> bool:
+    return identity.is_valid and identity.user_id == user_id
+
+
+def _owner_repair_blocked(identity: OwnerIdentity, user_id: int) -> bool:
+    return identity.source != "none" and not identity.is_valid and identity.user_id == user_id
+
+
+def _owner_repair_detail(identity: OwnerIdentity) -> str:
+    if identity.source == "environment":
+        return "Correct OWNER_USER_ID on the host and restart JARVIS before changing this user"
+    return (
+        "Repair the instance owner with jarvis-research owner set <admin-email> "
+        "before changing this user"
     )
 
 
@@ -132,6 +175,7 @@ async def list_users(request: Request, include_deleted: bool = False) -> list[Us
     """
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
+        owner = await resolve_owner_identity(conn)
         if include_deleted:
             rows = await conn.fetch(
                 """
@@ -151,7 +195,111 @@ async def list_users(request: Request, include_deleted: bool = False) -> list[Us
                 ORDER BY created_at ASC
                 """,
             )
-    return [_row_to_user(row) for row in rows]
+    return [_row_to_user(row, owner) for row in rows]
+
+
+@router.post(
+    "/owner/transfer",
+    response_model=OwnerIdentityResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def transfer_owner(
+    body: TransferOwnerBody,
+    request: Request,
+) -> OwnerIdentityResponse:
+    """Transfer database-managed ownership to another live administrator."""
+    caller_id: int | None = getattr(request.state, "user_id", None)
+    if caller_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin session required")
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))")
+            current = await resolve_owner_identity(conn)
+
+            if current.source == "environment":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Ownership is managed by OWNER_USER_ID; change it on the host "
+                        "and restart JARVIS"
+                    ),
+                )
+            if not current.is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "The stored owner is missing or invalid; repair it with "
+                        "jarvis-research owner set <admin-email>"
+                    ),
+                )
+            if current.user_id != caller_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only the current instance owner can transfer ownership",
+                )
+            if body.target_user_id == caller_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Choose a different administrator as the new owner",
+                )
+
+            target = await conn.fetchrow(
+                "SELECT id, email, role, deleted_at FROM users WHERE id = $1",
+                body.target_user_id,
+            )
+            if target is None or target["deleted_at"] is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Target user not found or deleted",
+                )
+            if target["role"] != "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="The new owner must already be an administrator",
+                )
+            if str(body.confirmation) != target["email"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Confirmation must exactly match the target administrator's email",
+                )
+
+            updated = await conn.fetchval(
+                """
+                UPDATE user_config
+                SET value = to_jsonb($1::bigint), updated_at = NOW()
+                WHERE user_id IS NULL AND key = $2
+                RETURNING value #>> '{}'
+                """,
+                body.target_user_id,
+                OWNER_USER_ID_CONFIG_KEY,
+            )
+            if updated is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "The stored owner changed while the transfer was in progress; "
+                        "run jarvis-research owner status and retry"
+                    ),
+                )
+
+            await log_audit_strict(
+                conn,
+                action="admin.owner.transfer",
+                resource=OWNER_USER_ID_CONFIG_KEY,
+                user_id=str(caller_id),
+                metadata={
+                    "previous_owner_user_id": current.user_id,
+                    "new_owner_user_id": body.target_user_id,
+                },
+            )
+
+    return OwnerIdentityResponse(
+        source="database",
+        state="valid",
+        user_id=body.target_user_id,
+    )
 
 
 @router.post(
@@ -277,6 +425,31 @@ async def update_user_role(user_id: int, body: UpdateRoleBody, request: Request)
                 "SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL",
                 user_id,
             )
+            if old_role is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            owner = await resolve_owner_identity(conn)
+            if (
+                old_role == "admin"
+                and body.role != "admin"
+                and _owner_change_blocked(owner, user_id)
+            ):
+                detail = (
+                    "Change OWNER_USER_ID on the host before demoting the instance owner"
+                    if owner.source == "environment"
+                    else "Transfer ownership before demoting the instance owner"
+                )
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+            if (
+                old_role != "admin"
+                and body.role == "admin"
+                and _owner_repair_blocked(owner, user_id)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_owner_repair_detail(owner),
+                )
+
             if old_role == "admin" and body.role != "admin":
                 admin_count: int = await conn.fetchval(
                     "SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL",
@@ -297,19 +470,18 @@ async def update_user_role(user_id: int, body: UpdateRoleBody, request: Request)
                 body.role,
                 user_id,
             )
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            await log_audit_strict(
+                conn,
+                action="admin.user.role_change",
+                resource=f"users/{user_id}",
+                user_id=str(caller_id) if caller_id is not None else None,
+                metadata={"old_role": old_role, "new_role": body.role},
+            )
 
-    await log_audit(
-        pool,
-        action="admin.user.role_change",
-        resource=f"users/{user_id}",
-        user_id=str(caller_id) if caller_id is not None else None,
-        metadata={"old_role": old_role, "new_role": body.role},
-    )
-
-    return _row_to_user(row)
+    return _row_to_user(row, owner)
 
 
 @router.delete(
@@ -352,6 +524,16 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
             )
             if target_role is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            owner = await resolve_owner_identity(conn)
+            if _owner_change_blocked(owner, user_id):
+                detail = (
+                    "Change OWNER_USER_ID on the host before deleting the instance owner"
+                    if owner.source == "environment"
+                    else "Transfer ownership before deleting the instance owner"
+                )
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
             if target_role == "admin":
                 admin_count: int = await conn.fetchval(
                     "SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL",
@@ -371,15 +553,14 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                 user_id,
             )
 
-    # Soft delete only — the daily data_purge job hard-deletes after the
-    # 30-day grace, and migration 080's ON DELETE CASCADE FKs then collapse
-    # all owned rows.
-    await log_audit(
-        pool,
-        action="admin.user.soft_delete",
-        resource=f"users/{user_id}",
-        user_id=str(caller_id) if caller_id is not None else None,
-    )
+            # Soft delete only — the daily data_purge job hard-deletes after
+            # the 30-day grace, when ownership is no longer attached to this row.
+            await log_audit_strict(
+                conn,
+                action="admin.user.soft_delete",
+                resource=f"users/{user_id}",
+                user_id=str(caller_id) if caller_id is not None else None,
+            )
 
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
@@ -404,23 +585,45 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
     _require_model_hmac_key()
 
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE users
-            SET deleted_at = NULL
-            WHERE id = $1
-              AND deleted_at IS NOT NULL
-              AND deleted_at >= NOW() - INTERVAL '30 days'
-            RETURNING id, email, role, created_at, last_login_at
-            """,
-            user_id,
-        )
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))")
+            target = await conn.fetchrow(
+                """
+                SELECT id, email, role, created_at, last_login_at, deleted_at
+                FROM users
+                WHERE id = $1
+                  AND deleted_at IS NOT NULL
+                  AND deleted_at >= NOW() - INTERVAL '30 days'
+                """,
+                user_id,
+            )
+            if target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found, not deleted, or past the 30-day restore grace",
+                )
 
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found, not deleted, or past the 30-day restore grace",
-        )
+            owner = await resolve_owner_identity(conn)
+            if target["role"] == "admin" and _owner_repair_blocked(owner, user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_owner_repair_detail(owner),
+                )
+
+            row = await conn.fetchrow(
+                """
+                UPDATE users
+                SET deleted_at = NULL
+                WHERE id = $1 AND deleted_at IS NOT NULL
+                RETURNING id, email, role, created_at, last_login_at
+                """,
+                user_id,
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The user changed while restore was in progress; reload and retry",
+                )
 
     await log_audit(
         pool,
@@ -429,7 +632,7 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
         user_id=str(caller_id) if caller_id is not None else None,
     )
 
-    return _row_to_user(row)
+    return _row_to_user(row, owner)
 
 
 @router.post(

@@ -1,14 +1,20 @@
 <!-- verified-against-UI: 2026-06-26 | routes: /admin/users, /admin/audit-log, /admin/system-health, /admin/backups, /logs -->
 
-# Admin & Multi-tenant
+# Admin and multi-user operation
 
-JARVIS RD Assistant supports multiple user accounts with two roles: **Admin** and **User**. Admin-gated surfaces are only accessible to accounts with the Admin role; attempting to access them without that role redirects immediately to the Home page.
+JARVIS supports two account roles: **Admin** and **User**. Only administrators
+can open user management, audit, health, backup, and log pages.
+
+Open these pages on the JARVIS host at `http://localhost:3001` or through the
+named HTTPS address configured during setup. A numeric LAN address exposes only
+`/health/jarvis` and returns HTTP 403 for admin and sign-in pages.
 
 ---
 
 ## Role-based access overview
 
-The sidebar navigation includes a **Group V** section that is hidden entirely for non-admin users. All routes in this section are wrapped in an **AdminOnlyRoute** guard that performs a hard redirect to `/` for any session that lacks the Admin role.
+Admin pages are hidden from a user's sidebar. Opening an admin address without
+the Admin role returns the person to Home.
 
 For Settings RBAC, see the [Settings](settings.md) page which documents per-section access levels.
 
@@ -18,7 +24,7 @@ For Settings RBAC, see the [Settings](settings.md) page which documents per-sect
 
 ### User Management — `/admin/users`
 
-The **AdminUsersPage** provides a table of all registered users on the instance.
+The page lists registered users on the instance.
 
 <!-- screenshot: /admin/users — table showing user rows with email, role dropdown, and action buttons -->
 
@@ -27,15 +33,48 @@ The **AdminUsersPage** provides a table of all registered users on the instance.
 | Action | Description |
 |--------|-------------|
 | **Role dropdown** | Set a user's role to **User** or **Admin**. Takes effect immediately. |
-| **Send sign-in link** | Send a magic-link email directly to the user's registered address. Useful for account recovery if the user cannot receive email through the normal flow. |
+| **Send sign-in link** | Create a fresh 15-minute sign-in link. JARVIS emails it when delivery works; otherwise the dialog shows the link so the administrator can share it privately. |
 | **Remove** | Soft-delete the user account. This button is **disabled for the currently signed-in admin** (you cannot delete yourself). |
 | **Passkeys** | Shows how many passkeys the user has registered, with a **Revoke all** action that immediately invalidates every passkey on the account (for example after a lost or compromised device). The user can still sign in via magic link and re-register. |
 
 **Invite modal:**
 
-Click **Invite user** to open the invite modal. Enter an email address and select the initial role (User or Admin), then click **Send invite**. The invited user receives a magic-link email; clicking the link creates their account and signs them in directly.
+Click **Invite user**, enter an email address, and select the initial role. JARVIS
+creates the account and a 24-hour invitation. When email delivery works, it
+sends the link. When email is absent or fails, the dialog stays open and shows
+the link for the administrator to copy.
 
-A **soft-delete confirmation** dialog appears before any remove action to prevent accidental deletion. Soft-deleted users cannot sign in but their data is retained and can be restored by contacting a database administrator.
+Share a displayed link through a private channel. Anyone holding an unused link
+can sign in until it expires. The recipient should open it at the same named
+HTTPS address the family will keep using, then add a passkey under **Settings →
+Account → Passkeys**.
+
+A **soft-delete confirmation** dialog appears before any remove action. Removed
+users cannot sign in; the administrator can restore an account during its
+retention window from this page.
+
+### Instance ownership and recovery
+
+One live administrator is the **instance owner**. The operations API key can
+recover only this account; it is not a shared administrator password. The User
+Management table marks the account with an **instance owner** badge and prevents
+it from being demoted or removed.
+
+Migration `0105` automatically assigns ownership when an upgraded instance has
+exactly one live administrator. If it has two or more live administrators, the
+migration cannot choose safely. On the JARVIS host, inspect and repair the
+state explicitly:
+
+```bash
+jarvis-research owner status
+jarvis-research owner set <admin-email>
+```
+
+When ownership is stored in the database, the current owner can transfer it in
+User Management to another live administrator. The target must already be an
+administrator, and the owner must type that administrator's email exactly.
+When `OWNER_USER_ID` manages ownership on the host, change that value and
+restart JARVIS instead; the web page does not override host policy.
 
 ---
 
@@ -57,39 +96,27 @@ A live operational dashboard showing the health of all backend services.
 
 **Readiness checklist:** A checklist of deployment prerequisites (database migrations applied, required environment variables set, source API keys present, etc.). Each item shows a status indicator and a **remediation note** describing how to resolve it if it is failing.
 
-**InfoTooltips:** Each checklist item has an info tooltip explaining what the check verifies and why it matters.
+Each checklist item explains what it verifies and why it matters.
+
+The same page contains **Disk usage** for the stores JARVIS can measure and
+**model runtime diagnostics** for detected hardware, the backend serving recent
+requests, and the recommended model. Use **Re-detect** after changing hardware
+or a GPU overlay. These application views cannot measure Docker's host-wide
+builder cache; see the deployment requirements before running any host cleanup
+command.
 
 ---
 
 ### Backups — `/admin/backups`
 
-The **Admin Backups panel** surfaces the disaster-recovery archives produced by the `postgres-backup` sidecar, which runs by default (a scheduled run plus on-demand triggers).
+The Backups page lists restore points, starts an on-demand backup, downloads an
+off-site copy, sets retention, and starts a guided restore. It also accepts an
+off-site restore set when a server must be rebuilt.
 
-**Archive table:** Each archive is listed newest-first with its store (main database, model-router database, secrets, or Qdrant vectors), size, age, and an **Encrypted / Plaintext** badge. A per-row **Download** streams the archive to your browser for off-site storage. Archives are encrypted at rest whenever a backup key is configured (the default).
-
-**Run backup now:** Requests an immediate on-demand backup (a confirm step guards it); the sidecar runs one right away in addition to its scheduled runs.
-
-**One-click restore:**
-
-Admins can restore the instance to any listed backup point without leaving the browser.
-
-*How it works:*
-
-1. **Choose a restore point.** The archive table shows each backup set with its timestamp, stores covered, and size. Click **Restore** on the set you want to roll back to.
-2. **Confirm.** A dialog explains that this will overwrite all current data. Type **RESTORE** in the confirmation field to proceed — there is no undo once you confirm.
-3. **Watch progress.** The panel shows live status. The app enters a **maintenance window** while the restore runs: other users see a "restore in progress" message and cannot use the app. You do not need to stay on the Backups page. While the restore runs the whole app is in the maintenance window, so a page reload shows a brief "restore in progress" message rather than the live progress until it finishes. After the restore completes, you may need to sign in again, because the restore replaces the session store along with the rest of the data.
-
-*What happens automatically:*
-
-- **Safety pre-backup.** Before touching any live data, the sidecar captures a snapshot of the current state. If something goes wrong after the destructive step, the safety backup appears in the panel and can be used to recover.
-- **Staged, self-healing swap.** The backup is loaded into a separate staging database and swapped in atomically only once it verifies; a failure before the swap leaves the original untouched and served again, so a restore never leaves a half-restored instance.
-- **Older backups migrate forward.** A backup taken by an older app version is accepted and migrated forward automatically after the swap. A **newer** backup is refused — update the app first (`./update.sh`), then retry.
-- **Maintenance gate.** User-facing requests are blocked during the restore and resume automatically when a clean restore completes.
-- **Qdrant recovery.** The search index is restored best-effort. If the Qdrant step fails, the rest of the restore still completes — your papers and data are intact. The search index rebuilds itself by re-embedding from the restored database; this may take a few minutes on a large library but involves no data loss.
-
-**Recovering a fresh host (disaster recovery):** if the original server is gone, you can rebuild a brand-new host from your off-site archives entirely in the browser — generate a one-time upload grant, upload the archive set and backup key, and trigger the restore from the Backups panel. See [Backup & Restore](backup-and-restore.md) for the full admin walkthrough, and the [Deployment Guide](../DEPLOYMENT.md#off-host-total-host-loss-recovery) for the command-line fallback.
-
-**Manual restore (advanced):** if both the one-click path and the browser upload are unavailable — for example a headless host whose app cannot start — use the host-level procedure documented in the [Deployment Guide](../DEPLOYMENT.md#backup-restore). The steps: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases, and recover the Qdrant snapshots.
+Keep the backup encryption key somewhere other than the JARVIS host. The key is
+deliberately excluded from the encrypted archive it unlocks. The complete
+backup, restore, and fresh-host procedure lives in one place: [Backup and
+restore](backup-and-restore.md).
 
 ---
 
@@ -106,7 +133,7 @@ The logs page provides a real-time view of application log output, organised int
 
 ---
 
-## Multi-tenant model
+## Multi-user data model
 
 JARVIS RD Assistant is designed for small teams where multiple researchers share a single self-hosted instance.
 
@@ -116,23 +143,36 @@ JARVIS RD Assistant is designed for small teams where multiple researchers share
 - Learning cards, projects, research topics, and Pulse decks are per-user.
 - Users do not see each other's private data.
 
-**Shared corpus:**
+**Paper visibility:**
 
-- The underlying paper corpus (PDF text, chunks, embeddings) is shared across the instance. If two users save the same paper, the PDF and its processed data are stored once.
-- The [Research Feed](research-feed.md) Library surface has a scope toggle: **My library** (private state) and **All discovered** (all papers any user has ingested).
+- Verified papers discovered by the server's arXiv, Semantic Scholar, OpenAlex,
+  and PubMed adapters are public to authenticated users on the instance.
+- Local uploads, unverified client batches, and personal or group Zotero
+  imports remain private unless the signed-in user has added them to their own
+  library.
+- The [Research Feed](research-feed.md) Library surface distinguishes **My
+  library** from **Public + mine**. The latter means verified public papers plus
+  the signed-in user's private library, never another user's private imports.
+
+The canonical matrix and vector-search boundary are documented in
+[Source-aware paper visibility](../SECURITY.md#source-aware-paper-visibility).
 
 **Roles:**
 
 - **User** — full access to their own data and all research surfaces.
 - **Admin** — same as User, plus access to the admin pages described above, admin-gated Settings sections, and the ability to manage other users.
 
-**Magic-link invites:**
+**Invitations and recovery links:**
 
-New users are added exclusively via the admin invite flow (`/admin/users` → Invite modal) or by the onboarding wizard (which creates the initial admin account). There is no public self-registration. This keeps the user list under admin control.
+New users are added through the admin invite flow or by the onboarding wizard,
+which creates the first administrator. There is no public self-registration.
+SMTP only changes how a link is delivered; it is not required to create the
+account or the link. Without SMTP, the invite or **Send sign-in link** dialog
+returns a manual one-time link for the administrator to share privately.
 
 ---
 
 ## Related pages
 
 - [Settings](settings.md) — per-section RBAC breakdown; admin-only sections are §II Sources, §III Models, §IV System, and §V Bot Token.
-- [Getting Started](getting-started.md) — onboarding wizard and admin account creation.
+- [First sign-in and setup](getting-started.md) — first administrator and family onboarding.

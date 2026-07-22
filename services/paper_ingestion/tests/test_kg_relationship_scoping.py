@@ -1,24 +1,20 @@
-"""Cross-user scoping for entity_relationships reads (close cross-user leak).
+"""Paper-visibility scoping for knowledge-graph reads.
 
-Entities are scoped per-user via ``paper_entities.user_id``. The
-``entity_relationships`` table, however, has a ``paper_id`` column but NO
-user scoping — a relationship whose ``paper_id`` belongs to ANOTHER user's
-explicitly-owned paper was previously returned to the caller whenever both
-endpoint entities happened to be visible.
+``paper_entities.user_id`` records who ran extraction; it is not an access
+grant. Nodes and edges must instead follow the persisted paper scope and the
+caller's explicit library membership.
 
-These tests verify the canonical-corpus visibility predicate (mirrors
-``list_contradictions``: ``user_library`` EXISTS + ``discovered_by IS NULL``
-free pass) is applied to every ``entity_relationships`` read path:
+These tests verify the centralized public-or-library predicate is applied to
+every ``entity_relationships`` read path:
 
 * ``get_knowledge_graph`` (helper)
 * ``query_knowledge_graph`` (helper, scoped branches)
 * ``get_entity_detail`` (router endpoint)
 
-Rule (decided, canonical corpus):
-  * ``papers.discovered_by IS NULL``       → shared/system → visible to all.
-  * ``discovered_by = caller``             → caller's own  → visible.
-  * row in ``user_library(caller, paper)`` → in library    → visible.
-  * else (another user's explicitly-owned, non-library)    → NOT visible.
+Rule:
+  * ``papers.visibility_scope = 'public'`` → visible to all callers.
+  * row in ``user_library(caller, paper)``  → visible to that caller.
+  * missing/deleted/private otherwise       → not visible.
 
 Mirrors the cross-user fixture style of ``test_contradictions_scoping.py``.
 """
@@ -33,7 +29,7 @@ import pytest
 # Fake connection that actually evaluates the visibility rule.
 #
 # Instead of asserting on SQL strings only, this fake models the relevant
-# slice of the schema (papers.discovered_by, user_library, a set of
+# slice of the schema (papers.visibility_scope, user_library, a set of
 # entity_relationships rows) and applies the *decided* visibility rule to
 # whatever the production SQL asks for. If production drops the predicate the
 # fake still returns everything → the leak assertion fails. This makes the
@@ -43,10 +39,10 @@ import pytest
 
 # user A = 1, user B = 2.
 # Papers:
-#   100 → discovered_by = 1 (user A's explicitly-owned, NOT in B's library)
-#   200 → discovered_by NULL (shared / system / Pulse-discovered)
-#   300 → discovered_by = 1 but ALSO in user B's user_library
-_PAPERS = {100: 1, 200: None, 300: 1}
+#   100 → private, NOT in B's library
+#   200 → public
+#   300 → private, but in user B's library
+_PAPERS = {100: "private", 200: "public", 300: "private"}
 _USER_LIBRARY = {(2, 300)}  # (user_id, paper_id)
 
 # Relationships: all between the same visible entity pair (1, 2).
@@ -56,7 +52,7 @@ _RELATIONSHIPS = [
         "source_entity_id": 1,
         "target_entity_id": 2,
         "relationship_type": "evaluates",
-        "paper_id": 100,  # user A's owned paper → must be HIDDEN from B
+        "paper_id": 100,  # unshelved private paper → HIDDEN from B
         "evidence_quote": "leak",
         "confidence": 0.9,
         "metadata": {},
@@ -67,7 +63,7 @@ _RELATIONSHIPS = [
         "source_entity_id": 1,
         "target_entity_id": 2,
         "relationship_type": "uses",
-        "paper_id": 200,  # shared canonical paper → must be VISIBLE to B
+        "paper_id": 200,  # public paper → VISIBLE to B
         "evidence_quote": "shared",
         "confidence": 0.8,
         "metadata": {},
@@ -78,7 +74,7 @@ _RELATIONSHIPS = [
         "source_entity_id": 1,
         "target_entity_id": 2,
         "relationship_type": "compares",
-        "paper_id": 300,  # A-owned but in B's library → VISIBLE to B
+        "paper_id": 300,  # private but in B's library → VISIBLE to B
         "evidence_quote": "in-library",
         "confidence": 0.7,
         "metadata": {},
@@ -88,15 +84,10 @@ _RELATIONSHIPS = [
 
 
 def _paper_visible_to(paper_id: int | None, user_id: int) -> bool:
-    """The decided canonical-corpus visibility rule."""
+    """Model the persisted public-or-library visibility rule."""
     if paper_id is None:
-        return True  # unattributable (ON DELETE SET NULL) → visible
-    discovered_by = _PAPERS.get(paper_id)
-    if discovered_by is None:
-        return True  # shared / system
-    if discovered_by == user_id:
-        return True  # caller's own
-    return (user_id, paper_id) in _USER_LIBRARY  # explicit library membership
+        return False
+    return _PAPERS.get(paper_id) == "public" or (user_id, paper_id) in _USER_LIBRARY
 
 
 class _ScopingFakeConn:
@@ -141,7 +132,7 @@ class _ScopingFakeConn:
             ]
         if "entity_relationships" in norm:
             self.relationship_sql = norm
-            scoped = "user_library" in norm and "discovered_by" in norm and self._user_id in args
+            scoped = "user_library" in norm and "visibility_scope" in norm and self._user_id in args
             out = []
             for rel in _RELATIONSHIPS:
                 if scoped and not _paper_visible_to(rel["paper_id"], self._user_id):
@@ -158,9 +149,7 @@ class _ScopingFakeConn:
 
 @pytest.mark.asyncio
 async def test_get_knowledge_graph_hides_other_users_relationship():
-    """User B's KG must NOT include an edge from user A's owned paper, but
-    MUST include edges from a shared (discovered_by NULL) paper and from an
-    A-owned paper that is in B's library."""
+    """User B sees public and shelved-private edges, never unshelved private edges."""
     from paper_ingestion.extraction.entities import get_knowledge_graph
 
     conn = _ScopingFakeConn(user_id=2)
@@ -169,18 +158,19 @@ async def test_get_knowledge_graph_hides_other_users_relationship():
     rel_ids = sorted(r["id"] for r in result["relationships"])
     paper_ids = sorted(r["paper_id"] for r in result["relationships"])
 
-    # Edge id=1 (paper 100, A-owned, not in B's library) must be hidden.
-    assert 1 not in rel_ids, f"cross-user leak: edge from A-owned paper leaked: {rel_ids}"
-    # Edge id=2 (paper 200, shared canonical) must be visible.
-    assert 2 in rel_ids, "shared canonical edge wrongly hidden"
-    # Edge id=3 (paper 300, A-owned but in B's library) must be visible.
+    # Edge id=1 (paper 100, private and not in B's library) must be hidden.
+    assert 1 not in rel_ids, f"private-paper edge leaked: {rel_ids}"
+    # Edge id=2 (paper 200, public) must be visible.
+    assert 2 in rel_ids, "public edge wrongly hidden"
+    # Edge id=3 (paper 300, private but in B's library) must be visible.
     assert 3 in rel_ids, "in-library edge wrongly hidden"
     assert paper_ids == [200, 300]
 
-    # The scoped SQL must carry the canonical-visibility predicate.
+    # The scoped SQL must carry the centralized visibility predicate.
     assert conn.relationship_sql is not None
     assert "user_library" in conn.relationship_sql
-    assert "discovered_by" in conn.relationship_sql
+    assert "visibility_scope" in conn.relationship_sql
+    assert "discovered_by" not in conn.relationship_sql
 
 
 @pytest.mark.asyncio
@@ -211,37 +201,6 @@ async def test_get_knowledge_graph_unscoped_path_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# query_knowledge_graph helper (scoped branches)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("query", "marker"),
-    [
-        ("What methods are used on GLUE?", "used_on"),
-        ("What outperforms BM25?", "outperforms"),
-    ],
-)
-async def test_query_knowledge_graph_scoped_branches_carry_predicate(query, marker):
-    """Both relationship-driven query branches must thread user_id into a
-    canonical-visibility predicate over entity_relationships.paper_id."""
-    from paper_ingestion.extraction.entities import query_knowledge_graph
-
-    mock_conn = AsyncMock()
-    mock_conn.fetch.return_value = []
-
-    await query_knowledge_graph(mock_conn, query, user_id=2)
-
-    sql = " ".join(mock_conn.fetch.call_args.args[0].split())
-    params = mock_conn.fetch.call_args.args[1:]
-    assert "entity_relationships" in sql
-    assert "user_library" in sql, f"{marker}: missing user_library predicate"
-    assert "discovered_by" in sql, f"{marker}: missing discovered_by predicate"
-    assert 2 in params, f"{marker}: user_id not threaded into SQL params"
-
-
-# ---------------------------------------------------------------------------
 # get_entity_detail router endpoint
 # ---------------------------------------------------------------------------
 
@@ -265,10 +224,9 @@ async def test_get_entity_detail_relationships_scoped_to_caller():
         "paper_count": 1,
         "created_at": None,
     }
-    conn.fetchval.return_value = 1  # entity visible to user B
     conn.fetch.side_effect = [
         # entity_relationships fetch — DB already applied predicate, returns
-        # only the shared-canonical edge (paper 200).
+        # only the public edge (paper 200).
         [
             {
                 "id": 2,
@@ -304,5 +262,6 @@ async def test_get_entity_detail_relationships_scoped_to_caller():
     rel_params = conn.fetch.call_args_list[0].args[1:]
     assert "entity_relationships" in rel_sql
     assert "user_library" in rel_sql, "get_entity_detail relationship read not scoped"
-    assert "discovered_by" in rel_sql
+    assert "visibility_scope" in rel_sql
+    assert "discovered_by" not in rel_sql
     assert 2 in rel_params, "caller user_id not threaded into the predicate"

@@ -5,15 +5,14 @@
  * - display_name edit via PATCH /api/account (updateAccount).
  * - Email change via PATCH /api/account with `email` field; response carries
  *   `email_verification_sent: true` when a verify link was sent.
- * - Confirm-email-change token: when the page mounts with
- *   `?confirm_email_token=<tok>` in the URL, this component calls
- *   confirmEmailChange(tok) and shows success/failure, then strips the param
- *   without adding a new route.
+ * - Confirm-email-change token: when the account pane mounts with
+ *   `#confirm_email_token=<tok>`, this component confirms the change and strips
+ *   the bearer from the address. The old query form remains compatible.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { fetchAccount, updateAccount, confirmEmailChange, downloadMyData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,7 +33,7 @@ function formatDate(iso: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Confirm-token banner (shown when ?confirm_email_token= is present on mount)
+// Confirm-token banner (shown when a confirm_email_token is present on mount)
 // ---------------------------------------------------------------------------
 
 type ConfirmState =
@@ -45,7 +44,12 @@ type ConfirmState =
 
 function useConfirmEmailToken(): ConfirmState {
   const [searchParams, setSearchParams] = useSearchParams();
-  const token = searchParams.get('confirm_email_token');
+  const location = useLocation();
+  const tokenRef = useRef(
+    new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
+      .get('confirm_email_token') ?? searchParams.get('confirm_email_token'),
+  );
+  const token = tokenRef.current;
   const [state, setState] = useState<ConfirmState>({ status: 'idle' });
   const confirmedRef = useRef(false);
   const qc = useQueryClient();
@@ -55,21 +59,21 @@ function useConfirmEmailToken(): ConfirmState {
     confirmedRef.current = true;
     setState({ status: 'pending' });
 
+    // New links use a fragment so the token never reaches the server. Strip
+    // either form before the confirmation request, while preserving the
+    // settings section and item query parameters.
+    const next = new URLSearchParams(searchParams);
+    next.delete('confirm_email_token');
+    setSearchParams(next, { replace: true });
+
     confirmEmailChange(token)
       .then((account: AccountResponse) => {
         setState({ status: 'ok', email: account.email });
         qc.invalidateQueries({ queryKey: QUERY_KEYS.account.self() });
-        // Strip the token from the URL without a full navigation
-        const next = new URLSearchParams(searchParams);
-        next.delete('confirm_email_token');
-        setSearchParams(next, { replace: true });
       })
       .catch((err: unknown) => {
         const message = errorMessage(err, 'Email confirmation failed. The link may have expired.');
         setState({ status: 'err', message });
-        const next = new URLSearchParams(searchParams);
-        next.delete('confirm_email_token');
-        setSearchParams(next, { replace: true });
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
@@ -400,7 +404,7 @@ export function AccountSection() {
         Manage your display name, email address, and account details.
       </p>
 
-      {/* Confirm-email banner (shown only when ?confirm_email_token= was in URL) */}
+      {/* Confirm-email banner (shown only when a confirmation token was in the URL) */}
       <ConfirmBanner state={confirmState} />
 
       {/* Profile card */}

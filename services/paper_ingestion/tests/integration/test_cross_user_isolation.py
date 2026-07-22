@@ -9,7 +9,7 @@ denied (403/404) and must not leak A's content.
 
 Run (Docker PostgreSQL required)::
 
-    JARVIS_RUN_LIVE_PG=1 uv run pytest -m "integration and live_pg" \
+    JARVIS_RUN_LIVE_PG=1 uv run pytest -c pyproject.toml -m "integration and live_pg" \
         services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
 
 Standard ``uv run pytest`` excludes ``live_pg``/``integration`` so this is
@@ -100,15 +100,9 @@ _PRIVATE_MARKERS = (
     A_TASK_TITLE,
     A_CARD_FRONT,
 )
-# Paper TITLE is deliberately NOT private under the Sprint-B canonical-corpus
-# model: papers are a GLOBAL shared corpus (see
-# jarvis_common.db_helpers.assert_paper_ownership docstring — "Papers are
-# global (canonical corpus). Ownership = library membership."). What is
-# per-user-private is *library membership / user-state / notes*, not the
-# paper's bibliographic metadata. So the global papers collection
-# (`corpus_list` kind) only forbids the private markers, while per-user
-# paper access (`byid`/`mutate`, gated by assert_paper_ownership) and all
-# per-user collections still forbid the title too.
+# A paper title may be shared only when its row is persisted public. The seeded
+# tenant papers below remain private and are visible through explicit library
+# membership. Per-user state, notes, and product outputs are always private.
 _LEAK_MARKERS = (A_PAPER_TITLE, *_PRIVATE_MARKERS)
 
 
@@ -402,7 +396,7 @@ async def test_extraction_reads_scoped_to_calling_user(
 ) -> None:
     """User B cannot see user A's paper_extractions rows via either read endpoint.
 
-    Seed: shared paper (discovered_by NULL, in both users' libraries) + one
+    Seed: one private paper in both users' libraries + one
     extraction template + one paper_extractions row owned by user A.
 
     Asserts:
@@ -414,7 +408,7 @@ async def test_extraction_reads_scoped_to_calling_user(
               extractions.py:324-440 get_extraction_table
     # Verified: extractions.py:268
     """
-    # Seed: shared paper (discovered_by NULL) visible to both users.
+    # Seed a private paper made visible to both users by explicit membership.
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
            VALUES ('iso-ext-shared-xtr', 'arxiv', 'shared-paper-extractions-isolation',

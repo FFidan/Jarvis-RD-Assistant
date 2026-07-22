@@ -45,6 +45,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -94,9 +95,17 @@ from jarvis_common.llm_client import (  # noqa: E402
 from jarvis_common.llm_client import (
     get_litellm_config,
 )
+from paper_ingestion.ingestion.embed_store import (  # noqa: E402
+    chunk_embedding_fingerprint,
+    chunk_point_id,
+)
 from paper_ingestion.ingestion.embedder import (  # noqa: E402
     extract_qdrant_collection_dimension,
     validate_embedding_configuration,
+)
+from paper_ingestion.ingestion.payload_schema import (  # noqa: E402
+    VectorVisibility,
+    prepare_visibility_schema,
 )
 
 # ---------------------------------------------------------------------------
@@ -105,6 +114,8 @@ from paper_ingestion.ingestion.embedder import (  # noqa: E402
 
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
 _QDRANT_UPSERT_BATCH_SIZE = 100
+_QDRANT_PROBE_BATCH_SIZE = 256
+_DB_SCAN_PAGE_SIZE = 1000
 _DB_POOL_MIN_SIZE = 1
 _DB_POOL_MAX_SIZE = 5
 _MS_PER_SECOND = 1000
@@ -292,11 +303,20 @@ async def embed_texts(client: httpx.AsyncClient, texts: list[str]) -> list[list[
 
 
 def deterministic_point_id(paper_id: int, chunk_index: int, model_name: str) -> str:
-    """Return a stable UUID-format Qdrant point ID for a paper chunk + model combination.
+    """Return the runtime writer's canonical point ID.
 
-    The ID is derived from ``SHA-256("<paper_id>:<chunk_index>:<model_name>")``
-    so it is reproducible across re-embedding runs — enabling idempotent upsert
-    without a prior lookup.
+    ``model_name`` remains accepted for callers of older script versions, but
+    models now replace the vector at one stable chunk identity.
+    """
+    del model_name
+    return chunk_point_id(paper_id, chunk_index)
+
+
+def _legacy_model_point_id(paper_id: int, chunk_index: int, model_name: str) -> str:
+    """Return the point ID written by reembed.py before canonical runtime IDs.
+
+    Kept only so a repaired run can remove old model-scoped duplicates after
+    writing the runtime writer's canonical model-independent point ID.
 
     Parameters
     ----------
@@ -310,7 +330,7 @@ def deterministic_point_id(paper_id: int, chunk_index: int, model_name: str) -> 
     Returns
     -------
     str
-        UUID-format string (8-4-4-4-12 hex groups).
+        Legacy UUID-shaped point ID.
     """
     digest = hashlib.sha256(f"{paper_id}:{chunk_index}:{model_name}".encode()).hexdigest()
     return f"{digest[0:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
@@ -400,7 +420,10 @@ async def _create_collection(qdrant: AsyncQdrantClient) -> None:
     )
 
 
-async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
+async def ensure_collection_dimension(
+    qdrant: AsyncQdrantClient,
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy | None = None,
+) -> str | None:
     """Ensure the Qdrant collection exists with the configured vector dimension.
 
     Creates the collection if it does not exist. If it exists with a different
@@ -412,6 +435,15 @@ async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
     ----------
     qdrant : AsyncQdrantClient
         Qdrant async client.
+    conn : asyncpg.Connection | asyncpg.pool.PoolConnectionProxy | None
+        Maintenance database connection. Production calls provide it so
+        collection creation or replacement rotates the global visibility
+        generation. ``None`` is reserved for isolated dimension checks.
+
+    Returns
+    -------
+    str | None
+        Current visibility generation when ``conn`` is provided.
 
     Raises
     ------
@@ -423,20 +455,37 @@ async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
         model_name=EMBEDDING_MODEL_NAME,
         dimension=EMBEDDING_DIMENSION,
     )
-    if not await _collection_exists(qdrant):
+    collection_created = not await _collection_exists(qdrant)
+    if collection_created:
         logger.info(
             "Qdrant collection %s missing; creating with dimension %d",
             COLLECTION_NAME,
             EMBEDDING_DIMENSION,
         )
         await _create_collection(qdrant)
-        return
+        if conn is None:
+            return None
+        checkpoint = await prepare_visibility_schema(
+            conn,
+            qdrant,
+            collection_created=True,
+            collection_name=COLLECTION_NAME,
+        )
+        return checkpoint.visibility_generation
 
     info = await qdrant.get_collection(collection_name=COLLECTION_NAME)
     current_dim = extract_qdrant_collection_dimension(info)
     if current_dim == EMBEDDING_DIMENSION:
         logger.info("Qdrant collection %s dimension is %d", COLLECTION_NAME, current_dim)
-        return
+        if conn is None:
+            return None
+        checkpoint = await prepare_visibility_schema(
+            conn,
+            qdrant,
+            collection_created=False,
+            collection_name=COLLECTION_NAME,
+        )
+        return checkpoint.visibility_generation
 
     message = (
         f"Qdrant collection {COLLECTION_NAME!r} has dimension {current_dim}; "
@@ -456,14 +505,276 @@ async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
     logger.warning("%s Recreating collection because REEMBED_RECREATE_COLLECTION=true.", message)
     await qdrant.delete_collection(collection_name=COLLECTION_NAME)
     await _create_collection(qdrant)
+    if conn is None:
+        return None
+    checkpoint = await prepare_visibility_schema(
+        conn,
+        qdrant,
+        collection_created=True,
+        collection_name=COLLECTION_NAME,
+    )
+    return checkpoint.visibility_generation
 
 
-async def reembed_paper(
+_PAPER_CHUNKS_SQL = """\
+SELECT c.id, c.paper_id, c.chunk_index, c.content, c.page_number,
+       c.start_char, c.end_char, c.embedding_id, c.embedding_model,
+       p.source_type, p.visibility_scope, p.discovered_by
+  FROM paper_chunks AS c
+  JOIN papers AS p ON p.id = c.paper_id
+ WHERE c.paper_id = $1
+ ORDER BY c.chunk_index"""
+
+
+def _chunk_snapshot(rows: list[Any]) -> tuple[tuple[Any, ...], ...]:
+    """Return every field that determines a paper's vector generation."""
+    return tuple(
+        (
+            int(row["id"]),
+            int(row["chunk_index"]),
+            str(row["content"]),
+            row["page_number"],
+            row["start_char"],
+            row["end_char"],
+            row["embedding_id"],
+            row["embedding_model"],
+            row["source_type"],
+            row["visibility_scope"],
+            row["discovered_by"],
+        )
+        for row in rows
+    )
+
+
+def _record_matches_chunk(record: Any, row: Any, visibility_generation: str) -> bool:
+    """Return whether a Qdrant point proves full content and visibility identity."""
+    paper_id = int(row["paper_id"])
+    chunk_index = int(row["chunk_index"])
+    expected_id = chunk_point_id(paper_id, chunk_index)
+    payload = getattr(record, "payload", None)
+    return (
+        str(getattr(record, "id", "")) == expected_id
+        and row["embedding_model"] == EMBEDDING_MODEL_NAME
+        and str(row["embedding_id"]) == expected_id
+        and isinstance(payload, dict)
+        and payload.get("paper_id") == paper_id
+        and payload.get("chunk_index") == chunk_index
+        and payload.get("embedding_model") == EMBEDDING_MODEL_NAME
+        and payload.get("source_type") == row["source_type"]
+        and payload.get("visibility_scope") == row["visibility_scope"]
+        and payload.get("visibility_generation") == visibility_generation
+        and payload.get("embedding_fingerprint")
+        == chunk_embedding_fingerprint(str(row["content"]), model_name=EMBEDDING_MODEL_NAME)
+    )
+
+
+async def find_papers_needing_reembed(
+    pool: asyncpg.Pool,
+    qdrant: AsyncQdrantClient,
+    visibility_generation: str,
+) -> list[int]:
+    """Find DB/Qdrant identity mismatches, including missing same-model vectors."""
+    affected: set[int] = set()
+    last_row_id = 0
+    async with pool.acquire() as conn:
+        while True:
+            rows = list(
+                await conn.fetch(
+                    """SELECT c.id, c.paper_id, c.chunk_index, c.content,
+                              c.embedding_id, c.embedding_model,
+                              p.source_type, p.visibility_scope, p.discovered_by
+                         FROM paper_chunks AS c
+                         JOIN papers AS p ON p.id = c.paper_id
+                        WHERE c.id > $1
+                        ORDER BY c.id
+                        LIMIT $2""",
+                    last_row_id,
+                    _DB_SCAN_PAGE_SIZE,
+                )
+            )
+            if not rows:
+                break
+            last_row_id = int(rows[-1]["id"])
+            for offset in range(0, len(rows), _QDRANT_PROBE_BATCH_SIZE):
+                batch = rows[offset : offset + _QDRANT_PROBE_BATCH_SIZE]
+                point_ids = [
+                    chunk_point_id(int(row["paper_id"]), int(row["chunk_index"])) for row in batch
+                ]
+                records = await qdrant.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=point_ids,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                records_by_id = {str(record.id): record for record in records}
+                for row, point_id in zip(batch, point_ids):
+                    if not _record_matches_chunk(
+                        records_by_id.get(point_id),
+                        row,
+                        visibility_generation,
+                    ):
+                        affected.add(int(row["paper_id"]))
+    return sorted(affected)
+
+
+@asynccontextmanager
+async def _paper_advisory_lock(conn: Any, paper_id: int):
+    """Serialize maintenance writes with the regular PDF processing lock."""
+    await conn.execute("SELECT pg_advisory_lock($1, $2)", 1, paper_id)
+    try:
+        yield
+    finally:
+        await conn.execute("SELECT pg_advisory_unlock($1, $2)", 1, paper_id)
+
+
+def _reembedded_points(
+    paper_id: int,
+    rows: list[Any],
+    all_embeddings: list[list[float]],
+    visibility_generation: str,
+) -> tuple[list[PointStruct], list[tuple[str, int]]]:
+    """Build Qdrant points and the corresponding database metadata updates."""
+    points: list[PointStruct] = []
+    update_rows: list[tuple[str, int]] = []
+    for row, embedding in zip(rows, all_embeddings):
+        point_id = chunk_point_id(paper_id, row["chunk_index"])
+        update_rows.append((point_id, row["id"]))
+        visibility = VectorVisibility(
+            source_type=str(row["source_type"]),
+            visibility_scope=row["visibility_scope"],
+            visibility_generation=visibility_generation,
+        )
+        points.append(
+            PointStruct(
+                id=point_id,
+                vector=embedding,
+                payload={
+                    "paper_id": paper_id,
+                    "chunk_index": row["chunk_index"],
+                    "page_number": row["page_number"],
+                    "content": row["content"],
+                    "embedding_model": EMBEDDING_MODEL_NAME,
+                    "user_id": row["discovered_by"],
+                    **visibility.payload,
+                    "embedding_fingerprint": chunk_embedding_fingerprint(
+                        row["content"], model_name=EMBEDDING_MODEL_NAME
+                    ),
+                },
+            )
+        )
+    return points, update_rows
+
+
+def _stale_reembedded_point_ids(
+    paper_id: int,
+    rows: list[Any],
+    update_rows: list[tuple[str, int]],
+) -> list[str]:
+    """Return the old point IDs that the new deterministic IDs supersede."""
+    new_point_ids_by_row_id = {row_id: point_id for point_id, row_id in update_rows}
+    stale_point_ids: list[str] = []
+    for row in rows:
+        new_point_id = new_point_ids_by_row_id[row["id"]]
+        if row["embedding_id"] and row["embedding_id"] != new_point_id:
+            stale_point_ids.append(row["embedding_id"])
+        legacy_point_id = _legacy_model_point_id(paper_id, row["chunk_index"], EMBEDDING_MODEL_NAME)
+        if legacy_point_id != new_point_id:
+            stale_point_ids.append(legacy_point_id)
+    return list(dict.fromkeys(stale_point_ids))
+
+
+async def _delete_stale_reembedded_points(
+    paper_id: int,
+    point_ids: list[str],
+    qdrant: AsyncQdrantClient,
+) -> None:
+    """Delete superseded points, honoring the command's explicit error policy."""
+    if not point_ids:
+        return
+    try:
+        await qdrant.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=PointIdsList(points=point_ids),
+            wait=True,
+        )
+    except Exception as exc:
+        message = (
+            f"Failed to delete old Qdrant points for paper {paper_id}: "
+            f"{len(point_ids)} stale point(s) may remain"
+        )
+        if not REEMBED_CONTINUE_ON_ERROR:
+            raise ScriptError(message) from exc
+        logger.warning("%s; continuing because REEMBED_CONTINUE_ON_ERROR=true", message)
+
+
+async def _update_embedding_metadata(
+    conn: Any,
+    update_rows: list[tuple[str, int]],
+) -> None:
+    """Commit the newly published deterministic point IDs to Postgres."""
+    async with conn.transaction():
+        if hasattr(conn, "executemany"):
+            await conn.executemany(
+                """UPDATE paper_chunks
+                   SET embedding_id = $1, embedding_model = $2
+                   WHERE id = $3""",
+                [(point_id, EMBEDDING_MODEL_NAME, row_id) for point_id, row_id in update_rows],
+            )
+            return
+        for point_id, row_id in update_rows:
+            await conn.execute(
+                """UPDATE paper_chunks
+                   SET embedding_id = $1, embedding_model = $2
+                   WHERE id = $3""",
+                point_id,
+                EMBEDDING_MODEL_NAME,
+                row_id,
+            )
+
+
+async def _store_reembedded_paper(  # noqa: PLR0913 - publication boundary inputs
+    paper_id: int,
+    rows: list[Any],
+    all_embeddings: list[list[float]],
+    pool: asyncpg.Pool,
+    qdrant: AsyncQdrantClient,
+    visibility_generation: str,
+) -> None:
+    """Validate the DB snapshot, then publish Qdrant and DB state under one lock."""
+    points, update_rows = _reembedded_points(
+        paper_id,
+        rows,
+        all_embeddings,
+        visibility_generation,
+    )
+    stale_point_ids = _stale_reembedded_point_ids(paper_id, rows, update_rows)
+
+    async with pool.acquire() as conn:
+        async with _paper_advisory_lock(conn, paper_id):
+            current_rows = list(await conn.fetch(_PAPER_CHUNKS_SQL, paper_id))
+            if _chunk_snapshot(current_rows) != _chunk_snapshot(rows):
+                raise ScriptError(
+                    f"Paper {paper_id} chunks changed during re-embedding; retry the command"
+                )
+
+            for offset in range(0, len(points), _QDRANT_UPSERT_BATCH_SIZE):
+                await qdrant.upsert(
+                    collection_name=COLLECTION_NAME,
+                    points=points[offset : offset + _QDRANT_UPSERT_BATCH_SIZE],
+                    wait=True,
+                )
+            await _delete_stale_reembedded_points(paper_id, stale_point_ids, qdrant)
+            await _update_embedding_metadata(conn, update_rows)
+
+
+async def reembed_paper(  # noqa: PLR0913 - one-shot runtime resources
     paper_id: int,
     pool: asyncpg.Pool,
     qdrant: AsyncQdrantClient,
     http_client: httpx.AsyncClient,
     backend: EmbeddingBackend | None = None,
+    *,
+    visibility_generation: str,
 ) -> int:
     """Re-embed all chunks for a single paper and sync Qdrant + DB.
 
@@ -484,6 +795,9 @@ async def reembed_paper(
     backend : EmbeddingBackend or None
         Backend to use. Defaults to :class:`LiteLLMEmbeddingBackend` when
         ``None``.
+    visibility_generation : str
+        Current deployment-wide vector visibility generation written into each
+        replacement point.
 
     Returns
     -------
@@ -501,14 +815,7 @@ async def reembed_paper(
 
     # 1. Get chunks from DB
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id, chunk_index, content, page_number, start_char, end_char,
-                      embedding_id
-               FROM paper_chunks
-               WHERE paper_id = $1
-               ORDER BY chunk_index""",
-            paper_id,
-        )
+        rows = list(await conn.fetch(_PAPER_CHUNKS_SQL, paper_id))
 
     if not rows:
         return 0
@@ -516,87 +823,24 @@ async def reembed_paper(
     # 2. Re-embed in batches
     texts = [r["content"] for r in rows]
     all_embeddings = await embed_texts_in_batches(backend, http_client, texts, paper_id=paper_id)
-
-    # 3. Upsert new points to Qdrant
-    points: list[PointStruct] = []
-    update_rows: list[tuple[str, int]] = []
-    for row, embedding in zip(rows, all_embeddings):
-        point_id = deterministic_point_id(paper_id, row["chunk_index"], EMBEDDING_MODEL_NAME)
-        update_rows.append((point_id, row["id"]))
-        points.append(
-            PointStruct(
-                id=point_id,
-                vector=embedding,
-                payload={
-                    "paper_id": paper_id,
-                    "chunk_index": row["chunk_index"],
-                    "page_number": row["page_number"],
-                    "content": row["content"],
-                    "embedding_model": EMBEDDING_MODEL_NAME,
-                },
-            )
-        )
-
-    # Upsert in batches to avoid oversized requests.
-    for i in range(0, len(points), _QDRANT_UPSERT_BATCH_SIZE):
-        await qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points[i : i + _QDRANT_UPSERT_BATCH_SIZE],
-            wait=True,
-        )
-
-    # 4. Delete old Qdrant points before flipping DB rows. If cleanup fails,
-    #    the DB still says the paper needs re-embedding, so a rerun remains
-    #    deterministic and can retry the same stale IDs.
-    new_point_ids_by_row_id = {row_id: point_id for point_id, row_id in update_rows}
-    old_point_ids = [
-        row["embedding_id"]
-        for row in rows
-        if row["embedding_id"] and row["embedding_id"] != new_point_ids_by_row_id[row["id"]]
-    ]
-    if old_point_ids:
-        try:
-            await qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=PointIdsList(points=old_point_ids),
-                wait=True,
-            )
-        except Exception as exc:
-            message = (
-                f"Failed to delete old Qdrant points for paper {paper_id}: "
-                f"{len(old_point_ids)} stale point(s) may remain"
-            )
-            if not REEMBED_CONTINUE_ON_ERROR:
-                raise ScriptError(message) from exc
-            logger.warning("%s; continuing because REEMBED_CONTINUE_ON_ERROR=true", message)
-
-    # 5. Update DB last: set new embedding_id and embedding_model.
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if hasattr(conn, "executemany"):
-                await conn.executemany(
-                    """UPDATE paper_chunks
-                       SET embedding_id = $1, embedding_model = $2
-                       WHERE id = $3""",
-                    [(point_id, EMBEDDING_MODEL_NAME, row_id) for point_id, row_id in update_rows],
-                )
-            else:
-                # Test doubles may not implement executemany.
-                for point_id, row_id in update_rows:
-                    await conn.execute(
-                        """UPDATE paper_chunks
-                           SET embedding_id = $1, embedding_model = $2
-                           WHERE id = $3""",
-                        point_id,
-                        EMBEDDING_MODEL_NAME,
-                        row_id,
-                    )
+    await _store_reembedded_paper(
+        paper_id,
+        rows,
+        all_embeddings,
+        pool,
+        qdrant,
+        visibility_generation,
+    )
 
     return len(rows)
 
 
-async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -> None:
-    """Verify DB target-model chunk count matches Qdrant vector count.
+async def verify_postconditions(
+    pool: asyncpg.Pool,
+    qdrant: AsyncQdrantClient,
+    visibility_generation: str,
+) -> None:
+    """Verify target-model count, content, and current visibility parity.
 
     Parameters
     ----------
@@ -608,7 +852,8 @@ async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -
     Raises
     ------
     ScriptError
-        If the DB count and Qdrant count for the target model diverge.
+        If aggregate counts diverge or any point does not match its database
+        chunk's deterministic ID, content fingerprint, model, or owner.
     """
     async with pool.acquire() as conn:
         db_target_chunks = int(
@@ -637,6 +882,18 @@ async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -
             "Postcondition failed: DB target-model chunk count "
             f"({db_target_chunks}) does not match Qdrant vector count for model "
             f"{EMBEDDING_MODEL_NAME!r} ({qdrant_vectors})"
+        )
+    mismatched_papers = await find_papers_needing_reembed(
+        pool,
+        qdrant,
+        visibility_generation,
+    )
+    if mismatched_papers:
+        preview = ", ".join(str(paper_id) for paper_id in mismatched_papers[:10])
+        suffix = "" if len(mismatched_papers) <= 10 else ", ..."
+        raise ScriptError(
+            "Postcondition failed: vector identity or visibility mismatch for paper(s) "
+            f"{preview}{suffix}"
         )
     logger.info(
         "Postcondition passed: DB target-model chunks=%d, Qdrant vectors for model %r=%d",
@@ -789,22 +1046,21 @@ async def main(argv: list[str] | None = None) -> None:
             return
 
         qdrant = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
-        await ensure_collection_dimension(qdrant)
-
-        # Find papers that need re-embedding
         async with pool.acquire() as conn:
-            paper_ids = await conn.fetch(
-                """SELECT DISTINCT paper_id
-                   FROM paper_chunks
-                   WHERE embedding_model != $1 OR embedding_model IS NULL
-                   ORDER BY paper_id""",
-                EMBEDDING_MODEL_NAME,
-            )
+            visibility_generation = await ensure_collection_dimension(qdrant, conn)
+        if visibility_generation is None:
+            raise ScriptError("Vector visibility generation was not initialized")
+
+        paper_ids = await find_papers_needing_reembed(
+            pool,
+            qdrant,
+            visibility_generation,
+        )
 
         total = len(paper_ids)
         if total == 0:
             logger.info("All papers already embedded with %s. Nothing to do.", EMBEDDING_MODEL_NAME)
-            await verify_postconditions(pool, qdrant)
+            await verify_postconditions(pool, qdrant, visibility_generation)
             return
 
         logger.info("Found %d papers to re-embed", total)
@@ -832,10 +1088,16 @@ async def main(argv: list[str] | None = None) -> None:
             total_chunks = 0
             for i in range(0, total, BATCH_SIZE):
                 batch = paper_ids[i : i + BATCH_SIZE]
-                for record in batch:
-                    pid = record["paper_id"]
+                for pid in batch:
                     try:
-                        count = await reembed_paper(pid, pool, qdrant, http_client, backend)
+                        count = await reembed_paper(
+                            pid,
+                            pool,
+                            qdrant,
+                            http_client,
+                            backend,
+                            visibility_generation=visibility_generation,
+                        )
                         total_chunks += count
                         done += 1
                         logger.info("  [%d/%d] paper_id=%d  chunks=%d", done, total, pid, count)
@@ -857,7 +1119,7 @@ async def main(argv: list[str] | None = None) -> None:
             failed = ", ".join(f"paper_id={pid}" for pid in failed_paper_ids)
             raise ScriptError(f"Re-embedding failed for {len(failed_paper_ids)} paper(s): {failed}")
 
-        await verify_postconditions(pool, qdrant)
+        await verify_postconditions(pool, qdrant, visibility_generation)
         logger.info(
             "Re-embedding complete: %d papers, %d chunks processed with model=%s",
             done,

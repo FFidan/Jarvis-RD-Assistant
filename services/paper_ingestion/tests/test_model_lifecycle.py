@@ -6,6 +6,7 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from jarvis_common.model_catalog import ModelCatalogEntry
 from paper_ingestion.services.model_lifecycle import (
     MODEL_CATALOG,
@@ -150,6 +151,15 @@ class _HTTPClient:
         return _StreamResponse()
 
 
+class _RecordingHTTPClient:
+    def __init__(self) -> None:
+        self.stream_calls = 0
+
+    def stream(self, *args, **kwargs):
+        self.stream_calls += 1
+        return _StreamResponse()
+
+
 def test_tier4_entry_unfit_on_tier1_hardware() -> None:
     statuses = build_model_statuses(
         installed=[],
@@ -191,6 +201,17 @@ class _NeverCancelledCtx:
         return False
 
 
+class _QuarantineOnProgressCtx(_NeverCancelledCtx):
+    def __init__(self, quarantine_path) -> None:
+        super().__init__()
+        self._quarantine_path = quarantine_path
+
+    async def update_progress(self, progress: float, message: str | None = None) -> None:
+        await super().update_progress(progress, message)
+        if progress == 0.0:
+            self._quarantine_path.touch()
+
+
 class _ErrorStreamResponse:
     status_code = 200
 
@@ -226,6 +247,26 @@ async def test_model_pull_job_reports_progress_and_completes() -> None:
         (0.2, "pulling"),
         (1.0, "Done"),
     ]
+
+
+async def test_model_pull_job_rechecks_quarantine_before_opening_stream(
+    tmp_path, monkeypatch
+) -> None:
+    """Refuse a quarantine that begins after the job starts but before HTTP."""
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = _RecordingHTTPClient()
+    ctx = _QuarantineOnProgressCtx(quarantine)
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await _model_pull_job(
+            None,
+            client,
+            {"ollama_tag": "qwen3:4b", "ollama_url": "http://ollama:11434"},
+            ctx,
+        )
+
+    assert client.stream_calls == 0
 
 
 async def test_model_pull_job_raises_on_stream_error_event() -> None:

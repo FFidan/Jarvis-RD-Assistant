@@ -117,40 +117,74 @@ def _point_payload(hit) -> dict | None:
 def _user_scope_filter(
     user_id: int | None,
     library_paper_ids: list[int] | None = None,
+    visibility_generation: str | None = None,
 ):
-    """Return a Qdrant Filter scoping search to the caller, or None when unscoped.
+    """Build the persisted-scope Qdrant filter for an authenticated caller.
 
-    The ``should`` branches are OR-combined.  Base scope: chunks the caller
-    embedded (``user_id == X``) OR canonical chunks (``user_id`` payload IS NULL).
+    Parameters
+    ----------
+    user_id : int | None
+        Caller identity. ``None`` is the explicit trusted-internal mode and
+        returns no filter.
+    library_paper_ids : list[int] | None
+        Paper IDs from the caller's own ``user_library`` rows. They admit only
+        private vectors for those exact papers.
+    visibility_generation : str | None
+        Current deployment checkpoint generation. Missing or malformed values
+        use an impossible all-zero generation so user-facing retrieval fails
+        closed.
 
-    ``library_paper_ids`` (PI-RAG-001) widens the scope so the caller can also
-    retrieve chunks for ANY paper in **their own** library, regardless of which
-    user originally embedded them.  This fixes secondary-library under-fetch on
-    shared-corpus papers (e.g. paper P processed by user A, where A's chunks
-    carry ``user_id == A``, but P is legitimately in caller B's library).
+    Returns
+    -------
+    qdrant_client.models.Filter | None
+        Current generation AND (persisted public OR caller-library private),
+        or ``None`` only for the explicit internal path.
 
-    Security: the widening is keyed strictly on the CALLER'S own
-    ``user_library`` membership — the caller must supply only their own
-    library's paper_ids.  A paper that is NOT in the caller's library (e.g. a
-    private upload owned solely by another user) is never added to this branch
-    and therefore stays out of the candidate set.  The defense-in-depth DB
-    visibility check in ``rag/streaming.py`` remains the backstop.
+    Notes
+    -----
+    ``source_type``, ``discovered_by``, and legacy payload ``user_id`` values
+    are descriptive or compatibility metadata and never grant access.
     """
     if user_id is None:
         return None
     from qdrant_client.models import (
         FieldCondition,
         Filter,
-        IsNullCondition,
         MatchAny,
         MatchValue,
-        PayloadField,
     )
 
-    should: list = [
-        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
-        IsNullCondition(is_null=PayloadField(key="user_id")),
+    generation = (
+        visibility_generation
+        if visibility_generation is not None
+        and re.fullmatch(r"[0-9a-f]{32}", visibility_generation)
+        else "0" * 32
+    )
+    access_branches: list = [
+        FieldCondition(key="visibility_scope", match=MatchValue(value="public")),
     ]
     if library_paper_ids:
-        should.append(FieldCondition(key="paper_id", match=MatchAny(any=library_paper_ids)))
-    return Filter(should=should)
+        allowed_private_ids = list(dict.fromkeys(int(paper_id) for paper_id in library_paper_ids))
+        access_branches.append(
+            Filter(
+                must=[
+                    FieldCondition(
+                        key="visibility_scope",
+                        match=MatchValue(value="private"),
+                    ),
+                    FieldCondition(
+                        key="paper_id",
+                        match=MatchAny(any=allowed_private_ids),
+                    ),
+                ]
+            )
+        )
+    return Filter(
+        must=[
+            FieldCondition(
+                key="visibility_generation",
+                match=MatchValue(value=generation),
+            ),
+            Filter(should=access_branches),
+        ]
+    )

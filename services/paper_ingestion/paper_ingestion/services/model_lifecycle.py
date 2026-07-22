@@ -16,6 +16,7 @@ from typing import Any, Literal, TypedDict
 
 import httpx
 from jarvis_common.hw_detect import Vendor, vendor_from_env
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.model_catalog import (
     ModelCatalogEntry,
     Role,
@@ -925,6 +926,7 @@ async def _model_pull_job(
         payload.get("ollama_url") or get_paper_ingestion_settings().ollama_base_url
     ).rstrip("/")
     last_message = "Pulling model"
+    ensure_outbound_egress_allowed("Ollama model pull")
     try:
         async with http_client.stream(
             "POST",

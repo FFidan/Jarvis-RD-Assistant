@@ -1331,7 +1331,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
 
     Exercises real asyncpg SAVEPOINT behavior against a live Postgres connection.
     Three cards in the assembled deck — first card's upsert raises a foreign-key-like
-    error (patched at the upsert_paper boundary), other two succeed.
+    error (patched at the verified-public upsert boundary), other two succeed.
     Contract: pulse_decks row is created with card_count > 0 despite the first-card failure.
     Verified: pulse/job.py:388-396 (async with conn.transaction(): inner savepoint per card).
     """
@@ -1430,7 +1430,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
             MagicMock(return_value=candidates),
         ),
         patch(
-            "paper_ingestion.pulse.job.upsert_paper",
+            "paper_ingestion.pulse.job.upsert_verified_public_paper",
             AsyncMock(side_effect=selective_upsert),
         ),
     ):

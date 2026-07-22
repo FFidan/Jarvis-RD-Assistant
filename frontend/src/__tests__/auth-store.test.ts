@@ -87,17 +87,17 @@ describe('auth-store', () => {
     expect(useAuthStore.getState().lastError).toBe('Invalid or missing API key');
   });
 
-  it('login surfaces the 403 multi-tenant-disabled message instead of bouncing', async () => {
+  it('login surfaces the 403 owner-recovery message instead of bouncing', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 403,
       json: async () => ({
-        detail: 'API-key login disabled for multi-tenant deployments; use magic-link',
+        detail: 'API-key recovery is reserved for the configured instance owner; use a passkey or sign-in link',
       }),
     });
     const result = await useAuthStore.getState().login('some-key');
     expect(result).toBe(false);
-    expect(useAuthStore.getState().lastError).toContain('magic-link');
+    expect(useAuthStore.getState().lastError).toContain('passkey or sign-in link');
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });
 

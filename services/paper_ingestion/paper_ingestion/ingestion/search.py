@@ -26,8 +26,9 @@ from paper_ingestion.ingestion.embedding_config import (
     _point_payload,
     _user_scope_filter,
 )
-from paper_ingestion.ingestion.search_scope import SearchScope
+from paper_ingestion.ingestion.search_scope import SearchScope, SearchScopeMode
 from paper_ingestion.perf_probe import probe_span
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
 # Qdrant exception classes that indicate a transport / server-side failure.
@@ -49,16 +50,16 @@ _SEARCH_SCOPE_KEYS = {"user_id", "library_paper_ids", "allowed_paper_ids"}
 
 
 def _build_bm25_query(query: str, candidate_limit: int, user_id: int | None) -> tuple[str, tuple]:
-    """Return (SQL, args) for the BM25 leg, library-scoped when user_id is set (RD-DA-003)."""
+    """Return BM25 SQL and arguments under the relational visibility policy."""
     if user_id is not None:
-        bm25_sql = """
+        bm25_sql = f"""
             SELECT p.id, p.title, p.authors, p.url, p.abstract,
                    p.published_date,
                    ts_rank(p.search_vector,
                            websearch_to_tsquery('english', $1)) AS bm25_score
             FROM papers p
-            JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $3
             WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
+              AND {paper_visible_sql(3)}
             ORDER BY bm25_score DESC
             LIMIT $2
         """
@@ -80,19 +81,22 @@ def _coerce_search_scope(
     scope: SearchScope | None,
     legacy_scope: dict[str, Any],
 ) -> SearchScope:
-    """Return a search scope while preserving older keyword-call contracts."""
+    """Return one explicit mode while preserving older keyword-call contracts."""
     if not legacy_scope:
-        return scope or SearchScope()
+        return scope or SearchScope.internal()
     unknown = sorted(set(legacy_scope) - _SEARCH_SCOPE_KEYS)
     if unknown:
         raise TypeError(f"unexpected search scope keyword(s): {', '.join(unknown)}")
     if scope is not None:
         raise TypeError("scope cannot be combined with legacy scope keyword arguments")
-    return SearchScope(
-        user_id=legacy_scope.get("user_id"),
-        library_paper_ids=legacy_scope.get("library_paper_ids"),
-        allowed_paper_ids=legacy_scope.get("allowed_paper_ids"),
-    )
+    user_id = legacy_scope.get("user_id")
+    if user_id is None:
+        return SearchScope.internal()
+    library_ids = legacy_scope.get("library_paper_ids") or []
+    allowed_ids = legacy_scope.get("allowed_paper_ids") or []
+    if allowed_ids:
+        return SearchScope.explicit_papers(user_id, allowed_ids, library_ids)
+    return SearchScope.caller_corpus(user_id, library_ids)
 
 
 async def _fetch_library_paper_ids_for_scope(
@@ -110,14 +114,14 @@ async def _fetch_library_paper_ids_for_scope(
 async def _fetch_missing_metadata(
     db_pool: asyncpg.Pool, missing_ids: list[int], user_id: int | None
 ) -> dict[int, dict]:
-    """Fetch semantic-only paper metadata with a visibility re-check (RD-DA-003)."""
+    """Fetch semantic-only paper metadata with a relational visibility recheck."""
     async with db_pool.acquire() as conn:
         if user_id is not None:
             meta_rows = await conn.fetch(
-                "SELECT p.id, p.title, p.authors, p.url, p.abstract, p.published_date "
-                "FROM papers p "
-                "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2 "
-                "WHERE p.id = ANY($1::int[])",
+                "SELECT p.id, p.title, p.authors, p.url, p.abstract, p.published_date"
+                " FROM papers p"
+                " WHERE p.id = ANY($1::int[])"
+                f" AND {paper_visible_sql(2)}",
                 missing_ids,
                 user_id,
             )
@@ -150,6 +154,21 @@ class EmbeddingSearchMixin:
 
         async def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 
+        async def current_visibility_generation(self) -> str: ...
+
+    async def _visibility_generation_or_none(self, *, authenticated: bool) -> str | None:
+        """Resolve the current generation or return a fail-closed marker input."""
+        if not authenticated:
+            return None
+        try:
+            return await self.current_visibility_generation()
+        except Exception:
+            logger.warning(
+                "Vector visibility checkpoint unavailable; authenticated search is fail-closed",
+                exc_info=True,
+            )
+            return None
+
     async def search_similar(
         self,
         query_text: str,
@@ -172,12 +191,11 @@ class EmbeddingSearchMixin:
         score_threshold : float
             Minimum cosine similarity score.
         user_id : int | None
-            If set, restrict to chunks owned by ``user_id`` or marked
-            canonical (NULL payload).  ``None`` preserves the unscoped path.
+            Authenticated caller whose persisted-public/library scope is
+            enforced. ``None`` is reserved for trusted internal search.
         library_paper_ids : list[int] | None
-            The CALLER'S OWN ``user_library`` paper ids (PI-RAG-001 widening)
-            so shared-corpus papers embedded by another user stay retrievable
-            — see ``_user_scope_filter``.
+            Exact private-paper memberships loaded from the caller's
+            ``user_library``. Public access comes only from persisted scope.
 
         Returns
         -------
@@ -201,7 +219,8 @@ class EmbeddingSearchMixin:
         # beside `must_not` is advisory (scoring-only) in Qdrant, not
         # restrictive — the previous flat-filter composition leaked cross-tenant chunks.
         must_clauses: list = []
-        user_scope = _user_scope_filter(user_id, library_paper_ids)
+        generation = await self._visibility_generation_or_none(authenticated=user_id is not None)
+        user_scope = _user_scope_filter(user_id, library_paper_ids, generation)
         if user_scope is not None:
             must_clauses.append(user_scope)
         if must_clauses or must_not_clauses:
@@ -270,16 +289,11 @@ class EmbeddingSearchMixin:
         score_threshold : float
             Minimum cosine similarity score (0.0-1.0).
         user_id : int | None
-            Defense-in-depth (M7): when set, additionally restrict to chunks
-            owned by ``user_id``, canonical chunks (``user_id`` payload IS
-            NULL), or chunks for papers in ``library_paper_ids``.  Callers
-            pre-assert paper ownership at the route boundary; ``None``
-            preserves unscoped behaviour (system-context paths such as
-            extraction).
+            Authenticated caller whose current-generation visibility metadata
+            is enforced in addition to the paper ID. ``None`` is reserved for
+            trusted internal extraction paths.
         library_paper_ids : list[int] | None
-            The CALLER'S OWN ``user_library`` paper ids (PI-RAG-001 widening)
-            so shared-corpus papers embedded by another user stay retrievable
-            — see ``_user_scope_filter``.
+            Exact private-paper memberships loaded from the caller's library.
 
         Returns
         -------
@@ -300,7 +314,8 @@ class EmbeddingSearchMixin:
         # flat-merge its `should` branches into this Filter: in Qdrant a
         # `should` list sitting beside a `must` list is advisory
         # (scoring-only), not restrictive — the previous flat-filter composition bug.
-        user_scope = _user_scope_filter(user_id, library_paper_ids)
+        generation = await self._visibility_generation_or_none(authenticated=user_id is not None)
+        user_scope = _user_scope_filter(user_id, library_paper_ids, generation)
         if user_scope is not None:
             must_clauses.append(user_scope)
 
@@ -445,18 +460,16 @@ class EmbeddingSearchMixin:
         scope: SearchScope | None = None,
         **legacy_scope: Any,
     ) -> list[dict]:
-        """Search ALL chunks in Qdrant without a paper_id filter.
+        """Search chunks under a validated vector-visibility scope.
 
-        When ``user_id`` is set, results are scoped to chunks owned by that
-        user OR marked canonical (``user_id`` payload IS NULL). When unset,
-        no scope filter is applied (preserves single-tenant + procrastinate
-        task code paths).
+        Authenticated modes require the current visibility generation and
+        admit public papers plus private papers in the caller's library.
+        Explicit paper IDs further restrict that corpus; they never grant
+        access. Only the explicit trusted-internal mode is unfiltered.
 
-        ``scope`` carries both user-library visibility and optional explicit
-        paper restrictions. Existing callers may still pass ``user_id``,
-        ``library_paper_ids``, or ``allowed_paper_ids`` as keywords; new code
-        should prefer ``SearchScope``. Callers MUST pass only the requesting
-        user's own ``user_library`` ids when widening shared-corpus retrieval.
+        ``scope`` is the preferred interface. Compatibility keywords are
+        normalized into the same validated modes and fail closed when caller
+        context or the current generation is unavailable.
 
         Returns
         -------
@@ -470,7 +483,9 @@ class EmbeddingSearchMixin:
         # Let RuntimeError from embed_texts propagate (callers handle it)
         query_embedding = (await self.embed_texts([query_text]))[0]
 
-        query_filter = self._restricted_scope_filter(_coerce_search_scope(scope, legacy_scope))
+        query_filter = await self._restricted_scope_filter(
+            _coerce_search_scope(scope, legacy_scope)
+        )
 
         try:
             response = await self.qdrant.query_points(
@@ -505,15 +520,30 @@ class EmbeddingSearchMixin:
             )
         return results
 
-    @staticmethod
-    def _restricted_scope_filter(scope: SearchScope):
-        """Return the user scope optionally AND-restricted to explicit papers."""
-        user_scope = _user_scope_filter(scope.user_id, scope.library_paper_ids)
-        if not scope.allowed_paper_ids:
+    async def _restricted_scope_filter(self, scope: SearchScope):
+        """Build the Qdrant filter for one validated search-scope mode."""
+        if scope.mode is SearchScopeMode.INTERNAL:
+            return None
+        authenticated = scope.user_id is not None
+        generation = await self._visibility_generation_or_none(authenticated=authenticated)
+        user_scope = (
+            _user_scope_filter(scope.user_id, list(scope.library_paper_ids), generation)
+            if authenticated
+            else None
+        )
+        if scope.mode is SearchScopeMode.CALLER_CORPUS:
             return user_scope
         from qdrant_client.models import FieldCondition, Filter, MatchAny
 
-        explicit_scope = FieldCondition(key="paper_id", match=MatchAny(any=scope.allowed_paper_ids))
+        paper_ids = (
+            scope.allowed_paper_ids
+            if scope.mode is SearchScopeMode.EXPLICIT_PAPERS
+            else scope.library_paper_ids
+        )
+        explicit_scope = FieldCondition(
+            key="paper_id",
+            match=MatchAny(any=list(paper_ids) or [-1]),
+        )
         must: list[Any] = [explicit_scope]
         if user_scope is not None:
             must.append(user_scope)
@@ -530,9 +560,8 @@ class EmbeddingSearchMixin:
     ) -> list[dict]:
         """Hybrid search combining BM25 keyword + semantic vector search via RRF.
 
-        When ``user_id`` is set, both the BM25 leg and the metadata fetch are
-        scoped to papers visible to that user (via ``user_library`` JOIN).
-        The semantic leg is already scoped via ``search_chunks_global``.
+        When ``user_id`` is set, both relational legs and the semantic leg use
+        the same persisted-public or explicit caller-library policy.
 
         Uses Reciprocal Rank Fusion to combine rankings from PostgreSQL
         full-text search and Qdrant cosine similarity search.
@@ -598,7 +627,11 @@ class EmbeddingSearchMixin:
             query,
             limit=candidate_limit,
             score_threshold=_HYBRID_SEARCH_SCORE_THRESHOLD,
-            scope=SearchScope(user_id=user_id, library_paper_ids=library_paper_ids),
+            scope=(
+                SearchScope.internal()
+                if user_id is None
+                else SearchScope.caller_corpus(user_id, library_paper_ids or [])
+            ),
         )
 
         # Aggregate: max chunk score per paper
@@ -693,9 +726,9 @@ class EmbeddingSearchMixin:
         max_points_per_seed : int
             Maximum Qdrant point IDs to sample per seed paper.
         user_id : int | None
-            When provided, restricts Qdrant results to chunks owned by this
-            user (or chunks with no user_id for legacy single-tenant data).
-            Prevents cross-user vector data leakage in multi-tenant deployments.
+            Authenticated caller whose current-generation public/library
+            visibility policy restricts recommendation results. ``None`` is
+            reserved for trusted internal discovery.
 
         Returns
         -------
@@ -728,7 +761,9 @@ class EmbeddingSearchMixin:
         # and additionally scope to the requesting user's chunks when user_id
         # is supplied (_user_scope_filter returns None for single-tenant path).
         seed_exclusion = FieldCondition(key="paper_id", match=MatchAny(any=seed_paper_ids))
-        user_scope = _user_scope_filter(user_id)
+        library_paper_ids = await _fetch_library_paper_ids_for_scope(db_pool, user_id)
+        generation = await self._visibility_generation_or_none(authenticated=user_id is not None)
+        user_scope = _user_scope_filter(user_id, library_paper_ids, generation)
         if user_scope is not None:
             query_filter = Filter(must=[user_scope], must_not=[seed_exclusion])
         else:

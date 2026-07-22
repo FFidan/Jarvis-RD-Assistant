@@ -1,6 +1,6 @@
 """auto_fetch fans out a canonical paper into N user_library rows.
 
-Approach: patch ``upsert_paper`` and ``fan_out_to_topic_users`` and assert
+Approach: patch ``upsert_verified_public_paper`` and ``fan_out_to_topic_users`` and assert
 the wiring (one canonical insert per result, one fan-out call per topic
 per result).
 """
@@ -96,7 +96,10 @@ async def test_run_auto_pipeline_fans_out_per_topic(monkeypatch):
             "paper_ingestion.pipelines.auto_fetch.get_source_class",
             return_value=lambda *a, **kw: fake_source,
         ),
-        patch("paper_ingestion.pipelines.auto_fetch.upsert_paper", side_effect=fake_upsert),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.upsert_verified_public_paper",
+            side_effect=fake_upsert,
+        ),
         patch(
             "paper_ingestion.pipelines.auto_fetch.fan_out_to_topic_users", side_effect=fake_fanout
         ),
@@ -144,7 +147,7 @@ async def test_subscriber_gets_library_row_via_fan_out():
 async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
     """End-to-end: run_auto_pipeline with a real subscriber fans out to user_library.
 
-    Patches upsert_paper and fan_out_to_topic_users to verify that the pipeline
+    Patches the verified-public upsert and fan-out to verify that the pipeline
     calls fan-out with the correct paper_id and topic_ids.
     """
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
@@ -189,7 +192,7 @@ async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
             return_value=lambda *a, **kw: fake_source,
         ),
         patch(
-            "paper_ingestion.pipelines.auto_fetch.upsert_paper",
+            "paper_ingestion.pipelines.auto_fetch.upsert_verified_public_paper",
             side_effect=lambda conn_arg, paper, **kw: {"id": 42, "is_insert": True},
         ),
         patch(
@@ -264,7 +267,10 @@ async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
             "paper_ingestion.pipelines.auto_fetch.get_source_class",
             return_value=lambda *a, **kw: fake_source,
         ),
-        patch("paper_ingestion.pipelines.auto_fetch.upsert_paper", side_effect=fake_upsert),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.upsert_verified_public_paper",
+            side_effect=fake_upsert,
+        ),
         patch(
             "paper_ingestion.pipelines.auto_fetch.fan_out_to_topic_users", side_effect=fake_fanout
         ),
@@ -283,3 +289,30 @@ async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
     # Each topic's paper is fanned out with THAT topic's id (never blended).
     assert len(fanout_calls) == 2
     assert sorted(topic_ids[0] for _paper_id, topic_ids in fanout_calls) == [11, 12]
+
+
+@pytest.mark.asyncio
+async def test_discover_and_save_passes_exact_pool_to_source_constructor():
+    """Persistent source limiters receive the shared pool; constructor failures are not hidden."""
+    conn = AsyncMock()
+    pool = MagicMock()
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire = MagicMock(return_value=acquire)
+    captured: dict[str, object] = {}
+
+    class StrictSource:
+        def __init__(self, config, http_client, *, db_pool):
+            captured.update(config=config, http_client=http_client, db_pool=db_pool)
+
+        async def fetch_new_since(self, *_args, **_kwargs):
+            return []
+
+    app = SimpleNamespace(state=SimpleNamespace(http_client=MagicMock()))
+    rows = [{"id": 9, "source_type": "arxiv", "enabled": True, "config": {}}]
+
+    with patch("paper_ingestion.pipelines.auto_fetch.get_source_class", return_value=StrictSource):
+        await af._discover_and_save(app, pool, rows, [(12, "graphs")])
+
+    assert captured["db_pool"] is pool

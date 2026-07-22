@@ -1,50 +1,83 @@
-"""Tests for the restore-status contract + one-time bearer-token auth in
-``routers/backups.py``.
+"""Restore status, recovery-session, quarantine, and acknowledgement tests.
 
-``RestoreStatus`` is the shape the admin UI polls while a restore runs. It gains
-two additive fields — ``manual_steps_required`` (a restore that finished but is
-still held in maintenance) and ``phase`` (a machine-readable step key) — which
-must round-trip, default safely for legacy status files, and keep ignoring the
-sidecar's extra keys.
-
-The ASGI tests below exercise the restore-status bearer token: ``request_restore``
-mints it and persists only its hash; ``restore_status`` accepts it DB-free (proven
-with the DB pool wired to explode on any access) so the initiating admin's poll
-survives after a restore has torn down the session store, while a wrong/expired
-token falls through to the normal session/API-key gate.
+Covers missing status fields, database-independent token polling, exact restore
+binding, linked or malformed state, concurrent requests, configured-owner
+authentication, and acknowledgement replay refusal.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport
-from jarvis_common.auth import restore_status_bearer_valid, restore_status_token_file
+from jarvis_common.auth import (
+    RESTORE_ACKNOWLEDGE_PATH,
+    RESTORE_STATUS_PATH,
+    restore_status_bearer_valid,
+    restore_status_token_file,
+    verify_api_key,
+)
 from jarvis_common.testing_contract_apps import configure_contract_api_key
 
 from paper_ingestion.routers import backups as bk
 from paper_ingestion.routers.backups import RestoreStatus
 
 _STATUS_PATH = "/api/admin/backups/restore/status"
+_ACKNOWLEDGE_PATH = "/api/admin/backups/restore/acknowledge"
+_RESTORE_ID = "0123456789abcdef0123456789abcdef"
+_REQUESTED_AT = "2026-07-21T20:00:00+00:00"
+_COMPLETED_AT = "2026-07-21T20:05:00+00:00"
 
 
 class _DeadPool:
-    """A DB pool that raises on ANY access — proves a code path is DB-free."""
+    """Raise on database access to verify database-independent request paths."""
 
     def __getattr__(self, name: str):  # noqa: ANN204
-        raise AssertionError(f"restore_status touched the DB pool ({name}) — must be DB-free")
+        raise AssertionError(f"restore_status accessed the database pool ({name})")
 
 
 def _seed_complete_point(d, ts: str) -> None:
-    """Write a complete restore point (jarvis + litellm + secrets) under ``d``."""
-    for name in (f"jarvis_{ts}.sql.gz", f"litellm_{ts}.sql.gz", f"secrets_{ts}.tar.gz"):
+    """Write a complete restore point (databases + PDFs) under ``d``."""
+    for name in (f"jarvis_{ts}.sql.gz", f"litellm_{ts}.sql.gz", f"pdfs_{ts}.tar.gz"):
         (d / name).write_bytes(b"x" * 8)
+
+
+def _quarantine_payload(*, restore_id: str = _RESTORE_ID) -> dict[str, object]:
+    return {
+        "version": 1,
+        "restore_id": restore_id,
+        "source": "inbox",
+        "requested_at": _REQUESTED_AT,
+        "completed_at": _COMPLETED_AT,
+        "review_state": "awaiting_review",
+    }
+
+
+def _seed_quarantine(trigger, *, restore_id: str = _RESTORE_ID):
+    quarantine = trigger / ".outbound-quarantine.json"
+    quarantine.write_text(json.dumps(_quarantine_payload(restore_id=restore_id)))
+    return quarantine
+
+
+def _unit_request(*, headers: dict[str, str] | None = None, user_id: int | None = None):
+    state = SimpleNamespace(user_id=user_id) if user_id is not None else SimpleNamespace()
+    return SimpleNamespace(
+        headers=headers or {},
+        state=state,
+        app=SimpleNamespace(state=SimpleNamespace(db_pool=SimpleNamespace())),
+        url=SimpleNamespace(path=_ACKNOWLEDGE_PATH),
+        method="POST",
+        client=None,
+    )
 
 
 def test_manual_step_fields_round_trip() -> None:
@@ -86,19 +119,42 @@ def test_legacy_status_without_new_fields_defaults() -> None:
     )
     assert status.manual_steps_required is False
     assert status.phase is None
+    assert status.restore_id is None
+    assert status.source is None
+    assert status.quarantine == "none"
 
 
-def test_write_status_token_persists_only_hash(tmp_path, monkeypatch) -> None:
+def test_write_status_token_binds_the_current_restore(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(tmp_path))
     token = "correct-horse-battery-staple"
+    restore_id = "0123456789abcdef0123456789abcdef"
+    requested_at = datetime.now(UTC).isoformat()
 
-    assert bk._write_status_token(token) is True
+    assert (
+        bk._write_status_token(
+            token,
+            restore_id=restore_id,
+            source="inbox",
+            requested_at=requested_at,
+        )
+        is True
+    )
 
     f = restore_status_token_file()
     persisted = json.loads(f.read_text())
-    # Only the hash + expiry are persisted — never the raw token.
-    assert set(persisted) == {"sha256", "expires_at"}
+    assert set(persisted) == {
+        "version",
+        "sha256",
+        "expires_at",
+        "restore_id",
+        "source",
+        "requested_at",
+    }
+    assert persisted["version"] == 2
     assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert persisted["restore_id"] == restore_id
+    assert persisted["source"] == "inbox"
+    assert persisted["requested_at"] == requested_at
     assert token not in f.read_text()
     assert (f.stat().st_mode & 0o777) == 0o600
     expires = datetime.fromisoformat(persisted["expires_at"])
@@ -140,22 +196,139 @@ async def test_request_restore_returns_token_and_writes_only_hash(tmp_path, monk
         app.state.limiter.enabled = True
 
     assert resp.status_code == 202, resp.text
-    token = resp.json()["status_token"]
+    response = resp.json()
+    token = response["status_token"]
+    restore_id = response["restore_id"]
     assert token
+    assert len(restore_id) == 32
     f = restore_status_token_file()
     persisted = json.loads(f.read_text())
-    assert set(persisted) == {"sha256", "expires_at"}
+    assert persisted["restore_id"] == restore_id
+    assert persisted["source"] == "local"
     assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert datetime.fromisoformat(response["expires_at"]) == datetime.fromisoformat(
+        persisted["expires_at"]
+    )
     assert token not in f.read_text()
-    # The token file is SEPARATE from the request sentinel restore.sh consumes.
+    # The token record is stored separately from the restore request.
     assert (trigger / ".restore_request.json").exists()
+    request = json.loads((trigger / ".restore_request.json").read_text())
+    assert request["restore_id"] == restore_id
+    assert request["requested_at"] == persisted["requested_at"]
+    assert request["allow_missing_pdfs"] is False
     assert f.name == ".restore_status_token.json"
 
 
 @pytest.mark.asyncio
+async def test_request_restore_refuses_when_token_record_cannot_be_persisted(
+    tmp_path, monkeypatch
+) -> None:
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    ts = "20260708_120000"
+    _seed_complete_point(backup_dir, ts)
+
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+    monkeypatch.setattr(bk, "_write_status_token", lambda *args, **kwargs: False)
+    monkeypatch.setattr(bk, "log_audit", AsyncMock())
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/admin/backups/restore",
+                json={"timestamp": ts, "confirm": "RESTORE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 503, resp.text
+    assert not (trigger / ".restore_request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_request_restore_forwards_legacy_missing_pdf_authorization(
+    tmp_path, monkeypatch
+) -> None:
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    ts = "20260708_120000"
+    names = [
+        f"jarvis_{ts}.sql.gz.enc",
+        f"litellm_{ts}.sql.gz.enc",
+        f"secrets_{ts}.tar.gz.enc",
+    ]
+    for name in names:
+        (backup_dir / name).write_bytes(b"legacy")
+    (backup_dir / f"manifest_{ts}.json").write_text(
+        json.dumps(
+            {
+                "timestamp": ts,
+                "app_version": "1.1.3",
+                "schema_version": 100,
+                "archives": [{"filename": name} for name in names],
+            }
+        )
+    )
+    (backup_dir / f"manifest_{ts}.json.hmac").write_text("0" * 64)
+
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+    monkeypatch.setattr(bk, "log_audit", AsyncMock())
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            refused = await client.post(
+                "/api/admin/backups/restore",
+                json={"timestamp": ts, "confirm": "RESTORE"},
+            )
+            accepted = await client.post(
+                "/api/admin/backups/restore",
+                json={
+                    "timestamp": ts,
+                    "confirm": "RESTORE",
+                    "allow_missing_pdfs": True,
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert refused.status_code == 409, refused.text
+    assert accepted.status_code == 202, accepted.text
+    request = json.loads((trigger / ".restore_request.json").read_text())
+    assert request["allow_missing_pdfs"] is True
+
+
+@pytest.mark.asyncio
 async def test_restore_status_bearer_token_is_db_free(tmp_path, monkeypatch) -> None:
-    """A valid bearer token authorizes the poll through the REAL front door + route
-    gate with the DB pool wired to explode on any access — proving DB-free auth."""
+    """A valid restore token authorizes polling without database access."""
     from paper_ingestion.main import app
 
     trigger = tmp_path / "trigger"
@@ -165,7 +338,15 @@ async def test_restore_status_bearer_token_is_db_free(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(bk, "_RESTORE_STATUS", trigger / ".restore_status.json")
 
     token = "db-free-poll-token-value"
-    assert bk._write_status_token(token) is True
+    assert (
+        bk._write_status_token(
+            token,
+            restore_id="0123456789abcdef0123456789abcdef",
+            source="inbox",
+            requested_at=datetime.now(UTC).isoformat(),
+        )
+        is True
+    )
     (trigger / ".restore_status.json").write_text(
         json.dumps(
             {
@@ -178,8 +359,7 @@ async def test_restore_status_bearer_token_is_db_free(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(app.state, "db_pool", _DeadPool(), raising=False)
     app.state.limiter.enabled = False
-    # configure_contract_api_key ARMS the global front door (a real key configured),
-    # so passing the bearer is a meaningful proof — an unauthenticated request 403s.
+    # Configure an API key so the restore token is required for this request.
     with configure_contract_api_key(monkeypatch):
         try:
             async with httpx.AsyncClient(
@@ -197,11 +377,8 @@ async def test_restore_status_bearer_token_is_db_free(tmp_path, monkeypatch) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["wrong", "expired", "absent"])
-async def test_restore_status_bad_bearer_falls_through_to_front_door(
-    tmp_path, monkeypatch, scenario
-) -> None:
-    """A wrong / expired / absent bearer token is NOT accepted — the request falls
-    through to the normal gate and is rejected (no session, no API-key)."""
+async def test_restore_status_bad_bearer_is_rejected(tmp_path, monkeypatch, scenario) -> None:
+    """Reject a wrong, expired, or absent restore token."""
     from paper_ingestion.main import app
 
     trigger = tmp_path / "trigger"
@@ -211,7 +388,15 @@ async def test_restore_status_bad_bearer_falls_through_to_front_door(
     monkeypatch.setattr(bk, "_RESTORE_STATUS", trigger / ".restore_status.json")
 
     if scenario == "wrong":
-        assert bk._write_status_token("the-real-token") is True
+        assert (
+            bk._write_status_token(
+                "the-real-token",
+                restore_id="0123456789abcdef0123456789abcdef",
+                source="inbox",
+                requested_at=datetime.now(UTC).isoformat(),
+            )
+            is True
+        )
         header = {"Authorization": "Bearer WRONG"}
     elif scenario == "expired":
         (trigger / ".restore_status_token.json").write_text(
@@ -226,7 +411,7 @@ async def test_restore_status_bad_bearer_falls_through_to_front_door(
     else:  # absent token file
         header = {"Authorization": "Bearer anything"}
 
-    # A rejection needs no DB: None pool -> the front door's failure-audit is skipped.
+    # Rejection remains database-independent when no audit pool is available.
     monkeypatch.setattr(app.state, "db_pool", None, raising=False)
     app.state.limiter.enabled = False
     with configure_contract_api_key(monkeypatch):
@@ -282,9 +467,7 @@ async def test_restore_status_api_key_path_still_works(tmp_path, monkeypatch) ->
     ],
 )
 def test_bearer_valid_never_raises_on_malformed_token_file(tmp_path, monkeypatch, content) -> None:
-    """The front-door helper must FALL THROUGH (return False), never raise, on any
-    malformed sentinel file — otherwise a corrupt/garbage token file would 500 the
-    status poll instead of degrading to the session/API-key gate."""
+    """Treat a malformed token record as invalid without raising."""
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(tmp_path))
     (tmp_path / ".restore_status_token.json").write_text(content)
     request = SimpleNamespace(headers={"Authorization": "Bearer anything"})
@@ -292,8 +475,423 @@ def test_bearer_valid_never_raises_on_malformed_token_file(tmp_path, monkeypatch
     assert restore_status_bearer_valid(request) is False
 
 
+def test_bearer_rejects_an_unbound_legacy_token_file(tmp_path, monkeypatch) -> None:
+    token = "legacy-unbound-token"
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(tmp_path))
+    (tmp_path / ".restore_status_token.json").write_text(
+        json.dumps(
+            {
+                "sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            }
+        )
+    )
+    request = SimpleNamespace(headers={"Authorization": f"Bearer {token}"})
+
+    assert restore_status_bearer_valid(request) is False
+
+
 # ---------------------------------------------------------------------------
-# Off-host upload grant — control-plane token the restore-uploader authorizes.
+# Restore acknowledgement authentication, token consumption, and owner fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_restore_bearer_is_bound_to_exact_method_and_path(tmp_path, monkeypatch) -> None:
+    token = "current-inbox-recovery-token"
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(tmp_path))
+    assert bk._write_status_token(
+        token,
+        restore_id=_RESTORE_ID,
+        source="inbox",
+        requested_at=_REQUESTED_AT,
+    )
+
+    with configure_contract_api_key(monkeypatch):
+        for method, path in (("GET", RESTORE_STATUS_PATH), ("POST", RESTORE_ACKNOWLEDGE_PATH)):
+            request = _unit_request(headers={"Authorization": f"Bearer {token}"})
+            request.method = method
+            request.url.path = path
+            await verify_api_key(request, None)
+
+        for method, path in (
+            ("POST", RESTORE_STATUS_PATH),
+            ("GET", RESTORE_ACKNOWLEDGE_PATH),
+            ("POST", f"{RESTORE_ACKNOWLEDGE_PATH}/"),
+        ):
+            request = _unit_request(headers={"Authorization": f"Bearer {token}"})
+            request.method = method
+            request.url.path = path
+            with pytest.raises(HTTPException) as exc:
+                await verify_api_key(request, None)
+            assert exc.value.status_code == 403
+
+        # A same-host token remains valid for status polling but never opens the
+        # off-host acknowledgement exception.
+        assert bk._write_status_token(
+            token,
+            restore_id=_RESTORE_ID,
+            source="local",
+            requested_at=_REQUESTED_AT,
+        )
+        request = _unit_request(headers={"Authorization": f"Bearer {token}"})
+        with pytest.raises(HTTPException) as exc:
+            await verify_api_key(request, None)
+        assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_restore_bearer_rejects_linked_token_state(tmp_path, monkeypatch, link_kind) -> None:
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(tmp_path))
+    token = "linked-restore-token"
+    real = tmp_path / "real-token.json"
+    real.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                "restore_id": _RESTORE_ID,
+                "source": "inbox",
+                "requested_at": _REQUESTED_AT,
+            }
+        )
+    )
+    token_record = restore_status_token_file()
+    if link_kind == "symlink":
+        token_record.symlink_to(real)
+    else:
+        os.link(real, token_record)
+
+    request = _unit_request(headers={"Authorization": f"Bearer {token}"})
+    assert restore_status_bearer_valid(request) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("quarantine_kind", "expected_status"),
+    [("valid", 503), ("malformed", 503), ("dangling_symlink", 503)],
+)
+async def test_request_restore_refuses_outstanding_quarantine_before_audit(
+    tmp_path, monkeypatch, quarantine_kind, expected_status
+) -> None:
+    from jarvis_common.auth import require_admin
+
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    timestamp = "20260721_200000"
+    _seed_complete_point(backup_dir, timestamp)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+    audit = AsyncMock()
+    monkeypatch.setattr(bk, "log_audit", audit)
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+
+    quarantine = trigger / ".outbound-quarantine.json"
+    if quarantine_kind == "valid":
+        _seed_quarantine(trigger)
+    elif quarantine_kind == "malformed":
+        quarantine.write_text("not json")
+    else:
+        quarantine.symlink_to(trigger / "missing-target")
+
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/admin/backups/restore",
+                json={"timestamp": timestamp, "confirm": "RESTORE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert response.status_code == expected_status, response.text
+    audit.assert_not_awaited()
+    assert not os.path.lexists(trigger / ".restore_request.json")
+    assert not os.path.lexists(trigger / ".restore_status_token.json")
+
+
+@pytest.mark.asyncio
+async def test_request_restore_refuses_an_active_lifecycle_operation_before_audit(
+    tmp_path, monkeypatch
+) -> None:
+    from jarvis_common.auth import require_admin
+
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    backup_dir = tmp_path / "backups"
+    lifecycle_dir = backup_dir / ".lifecycle"
+    lifecycle_dir.mkdir(parents=True)
+    (lifecycle_dir / "operation.state").write_text("restore\n")
+    timestamp = "20260721_200000"
+    _seed_complete_point(backup_dir, timestamp)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+    audit = AsyncMock()
+    monkeypatch.setattr(bk, "log_audit", audit)
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/admin/backups/restore",
+                json={"timestamp": timestamp, "confirm": "RESTORE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert response.status_code == 409, response.text
+    assert "lifecycle operation is already active" in response.json()["detail"]
+    audit.assert_not_awaited()
+    assert not os.path.lexists(trigger / ".restore_request.json")
+    assert not os.path.lexists(trigger / ".restore_status_token.json")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_restore_requests_keep_the_winners_token_record(
+    tmp_path, monkeypatch
+) -> None:
+    from jarvis_common.auth import require_admin
+
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    timestamp = "20260721_200000"
+    _seed_complete_point(backup_dir, timestamp)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+
+    both_audited = asyncio.Event()
+    audit_count = 0
+
+    async def synchronized_audit(*args, **kwargs) -> None:
+        nonlocal audit_count
+        audit_count += 1
+        if audit_count == 2:
+            both_audited.set()
+        await both_audited.wait()
+
+    monkeypatch.setattr(bk, "log_audit", synchronized_audit)
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            responses = await asyncio.gather(
+                client.post(
+                    "/api/admin/backups/restore",
+                    json={"timestamp": timestamp, "confirm": "RESTORE"},
+                ),
+                client.post(
+                    "/api/admin/backups/restore",
+                    json={"timestamp": timestamp, "confirm": "RESTORE"},
+                ),
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    accepted = [response for response in responses if response.status_code == 202]
+    refused = [response for response in responses if response.status_code == 409]
+    assert len(accepted) == 1
+    assert len(refused) == 1
+    sentinel = json.loads((trigger / ".restore_request.json").read_text())
+    token_record = json.loads(restore_status_token_file().read_text())
+    assert sentinel["restore_id"] == accepted[0].json()["restore_id"]
+    assert token_record["restore_id"] == accepted[0].json()["restore_id"]
+    assert sentinel["requested_at"] == token_record["requested_at"]
+
+
+def _acknowledgement(restore_id: str = _RESTORE_ID):
+    return bk.RestoreAcknowledgement(
+        restore_id=restore_id,
+        source="inbox",
+        confirm=bk.RESTORE_ACKNOWLEDGEMENT_PHRASE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_bearer_atomically_acknowledges_and_replay_fails(
+    tmp_path, monkeypatch
+) -> None:
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    quarantine = _seed_quarantine(trigger)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    token = "current-acknowledgement-token"
+    assert bk._write_status_token(
+        token,
+        restore_id=_RESTORE_ID,
+        source="inbox",
+        requested_at=_REQUESTED_AT,
+    )
+    monkeypatch.setattr(app.state, "db_pool", _DeadPool(), raising=False)
+    app.state.limiter.enabled = False
+    with configure_contract_api_key(monkeypatch):
+        try:
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    _ACKNOWLEDGE_PATH,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=_acknowledgement().model_dump(),
+                )
+                replay = await client.post(
+                    _ACKNOWLEDGE_PATH,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=_acknowledgement().model_dump(),
+                )
+        finally:
+            app.state.limiter.enabled = True
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "acknowledged", "restore_id": _RESTORE_ID}
+    assert not os.path.lexists(quarantine)
+    assert not os.path.lexists(restore_status_token_file())
+    assert replay.status_code in (401, 403), replay.text
+
+
+@pytest.mark.asyncio
+async def test_acknowledgement_failure_after_token_consume_keeps_quarantine(
+    tmp_path, monkeypatch
+) -> None:
+    from pathlib import Path
+
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    quarantine = _seed_quarantine(trigger)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    token = "consume-before-commit-token"
+    assert bk._write_status_token(
+        token,
+        restore_id=_RESTORE_ID,
+        source="inbox",
+        requested_at=_REQUESTED_AT,
+    )
+
+    original_unlink = Path.unlink
+
+    def fail_quarantine_remove(path, *args, **kwargs) -> None:
+        if path == quarantine:
+            raise OSError("simulated quarantine unlink failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_quarantine_remove)
+    monkeypatch.setattr(app.state, "db_pool", _DeadPool(), raising=False)
+    app.state.limiter.enabled = False
+    with configure_contract_api_key(monkeypatch):
+        try:
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    _ACKNOWLEDGE_PATH,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=_acknowledgement().model_dump(),
+                )
+        finally:
+            app.state.limiter.enabled = True
+
+    assert response.status_code == 503, response.text
+    assert os.path.lexists(quarantine)
+    assert not os.path.lexists(restore_status_token_file())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    ["wrong_token", "wrong_id", "local_source", "expired", "malformed", "prior_restore"],
+)
+async def test_bearer_acknowledgement_rejects_unbound_or_invalid_state(
+    tmp_path, monkeypatch, scenario
+) -> None:
+    from paper_ingestion.main import app
+
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    quarantine = _seed_quarantine(trigger)
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    token = "bound-token"
+    source = "local" if scenario == "local_source" else "inbox"
+    requested_at = "2026-07-20T20:00:00+00:00" if scenario == "prior_restore" else _REQUESTED_AT
+    assert bk._write_status_token(
+        token,
+        restore_id=_RESTORE_ID,
+        source=source,
+        requested_at=requested_at,
+    )
+    token_record = restore_status_token_file()
+    if scenario == "expired":
+        data = json.loads(token_record.read_text())
+        data["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        token_record.write_text(json.dumps(data))
+    elif scenario == "malformed":
+        token_record.write_text("not json")
+
+    presented = "wrong-token" if scenario == "wrong_token" else token
+    restore_id = "fedcba9876543210fedcba9876543210" if scenario == "wrong_id" else _RESTORE_ID
+    monkeypatch.setattr(app.state, "db_pool", _DeadPool(), raising=False)
+    app.state.limiter.enabled = False
+    with configure_contract_api_key(monkeypatch):
+        try:
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    _ACKNOWLEDGE_PATH,
+                    headers={"Authorization": f"Bearer {presented}"},
+                    json=_acknowledgement(restore_id).model_dump(),
+                )
+        finally:
+            app.state.limiter.enabled = True
+
+    assert response.status_code in (401, 403, 409), response.text
+    assert os.path.lexists(quarantine)
+    assert os.path.lexists(token_record)
+
+
+# ---------------------------------------------------------------------------
+# Off-host upload grant used by the restore uploader.
 # ---------------------------------------------------------------------------
 
 
@@ -305,11 +903,11 @@ def test_write_upload_grant_persists_only_hash_0644(tmp_path, monkeypatch) -> No
 
     f = bk._UPLOAD_GRANT
     persisted = json.loads(f.read_text())
-    # Only the hash + expiry are persisted — never the raw token.
+    # Server storage contains the hash and expiry, not the raw token.
     assert set(persisted) == {"sha256", "expires_at"}
     assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
     assert token not in f.read_text()
-    # 0644 (NOT 0600): the SEPARATE uploader container reads it over backup_trigger:ro.
+    # The uploader reads this non-secret hash record through its read-only mount.
     assert (f.stat().st_mode & 0o777) == 0o644
     expires = datetime.fromisoformat(persisted["expires_at"])
     assert timedelta(minutes=25) < expires - datetime.now(UTC) <= timedelta(minutes=30)
@@ -342,7 +940,7 @@ async def test_upload_grant_endpoint_returns_token_once_and_audits(tmp_path, mon
     body = resp.json()
     token = body["grant_token"]
     assert token and body["expires_in_seconds"] == 1800
-    # The raw token is returned ONCE; only its hash + expiry touch disk.
+    # The response contains the raw token once; disk storage contains its hash and expiry.
     persisted = json.loads(grant_file.read_text())
     assert set(persisted) == {"sha256", "expires_at"}
     assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()

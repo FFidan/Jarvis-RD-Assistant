@@ -5,6 +5,8 @@ papers without a paper_user_state row (LEFT JOIN NULL) are treated as
 state='inbox' — the freshly-discovered default.
 """
 
+from jarvis_common.paper_visibility import paper_visibility_sql
+
 # Per-view predicates. Used by routers/feed.py, list_papers,
 # get_feed_counts, and other surface-bound queries.
 VIEW_PREDICATES: dict[str, str] = {
@@ -28,14 +30,18 @@ EXCLUDED_STATE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
 
 
 def paper_visible_sql(param_index: int, alias: str = "p") -> str:
-    """SQL fragment: a paper row is visible to the bound user_id.
+    """Return the centralized paper-visibility predicate for service SQL.
 
-    Emits ``(<alias>.discovered_by IS NULL OR <alias>.discovered_by = $N)`` —
-    i.e. unattributed stubs plus papers the caller discovered. The user_library
-    membership branch is composed at each call site (it varies by surrounding
-    query shape).
+    Parameters
+    ----------
+    param_index : int
+        One-based PostgreSQL placeholder index for the caller's user ID.
+    alias : str
+        Trusted alias for the `papers` relation.
 
-    Both ``param_index`` (a literal int) and ``alias`` (a SQL identifier) are
-    caller-controlled, never user input — f-string interpolation is safe.
+    Returns
+    -------
+    str
+        Persisted public scope or explicit caller-library membership.
     """
-    return f"({alias}.discovered_by IS NULL OR {alias}.discovered_by = ${param_index})"
+    return paper_visibility_sql(param_index, alias=alias)

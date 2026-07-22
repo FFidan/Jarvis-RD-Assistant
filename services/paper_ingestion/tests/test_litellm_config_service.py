@@ -953,6 +953,19 @@ async def test_get_litellm_deployments_keeps_deployment_with_null_model_info():
     assert result[0].model_info.id == ""
 
 
+@pytest.mark.asyncio
+async def test_litellm_admin_sink_refuses_quarantine_before_http(monkeypatch, tmp_path):
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+    from paper_ingestion.services.litellm_config import get_litellm_deployments
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await get_litellm_deployments()
+
+
 async def test_parse_model_target_strips_latest_splits_cloud_and_validates():
     from paper_ingestion.services.litellm_config import _parse_model_target
 

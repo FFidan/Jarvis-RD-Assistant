@@ -43,11 +43,14 @@ from paper_ingestion.integrations._zotero_poll import (  # noqa: F401
     _ingest_new_item,
     _link_existing_by_doi,
     _load_poll_config,
+    _migrate_unambiguous_legacy_identity,
+    _namespace_from_poll_config,
     _parse_zotero_item,
     _ParsedZoteroItem,
     _persist_poll_cursor,
     _PollConfig,
     _safe_parse_zotero_item,
+    _ZoteroLibraryNamespace,
     poll_zotero_library,
 )
 from paper_ingestion.integrations._zotero_push import (  # noqa: F401

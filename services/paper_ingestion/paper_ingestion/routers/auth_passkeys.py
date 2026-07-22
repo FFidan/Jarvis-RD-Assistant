@@ -18,9 +18,9 @@ via :func:`current_user_id_strict`, taking ``user_id`` from the session cookie a
 NEVER from the request body (registering a credential is account-scoped).
 
 Origin/rp_id are matched against a server-side allowlist rather than derived from
-proxy headers: Caddy rewrites Host→localhost and does not forward a trustworthy
-X-Forwarded-Host, so request.url/Host would be attacker-influenceable. See
-:func:`_match_origin`.
+proxy headers. The local Caddy preserves the browser Host and port, while the
+public Caddy rewrites Host to localhost; neither makes arbitrary client proxy
+headers a trustworthy WebAuthn origin. See :func:`_match_origin`.
 """
 
 from __future__ import annotations

@@ -99,13 +99,23 @@ const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
 const zoteroPushWarning = (status: string): string =>
   ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
 
-/** Failed, skipped and total paper counts from a `papers.process_library` result. */
+/** Failed, skipped, untouched and total counts from a process-library result. */
 const libraryCounts = (result: Job['result']) => {
-  const r = (result ?? {}) as { total?: number; errors?: unknown[]; blocked?: unknown[] };
+  const r = (result ?? {}) as {
+    total?: number;
+    remaining?: number;
+    errors?: unknown[];
+    blocked?: unknown[];
+  };
   const failed = Array.isArray(r.errors) ? r.errors.length : 0;
   const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const remaining = typeof r.remaining === 'number'
+    && Number.isInteger(r.remaining)
+    && r.remaining >= 0
+    ? r.remaining
+    : 0;
   const total = typeof r.total === 'number' ? r.total : failed + skipped;
-  return { failed, skipped, total };
+  return { failed, skipped, remaining, total };
 };
 
 /** The count fragments a library warning names, omitting the zero ones. */
@@ -123,8 +133,9 @@ const libraryOutcomeParts = (failed: number, skipped: number): string[] => {
  * `partial` result gets a warning naming both counts.
  */
 const libraryPartialWarning = (result: Job['result']): string => {
-  const { failed, skipped, total } = libraryCounts(result);
+  const { failed, skipped, remaining, total } = libraryCounts(result);
   const parts = libraryOutcomeParts(failed, skipped);
+  if (remaining > 0) parts.push(`${remaining} not processed`);
   const detail = parts.length > 0 ? parts.join(', ') : 'no work completed';
   return `Library processing finished - ${detail} of ${total}; open Jobs for details`;
 };
@@ -135,9 +146,9 @@ const libraryPartialWarning = (result: Job['result']): string => {
  * had already failed or been skipped before the stop.
  */
 const libraryCancelledWarning = (result: Job['result']): string => {
-  const { failed, skipped, total } = libraryCounts(result);
+  const { failed, skipped, remaining, total } = libraryCounts(result);
   const parts = [
-    `stopped before finishing ${total} papers`,
+    remaining > 0 ? `${remaining} not processed` : `stopped before finishing ${total} papers`,
     ...libraryOutcomeParts(failed, skipped),
   ];
   return `Library processing was cancelled - ${parts.join(', ')}; open Jobs for details`;

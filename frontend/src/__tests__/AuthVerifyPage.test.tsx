@@ -11,7 +11,7 @@
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthVerifyPage, __resetVerifyDedupeForTests } from '@/pages/AuthVerifyPage';
 
 const verifyMock = vi.fn();
@@ -44,10 +44,19 @@ vi.mock('@/stores/auth-store', () => ({
 }));
 
 function renderWithRoute(initialUrl: string) {
+  function LocationProbe() {
+    const location = useLocation();
+    return (
+      <span data-testid="verify-location">
+        {location.pathname}{location.search}{location.hash}
+      </span>
+    );
+  }
+
   return render(
     <MemoryRouter initialEntries={[initialUrl]}>
       <Routes>
-        <Route path="/auth/verify" element={<AuthVerifyPage />} />
+        <Route path="/auth/verify" element={<><AuthVerifyPage /><LocationProbe /></>} />
         <Route path="/" element={<div>HOME</div>} />
         <Route path="/login" element={<div>LOGIN</div>} />
       </Routes>
@@ -57,7 +66,8 @@ function renderWithRoute(initialUrl: string) {
 
 describe('AuthVerifyPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    verifyMock.mockReset();
+    loginWithSessionMock.mockReset();
     authState = { isAuthenticated: false, isSessionValid: () => false };
     __resetVerifyDedupeForTests();
   });
@@ -75,7 +85,7 @@ describe('AuthVerifyPage', () => {
 
   it('on success, calls loginWithSession with returned user and navigates to /', async () => {
     verifyMock.mockResolvedValueOnce({ id: 7, email: 'a@b.com', role: 'admin' });
-    renderWithRoute('/auth/verify?token=abcdefghijklmnop');
+    renderWithRoute('/auth/verify#token=abcdefghijklmnop');
 
     await waitFor(() => {
       expect(verifyMock).toHaveBeenCalledWith('abcdefghijklmnop');
@@ -89,6 +99,27 @@ describe('AuthVerifyPage', () => {
     });
     await waitFor(() => {
       expect(screen.getByText('HOME')).toBeInTheDocument();
+    });
+  });
+
+  it('accepts a fragment token and removes it from the address before verification finishes', async () => {
+    verifyMock.mockImplementationOnce(() => new Promise(() => {}));
+    renderWithRoute('/auth/verify#token=fragment-secret');
+
+    await waitFor(() => expect(verifyMock).toHaveBeenCalledWith('fragment-secret'));
+    await waitFor(() => {
+      expect(screen.getByTestId('verify-location')).toHaveTextContent('/auth/verify');
+      expect(screen.getByTestId('verify-location')).not.toHaveTextContent('fragment-secret');
+    });
+  });
+
+  it('keeps accepting old query-token links and strips their token immediately', async () => {
+    verifyMock.mockImplementationOnce(() => new Promise(() => {}));
+    renderWithRoute('/auth/verify?token=legacy-query-secret');
+
+    await waitFor(() => expect(verifyMock).toHaveBeenCalledWith('legacy-query-secret'));
+    await waitFor(() => {
+      expect(screen.getByTestId('verify-location')).not.toHaveTextContent('legacy-query-secret');
     });
   });
 

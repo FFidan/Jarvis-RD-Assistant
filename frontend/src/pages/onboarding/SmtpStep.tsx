@@ -98,7 +98,7 @@ export function SmtpStep({
       description={
         singleUser
           ? "Single-user install — you log in with your API key, so email is optional. Configure SMTP only if you plan to add more users later."
-          : 'Used to send magic-link login emails. Skippable — dev mode logs links to stdout instead.'
+          : 'Optional. Without SMTP, finish setup and copy one-time sign-in links from Admin → Users. Family members can add passkeys after signing in.'
       }
       footer={
         <>

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { setNavigate } from '@/lib/navigate-bridge';
@@ -100,6 +100,8 @@ function NavigateBridgeRegistrar() {
 
 export function App() {
   const { isAuthenticated, isSessionValid, expireSession, hydrateFromCookie } = useAuthStore();
+  const { pathname } = useLocation();
+  const isMagicLinkLanding = pathname === '/auth/verify';
 
   // Single onboarding gate (Task A2 — wizard consolidation). Keyed on the
   // PRE-AUTH /api/setup/status (reachable with no session, HTTP 200) so the
@@ -129,7 +131,7 @@ export function App() {
   } = useQuery({
     queryKey: QUERY_KEYS.account.self(),
     queryFn: fetchAccount,
-    enabled: !isAuthenticated,
+    enabled: !isAuthenticated && !isMagicLinkLanding,
     retry: (count, err) => !(err instanceof ApiError && err.status === 401) && count < 2,
   });
 

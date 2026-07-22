@@ -10,22 +10,26 @@ import { Button } from '@/components/ui/button';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { kindLabel } from '@/lib/labels/jobKinds';
 
-function statusColor(status: Job['status']): string {
+type DisplayStatus = Job['status'] | 'partial';
+
+function statusColor(status: DisplayStatus): string {
   switch (status) {
     case 'queued': return 'text-muted-foreground';
     case 'running': return 'text-blue-500';
     case 'succeeded': return 'text-green-500';
+    case 'partial': return 'text-[var(--status-warn)]';
     case 'failed': return 'text-destructive';
     case 'cancelled': return 'text-muted-foreground';
     default: return 'text-muted-foreground';
   }
 }
 
-function statusLabel(status: Job['status']): string {
+function statusLabel(status: DisplayStatus): string {
   switch (status) {
     case 'queued': return 'Queued';
     case 'running': return 'Running';
     case 'succeeded': return 'Done';
+    case 'partial': return 'Partial';
     case 'failed': return 'Failed';
     case 'cancelled': return 'Cancelled';
     default: return status;
@@ -35,26 +39,42 @@ function statusLabel(status: Job['status']): string {
 /**
  * A job that reached `succeeded` but reports a `partial` or `cancelled` result
  * (e.g. `papers.process_library`) left work undone. Returns a short
- * "N failed, M skipped of T" line, or null for a plain success — a cancelled run
- * reports it too, so failures accrued before the stop stay visible.
+ * "N failed, M skipped, R not processed of T" line, or null for a plain
+ * success. Older results without a trustworthy remaining count keep their
+ * existing summary.
  */
 function outcomeSummary(job: Job): string | null {
-  const r = (job.result ?? {}) as { status?: string; total?: number; errors?: unknown[]; blocked?: unknown[] };
+  const r = (job.result ?? {}) as {
+    status?: string;
+    total?: number;
+    remaining?: number;
+    errors?: unknown[];
+    blocked?: unknown[];
+  };
   if (job.status !== 'succeeded') return null;
   if (r.status !== 'partial' && r.status !== 'cancelled') return null;
   const failed = Array.isArray(r.errors) ? r.errors.length : 0;
   const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const remaining = typeof r.remaining === 'number'
+    && Number.isInteger(r.remaining)
+    && r.remaining >= 0
+    ? r.remaining
+    : 0;
   const total = typeof r.total === 'number' ? r.total : failed + skipped;
-  return `${failed} failed, ${skipped} skipped of ${total}`;
+  const remainingSummary = remaining > 0 ? `, ${remaining} not processed` : '';
+  return `${failed} failed, ${skipped} skipped${remainingSummary} of ${total}`;
 }
 
 /**
- * A run stopped by cancellation still reaches `succeeded` — it returned a
- * `cancelled` result rather than raising — so the pill must read Cancelled.
+ * Some handlers return a terminal outcome instead of raising. Keep the API job
+ * status unchanged while showing users whether work completed only partially
+ * or stopped through cancellation.
  */
-function effectiveStatus(job: Job): Job['status'] {
+function effectiveStatus(job: Job): DisplayStatus {
   const resultStatus = (job.result as { status?: string } | null)?.status;
-  return job.status === 'succeeded' && resultStatus === 'cancelled' ? 'cancelled' : job.status;
+  if (job.status !== 'succeeded') return job.status;
+  if (resultStatus === 'partial' || resultStatus === 'cancelled') return resultStatus;
+  return job.status;
 }
 
 interface JobRowProps {
@@ -123,7 +143,13 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
       )}
 
       {summary && (
-        <p className="text-xs text-[var(--status-warn)] truncate">{summary}</p>
+        <p
+          role="status"
+          aria-label={`Incomplete: ${summary}`}
+          className="text-xs text-[var(--status-warn)] truncate"
+        >
+          {summary}
+        </p>
       )}
     </div>
   );

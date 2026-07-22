@@ -1,3 +1,5 @@
+"""Model-assignment validation, Telegram reload, and quarantine tests."""
+
 from __future__ import annotations
 
 import logging
@@ -37,6 +39,30 @@ def _patch_settings(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_reload_telegram_nudges_refuses_quarantine_before_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Quarantine prevents Telegram reload from reading the restored API key."""
+    import paper_ingestion.services.model_assignment as model_assignment
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    def unexpected_settings_read():
+        raise AssertionError("quarantine must be checked before settings are loaded")
+
+    monkeypatch.setattr(
+        model_assignment,
+        "get_telegram_settings",
+        unexpected_settings_read,
+    )
+
+    await model_assignment.reload_telegram_nudges()
+
+
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [403, 500])
@@ -66,18 +92,8 @@ async def test_http_200_no_warning(monkeypatch, caplog):
     assert not warning_records, f"Unexpected warning on 200: {warning_records}"
 
 
-# ---------------------------------------------------------------------------
-# write_config -> validate_model_assignment: registry drift must not become
-# an unhandled 500 (Task 3.4).
-#
-# validate_model_assignment (model_assignment.py:104) calls
-# cloud_provider_key_present, which calls provider_for_id
-# (llm_provider_registry.py:172-177). provider_for_id raises a bare
-# ValueError for a provider id absent from PROVIDERS_BY_ID; model_assignment.py
-# does not catch it, so config_write.py's write_config (the config-write
-# boundary the settings router uses) must be the one that converts it into a
-# clean HTTPException(400) instead of letting it surface as an unhandled 500.
-# ---------------------------------------------------------------------------
+# Registry drift is reported as a validation error at the configuration-write
+# boundary instead of surfacing as an internal server error.
 
 
 def _patch_catalog_entry(monkeypatch: pytest.MonkeyPatch, *, provider: str) -> None:

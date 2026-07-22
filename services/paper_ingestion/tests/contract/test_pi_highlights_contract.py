@@ -1,14 +1,14 @@
 """Raw-PDF endpoint + spatial-highlight CRUD contract tests (P7b.1).
 
 Live-PG, real-auth. Covers:
-  GET /api/pdfs/{id}                       — shared-corpus visibility + guards
+  GET /api/pdfs/{id}                       — persisted visibility + guards
   POST/GET /api/papers/{id}/highlights     — per-user CRUD + tenancy
   PATCH/DELETE /api/highlights/{id}        — owner-only mutation (opaque 404)
 
 The PDF storage dir is redirected to tmp_path so FileResponse serves fixture
-files. Visibility mirrors the snapshots endpoint: public-source papers are
-served to any authenticated user; LOCAL papers are scoped to the caller's
-library, with an opaque 404 (never 403) for everything out of scope.
+files. Visibility mirrors the snapshots endpoint: persisted-public papers are
+served to authenticated users; private papers require caller-library
+membership, with an opaque 404 (never 403) for everything out of scope.
 """
 
 from __future__ import annotations
@@ -82,16 +82,31 @@ async def _seed_private_paper(conn, user_id: int, external_id: str, source_type:
     )
 
 
+async def _seed_public_paper(conn, external_id: str) -> int:
+    """Insert a persisted-public scholarly paper with no library membership."""
+    return int(
+        await conn.fetchval(
+            """INSERT INTO papers (
+                   external_id, source_type, title, authors, url, visibility_scope
+               )
+               VALUES ($1, 'arxiv', 'Public Paper', ARRAY['A'], $2, 'public')
+               RETURNING id""",
+            external_id,
+            f"https://example.test/{external_id}",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # GET /api/pdfs/{id}
 # ---------------------------------------------------------------------------
 
 
 async def test_pdf_public_source_served_to_non_owner(
-    contract_two_users, _pi_app_with_pool, _configure_api_key, tmp_path
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, tmp_path
 ):
-    """A public-source paper's PDF is served (200) to a non-owner (shared corpus)."""
-    paper_id = contract_two_users.paper_id_a  # source_type='arxiv', discovered_by=A
+    """A persisted-public paper's PDF is served to another authenticated user."""
+    paper_id = await _seed_public_paper(contract_conn, "hl-public")
     (tmp_path / f"{paper_id}.pdf").write_bytes(_MIN_PDF_BYTES)
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
@@ -160,10 +175,10 @@ async def test_pdf_zotero_unauthorized_is_opaque_404(
     )
 
 
-async def test_pdf_zotero_owned_by_discoverer_served_200(
+async def test_pdf_zotero_discoverer_without_library_denied(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, tmp_path
 ):
-    """A ZOTERO paper is served (200) to the caller who discovered it."""
+    """Discoverer attribution alone does not authorize a private ZOTERO PDF."""
     paper_id = await _seed_private_paper(
         contract_conn, contract_two_users.user_a_id, "hl-zotero-owned", "zotero"
     )
@@ -172,9 +187,7 @@ async def test_pdf_zotero_owned_by_discoverer_served_200(
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get(f"/api/pdfs/{paper_id}")
 
-    assert resp.status_code == 200, resp.text[:300]
-    assert resp.headers["content-type"] == "application/pdf"
-    assert resp.content.startswith(b"%PDF-")
+    assert resp.status_code == 404, resp.text[:300]
 
 
 async def test_pdf_private_in_caller_library_served_200(
@@ -258,10 +271,10 @@ async def test_highlights_crud_roundtrip_scoped_per_user(
 
 
 async def test_highlights_tenancy_isolation(
-    contract_two_users, _pi_app_with_pool, _configure_api_key
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
     """User B cannot list, patch, or delete user A's highlight (opaque 404s)."""
-    paper_id = contract_two_users.paper_id_a  # public source: visible to both users
+    paper_id = await _seed_public_paper(contract_conn, "hl-public-tenancy")
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         created = await c.post(
@@ -271,7 +284,7 @@ async def test_highlights_tenancy_isolation(
         hid = created.json()["id"]
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
-        # B can view the shared-corpus PDF but sees none of A's highlights.
+        # B can view the persisted-public paper but sees none of A's highlights.
         listed = await c.get(f"/api/papers/{paper_id}/highlights")
         assert listed.status_code == 200, listed.text[:300]
         assert listed.json() == [], f"IDOR leak: B saw A's highlights: {listed.json()}"

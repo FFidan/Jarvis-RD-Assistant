@@ -23,6 +23,7 @@ import {
   updateUserRole,
   deleteUser,
   restoreUser,
+  transferOwner,
   sendSignInLink,
   getUserPasskeyCount,
   revokeAllUserPasskeys,
@@ -59,7 +60,16 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, Trash2, Shield, User, Send, RotateCcw, KeyRound } from 'lucide-react';
+import {
+  ArrowRightLeft,
+  UserPlus,
+  Trash2,
+  Shield,
+  User,
+  Send,
+  RotateCcw,
+  KeyRound,
+} from 'lucide-react';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string | null): string {
@@ -150,8 +160,10 @@ function InviteModal({ open, onClose }: InviteModalProps) {
         {manualLink ? (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground" role="status">
-              SMTP is not configured, so the invite email could not be sent. Share
-              this sign-in link with the user manually — it expires in 24 hours.
+              {smtpConfigured === false
+                ? 'Automatic email is not configured.'
+                : 'JARVIS could not deliver the invite email.'}{' '}
+              Share this sign-in link with the user manually — it expires in 24 hours.
             </p>
             <div className="space-y-2">
               <Label htmlFor="invite-link">Sign-in link</Label>
@@ -314,7 +326,7 @@ function PasskeyCell({ user }: { user: AdminUser }) {
             <AlertDialogTitle>Revoke all passkeys</AlertDialogTitle>
             <AlertDialogDescription>
               Remove every passkey for <strong>{user.email}</strong>? They&apos;ll need to
-              sign in with a magic link or API key and re-register a passkey. Use the
+              sign in with a fresh link and re-register a passkey. Use the
               &ldquo;Send sign-in link&rdquo; action afterwards to get them back in.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -340,6 +352,9 @@ function PasskeyCell({ user }: { user: AdminUser }) {
 export function AdminUsersPage() {
   const currentUser = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
+  const smtpConfigured = queryClient.getQueryData<FirstRunStatus>(
+    QUERY_KEYS.setup.firstRun(),
+  )?.smtp_configured;
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
@@ -352,6 +367,9 @@ export function AdminUsersPage() {
   // only the targeted row's button is disabled, not the whole table.
   const [pendingSendLinkUserId, setPendingSendLinkUserId] = useState<number | null>(null);
   const [pendingRestoreUserId, setPendingRestoreUserId] = useState<number | null>(null);
+  const [pendingTransfer, setPendingTransfer] = useState<AdminUser | null>(null);
+  const [transferConfirmation, setTransferConfirmation] = useState('');
+  const [transferError, setTransferError] = useState<string | null>(null);
   const [manualSignInLink, setManualSignInLink] = useState<{ email: string; link: string } | null>(
     null,
   );
@@ -423,6 +441,39 @@ export function AdminUsersPage() {
     },
   });
 
+  const transferMutation = useMutation({
+    mutationFn: ({ user, confirmation }: { user: AdminUser; confirmation: string }) =>
+      transferOwner(user.id, confirmation),
+    onSuccess: (_data, { user }) => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
+      toast.success(`Ownership transferred to ${user.email}`);
+      setPendingTransfer(null);
+      setTransferConfirmation('');
+      setTransferError(null);
+    },
+    onError: (err) => {
+      setTransferError(
+        err instanceof ApiError ? err.detail : 'Failed to transfer ownership.',
+      );
+    },
+  });
+
+  const ownerRecord = users?.find((user) => user.owner_state != null);
+  const currentOwner = users?.find((user) => user.is_owner);
+  const ownerSource = ownerRecord?.owner_source;
+  const ownerState = ownerRecord?.owner_state;
+  const canTransferOwnership =
+    ownerSource === 'database' &&
+    ownerState === 'valid' &&
+    currentOwner?.id === currentUser?.id;
+
+  function closeTransferDialog() {
+    if (transferMutation.isPending) return;
+    setPendingTransfer(null);
+    setTransferConfirmation('');
+    setTransferError(null);
+  }
+
   if (isLoading) {
     return (
       <div className="p-6 text-sm text-muted-foreground">Loading users…</div>
@@ -457,6 +508,28 @@ export function AdminUsersPage() {
         </p>
       )}
 
+      {ownerSource === 'environment' && (
+        <div className="rounded-md border bg-muted/40 px-4 py-3 text-sm" role="status">
+          Ownership is managed on the host with OWNER_USER_ID. Change that value and restart
+          JARVIS to choose a different owner.
+        </div>
+      )}
+
+      {ownerState != null && ownerState !== 'valid' && ownerSource !== 'environment' && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm" role="status">
+          JARVIS does not have a valid instance owner. On the server, run{' '}
+          <code>jarvis-research owner status</code>, then{' '}
+          <code>jarvis-research owner set &lt;admin-email&gt;</code>.
+        </div>
+      )}
+
+      {ownerState === 'valid' && (
+        <p className="text-sm text-muted-foreground">
+          The operations key can recover only the instance owner account. It is not a shared
+          family password.
+        </p>
+      )}
+
       <div className="rounded-md border overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -482,6 +555,11 @@ export function AdminUsersPage() {
                         you
                       </Badge>
                     )}
+                    {user.is_owner && (
+                      <Badge variant="outline" className="ml-2 text-xs">
+                        instance owner
+                      </Badge>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Select
@@ -489,7 +567,7 @@ export function AdminUsersPage() {
                       onValueChange={(v) =>
                         roleMutation.mutate({ userId: user.id, role: v as 'user' | 'admin' })
                       }
-                      disabled={isSelf || pendingRoleUserId === user.id}
+                      disabled={isSelf || user.is_owner || pendingRoleUserId === user.id}
                     >
                       <SelectTrigger className="w-28 h-8 text-xs" aria-label={`Role for ${user.email}`}>
                         <SelectValue />
@@ -548,14 +626,36 @@ export function AdminUsersPage() {
                           >
                             <Send className="h-4 w-4" />
                           </Button>
+                          {canTransferOwnership && user.role === 'admin' && !isSelf && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={() => {
+                                setPendingTransfer(user);
+                                setTransferConfirmation('');
+                                setTransferError(null);
+                              }}
+                              aria-label={`Transfer ownership to ${user.email}`}
+                              title={`Transfer ownership to ${user.email}`}
+                            >
+                              <ArrowRightLeft className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            disabled={isSelf || pendingDeleteUserId === user.id}
+                            disabled={isSelf || user.is_owner || pendingDeleteUserId === user.id}
                             onClick={() => setPendingDelete(user)}
                             aria-label={`Remove ${user.email}`}
-                            title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}
+                            title={
+                              user.is_owner
+                                ? 'Transfer ownership before removing this account'
+                                : isSelf
+                                  ? 'Cannot remove your own account'
+                                  : `Remove ${user.email}`
+                            }
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -586,6 +686,69 @@ export function AdminUsersPage() {
       />
 
       <Dialog
+        open={pendingTransfer !== null}
+        onOpenChange={(open) => !open && closeTransferDialog()}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transfer ownership</DialogTitle>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!pendingTransfer || transferConfirmation !== pendingTransfer.email) return;
+              transferMutation.mutate({
+                user: pendingTransfer,
+                confirmation: transferConfirmation,
+              });
+            }}
+          >
+            <p className="text-sm text-muted-foreground">
+              This moves operations-key recovery to {pendingTransfer?.email}. Your own passkeys
+              and sign-in links continue to work.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="owner-transfer-confirmation">
+                Type {pendingTransfer?.email} to confirm
+              </Label>
+              <Input
+                id="owner-transfer-confirmation"
+                value={transferConfirmation}
+                onChange={(event) => setTransferConfirmation(event.target.value)}
+                autoComplete="off"
+                autoFocus
+              />
+            </div>
+            {transferError && (
+              <p className="text-sm text-destructive" role="alert">
+                {transferError}
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeTransferDialog}
+                disabled={transferMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  transferMutation.isPending ||
+                  transferConfirmation !== pendingTransfer?.email
+                }
+              >
+                {transferMutation.isPending ? 'Transferring…' : 'Transfer ownership'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={manualSignInLink !== null}
         onOpenChange={(v) => !v && setManualSignInLink(null)}
       >
@@ -595,8 +758,10 @@ export function AdminUsersPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground" role="status">
-              SMTP is not configured, so the sign-in email could not be sent. Share
-              this link with {manualSignInLink?.email} manually — it expires in 15 minutes.
+              {smtpConfigured === false
+                ? 'Automatic email is not configured.'
+                : 'JARVIS could not deliver the sign-in email.'}{' '}
+              Share this link with {manualSignInLink?.email} manually — it expires in 15 minutes.
             </p>
             <div className="space-y-2">
               <Label htmlFor="signin-link">Sign-in link</Label>

@@ -1,15 +1,9 @@
-"""SMTP delivery for transactional emails (magic-link, future invites).
+"""Plain-text SMTP delivery and configuration checks for transactional email.
 
-Ships ``send_magic_link`` and the public ``smtp_configured`` probe.
-Plain-text only by design (better deliverability, simpler debugging,
-no template engine dependency).
-
-Dev-mode fallback: when SMTP is unconfigured (``smtp_configured`` returns
-``False``) OR ``DEV_MODE=true``, the magic-link is NOT delivered anywhere
-visible to end users.  It is NOT logged to stdout — only a SHA-256 hash of
-the recipient email is recorded in ``system_events`` (category=auth,
-message='magic_link_dev_mode') so the Logs Live tab can surface it.
-The raw link (a bearer token) is never written to any log.
+When SMTP is unavailable or development log-only mode is enabled, magic-link
+delivery is suppressed. The raw link is never logged; a SHA-256 recipient hash
+may be recorded in ``system_events`` so operators can correlate the event
+without storing an address or bearer token.
 """
 
 from __future__ import annotations
@@ -26,6 +20,10 @@ import asyncpg
 
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.event_log import log_event
+from jarvis_common.maintenance import (
+    OutboundEgressBlockedError,
+    ensure_outbound_egress_allowed,
+)
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
@@ -39,7 +37,20 @@ SMTP_SEND_TIMEOUT_SECONDS = 30.0
 
 
 def smtp_tls_flags(port: int) -> tuple[bool, bool]:
-    """(use_tls, start_tls) by port: 465 implicit TLS; 587 STARTTLS; else plaintext."""
+    """Choose implicit TLS or STARTTLS from the SMTP port.
+
+    Parameters
+    ----------
+    port : int
+        SMTP server port.
+
+    Returns
+    -------
+    tuple[bool, bool]
+        ``(use_tls, start_tls)``. Port 465 selects implicit TLS, port 587
+        selects STARTTLS, and other ports select neither.
+
+    """
     return port == 465, port == 587
 
 
@@ -230,7 +241,7 @@ async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
 
 
 async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
-    """True iff a required SMTP field is present but empty.
+    """Return whether a required SMTP field is present but empty.
 
     ``SecretsSettings`` rejects explicit empty SMTP values, so this probe reads
     raw env values to keep the status endpoint diagnostic instead of crashing.
@@ -270,6 +281,7 @@ _REACHABILITY_PROBE_TIMEOUT_SECONDS = 8.0
 _UNREACHABLE_ISSUE = (
     "The mail server is not accepting connections — sign-in emails may not be delivered."
 )
+_QUARANTINED_ISSUE = "Mail delivery is disabled until restored credentials are reviewed."
 
 
 async def _probe_relay(eff: _EffectiveSmtp) -> tuple[bool, str | None]:
@@ -282,6 +294,11 @@ async def _probe_relay(eff: _EffectiveSmtp) -> tuple[bool, str | None]:
     failing — the user will not wait that long for a sign-in link anyway).
     Returns ``(reachable, issue)`` with a value-free issue string on any failure.
     """
+    try:
+        ensure_outbound_egress_allowed("SMTP reachability probe")
+    except OutboundEgressBlockedError:
+        return False, _QUARANTINED_ISSUE
+
     # SSRF parity with the live send: refuse a non-public relay unless the
     # operator opted in. A send would be skipped for such a host anyway, so it
     # is effectively unreachable for delivery — and this keeps the probe from
@@ -328,10 +345,28 @@ async def probe_smtp_reachable(pool: asyncpg.Pool | None = None) -> tuple[bool, 
     repeated status polls never reconnect. Never raises; the issue string is
     value-free (no host/port/credentials).
 
-    Safe on any authenticated status/admin/setup surface. It must NEVER be
+    Safe on any authenticated status/admin/setup surface. It must never be
     called inline on the unauthenticated ``request-link`` path — that path's
     shape and timing are the anti-enumeration defense.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool or None
+        Optional pool used to resolve database-backed SMTP settings.
+
+    Returns
+    -------
+    tuple[bool, str or None]
+        Cached reachability and a value-free issue. Quarantine returns
+        ``(False, _QUARANTINED_ISSUE)`` without reading relay credentials or
+        opening a connection.
+
     """
+    try:
+        ensure_outbound_egress_allowed("SMTP reachability probe")
+    except OutboundEgressBlockedError:
+        return False, _QUARANTINED_ISSUE
+
     eff = await _effective_smtp(pool)
     if not eff.deliverable:
         return False, None
@@ -348,12 +383,24 @@ async def probe_smtp_reachable(pool: asyncpg.Pool | None = None) -> tuple[bool, 
 
 
 async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool, list[str]]:
-    """Return ``(deliverable, issues)`` for the EFFECTIVE relay (DB over env).
+    """Return delivery readiness for database-over-environment SMTP settings.
 
     ``deliverable`` mirrors ``_EffectiveSmtp.deliverable`` of the resolved
     config, so an env-only deployment reports healthy (no false warning).
     ``issues`` are value-free, operator-facing strings for the settings UI;
     they never embed a configured value.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool or None
+        Optional pool used to resolve database-backed SMTP settings.
+
+    Returns
+    -------
+    tuple[bool, list[str]]
+        Whether the resolved relay has the minimum delivery fields and any
+        value-free configuration or reachability issues.
+
     """
     eff = await _effective_smtp(pool)
 
@@ -388,8 +435,8 @@ async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool,
         issues.append("The From address is set but the mail server (host) is missing.")
     else:
         issues.append(
-            "No mail relay is configured — sign-in links are written to the server log, "
-            "not emailed."
+            "No mail relay is configured — administrators can create one-time "
+            "sign-in links and share them directly."
         )
     return False, issues
 
@@ -417,13 +464,40 @@ _PLAIN_BODY_TEMPLATE = (
 
 
 class MagicLinkDelivery(StrEnum):
-    """Outcome of a ``send_magic_link`` call so callers act on truth, not inference."""
+    """Non-secret outcome of one attempted magic-link delivery.
+
+    Attributes
+    ----------
+    DELIVERED : MagicLinkDelivery
+        The configured relay accepted the message.
+    DROPPED_UNCONFIGURED : MagicLinkDelivery
+        No deliverable relay was configured.
+    DROPPED_DEV_LOG_ONLY : MagicLinkDelivery
+        Development log-only mode intentionally suppressed delivery.
+    DROPPED_PRIVATE_HOST : MagicLinkDelivery
+        The SSRF guard refused the configured relay host.
+    DROPPED_QUARANTINED : MagicLinkDelivery
+        Post-restore credential review prohibited SMTP use.
+    FAILED : MagicLinkDelivery
+        A delivery attempt failed without exposing recipient or link data.
+
+    """
 
     DELIVERED = auto()
     DROPPED_UNCONFIGURED = auto()
     DROPPED_DEV_LOG_ONLY = auto()
     DROPPED_PRIVATE_HOST = auto()
+    DROPPED_QUARANTINED = auto()
     FAILED = auto()
+
+
+def _magic_link_egress_allowed() -> bool:
+    """Return whether a magic-link delivery may use outbound credentials."""
+    try:
+        ensure_outbound_egress_allowed("magic-link delivery")
+    except OutboundEgressBlockedError:
+        return False
+    return True
 
 
 async def send_magic_link(
@@ -434,32 +508,42 @@ async def send_magic_link(
 ) -> MagicLinkDelivery:
     """Deliver a magic-link email and report the outcome as a ``MagicLinkDelivery``.
 
-    Never raises for a delivery problem: an unconfigured relay, dev-log-only
-    mode, a rejected private host, and a failed send each return a distinct
-    enum member so callers can surface a manual link instead of inferring
-    delivery from mere config presence.
+    Never raises for a delivery problem: quarantine, an unconfigured relay,
+    dev-log-only mode, a rejected private host, and a failed send each return a
+    distinct enum member so callers can distinguish delivery from each refusal
+    or failure.
 
     Parameters
     ----------
-    email:
+    email : str
         Recipient address.
-    link:
+    link : str
         Fully-qualified URL the user clicks to verify (e.g.
         ``https://localhost:3001/auth/verify?token=...``). Constructed by the
         caller to avoid this module knowing about the front-end origin.
-    pool:
+    pool : asyncpg.Pool or None
         Optional asyncpg pool. When supplied and SMTP is unconfigured or
         ``DEV_SMTP_LOG_ONLY=true``, the event is persisted as a
         ``system_events`` row (category=auth, message='magic_link_dev_mode')
         so the Logs Live tab can surface it. Pass ``app.state.db_pool``
         from the request handler.
 
-    Security note: the raw ``link`` (and the embedded token) is **never**
-    logged.  When SMTP is unconfigured the link is silently dropped — only
-    a SHA-256 hash of the recipient email is recorded so operators can
-    correlate events without the log becoming a bearer-token store.
+    Returns
+    -------
+    MagicLinkDelivery
+        ``DROPPED_QUARANTINED`` when restored credentials await review;
+        otherwise the precise delivery, configuration, or failure outcome.
+
+    Notes
+    -----
+    The raw ``link`` and embedded token are never logged. When SMTP is
+    unconfigured, only a SHA-256 hash of the recipient address is recorded so
+    operators can correlate events without creating a bearer-token store.
 
     """
+    if not _magic_link_egress_allowed():
+        return MagicLinkDelivery.DROPPED_QUARANTINED
+
     # Resolve the effective relay once: wizard-written user_config layered
     # over env. This is what makes a wizard-saved SMTP relay send mail with
     # NO restart / hand-edited .env — the DB is the durable source of truth.
@@ -528,6 +612,8 @@ async def send_magic_link(
             return MagicLinkDelivery.DROPPED_PRIVATE_HOST
 
     try:
+        if not _magic_link_egress_allowed():
+            return MagicLinkDelivery.DROPPED_QUARANTINED
         await aiosmtplib.send(
             message,
             hostname=smtp.host,
@@ -582,17 +668,23 @@ async def send_magic_link(
 
 
 async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
-    """Return ``True`` iff SMTP is configured via the DB OR process env.
+    """Return whether SMTP is configured in the database or environment.
 
-    SMTP_USER and SMTP_PASS are intentionally NOT required (some relays use
-    IP-allowlist auth). HOST and FROM are the minimum to compose and deliver an
+    ``SMTP_USER`` and ``SMTP_PASS`` are optional because some relays use
+    IP-allowlist authentication. Host and sender are the minimum fields for an
     envelope. Wizard-written ``user_config`` rows are weighted the same as env.
 
-    This is the public wrapper around the private ``_smtp_configured`` probe,
-    exported for callers (e.g. ``/api/setup/status``) that need to surface
-    SMTP readiness without coupling to internal helpers.  The function is
-    always safe to call: a DB failure falls back to env, and ``None`` pool
-    skips the DB entirely.
+    Parameters
+    ----------
+    pool : asyncpg.Pool or None
+        Optional pool used to resolve database-backed SMTP settings. Database
+        failures fall back to environment settings; ``None`` skips the database.
+
+    Returns
+    -------
+    bool
+        Whether the resolved settings contain both a host and sender.
+
     """
     return await _smtp_configured(pool)
 

@@ -16,11 +16,6 @@ COPY . .
 RUN npm run build
 
 FROM ${NGINX_RUNTIME_IMAGE}
-# Switch to root only for package install + file setup; drop back to nginx after.
-USER root
-RUN apk add --no-cache openssl
-COPY scripts/generate-certs.sh /docker-entrypoint.d/00-generate-certs.sh
-RUN chmod +x /docker-entrypoint.d/00-generate-certs.sh
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
 # Prefix with 00- so this file sorts before default.conf in conf.d include

@@ -93,16 +93,14 @@ def _diagnostic_for_empty_source(src: PaperSource) -> dict[str, Any]:
             "settings_hint": None,
         }
     if source_type == "openalex":
-        has_openalex_key = bool(getattr(src, "_api_key", None) or getattr(src, "_email", None))
+        has_openalex_key = bool(getattr(src, "_api_key", None))
         if not has_openalex_key:
             return {
                 "status": "unconfigured",
-                "message": (
-                    "OpenAlex requires OPENALEX_EMAIL or OPENALEX_API_KEY for Pulse polling."
-                ),
+                "message": "OpenAlex requires OPENALEX_API_KEY for Pulse polling.",
                 "status_code": None,
                 "retry_after_s": None,
-                "settings_hint": "Set OPENALEX_EMAIL or OPENALEX_API_KEY, or disable OpenAlex.",
+                "settings_hint": "Set OPENALEX_API_KEY or disable OpenAlex.",
             }
     return {
         "status": "empty",

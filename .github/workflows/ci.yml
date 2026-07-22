@@ -1,12 +1,7 @@
 name: CI
 
-# Public-launch CI. The `cross-user-isolation` job is the release gate.
-#
-# BRANCH PROTECTION: mark the terminal `gate` job (defined at the bottom of
-# this file) as the ONLY required status check. It `needs:` all real jobs,
-# so requiring `gate` transitively requires lint-test + cross-user-isolation
-# + frontend. Requiring individual jobs directly is fragile (a renamed job
-# silently drops the gate); `gate` makes the requirement self-enforcing.
+# Branch protection should require the terminal `gate` job defined below. Its
+# dependencies make every validation job part of that single required check.
 on:
   public:
   push:
@@ -33,10 +28,10 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -54,7 +49,7 @@ jobs:
         run: uv run tach check
 
       - name: Set up Node (for pyright)
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
 
@@ -68,6 +63,9 @@ jobs:
 
       - name: Fast test suite
         run: uv run pytest
+
+      - name: Deterministic shell contracts
+        run: make test-shell-contracts
 
       - name: Guard - no tracked secrets
         run: bash scripts/check-no-tracked-secrets.sh
@@ -95,26 +93,15 @@ jobs:
     name: Cross-user isolation (release gate)
     timeout-minutes: 20
     runs-on: ubuntu-latest
-    # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via the
-    # `services:` block below, on tmpfs.  The live-PG fixtures clone a fresh
-    # EMPTY database from it per session (CREATE DATABASE … TEMPLATE template0)
-    # instead of shelling `docker run`, so pytest issues ZERO docker commands and
-    # parallel runners never contend on the Docker daemon.  The host port is RANDOM (`ports: - 5432`): this
-    # avoids colliding with a pre-existing local Postgres on port 5432, and also
-    # lets two concurrent jobs on one host coexist.
-    # The first step resolves JARVIS_TEST_PG_ADMIN_DSN from the assigned port.
-    #
-    # PYTHONPATH must include services/learning_engine (and the other service +
-    # lib roots) so that `pytest.importorskip("learning_engine.main")` at the
-    # top of the test module succeeds.  Without it pytest sees 0 collected /
-    # 1 skipped and exits with code 5 (vacuously green — the bug we're fixing).
-    #
-    # --override-ini="addopts=…" replaces the service-local pytest.ini addopts
-    # which contains `-m "not live_pg and not integration"` — that marker
-    # filter ANDs with the CLI -m flag and makes the test set empty.
+    # PostgreSQL runs as a GitHub-managed service on tmpfs. The fixtures clone a
+    # fresh database per session and use the assigned random host port, avoiding
+    # Docker commands inside pytest and port conflicts between jobs.
+    # PYTHONPATH exposes every service imported by the isolation suite.
+    # The addopts override replaces the service-local marker exclusion so the
+    # explicit live integration selection cannot be filtered to an empty set.
     services:
       postgres:
-        image: postgres:16.8
+        image: postgres:16.8@sha256:301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae
         env:
           POSTGRES_PASSWORD: jarvis-ci
         options: >-
@@ -130,7 +117,7 @@ jobs:
       PYTHONPATH: >-
         services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Resolve managed-Postgres admin DSN
         run: >-
@@ -138,7 +125,7 @@ jobs:
           >> "$GITHUB_ENV"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -152,61 +139,45 @@ jobs:
           --override-ini="addopts=--import-mode=importlib"
           -m "integration and live_pg"
           services/paper_ingestion/tests/integration/test_cross_user_isolation.py
+          --junitxml=cross-user-isolation.junit.xml
           -v
 
-      - name: Guard - squashed baseline schema invariants
-        # Reuses this job's JARVIS_RUN_LIVE_PG=1 + JARVIS_TEST_PG_ADMIN_DSN (the
-        # live-PG fixture clones a fresh empty db from the managed `services:`
-        # Postgres). The guard tests are marked `live_pg` only, so the marker
-        # filter is `live_pg`, not
-        # the `integration and live_pg` used by the cross-user file above.
-        # The squashed baseline (db/init.sql) collapses all migrations into one
-        # init script; test_baseline_invariants.py is the guard that keeps it honest.
+      - name: Squashed baseline schema invariants
+        # This reuses the job's managed PostgreSQL fixture. These tests carry
+        # only the `live_pg` marker, so select that marker explicitly.
         run: >-
           uv run pytest
           --override-ini="addopts=--import-mode=importlib"
           -m "live_pg"
           services/paper_ingestion/tests/test_baseline_invariants.py
+          --junitxml=baseline-invariants.junit.xml
           -v
 
-      - name: Guard — exit 5 (no tests collected) is a failure
+      - name: Require a non-skipped cross-user result
         if: always()
-        run: |
-          # Re-run collection-only and parse the N/M summary line.
-          # grep -c "test_user_b_cannot_reach" is rename-fragile: a renamed test
-          # drops the count to 0 and silently makes this gate vacuously green.
-          # The N/M collected footer is stable across test-name changes.
-          OUTPUT=$(uv run pytest \
-            --override-ini="addopts=--import-mode=importlib" \
-            -m "integration and live_pg" \
-            services/paper_ingestion/tests/integration/test_cross_user_isolation.py \
-            --collect-only -q 2>&1 || true)
-          echo "$OUTPUT" | tail -5
-          # Pytest prints "N/M tests collected" when a marker selects a subset, but
-          # "N tests collected" (no slash) when ALL collected tests match the marker
-          # (single-file invocation). Match both forms; extract the leading integer.
-          N=$(echo "$OUTPUT" | grep -oE '([0-9]+/[0-9]+|[0-9]+) tests collected' | head -1 | grep -oE '^[0-9]+')
-          echo "Cross-user isolation tests collected: ${N:-0}"
-          if [ -z "$N" ] || [ "$N" -eq 0 ]; then
-            echo "ERROR: zero cross-user isolation tests collected — gate would pass vacuously."
-            exit 1
-          fi
+        run: >-
+          uv run python scripts/check-pytest-junit.py
+          cross-user-isolation.junit.xml
+          --label "cross-user isolation"
+
+      - name: Require a non-skipped baseline-schema result
+        if: always()
+        run: >-
+          uv run python scripts/check-pytest-junit.py
+          baseline-invariants.junit.xml
+          --label "baseline schema invariants"
 
   contract-tests:
     if: github.event.repository.private == false
     name: Contract layer (DB-backed)
     timeout-minutes: 20
     runs-on: ubuntu-latest
-    # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via `services:`
-    # below, on tmpfs.  The contract_pg_dsn fixture clones ONE fresh empty
-    # database from it per session (CREATE DATABASE … TEMPLATE template0) and
-    # applies db/init.sql + run_migrations() once; per-test isolation is via
-    # asyncpg transaction rollback (zero per-test cost).  No `docker run` from
-    # pytest.  Random host port (`ports: - 5432`) — use a random host port so a
-    # pre-existing local Postgres doesn't collide, and concurrent jobs can coexist.
+    # GitHub provides PostgreSQL 16 on tmpfs. The fixture clones one database,
+    # applies the baseline and migrations once, then isolates tests with
+    # transaction rollbacks. A random host port avoids job collisions.
     services:
       postgres:
-        image: postgres:16.8
+        image: postgres:16.8@sha256:301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae
         env:
           POSTGRES_PASSWORD: jarvis-ci
         options: >-
@@ -222,7 +193,7 @@ jobs:
       PYTHONPATH: >-
         services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Resolve managed-Postgres admin DSN
         run: >-
@@ -230,7 +201,7 @@ jobs:
           >> "$GITHUB_ENV"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -239,29 +210,22 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Contract suite
+        # Cross-user integration and real Qdrant each have an isolated job.
+        # Keep this selection on the managed-PostgreSQL contract boundary so
+        # the non-skip validator cannot be satisfied by an unavailable service.
         run: >-
           uv run pytest
           --override-ini="addopts=--import-mode=importlib"
-          -m contract
+          -m "contract and not integration and not live_qdrant"
+          --junitxml=contract-tests.junit.xml
           -v
 
-      - name: Guard — non-zero contract tests collected
+      - name: Require a non-skipped contract result
         if: always()
-        run: |
-          # Re-run --collect-only to confirm >0 contract tests were collected.
-          # Exit code 5 (no tests) or zero count would otherwise let the job
-          # silently pass with no assertions.
-          OUTPUT=$(uv run pytest \
-            --override-ini="addopts=--import-mode=importlib" \
-            -m contract --collect-only -q 2>&1 || true)
-          echo "$OUTPUT" | tail -5
-          # Extract collected count from pytest's "N/M tests collected" footer
-          N=$(echo "$OUTPUT" | grep -oE '[0-9]+/[0-9]+ tests collected' | head -1 | cut -d/ -f1)
-          echo "Contract tests collected: ${N:-0}"
-          if [ -z "$N" ] || [ "$N" -eq 0 ]; then
-            echo "ERROR: zero contract tests collected — gate would pass vacuously"
-            exit 1
-          fi
+        run: >-
+          uv run python scripts/check-pytest-junit.py
+          contract-tests.junit.xml
+          --label "contract tests"
 
   frontend:
     if: github.event.repository.private == false
@@ -269,10 +233,10 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
           cache: npm
@@ -306,10 +270,10 @@ jobs:
     needs: [frontend]
     continue-on-error: false
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
           cache: npm
@@ -351,7 +315,7 @@ jobs:
         env:
           CI: "true"
 
-  # gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
+  # Branch protection requires this aggregate result.
   gate:
     if: ${{ always() && github.event.repository.private == false }}
     name: CI gate (required status check)

@@ -6,7 +6,7 @@
  *  - §II Sources rail items appear from mocked GET /api/sources.
  *  - §IV System hidden for non-admin session.
  *  - Rail item click updates breadcrumb and detail pane heading.
- *  - ?confirm_email_token query param → AccountSection calls confirm endpoint
+ *  - #confirm_email_token fragment → AccountSection calls confirm endpoint
  *    and shows success banner.
  *  - Default landing is Research / Topics.
  *
@@ -295,9 +295,9 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     await expect(page.getByRole('heading', { name: 'Topics', level: 2 })).toBeVisible({ timeout: 8000 });
   });
 
-  test('?confirm_email_token param triggers confirm flow and shows success', async ({ page }) => {
+  test('#confirm_email_token fragment triggers confirm flow and shows success', async ({ page }) => {
     await setupMocks(page);
-    await page.goto('/settings?section=account&item=profile&confirm_email_token=tok-abc-123');
+    await page.goto('/settings?section=account&item=profile#confirm_email_token=tok-abc-123');
 
     // AccountSection should show success banner
     await expect(page.getByText(/Email address updated to/i)).toBeVisible({ timeout: 10_000 });

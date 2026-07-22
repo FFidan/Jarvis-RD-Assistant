@@ -1,8 +1,8 @@
-"""Boundary tests for MaintenanceMiddleware (P6 sentinel-driven 503 gate).
+"""Restore maintenance, outbound quarantine, and worker-pause tests.
 
-Pure-ASGI middleware: a fresh sentinel returns 503 for non-exempt paths,
-exempt prefixes are always served, and a sentinel older than ``max_age_s`` is
-ignored (auto-expiry anti-brick). No sentinel means normal serving.
+Covers fresh and stale maintenance markers, exact recovery-route exemptions,
+fail-closed quarantine reads, credential-bearing sink guards, worker resume, and
+post-restore secret-rotation detection.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import app_factory
@@ -26,6 +27,8 @@ from jarvis_common.app_factory import (
 )
 from jarvis_common.maintenance import (
     MaintenanceMiddleware,
+    OutboundEgressBlockedError,
+    ensure_outbound_egress_allowed,
     maintenance_active,
     secrets_rotated_since,
     skip_for_maintenance,
@@ -59,6 +62,10 @@ def _make_client(sentinel: Path, destructive: Path | None = None) -> TestClient:
     @app.get("/api/setup/status")
     async def setup_status():
         return {"setup_completed": False}
+
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def catch_all(path: str):
+        return {"path": path}
 
     return TestClient(app, raise_server_exceptions=True)
 
@@ -197,6 +204,163 @@ def test_skip_for_maintenance_tracks_sentinel(tmp_path, monkeypatch):
     assert skip_for_maintenance("pulse") is False
     soft.touch()
     assert skip_for_maintenance("pulse") is True
+
+
+def test_skip_for_maintenance_fails_closed_for_an_unreadable_quarantine(tmp_path, monkeypatch):
+    soft = tmp_path / ".maintenance"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    assert skip_for_maintenance("pulse") is False
+
+    quarantine.write_text("not json")
+    assert skip_for_maintenance("pulse") is True
+
+
+def test_outbound_egress_guard_fails_closed_for_existing_quarantine(tmp_path, monkeypatch):
+    """The shared sink guard refuses even malformed quarantine state."""
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    ensure_outbound_egress_allowed("smtp delivery")
+    quarantine.write_text("not json")
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        ensure_outbound_egress_allowed("smtp delivery")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/auth/request-link",
+        "/api/setup/smtp",
+        "/api/jobs",
+        "/api/papers/search",
+        "/api/zotero/test",
+        "/api/pulse/generate",
+    ],
+)
+def test_quarantine_blocks_manual_egress_mutations(tmp_path, monkeypatch, path):
+    """One ASGI policy refuses every credential-bearing manual egress family."""
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.write_text("not json")
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = _make_client(tmp_path / ".maintenance")
+
+    response = client.post(path)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "This restored deployment is read-only until outbound credentials are reviewed"
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/admin/backups/restore/status",
+        "/api/setup/status",
+        "/api/dashboard",
+    ],
+)
+def test_quarantine_keeps_local_read_routes_available(tmp_path, monkeypatch, path):
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = _make_client(tmp_path / ".maintenance")
+
+    assert client.get(path).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/admin/backups/restore/acknowledge",
+        "/api/auth/api-key-session",
+        "/api/auth/verify",
+        "/api/auth/passkeys/capability",
+        "/api/auth/passkeys/login/begin",
+        "/api/auth/passkeys/login/finish",
+        "/api/auth/logout",
+    ],
+)
+def test_quarantine_keeps_exact_owner_recovery_mutations_available(tmp_path, monkeypatch, path):
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = _make_client(tmp_path / ".maintenance")
+
+    assert client.post(path).status_code == 200
+
+
+def test_quarantine_recovery_exemption_is_exact(tmp_path, monkeypatch):
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = _make_client(tmp_path / ".maintenance")
+
+    assert client.post("/api/auth/passkeys/login/begin/extra").status_code == 503
+
+
+def test_read_outbound_quarantine_returns_bound_nonsecret_state(tmp_path, monkeypatch):
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    quarantine.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "restore_id": "0123456789abcdef0123456789abcdef",
+                "source": "inbox",
+                "requested_at": "2026-07-21T20:00:00+00:00",
+                "completed_at": "2026-07-21T20:05:00+00:00",
+                "review_state": "awaiting_review",
+            }
+        )
+    )
+
+    state = maintenance_mod.read_outbound_quarantine()
+
+    assert state is not None
+    assert state.restore_id == "0123456789abcdef0123456789abcdef"
+    assert state.source == "inbox"
+    assert state.review_state == "awaiting_review"
+
+
+def test_read_outbound_quarantine_rejects_malformed_existing_state(tmp_path, monkeypatch):
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    quarantine.write_text('{"restore_id":"wrong"}')
+
+    with pytest.raises(maintenance_mod.OutboundQuarantineStateError):
+        maintenance_mod.read_outbound_quarantine()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_read_outbound_quarantine_rejects_linked_state(tmp_path, monkeypatch, link_kind):
+    real = tmp_path / "real-quarantine.json"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    real.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "restore_id": "0123456789abcdef0123456789abcdef",
+                "source": "inbox",
+                "requested_at": "2026-07-21T20:00:00+00:00",
+                "completed_at": "2026-07-21T20:05:00+00:00",
+                "review_state": "awaiting_review",
+            }
+        )
+    )
+    if link_kind == "symlink":
+        quarantine.symlink_to(real)
+    else:
+        os.link(real, quarantine)
+
+    with pytest.raises(maintenance_mod.OutboundQuarantineStateError):
+        maintenance_mod.read_outbound_quarantine()
 
 
 # ---------------------------------------------------------------------------

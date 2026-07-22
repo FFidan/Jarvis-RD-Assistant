@@ -36,7 +36,7 @@ class _FakeURL:
     path = "/api/account"
 
     def replace(self, **_kwargs) -> str:
-        return "http://test/account/confirm-email?token=tok"
+        return "http://test/settings?section=account&item=profile"
 
     def __str__(self) -> str:
         return "http://test/api/account"

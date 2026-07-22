@@ -5,7 +5,7 @@ C2: submit_feedback INSERT must include user_id; conflict key must include user_
 Note: C1 (mark_paper_read) tests were removed in Phase-A lifecycle redesign because
 the mark_paper_read endpoint was deleted (replaced by annotate_paper / state machine).
 
-After the canonical-corpus refactor, ``submit_feedback`` delegates the write to
+``submit_feedback`` delegates the write to
 ``_upsert_recommendation_feedback`` which:
   * issues ``conn.fetchval(...)`` to look up the paper's primary topic_id
     (when not supplied) — 1 fetchval call always
@@ -34,12 +34,16 @@ async def test_submit_feedback_threads_user_id_to_insert():
     Writes to recommendation_feedback with binds ($1=paper_id, $2=user_id,
     $3=signal, $4=source, $5=reason, $6=topic_id). Cross-user isolation: the
     resolver yields a real user, so ``assert_paper_ownership`` runs (1
-    fetchrow, canonical fast-grant) in addition to the Group B
+    fetchrow, persisted-visibility grant) in addition to the Group B
     discovery_origin fetchrow.
     """
     pool, conn = _make_pool_and_conn()
     # Group B: source='feed_thumbs' is pulse-only; fetchrow validates discovery_origin.
-    conn.fetchrow.return_value = {"discovery_origin": "pulse_discovery"}
+    conn.fetchrow.return_value = {
+        "id": 7,
+        "is_visible": True,
+        "discovery_origin": "pulse_discovery",
+    }
     # fetchval returns topic_id from paper_topics lookup; None means no topic
     conn.fetchval.return_value = None
 
@@ -58,8 +62,8 @@ async def test_submit_feedback_threads_user_id_to_insert():
     assert result.paper_id == 7
     assert result.signal == "positive"
 
-    # Cross-user isolation: assert_paper_ownership now runs (1 fetchrow, canonical
-    # fast-grant) plus the Group B discovery_origin fetchrow.
+    # Cross-user isolation: the persisted-visibility check and the feedback
+    # discovery-origin validation each issue one fetchrow.
     assert conn.fetchrow.await_count == 2
     # INSERT goes through conn.execute (no RETURNING) after a topic_id fetchval.
     assert conn.execute.await_count == 1
@@ -96,7 +100,11 @@ async def test_submit_feedback_threads_user_id_to_select():
     """
     pool, conn = _make_pool_and_conn()
     # Group B: source='pulse_thumbs' is pulse-only; fetchrow validates discovery_origin.
-    conn.fetchrow.return_value = {"discovery_origin": "pulse_discovery"}
+    conn.fetchrow.return_value = {
+        "id": 10,
+        "is_visible": True,
+        "discovery_origin": "pulse_discovery",
+    }
     conn.fetchval.return_value = None  # no topic mapping
 
     # CC-03: explicit caller identity for the direct (non-ASGI) handler call;
@@ -133,7 +141,7 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.side_effect = [
-        {"user_id": 42},  # ownership check: user_id=42 owns the paper
+        {"id": 10, "is_visible": True},  # central visibility check passes
         {"discovery_origin": "pulse"},  # feedback gate: system-discovered paper
     ]
     conn.fetchval.return_value = None  # no topic mapping

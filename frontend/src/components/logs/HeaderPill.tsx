@@ -4,10 +4,12 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { getSummary } from '@/lib/logs';
 import { AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuthStore } from '@/stores/auth-store';
 
 export function HeaderPill() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin');
 
   // Only poll actively while the user is on /logs; elsewhere a 60s interval
   // is enough to keep the badge roughly correct without hammering the endpoint.
@@ -19,9 +21,12 @@ export function HeaderPill() {
     // exclude_infra=1 so nginx proxy/rate-limit events (category=infra) don't
     // inflate the badge — those are infrastructure noise, not application errors.
     queryFn: () => getSummary({ excludeInfra: true }),
+    enabled: isAdmin,
     refetchInterval: isLogsPage ? 30_000 : 60_000,
     staleTime: 20_000,
   });
+
+  if (!isAdmin) return null;
 
   // Count error + critical application events; infra events are excluded above.
   const errorCount = (data?.by_level?.error ?? 0) + (data?.by_level?.critical ?? 0);

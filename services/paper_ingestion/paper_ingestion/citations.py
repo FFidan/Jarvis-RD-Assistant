@@ -10,6 +10,10 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import asyncpg
+from jarvis_common.paper_visibility import (
+    PUBLIC_VISIBILITY_SCOPE,
+    require_verified_public_source,
+)
 
 from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import (
@@ -40,6 +44,10 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
 
     The function tolerates several S2 response shapes: the paper payload may
     be nested under ``citingPaper``, ``citedPaper``, or at the top level.
+
+    This function is called only with responses obtained by the configured
+    Semantic Scholar adapter, so a valid stub is explicitly promoted to public
+    visibility. The historical `citation_batch` origin remains descriptive.
 
     Returns ``None`` (without raising) when the S2 payload lacks a valid
     ``paperId`` or a non-empty ``title``, so callers can safely skip the entry.
@@ -77,13 +85,17 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
     if external_ids.get("DOI"):
         metadata["doi"] = external_ids["DOI"]
 
+    require_verified_public_source("semantic_scholar")
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, citation_count, metadata,
-                               discovery_origin)
+                               discovery_origin, visibility_scope)
            VALUES ($1, 'semantic_scholar', $2, $3, '', $4, $5, $6, $7::jsonb,
-                   'citation_batch')
-           ON CONFLICT (external_id) DO UPDATE SET citation_count = EXCLUDED.citation_count
+                   'citation_batch', $8)
+           ON CONFLICT (external_id) DO UPDATE SET
+               citation_count = EXCLUDED.citation_count,
+               source_type = EXCLUDED.source_type,
+               visibility_scope = EXCLUDED.visibility_scope
            RETURNING id""",
         external_id,
         title,
@@ -92,6 +104,7 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
         url,
         citation_count,
         metadata,
+        PUBLIC_VISIBILITY_SCOPE,
     )
     return row["id"] if row else None
 
@@ -262,21 +275,14 @@ async def _filter_visible_paper_ids(
 ) -> list[int]:
     """Return the subset of *candidate_ids* visible to *user_id*.
 
-    A paper is visible when it is a stub (``discovered_by IS NULL``),
-    directly discovered by the caller, or held in their user_library.
-    The stub/discovered-by clauses use the shared
-    :func:`paper_visible_sql` helper, as in the KG relationship queries.
+    The shared predicate grants persisted public papers or private papers in
+    the caller's library. Provenance labels and discoverer attribution do not
+    authorize access.
     """
     rows = await conn.fetch(
         f"""SELECT id FROM papers
            WHERE id = ANY($1)
-             AND (
-                 {paper_visible_sql(2, alias="papers")}
-                 OR EXISTS (
-                     SELECT 1 FROM user_library ul
-                     WHERE ul.user_id = $2 AND ul.paper_id = papers.id
-                 )
-             )""",
+             AND {paper_visible_sql(2, alias="papers")}""",
         candidate_ids,
         user_id,
     )

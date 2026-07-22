@@ -263,6 +263,8 @@ describe('ResearchFeedPage — 3-pane IA', () => {
     await waitFor(() => {
       expect(screen.getByRole('tablist', { name: /library scope/i })).toBeInTheDocument();
     });
+    expect(screen.getByRole('tab', { name: 'My library' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Public + mine' })).toBeInTheDocument();
   });
 
   // ── Surface info copy ─────────────────────────────────────────────────────
@@ -279,6 +281,15 @@ describe('ResearchFeedPage — 3-pane IA', () => {
     await waitFor(() => {
       // C-FEED: copy updated to "My library — papers you've saved or own."
       expect(screen.getByText(/my library.*saved.*own/i)).toBeInTheDocument();
+    });
+  });
+
+  it('describes corpus scope as public papers plus the caller library', async () => {
+    renderPage('?surface=library&scope=corpus');
+    await waitFor(() => {
+      expect(
+        screen.getByText(/verified public papers plus private papers in your library/i),
+      ).toBeInTheDocument();
     });
   });
 });

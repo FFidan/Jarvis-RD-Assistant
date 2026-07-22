@@ -8,7 +8,7 @@ Handler signature: async (pool, http_client, payload, ctx) -> dict
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
 
     from paper_ingestion.pdf_processor import PDFProcessor
-    from paper_ingestion.services.pdf_workflow import ProcessPdfResult
+    from paper_ingestion.services.pdf_workflow import EmbeddingReconcileResult, ProcessPdfResult
     from paper_ingestion.services.summarization import SummaryGenerationResult
 
 logger = logging.getLogger(__name__)
@@ -163,7 +163,11 @@ async def _paper_analyze_job(
     B6 fix: local papers (source_type='local' or pdf_local_path IS NOT NULL)
     skip the download step.
     """
-    from paper_ingestion.services.pdf_workflow import run_process_pdf
+    from paper_ingestion.services.pdf_workflow import (
+        PDFRecordMissingError,
+        download_and_store_pdf,
+        run_process_pdf,
+    )
     from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_id: int = payload["paper_id"]
@@ -202,20 +206,15 @@ async def _paper_analyze_job(
     # ---- Step 1: Download (skip for local) ----
     if not is_local and not row["pdf_downloaded"]:
         await ctx.update_progress(0.0, "Downloading PDF")
-        pdf_path_obj = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
-                "WHERE id = $2 RETURNING id, source_type, pdf_url, pdf_downloaded,"
-                " pdf_local_path",
-                str(pdf_path_obj),
+        try:
+            row = await download_and_store_pdf(
+                pool,
+                pdf_processor,
+                row["pdf_url"],
                 paper_id,
             )
-        # PI-CORR-01: the row can be deleted between the initial load and this
-        # post-download UPDATE (TOCTOU). UPDATE ... RETURNING then yields None;
-        # dereferencing it below would raise an opaque TypeError. Fail cleanly.
-        if row is None:
-            raise JobError(f"Paper {paper_id} deleted during download")
+        except PDFRecordMissingError as exc:
+            raise JobError(f"Paper {paper_id} deleted during download") from exc
     else:
         await ctx.update_progress(0.0, "Download skipped" if is_local else "Already downloaded")
 
@@ -395,22 +394,32 @@ async def _papers_batch_process_job(
 # ---------------------------------------------------------------------------
 
 
-# Selection: every paper in the caller's user_library that still needs any stage.
-# Shared verbatim with the process-library endpoint's emptiness pre-check so the
-# skip contract and the job agree on "nothing to do". ``$1`` = user_id, ``$2`` =
-# summarize. paper_summaries is per-user (UNIQUE NULLS NOT DISTINCT
+# Selection: one stable ID-keyset page from the caller's user_library. Every
+# completed paper remains eligible for a cheap vector-identity probe because
+# PostgreSQL cannot prove its deterministic Qdrant points still match its chunks.
+# Shared with the process-library endpoint's emptiness pre-check. ``$1`` = user_id,
+# ``$2`` = summarize, ``$3`` = page size, ``$4`` = last examined paper ID.
+# paper_summaries is per-user (UNIQUE NULLS NOT DISTINCT
 # (paper_id, user_id)); scope the LEFT JOIN with IS NOT DISTINCT FROM to match
 # the batch-summarize selection (rag.py).
+_PROCESS_LIBRARY_PAGE_SIZE = 100
+_PROCESS_LIBRARY_COUNT = "SELECT COUNT(*) FROM user_library WHERE user_id = $1"
 _PROCESS_LIBRARY_SELECTION = """
     SELECT p.id, p.source_type, p.pdf_url, p.pdf_downloaded, p.pdf_local_path,
-           (p.chunked_at IS NULL) AS needs_process,
-           (s.paper_id IS NULL)   AS needs_summary
+           (p.chunked_at IS NULL OR NOT EXISTS (
+               SELECT 1 FROM paper_chunks c WHERE c.paper_id = p.id
+           )) AS needs_process,
+           (p.chunked_at IS NOT NULL AND EXISTS (
+               SELECT 1 FROM paper_chunks c WHERE c.paper_id = p.id
+           )) AS needs_reconcile,
+           ($2 AND s.paper_id IS NULL) AS needs_summary
     FROM papers p
     JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
     LEFT JOIN paper_summaries s
       ON s.paper_id = p.id AND s.user_id IS NOT DISTINCT FROM $1
-    WHERE p.chunked_at IS NULL OR ($2 AND s.paper_id IS NULL)
+    WHERE p.id > $4
     ORDER BY p.id
+    LIMIT $3
 """
 
 
@@ -426,6 +435,7 @@ class _LibraryRun:
     summarize: bool
     pdf_processor: PDFProcessor
     process_pdf: partial[Coroutine[Any, Any, ProcessPdfResult]]
+    reconcile_embeddings: partial[Coroutine[Any, Any, EmbeddingReconcileResult]]
     summarize_paper: partial[Coroutine[Any, Any, SummaryGenerationResult]]
 
 
@@ -440,6 +450,50 @@ class _PaperOutcome:
     error: dict[str, Any] | None = None
 
 
+@dataclass
+class _LibraryProgress:
+    """Mutable counters and per-paper details for one process-library run."""
+
+    examined: int = 0
+    downloaded: int = 0
+    processed: int = 0
+    summarized: int = 0
+    blocked: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, outcome: _PaperOutcome) -> None:
+        """Add one completed paper outcome to the aggregate result."""
+        self.examined += 1
+        self.downloaded += outcome.downloaded
+        self.processed += outcome.processed
+        self.summarized += outcome.summarized
+        if outcome.blocked is not None:
+            self.blocked.append(outcome.blocked)
+        if outcome.error is not None:
+            self.errors.append(outcome.error)
+
+    def result(self, total: int, *, cancelled: bool) -> dict[str, Any]:
+        """Build the public job result with an honest terminal status."""
+        remaining = max(total - self.examined, 0)
+        if cancelled:
+            status = "cancelled"
+        elif self.errors or self.blocked or remaining:
+            status = "partial"
+        else:
+            status = "ok"
+        return {
+            "status": status,
+            "total": total,
+            "examined": self.examined,
+            "remaining": remaining,
+            "downloaded": self.downloaded,
+            "processed": self.processed,
+            "summarized": self.summarized,
+            "blocked": self.blocked,
+            "errors": self.errors,
+        }
+
+
 def _resolve_library_run(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -447,7 +501,7 @@ def _resolve_library_run(
     summarize: bool,
 ) -> _LibraryRun:
     """Resolve the services and bind the workflow calls the stage machine needs."""
-    from paper_ingestion.services.pdf_workflow import run_process_pdf
+    from paper_ingestion.services.pdf_workflow import reconcile_paper_embeddings, run_process_pdf
     from paper_ingestion.services.summarization import generate_paper_summary
 
     services = get_services()
@@ -470,6 +524,11 @@ def _resolve_library_run(
             pdf_processor=pdf_processor,
             embedder=embedder,
         ),
+        reconcile_embeddings=partial(
+            reconcile_paper_embeddings,
+            db_pool=pool,
+            embedder=embedder,
+        ),
         summarize_paper=partial(
             generate_paper_summary,
             db_pool=pool,
@@ -483,17 +542,21 @@ def _resolve_library_run(
 
 async def _library_download_stage(row: Any, run: _LibraryRun) -> Any:
     """Download a paper's PDF, persist its local path and return that path."""
+    from paper_ingestion.services.pdf_workflow import (
+        PDFRecordMissingError,
+        download_and_store_pdf,
+    )
+
     paper_id = row["id"]
-    pdf_path_obj = await run.pdf_processor.download_pdf(row["pdf_url"], paper_id)
-    async with run.pool.acquire() as conn:
-        updated = await conn.fetchrow(
-            "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
-            "WHERE id = $2 RETURNING pdf_local_path",
-            str(pdf_path_obj),
+    try:
+        updated = await download_and_store_pdf(
+            run.pool,
+            run.pdf_processor,
+            row["pdf_url"],
             paper_id,
         )
-    if updated is None:
-        raise JobError(f"Paper {paper_id} deleted during download")
+    except PDFRecordMissingError as exc:
+        raise JobError(f"Paper {paper_id} deleted during download") from exc
     return updated["pdf_local_path"]
 
 
@@ -512,6 +575,14 @@ async def _library_process_stage(
     if not pdf_path.exists():
         raise JobError(f"PDF file missing from disk for paper {paper_id}")
     await run.process_pdf(paper_id, pdf_path, ctx=sub_ctx)
+
+
+async def _library_reconcile_stage(paper_id: int, run: _LibraryRun) -> bool:
+    """Probe persisted vectors and return whether repair work was performed."""
+    result = await run.reconcile_embeddings(paper_id)
+    if result["status"] == "empty":
+        raise JobError(f"Paper {paper_id} lost its persisted chunks during reconciliation")
+    return result["status"] == "repaired"
 
 
 def _library_pdf_plan(row: Any) -> tuple[bool, dict[str, Any] | None]:
@@ -555,6 +626,9 @@ async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx
             await _library_process_stage(paper_id, pdf_local_path, run, sub_ctx)
             processed = 1
             chunked = True
+        elif row["needs_reconcile"]:
+            stage = "reconcile"
+            processed = int(await _library_reconcile_stage(paper_id, run))
 
         if run.summarize and row["needs_summary"] and chunked:
             stage = "summarize"
@@ -573,6 +647,70 @@ async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx
     )
 
 
+async def _fetch_library_page(
+    pool: asyncpg.Pool,
+    user_id: int,
+    summarize: bool,
+    cursor: int,
+) -> list[Any]:
+    """Fetch one keyset page and reaffirm that every row belongs to the caller."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            _PROCESS_LIBRARY_SELECTION,
+            user_id,
+            summarize,
+            _PROCESS_LIBRARY_PAGE_SIZE,
+            cursor,
+        )
+    if rows:
+        paper_ids = [int(row["id"]) for row in rows]
+        async with pool.acquire() as conn:
+            await assert_papers_ownership(conn, paper_ids, user_id)
+    return rows
+
+
+async def _run_library_page(
+    rows: list[Any],
+    run: _LibraryRun,
+    ctx: ProgressContext,
+    total: int,
+    progress: _LibraryProgress,
+) -> bool:
+    """Run one page and return whether cancellation stopped it early."""
+    for row in rows:
+        if await ctx.is_cancelled():
+            return True
+        paper_id = int(row["id"])
+        await ctx.update_progress(
+            progress.examined / total,
+            f"Paper {paper_id} ({progress.examined + 1}/{total})",
+        )
+        sub_ctx = _SubCtx(
+            ctx,
+            (progress.examined / total) * 0.95,
+            ((progress.examined + 1) / total) * 0.95,
+        )
+        progress.record(await _run_library_paper_stages(row, run, sub_ctx))
+    return False
+
+
+async def _finish_library_run(
+    ctx: ProgressContext,
+    total: int,
+    progress: _LibraryProgress,
+    *,
+    cancelled: bool,
+) -> dict[str, Any]:
+    """Publish terminal progress and build the caller-visible result."""
+    headline = "Cancelled" if cancelled else "Done"
+    await ctx.update_progress(
+        1.0,
+        f"{headline}: {progress.examined}/{total} examined, "
+        f"{progress.processed} processed, {progress.summarized} summarized",
+    )
+    return progress.result(total, cancelled=cancelled)
+
+
 async def _papers_process_library_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -582,7 +720,8 @@ async def _papers_process_library_job(
     """Process a caller's whole library in one job via a per-paper stage machine.
 
     Each selected paper runs download (skip for local) → process (when
-    ``chunked_at IS NULL``) → summarize (opt-in, when no summary exists). Each
+    missing chunks) or bounded vector reconciliation → summarize (opt-in, when
+    no summary exists). Each
     paper's stages are isolated: a failure records an ``errors`` entry and the
     loop continues; a paper with no PDF source records a ``blocked`` entry (a
     skip, not an error) for the PDF-dependent stages only. The result ``status``
@@ -590,7 +729,8 @@ async def _papers_process_library_job(
     run never reads as success, and ``"cancelled"`` when the run stopped early on
     cancellation, so a run that never reached most of its papers cannot read as a
     clean completion.
-    Reruns are idempotent by construction — the selection picks only missing work.
+    Reruns are idempotent: completed work is verified and reused, while only
+    missing or stale stages mutate state.
 
     Payload keys:
         user_id (int): REQUIRED — the library owner and tenancy boundary.
@@ -602,72 +742,25 @@ async def _papers_process_library_job(
     summarize: bool = bool(payload.get("summarize", False))
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_PROCESS_LIBRARY_SELECTION, user_id, summarize)
-
-    total = len(rows)
+        total = int(await conn.fetchval(_PROCESS_LIBRARY_COUNT, user_id) or 0)
     if total == 0:
         await ctx.update_progress(1.0, "Library already processed")
-        return {
-            "status": "ok",
-            "total": 0,
-            "downloaded": 0,
-            "processed": 0,
-            "summarized": 0,
-            "blocked": [],
-            "errors": [],
-        }
-
-    # Defense-in-depth: the selection is already user_library-scoped, so this
-    # can only reaffirm the tenancy boundary — kept to mirror the batch clone and
-    # guard against a future selection-query change widening scope.
-    paper_ids = [row["id"] for row in rows]
-    async with pool.acquire() as conn:
-        await assert_papers_ownership(conn, paper_ids, user_id)
+        return _LibraryProgress().result(total, cancelled=False)
 
     run = _resolve_library_run(pool, http_client, user_id, summarize)
-
-    downloaded = 0
-    processed = 0
-    summarized = 0
-    blocked: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-
+    progress = _LibraryProgress()
     cancelled = False
     await ctx.update_progress(0.0, f"Starting: {total} papers")
-    for i, row in enumerate(rows):
-        if await ctx.is_cancelled():
-            cancelled = True
+    cursor = 0
+    while progress.examined < total:
+        rows = await _fetch_library_page(pool, user_id, summarize, cursor)
+        if not rows:
             break
-        paper_id = row["id"]
-        await ctx.update_progress(i / total, f"Paper {paper_id} ({i + 1}/{total})")
-        sub_ctx = _SubCtx(ctx, (i / total) * 0.95, ((i + 1) / total) * 0.95)
-
-        outcome = await _run_library_paper_stages(row, run, sub_ctx)
-        downloaded += outcome.downloaded
-        processed += outcome.processed
-        summarized += outcome.summarized
-        if outcome.blocked is not None:
-            blocked.append(outcome.blocked)
-        if outcome.error is not None:
-            errors.append(outcome.error)
-
-    if cancelled:
-        status = "cancelled"
-    elif errors or blocked:
-        status = "partial"
-    else:
-        status = "ok"
-    headline = "Cancelled" if cancelled else "Done"
-    await ctx.update_progress(1.0, f"{headline}: {processed} processed, {summarized} summarized")
-    return {
-        "status": status,
-        "total": total,
-        "downloaded": downloaded,
-        "processed": processed,
-        "summarized": summarized,
-        "blocked": blocked,
-        "errors": errors,
-    }
+        cancelled = await _run_library_page(rows, run, ctx, total, progress)
+        if cancelled:
+            break
+        cursor = int(rows[-1]["id"])
+    return await _finish_library_run(ctx, total, progress, cancelled=cancelled)
 
 
 async def _papers_scan_local_job(

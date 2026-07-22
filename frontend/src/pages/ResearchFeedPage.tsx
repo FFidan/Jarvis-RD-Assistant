@@ -61,7 +61,7 @@ const VALID_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
 
 const FEED_SCOPES: { value: FeedScope; label: string }[] = [
   { value: 'library', label: 'My library' },
-  { value: 'corpus', label: 'All discovered' },
+  { value: 'corpus', label: 'Public + mine' },
 ];
 
 // ─── helper ─────────────────────────────────────────────────────────────────
@@ -517,7 +517,7 @@ export function ResearchFeedPage() {
               <div className="mb-1 flex items-center gap-2">
                 <SectionInfo>
                   {feedScope === 'corpus'
-                    ? 'All discovered papers — the shared library across all sources.'
+                    ? 'Verified public papers plus private papers in your library.'
                     : filter === 'reading'
                       ? 'Papers you\'re currently reading.'
                       : filter === 'to_read'

@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any, cast
 
 import asyncpg
+from jarvis_common.paper_visibility import paper_visibility_sql
 
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
 
@@ -60,9 +61,8 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     )
 
 
-# Papers are canonical (no owner column); per-user library membership
-# is in `user_library`. The feed joins `user_library` so users see
-# *their* library; single-user mode (user_id=None) bypasses the join.
+# Library scope is exact membership from `user_library`. The audit-only
+# `discovered_by` column does not participate in feed authorization.
 _BASE_FROM_USER = (
     " FROM papers p"
     " JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1"
@@ -138,21 +138,65 @@ def build_feed_queries(
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters.
 
-    Papers are a canonical shared corpus; per-user library membership is
-    in ``user_library``. The data query JOINs ``user_library`` so each
-    user only sees what's actually in *their* library. When ``user_id``
-    is ``None`` (single-user fallback) the JOIN is skipped and the query
-    returns the entire canonical corpus.
+    Parameters
+    ----------
+    unread_only : bool
+        Apply the active-state predicate when no explicit ``view`` is supplied.
+    sort : str
+        Requested stable ordering key; unknown values use discovery time.
+    limit : int
+        Page size appended to the data-query bindings.
+    offset : int
+        Page offset appended after ``limit``.
+    q : str | None
+        PostgreSQL full-text query, or ``None`` to omit text search.
+    statuses : str | None
+        Deprecated comma-separated filter. It is parsed only for a warning and
+        does not constrain results.
+    source_types : str | None
+        Comma-separated source types to include.
+    topic_names : str | None
+        Comma-separated topic names to include.
+    topic_id : int | None
+        Exact topic ID to require in addition to any topic-name filter.
+    untagged : bool
+        Require papers without a topic link.
+    date_from : date | None
+        Inclusive lower bound on paper creation time.
+    date_to : date | None
+        Inclusive upper bound on paper creation time.
+    recommended : bool
+        Require a current recommendation row.
+    include_zotero_notes : bool
+        Include caller-owned Zotero note matches when ``q`` is present.
+    user_id : int | None
+        Authenticated caller ID. ``None`` is reserved for trusted internal
+        compatibility calls.
+    view : str | None
+        Fixed state predicate from :data:`VIEW_PREDICATES`. It takes precedence
+        over deprecated ``statuses``.
+    scope : str
+        ``"library"`` for exact caller membership or ``"corpus"`` for
+        persisted public papers plus the caller's explicitly shelved private
+        papers.
 
-    The ``view`` parameter maps to a set of fixed SQL predicates defined in
-    :data:`VIEW_PREDICATES`.  Valid values:
-    ``inbox / library / reading_list / reading / done / starred / trash /
-    active / kept / all_non_trash``.
-    When ``view`` is supplied it takes precedence over the legacy ``statuses``
-    filter.  Raises :exc:`ValueError` if ``view`` is not a recognised key.
+    Returns
+    -------
+    FeedQueryParts
+        Primary and TLDR-compatible fallback data queries, the count query, and
+        their positional bindings. ``params`` includes pagination bindings;
+        ``count_params`` does not.
 
-    .. deprecated::
-        `statuses` is ignored. Use `view` instead. Will be removed in a future release.
+    Raises
+    ------
+    ValueError
+        If ``view`` is unknown or ``scope`` is not ``"library"`` or
+        ``"corpus"``.
+
+    Notes
+    -----
+    Provenance fields never grant feed access. Authenticated corpus scope adds
+    the centralized persisted public-or-caller-library predicate.
     """
     if view is not None and view not in VIEW_PREDICATES:
         raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
@@ -179,6 +223,8 @@ def build_feed_queries(
         base_from = _BASE_FROM_USER
     params.append(user_id)
     param_idx += 1
+    if scope == "corpus" and user_id is not None:
+        conditions.append(paper_visibility_sql(1, alias="p"))
 
     note_query_param: int | None = None
     if q:
@@ -200,8 +246,8 @@ def build_feed_queries(
         params.append(q)
         param_idx += 1
 
-    # In corpus scope, the Library tab means "all non-trash canonical papers";
-    # user library membership is only meaningful in library scope.
+    # In corpus scope, the Library tab means all non-trash rows already admitted
+    # by the persisted public-or-library corpus predicate.
     effective_view = "all_non_trash" if scope == "corpus" and view == "library" else view
 
     # unread_only is only applied when no explicit view is requested; an
@@ -360,6 +406,13 @@ _SQL_BY_SOURCE_CORPUS = """
      GROUP BY p.source_type
 """
 
+_SQL_BY_SOURCE_VISIBLE = f"""
+    SELECT p.source_type, COUNT(*)::int AS cnt
+      FROM papers p
+     WHERE {paper_visibility_sql(1, alias="p")}
+     GROUP BY p.source_type
+"""
+
 _SQL_BY_TOPIC_USER = """
     SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
       FROM topics t
@@ -373,6 +426,16 @@ _SQL_BY_TOPIC_CORPUS = """
     SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
       FROM topics t
       JOIN paper_topics pt ON pt.topic_id = t.id
+     GROUP BY t.id, t.name
+     ORDER BY cnt DESC, t.name
+"""
+
+_SQL_BY_TOPIC_VISIBLE = f"""
+    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
+      FROM topics t
+      JOIN paper_topics pt ON pt.topic_id = t.id
+      JOIN papers p ON p.id = pt.paper_id
+     WHERE {paper_visibility_sql(1, alias="p")}
      GROUP BY t.id, t.name
      ORDER BY cnt DESC, t.name
 """
@@ -394,6 +457,15 @@ _SQL_UNTAGGED_CORPUS = """
      )
 """
 
+_SQL_UNTAGGED_VISIBLE = f"""
+    SELECT COUNT(*)::int AS cnt
+      FROM papers p
+     WHERE {paper_visibility_sql(1, alias="p")}
+       AND NOT EXISTS (
+         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
+     )
+"""
+
 
 async def fetch_feed_facet_counts(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
@@ -402,18 +474,20 @@ async def fetch_feed_facet_counts(
 ) -> tuple[dict[str, int], list[dict[str, Any]], int]:
     """Return (by_source, by_topic_rows, untagged) facet counts.
 
-    When *scope* is ``"library"`` (default) and *user_id* is not None, the
-    three aggregations are scoped to that user's user_library rows.  When
-    *scope* is ``"corpus"`` — or when *user_id* is None (no-auth mode) —
-    the corpus-wide SQL variants are used instead, mirroring the branching
-    in ``get_feed_counts`` and ``build_feed_queries``.
+    Authenticated corpus scope counts public rows plus the caller's private
+    library rows. Library scope remains exact membership. A `None` caller uses
+    the trusted internal corpus path.
 
-    Returns:
-        by_source  — ``{source_type: count}`` mapping.
-        by_topic   — list of ``{topic_id, name, count}`` dicts, desc by count.
-        untagged   — count of papers with no paper_topics row.
+    Returns
+    -------
+    tuple[dict[str, int], list[dict[str, Any]], int]
+        Source counts, topic counts, and the untagged-paper count.
     """
-    if scope == "corpus" or user_id is None:
+    if scope == "corpus" and user_id is not None:
+        source_rows = await conn.fetch(_SQL_BY_SOURCE_VISIBLE, user_id)
+        topic_rows = await conn.fetch(_SQL_BY_TOPIC_VISIBLE, user_id)
+        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_VISIBLE, user_id)
+    elif user_id is None:
         source_rows = await conn.fetch(_SQL_BY_SOURCE_CORPUS)
         topic_rows = await conn.fetch(_SQL_BY_TOPIC_CORPUS)
         untagged_row = await conn.fetchrow(_SQL_UNTAGGED_CORPUS)

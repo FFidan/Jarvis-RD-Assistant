@@ -14,11 +14,21 @@ from unittest.mock import AsyncMock
 import paper_ingestion.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException, Response
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.settings import get_secrets_settings
 from jarvis_common.testing import make_pool_and_conn
 from starlette.datastructures import Headers
 
 _TOKEN = "test-sentinel-token"
+
+
+def _loopback_transport() -> dict[str, object]:
+    """Transport fields for a request made directly on the server."""
+    return {
+        "scope": {RAW_CLIENT_SCOPE_KEY: ("127.0.0.1", 51234)},
+        "client": SimpleNamespace(host="127.0.0.1", port=51234),
+        "url": SimpleNamespace(scheme="http"),
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +65,14 @@ def _bootstrap_request(*, method: str, token: str | None) -> SimpleNamespace:
     state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=state)
     headers = Headers({} if token is None else {"x-setup-token": token})
-    return SimpleNamespace(app=app, state=state, cookies={}, method=method, headers=headers)
+    return SimpleNamespace(
+        app=app,
+        state=state,
+        cookies={},
+        method=method,
+        headers=headers,
+        **_loopback_transport(),
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +151,14 @@ async def test_create_first_admin_rejects_missing_token_in_bootstrap(_token_set)
     pool, _ = make_pool_and_conn(conn=conn)
     state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=state)
-    request = SimpleNamespace(app=app, state=state, cookies={}, method="POST", headers=Headers({}))
+    request = SimpleNamespace(
+        app=app,
+        state=state,
+        cookies={},
+        method="POST",
+        headers=Headers({}),
+        **_loopback_transport(),
+    )
     body = setup_router.AdminBody(email="admin@example.com")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -152,7 +176,14 @@ async def test_create_first_admin_409_takes_precedence_over_token(_token_set) ->
     pool, _ = make_pool_and_conn(conn=conn)
     state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=state)
-    request = SimpleNamespace(app=app, state=state, cookies={}, method="POST", headers=Headers({}))
+    request = SimpleNamespace(
+        app=app,
+        state=state,
+        cookies={},
+        method="POST",
+        headers=Headers({}),
+        **_loopback_transport(),
+    )
     body = setup_router.AdminBody(email="second-admin@example.com")
 
     with pytest.raises(HTTPException) as exc_info:

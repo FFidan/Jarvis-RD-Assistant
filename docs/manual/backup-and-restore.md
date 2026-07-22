@@ -1,20 +1,29 @@
 <!-- verified-against-UI: 2026-07-20 | routes: /admin/backups -->
 
-# Backup & Restore
+# Backup and restore
 
-JARVIS RD Assistant backs itself up **automatically** — a scheduled run every day, plus on-demand backups whenever you want one — and every archive is **encrypted** by default. Admins manage everything from a single page: **Admin → Backups** (`/admin/backups`). From that one page you can review and download backup points, adjust how long they are kept, restore the instance to an earlier point with one click, and even recover a brand-new server from an off-site copy — all in the browser.
+The default installation takes a restore point each day and can take one on
+demand. Setup creates an encryption key, so those archives are encrypted unless
+the operator deliberately changes the backup configuration. Administrators use
+**Admin → Backups** (`/admin/backups`) to review, download, retain, and restore
+them.
 
-This page is for **admins**. Regular users never see the Backups panel; during a restore they simply see a brief "restore in progress" message.
+This page is for **admins**. Regular users do not see the Backups panel; during
+a restore they see a brief "restore in progress" message.
 
 ---
 
-## The one key you must keep somewhere else
+## Keep the encryption key off the server
 
-Backups are encrypted with a **backup encryption key** that is generated during installation and stored in the server's `secrets/` folder. For obvious reasons, that key is **excluded from its own backup archive** — the archive it unlocks does not contain it.
+Setup creates a local backup encryption key. The key is excluded from the
+archive it unlocks.
 
-> **Keep a copy of the backup encryption key off-site, separate from your backup archives.** A password manager, a sealed envelope, a secret in a separate cloud account — anywhere that is *not* the server itself. If the server is ever lost, your off-site archives can only be decrypted with that key. **Losing the key makes every encrypted backup permanently unrecoverable.** No support process can get the data back.
+Keep a copy off-site and separate from the archive set: a password manager,
+sealed physical copy, or secret store on another account. If the host and the
+only key copy are lost together, encrypted backups cannot be recovered.
 
-Where to find the key file on the host is covered in the [Deployment Guide](../DEPLOYMENT.md#backup-restore); if someone else operates your server, ask them to confirm an off-site copy exists.
+If someone else operates the server, ask them to confirm that an off-site copy
+exists without sending the key through an untrusted channel.
 
 ---
 
@@ -26,8 +35,9 @@ Each **restore point** is a consistent snapshot of everything the instance needs
 |-----------|---------------|
 | **Main database** | Papers, users, notes, projects, settings, jobs |
 | **AI model router database** | Model routing configuration and API keys |
-| **Secrets** | The platform's credential files — required to decrypt and run a restored instance |
-| **Search index (Qdrant)** | Vector search snapshots (best-effort — if this part is missing, a restore rebuilds the index automatically) |
+| **PDF archive** | The numeric PDF files referenced by the main database; required in every current restore point |
+| **Data keys** | Exactly three keys coupled to encrypted database content; host service credentials are not moved between servers |
+| **Search index (Qdrant)** | Vector search snapshots (best-effort; a missing snapshot leaves search degraded until you repair it) |
 
 Because archives contain platform secrets, treat downloaded backup files with the same care as passwords — store them somewhere private.
 
@@ -85,34 +95,159 @@ You can roll the whole instance back to any listed restore point without leaving
 ### What happens behind the scenes
 
 - **A safety backup is taken first.** Before anything is touched, the current state is captured as a new restore point — so even a restore you regret is recoverable.
-- **The restore point is checked for tampering.** Backup points taken by this version or newer carry a signature that only your backup encryption key can produce. Whenever a restore point has one, it is re-checked before the restore starts — every time, on this server and on a fresh one alike. If it does not match, the restore point has been altered on disk, and the restore is refused outright with nothing touched: a signature that fails to verify is never overridable. A point carrying **no** signature is a separate case with its own rules — see *If your only surviving backup is an older, unsigned one* below. Deployments set up without a backup encryption key have nothing to sign with, so their restore points are neither signed nor checked.
+- **The restore point is checked before use.** Current backup points carry a
+  signed manifest that names the exact archives for one run. Restore checks the
+  signature, timestamp, file names, sizes, and checksums before decrypting or
+  replacing data. A duplicate, extra, missing, mismatched, or invalidly signed
+  archive is refused. An older point with no signature follows the separate
+  legacy procedure below; an invalid signature can never be overridden.
 - **The restore is staged, not in-place.** Your chosen backup is loaded into a *separate staging database* and only **swapped in atomically** once it verifies. If anything fails before the swap, the original database was never touched and is served again automatically — the restore **self-heals** rather than leaving you with a half-restored instance. The previous database is dropped only after the swap succeeds.
-- **Older backups are fine.** A backup taken by an older version of the app is accepted and **migrated forward automatically** after the swap — no manual steps.
-- **Newer backups are refused.** If a backup was made by a newer app version than is currently running, its Restore button is disabled with a note to update first (run `./update.sh`, then retry).
-- **The search index recovers best-effort.** If the search-index step fails, the rest of the restore still completes — your papers and data are intact, and the index rebuilds itself from the restored database (a few minutes on a large library, no data loss).
-- **Everyone is signed out.** The restore replaces the session store along with the rest of the data, so all users — including you — sign in again afterwards. This is expected.
+- **Older signed backups migrate forward.** Unsigned points follow the legacy
+  procedure below.
+- **Pre-v1.2 backups may not contain PDFs.** A correctly authenticated legacy
+  point is offered only with an explicit data-loss warning. Accepting it clears
+  the server's current PDF files before the restored database goes live; paper
+  records can remain, but their PDFs will not open until they are obtained and
+  processed again. A current backup missing its PDF archive is incomplete and
+  cannot be restored.
+- **Newer backups are refused.** If a backup was made by a newer app version,
+  update with `jarvis-research update`, then retry.
+- **The search index recovers best-effort.** Every restore rotates the vector
+  visibility generation. Readiness stays amber and search can temporarily
+  under-fetch while the reconciliation job validates and retags recovered
+  vectors. If the snapshot step was skipped or failed, use **Home → Prepare
+  library → Process whole library** for each affected library; healthy PDFs do
+  not need to be extracted again.
+- **Everyone is signed out.** Restored sessions, magic links, WebAuthn
+  challenges, and Telegram pairing codes are removed before the database goes
+  live. Durable accounts, roles, and passkeys remain, but every user — including
+  the initiating administrator — must sign in again.
 
 A clean restore lifts the maintenance window by itself. If a restore fails, the guided view says exactly what happened and what to do next — including the safety backup taken beforehand, which appears in the panel and can be restored like any other point.
 
 ---
 
-## Recovering a fresh server (disaster recovery, in the browser)
+## Identity and credential boundaries
 
-If the original server is gone entirely, you can bring a **brand-new host** back to life from your off-site copies — end to end in the browser, with **no terminal steps after installation**.
+A restore preserves durable accounts, roles, and passkeys while revoking
+transient sessions and one-time authentication challenges, so everyone is
+signed out. Existing passkeys continue to work only when the replacement server
+keeps the same hostname and RP ID; see [Passkeys](passkeys.md#after-a-restore-or-hostname-change).
 
-**You need:** your off-site **archive set** for one backup point (all the files from that restore point's Details table, including the required `manifest_<timestamp>.json.hmac` sidecar) and your off-site copy of the **backup encryption key**. A wrong key fails safe — it is checked against the archives before anything destructive happens, so a typo cannot destroy the fresh install.
+The encrypted archive installs exactly these three data-coupled keys:
+`jarvis_config_key.txt`, `jarvis_model_hmac_key.txt`, and
+`litellm_salt_key.txt`. They are needed to read database-backed encrypted
+settings and model-router credentials.
 
-> Recovering a fresh server requires a backup point taken by this version or newer, because it is verified by signature and older points carry none. Download a fresh off-site archive set after updating so your disaster-recovery copy is a verifiable one. Restore points on the original server are unaffected — older ones keep restoring normally there.
+The target host keeps its own PostgreSQL role password, backup key, operations
+API key, Qdrant key, SMTP host secret, Telegram host secret, and access-edge
+credentials. Database-backed SMTP, Telegram, cloud-provider, Zotero, and source
+settings are restored with the main database. After an off-host restore, those
+outbound database settings remain quarantined until the operator reviews and
+acknowledges them.
 
-1. **Install JARVIS on the new host** with `./setup.sh` and complete the first-admin sign-in, exactly as for a fresh install ([Getting Started](getting-started.md)).
-2. **Generate a one-time upload grant** from the Backups panel. The grant is shown once and is valid for **30 minutes** — it authorizes the browser upload and nothing else.
-3. **Upload the archive set and the key** in the browser. Uploads go to a dedicated, locked-down upload service — the key and the archive contents never pass through the app itself, and the one-time key is destroyed automatically once the restore finishes.
-4. **Trigger the restore.** The uploaded set appears in the **Restore from another JARVIS** section with **Complete**, **Secrets**, and **Key ready** badges. If a badge shows a problem (say, a missing archive or key), an inline hint says what to add. When everything is ready, click **Restore to this point** and type **RESTORE** to confirm.
-5. **Watch the guided view.** The restore runs the same staged, self-healing process as a one-click restore, then the stack **reconciles itself** — restored credentials are put in place, the database account is re-bound, and the app services restart on their own. When it completes, sign in with your restored account. Done.
+---
+
+## Application recovery is separate
+
+A data restore replaces databases, PDFs, the vector snapshot, and the three
+data keys; it does not install application images or change the checked-out
+JARVIS release. On a replacement server, first install a compatible release. If
+the restore reports that its backup came from newer code, recover or update the
+application with `jarvis-research update`, then retry the data restore. Do not
+use a database restore as an image rollback mechanism.
+
+---
+
+## Recovering a fresh server in the browser
+
+You need one complete, signed off-site archive set and the matching backup
+encryption key. The set includes `manifest_<timestamp>.json` and
+`manifest_<timestamp>.json.hmac`. JARVIS checks the key and archive set before
+it replaces data.
+
+1. Install JARVIS on the new host with `./setup.sh` and complete first-admin
+   setup.
+2. In **Admin → Backups**, generate a one-time upload grant. It expires after 30
+   minutes.
+3. Upload the archive set and encryption key. The dedicated browser upload
+   service writes only to the restore inbox; it has no database, application
+   secret, or Docker-socket access. The backup sidecar validates and consumes
+   that inbox.
+4. Under **Restore from another JARVIS**, confirm that **Complete**,
+   **Secrets**, and **Key ready** are shown. Select **Restore to this point** and
+   type **RESTORE**.
+5. Follow the progress view. A successful restore installs the recovered data
+   keys, rebinds the database account, restarts affected services, and signs
+   everyone out. Sign in with the recovered account.
+6. Review every restored outbound integration. In the original progress tab,
+   type `I HAVE REVIEWED RESTORED CREDENTIALS` to release quarantine. If that
+   restore session is no longer available, sign in as the configured owner or
+   run `jarvis-research restore acknowledge <restore-id>` on the host. Until
+   acknowledgement, SMTP, Telegram, source, Zotero, and cloud-provider egress
+   remains blocked.
 
 <!-- screenshot: Restore from another JARVIS section showing a staged backup set with Complete, Secrets, and Key ready badges -->
 
-For a headless server with no browser access, a command-line fallback exists — see [Deployment Guide → Off-host recovery](../DEPLOYMENT.md#off-host-total-host-loss-recovery).
+An unsigned off-site set is not accepted on a fresh host. After updating an old
+installation, download a new signed restore point for disaster recovery.
+
+---
+
+## Headless fresh-host recovery
+
+Use this fallback only when the new server cannot be reached with a browser.
+Replace `<timestamp>` with the restore point timestamp in `YYYYMMDD_HHMMSS`
+format.
+
+1. Start the fresh stack with `./setup.sh`.
+2. Copy the complete archive set into the restore inbox:
+
+   ```bash
+   docker compose cp ./offsite/. postgres-backup:/restore-inbox/
+   ```
+
+   If the set is in the configured S3 bucket, pull only that timestamp instead:
+
+   ```bash
+   docker compose exec -e BACKUP_PULL_TS=<timestamp> \
+     -e BACKUP_PULL_DEST=/restore-inbox \
+     postgres-backup /usr/local/bin/backup.sh
+   ```
+
+3. Copy the matching encryption key under the required one-time name, then
+   submit the restore request:
+
+   ```bash
+   docker compose cp /path/to/backup_encrypt_key.txt \
+     postgres-backup:/restore-inbox/operator_key
+   docker compose exec postgres-backup sh -c \
+     'printf "{\"source\":\"inbox\",\"timestamp\":\"<timestamp>\"}" > /backup-trigger/.restore_request.json'
+   ```
+
+4. Follow `docker compose logs -f postgres-backup`, or run:
+
+   ```bash
+   docker compose exec postgres-backup cat /backup-trigger/.restore_status.json
+   ```
+
+   The one-time key and decrypted secrets staging are removed when the restore
+   exits.
+
+5. Review the restored outbound settings, note the `restore_id` in the status,
+   and run `jarvis-research restore acknowledge <restore-id>`. The command
+   requires the exact ID and a second typed confirmation before it releases
+   quarantine.
+
+A failure before the database swap lifts maintenance because live data was not
+replaced. A later failure keeps the service at HTTP 503. Do not remove the
+`.destructive` marker merely to make the app reachable. Read the status and fix
+the reported cause; for an inbox restore, copy the one-time key again and repeat
+the restore request above. A successful retry clears the maintenance markers.
+Clear them manually only after the status instructions are complete and the
+databases and services have been checked.
+
+Remove the copied archive set from the restore inbox after recovery is confirmed.
 
 ---
 
@@ -130,4 +265,4 @@ This override applies **only** when a signature is absent. It never applies to a
 
 - [Admin Pages](admin.md) — the other admin surfaces: user management, audit log, system health, logs.
 - [Getting Started](getting-started.md) — installation and first-admin sign-in (step 1 of disaster recovery).
-- [Deployment Guide](../DEPLOYMENT.md#backup-restore) — operator-level detail: backup schedule and encryption settings, the manual host-level restore runbook, and the command-line disaster-recovery fallback.
+- [Deployment Guide](../DEPLOYMENT.md#backup-restore) — access modes, host setup, and troubleshooting.

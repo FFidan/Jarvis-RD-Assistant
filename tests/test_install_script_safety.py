@@ -131,6 +131,18 @@ def test_setup_never_advertises_https_on_a_raw_lan_ip():
     )
 
 
+def test_setup_migrates_every_retired_dashboard_tls_key():
+    """A reconfigure must remove both inputs from the retired dashboard TLS path."""
+    text = (REPO_ROOT / "setup.sh").read_text()
+    match = re.search(r'^RETIRED_ENV_KEYS="([^"]*)"', text, re.MULTILINE)
+    assert match, "setup.sh must declare RETIRED_ENV_KEYS"
+    retired = set(match.group(1).split())
+    assert {"JARVIS_CERT_SAN", "JARVIS_SKIP_SELFSIGNED_GEN"}.issubset(retired), (
+        "setup.sh must remove both obsolete dashboard certificate inputs from "
+        f"carried-forward .env files; got {sorted(retired)}"
+    )
+
+
 def test_no_executed_docker_prune():
     """The install / reconfigure scripts must never auto-run a docker prune;
     printed guidance telling the operator to prune manually is fine."""

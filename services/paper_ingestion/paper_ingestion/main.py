@@ -19,9 +19,9 @@ while letting paper_ingestion express its rich init pipeline as
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
-import os
 import socket
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -29,7 +29,7 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.responses import JSONResponse
 from jarvis_common import (
     ServiceLifespanConfig,
     configure_lifespan,
@@ -67,6 +67,7 @@ from paper_ingestion.ingestion.embedding_config import (
     EMBEDDING_MODEL,
     EMBEDDING_MODEL_NAME,
 )
+from paper_ingestion.ingestion.payload_schema import run_visibility_reconciler
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 
 # Re-exported so `from paper_ingestion.main import <name>` keeps resolving after
@@ -101,30 +102,10 @@ from paper_ingestion.services.source_helper import _decrypt_config_api_key
 from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 
-# Install uvloop early so the event-loop policy is set before
-# any asyncio.get_event_loop() calls.  Guarded against pytest runs because
-# uvloop.install() mutates the global policy and breaks pytest-asyncio
-# per-test loop isolation (tests pass when isolated but fail as a suite).
-if not os.environ.get("PYTEST_CURRENT_TEST"):
-    try:
-        import uvloop  # noqa: PLC0415
-
-        uvloop.install()
-    except ImportError:
-        pass
-
 configure_logging("paper_ingestion", log_level=get_core_settings().log_level)
 maybe_init_sentry("paper_ingestion")
 
 logger = logging.getLogger(__name__)
-
-try:
-    import orjson as _orjson  # noqa: F401
-
-    DEFAULT_RESPONSE_CLASS = ORJSONResponse
-except ImportError:
-    logger.warning("orjson is not installed; falling back to JSONResponse")
-    DEFAULT_RESPONSE_CLASS = JSONResponse
 
 
 # ---------------------------------------------------------------------------
@@ -204,15 +185,23 @@ async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
 
 
 async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
-    """Construct Qdrant client + Embedder + PDFProcessor + QuoteVerifier."""
+    """Initialize Qdrant, visibility repair, PDF processing, and verification."""
     _cfg = get_paper_ingestion_settings()
     qdrant_url = _cfg.qdrant_url
     qdrant_api_key = _cfg.qdrant_api_key.get_secret_value() if _cfg.qdrant_api_key else None
     app.state.qdrant_client = AsyncQdrantClient(
         url=qdrant_url, api_key=qdrant_api_key, check_compatibility=False
     )
-    app.state.embedder = Embedder(app.state.http_client, app.state.qdrant_client)
+    app.state.embedder = Embedder(
+        app.state.http_client,
+        app.state.qdrant_client,
+        db_pool=app.state.db_pool,
+    )
     await app.state.embedder.ensure_collection()
+    app.state.vector_visibility_task = asyncio.create_task(
+        run_visibility_reconciler(app.state.db_pool, app.state.embedder),
+        name="vector_visibility_reconciler",
+    )
     app.state.pdf_processor = PDFProcessor(app.state.http_client, app.state.embedder)
     app.state.verifier = QuoteVerifier()
 
@@ -462,16 +451,20 @@ def _register_tasks(procrastinate_app: Any) -> None:
     register_paper_ingestion_tasks(procrastinate_app)
 
 
-# B.4 Step 4 — start the procrastinate worker polling paper_ingestion + builtin
-# Hook body is shared via jarvis_common.app_factory. The maintenance watcher must
-# pause/resume the SAME queues, so both hooks read one constant to prevent drift.
+# The worker and maintenance watcher share one queue list so pause and resume
+# always cover the queues the service polls.
 _WORKER_QUEUES = ["paper_ingestion", "builtin"]
 _start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, queues=_WORKER_QUEUES)
 _maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 
 
 async def _shutdown_qdrant(app: FastAPI) -> None:
-    """Close the Qdrant client before the http client tears down."""
+    """Cancel visibility reconciliation, then close Qdrant cleanly."""
+    visibility_task = getattr(app.state, "vector_visibility_task", None)
+    if visibility_task is not None:
+        visibility_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await visibility_task
     qdrant_client = getattr(app.state, "qdrant_client", None)
     if qdrant_client is not None:
         await qdrant_client.close()
@@ -538,10 +531,10 @@ _lifespan_config = ServiceLifespanConfig(
         _shutdown_litellm_reconciler,  # _start_litellm_reconciler
         _shutdown_scheduler,  # _start_scheduler_hook
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
-        # LIFO: watcher inits after the worker, so it is torn down BEFORE the
-        # worker's connector closes — the watcher never resumes onto a closed app.
+        # Shutdown runs in reverse order, so the watcher stops before the worker
+        # connector closes.
         shutdown_maintenance_watcher,  # _maintenance_watcher
-        None,  # make_warmup_hook (fire-and-forget; cancelled at process exit)
+        None,  # make_warmup_hook has no cleanup callback
     ],
 )
 
@@ -551,7 +544,6 @@ app = FastAPI(
     version=app_version(),
     lifespan=configure_lifespan(_lifespan_config),
     dependencies=[Depends(verify_api_key)],
-    default_response_class=DEFAULT_RESPONSE_CLASS,
 )
 
 configure_middleware_and_errors(
@@ -637,24 +629,10 @@ from paper_ingestion.routers import source_config as source_config_router  # noq
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
-# Passkey ceremonies. Under /api/auth/* so verify_api_key exempts the front door;
-# login/* + capability are unauthenticated, register/list/delete enforce the
-# session in-handler via current_user_id_strict.
 app.include_router(auth_passkeys_router.router)
-# Admin, backup and AI-settings panels stay behind the app-level verify_api_key:
-# it returns early once SessionMiddleware has set request.state.user_id from a
-# valid session, so a browser needs no X-API-Key. require_admin is the
-# authorization gate on every route here except GET
-# /api/admin/backups/restore/status, which uses restore_status_auth so the
-# progress poll still answers with a one-time bearer token or the ops X-API-Key
-# when a restore has torn down the session store.
 app.include_router(admin_router.router)
 app.include_router(backups_router.router)
 app.include_router(settings_ai_router.router)
-# Setup is the first-run bootstrap. verify_api_key exempts /api/setup/* by path
-# because FirstRunGate polls it before any credential exists; each handler's
-# require_unconfigured_or_admin is the real gate — open until the first admin
-# exists, admin-only afterwards.
 app.include_router(setup_router.router)
 app.include_router(topics.router)
 app.include_router(settings.router)

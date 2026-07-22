@@ -45,6 +45,27 @@ def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return json.loads(encoded)
 
 
+async def log_audit_strict(
+    conn: Any,
+    *,
+    action: str,
+    resource: str,
+    user_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Insert an audit event on the caller's transaction and propagate failure."""
+    await conn.execute(
+        """
+        INSERT INTO audit_log (user_id, action, resource, metadata)
+        VALUES ($1, $2, $3, $4)
+        """,
+        user_id,
+        action,
+        resource,
+        _cap_metadata(metadata),
+    )
+
+
 async def log_audit(
     pool: asyncpg.Pool,
     *,

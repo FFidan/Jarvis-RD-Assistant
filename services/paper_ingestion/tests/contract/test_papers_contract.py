@@ -802,13 +802,13 @@ async def test_a81_trash_and_reject_trashes_and_inserts_feedback(
 # --- A83: DELETE /api/papers/{paper_id} — hard delete trashed paper ---
 
 
-async def test_a83_hard_delete_removes_paper_row(
+async def test_a83_hard_delete_removes_only_the_callers_membership(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
-    """Covers map row A83: DELETE /api/papers/{paper_id} removes the paper row from DB.
+    """A session-scoped delete preserves the canonical paper row.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:831 at HEAD ba1f8146.
     Survivor-of: test_papers_lifecycle.py mock-unit hard_delete tests.
 
@@ -842,9 +842,16 @@ async def test_a83_hard_delete_removes_paper_row(
     body = resp.json()
     assert body.get("deleted") == paper_id, f"Expected {{'deleted': {paper_id}}}; got {body}"
 
-    # Verify the paper row is actually gone from the DB (cascade removes user_library too)
-    gone = await contract_conn.fetchrow("SELECT id FROM papers WHERE id=$1", paper_id)
-    assert gone is None, f"Paper {paper_id} must be deleted from papers table after hard delete"
+    preserved = await contract_conn.fetchval("SELECT id FROM papers WHERE id=$1", paper_id)
+    assert preserved == paper_id
+    assert (
+        await contract_conn.fetchval(
+            "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2",
+            paper_id,
+            contract_two_users.user_a_id,
+        )
+        is None
+    )
 
 
 # --- A84: POST /api/papers/bulk — bulk state action scoped to current user ---
@@ -902,18 +909,180 @@ async def test_a84_bulk_action_transitions_state_for_owner(
     )
 
 
-# --- CRIT-XT-1: multi-tenant hard-delete must not destroy a shared corpus row ---
+# --- CRIT-XT-1: multi-tenant hard-delete must preserve a still-visible paper row ---
 
 
-async def test_hard_delete_shared_paper_only_removes_callers_membership(
+async def _seed_caller_private_paper_rows(
+    conn, paper_id: int, user_id: int, other_id: int
+) -> tuple[int, int]:
+    suffix = f"{paper_id}-{user_id}"
+    entity_id = await conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type)
+           VALUES ($1, $1, 'concept') RETURNING id""",
+        f"delete-private-entity-{suffix}",
+    )
+    template_id = await conn.fetchval(
+        "INSERT INTO extraction_templates (name) VALUES ($1) RETURNING id",
+        f"delete-private-template-{suffix}",
+    )
+    project_id = await conn.fetchval(
+        "INSERT INTO projects (name, user_id) VALUES ($1, $2) RETURNING id",
+        f"delete-private-project-{suffix}",
+        user_id,
+    )
+    task_id = await conn.fetchval(
+        "INSERT INTO tasks (project_id, title, user_id) VALUES ($1, $2, $3) RETURNING id",
+        project_id,
+        f"delete-private-task-{suffix}",
+        user_id,
+    )
+    pulse_deck_id = await conn.fetchval(
+        """INSERT INTO pulse_decks (deck_date, user_id)
+           VALUES (CURRENT_DATE, $1)
+           ON CONFLICT (deck_date, user_id) DO UPDATE SET user_id=EXCLUDED.user_id
+           RETURNING id""",
+        user_id,
+    )
+
+    await conn.execute(
+        "INSERT INTO author_alert_log (paper_id, user_id) VALUES ($1, $2)", paper_id, user_id
+    )
+    await conn.execute(
+        """INSERT INTO cards (paper_id, card_type, front, back, user_id)
+           VALUES ($1, 'concept', $3, 'back', $2)""",
+        paper_id,
+        user_id,
+        f"delete-private-card-{suffix}",
+    )
+    await conn.execute(
+        """INSERT INTO paper_contradictions
+             (paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+              explanation, confidence, user_id)
+           VALUES ($1, $3, 'a', 'b', $4, $5, 'explanation', 0.9, $2)""",
+        paper_id,
+        user_id,
+        other_id,
+        f"quote-a-{suffix}",
+        f"quote-b-{suffix}",
+    )
+    await conn.execute(
+        "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $3, $2)",
+        paper_id,
+        user_id,
+        entity_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_extractions (paper_id, template_id, user_id)
+           VALUES ($1, $3, $2)""",
+        paper_id,
+        user_id,
+        template_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_highlights (paper_id, user_id, page, rect, note)
+           VALUES ($1, $2, 1, '{}'::jsonb, $3)""",
+        paper_id,
+        user_id,
+        f"delete-private-highlight-{suffix}",
+    )
+    await conn.execute(
+        "INSERT INTO paper_notes (paper_id, user_id, user_note) VALUES ($1, $2, $3)",
+        paper_id,
+        user_id,
+        f"delete-private-note-{suffix}",
+    )
+    await conn.execute(
+        "INSERT INTO paper_recommendations (paper_id, score, user_id) VALUES ($1, 0.8, $2)",
+        paper_id,
+        user_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_summaries
+             (paper_id, summary_brief, summary_detailed, user_id)
+           VALUES ($1, $3, $3, $2)""",
+        paper_id,
+        user_id,
+        f"delete-private-summary-{suffix}",
+    )
+    await conn.execute(
+        """INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key)
+           VALUES ($1, $2, $3)""",
+        paper_id,
+        user_id,
+        f"zotero-{suffix}",
+    )
+    await conn.execute(
+        """INSERT INTO pulse_cards (deck_id, paper_id, rank, score, user_id)
+           VALUES ($3, $1, 1, 0.8, $2)""",
+        paper_id,
+        user_id,
+        pulse_deck_id,
+    )
+    await conn.execute(
+        """INSERT INTO recommendation_feedback (paper_id, user_id, signal, source)
+           VALUES ($1, $2, 'positive', 'paper_detail_thumbs')""",
+        paper_id,
+        user_id,
+    )
+    await conn.execute(
+        "INSERT INTO task_paper_links (task_id, paper_id) VALUES ($2, $1)", paper_id, task_id
+    )
+    await conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($2, $1)", paper_id, project_id
+    )
+    await conn.execute(
+        """UPDATE entities AS entity
+           SET paper_count = (SELECT count(*) FROM paper_entities WHERE entity_id = entity.id)
+           WHERE entity.id = $1""",
+        entity_id,
+    )
+    await conn.execute(
+        """UPDATE pulse_decks AS deck
+           SET card_count = (SELECT count(*) FROM pulse_cards WHERE deck_id = deck.id)
+           WHERE deck.id = $1""",
+        pulse_deck_id,
+    )
+    return entity_id, pulse_deck_id
+
+
+async def _caller_private_paper_counts(conn, paper_id: int, user_id: int) -> dict[str, int]:
+    queries = {
+        "author_alert_log": "SELECT count(*) FROM author_alert_log WHERE paper_id=$1 AND user_id=$2",
+        "cards": "SELECT count(*) FROM cards WHERE paper_id=$1 AND user_id=$2",
+        "paper_contradictions": """SELECT count(*) FROM paper_contradictions
+            WHERE (paper_a_id=$1 OR paper_b_id=$1) AND user_id=$2""",
+        "paper_entities": "SELECT count(*) FROM paper_entities WHERE paper_id=$1 AND user_id=$2",
+        "paper_extractions": "SELECT count(*) FROM paper_extractions WHERE paper_id=$1 AND user_id=$2",
+        "paper_highlights": "SELECT count(*) FROM paper_highlights WHERE paper_id=$1 AND user_id=$2",
+        "paper_notes": "SELECT count(*) FROM paper_notes WHERE paper_id=$1 AND user_id=$2",
+        "paper_recommendations": "SELECT count(*) FROM paper_recommendations WHERE paper_id=$1 AND user_id=$2",
+        "paper_summaries": "SELECT count(*) FROM paper_summaries WHERE paper_id=$1 AND user_id=$2",
+        "paper_user_zotero_links": "SELECT count(*) FROM paper_user_zotero_links WHERE paper_id=$1 AND user_id=$2",
+        "pulse_cards": "SELECT count(*) FROM pulse_cards WHERE paper_id=$1 AND user_id=$2",
+        "recommendation_feedback": "SELECT count(*) FROM recommendation_feedback WHERE paper_id=$1 AND user_id=$2",
+        "task_paper_links": """SELECT count(*) FROM task_paper_links link
+            JOIN tasks owner ON owner.id=link.task_id
+            WHERE link.paper_id=$1 AND owner.user_id=$2""",
+        "project_papers": """SELECT count(*) FROM project_papers link
+            JOIN projects owner ON owner.id=link.project_id
+            WHERE link.paper_id=$1 AND owner.user_id=$2""",
+        "paper_user_state": "SELECT count(*) FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+        "user_library": "SELECT count(*) FROM user_library WHERE paper_id=$1 AND user_id=$2",
+    }
+    return {name: await conn.fetchval(sql, paper_id, user_id) for name, sql in queries.items()}
+
+
+async def test_hard_delete_shared_paper_removes_only_callers_private_rows(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
 ):
-    """User A hard-deletes a paper that user B also holds → only A's membership/state
-    is removed; the shared papers row + B's library/state survive; vectors untouched.
+    """User A hard-deletes a shared paper without deleting B's data or shared artifacts.
+
+    Every paper-linked row that is privately owned by A is removed in the same
+    transaction. B's corresponding rows and the canonical chunk remain.
     """
     from paper_ingestion import papers_service
 
@@ -952,6 +1121,46 @@ async def test_hard_delete_shared_paper_only_removes_callers_membership(
         paper_id,
         user_b_id,
     )
+    other_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ($1, 'arxiv', 'XT1 Comparison Paper', ARRAY['Au'], $2)
+           RETURNING id""",
+        f"xt1-comparison-{paper_id}",
+        f"https://xt1.t/comparison/{paper_id}",
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks (paper_id, chunk_index, content)
+           VALUES ($1, 0, 'shared canonical chunk')""",
+        paper_id,
+    )
+    entity_a_id, pulse_deck_a_id = await _seed_caller_private_paper_rows(
+        contract_conn, paper_id, user_a_id, other_id
+    )
+    entity_b_id, pulse_deck_b_id = await _seed_caller_private_paper_rows(
+        contract_conn, paper_id, user_b_id, other_id
+    )
+    assert set(
+        (await _caller_private_paper_counts(contract_conn, paper_id, user_a_id)).values()
+    ) == {1}
+    assert set(
+        (await _caller_private_paper_counts(contract_conn, paper_id, user_b_id)).values()
+    ) == {1}
+    assert await contract_conn.fetchval(
+        "SELECT paper_count FROM entities WHERE id=$1", entity_a_id
+    ) == await contract_conn.fetchval(
+        "SELECT count(*) FROM paper_entities WHERE entity_id=$1", entity_a_id
+    )
+    assert await contract_conn.fetchval(
+        "SELECT paper_count FROM entities WHERE id=$1", entity_b_id
+    ) == await contract_conn.fetchval(
+        "SELECT count(*) FROM paper_entities WHERE entity_id=$1", entity_b_id
+    )
+    for deck_id in (pulse_deck_a_id, pulse_deck_b_id):
+        assert await contract_conn.fetchval(
+            "SELECT card_count FROM pulse_decks WHERE id=$1", deck_id
+        ) == await contract_conn.fetchval(
+            "SELECT count(*) FROM pulse_cards WHERE deck_id=$1", deck_id
+        )
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.delete(f"/api/papers/{paper_id}")
@@ -975,18 +1184,19 @@ async def test_hard_delete_shared_paper_only_removes_callers_membership(
         )
         == "reading"
     )
-    # A's membership + state gone.
+    # Every caller-private row/link is gone, while B's complete private surface
+    # and the canonical chunk remain.
+    assert set(
+        (await _caller_private_paper_counts(contract_conn, paper_id, user_a_id)).values()
+    ) == {0}
+    assert set(
+        (await _caller_private_paper_counts(contract_conn, paper_id, user_b_id)).values()
+    ) == {1}
     assert (
         await contract_conn.fetchval(
-            "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
+            "SELECT content FROM paper_chunks WHERE paper_id=$1 AND chunk_index=0", paper_id
         )
-        is None
-    )
-    assert (
-        await contract_conn.fetchval(
-            "SELECT 1 FROM paper_user_state WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
-        )
-        is None
+        == "shared canonical chunk"
     )
     # Shared vectors NOT touched (row survives).
     assert vector_calls == [], (
@@ -994,16 +1204,14 @@ async def test_hard_delete_shared_paper_only_removes_callers_membership(
     )
 
 
-async def test_hard_delete_last_holder_removes_shared_row_and_vectors(
+async def test_hard_delete_last_holder_preserves_shared_row_and_vectors(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
 ):
-    """When the caller is the only library holder, hard-delete removes the papers row
-    and runs Qdrant cleanup (legacy full-delete preserved for the last holder).
-    """
+    """A last library holder still cannot delete shared canonical data."""
     from paper_ingestion import papers_service
 
     vector_calls: list[int] = []
@@ -1037,29 +1245,23 @@ async def test_hard_delete_last_holder_removes_shared_row_and_vectors(
         resp = await c.delete(f"/api/papers/{paper_id}")
 
     assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:300]}"
-    purged_paper_row = await contract_conn.fetchval("SELECT id FROM papers WHERE id=$1", paper_id)
-    assert purged_paper_row is None
-    assert vector_calls == [paper_id], f"vectors must be cleaned on full delete: {vector_calls}"
+    preserved = await contract_conn.fetchval("SELECT id FROM papers WHERE id=$1", paper_id)
+    assert preserved == paper_id
+    assert vector_calls == []
 
 
-async def test_hard_delete_sole_holder_preserves_row_when_discovered_by_other(
+async def test_hard_delete_sole_holder_preserves_shared_row_regardless_of_discoverer(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
 ):
-    """Exercises the ``discovered_by`` guard in ``_hard_delete_scoped`` directly.
+    """A session-scoped delete never removes the canonical paper row.
 
-    User A is the ONLY remaining library holder (so the ``others_hold`` short-circuit
-    does NOT fire), but the paper was discovered by user B. The guard must therefore
-    refuse the physical delete: A's membership/state are removed, the shared ``papers``
-    row is preserved (B remains the discoverer), and the shared Qdrant vectors are NOT
-    touched. If the guard were removed, the row would be physically deleted and
-    ``delete_paper_vectors`` would run — failing the assertions below.
-
-    Verified: services/paper_ingestion/paper_ingestion/papers_service.py:104 at HEAD
-    (``if discovered_by is not None and discovered_by != user_id: return False``).
+    A is the only library holder, while B is the recorded discoverer. A's
+    private rows are removed, but shared SQL and Qdrant data remain available
+    independently of membership count or discovery attribution.
     """
     from paper_ingestion import papers_service
 
@@ -1098,12 +1300,12 @@ async def test_hard_delete_sole_holder_preserves_row_when_discovered_by_other(
 
     assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:300]}"
 
-    # (b) Shared papers row PRESERVED — A is not the discoverer, so no physical delete.
+    # The shared papers row is preserved even after the last membership is gone.
     surviving_paper_row = await contract_conn.fetchval(
         "SELECT id FROM papers WHERE id=$1", paper_id
     )
     assert surviving_paper_row == paper_id, (
-        f"shared papers row {paper_id} must survive when caller is not the discoverer"
+        f"shared papers row {paper_id} must survive a session-scoped delete"
     )
     # (a) A's user_library + paper_user_state rows are gone.
     a_library_row = await contract_conn.fetchval(
@@ -1114,10 +1316,9 @@ async def test_hard_delete_sole_holder_preserves_row_when_discovered_by_other(
         "SELECT 1 FROM paper_user_state WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
     )
     assert a_state_row is None, "A's paper_user_state row must be removed"
-    # (c) Vectors NOT touched — row was not physically deleted.
+    # Shared vectors are not touched because the row was not physically deleted.
     assert vector_calls == [], (
-        f"delete_paper_vectors must not run when the discovered_by guard blocks "
-        f"physical delete: {vector_calls}"
+        f"delete_paper_vectors must not run for a session-scoped delete: {vector_calls}"
     )
 
 
@@ -1979,11 +2180,11 @@ async def test_pwst_06_state_transitions_idor_rejected(
 ):
     """PUT /api/papers/{paper_id_a}/save by user B returns 403 (IDOR rejection).
 
-    # Verified: libs/jarvis_common/jarvis_common/db_helpers.py:234
-    # (assert_paper_ownership: discovered_by=user_a, caller=user_b, not in
-    # user_b's user_library → raises HTTPException(403)).
+    # Verified: libs/jarvis_common/jarvis_common/db_helpers.py
+    # (assert_paper_ownership requires persisted public scope or caller-library
+    # membership; this private paper has neither for user B).
     """
-    # ARRANGE — paper_id_a is owned (discovered_by) by user_a; user_b has no access.
+    # ARRANGE — paper_id_a is private and absent from user B's library.
     paper_id = contract_two_users.paper_id_a
 
     # ACT — user B attempts to save user A's paper
@@ -2002,8 +2203,8 @@ async def test_pwst_07_state_transition_404_for_missing_paper(
 ):
     """PUT /api/papers/9999999/save returns 404 when the paper does not exist.
 
-    # Verified: libs/jarvis_common/jarvis_common/db_helpers.py:234
-    # (assert_paper_ownership: SELECT discovered_by … WHERE id=$1 returns None → 404).
+    # Verified: libs/jarvis_common/jarvis_common/db_helpers.py
+    # (assert_paper_ownership returns an opaque 404 when no visible row exists).
     """
     # ACT — paper_id 9999999 does not exist in the test DB
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -2303,15 +2504,14 @@ async def test_process_library_enqueues_202_with_job_id(
     mock_task.defer_async.assert_awaited_once()
 
 
-async def test_process_library_skips_when_already_processed(
+async def test_process_library_enqueues_bounded_reconciliation_when_chunks_exist(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """When every library paper is already processed, no job is queued and the
-    endpoint returns the skip contract.
+    """A chunked library still queues bounded vector reconciliation.
 
     # Verified: routers/papers_bulk.py:process_library returns
-    # {"job_id": null, "status": "skipped", "reason": "library_already_processed"}
-    # on an empty EXISTS pre-check; the selection excludes chunked papers.
+    # The database cannot prove Qdrant points exist, so chunked papers remain
+    # bounded probe candidates for the background job.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2329,10 +2529,9 @@ async def test_process_library_skips_when_already_processed(
 
     assert resp.status_code == 202, resp.text[:300]
     body = resp.json()
-    assert body.get("job_id") is None, f"Expected null job_id: {body}"
-    assert body.get("status") == "skipped", body
-    assert body.get("reason") == "library_already_processed", body
-    mock_task.defer_async.assert_not_awaited()
+    assert body.get("job_id"), f"Expected reconciliation job_id: {body}"
+    assert body.get("status") == "queued", body
+    mock_task.defer_async.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

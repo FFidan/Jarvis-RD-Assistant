@@ -1,24 +1,19 @@
 #!/usr/bin/env bash
-# restore.sh — JARVIS one-click disaster-recovery RESTORE (runs in the
-# postgres-backup sidecar, never the app, so the app gains ZERO new privilege).
+# Restore one selected backup set from the postgres-backup sidecar. The
+# application receives no database tools or container-control privileges.
 #
-# Triggered by /backup-trigger/.restore_request.json (written by the admin API).
-# It restores a chosen backup timestamp: safety pre-backup -> drop+recreate+
-# reload both Postgres DBs -> recover Qdrant -> all behind a maintenance gate.
+# The admin API writes /backup-trigger/.restore_request.json. The sidecar takes
+# a safety backup, verifies and swaps both databases, restores Qdrant and data
+# keys, then replaces the PDF set while maintenance remains active.
 #
-# Three load-bearing safety invariants (each closes a specific failure mode):
-#   1. AT-MOST-ONCE — the request sentinel is consumed (rm -f) BEFORE any
-#      destruction, so a failed restore can never re-fire on a sidecar restart.
-#      A recorded terminal failure exits 0 (the sidecar is restart:unless-stopped;
-#      a non-zero exit would crash-restart into a re-drop loop).
-#   2. QUIESCE-BY-REVOKE — every DROP DATABASE is preceded by
-#      `ALTER DATABASE ... ALLOW_CONNECTIONS false` + pg_terminate_backend, so
-#      the persistent litellm container and the app pools cannot re-grab the DB
-#      during the drop window (the sidecar has no docker.sock to stop them).
-#   3. NEVER-RE-EXPOSE-A-DESTROYED-DB — a failure AFTER the first DROP keeps the
-#      maintenance sentinel ON (the stack stays 503) until the operator restores
-#      from the safety backup. A clean restore, or any failure BEFORE the first
-#      DROP (nothing was destroyed), clears maintenance immediately.
+# Safety properties:
+#   1. The request is consumed before destructive work, preventing a failed
+#      restore from replaying after a sidecar restart. Recorded terminal failures
+#      exit successfully so the container does not restart into the same request.
+#   2. Database connections are revoked and existing backends terminated before
+#      every drop, preventing application pools from reconnecting mid-swap.
+#   3. A failure after the first drop keeps maintenance active until recovery
+#      completes. Clean restores and pre-destructive failures clear maintenance.
 
 set -euo pipefail
 
@@ -28,25 +23,33 @@ REQUEST_FILE="${TRIGGER_DIR}/.restore_request.json"
 STATUS_FILE="${TRIGGER_DIR}/.restore_status.json"
 MAINTENANCE_SENTINEL="${MAINTENANCE_SENTINEL:-${TRIGGER_DIR}/.maintenance}"
 MAINTENANCE_DESTRUCTIVE="${MAINTENANCE_DESTRUCTIVE_SENTINEL:-${TRIGGER_DIR}/.destructive}"
-# Durable crash-recovery marker for the rename-swap: names the db + phase of the
-# in-flight swap so a sidecar restart (via `restore.sh --recover`) can reconcile a
-# stranded half-swap deterministically. Cleared when a db's swap fully completes.
-SWAP_STATE_FILE="${TRIGGER_DIR}/.restore_swap_state.json"
+OUTBOUND_QUARANTINE_SENTINEL="${OUTBOUND_QUARANTINE_SENTINEL:-${TRIGGER_DIR}/.outbound-quarantine.json}"
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
-# Off-host (cross-host) disaster recovery: the operator drops the archive set +
-# a one-time operator key into the rw restore_inbox volume mounted here. This is
-# the ONLY writable cross-host secrets-staging surface and is NEVER under the RO
-# /secrets mount. Used only by an `inbox` restore (see STEP 1 / STEP 8); the
-# same-host WebUI restore never touches any of these paths.
+LOCK_DIR="${BACKUP_DIR}/.lifecycle"
+# Durable protocol state belongs in the private backup volume, not the
+# app-writable request/status volume.
+SWAP_STATE_FILE="${LOCK_DIR}/restore-swap-state.json"
+RESTORE_TIMEOUT_FILE="${LOCK_DIR}/restore-timeout"
+# Inbox restores read the archive set and one-time operator key from this
+# writable volume. It is separate from the read-only service-secret mount and
+# is unused by same-host guided restores.
 INBOX_DIR="${RESTORE_INBOX_DIR:-/restore-inbox}"
 OPERATOR_KEYFILE="${INBOX_DIR}/operator_key"
 SECRETS_STAGING="${INBOX_DIR}/.secrets-staging"
-# Off-host restore materializes the restored ./secrets/*.txt here (the sidecar's rw
-# bind mount of the host ./secrets) so the app containers self-restart onto the
-# rotated secrets — a fresh host recovers with zero terminal steps. Only the inbox path
-# WRITES here; the mount itself is unconditional, which is what lets a local restore read
-# the signing ratchet marker below.
+# The sidecar installs only the three archive data keys in this destination-host
+# directory; its other files remain untouched. Database-backed settings restore
+# separately and stay quarantined after off-host recovery. A local restore also
+# reads the signing marker below from this mount.
 HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
+LIFECYCLE_OPERATION_LOCK="${LOCK_DIR}/operation.lock"
+LIFECYCLE_OPERATION_STATE="${LOCK_DIR}/operation.state"
+LIFECYCLE_ADMISSION_LOCK="${LOCK_DIR}/operation-admission.lock"
+HOST_RESERVATION="${LOCK_DIR}/host.reservation"
+UPDATE_GUARD="${LOCK_DIR}/update.guard"
+UPDATE_CONTROL="${LOCK_DIR}/update.control"
+UPDATE_RESERVATION="${LOCK_DIR}/update.reservation"
+ROTATION_SENTINEL="${LOCK_DIR}/rotation.guard"
+ROTATION_RESERVATION="${LOCK_DIR}/rotation.reservation"
 # Out-of-band ratchet: backup.sh drops this marker the first time it signs a manifest.
 # The decision to REQUIRE a signature must never come from a field inside the
 # (unauthenticated) manifest — that would be a strip-the-field downgrade — so it is read
@@ -67,9 +70,14 @@ LITELLM_DB="${LITELLM_DATABASE:-litellm}"
 # the disk preflight can size the free space the reload will consume. Overridable
 # only to keep the path in one place; users never set it.
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/postgres-data}"
-ENC_KEYFILE="${BACKUP_ENCRYPT_KEYFILE:-}"
+# Keep the destination host's backup key separate from the key that decrypts the
+# selected restore point. Inbox restores replace ENC_KEYFILE with operator_key,
+# while their just-created safety backup is still signed by this target-host key.
+TARGET_BACKUP_KEYFILE="${BACKUP_ENCRYPT_KEYFILE:-}"
+ENC_KEYFILE="$TARGET_BACKUP_KEYFILE"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 QDRANT_API_KEYFILE="${QDRANT_API_KEYFILE:-/run/secrets/qdrant_api_key}"
+PDF_STORAGE_DIR="${PDF_STORAGE_DIR:-/pdf-storage}"
 # Shared staging dir: the sidecar writes the decrypted snapshot here and Qdrant
 # reads it via file:// — both containers mount the restore_staging volume at this
 # same path (under Qdrant's default /qdrant/snapshots dir).
@@ -91,23 +99,35 @@ DROP_STARTED=0
 RESTORE_CLEAN=0
 HEARTBEAT_PID=""
 MANUAL_STEPS_REQUIRED=0
-# Set only by the --recover entrypoint branch: skips the request re-consume in the
-# EXIT trap so a crash-recovery run never eats a legitimately pending restore.
-RECOVER_MODE=0
 # Set only by the --inbox-manifest entrypoint branch: a read-only inventory pass that
 # short-circuits the EXIT trap entirely (no request consume, no status write, no key
 # shred, no maintenance change) — it runs every sidecar loop and must touch nothing.
 MANIFEST_MODE=0
+# An admission refusal must leave the request, status, keys, and maintenance
+# untouched so the single-threaded sidecar can retry it on the next loop.
+ADMISSION_REFUSED=0
 PHASE=""
 # Restore source: "local" (same-host WebUI restore, the default) reads the
-# archive set + key exactly as before; "inbox" (off-host DR) reads them from the
-# rw restore_inbox volume and additionally materializes secrets + rebinds the
-# postgres role. Both are set from the request in STEP 1; the inbox seams are all
-# guarded by [ "$SOURCE" = "inbox" ] so the local path is byte-for-byte unchanged.
+# archive set and host key; "inbox" (off-host DR) reads the supplied set and
+# one-time key from restore_inbox. Both preserve target-local credentials; both
+# install restored-data keys when their archive contains them.
 SOURCE="local"
 ARCHIVE_DIR="$BACKUP_DIR"
+MANIFEST_AUTHENTICATED=0
+MANIFEST_LEGACY=0
+PRIVATE_INPUT_DIR=""
+SAFETY_RUN_ID=""
+SAFETY_STAGING_DIR=""
+SECRETS_ARCHIVE=""
+DATA_KEYS_STAGED=0
+PDFS_STAGED=0
+PDF_RESTORE_RUN_ID=""
+ALLOW_MISSING_PDFS=0
+RESTORE_ID=""
+REQUESTED_AT=""
+VECTOR_VISIBILITY_GENERATION=""
 
-# --- JSON status writer (atomic .tmp -> mv; matches the P6.3 RestoreStatus
+# --- JSON status writer (atomic .tmp -> mv; matches the RestoreStatus API
 #     shape: state/current_step/steps[].{name,status}/safety_backup_ts/
 #     started_at/finished_at/error). Never aborts the script (|| return 0). -----
 _json_escape() {
@@ -138,6 +158,40 @@ write_status() {
       "$manual_json" "$(_json_or_null "$PHASE")"
   } > "$tmp" 2>/dev/null || return 0
   mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || return 0
+}
+
+outbound_quarantine_exists() {
+  [ -e "$OUTBOUND_QUARANTINE_SENTINEL" ] || [ -L "$OUTBOUND_QUARANTINE_SENTINEL" ]
+}
+
+write_outbound_quarantine() {
+  local restore_id="$1" source="$2" requested_at="$3" completed_at="$4"
+  local tmp
+  printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  [ "$source" = "inbox" ] || return 1
+  [ -n "$requested_at" ] && [ -n "$completed_at" ] || return 1
+  outbound_quarantine_exists && return 1
+  tmp="$(mktemp "${OUTBOUND_QUARANTINE_SENTINEL}.tmp.XXXXXX")" || return 1
+  {
+    printf '{"version":1,"restore_id":"%s","source":"inbox",' \
+      "$(_json_escape "$restore_id")"
+    printf '"requested_at":"%s","completed_at":"%s",' \
+      "$(_json_escape "$requested_at")" "$(_json_escape "$completed_at")"
+    printf '"review_state":"awaiting_review"}'
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 644 "$tmp" || { rm -f "$tmp"; return 1; }
+  ln -- "$tmp" "$OUTBOUND_QUARANTINE_SENTINEL" \
+    || { rm -f -- "$tmp"; return 1; }
+  rm -f -- "$tmp" || return 1
+  sync -d "$OUTBOUND_QUARANTINE_SENTINEL" || return 1
+  sync -f "$(dirname "$OUTBOUND_QUARANTINE_SENTINEL")" || return 1
+}
+
+consume_restore_request() {
+  local content
+  content="$(cat -- "$REQUEST_FILE" 2>/dev/null)" || return 1
+  rm -f -- "$REQUEST_FILE" 2>/dev/null || return 1
+  printf '%s' "$content"
 }
 
 # --- decrypt_or_passthrough — the INVERSE of backup.sh:encrypt_or_passthrough.
@@ -191,6 +245,13 @@ verify_manifest_signature() {
   return "$rc"
 }
 
+verify_manifest_signature_with_key() (
+  local manifest="$1" keyfile="$2"
+  [ -s "$keyfile" ] && [ ! -L "$keyfile" ] || return 1
+  ENC_KEYFILE="$keyfile"
+  verify_manifest_signature "$manifest"
+)
+
 # manifest_signature_required — whether an ABSENT signature is fatal. It answers only
 # that question: a signature that is PRESENT is always verified regardless of this (see
 # gate_manifest_signature). Off-host sets require one UNCONDITIONALLY — the operator key
@@ -233,7 +294,10 @@ break_glass_accepted() {
 gate_manifest_signature() {
   [ -n "$ENC_KEYFILE" ] && [ -s "$ENC_KEYFILE" ] || return 0
   if [ -e "${MANIFEST}.hmac" ]; then
-    verify_manifest_signature "$MANIFEST" && return 0
+    if verify_manifest_signature "$MANIFEST"; then
+      MANIFEST_AUTHENTICATED=1
+      return 0
+    fi
     fail_before_destruction "backup ${TIMESTAMP} failed its manifest authentication check — the manifest does not match its signature and may have been tampered with; nothing was changed"
   fi
   if ! manifest_signature_required; then
@@ -248,7 +312,7 @@ gate_manifest_signature() {
 }
 
 # --- valid_archive_name — mirror of backups.py:_FILENAME_RE. Rejects path
-#     separators / '..' and pins the four archive shapes, so a tampered timestamp
+#     separators / '..' and pins the supported archive shapes, so a tampered timestamp
 #     in the request can never escape /backups (e.g. into /run/secrets/*). --------
 valid_archive_name() {
   local n="$1"
@@ -256,7 +320,244 @@ valid_archive_name() {
     */*|*\\*|*..*) return 1 ;;
   esac
   printf '%s' "$n" | grep -Eq \
-    '^(jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|litellm_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|secrets_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?|qdrant_[A-Za-z0-9_-]+_[0-9]{8}_[0-9]{6}\.snapshot(\.enc)?)$'
+    '^(jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|litellm_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?|pdfs_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?|secrets_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?|qdrant_[A-Za-z0-9_-]+_[0-9]{8}_[0-9]{6}\.snapshot(\.enc)?)$'
+}
+
+# Parse an authenticated manifest into role<TAB>filename<TAB>sha256<TAB>size.
+# Current manifests carry a run_id. The narrowly scoped compatibility branch
+# accepts the exact manifest shape written before v1.2 only after the caller has
+# authenticated it; unsigned historical sets remain on the explicit break-glass
+# path in gate_manifest_signature. JSON::PP is part of the Perl runtime already
+# used by this sidecar.
+parse_authenticated_manifest() {
+  local manifest="$1" expected_ts="$2" out="$3" tmp="${3}.tmp" base
+  [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
+  base="$(basename "$manifest")"
+  [ "$base" = "manifest_${expected_ts}.json" ] || return 1
+  EXPECTED_TS="$expected_ts" perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>); my $ts = $ENV{EXPECTED_TS};
+    die "root" unless ref($d) eq "HASH";
+    die "timestamp" unless ($d->{timestamp} // "") eq $ts;
+    my $legacy = !exists($d->{run_id});
+    if ($legacy) {
+      my @want = sort qw(timestamp app_version schema_version created_at archives);
+      my @have = sort keys %$d;
+      die "legacy root" unless join("\0", @have) eq join("\0", @want);
+      my $v = $d->{app_version};
+      die "legacy version" unless defined($v) && !ref($v);
+      my $pre_v12 = $v eq "unknown";
+      if (!$pre_v12 && $v =~ /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/) {
+        $pre_v12 = $1 < 1 || ($1 == 1 && $2 < 2);
+      }
+      die "legacy version" unless $pre_v12;
+      die "legacy schema" unless defined($d->{schema_version})
+        && !ref($d->{schema_version}) && "$d->{schema_version}" =~ /^(?:0|[1-9][0-9]*)$/;
+      die "legacy created_at" unless defined($d->{created_at})
+        && !ref($d->{created_at})
+        && $d->{created_at} =~ /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
+    } else {
+      die "run_id" unless ($d->{run_id} // "") =~ /^[0-9a-f]{32}$/;
+    }
+    die "archives" unless ref($d->{archives}) eq "ARRAY";
+    my (%seen, %required); my $archive_mode;
+    for my $a (@{$d->{archives}}) {
+      die "entry" unless ref($a) eq "HASH";
+      if ($legacy) {
+        my @want = sort qw(filename sha256 size_bytes);
+        my @have = sort keys %$a;
+        die "legacy entry" unless join("\0", @have) eq join("\0", @want);
+      }
+      my ($n,$h,$s) = @{$a}{qw(filename sha256 size_bytes)};
+      die "fields" unless defined($n) && defined($h) && defined($s)
+        && $h =~ /^[0-9a-f]{64}$/ && "$s" =~ /^\d+$/;
+      my $encrypted = $n =~ /\.enc$/ ? 1 : 0;
+      if (!$legacy) {
+        if (defined($archive_mode)) { die "mixed encryption" unless $archive_mode == $encrypted; }
+        else { $archive_mode = $encrypted; }
+      }
+      my $role;
+      if ($n =~ /^jarvis_\Q$ts\E\.sql\.gz(?:\.enc)?$/) { $role="jarvis"; $required{jarvis}=1; }
+      elsif ($n =~ /^litellm_\Q$ts\E\.sql\.gz(?:\.enc)?$/) { $role="litellm"; $required{litellm}=1; }
+      elsif ($n =~ /^pdfs_\Q$ts\E\.tar\.gz(?:\.enc)?$/) { $role="pdfs"; $required{pdfs}=1; }
+      elsif ($n =~ /^secrets_\Q$ts\E\.tar\.gz(?:\.enc)?$/) { $role="secrets"; $required{secrets}=1; }
+      elsif ($n =~ /^qdrant_([A-Za-z0-9_-]+)_\Q$ts\E\.snapshot(?:\.enc)?$/) { $role="qdrant:$1"; }
+      else { die "filename"; }
+      die "duplicate role" if $seen{$role}++;
+      print join("\t", $role, $n, $h, $s), "\n";
+    }
+    die "required" unless $required{jarvis} && $required{litellm}
+      && ($legacy || $required{pdfs})
+      && ($legacy || !$archive_mode || $required{secrets});
+  ' "$manifest" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$out"
+}
+
+authenticated_manifest_is_legacy() {
+  local manifest="$1"
+  [ "$MANIFEST_AUTHENTICATED" = "1" ] \
+    && [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+    && perl -MJSON::PP -e '
+      use strict; use warnings;
+      local $/; my $d = decode_json(<>);
+      exit((ref($d) eq "HASH" && !exists($d->{run_id})) ? 0 : 1);
+    ' "$manifest" 2>/dev/null
+}
+
+parse_allow_missing_pdfs_request() {
+  local content="$1" count value
+  ALLOW_MISSING_PDFS=0
+  count="$(printf '%s' "$content" \
+    | grep -oE '"allow_missing_pdfs"[[:space:]]*:' \
+    | wc -l | tr -d ' ')"
+  case "$count" in
+    0) return 0 ;;
+    1) ;;
+    *) return 1 ;;
+  esac
+  value="$(printf '%s' "$content" \
+    | grep -oE '"allow_missing_pdfs"[[:space:]]*:[[:space:]]*(true|false)' \
+    | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || true)"
+  case "$value" in
+    true) ALLOW_MISSING_PDFS=1 ;;
+    false) ALLOW_MISSING_PDFS=0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_restore_identity_request() {
+  local content="$1" restore_id_count requested_at_count parsed
+  RESTORE_ID=""
+  REQUESTED_AT=""
+  restore_id_count="$(printf '%s' "$content" \
+    | grep -oE '"restore_id"[[:space:]]*:' \
+    | wc -l | tr -d ' ')"
+  requested_at_count="$(printf '%s' "$content" \
+    | grep -oE '"requested_at"[[:space:]]*:' \
+    | wc -l | tr -d ' ')"
+  [ "$restore_id_count" = "1" ] && [ "$requested_at_count" = "1" ] || return 1
+  parsed="$(printf '%s' "$content" | perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>);
+    die "object" unless ref($d) eq "HASH";
+    my ($id, $at) = @{$d}{qw(restore_id requested_at)};
+    die "fields" unless defined($id) && defined($at) && !ref($id) && !ref($at);
+    print "$id\t$at";
+  ' 2>/dev/null)" || return 1
+  RESTORE_ID="${parsed%%$'\t'*}"
+  REQUESTED_AT="${parsed#*$'\t'}"
+  [ "$RESTORE_ID" != "$parsed" ] || return 1
+  printf '%s' "$RESTORE_ID" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  printf '%s' "$REQUESTED_AT" \
+    | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' \
+    || return 1
+}
+
+missing_pdf_restore_is_authorized() {
+  [ "$ALLOW_MISSING_PDFS" = "1" ] \
+    && [ "$MANIFEST_AUTHENTICATED" = "1" ] \
+    && [ "$MANIFEST_LEGACY" = "1" ]
+}
+
+verify_manifest_inventory() {
+  local dir="$1" ts="$2" inventory="$3" role name expected_sha expected_size path actual
+  [ -s "$inventory" ] || return 1
+  while IFS=$'\t' read -r role name expected_sha expected_size; do
+    [ -n "$role" ] && [ -n "$name" ] || return 1
+    path="${dir}/${name}"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    actual="$(stat -c%s "$path" 2>/dev/null || true)"
+    [ "$actual" = "$expected_size" ] || return 1
+    actual="$(sha256sum "$path" 2>/dev/null | cut -d' ' -f1 || true)"
+    [ "$actual" = "$expected_sha" ] || return 1
+  done < "$inventory"
+  while IFS= read -r path; do
+    name="$(basename "$path")"
+    case "$name" in "manifest_${ts}.json"|"manifest_${ts}.json.hmac") continue ;; esac
+    awk -F '\t' -v n="$name" '$2 == n { found=1 } END { exit !found }' "$inventory" \
+      || return 1
+  done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -name "*_${ts}.*" -print)
+}
+
+stage_manifest_inventory() {
+  local source_dir="$1" ts="$2" inventory="$3" dest="$4"
+  local role name expected_sha expected_size staged
+  verify_manifest_inventory "$source_dir" "$ts" "$inventory" || return 1
+  [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+  while IFS=$'\t' read -r role name expected_sha expected_size; do
+    staged="${dest}/.${name}.tmp.$$"
+    cp --reflink=auto -- "${source_dir}/${name}" "$staged" || return 1
+    chmod 400 "$staged" || return 1
+    mv -T -- "$staged" "${dest}/${name}" || return 1
+  done < "$inventory"
+  verify_manifest_inventory "$dest" "$ts" "$inventory"
+}
+
+# The safety backup is the only rollback point after the first database swap.
+# Keep a private, authenticated copy on the durable backup volume so later
+# retention or a path replacement cannot invalidate that rollback point.
+stage_safety_backup() {
+  local ts="$1" expected_run_id="$2" manifest="$3"
+  local stage_tmp stage_final inventory staged_manifest
+  [ -n "$TARGET_BACKUP_KEYFILE" ] && [ -s "$TARGET_BACKUP_KEYFILE" ] \
+    && [ ! -L "$TARGET_BACKUP_KEYFILE" ] || return 1
+  [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+    && [ -f "${manifest}.hmac" ] && [ ! -L "${manifest}.hmac" ] || return 1
+  verify_manifest_signature_with_key "$manifest" "$TARGET_BACKUP_KEYFILE" || return 1
+
+  stage_final="${BACKUP_DIR}/.restore-safety-${ts}-${expected_run_id}"
+  stage_tmp="${stage_final}.tmp.$$"
+  [ ! -e "$stage_final" ] && [ ! -L "$stage_final" ] \
+    && [ ! -e "$stage_tmp" ] && [ ! -L "$stage_tmp" ] || return 1
+  if ! (umask 077 && mkdir -m 700 -- "$stage_tmp"); then return 1; fi
+  inventory="${stage_tmp}/.inventory.tsv"
+
+  if ! parse_authenticated_manifest "$manifest" "$ts" "$inventory" \
+     || ! EXPECTED_RUN_ID="$expected_run_id" perl -MJSON::PP -e '
+          use strict; use warnings;
+          local $/; my $d = decode_json(<>);
+          die "run_id" unless ref($d) eq "HASH"
+            && ($d->{run_id} // "") eq $ENV{EXPECTED_RUN_ID};
+        ' "$manifest" >/dev/null 2>&1 \
+     || ! awk -F '\t' '
+          NF != 4 { bad=1; next }
+          $2 !~ /\.enc$/ || $4 !~ /^[1-9][0-9]*$/ { bad=1 }
+          $1 == "jarvis" { jarvis++ }
+          $1 == "litellm" { litellm++ }
+          $1 == "pdfs" { pdfs++ }
+          $1 == "secrets" { secrets++ }
+          $1 !~ /^(jarvis|litellm|pdfs|secrets|qdrant:[A-Za-z0-9_-]+)$/ { bad=1 }
+          END { exit bad || jarvis != 1 || litellm != 1 || pdfs != 1 || secrets != 1 }
+        ' "$inventory" \
+     || ! verify_manifest_inventory "$BACKUP_DIR" "$ts" "$inventory"; then
+    rm -rf -- "$stage_tmp"
+    return 1
+  fi
+
+  staged_manifest="${stage_tmp}/$(basename "$manifest")"
+  if ! cp --reflink=auto -- "$manifest" "$staged_manifest" \
+     || ! cp --reflink=auto -- "${manifest}.hmac" "${staged_manifest}.hmac" \
+     || ! chmod 400 "$inventory" "$staged_manifest" "${staged_manifest}.hmac" \
+     || ! stage_manifest_inventory "$BACKUP_DIR" "$ts" "$inventory" "$stage_tmp" \
+     || ! verify_manifest_signature_with_key "$staged_manifest" "$TARGET_BACKUP_KEYFILE" \
+     || ! verify_manifest_inventory "$stage_tmp" "$ts" "$inventory" \
+     || ! mv -T -- "$stage_tmp" "$stage_final"; then
+    rm -rf -- "$stage_tmp"
+    return 1
+  fi
+  SAFETY_STAGING_DIR="$stage_final"
+  return 0
+}
+
+remove_safety_staging() {
+  local base
+  [ -n "$SAFETY_STAGING_DIR" ] || return 0
+  base="$(basename -- "$SAFETY_STAGING_DIR")"
+  [ "$(dirname -- "$SAFETY_STAGING_DIR")" = "$BACKUP_DIR" ] || return 1
+  printf '%s' "$base" \
+    | grep -Eq '^\.restore-safety-[0-9]{8}_[0-9]{6}-[0-9a-f]{32}$' || return 1
+  rm -rf -- "$SAFETY_STAGING_DIR"
+  SAFETY_STAGING_DIR=""
 }
 
 # --- resolve_secrets_archive — echo the secrets_<ts> archive path in ${ARCHIVE_DIR}
@@ -272,36 +573,510 @@ resolve_secrets_archive() {
   return 1
 }
 
-# --- safety_backup_is_fresh <backup_rc> — true iff the STEP-4 safety pre-backup is a
-#     usable rollback point FOR THIS RUN: backup.sh exited 0, ${BACKUP_DIR}/.last_run.json
-#     records succeeded:true, and its attempted_at is NEWER than this restore's start
-#     (STARTED_AT). Freshness matters: a safety backup that fails on a full/read-only
-#     /backups cannot rewrite .last_run.json, so YESTERDAY's succeeded:true record
-#     survives — a stale succeeded record must NOT count as a fresh rollback point.
+resolve_pdfs_archive() {
+  local cand
+  for cand in "${ARCHIVE_DIR}/pdfs_${TIMESTAMP}.tar.gz.enc" \
+              "${ARCHIVE_DIR}/pdfs_${TIMESTAMP}.tar.gz"; do
+    if [ -f "$cand" ] && [ ! -L "$cand" ]; then printf '%s' "$cand"; return 0; fi
+  done
+  return 1
+}
+
+# Only keys cryptographically coupled to restored database content cross hosts.
+restorable_inbox_secret_basename() {
+  local base="$1"
+  case "$base" in
+    jarvis_config_key.txt|jarvis_model_hmac_key.txt|litellm_salt_key.txt) return 0 ;;
+  esac
+  return 1
+}
+
+validate_restored_data_key() {
+  local file="$1" base="$2" value normalized decoded_size size
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -s "$file" ] || return 1
+  size="$(stat -c%s "$file" 2>/dev/null || echo 4097)"
+  [ "$size" -ge 1 ] 2>/dev/null && [ "$size" -le 4096 ] 2>/dev/null || return 1
+  value="$(cat "$file")"
+  [ -n "$value" ] || return 1
+  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  case "$base" in
+    jarvis_config_key.txt)
+      printf '%s' "$value" | grep -Eq '^[A-Za-z0-9_+/-]{43}=$' || return 1
+      normalized="$(printf '%s' "$value" | tr '_-' '/+')"
+      decoded_size="$(printf '%s' "$normalized" \
+        | openssl base64 -d -A 2>/dev/null | wc -c | tr -d ' ')"
+      [ "$decoded_size" = "32" ] || return 1
+      ;;
+    jarvis_model_hmac_key.txt)
+      [ "${#value}" -ge 32 ] || return 1
+      ;;
+    litellm_salt_key.txt)
+      [ "${#value}" -ge 16 ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Decrypt and validate the data-key archive before any database mutation. New
+# archives must contain exactly the three data keys; authenticated historical
+# archives may contain additional host credentials, but those files are ignored
+# and never extracted.
+stage_restored_data_keys() {
+  local archive="$1" exact="$2" incoming listing key count detail size
+  case "$exact" in 0|1) ;; *) return 1 ;; esac
+  [ -f "$archive" ] && [ ! -L "$archive" ] || return 1
+  purge_secrets_staging
+  if [ -e "$SECRETS_STAGING" ] || [ -L "$SECRETS_STAGING" ]; then return 1; fi
+  mkdir -m 700 -- "$SECRETS_STAGING" || return 1
+  incoming="${SECRETS_STAGING}/.incoming.tar.gz"
+  if ! decrypt_or_passthrough "$archive" > "$incoming" 2>/dev/null; then
+    purge_secrets_staging
+    return 1
+  fi
+  listing="$(tar --quoting-style=escape -tzf "$incoming" 2>/dev/null)" || {
+    purge_secrets_staging
+    return 1
+  }
+  if [ "$exact" = "1" ]; then
+    while IFS= read -r key; do
+      [ -n "$key" ] || continue
+      restorable_inbox_secret_basename "$key" || { purge_secrets_staging; return 1; }
+    done <<< "$listing"
+  fi
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    count="$(printf '%s\n' "$listing" | grep -cxF "$key" || true)"
+    [ "$count" = "1" ] || { purge_secrets_staging; return 1; }
+    detail="$(tar --numeric-owner --quoting-style=escape -tvzf "$incoming" -- "$key" 2>/dev/null)" \
+      || { purge_secrets_staging; return 1; }
+    [ "$(printf '%s\n' "$detail" | wc -l | tr -d ' ')" = "1" ] \
+      || { purge_secrets_staging; return 1; }
+    [ "${detail:0:1}" = "-" ] || { purge_secrets_staging; return 1; }
+    size="$(printf '%s\n' "$detail" | awk '{print $3}')"
+    printf '%s' "$size" | grep -Eq '^[1-9][0-9]{0,3}$' \
+      || { purge_secrets_staging; return 1; }
+    [ "$size" -le 4096 ] || { purge_secrets_staging; return 1; }
+  done
+  if ! tar --no-same-owner --no-same-permissions -xzf "$incoming" \
+      -C "$SECRETS_STAGING" -- \
+      jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt 2>/dev/null; then
+    purge_secrets_staging
+    return 1
+  fi
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    validate_restored_data_key "${SECRETS_STAGING}/${key}" "$key" \
+      || { purge_secrets_staging; return 1; }
+    chmod 600 "${SECRETS_STAGING}/${key}" || { purge_secrets_staging; return 1; }
+  done
+  return 0
+}
+
+data_key_transaction_dir() {
+  printf '%s/data-key-restore' "$LOCK_DIR"
+}
+
+remove_data_key_transaction() {
+  local transaction
+  transaction="$(data_key_transaction_dir)" || return 1
+  case "$transaction" in "${LOCK_DIR}/data-key-restore") ;; *) return 1 ;; esac
+  [ ! -L "$transaction" ] || return 1
+  rm -rf -- "$transaction"
+}
+
+validate_data_key_set() {
+  local source_dir="$1" key
+  [ -d "$source_dir" ] && [ ! -L "$source_dir" ] || return 1
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    validate_restored_data_key "${source_dir}/${key}" "$key" || return 1
+  done
+}
+
+replace_data_key_set_from_dir() {
+  local source_dir="$1" key source dest tmp
+  validate_data_key_set "$source_dir" || return 1
+  [ -d "$HOST_SECRETS_DIR" ] && [ ! -L "$HOST_SECRETS_DIR" ] || return 1
+  # Validate every destination before replacing the first member.
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    dest="${HOST_SECRETS_DIR}/${key}"
+    [ -f "$dest" ] && [ ! -L "$dest" ] || return 1
+  done
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    source="${source_dir}/${key}"
+    dest="${HOST_SECRETS_DIR}/${key}"
+    tmp="${dest}.restore.$$"
+    [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 1
+    if ! cp -- "$source" "$tmp" || ! chmod 644 "$tmp" || ! mv -T -- "$tmp" "$dest"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  done
+}
+
+prepare_data_key_transaction() {
+  local transaction old_dir new_dir key
+  transaction="$(data_key_transaction_dir)" || return 1
+  old_dir="${transaction}/old"
+  new_dir="${transaction}/new"
+  [ -d "$LOCK_DIR" ] && [ ! -L "$LOCK_DIR" ] || return 1
+  [ ! -e "$transaction" ] && [ ! -L "$transaction" ] || return 1
+  mkdir -m 700 -- "$transaction" "$old_dir" "$new_dir" || return 1
+  for key in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+    validate_restored_data_key "${SECRETS_STAGING}/${key}" "$key" \
+      || { remove_data_key_transaction; return 1; }
+    validate_restored_data_key "${HOST_SECRETS_DIR}/${key}" "$key" \
+      || { remove_data_key_transaction; return 1; }
+    cp -- "${HOST_SECRETS_DIR}/${key}" "${old_dir}/${key}" \
+      || { remove_data_key_transaction; return 1; }
+    cp -- "${SECRETS_STAGING}/${key}" "${new_dir}/${key}" \
+      || { remove_data_key_transaction; return 1; }
+    chmod 600 "${old_dir}/${key}" "${new_dir}/${key}" \
+      || { remove_data_key_transaction; return 1; }
+  done
+  validate_data_key_set "$old_dir" && validate_data_key_set "$new_dir" \
+    && write_lifecycle_file "${transaction}/state" prepared 600 \
+    || { remove_data_key_transaction; return 1; }
+}
+
+# Replace exactly the three data-coupled keys as a crash-recoverable set. The
+# durable transaction retains complete old and new copies until all members and
+# the reload marker are installed. Immediate failures roll the whole set back;
+# --recover completes a stranded transaction before maintenance can lift.
+install_restored_data_keys() {
+  local transaction old_dir new_dir
+  transaction="$(data_key_transaction_dir)" || return 1
+  old_dir="${transaction}/old"
+  new_dir="${transaction}/new"
+  prepare_data_key_transaction || return 1
+  write_lifecycle_file "${transaction}/state" installing 600 \
+    || { remove_data_key_transaction; return 1; }
+  if ! replace_data_key_set_from_dir "$new_dir"; then
+    if replace_data_key_set_from_dir "$old_dir"; then
+      remove_data_key_transaction || true
+    fi
+    return 1
+  fi
+  write_lifecycle_file "${transaction}/state" installed 600 || return 1
+  write_lifecycle_file "${TRIGGER_DIR}/.secrets_rotated" "$(date +%s)" 644 || return 1
+  remove_data_key_transaction
+}
+
+recover_restored_data_keys() {
+  local transaction state old_dir new_dir
+  transaction="$(data_key_transaction_dir)" || return 1
+  old_dir="${transaction}/old"
+  new_dir="${transaction}/new"
+  [ -d "$transaction" ] && [ ! -L "$transaction" ] \
+    && [ -f "${transaction}/state" ] && [ ! -L "${transaction}/state" ] || return 1
+  state="$(cat "${transaction}/state" 2>/dev/null || true)"
+  case "$state" in prepared|installing|installed) ;; *) return 1 ;; esac
+  validate_data_key_set "$old_dir" && validate_data_key_set "$new_dir" || return 1
+  if ! replace_data_key_set_from_dir "$new_dir"; then
+    replace_data_key_set_from_dir "$old_dir" || true
+    return 1
+  fi
+  write_lifecycle_file "${transaction}/state" installed 600 || return 1
+  write_lifecycle_file "${TRIGGER_DIR}/.secrets_rotated" "$(date +%s)" 644 || return 1
+  remove_data_key_transaction
+}
+
+valid_pdf_restore_run_id() {
+  printf '%s' "$1" | grep -Eq '^[0-9a-f]{32}$'
+}
+
+pdf_stage_dir() {
+  valid_pdf_restore_run_id "$1" || return 1
+  printf '%s/.restore-stage-%s' "$PDF_STORAGE_DIR" "$1"
+}
+
+pdf_old_dir() {
+  valid_pdf_restore_run_id "$1" || return 1
+  printf '%s/.restore-old-%s' "$PDF_STORAGE_DIR" "$1"
+}
+
+verify_pdf_inventory() {
+  local dir="$1" inventory="$2" name expected_size expected_sha path actual seen=""
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  [ -f "$inventory" ] && [ ! -L "$inventory" ] || return 1
+  while IFS=$'\t' read -r name expected_size expected_sha; do
+    [ -n "$name" ] || continue
+    printf '%s' "$name" | grep -Eq '^[0-9]+\.pdf$' || return 1
+    printf '%s' "$expected_size" | grep -Eq '^(0|[1-9][0-9]*)$' || return 1
+    printf '%s' "$expected_sha" | grep -Eq '^[0-9a-f]{64}$' || return 1
+    printf '%s\n' "$seen" | grep -qxF "$name" && return 1
+    seen="${seen}${name}"$'\n'
+    path="${dir}/${name}"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    actual="$(stat -c%s "$path" 2>/dev/null || true)"
+    [ "$actual" = "$expected_size" ] || return 1
+    actual="$(sha256sum "$path" 2>/dev/null | cut -d' ' -f1 || true)"
+    [ "$actual" = "$expected_sha" ] || return 1
+  done < "$inventory"
+  while IFS= read -r -d '' path; do
+    name="$(basename -- "$path")"
+    printf '%s\n' "$seen" | grep -qxF "$name" || return 1
+  done < <(find "$dir" -regextype posix-extended -mindepth 1 -maxdepth 1 \
+    -regex '.*/[0-9]+\.pdf' -print0)
+}
+
+# Stage and bound the complete PDF set before maintenance or database mutation.
+# The archive may be empty, but every member it does contain must be one flat,
+# numeric regular file.
+stage_restored_pdfs() {
+  local archive="$1" run_id="$2" stage old incoming listing name detail size
+  local count=0 total=0 archive_size available_kb required_bytes inventory_tmp path sha
+  valid_pdf_restore_run_id "$run_id" || return 1
+  [ -d "$PDF_STORAGE_DIR" ] && [ ! -L "$PDF_STORAGE_DIR" ] || return 1
+  [ -f "$archive" ] && [ ! -L "$archive" ] || return 1
+  stage="$(pdf_stage_dir "$run_id")" || return 1
+  old="$(pdf_old_dir "$run_id")" || return 1
+  [ ! -e "$stage" ] && [ ! -L "$stage" ] \
+    && [ ! -e "$old" ] && [ ! -L "$old" ] || return 1
+  mkdir -m 700 -- "$stage" || return 1
+  incoming="${stage}/.incoming.tar.gz"
+  if ! decrypt_or_passthrough "$archive" > "$incoming" 2>/dev/null; then
+    rm -rf -- "$stage"
+    return 1
+  fi
+  listing="$(tar --quoting-style=escape -tzf "$incoming" 2>/dev/null)" || {
+    rm -rf -- "$stage"
+    return 1
+  }
+  declare -A seen=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s' "$name" | grep -Eq '^[0-9]+\.pdf$' \
+      || { rm -rf -- "$stage"; return 1; }
+    [ -z "${seen[$name]+x}" ] || { rm -rf -- "$stage"; return 1; }
+    seen[$name]=1
+    count=$((count + 1))
+    detail="$(tar --numeric-owner --quoting-style=escape -tvzf "$incoming" -- "$name" 2>/dev/null)" \
+      || { rm -rf -- "$stage"; return 1; }
+    [ "$(printf '%s\n' "$detail" | wc -l | tr -d ' ')" = "1" ] \
+      && [ "${detail:0:1}" = "-" ] || { rm -rf -- "$stage"; return 1; }
+    size="$(printf '%s\n' "$detail" | awk '{print $3}')"
+    printf '%s' "$size" | grep -Eq '^(0|[1-9][0-9]*)$' \
+      || { rm -rf -- "$stage"; return 1; }
+    [ "$size" -le "${PDF_RESTORE_MAX_FILE_BYTES:-104857600}" ] 2>/dev/null \
+      || { rm -rf -- "$stage"; return 1; }
+    total=$((total + size))
+  done <<< "$listing"
+  [ "$count" -le "${PDF_RESTORE_MAX_FILES:-100000}" ] 2>/dev/null \
+    && [ "$total" -le "${PDF_RESTORE_MAX_TOTAL_BYTES:-21474836480}" ] 2>/dev/null \
+    || { rm -rf -- "$stage"; return 1; }
+  archive_size="$(stat -c%s "$incoming" 2>/dev/null || echo 0)"
+  required_bytes=$((total + archive_size + ${PDF_RESTORE_HEADROOM_BYTES:-67108864}))
+  available_kb="$(df -Pk "$PDF_STORAGE_DIR" 2>/dev/null | awk 'NR == 2 {print $4}')"
+  printf '%s' "$available_kb" | grep -Eq '^[0-9]+$' \
+    && [ $((available_kb * 1024)) -ge "$required_bytes" ] \
+    || { rm -rf -- "$stage"; return 1; }
+  if ! tar --no-same-owner --no-same-permissions -xzf "$incoming" -C "$stage" 2>/dev/null; then
+    rm -rf -- "$stage"
+    return 1
+  fi
+  rm -f -- "$incoming"
+  inventory_tmp="${stage}/.inventory.tsv.tmp"
+  : > "$inventory_tmp" || { rm -rf -- "$stage"; return 1; }
+  while IFS= read -r -d '' path; do
+    name="$(basename -- "$path")"
+    [ -f "$path" ] && [ ! -L "$path" ] || { rm -rf -- "$stage"; return 1; }
+    size="$(stat -c%s "$path" 2>/dev/null || true)"
+    sha="$(sha256sum "$path" 2>/dev/null | cut -d' ' -f1 || true)"
+    printf '%s\t%s\t%s\n' "$name" "$size" "$sha" >> "$inventory_tmp" \
+      || { rm -rf -- "$stage"; return 1; }
+  done < <(find "$stage" -regextype posix-extended -mindepth 1 -maxdepth 1 \
+    -type f -regex '.*/[0-9]+\.pdf' -print0 | sort -z)
+  mv -T -- "$inventory_tmp" "${stage}/.inventory.tsv" \
+    || { rm -rf -- "$stage"; return 1; }
+  verify_pdf_inventory "$stage" "${stage}/.inventory.tsv" \
+    || { rm -rf -- "$stage"; return 1; }
+}
+
+stage_empty_pdf_set() {
+  local run_id="$1" stage old
+  valid_pdf_restore_run_id "$run_id" || return 1
+  [ -d "$PDF_STORAGE_DIR" ] && [ ! -L "$PDF_STORAGE_DIR" ] || return 1
+  stage="$(pdf_stage_dir "$run_id")" || return 1
+  old="$(pdf_old_dir "$run_id")" || return 1
+  [ ! -e "$stage" ] && [ ! -L "$stage" ] \
+    && [ ! -e "$old" ] && [ ! -L "$old" ] || return 1
+  mkdir -m 700 -- "$stage" || return 1
+  : > "${stage}/.inventory.tsv" || { rm -rf -- "$stage"; return 1; }
+}
+
+write_pdf_swap_state() {
+  local run_id="$1" phase="$2" tmp="${SWAP_STATE_FILE}.tmp"
+  valid_pdf_restore_run_id "$run_id" || return 1
+  case "$phase" in move_old|move_new|verify|cleanup) ;; *) return 1 ;; esac
+  printf '{"version":2,"resource":"pdfs","run_id":"%s","phase":"%s"}' \
+    "$run_id" "$phase" > "$tmp" 2>/dev/null || return 1
+  mv -T -- "$tmp" "$SWAP_STATE_FILE" 2>/dev/null || return 1
+}
+
+read_pdf_swap_state() {
+  [ -f "$SWAP_STATE_FILE" ] && [ ! -L "$SWAP_STATE_FILE" ] \
+    && [ "$(stat -c%s "$SWAP_STATE_FILE" 2>/dev/null || echo 513)" -le 512 ] || return 1
+  perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>);
+    die "root" unless ref($d) eq "HASH";
+    my @want = sort qw(version resource run_id phase);
+    my @have = sort keys %$d;
+    die "keys" unless join("\0", @want) eq join("\0", @have);
+    die "version" unless ($d->{version} // 0) == 2;
+    die "resource" unless ($d->{resource} // "") eq "pdfs";
+    die "run" unless ($d->{run_id} // "") =~ /^[0-9a-f]{32}$/;
+    die "phase" unless ($d->{phase} // "") =~ /^(?:move_old|move_new|verify|cleanup)$/;
+    print "$d->{run_id}\t$d->{phase}";
+  ' "$SWAP_STATE_FILE" 2>/dev/null
+}
+
+_complete_pdf_swap_locked() {
+  local run_id="$1" phase="$2" stage old path name inventory
+  stage="$(pdf_stage_dir "$run_id")" || return 1
+  old="$(pdf_old_dir "$run_id")" || return 1
+  inventory="${stage}/.inventory.tsv"
+  [ -d "$stage" ] && [ ! -L "$stage" ] && [ -f "$inventory" ] && [ ! -L "$inventory" ] \
+    && [ -d "$old" ] && [ ! -L "$old" ] || return 1
+
+  if [ "$phase" = "move_old" ]; then
+    while IFS= read -r -d '' path; do
+      name="$(basename -- "$path")"
+      [ -f "$path" ] && [ ! -L "$path" ] && [ ! -e "${old}/${name}" ] \
+        || return 1
+      mv -T -- "$path" "${old}/${name}" || return 1
+    done < <(find "$PDF_STORAGE_DIR" -regextype posix-extended -mindepth 1 -maxdepth 1 \
+      -regex '.*/[0-9]+\.pdf' -print0 | sort -z)
+    write_pdf_swap_state "$run_id" move_new || return 1
+    phase=move_new
+  fi
+  if [ "$phase" = "move_new" ]; then
+    while IFS= read -r -d '' path; do
+      name="$(basename -- "$path")"
+      [ -f "$path" ] && [ ! -L "$path" ] && [ ! -e "${PDF_STORAGE_DIR}/${name}" ] \
+        || return 1
+      mv -T -- "$path" "${PDF_STORAGE_DIR}/${name}" || return 1
+    done < <(find "$stage" -regextype posix-extended -mindepth 1 -maxdepth 1 \
+      -type f -regex '.*/[0-9]+\.pdf' -print0 | sort -z)
+    write_pdf_swap_state "$run_id" verify || return 1
+    phase=verify
+  fi
+  if [ "$phase" = "verify" ]; then
+    verify_pdf_inventory "$PDF_STORAGE_DIR" "$inventory" || return 1
+    write_pdf_swap_state "$run_id" cleanup || return 1
+    phase=cleanup
+  fi
+  if [ "$phase" = "cleanup" ]; then
+    verify_pdf_inventory "$PDF_STORAGE_DIR" "$inventory" || return 1
+    # Commit by clearing the durable journal before discarding recovery evidence.
+    # If the clear fails, keep both directories so the same phase can retry.
+    clear_swap_state || return 1
+    rm -rf -- "$old" "$stage" \
+      || echo "[restore] WARNING: restored PDFs are committed but transaction staging could not be removed" >&2
+  fi
+}
+
+open_pdf_publish_lock_exclusive() {
+  local lock="${PDF_STORAGE_DIR}/.publish.lock" path_id fd_id
+  [ -d "$PDF_STORAGE_DIR" ] && [ ! -L "$PDF_STORAGE_DIR" ] || return 1
+  [ ! -L "$lock" ] || return 1
+  if [ ! -e "$lock" ]; then
+    (umask 022; set -C; : > "$lock") 2>/dev/null || [ -e "$lock" ] || return 1
+  fi
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+  path_id="$(stat -Lc '%d:%i' -- "$lock" 2>/dev/null || true)"
+  [ -n "$path_id" ] || return 1
+  exec 8<"$lock" || return 1
+  fd_id="$(stat -Lc '%d:%i' -- /proc/self/fd/8 2>/dev/null || true)"
+  if [ "$fd_id" != "$path_id" ] || [ -L "$lock" ]; then
+    exec 8>&-
+    return 1
+  fi
+  if ! flock 8; then
+    exec 8>&-
+    return 1
+  fi
+  path_id="$(stat -Lc '%d:%i' -- "$lock" 2>/dev/null || true)"
+  fd_id="$(stat -Lc '%d:%i' -- /proc/self/fd/8 2>/dev/null || true)"
+  if [ -L "$lock" ] || [ -z "$path_id" ] || [ "$fd_id" != "$path_id" ]; then
+    flock -u 8 2>/dev/null || true
+    exec 8>&-
+    return 1
+  fi
+}
+
+swap_restored_pdfs() {
+  local run_id="$1" stage old
+  valid_pdf_restore_run_id "$run_id" || return 1
+  stage="$(pdf_stage_dir "$run_id")" || return 1
+  old="$(pdf_old_dir "$run_id")" || return 1
+  [ -d "$stage" ] && [ ! -L "$stage" ] && [ ! -e "$old" ] && [ ! -L "$old" ] \
+    || return 1
+  (
+    open_pdf_publish_lock_exclusive || exit 1
+    mkdir -m 700 -- "$old" || exit 1
+    write_pdf_swap_state "$run_id" move_old || exit 1
+    _complete_pdf_swap_locked "$run_id" move_old
+  )
+}
+
+recover_pdf_swap() {
+  local record run_id phase
+  record="$(read_pdf_swap_state)" || return 1
+  IFS=$'\t' read -r run_id phase <<< "$record"
+  (
+    open_pdf_publish_lock_exclusive || exit 1
+    _complete_pdf_swap_locked "$run_id" "$phase"
+  )
+}
+
+remove_staged_pdf_restore() {
+  local run_id="$1" stage old path
+  valid_pdf_restore_run_id "$run_id" || return 1
+  stage="$(pdf_stage_dir "$run_id")" || return 1
+  old="$(pdf_old_dir "$run_id")" || return 1
+  for path in "$stage" "$old"; do
+    case "$path" in
+      "${PDF_STORAGE_DIR}/.restore-stage-${run_id}"|"${PDF_STORAGE_DIR}/.restore-old-${run_id}") ;;
+      *) return 1 ;;
+    esac
+  done
+  rm -rf -- "$stage" "$old"
+}
+
+# --- safety_backup_is_fresh <backup_rc> <expected_run_id> — accept only the
+# caller-correlated successful run and its matching manifest. Exact correlation
+# avoids both stale .last_run reuse and false rejection within the same second.
 safety_backup_is_fresh() {
-  local rc="$1" lr succeeded attempted
+  local rc="$1" expected_run_id="$2" lr ts manifest
   [ "$rc" -eq 0 ] || return 1
+  printf '%s' "$expected_run_id" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  [ -f "${BACKUP_DIR}/.last_run.json" ] && [ ! -L "${BACKUP_DIR}/.last_run.json" ] || return 1
   lr="$(cat "${BACKUP_DIR}/.last_run.json" 2>/dev/null || true)"
-  succeeded="$(printf '%s' "$lr" \
-    | grep -oE '"succeeded"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE 'true|false' | head -1 || true)"
-  [ "$succeeded" = "true" ] || return 1
-  attempted="$(printf '%s' "$lr" \
-    | grep -oE '"attempted_at"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true)"
-  [ -n "$attempted" ] || return 1
-  [[ "$attempted" > "$STARTED_AT" ]]
+  [ "${#lr}" -le 16384 ] || return 1
+  ts="$(printf '%s' "$lr" | EXPECTED_RUN_ID="$expected_run_id" perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>);
+    die "root" unless ref($d) eq "HASH";
+    die "success" unless ref($d->{succeeded}) eq "JSON::PP::Boolean" && $d->{succeeded};
+    die "run_id" unless ($d->{run_id} // "") eq $ENV{EXPECTED_RUN_ID};
+    my $ts = $d->{timestamp} // "";
+    die "timestamp" unless $ts =~ /^[0-9]{8}_[0-9]{6}$/;
+    print $ts;
+  ' 2>/dev/null || true)"
+  printf '%s' "$ts" | grep -Eq '^[0-9]{8}_[0-9]{6}$' || return 1
+  manifest="${BACKUP_DIR}/manifest_${ts}.json"
+  stage_safety_backup "$ts" "$expected_run_id" "$manifest" || return 1
+  SAFETY_BACKUP_TS="$ts"
 }
 
 # --- write_inbox_manifest — inventory ${INBOX_DIR} into a SANITIZED
 #     ${TRIGGER_DIR}/.inbox_manifest.json (names/booleans ONLY — never a path or a key
 #     byte) that the admin app's GET /inbox lists. Groups valid_archive_name-accepted
-#     files by their %Y%m%d_%H%M%S timestamp; per group emits
-#     {timestamp, complete, has_secrets, has_key} where complete = the jarvis + litellm
-#     DB archives are BOTH present (mirrors restore.sh's own STEP-1 completeness gate),
-#     has_secrets = a secrets_<ts> archive is present, has_key = the one-time operator
-#     key is present (a single inbox-wide fact). Atomic tmp->mv; writes [] on an empty
-#     inbox. Never touches the DB, never consumes the restore request, never emits a
-#     path or key content. Called ONLY from the --inbox-manifest branch (MANIFEST_MODE).
+#     files by their %Y%m%d_%H%M%S timestamp. It distinguishes a current complete
+#     set from an authenticated pre-v1.2 set that legitimately has no PDF archive;
+#     an arbitrary current set cannot acquire that compatibility label. Atomic
+#     tmp->mv; writes [] on an empty inbox. Never touches the DB, consumes the
+#     restore request, or emits a path or key content. Called only from the
+#     --inbox-manifest branch (MANIFEST_MODE).
 write_inbox_manifest() {
   local out="${TRIGGER_DIR}/.inbox_manifest.json"
   local tmp="${out}.tmp"
@@ -325,26 +1100,77 @@ write_inbox_manifest() {
 
   {
     printf '['
-    local first=1 t complete has_secrets
+    local first=1 t complete has_pdfs legacy_missing_pdfs has_secrets
+    local jarvis_plain jarvis_enc litellm_plain litellm_enc pdfs_plain pdfs_enc
+    local secrets_plain secrets_enc manifest signature inventory coherent_current
     while IFS= read -r t; do
       [ -n "$t" ] || continue
       complete="false"
+      has_pdfs="false"
+      legacy_missing_pdfs="false"
       has_secrets="false"
-      # complete requires the manifest too: restore.sh STEP 2 HARD-requires
-      # manifest_<ts>.json for an inbox restore, so a DB-complete point that is missing
-      # its manifest is NOT restorable (it fails pre-swap) and must not read complete.
-      if { [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz.enc" ]; } \
-         && { [ -f "${INBOX_DIR}/litellm_${t}.sql.gz" ] || [ -f "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ]; } \
-         && [ -f "${INBOX_DIR}/manifest_${t}.json" ]; then
-        complete="true"
+      coherent_current="false"
+      jarvis_plain=0; jarvis_enc=0; litellm_plain=0; litellm_enc=0
+      pdfs_plain=0; pdfs_enc=0; secrets_plain=0; secrets_enc=0
+      [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz" ] \
+        && [ ! -L "${INBOX_DIR}/jarvis_${t}.sql.gz" ] && jarvis_plain=1
+      [ -f "${INBOX_DIR}/jarvis_${t}.sql.gz.enc" ] \
+        && [ ! -L "${INBOX_DIR}/jarvis_${t}.sql.gz.enc" ] && jarvis_enc=1
+      [ -f "${INBOX_DIR}/litellm_${t}.sql.gz" ] \
+        && [ ! -L "${INBOX_DIR}/litellm_${t}.sql.gz" ] && litellm_plain=1
+      [ -f "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ] \
+        && [ ! -L "${INBOX_DIR}/litellm_${t}.sql.gz.enc" ] && litellm_enc=1
+      [ -f "${INBOX_DIR}/pdfs_${t}.tar.gz" ] \
+        && [ ! -L "${INBOX_DIR}/pdfs_${t}.tar.gz" ] && pdfs_plain=1
+      [ -f "${INBOX_DIR}/pdfs_${t}.tar.gz.enc" ] \
+        && [ ! -L "${INBOX_DIR}/pdfs_${t}.tar.gz.enc" ] && pdfs_enc=1
+      [ -f "${INBOX_DIR}/secrets_${t}.tar.gz" ] \
+        && [ ! -L "${INBOX_DIR}/secrets_${t}.tar.gz" ] && secrets_plain=1
+      [ -f "${INBOX_DIR}/secrets_${t}.tar.gz.enc" ] \
+        && [ ! -L "${INBOX_DIR}/secrets_${t}.tar.gz.enc" ] && secrets_enc=1
+      manifest="${INBOX_DIR}/manifest_${t}.json"
+      signature="${manifest}.hmac"
+
+      [ "$((pdfs_plain + pdfs_enc))" -eq 1 ] && has_pdfs="true"
+      [ "$((secrets_plain + secrets_enc))" -eq 1 ] && has_secrets="true"
+      if [ -f "$manifest" ] && [ ! -L "$manifest" ]; then
+        if [ "$jarvis_plain" -eq 1 ] && [ "$litellm_plain" -eq 1 ] \
+           && [ "$pdfs_plain" -eq 1 ] && [ "$jarvis_enc" -eq 0 ] \
+           && [ "$litellm_enc" -eq 0 ] && [ "$pdfs_enc" -eq 0 ] \
+           && [ "$secrets_enc" -eq 0 ]; then
+          coherent_current="true"
+        elif [ "$jarvis_enc" -eq 1 ] && [ "$litellm_enc" -eq 1 ] \
+             && [ "$pdfs_enc" -eq 1 ] && [ "$secrets_enc" -eq 1 ] \
+             && [ "$jarvis_plain" -eq 0 ] && [ "$litellm_plain" -eq 0 ] \
+             && [ "$pdfs_plain" -eq 0 ] && [ "$secrets_plain" -eq 0 ]; then
+          coherent_current="true"
+        fi
       fi
-      if [ -f "${INBOX_DIR}/secrets_${t}.tar.gz" ] || [ -f "${INBOX_DIR}/secrets_${t}.tar.gz.enc" ]; then
-        has_secrets="true"
+      [ "$coherent_current" = "true" ] && complete="true"
+
+      # A missing PDF role is eligible only when the supplied key authenticates
+      # the strict pre-v1.2 manifest and its exact archive inventory.
+      if [ "$has_pdfs" = "false" ] && [ "$has_key" = "true" ] \
+         && [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+         && [ -f "$signature" ] && [ ! -L "$signature" ]; then
+        inventory="$(mktemp "${TRIGGER_DIR}/.inbox-inventory-${t}.XXXXXX" 2>/dev/null || true)"
+        if [ -n "$inventory" ] && (
+          ENC_KEYFILE="$OPERATOR_KEYFILE"
+          verify_manifest_signature "$manifest"
+          parse_authenticated_manifest "$manifest" "$t" "$inventory"
+          verify_manifest_inventory "$INBOX_DIR" "$t" "$inventory"
+          MANIFEST_AUTHENTICATED=1
+          authenticated_manifest_is_legacy "$manifest"
+        ); then
+          legacy_missing_pdfs="true"
+          complete="true"
+        fi
+        [ -z "$inventory" ] || rm -f -- "$inventory" "${inventory}.tmp"
       fi
       [ "$first" = "1" ] || printf ','
       first=0
-      printf '{"timestamp":"%s","complete":%s,"has_secrets":%s,"has_key":%s}' \
-        "$t" "$complete" "$has_secrets" "$has_key"
+      printf '{"timestamp":"%s","complete":%s,"has_pdfs":%s,"legacy_missing_pdfs":%s,"has_secrets":%s,"has_key":%s}' \
+        "$t" "$complete" "$has_pdfs" "$legacy_missing_pdfs" "$has_secrets" "$has_key"
     done <<< "$timestamps"
     printf ']'
   } > "$tmp" 2>/dev/null || return 0
@@ -375,6 +1201,56 @@ qdrant_http_body() {
   ' "$@"
 }
 
+litellm_accepts_http() {
+  local host="${LITELLM_RESTORE_HOST:-litellm}"
+  local port="${LITELLM_RESTORE_PORT:-4000}"
+  local timeout="${LITELLM_CONNECT_TIMEOUT_SECONDS:-1}"
+  case "$port" in ''|*[!0-9]*|??????*) return 2 ;; esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 2
+  case "$timeout" in ''|0*|*[!0-9]*) return 2 ;; esac
+  perl -MIO::Socket::INET -e '
+    my ($host, $port, $timeout) = @ARGV;
+    my $socket = IO::Socket::INET->new(
+      PeerHost => $host,
+      PeerPort => $port,
+      Proto => "tcp",
+      Timeout => $timeout,
+    ) or exit(1);
+    $socket->autoflush(1);
+    print {$socket} "GET / HTTP/1.0\r\nHost: $host\r\nConnection: close\r\n\r\n";
+    close $socket;
+  ' "$host" "$port" "$timeout"
+}
+
+wait_for_litellm_quarantine() {
+  local timeout="${LITELLM_PAUSE_TIMEOUT_SECONDS:-60}"
+  local poll="${LITELLM_PAUSE_POLL_SECONDS:-1}"
+  local deadline failures=0 probe_status
+  case "$timeout" in ''|0*|*[!0-9]*) return 1 ;; esac
+  [[ "$poll" =~ ^(0\.[0-9]+|[1-9][0-9]*(\.[0-9]+)?)$ ]] || return 1
+  deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    if litellm_accepts_http; then
+      failures=0
+    else
+      probe_status=$?
+      if [ "$probe_status" -eq 1 ]; then
+        failures=$((failures + 1))
+        if [ "$failures" -ge 2 ]; then
+          echo "[restore] LiteLLM is no longer accepting HTTP connections." >&2
+          return 0
+        fi
+      else
+        echo "[restore] ERROR: LiteLLM reachability check could not run." >&2
+        return 1
+      fi
+    fi
+    sleep "$poll"
+  done
+  echo "[restore] ERROR: LiteLLM remained reachable after ${timeout}s." >&2
+  return 1
+}
+
 # psql_admin — run a statement against the `postgres` maintenance DB (so the
 # DROP/CREATE of a product DB is never blocked by our own connection to it).
 psql_admin() {
@@ -386,12 +1262,14 @@ write_swap_state() {
   # $1 = db, $2 = phase (reload_tmp|swapping_out|swapping_in|verified). Written
   # BEFORE each transition so a crash leaves a durable record of the db + step.
   printf '{"db":"%s","phase":"%s"}' "$(_json_escape "$1")" "$(_json_escape "$2")" \
-    > "${SWAP_STATE_FILE}.tmp" 2>/dev/null || return 0
-  mv -f "${SWAP_STATE_FILE}.tmp" "$SWAP_STATE_FILE" 2>/dev/null || return 0
+    > "${SWAP_STATE_FILE}.tmp" 2>/dev/null || return 1
+  mv -f "${SWAP_STATE_FILE}.tmp" "$SWAP_STATE_FILE" 2>/dev/null || return 1
 }
 
 clear_swap_state() {
-  rm -f "$SWAP_STATE_FILE" 2>/dev/null || true
+  [ ! -L "$SWAP_STATE_FILE" ] || return 1
+  rm -f "$SWAP_STATE_FILE" 2>/dev/null || return 1
+  [ ! -e "$SWAP_STATE_FILE" ] && [ ! -L "$SWAP_STATE_FILE" ]
 }
 
 read_swap_db() {
@@ -446,6 +1324,79 @@ verify_db_structural() {
     [ "$regs" = "t" ] || return 1
   fi
   return 0
+}
+
+# purge_restored_auth_state <temporary-jarvis-db> — invalidate transient login
+# state before the restored database can replace the live one. Older verified
+# backups may not have every table, so each deletion is conditional. A single
+# explicit transaction makes a failed purge leave the temporary database intact
+# for cleanup while the live database is still serving.
+purge_restored_auth_state() {
+  local db="$1"
+  [ "$db" = "${JARVIS_DB}_restore_tmp" ] || return 1
+  psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -q <<'SQL'
+BEGIN;
+DO $$
+BEGIN
+  IF to_regclass('public.sessions') IS NOT NULL THEN
+    DELETE FROM public.sessions;
+  END IF;
+  IF to_regclass('public.magic_link_tokens') IS NOT NULL THEN
+    DELETE FROM public.magic_link_tokens;
+  END IF;
+  IF to_regclass('public.webauthn_challenges') IS NOT NULL THEN
+    DELETE FROM public.webauthn_challenges;
+  END IF;
+  IF to_regclass('public.telegram_pairing_tokens') IS NOT NULL THEN
+    DELETE FROM public.telegram_pairing_tokens;
+  END IF;
+END
+$$;
+COMMIT;
+SQL
+}
+
+# Replace the restored vector-visibility checkpoint after every database restore.
+# The generation is deliberately non-secret. Retrieval requires the current value,
+# so every pre-restore, missing, or unrelated Qdrant point remains invisible until
+# the application validates and retags it. The global user_config row exists in
+# every supported schema and lets older backups fail closed before migrations run.
+rotate_vector_visibility_checkpoint() {
+  local step_status="$1" qdrant_recovery generation rotated_at
+  case "$step_status" in
+    done) qdrant_recovery="succeeded" ;;
+    degraded) qdrant_recovery="degraded" ;;
+    skipped) qdrant_recovery="skipped" ;;
+    *) return 1 ;;
+  esac
+  generation="$(openssl rand -hex 16 2>/dev/null)" || return 1
+  printf '%s' "$generation" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  rotated_at="$(date -Iseconds)" || return 1
+
+  psql -h "$PGHOST" -U "$PGUSER" -d "$JARVIS_DB" -v ON_ERROR_STOP=1 -q \
+    -v "visibility_generation=${generation}" \
+    -v "qdrant_recovery=${qdrant_recovery}" \
+    -v "rotated_at=${rotated_at}" <<'SQL'
+BEGIN;
+INSERT INTO public.user_config(user_id, key, value)
+VALUES (
+  NULL,
+  'vector_visibility.checkpoint',
+  jsonb_build_object(
+    'version', 1,
+    'visibility_generation', :'visibility_generation',
+    'status', 'pending',
+    'last_chunk_id', 0,
+    'qdrant_recovery', :'qdrant_recovery',
+    'rotated_at', :'rotated_at'
+  )
+)
+ON CONFLICT (user_id, key) DO UPDATE
+SET value = EXCLUDED.value,
+    updated_at = now();
+COMMIT;
+SQL
+  VECTOR_VISIBILITY_GENERATION="$generation"
 }
 
 # preflight_disk_or_fail — refuse a restore that could exhaust the database volume
@@ -568,6 +1519,9 @@ restore_one_db_swap() {
   { [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ] && [ "${st[2]}" -eq 0 ]; } || return 1
   # (2) structural verify on the tmp BEFORE any destruction.
   verify_db_structural "$tmp" "$is_jarvis" || return 1
+  if [ "$is_jarvis" = "1" ]; then
+    purge_restored_auth_state "$tmp" || return 1
+  fi
   # ---- destructive window opens HERE (not before): disallow -> terminate -> rename.
   #      Write the DURABLE maintenance marker FIRST and fail-closed: it is the hold
   #      that keeps the stack 503 across a crash mid-swap (.maintenance soft-expires
@@ -625,11 +1579,9 @@ step5_fail() {
   exit 0
 }
 
-# Terminal failure in STEP 8 (off-host secrets materialization / role rebind),
-# AFTER the DBs were already restored: the restored data is intact, but the
-# cross-host secrets staging or the postgres-role rebind did not complete. Record
-# it (exit 0) and let the EXIT trap hold maintenance (DROP_STARTED=1) so the stack
-# stays 503 until the operator finishes the secrets/role steps per the runbook.
+# Terminal failure after the databases were restored. Record it (exit 0) and
+# let the EXIT trap hold maintenance so the stack stays 503 until the operator
+# retries from the recorded safety backup.
 fail_after_restore() {
   STATE="failed"
   ERROR="$1"
@@ -647,6 +1599,120 @@ purge_secrets_staging() {
   rm -rf "$SECRETS_STAGING" 2>/dev/null || true
 }
 
+write_lifecycle_file() {
+  local path="$1" value="$2" mode="${3:-644}" tmp
+  tmp="$(mktemp "${path}.XXXXXX")" || return 1
+  if ! printf '%s\n' "$value" > "$tmp" || ! chmod "$mode" "$tmp" || ! mv -f "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+read_lifecycle_state() {
+  [ -f "$LIFECYCLE_OPERATION_STATE" ] \
+    && [ ! -L "$LIFECYCLE_OPERATION_STATE" ] || return 1
+  cat "$LIFECYCLE_OPERATION_STATE" 2>/dev/null
+}
+
+# A restore request outranks only an update that is still preparing its safety
+# backup. Ask that holder to yield, then return without consuming the request.
+# A promoted update is already mutating and never yields; the request waits.
+request_preparing_update_yield() {
+  local owner="$1" id control=""
+  case "$owner" in
+    update-preparing:*) id="${owner#update-preparing:}" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$id" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  [ -f "$UPDATE_GUARD" ] && [ ! -L "$UPDATE_GUARD" ] \
+    && [ -f "$UPDATE_RESERVATION" ] && [ ! -L "$UPDATE_RESERVATION" ] \
+    && [ "$(cat "$UPDATE_GUARD" 2>/dev/null || true)" = "$id" ] \
+    && [ "$(cat "$UPDATE_RESERVATION" 2>/dev/null || true)" = "$id" ] \
+    || return 1
+  [ ! -L "$UPDATE_CONTROL" ] || return 1
+  if [ -e "$UPDATE_CONTROL" ]; then
+    [ -f "$UPDATE_CONTROL" ] \
+      && [ "$(wc -l < "$UPDATE_CONTROL" 2>/dev/null || echo 0)" -eq 1 ] 2>/dev/null \
+      || return 1
+    control="$(cat "$UPDATE_CONTROL" 2>/dev/null || true)"
+    case "$control" in
+      "${id}:yield-restore") return 0 ;;
+      "${id}:promote"|"${id}:release"|\
+      "${id}:release:clear"|"${id}:release:retain") return 1 ;;
+      *) return 1 ;;
+    esac
+  fi
+  write_lifecycle_file "$UPDATE_CONTROL" "${id}:yield-restore" 600
+}
+
+claim_restore_lifecycle_operation() {
+  local owner=""
+  [ ! -L "$LOCK_DIR" ] || return 2
+  mkdir -p "$LOCK_DIR" 2>/dev/null || return 2
+  [ -d "$LOCK_DIR" ] && [ ! -L "$LOCK_DIR" ] || return 2
+  chmod 700 "$LOCK_DIR" 2>/dev/null || return 2
+  [ ! -L "$LIFECYCLE_OPERATION_LOCK" ] \
+    && [ ! -L "$LIFECYCLE_OPERATION_STATE" ] \
+    && [ ! -L "$LIFECYCLE_ADMISSION_LOCK" ] || return 2
+  exec 4>>"$LIFECYCLE_ADMISSION_LOCK" || return 2
+  flock -n 4 || { exec 4>&-; return 3; }
+  if [ ! -e "$LIFECYCLE_OPERATION_LOCK" ]; then
+    (set -C; umask 077; : > "$LIFECYCLE_OPERATION_LOCK") 2>/dev/null || true
+  fi
+  [ -f "$LIFECYCLE_OPERATION_LOCK" ] \
+    && [ ! -L "$LIFECYCLE_OPERATION_LOCK" ] || return 2
+  chmod 600 "$LIFECYCLE_OPERATION_LOCK" 2>/dev/null \
+    || { exec 4>&-; return 2; }
+  exec 5<>"$LIFECYCLE_OPERATION_LOCK" || { exec 4>&-; return 2; }
+  if ! flock -n 5; then
+    exec 5>&-
+    owner="$(read_lifecycle_state 2>/dev/null || true)"
+    if request_preparing_update_yield "$owner"; then
+      echo "[restore] restore request retained; asking the preparing update to yield" >&2
+    else
+      echo "[restore] restore request retained; another lifecycle operation is active" >&2
+    fi
+    flock -u 4 2>/dev/null || true
+    exec 4>&-
+    return 3
+  fi
+  owner="$(read_lifecycle_state 2>/dev/null || true)"
+  if [ -n "$owner" ] && [ "$owner" != restore ]; then
+    exec 5>&-
+    exec 4>&-
+    echo "[restore] restore request retained; foreign lifecycle recovery state is present" >&2
+    return 4
+  fi
+  if [ -z "$owner" ]; then
+    # Legacy/partial durable state predating the shared marker still blocks a
+    # foreign restore. Restore-owned destructive/swap state is adoptable.
+    if [ -e "$HOST_RESERVATION" ] || [ -L "$HOST_RESERVATION" ] \
+        || [ -e "$ROTATION_SENTINEL" ] || [ -L "$ROTATION_SENTINEL" ] \
+        || [ -e "$ROTATION_RESERVATION" ] || [ -L "$ROTATION_RESERVATION" ] \
+        || [ -e "$UPDATE_GUARD" ] || [ -L "$UPDATE_GUARD" ] \
+        || [ -e "$UPDATE_RESERVATION" ] || [ -L "$UPDATE_RESERVATION" ]; then
+      exec 5>&-
+      exec 4>&-
+      echo "[restore] restore request retained; foreign lifecycle recovery state is present" >&2
+      return 4
+    fi
+    write_lifecycle_file "$LIFECYCLE_OPERATION_STATE" restore 600 \
+      || { exec 5>&-; exec 4>&-; return 2; }
+  fi
+  flock -u 4 2>/dev/null || true
+  exec 4>&-
+  return 0
+}
+
+finish_restore_lifecycle_operation() {
+  if [ -f "$LIFECYCLE_OPERATION_STATE" ] \
+      && [ ! -L "$LIFECYCLE_OPERATION_STATE" ] \
+      && [ "$(cat "$LIFECYCLE_OPERATION_STATE" 2>/dev/null || true)" = restore ]; then
+    rm -f "$LIFECYCLE_OPERATION_STATE" 2>/dev/null || return 1
+  fi
+  return 0
+}
+
 # --- EXIT trap: single terminal-status writer + maintenance lift gate ---------
 _cleanup() {
   set +e
@@ -654,11 +1720,8 @@ _cleanup() {
   # request, write .restore_status.json, shred the operator key, or touch maintenance.
   # Short-circuit before any of that (it wrote its own manifest and is exiting 0).
   [ "$MANIFEST_MODE" = "1" ] && exit 0
+  [ "$ADMISSION_REFUSED" = "1" ] && exit 0
   [ -n "$HEARTBEAT_PID" ] && kill "$HEARTBEAT_PID" 2>/dev/null
-  # belt-and-braces: re-consume the request so it can never re-fire. A --recover run
-  # never consumes a request (it did not claim one) so a legitimately pending
-  # restore that arrives while a crash-recovery is running is not silently eaten.
-  [ "$RECOVER_MODE" = "1" ] || rm -f "$REQUEST_FILE" 2>/dev/null
   # Off-host DR hygiene: shred the one-time operator key + the plaintext secrets
   # staging on every clean or recorded-failure exit, so a failed restore never
   # leaves them on the rw restore_inbox volume. A SIGKILL cannot run this trap, so
@@ -674,10 +1737,20 @@ _cleanup() {
     fi
     purge_secrets_staging
   fi
+  case "$PRIVATE_INPUT_DIR" in
+    /tmp/jarvis-restore-input.*) rm -rf -- "$PRIVATE_INPUT_DIR" 2>/dev/null || true ;;
+  esac
+  # A staged PDF set is disposable until its swap journal exists. Preserve it
+  # only when crash recovery needs it to finish an in-progress file swap.
+  if [ "$PDFS_STAGED" = "1" ] && valid_pdf_restore_run_id "$PDF_RESTORE_RUN_ID"; then
+    if ! read_pdf_swap_state >/dev/null 2>&1; then
+      remove_staged_pdf_restore "$PDF_RESTORE_RUN_ID" 2>/dev/null || true
+    fi
+  fi
   if [ "$STATE" = "running" ]; then
     STATE="failed"
     if [ -z "$ERROR" ]; then
-      if [ -f "${TRIGGER_DIR}/.restore_timeout" ]; then
+      if [ -f "$RESTORE_TIMEOUT_FILE" ]; then
         if [ "$DROP_STARTED" = "1" ]; then
           ERROR="restore exceeded its time limit and was abandoned; the database may be inconsistent — restore from the safety backup ${SAFETY_BACKUP_TS:-<unknown>}"
         else
@@ -694,20 +1767,27 @@ _cleanup() {
       fi
     fi
   fi
+  if [ -n "$SAFETY_STAGING_DIR" ]; then
+    if [ "$STATE" = "failed" ] && [ "$DROP_STARTED" = "1" ]; then
+      ERROR="${ERROR}; Recovery copy: safety backup ${SAFETY_BACKUP_TS:-<unknown>} staged at ${SAFETY_STAGING_DIR}"
+      echo "[restore] Recovery copy preserved: ${SAFETY_STAGING_DIR}" >&2
+    else
+      remove_safety_staging \
+        || echo "[restore] WARNING: could not remove completed safety staging directory ${SAFETY_STAGING_DIR}" >&2
+    fi
+  fi
   # Any terminal FAILURE that entered the destructive window (DROP_STARTED=1) leaves the
-  # DB inconsistent — the operator must recover from the safety backup / finish the
-  # off-host secrets+role steps — so report manual_steps_required honestly rather than a
-  # bare error. Covers every post-DROP path (step5_fail, STEP-8 fail_after_restore,
+  # restored state incomplete, so report manual_steps_required honestly rather than a
+  # bare error. Covers every post-DROP path (step5_fail, fail_after_restore,
   # timeout, abnormal death). A clean restore is STATE="done" here, so it stays false.
   if [ "$STATE" = "failed" ] && [ "$DROP_STARTED" = "1" ]; then MANUAL_STEPS_REQUIRED=1; fi
   [ -n "$FINISHED_AT" ] || FINISHED_AT="$(date -Iseconds)"
   write_status
   # Lift maintenance on ANY clean restore (same-host OR off-host) OR any failure
   # BEFORE the first DROP (DROP_STARTED=0 => nothing was destroyed => safe to serve,
-  # true on a fresh host too). A clean INBOX restore is now safe to lift: STEP 8
-  # materialized the restored ./secrets and wrote the .secrets_rotated marker, and
-  # the app_factory/telegram/litellm watchers self-restart to pick up the rotated
-  # secrets + rebound role — so the stack returns to service with no operator steps.
+  # true on a fresh host too). A clean restore is safe to lift after its data keys
+  # and exact PDF set are installed; affected services observe the rotation marker
+  # and restart with the restored keys.
   # A failure AFTER the first DROP still holds the durable .destructive sentinel (the
   # DB is inconsistent; it does NOT auto-expire — the MAINTENANCE_MAX_AGE_S soft-expiry
   # covers .maintenance only — so the operator MUST clear it explicitly). This can't
@@ -716,8 +1796,10 @@ _cleanup() {
   if [ "$RESTORE_CLEAN" = "1" ] || [ "$DROP_STARTED" = "0" ]; then
     rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null
     rm -f "$MAINTENANCE_DESTRUCTIVE" 2>/dev/null
+    finish_restore_lifecycle_operation \
+      || echo "[restore] WARNING: could not clear completed lifecycle state" >&2
   fi
-  rm -f "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
+  rm -f "$RESTORE_TIMEOUT_FILE" 2>/dev/null || true
   # Never crash-restart the sidecar: a recorded terminal failure exits 0.
   exit 0
 }
@@ -734,8 +1816,15 @@ trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+if [ "${1:-}" != "--inbox-manifest" ]; then
+  if ! claim_restore_lifecycle_operation; then
+    ADMISSION_REFUSED=1
+    exit 0
+  fi
+fi
+
 # === RECOVERY MODE (--recover): reconcile a stranded mid-swap state, then exit ==
-# The sidecar entrypoint invokes this on startup when .restore_swap_state.json is
+# The sidecar entrypoint invokes this on startup when private swap state is
 # present (a crash mid-swap). It runs ONLY the leftover-handler for the recorded db
 # — it never consumes a .restore_request.json or runs the full restore flow. A
 # durable .destructive sentinel means the crash happened AFTER the destructive
@@ -745,14 +1834,37 @@ trap 'exit 130' INT
 # destroyed (.destructive absent, e.g. a crash during the first reload) the
 # reconcile only drops a stale tmp and the EXIT trap lifts the 503.
 if [ "${1:-}" = "--recover" ]; then
-  RECOVER_MODE=1
   CURRENT_STEP="Recovering an interrupted restore"
   PHASE="recover"
   if [ -f "$MAINTENANCE_DESTRUCTIVE" ]; then DROP_STARTED=1; fi
+  if [ -d "$(data_key_transaction_dir)" ]; then
+    if recover_restored_data_keys; then
+      STATE="failed"
+      ERROR="completed an interrupted data-key installation; maintenance remains active — retry the restore to finish the PDF and search-index phases"
+    else
+      STATE="failed"
+      ERROR="could not recover the interrupted data-key installation; maintenance remains active and both complete key sets were preserved"
+    fi
+    FINISHED_AT="$(date -Iseconds)"
+    exit 0
+  fi
+  if PDF_RECOVERY_STATE="$(read_pdf_swap_state 2>/dev/null)"; then
+    PDF_RESTORE_RUN_ID="${PDF_RECOVERY_STATE%%$'\t'*}"
+    PDFS_STAGED=1
+    if recover_pdf_swap; then
+      RESTORE_CLEAN=1
+      STATE="done"
+    else
+      STATE="failed"
+      ERROR="could not finish the interrupted PDF restore; maintenance remains active and the recovery state was preserved"
+    fi
+    FINISHED_AT="$(date -Iseconds)"
+    exit 0
+  fi
   RECOVER_DB="$(read_swap_db)"
   if [ -z "$RECOVER_DB" ]; then
-    clear_swap_state
-    STATE="done"
+    STATE="failed"
+    ERROR="restore recovery state is malformed or names an unsupported resource; it was preserved for inspection"
     FINISHED_AT="$(date -Iseconds)"
     exit 0
   fi
@@ -788,9 +1900,10 @@ if [ "${1:-}" = "--inbox-manifest" ]; then
 fi
 
 # === STEP 1: consume the request FIRST (at-most-once) + validate =============
-REQ_CONTENT="$(cat "$REQUEST_FILE" 2>/dev/null || true)"
-rm -f "$REQUEST_FILE" 2>/dev/null || true
-rm -f "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
+if ! REQ_CONTENT="$(consume_restore_request)"; then
+  fail_before_destruction "restore request could not be consumed; nothing was changed"
+fi
+rm -f "$RESTORE_TIMEOUT_FILE" 2>/dev/null || true
 
 TIMESTAMP="$(printf '%s' "$REQ_CONTENT" \
   | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[0-9]{8}_[0-9]{6}"' \
@@ -803,6 +1916,18 @@ SOURCE_RAW="$(printf '%s' "$REQ_CONTENT" \
   | grep -oE '"source"[[:space:]]*:[[:space:]]*"[^"]*"' \
   | sed -E 's/.*"source"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' | head -1 || true)"
 SOURCE="${SOURCE_RAW:-local}"
+
+parse_restore_identity_request "$REQ_CONTENT" \
+  || fail_before_destruction "restore request is missing a valid restore_id or requested_at value"
+
+# Historical backups predate PDF archiving. Parse the acknowledgement strictly:
+# absent and false are safe defaults; malformed or duplicate fields are refused.
+parse_allow_missing_pdfs_request "$REQ_CONTENT" \
+  || fail_before_destruction "restore request has an invalid allow_missing_pdfs value"
+
+if outbound_quarantine_exists; then
+  fail_before_destruction "restore is blocked until the current outbound credential review is acknowledged"
+fi
 
 write_status
 
@@ -832,6 +1957,7 @@ esac
 
 JARVIS_ARCHIVE=""
 LITELLM_ARCHIVE=""
+PDFS_ARCHIVE=""
 QDRANT_SNAPS=()
 shopt -s nullglob
 for f in "${ARCHIVE_DIR}"/*_"${TIMESTAMP}".*; do
@@ -840,6 +1966,7 @@ for f in "${ARCHIVE_DIR}"/*_"${TIMESTAMP}".*; do
   case "$base" in
     jarvis_*) JARVIS_ARCHIVE="$f" ;;
     litellm_*) LITELLM_ARCHIVE="$f" ;;
+    pdfs_*) PDFS_ARCHIVE="$f" ;;
     qdrant_*) QDRANT_SNAPS+=("$f") ;;
   esac
 done
@@ -858,13 +1985,43 @@ PGPASSWORD="$(cat /run/secrets/postgres_password)"
 export PGPASSWORD
 
 # === STEP 2: compat gate (defense-in-depth, BEFORE any destruction) ==========
-MANIFEST="${ARCHIVE_DIR}/manifest_${TIMESTAMP}.json"
+MANIFEST_SOURCE="${ARCHIVE_DIR}/manifest_${TIMESTAMP}.json"
+MANIFEST="$MANIFEST_SOURCE"
+# Copy manifest metadata into sidecar-private storage before authentication. A
+# writer may rename files in BACKUP_DIR/inbox, but cannot change the bytes we
+# verify and subsequently parse.
+if [ -e "$MANIFEST_SOURCE" ]; then
+  [ -f "$MANIFEST_SOURCE" ] && [ ! -L "$MANIFEST_SOURCE" ] \
+    || fail_before_destruction "manifest_${TIMESTAMP}.json is not a safe regular file"
+  PRIVATE_INPUT_DIR="$(mktemp -d /tmp/jarvis-restore-input.XXXXXX)" \
+    || fail_before_destruction "could not create private restore-input staging; nothing was changed"
+  chmod 700 "$PRIVATE_INPUT_DIR" \
+    || fail_before_destruction "could not secure private restore-input staging; nothing was changed"
+  cp --reflink=auto -- "$MANIFEST_SOURCE" "${PRIVATE_INPUT_DIR}/manifest_${TIMESTAMP}.json" \
+    || fail_before_destruction "could not stage the restore manifest; nothing was changed"
+  if [ -e "${MANIFEST_SOURCE}.hmac" ]; then
+    [ -f "${MANIFEST_SOURCE}.hmac" ] && [ ! -L "${MANIFEST_SOURCE}.hmac" ] \
+      || fail_before_destruction "manifest signature is not a safe regular file"
+    cp --reflink=auto -- "${MANIFEST_SOURCE}.hmac" \
+      "${PRIVATE_INPUT_DIR}/manifest_${TIMESTAMP}.json.hmac" \
+      || fail_before_destruction "could not stage the manifest signature; nothing was changed"
+  fi
+  MANIFEST="${PRIVATE_INPUT_DIR}/manifest_${TIMESTAMP}.json"
+fi
 # Authenticate the manifest FIRST. The sha256 gate below reads its expected digests
 # from this file, so verifying the archives against an unverified manifest would prove
 # nothing about a set whose archives and digests were rewritten together.
 gate_manifest_signature
 if [ -r "$MANIFEST" ]; then
   MANIFEST_CONTENT="$(cat "$MANIFEST" 2>/dev/null || true)"
+  if [ "$MANIFEST_AUTHENTICATED" = "1" ]; then
+    INVENTORY_FILE="${PRIVATE_INPUT_DIR}/.inventory.tsv"
+    parse_authenticated_manifest "$MANIFEST" "$TIMESTAMP" "$INVENTORY_FILE" \
+      || fail_before_destruction "authenticated manifest identity or archive roles are invalid; nothing was changed"
+    if authenticated_manifest_is_legacy "$MANIFEST"; then
+      MANIFEST_LEGACY=1
+    fi
+  fi
   CHECKFILE="$(mktemp)"
   printf '%s' "$MANIFEST_CONTENT" \
     | grep -oE '"filename":"[^"]+","sha256":"[0-9a-f]{64}"' \
@@ -885,25 +2042,15 @@ if [ -r "$MANIFEST" ]; then
 
   MANIFEST_SCHEMA="$(printf '%s' "$MANIFEST_CONTENT" \
     | grep -oE '"schema_version"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
-  # Compare the backup's schema against the CODE this deployment ships, NOT the
-  # live DB. The live DB is the wrong reference: after a partial restore failure
-  # the jarvis DB is gone/empty, so a live-schema query would read 0 and refuse
-  # EVERY backup — bricking the very safety-backup recovery this script directs
-  # the operator to run. The code's max schema is stable regardless of DB state
-  # and is the right "what can this deployment load" bound. After a schema squash
-  # db/migrations/ is empty (the baseline lives in init.sql), so the glob yields
-  # nothing; in that case fall back to db/SCHEMA_VERSION — the single source of
-  # the baseline floor — so this gate stays ARMED rather than failing open.
+  # Compare the backup schema with the maximum schema supported by the installed
+  # code. A partial restore can leave the live database unavailable, while the
+  # installed schema support remains readable. If there are no incremental
+  # migration files, db/SCHEMA_VERSION supplies the baseline schema number.
   if [ -n "$MANIFEST_SCHEMA" ]; then
     MIG_DIR="${MIGRATIONS_DIR:-/app/db/migrations}"
-    # Highest NNN_*.sql migration number, via a glob (not `ls`) so filenames are
-    # handled safely; 10# forces base-10 so a leading-zero prefix is not read as
-    # octal. After a schema squash db/migrations/ is empty (the baseline lives in
-    # init.sql), so the glob yields nothing; fall back to db/SCHEMA_VERSION — the
-    # single source of the baseline floor — so this gate stays ARMED, not open.
-    # An older-than-code backup is NOT held here: it self-heals on the next app
-    # recreate (the migration runner forward-migrates it), so only newer-than-code
-    # is refused.
+    # Read the highest NNN_*.sql migration with a glob rather than parsing `ls`.
+    # The 10# prefix treats a leading-zero migration number as base 10. Backups at
+    # or below the supported schema may proceed; newer backups are refused.
     CODE_MAX=""
     for _mig in "$MIG_DIR"/*.sql; do
       [ -e "$_mig" ] || continue
@@ -916,11 +2063,28 @@ if [ -r "$MANIFEST" ]; then
     if [ -z "$CODE_MAX" ]; then
       CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX=102
+      [ -n "$CODE_MAX" ] || CODE_MAX=106
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"
     fi
+  fi
+
+  if [ "$MANIFEST_AUTHENTICATED" = "1" ]; then
+    verify_manifest_inventory "$ARCHIVE_DIR" "$TIMESTAMP" "$INVENTORY_FILE" \
+      || fail_before_destruction "authenticated restore inventory has missing, changed, duplicate, or extra archive content; nothing was changed"
+    stage_manifest_inventory "$ARCHIVE_DIR" "$TIMESTAMP" "$INVENTORY_FILE" "$PRIVATE_INPUT_DIR" \
+      || fail_before_destruction "could not stage the exact authenticated restore inventory; nothing was changed"
+    JARVIS_ARCHIVE=""; LITELLM_ARCHIVE=""; PDFS_ARCHIVE=""; QDRANT_SNAPS=()
+    while IFS=$'\t' read -r _role _name _sha _size; do
+      case "$_role" in
+        jarvis) JARVIS_ARCHIVE="${PRIVATE_INPUT_DIR}/${_name}" ;;
+        litellm) LITELLM_ARCHIVE="${PRIVATE_INPUT_DIR}/${_name}" ;;
+        pdfs) PDFS_ARCHIVE="${PRIVATE_INPUT_DIR}/${_name}" ;;
+        qdrant:*) QDRANT_SNAPS+=("${PRIVATE_INPUT_DIR}/${_name}") ;;
+      esac
+    done < "$INVENTORY_FILE"
+    ARCHIVE_DIR="$PRIVATE_INPUT_DIR"
   fi
 elif [ "$SOURCE" = "inbox" ]; then
   # Off-host archives are operator-supplied and less trusted, and the admin endpoint
@@ -946,18 +2110,44 @@ for arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
   fi
 done
 
-# === STEP 2.5: secrets preflight (inbox only, BEFORE any destruction) =========
-# An off-host set with NO secrets archive would otherwise swap BOTH DBs and only fail at
-# STEP 8 (secrets materialization) — leaving a shredded one-time key and a durable
-# maintenance hold. Verify the secrets archive is present up front and refuse before any
-# DROP. STEP 2's manifest sha256 check already integrity-verified it (backup.sh lists the
-# secrets archive in the manifest, and an inbox restore hard-requires that manifest), so
-# presence here means present + integrity-checked. Local restores never touch secrets.
-if [ "$SOURCE" = "inbox" ]; then
-  if ! resolve_secrets_archive >/dev/null; then
-    fail_before_destruction "off-host restore requires the secrets archive secrets_${TIMESTAMP}.tar.gz[.enc] (stage the full backup set, including its secrets, into the restore_inbox); nothing was changed"
+# === STEP 2.5: restored-data-key preflight (BEFORE any destruction) ===========
+# Decrypt and fully validate the three keys coupled to database content now. A
+# wrong key, malformed archive, unsafe member, or missing data key must be found
+# while the live databases and target-host credentials are still untouched.
+SECRETS_ARCHIVE="$(resolve_secrets_archive || true)"
+if [ -n "$SECRETS_ARCHIVE" ]; then
+  DATA_KEYS_EXACT=0
+  if [ "$MANIFEST_AUTHENTICATED" = "1" ] \
+     && grep -qE '"run_id"[[:space:]]*:[[:space:]]*"[0-9a-f]{32}"' "$MANIFEST"; then
+    DATA_KEYS_EXACT=1
   fi
+  if ! stage_restored_data_keys "$SECRETS_ARCHIVE" "$DATA_KEYS_EXACT"; then
+    fail_before_destruction "the restored-data-key archive is incomplete, malformed, or unsafe; nothing was changed"
+  fi
+  DATA_KEYS_STAGED=1
+elif [ "$SOURCE" = "inbox" ]; then
+  fail_before_destruction "off-host restore requires secrets_${TIMESTAMP}.tar.gz[.enc] with the restored data keys; nothing was changed"
 fi
+
+# Stage and validate the PDF object set before taking maintenance. Signed
+# pre-v1.2 backups may omit it, but only an explicit caller acknowledgement may
+# replace the live numeric PDF set with empty in that compatibility case.
+PDF_RESTORE_RUN_ID="$(openssl rand -hex 16 2>/dev/null || true)"
+valid_pdf_restore_run_id "$PDF_RESTORE_RUN_ID" \
+  || fail_before_destruction "could not allocate a PDF restore transaction ID; nothing was changed"
+PDFS_ARCHIVE="$(resolve_pdfs_archive || true)"
+if [ -n "$PDFS_ARCHIVE" ]; then
+  stage_restored_pdfs "$PDFS_ARCHIVE" "$PDF_RESTORE_RUN_ID" \
+    || fail_before_destruction "the PDF archive is malformed, unsafe, too large, or cannot be staged; nothing was changed"
+elif missing_pdf_restore_is_authorized; then
+  stage_empty_pdf_set "$PDF_RESTORE_RUN_ID" \
+    || fail_before_destruction "could not stage the acknowledged empty PDF set; nothing was changed"
+elif [ "$MANIFEST_LEGACY" = "1" ]; then
+  fail_before_destruction "this historical backup has no PDF archive. Confirm the legacy data-loss warning before restoring; nothing was changed"
+else
+  fail_before_destruction "backup ${TIMESTAMP} is incomplete (missing the required PDF archive); nothing was changed"
+fi
+PDFS_STAGED=1
 
 # === STEP 3: maintenance ON + heartbeat ======================================
 # Turn the stack to 503 for the whole restore, and re-touch the sentinel every
@@ -973,9 +2163,9 @@ RESTORE_DEADLINE=$(( $(date +%s) + ${RESTORE_MAX_SECONDS:-3600} ))
       # Deadline exceeded — abandon. If a DROP began (.destructive present) the
       # DB may be inconsistent: HOLD maintenance. If not, nothing was destroyed:
       # LIFT .maintenance. Then signal the main process so its EXIT trap writes
-      # the single terminal status. The .restore_timeout marker tells _cleanup to
+      # the single terminal status. The private timeout marker tells _cleanup to
       # word the error as a timeout.
-      : > "${TRIGGER_DIR}/.restore_timeout" 2>/dev/null || true
+      : > "$RESTORE_TIMEOUT_FILE" 2>/dev/null || true
       if [ ! -f "$MAINTENANCE_DESTRUCTIVE" ]; then
         rm -f "$MAINTENANCE_SENTINEL" 2>/dev/null || true
       fi
@@ -986,7 +2176,11 @@ RESTORE_DEADLINE=$(( $(date +%s) + ${RESTORE_MAX_SECONDS:-3600} ))
 ) &
 HEARTBEAT_PID=$!
 
-# === STEP 4: safety pre-backup (before ANY destruction) ======================
+echo "[restore] Waiting for LiteLLM to stop before the safety backup." >&2
+wait_for_litellm_quarantine \
+  || fail_before_destruction "LiteLLM did not stop after maintenance began; nothing was changed"
+
+# === STEP 4: safety pre-backup before destructive replacement ================
 CURRENT_STEP="Safety backup"
 PHASE="safety"
 STEP_SAFETY="running"
@@ -1000,15 +2194,19 @@ export BACKUP_SKIP_PRUNE=1
 # maintenance sentinel as "someone else is mid-restore" and abort the very safety
 # snapshot the restore depends on.
 export BACKUP_FORCE=1
+SAFETY_RUN_ID="$(openssl rand -hex 16 2>/dev/null || true)"
+if ! printf '%s' "$SAFETY_RUN_ID" | grep -Eq '^[0-9a-f]{32}$'; then
+  fail_before_destruction "could not allocate the safety-backup correlation ID; nothing was changed"
+fi
+export BACKUP_RUN_ID="$SAFETY_RUN_ID"
 if /usr/local/bin/backup.sh; then SAFETY_RC=0; else SAFETY_RC=$?; echo "[restore] WARN: safety backup.sh exited non-zero (${SAFETY_RC})" >&2; fi
 LAST_RUN="$(cat "${BACKUP_DIR}/.last_run.json" 2>/dev/null || true)"
 SAFETY_BACKUP_TS="$(printf '%s' "$LAST_RUN" \
   | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[0-9]{8}_[0-9]{6}"' | grep -oE '[0-9]{8}_[0-9]{6}' | head -1 || true)"
-# The safety pre-backup is the ONLY rollback point for a mid-swap failure, so it must be
-# proven FRESH for THIS run (exit 0 + succeeded + newer than STARTED_AT), not merely
-# "some prior backup succeeded". A failed backup that could not rewrite .last_run.json
-# would leave a stale succeeded record; treating that as a rollback point is the bug this guards against.
-if ! safety_backup_is_fresh "$SAFETY_RC"; then
+# The safety pre-backup is the ONLY rollback point for a mid-swap failure. Accept
+# only exit zero plus the caller-assigned run ID in both .last_run and its manifest;
+# a stale record or concurrent producer can therefore never masquerade as this run.
+if ! safety_backup_is_fresh "$SAFETY_RC" "$SAFETY_RUN_ID"; then
   STEP_SAFETY="failed"
   fail_before_destruction "safety backup failed or is stale (no fresh rollback point); nothing was changed"
 fi
@@ -1026,6 +2224,10 @@ for _arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
     fail_before_destruction "archive $(basename "$_arch") disappeared before the restore began (possibly pruned); nothing was changed"
   fi
 done
+if [ "$MANIFEST_AUTHENTICATED" = "1" ]; then
+  verify_manifest_inventory "$PRIVATE_INPUT_DIR" "$TIMESTAMP" "$INVENTORY_FILE" \
+    || fail_before_destruction "private restore input changed before use; nothing was changed"
+fi
 
 # === STEP 4.5: disk preflight (before the first tmp CREATE) ==================
 # The rename-swap keeps both live DBs while it reloads a transient tmp DB per DB,
@@ -1099,147 +2301,57 @@ else
   write_status
 fi
 
-# === STEP 8: cross-host secrets materialization + role rebind (inbox only) ===
-# Same-host (local) restores never touch secrets: ./secrets is read-only and the
-# live JARVIS_CONFIG_KEY already matches the restored Fernet rows — so this whole
-# block is skipped and the local path is byte-for-byte unchanged.
-#
-# An off-host (inbox) restore runs on a FRESH host whose postgres cluster fixed the
-# jarvis role's password at first-init from the NEW host's POSTGRES_PASSWORD. The
-# restored DBs (pg_dump --no-owner --no-acl; cluster roles are not in the dump)
-# leave that role untouched, but the app will read the OLD restored
-# postgres_password.txt — so we rebind the live role to the restored password with
-# ALTER ROLE. The secrets are decrypted to a WRITABLE staging dir (never the RO
-# /secrets) purely to read that password; the EXIT trap shreds the operator key
-# and removes this staging afterwards. The operator separately materializes the
-# host ./secrets from the same archive (runbook) for config-key decryptability.
-# Everything here runs AFTER the DB restore; the EXIT trap holds maintenance on any
-# failure (DROP_STARTED=1).
-if [ "$SOURCE" = "inbox" ]; then
-  CURRENT_STEP="Restoring secrets"
-  PHASE="secrets"
+rotate_vector_visibility_checkpoint "$STEP_QDRANT" \
+  || fail_after_restore "the databases were restored, but vector visibility could not be reset; maintenance remains active — retry recovery from the safety backup"
+echo "[restore] vector visibility reset after Qdrant recovery: ${STEP_QDRANT}" >&2
+
+# === STEP 8: install restored data keys ======================================
+# Database dumps do not contain PostgreSQL roles, so destination-host role
+# passwords and secret files remain unchanged. Database-backed SMTP, Telegram,
+# provider, Zotero, and source settings were restored with JARVIS and remain
+# quarantined after off-host recovery. Only the three data keys staged and
+# validated before STEP 3 are installed from the archive.
+if [ "$DATA_KEYS_STAGED" = "1" ]; then
+  CURRENT_STEP="Restoring data keys"
+  PHASE="data-keys"
   write_status
-  SECRETS_ARCHIVE="$(resolve_secrets_archive || true)"
-  if [ -z "$SECRETS_ARCHIVE" ]; then
-    fail_after_restore "off-host restore: secrets archive secrets_${TIMESTAMP}.tar.gz[.enc] not found in the inbox; databases were restored — materialize ./secrets and rebind the postgres role manually per the runbook"
-  fi
-  purge_secrets_staging  # shred any leftover plaintext from a SIGKILLed prior run
-  mkdir -p "$SECRETS_STAGING"
-  chmod 700 "$SECRETS_STAGING"
-  # The off-host secrets archive is OPERATOR-SUPPLIED and therefore untrusted:
-  # materialize the decrypted stream to a temp file, enumerate its members, and
-  # REJECT any absolute path or '..' traversal BEFORE extracting (a crafted member
-  # like /etc/x or ../../x could otherwise escape the staging dir). Extract with
-  # --no-same-owner --no-same-permissions so the archive cannot set ownership or
-  # setuid/setgid bits. The staging dir is already chmod 700; the temp .tar and the
-  # extracted plaintext are both shredded by purge_secrets_staging on exit. The
-  # member check reads a captured var via a here-string (NOT a pipe): under
-  # pipefail a `grep -q` that closes a pipe early on a huge crafted member list
-  # would surface as SIGPIPE and be misread as "no unsafe member found".
-  SECRETS_TAR_TMP="${SECRETS_STAGING}/.incoming.tar"
-  if ! decrypt_or_passthrough "$SECRETS_ARCHIVE" > "$SECRETS_TAR_TMP" 2>/dev/null; then
-    fail_after_restore "off-host restore: could not decrypt the secrets archive (wrong operator key or corrupt); databases were restored — see the runbook"
-  fi
-  SECRETS_TAR_MEMBERS="$(tar -tzf "$SECRETS_TAR_TMP" 2>/dev/null || true)"
-  if grep -Eq '^/|\.\.|^[A-Za-z]:' <<<"$SECRETS_TAR_MEMBERS"; then
-    fail_after_restore "off-host restore: the secrets archive contains an unsafe member path (absolute or '..' traversal); refusing to extract — see the runbook"
-  fi
-  # Reject symlink/hardlink members too (verbose listing: type char 'l'/'h'). A
-  # legitimate secrets archive is flat regular *.txt files; a crafted symlink member
-  # (e.g. d -> /host-secrets, now a rw mount) could otherwise redirect a subsequent
-  # member's write outside the staging dir during extraction.
-  SECRETS_TAR_TYPES="$(tar -tvzf "$SECRETS_TAR_TMP" 2>/dev/null || true)"
-  if grep -Eq '^[lh]' <<<"$SECRETS_TAR_TYPES"; then
-    fail_after_restore "off-host restore: the secrets archive contains a symlink or hardlink member; refusing to extract — see the runbook"
-  fi
-  if ! tar --no-same-owner --no-same-permissions -xzf "$SECRETS_TAR_TMP" -C "$SECRETS_STAGING" 2>/dev/null; then
-    fail_after_restore "off-host restore: could not extract the secrets archive (corrupt); databases were restored — see the runbook"
-  fi
-  chmod -R go-rwx "$SECRETS_STAGING" 2>/dev/null || true
-  OLD_PG_PW_FILE="${SECRETS_STAGING}/postgres_password.txt"
-  if [ ! -s "$OLD_PG_PW_FILE" ]; then
-    fail_after_restore "off-host restore: postgres_password.txt is missing from the restored secrets; cannot rebind the role — see the runbook"
-  fi
-  # Command substitution strips the trailing newline, matching how postgres and the
-  # app read the secret. The password is a SQL string LITERAL (not a bind param), so
-  # double every single quote before embedding it (a password containing ' would
-  # otherwise break the statement or inject SQL).
-  OLD_PG_PW="$(cat "$OLD_PG_PW_FILE")"
-  if [ -z "$OLD_PG_PW" ]; then
-    fail_after_restore "off-host restore: the restored postgres_password is empty; cannot rebind the role — see the runbook"
-  fi
-  OLD_PG_PW_ESC="${OLD_PG_PW//\'/\'\'}"
-  if ! psql_admin "ALTER ROLE \"${PGUSER}\" WITH PASSWORD '${OLD_PG_PW_ESC}';" >/dev/null; then
-    fail_after_restore "off-host restore: ALTER ROLE password rebind failed; databases were restored — rebind the postgres role manually per the runbook"
-  fi
-  # Materialize the restored secrets into the host ./secrets (bind-mounted here rw as
-  # HOST_SECRETS_DIR) so the app containers self-restart onto them — a fresh host now
-  # recovers with ZERO terminal steps. Runs BEFORE the EXIT trap purges the staging
-  # tree. The tar was traversal-checked at extraction (:951); re-assert a strict flat
-  # basename (defense-in-depth) and skip credentials the TARGET host is authoritative
-  # for — backup_encrypt_key.txt (already excluded from the archive) plus the local-
-  # service keys handled in the loop below. Per-file atomic
-  # tmp->mv. Mode 0644 matches setup.sh's convention (files 0644 inside a 0700 dir):
-  # the sidecar writes as root but the app containers read /run/secrets/* as a
-  # DIFFERENT non-root uid via bind mount, so a 0600 file would be unreadable and the
-  # self-restart would fail to reconnect. Any failure holds maintenance.
-  if [ ! -d "$HOST_SECRETS_DIR" ]; then
-    fail_after_restore "off-host restore: ${HOST_SECRETS_DIR} is not mounted; cannot materialize the restored secrets — recreate the app containers manually per the runbook"
-  fi
-  shopt -s nullglob
-  for sfile in "${SECRETS_STAGING}"/*.txt; do
-    sbase="$(basename "$sfile")"
-    [ "$sbase" = "backup_encrypt_key.txt" ] && continue
-    # qdrant_api_key / langfuse_pg_password are LOCAL access credentials to LOCAL
-    # services (qdrant; the langfuse-postgres backing store), not restored user data.
-    # Those services fixed their own key at first-init on the target host and are NOT
-    # restarted by a restore (no backup_trigger mount, no .secrets_rotated watcher,
-    # and unlike PGUSER no ALTER ROLE rebind), so the app must keep the TARGET host's
-    # copy to stay authenticated — materializing the OLD key would break app<->qdrant
-    # and langfuse<->langfuse-postgres auth on the next restart of those services.
-    [ "$sbase" = "qdrant_api_key.txt" ] && continue
-    [ "$sbase" = "langfuse_pg_password.txt" ] && continue
-    printf '%s' "$sbase" | grep -Eq '^[a-z0-9_]+\.txt$' || continue
-    if ! cp -- "$sfile" "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \
-       || ! chmod 644 "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null \
-       || ! mv -f "${HOST_SECRETS_DIR}/${sbase}.tmp" "${HOST_SECRETS_DIR}/${sbase}" 2>/dev/null; then
-      rm -f "${HOST_SECRETS_DIR}/${sbase}.tmp" 2>/dev/null || true
-      shopt -u nullglob
-      fail_after_restore "off-host restore: could not materialize secret ${sbase} into ${HOST_SECRETS_DIR}; databases were restored — recreate the app containers manually per the runbook"
-    fi
-  done
-  shopt -u nullglob
-  # Rotation marker (integer epoch): each postgres-connecting service restarts iff
-  # this marker is newer than ITS process start, so they come back reading the rotated
-  # secrets + rebound role (self-limiting — no restart loop). Atomic tmp->mv.
-  if ! { printf '%s\n' "$(date +%s)" > "${TRIGGER_DIR}/.secrets_rotated.tmp" \
-         && mv -f "${TRIGGER_DIR}/.secrets_rotated.tmp" "${TRIGGER_DIR}/.secrets_rotated"; }; then
-    rm -f "${TRIGGER_DIR}/.secrets_rotated.tmp" 2>/dev/null || true
-    fail_after_restore "off-host restore: could not write the secrets-rotation marker; databases were restored — recreate the app containers manually per the runbook"
+  if ! install_restored_data_keys; then
+    fail_after_restore "the databases were restored, but their data keys could not be installed; maintenance remains active — retry recovery from the safety backup"
   fi
   write_status
 fi
 
+# The PDF swap is last. Its durable journal can therefore finish forward after
+# a crash and safely lift maintenance once the exact staged inventory verifies.
+CURRENT_STEP="Restoring PDF library"
+PHASE="pdfs"
+write_status
+if ! swap_restored_pdfs "$PDF_RESTORE_RUN_ID"; then
+  fail_after_restore "the databases were restored, but the PDF library swap did not finish; automatic recovery will retry while maintenance remains active"
+fi
+PDFS_STAGED=0
+
 # === STEP 9: finishing up ====================================================
 # A clean restore — same-host OR off-host — lifts maintenance via the EXIT trap.
-# The off-host path now materializes the restored ./secrets and writes the rotation
-# marker in STEP 8, and the app_factory/telegram/litellm watchers self-restart to
-# read the rotated secrets + rebound role, so the stack returns to service with no
+# When data keys were present, STEP 8 installed them and wrote the rotation
+# marker so dependent services reload the restored keys. The stack returns with no
 # terminal steps. MANUAL_STEPS_REQUIRED stays 0 (reserved for genuinely
 # unrecoverable states) so write_status reports honestly.
 CURRENT_STEP="Finishing up"
 PHASE="finalize"
 STEP_FINISH="running"
 write_status
+FINISHED_AT="$(date -Iseconds)"
+if [ "$SOURCE" = "inbox" ]; then
+  write_outbound_quarantine "$RESTORE_ID" "$SOURCE" "$REQUESTED_AT" "$FINISHED_AT" \
+    || fail_after_restore "the off-host restore completed, but outbound quarantine could not be recorded; maintenance remains active — use the host recovery command after preserving the restore ID"
+fi
 RESTORE_CLEAN=1
 STATE="done"
-# An older-than-code backup is no longer held here: it self-heals on the next app
-# recreate (the migration runner forward-migrates it).
 STEP_FINISH="done"
-FINISHED_AT="$(date -Iseconds)"
 write_status
 if [ "$SOURCE" = "inbox" ]; then
-  echo "[restore] off-host restore complete: databases + vectors + secrets restored, the postgres role rebound, and the app services self-restarting to reload the rotated secrets. The stack returns to service automatically." >&2
+  echo "[restore] off-host restore complete: databases, PDFs, vectors, and data keys restored; target-host credentials were preserved." >&2
 fi
 # The EXIT trap clears both .maintenance and .destructive on any clean restore
 # + kills the heartbeat.
