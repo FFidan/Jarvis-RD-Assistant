@@ -758,7 +758,7 @@ requires-dist = [
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "fastapi", specifier = ">=0.136.1" },
-    { name = "gitpython", specifier = ">=3.1.51" },
+    { name = "gitpython", specifier = ">=3.1.54" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },

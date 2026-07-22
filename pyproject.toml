@@ -29,7 +29,7 @@ jarvis-common = [
     "cryptography>=48.0.1",  # >=48.0.1 clears GHSA-537c-gmf6-5ccf
     "email-validator>=2.0",  # backs pydantic EmailStr
     "fastapi>=0.136.1,<0.140.0",
-    "gitpython>=3.1.51",  # >=3.1.51 clears GHSA-2f96-g7mh-g2hx and 3 related advisories
+    "gitpython>=3.1.54",  # >=3.1.54 clears GHSA-2f96-g7mh-g2hx, -v396-v7q4-x2qj, -956x-8gvw-wg5v, -rwj8-pgh3-r573
     "httpx>=0.27.0",
     "idna>=3.15",
     "instructor>=1.15.0",
