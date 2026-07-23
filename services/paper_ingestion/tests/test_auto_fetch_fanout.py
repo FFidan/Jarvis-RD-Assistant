@@ -210,9 +210,12 @@ async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
-    """With two topics, ``_discover_and_save`` calls ``fetch_new_since`` once per
-    topic (not ``source.search``), and each topic's fan-out carries its own
-    topic_id — the flat ``fetch_new_since`` result never blends topic attribution.
+    """With two real topics plus the zero-configured-topics fallback pair
+    ``(None, "machine learning")``, ``_discover_and_save`` calls
+    ``fetch_new_since`` once per pair — including the fallback, restoring
+    discovery for topic-less installs — but fans out only the two real
+    topics (no subscribed topic exists to target for the fallback), and
+    building the fallback's placeholder ``TopicRef`` never raises.
     """
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
 
@@ -220,7 +223,11 @@ async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
     conn.fetch = AsyncMock(
         side_effect=[
             [{"id": 1, "source_type": "arxiv", "enabled": True, "config": {}, "display_order": 1}],
-            [{"id": 11, "name": "diffusion"}, {"id": 12, "name": "graphs"}],
+            [
+                {"id": 11, "name": "diffusion"},
+                {"id": 12, "name": "graphs"},
+                {"name": "machine learning"},  # no "id" -> _resolve_topic_pairs yields (None, ...)
+            ],
             [],  # to_download
             [],  # to_process
         ]
@@ -277,16 +284,21 @@ async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
     ):
         await af.run_auto_pipeline(app)
 
-    # One fetch_new_since call per topic — never a single fan-out-blind blast.
-    assert fake_source.fetch_new_since.await_count == 2, (
-        f"expected one call per topic, got {fake_source.fetch_new_since.await_count}"
+    # One fetch_new_since call per pair — including the topic-less fallback
+    # (never a single fan-out-blind blast, and the fallback is no longer
+    # silently skipped).
+    assert fake_source.fetch_new_since.await_count == 3, (
+        f"expected one call per pair (incl. fallback), got {fake_source.fetch_new_since.await_count}"
     )
     called_topic_ids = sorted(
         call.args[1][0].id for call in fake_source.fetch_new_since.await_args_list
     )
-    assert called_topic_ids == [11, 12]
+    # The fallback's placeholder id (af._DEFAULT_QUERY_TOPIC_ID) builds a
+    # valid TopicRef -- no ValidationError -- and is distinct from real ids.
+    assert called_topic_ids == sorted([11, 12, af._DEFAULT_QUERY_TOPIC_ID])
 
-    # Each topic's paper is fanned out with THAT topic's id (never blended).
+    # Each REAL topic's paper is fanned out with THAT topic's id (never
+    # blended); the fallback pair has no subscribed topic and is not fanned out.
     assert len(fanout_calls) == 2
     assert sorted(topic_ids[0] for _paper_id, topic_ids in fanout_calls) == [11, 12]
 
