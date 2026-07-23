@@ -134,9 +134,9 @@ def _ip_in_cidrs(value: str | None, cidrs: list[str]) -> bool:
             if address in ipaddress.ip_network(cidr, strict=False):
                 return True
         except ValueError:
-            # Log the position, not the entry: the allowlist is operator-controlled
-            # config, and keeping its raw value out of the log record avoids a
-            # clear-text-logging finding while still pointing at the bad element.
+            # Log the position rather than the raw entry: the allowlist is
+            # operator-controlled configuration, and keeping raw values out of log
+            # records is good hygiene while still pointing at which element to fix.
             logger.warning("Ignoring malformed transport-allowlist CIDR at index %d", index)
     return False
 

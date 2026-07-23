@@ -627,12 +627,11 @@ def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
     )
     assert any(
         f"signed-by={keyring}" in line
-        and "download.docker.com"
-        in {
-            urllib.parse.urlparse(token).netloc
+        and any(
+            urllib.parse.urlparse(token).hostname == "download.docker.com"
             for token in line.split()
             if token.startswith("https://")
-        }
+        )
         for line in plan
     ), f"apt repo must be pinned to the fetched key at download.docker.com: {plan}"
     for line in plan:

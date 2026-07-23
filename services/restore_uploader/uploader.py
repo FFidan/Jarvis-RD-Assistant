@@ -223,20 +223,18 @@ class UploadHandler(BaseHTTPRequestHandler):
 
     def _store(self, filename: str, content_length: int | None, cap: int) -> None:
         """Stream the body into the inbox atomically, then respond (handles its own errors)."""
-        # Resolve the archive path once through realpath and confirm it stays inside
-        # the inbox. This commonpath barrier is the containment form CodeQL's
-        # path-injection model recognises, and every filesystem call below consumes
-        # only these normalised values -- so the guard provably dominates the sinks.
-        # _resolve_filename already strips separators/traversal upstream; this is the
-        # sink-side barrier.
-        inbox_real = os.path.realpath(_inbox_dir())
-        final_path = os.path.realpath(os.path.join(inbox_real, filename))
-        if os.path.commonpath((inbox_real, final_path)) != inbox_real:
+        # Resolve the target inside the inbox and confirm it did not escape before
+        # writing. _resolve_filename has already allowlisted the name upstream; resolving
+        # and containment-checking again at the write site keeps this handler safe on its
+        # own, regardless of the caller.
+        inbox = os.path.realpath(_inbox_dir())
+        resolved = os.path.realpath(os.path.join(inbox, filename))
+        if not resolved.startswith(inbox + os.sep):
             self.close_connection = True
             self._deny(400, "unsafe path", filename)
             return
-        final = Path(final_path)
-        part = Path(f"{final_path}.part")
+        final = Path(resolved)
+        part = final.with_name(f"{final.name}.part")
         try:
             with open(part, "wb") as out:
                 written = self._stream_body(out, content_length, cap)
