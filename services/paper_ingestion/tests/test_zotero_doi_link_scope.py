@@ -12,7 +12,6 @@ is evaluated (a mock pool would return rows regardless of the SQL and prove noth
 - the poller's own private match still links idempotently (re-sync unaffected).
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jarvis_common.task_registry as task_registry
@@ -38,12 +37,12 @@ async def _seed_paper_with_doi(
                discovered_by, visibility_scope, metadata
            )
            VALUES ($1, 'arxiv', 'DOI Dedup Paper', ARRAY['Author'],
-                   'https://shared.test/paper', $2, $3, $4::jsonb)
+                   'https://shared.test/paper', $2, $3, jsonb_build_object('doi', $4::text))
            RETURNING id""",
         external_id,
         discovered_by,
         visibility_scope,
-        json.dumps({"doi": doi}),
+        doi,
     )
 
 
