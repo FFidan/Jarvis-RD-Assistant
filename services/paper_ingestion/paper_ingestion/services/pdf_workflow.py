@@ -788,33 +788,78 @@ async def _paper_mutation_connection(db_pool: asyncpg.Pool, paper_id: int):
 # ---------------------------------------------------------------------------
 
 
-async def _upsert_paper_with_visibility(
+# Conflict policies for the shared canonical upsert. Both are trusted code
+# literals interpolated verbatim into the SQL — never request-derived input.
+#
+# _ATTACH_ONLY_CONFLICT: the unverified client path (batch-save, Zotero). On
+# conflict it mutates nothing canonical; the no-op self-assignment returns the
+# existing row unchanged while `(xmax = 0)` still reports is_insert correctly.
+_ATTACH_ONLY_CONFLICT = "DO UPDATE SET external_id = papers.external_id"
+
+# _TRUSTED_REFRESH_CONFLICT: the server-owned adapter path (search/pulse/
+# auto-fetch, require_verified_public_source-guarded). On conflict the trusted
+# adapter re-owns EVERY client-provided descriptive column from EXCLUDED and
+# forces public scope, so promotion fully sanitizes any pre-seeded row. The
+# assignments are unconditional (no COALESCE): a COALESCE would let an
+# attacker-seeded value survive when the adapter's value is NULL. Columns not
+# listed are preserved: `discovered_by` (insert-only audit identity),
+# `discovery_origin` (a non-authorizing 4-value enum, immutable after insert),
+# `external_id` (the conflict key), and the server-local processing columns
+# absent from the INSERT list.
+_TRUSTED_REFRESH_CONFLICT = (
+    "DO UPDATE SET "
+    "source_type = EXCLUDED.source_type, "
+    "title = EXCLUDED.title, "
+    "authors = EXCLUDED.authors, "
+    "abstract = EXCLUDED.abstract, "
+    "published_date = EXCLUDED.published_date, "
+    "url = EXCLUDED.url, "
+    "pdf_url = EXCLUDED.pdf_url, "
+    "citation_count = EXCLUDED.citation_count, "
+    "metadata = EXCLUDED.metadata, "
+    "visibility_scope = 'public'"
+)
+
+
+async def _run_paper_upsert(
     conn: ConnLike,
     paper: PaperCreate,
     *,
     discovered_by: int | None = None,
     visibility_scope: VisibilityScope,
+    on_conflict: str,
 ) -> asyncpg.Record:
-    """Execute the shared canonical upsert with a caller-selected trusted scope."""
+    """Execute the shared canonical paper upsert with a caller-selected conflict policy.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Active database connection or compatible transaction proxy.
+    paper : PaperCreate
+        Validated descriptive paper metadata inserted for a new row.
+    discovered_by : int | None
+        Optional audit identity recorded only on initial insertion.
+    visibility_scope : VisibilityScope
+        Scope written for a NEW row. The scope of an EXISTING row on conflict is
+        governed by *on_conflict*, not by this value.
+    on_conflict : str
+        Trusted ``ON CONFLICT (external_id)`` action clause, interpolated
+        verbatim into the SQL. It MUST be a module-level code literal, never
+        request-derived input: either :data:`_ATTACH_ONLY_CONFLICT` (mutate
+        nothing canonical on the existing row) or :data:`_TRUSTED_REFRESH_CONFLICT`
+        (re-own the full descriptive surface and force public scope).
+
+    Returns
+    -------
+    asyncpg.Record
+        The inserted or existing row, including ``(xmax = 0) AS is_insert``.
+    """
     row = await conn.fetchrow(
-        """INSERT INTO papers (external_id, source_type, title, authors, abstract,
+        f"""INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, pdf_url, citation_count, metadata,
                                discovery_origin, discovered_by, visibility_scope)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-           ON CONFLICT (external_id) DO UPDATE SET
-               source_type = CASE
-                   WHEN EXCLUDED.visibility_scope = 'public' THEN EXCLUDED.source_type
-                   ELSE papers.source_type
-               END,
-               title = EXCLUDED.title,
-               authors = EXCLUDED.authors,
-               abstract = EXCLUDED.abstract,
-               citation_count = EXCLUDED.citation_count,
-               metadata = EXCLUDED.metadata,
-               visibility_scope = CASE
-                   WHEN EXCLUDED.visibility_scope = 'public' THEN 'public'
-                   ELSE papers.visibility_scope
-               END
+           ON CONFLICT (external_id) {on_conflict}
            RETURNING *, (xmax = 0) AS is_insert""",
         paper.external_id,
         paper.source_type.value,
@@ -860,14 +905,16 @@ async def upsert_paper(
 
     Notes
     -----
-    On conflict, this path preserves an existing public scope. Callers that
-    want a user to access a private row must add `user_library` membership.
+    On conflict this path is attach-only: it mutates no canonical column of the
+    existing shared row — neither content nor scope. Callers that want a user to
+    access an existing row must add `user_library` membership.
     """
-    return await _upsert_paper_with_visibility(
+    return await _run_paper_upsert(
         conn,
         paper,
         discovered_by=discovered_by,
         visibility_scope=PRIVATE_VISIBILITY_SCOPE,
+        on_conflict=_ATTACH_ONLY_CONFLICT,
     )
 
 
@@ -903,14 +950,17 @@ async def upsert_verified_public_paper(
     -----
     Authenticated request payloads must use :func:`upsert_paper`. The source
     guard is defense in depth; call-site ownership of the trusted adapter
-    boundary is also covered by tests.
+    boundary is also covered by tests. On conflict this path re-owns every
+    client-provided descriptive column and forces public scope, so promotion
+    fully sanitizes any pre-seeded row.
     """
     require_verified_public_source(paper.source_type.value)
-    return await _upsert_paper_with_visibility(
+    return await _run_paper_upsert(
         conn,
         paper,
         discovered_by=discovered_by,
         visibility_scope=PUBLIC_VISIBILITY_SCOPE,
+        on_conflict=_TRUSTED_REFRESH_CONFLICT,
     )
 
 

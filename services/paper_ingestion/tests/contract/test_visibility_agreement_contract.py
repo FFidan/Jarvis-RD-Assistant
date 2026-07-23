@@ -172,45 +172,154 @@ async def test_unknown_source_obeys_scope_and_library_only(contract_conn):
 async def test_upsert_paths_persist_private_default_and_trusted_public_promotion(
     contract_conn,
 ) -> None:
-    """Real upserts enforce the request/trusted-adapter visibility boundary.
+    """Real upserts enforce the request/trusted-adapter WRITE-authority boundary.
 
-    The general path creates a private row. The server-owned adapter path may
-    create a public row, and replaying that row through the general path cannot
-    demote its scope or replace its verified scholarly source with a private
-    descriptive label.
+    The unverified client path (``upsert_paper``) inserts private and is
+    attach-only on conflict: it mutates no canonical column of an existing
+    shared row (neither content nor scope). The server-owned adapter path
+    (``upsert_verified_public_paper``) inserts public and, on conflict, re-owns
+    EVERY client-provided descriptive column and forces public scope — so
+    promotion fully sanitizes a pre-seeded private row (TEN-2b) while preserving
+    the insert-only audit provenance (``discovered_by``/``discovery_origin``).
     """
+    from datetime import date
+
     from paper_ingestion.models.papers import PaperCreate, SourceType
     from paper_ingestion.services.pdf_workflow import (
         upsert_paper,
         upsert_verified_public_paper,
     )
 
-    def paper(external_id: str, source_type: SourceType, title: str) -> PaperCreate:
-        return PaperCreate(
-            external_id=external_id,
-            source_type=source_type,
-            title=title,
-            authors=["A. Author"],
-            url=f"https://example.test/{external_id}",
-        )
-
+    # --- New rows: client path is private, adapter path is public ---
     private_row = await upsert_paper(
         contract_conn,
-        paper("upsert-private-default", SourceType.ARXIV, "Private default"),
+        PaperCreate(
+            external_id="upsert-private-default",
+            source_type=SourceType.ARXIV,
+            title="Private default",
+            authors=["A. Author"],
+            url="https://example.test/upsert-private-default",
+        ),
     )
-    public_row = await upsert_verified_public_paper(
-        contract_conn,
-        paper("upsert-trusted-public", SourceType.ARXIV, "Trusted public"),
-    )
-    replayed_public = await upsert_paper(
-        contract_conn,
-        paper("upsert-trusted-public", SourceType.LOCAL, "Request replay"),
-    )
-
     assert private_row["visibility_scope"] == "private"
-    assert public_row["visibility_scope"] == "public"
-    assert replayed_public["visibility_scope"] == "public"
-    assert replayed_public["source_type"] == "arxiv"
+    assert private_row["is_insert"]
+
+    # --- Attach-only: the client path never mutates an existing shared row ---
+    owner = await upsert_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-attach-only",
+            source_type=SourceType.ARXIV,
+            title="Owner title",
+            authors=["Owner Author"],
+            abstract="owner abstract",
+            published_date=date(2020, 1, 1),
+            url="https://example.test/owner",
+            pdf_url="https://example.test/owner.pdf",
+            citation_count=3,
+            metadata={"owner": True},
+        ),
+    )
+    attached = await upsert_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-attach-only",
+            source_type=SourceType.LOCAL,
+            title="Client overwrite attempt",
+            authors=["Attacker"],
+            abstract="attacker abstract",
+            published_date=date(2099, 12, 31),
+            url="https://example.test/attacker",
+            pdf_url="https://example.test/attacker.pdf",
+            citation_count=999,
+            metadata={"attacker": True},
+        ),
+    )
+    assert attached["id"] == owner["id"]
+    assert not attached["is_insert"]
+    for column in (
+        "source_type",
+        "title",
+        "authors",
+        "abstract",
+        "published_date",
+        "url",
+        "pdf_url",
+        "citation_count",
+        "metadata",
+        "visibility_scope",
+    ):
+        assert attached[column] == owner[column], f"attach-only mutated {column}"
+    assert attached["visibility_scope"] == "private"
+
+    # --- TEN-2b: trusted promotion re-owns EVERY client column + forces public ---
+    audit_user = await _seed_user(contract_conn, "ten2b-discoverer@contract.example.com")
+    seeded = await upsert_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-trusted-refresh",
+            source_type=SourceType.LOCAL,
+            title="Attacker title",
+            authors=["Attacker"],
+            abstract="attacker abstract",
+            published_date=date(2099, 12, 31),
+            url="https://example.test/attacker-seed",
+            pdf_url="https://example.test/attacker-seed.pdf",
+            citation_count=999,
+            metadata={"seed": "attacker"},
+        ),
+        discovered_by=audit_user,
+    )
+    assert seeded["visibility_scope"] == "private"
+    assert seeded["discovery_origin"] == "user_initiated"
+
+    promoted = await upsert_verified_public_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-trusted-refresh",
+            source_type=SourceType.ARXIV,
+            title="Verified title",
+            authors=["Verified Author"],
+            abstract="verified abstract",
+            published_date=date(2021, 6, 1),
+            url="https://arxiv.org/abs/verified",
+            pdf_url="https://arxiv.org/pdf/verified.pdf",
+            citation_count=7,
+            metadata={"source": "verified"},
+            discovery_origin="pulse",
+        ),
+        discovered_by=None,
+    )
+    assert promoted["id"] == seeded["id"]
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["source_type"] == "arxiv"
+    assert promoted["title"] == "Verified title"
+    assert promoted["authors"] == ["Verified Author"]
+    assert promoted["abstract"] == "verified abstract"
+    assert promoted["published_date"] == date(2021, 6, 1)
+    assert promoted["url"] == "https://arxiv.org/abs/verified"
+    assert promoted["pdf_url"] == "https://arxiv.org/pdf/verified.pdf"
+    assert promoted["citation_count"] == 7
+    assert promoted["metadata"] == {"source": "verified"}
+    # Insert-only provenance is preserved, NOT overwritten by the promotion.
+    assert promoted["discovered_by"] == audit_user
+    assert promoted["discovery_origin"] == "user_initiated"
+
+    # The client path also cannot demote or mutate the now-public shared row.
+    client_replay = await upsert_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-trusted-refresh",
+            source_type=SourceType.LOCAL,
+            title="Demotion attempt",
+            authors=["Attacker"],
+            url="https://example.test/demote",
+        ),
+    )
+    assert client_replay["id"] == promoted["id"]
+    assert client_replay["visibility_scope"] == "public"
+    assert client_replay["source_type"] == "arxiv"
+    assert client_replay["title"] == "Verified title"
 
 
 # ---------------------------------------------------------------------------
