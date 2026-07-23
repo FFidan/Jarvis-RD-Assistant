@@ -1024,3 +1024,54 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
         if collection_created:
             await qdrant.delete_collection(collection_name=collection_name)
         await qdrant.close()
+
+
+async def test_trusted_refresh_purges_seeded_content_when_adapter_value_is_null(
+    contract_conn,
+) -> None:
+    """TEN-2b no-COALESCE: a NULL from the trusted adapter PURGES attacker-seeded content.
+
+    ``_TRUSTED_REFRESH_CONFLICT`` overwrites descriptive columns unconditionally,
+    never ``COALESCE(EXCLUDED.x, papers.x)``. A COALESCE would let an attacker's
+    pre-seeded value survive whenever the verified adapter omits that column (its
+    value is ``NULL``). This pins that the NULL wins, so a promoted row cannot
+    retain foreign content the verified source did not supply.
+    """
+    from paper_ingestion.models.papers import PaperCreate, SourceType
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-null-purge",
+            source_type=SourceType.LOCAL,
+            title="Attacker title",
+            authors=["Attacker"],
+            abstract="attacker abstract",
+            pdf_url="https://example.test/attacker-null.pdf",
+            url="https://example.test/attacker-null-seed",
+        ),
+    )
+    assert seeded["abstract"] == "attacker abstract"
+    assert seeded["pdf_url"] == "https://example.test/attacker-null.pdf"
+
+    promoted = await upsert_verified_public_paper(
+        contract_conn,
+        PaperCreate(
+            external_id="upsert-null-purge",
+            source_type=SourceType.ARXIV,
+            title="Verified title",
+            authors=["Verified Author"],
+            url="https://arxiv.org/abs/null-purge",
+            # abstract + pdf_url omitted -> None: the verified adapter supplies no
+            # value, so the attacker-seeded content must be erased, not preserved.
+        ),
+        discovered_by=None,
+    )
+    assert promoted["id"] == seeded["id"]
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["abstract"] is None, "NULL adapter abstract must purge attacker content"
+    assert promoted["pdf_url"] is None, "NULL adapter pdf_url must purge attacker content"

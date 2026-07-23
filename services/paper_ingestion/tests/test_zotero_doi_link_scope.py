@@ -150,3 +150,44 @@ async def test_own_private_doi_match_is_idempotent(contract_two_users, contract_
     assert await _is_member(contract_conn, user_a, own_id), (
         "A must remain a member of their own private row after idempotent re-link"
     )
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ambiguous_polling_user_links_only_public_rows(contract_two_users, contract_conn):
+    """Fail-safe: an ambiguous poll (``polling_user_id=None`` with 2+ active users)
+    resolves to no user, so the membership branch matches nothing.
+
+    ``poll_zotero_library`` defaults ``polling_user_id=None`` for scheduled
+    system-wide polls; ``_resolve_zotero_user_id`` then returns None. A foreign
+    PRIVATE row sharing the DOI is never linked, and even a public dedup grants no
+    ``user_library`` membership (the attach is skipped) — private never leaks.
+    """
+    user_a = contract_two_users.user_a_id
+    private_id = await _seed_paper_with_doi(
+        contract_conn,
+        "zotero:amb:priv",
+        "10.1/amb-priv",
+        visibility_scope="private",
+        discovered_by=user_a,
+    )
+    public_id = await _seed_paper_with_doi(
+        contract_conn, "zotero:amb:pub", "10.1/amb-pub", visibility_scope="public"
+    )
+
+    with _patched_annotation_enqueue():
+        priv_result = await _link_existing_by_doi(
+            SharedConnPool(contract_conn), "10.1/amb-priv", "KAMB1", polling_user_id=None
+        )
+        pub_result = await _link_existing_by_doi(
+            SharedConnPool(contract_conn), "10.1/amb-pub", "KAMB2", polling_user_id=None
+        )
+
+    assert priv_result is None, "ambiguous poll must not link a foreign private row"
+    assert pub_result == "linked", "public dedup still resolves under ambiguity"
+    granted = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM user_library WHERE paper_id = ANY($1::int[])",
+        [private_id, public_id],
+    )
+    assert granted == 0, "ambiguous poll must not grant any user_library membership"
