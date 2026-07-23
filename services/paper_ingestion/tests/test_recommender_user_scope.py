@@ -32,6 +32,7 @@ async def test_discover_from_seeds_receives_user_id() -> None:
       acquire #1: conn.fetch → _read_weights (rows with key/value/user_id)
       acquire #2: conn.fetch → _get_starred_ids (rows with paper_id)
                   conn.fetch → projects query   (rows with name/description)
+                  conn.fetch → caller library   (rows with paper_id)
       acquire #3: conn.fetch → _filter_unread   (only reached if discover returns hits)
     """
     pool, conn = make_pool_and_conn()
@@ -44,6 +45,8 @@ async def test_discover_from_seeds_receives_user_id() -> None:
             # _get_starred_ids: one starred paper so discover_from_seeds is called
             [{"paper_id": 99}],
             # projects query: no active projects
+            [],
+            # caller library: no additional private papers
             [],
         ]
     )
@@ -71,12 +74,13 @@ async def test_project_query_is_scoped_to_user_id() -> None:
     """
     pool, conn = make_pool_and_conn()
 
-    # Simulate the conn.fetch chain in order: _read_weights, _get_starred_ids, projects query
+    # Simulate _read_weights, _get_starred_ids, projects, then caller library.
     conn.fetch = AsyncMock(
         side_effect=[
             [],  # _read_weights: defaults
             [],  # _get_starred_ids: no starred papers
             [{"name": "secret-project", "description": "user B only"}],  # projects
+            [],  # caller library
         ]
     )
 

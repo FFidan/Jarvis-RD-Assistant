@@ -26,6 +26,13 @@ from httpx import ASGITransport
 from paper_ingestion.rag.streaming import prepare_single_paper_rag
 from tests.conftest import _make_pool_and_conn
 
+_VISIBILITY_GENERATION = "a" * 32
+
+
+async def _current_visibility_generation() -> str:
+    """Return the generation expected in test Qdrant filters."""
+    return _VISIBILITY_GENERATION
+
 
 def test_prepare_single_paper_rag_accepts_user_id() -> None:
     sig = inspect.signature(prepare_single_paper_rag)
@@ -114,20 +121,63 @@ def _make_embedder_with_captured_qdrant():
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
     mock_qdrant.query_points = AsyncMock(return_value=SimpleNamespace(points=[]))
-    embedder = Embedder(mock_http, mock_qdrant)
+    embedder = Embedder(
+        mock_http,
+        mock_qdrant,
+        visibility_generation_provider=_current_visibility_generation,
+    )
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 8])  # type: ignore[method-assign]
     return embedder, mock_qdrant
 
 
+def _assert_persisted_scope_filter(scope_filter, private_paper_ids: set[int]) -> None:
+    """Assert generation plus public-or-caller-private filter composition."""
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+
+    assert isinstance(scope_filter, Filter)
+    assert scope_filter.must is not None and len(scope_filter.must) == 2
+    generation_condition, access_filter = scope_filter.must
+    assert isinstance(generation_condition, FieldCondition)
+    assert generation_condition.key == "visibility_generation"
+    assert generation_condition.match == MatchValue(value=_VISIBILITY_GENERATION)
+
+    assert isinstance(access_filter, Filter)
+    access_branches = access_filter.should or []
+    assert any(
+        isinstance(branch, FieldCondition)
+        and branch.key == "visibility_scope"
+        and branch.match == MatchValue(value="public")
+        for branch in access_branches
+    )
+    private_filters = [branch for branch in access_branches if isinstance(branch, Filter)]
+    assert len(private_filters) == 1
+    private_conditions = private_filters[0].must or []
+    assert any(
+        isinstance(condition, FieldCondition)
+        and condition.key == "visibility_scope"
+        and condition.match == MatchValue(value="private")
+        for condition in private_conditions
+    )
+    paper_conditions = [
+        condition
+        for condition in private_conditions
+        if isinstance(condition, FieldCondition)
+        and condition.key == "paper_id"
+        and isinstance(condition.match, MatchAny)
+    ]
+    assert len(paper_conditions) == 1
+    assert set(paper_conditions[0].match.any) == private_paper_ids
+
+
 @pytest.mark.asyncio
-async def test_search_chunks_in_paper_nests_user_scope_as_must_subfilter() -> None:
-    """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
+async def test_search_chunks_in_paper_nests_visibility_scope_as_must_subfilter() -> None:
+    """Persisted visibility must be one restrictive nested filter.
 
     Regression guard: if a refactor flat-merges the scope's
     ``should`` branches beside the outer ``must`` list, the outer ``should``
     assertion fails (advisory-only in real Qdrant = silent cross-tenant leak).
     """
-    from qdrant_client.models import FieldCondition, Filter, IsNullCondition, MatchAny, MatchValue
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
 
@@ -155,26 +205,7 @@ async def test_search_chunks_in_paper_nests_user_scope_as_must_subfilter() -> No
     assert paper_cond.match == MatchValue(value=42)
 
     assert isinstance(nested, Filter), "user scope must be a nested sub-Filter"
-    branches = nested.should or []
-    assert any(
-        isinstance(c, FieldCondition)
-        and c.key == "user_id"
-        and getattr(c.match, "value", None) == 7
-        for c in branches
-    ), "nested scope must keep the caller's user_id branch"
-    assert any(isinstance(c, IsNullCondition) for c in branches), (
-        "nested scope must keep the canonical (user_id IS NULL) branch"
-    )
-    widened = [
-        c
-        for c in branches
-        if isinstance(c, FieldCondition)
-        and c.key == "paper_id"
-        and isinstance(getattr(c, "match", None), MatchAny)
-    ]
-    assert len(widened) == 1 and set(widened[0].match.any) == {42, 99}, (
-        "nested scope must keep the PI-RAG-001 library widening branch"
-    )
+    _assert_persisted_scope_filter(nested, {42, 99})
 
 
 @pytest.mark.asyncio
@@ -202,15 +233,15 @@ async def test_search_chunks_in_paper_default_none_filter_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_similar_nests_user_scope_as_must_subfilter() -> None:
-    """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
+async def test_search_similar_nests_visibility_scope_as_must_subfilter() -> None:
+    """Persisted visibility must be one restrictive nested filter.
 
     Regression guard: ``search_similar`` previously flat-merged the
     scope's ``should`` branches beside ``must_not``, where they are advisory
     (scoring-only) in real Qdrant — a silent cross-tenant leak.  The paper
     exclusion stays in ``must_not``; the scope must be restrictive (``must``).
     """
-    from qdrant_client.models import FieldCondition, Filter, IsNullCondition, MatchAny, MatchValue
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
 
@@ -242,26 +273,7 @@ async def test_search_similar_nests_user_scope_as_must_subfilter() -> None:
     )
     (nested,) = query_filter.must
     assert isinstance(nested, Filter), "user scope must be a nested sub-Filter"
-    branches = nested.should or []
-    assert any(
-        isinstance(c, FieldCondition)
-        and c.key == "user_id"
-        and getattr(c.match, "value", None) == 7
-        for c in branches
-    ), "nested scope must keep the caller's user_id branch"
-    assert any(isinstance(c, IsNullCondition) for c in branches), (
-        "nested scope must keep the canonical (user_id IS NULL) branch"
-    )
-    widened = [
-        c
-        for c in branches
-        if isinstance(c, FieldCondition)
-        and c.key == "paper_id"
-        and isinstance(getattr(c, "match", None), MatchAny)
-    ]
-    assert len(widened) == 1 and set(widened[0].match.any) == {42, 99}, (
-        "nested scope must keep the PI-RAG-001 library widening branch"
-    )
+    _assert_persisted_scope_filter(nested, {42, 99})
 
 
 @pytest.mark.asyncio

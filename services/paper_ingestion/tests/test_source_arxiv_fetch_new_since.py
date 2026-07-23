@@ -1,8 +1,7 @@
-"""Tests for ArxivSource.fetch_new_since().
+"""Tests for ``ArxivSource.fetch_new_since``.
 
-TDD — written before the implementation was added.
-Uses respx to mock the arXiv Atom API; fixture XML is loaded from
-tests/fixtures/arxiv_new_since.xml.
+HTTP responses are mocked with respx; Atom fixtures are loaded from the shared
+test fixture directory.
 """
 
 from __future__ import annotations
@@ -11,7 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
 
@@ -100,6 +101,23 @@ async def test_fetch_new_since_http_error_returns_empty():
     assert papers == []
 
 
+async def test_fetch_new_since_propagates_outbound_quarantine(monkeypatch):
+    """A quarantine race remains retryable instead of looking like no data."""
+    source = _make_source()
+
+    async def blocked_fetch(*_args, **_kwargs):
+        raise OutboundEgressBlockedError("outbound work is quarantined")
+
+    monkeypatch.setattr(source, "_fetch_xml", blocked_fetch)
+
+    with pytest.raises(OutboundEgressBlockedError, match="quarantined"):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 9, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="ML", query_terms=["machine learning"])],
+            limit=10,
+        )
+
+
 @respx.mock
 async def test_fetch_new_since_retries_429_with_retry_after(monkeypatch):
     """arXiv 429 should retry after Retry-After before degrading to []."""
@@ -186,8 +204,8 @@ async def test_fetch_new_since_malformed_xml_records_api_error():
 async def test_fetch_new_since_calls_rate_limiter():
     """_rate_limit is called once per consolidated query issued.
 
-    PR-B1: consolidate_topics merges all topics into 1 query when under
-    1500 chars, so 2 short topics → 1 API call → 1 _rate_limit call.
+    ``consolidate_topics`` merges queries below the length limit, so two short
+    topics produce one API call and one rate-limit acquisition.
     """
     fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
     respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))

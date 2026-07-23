@@ -16,6 +16,7 @@ from urllib.parse import quote as _url_quote
 from urllib.parse import urlparse as _urlparse
 
 import httpx
+from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
@@ -46,6 +47,12 @@ class SemanticScholarSource(PaperSource):
     ----------
     source_type : str
         Always ``"semantic_scholar"``.
+
+    Notes
+    -----
+    Network methods propagate ``OutboundEgressBlockedError`` while restored
+    credentials await review; quarantine is not reported as an empty provider
+    result.
     """
 
     source_type = "semantic_scholar"
@@ -93,11 +100,15 @@ class SemanticScholarSource(PaperSource):
 
         Raises
         ------
+        OutboundEgressBlockedError
+            If restored credentials await review before the request.
         httpx.HTTPStatusError
             If the request returns a non-2xx status.
         """
+        ensure_outbound_egress_allowed("Semantic Scholar request")
         await self._rate_limit()
         url = f"{S2_API_URL}{path}"
+        ensure_outbound_egress_allowed("Semantic Scholar request")
         response = await self.http_client.get(
             url, params=params, headers=self._build_headers(), timeout=30.0
         )
@@ -330,7 +341,33 @@ class SemanticScholarSource(PaperSource):
         limit: int = 100,
         user_id: int | None = None,
     ) -> list[PaperCreate]:
-        """Fetch recent Semantic Scholar papers matching Pulse topics."""
+        """Fetch recent Semantic Scholar papers matching the supplied topics.
+
+        Parameters
+        ----------
+        since : datetime
+            Lower publication-date bound. Results older than this instant are
+            excluded after retrieval.
+        topics : list[TopicRef]
+            Topics to search. An empty list uses a general science query.
+        limit : int
+            Maximum total papers to return across topic queries.
+        user_id : int or None
+            Caller identity for per-user rate limiting and run history, when
+            available.
+
+        Returns
+        -------
+        list[PaperCreate]
+            Deduplicated papers whose publication date is not older than
+            ``since``.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before or during a scheduled
+            request.
+        """
         # Startup grace — see ArxivSource.fetch_new_since for details.
         await self.apply_startup_grace()
 
@@ -380,6 +417,8 @@ class SemanticScholarSource(PaperSource):
             }
             try:
                 data = await self._fetch_json("/paper/search", params=params)
+            except OutboundEgressBlockedError:
+                raise
             except Exception as _exc:
                 logger.warning("S2 fetch_new_since failed for query %r", query, exc_info=True)
                 await self._record_fetch_outcome(

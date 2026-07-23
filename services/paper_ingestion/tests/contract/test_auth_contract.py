@@ -7,9 +7,13 @@ Carve-out: send_magic_link (SMTP) mocked — outbound email boundary.
 
 from __future__ import annotations
 
+import asyncio
+
+import httpx
 import pytest
 
 from jarvis_common.testing_contract_apps import (
+    DEFAULT_CONTRACT_API_KEY,
     make_contract_client as _make_client,
 )
 
@@ -24,6 +28,15 @@ def _make_unauthenticated_client(app, *, base_url: str = "http://localhost"):
     # Loopback base_url so the credential-transport gate on verify/api-key-session
     # (which requires a loopback Host or forwarded https) is satisfied by default.
     return _make_client(app, None, base_url=base_url)
+
+
+def _make_raw_peer_client(app, *, raw_peer: str, base_url: str):
+    """Drive the real middleware stack with a controlled socket peer."""
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=(raw_peer, 51234)),
+        base_url=base_url,
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +324,56 @@ async def test_request_link_email_change_token_does_not_suppress_login(
     )
 
 
+async def test_cooldown_probe_answers_per_link_kind(contract_two_users, contract_conn):
+    """``magic_link_on_cooldown`` scopes to the requested kind against a real database.
+
+    User A holds only a recent email-change token (``pending_email`` set); user B
+    holds only a recent sign-in token (``pending_email`` NULL). Each user must be
+    on cooldown for their own kind and off cooldown for the other, so an
+    email-change link can never suppress a sign-in link or vice versa.
+
+    Verified: routers/_auth_shared.py magic_link_on_cooldown (the
+    ``IS NOT NULL``/``IS NULL`` predicate selected by ``email_change``).
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    from paper_ingestion.routers._auth_shared import magic_link_on_cooldown
+
+    expires_at = datetime.now(UTC) + timedelta(minutes=15)
+
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at, pending_email)"
+        " VALUES ($1, $2, $3, $4)",
+        hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest(),
+        contract_two_users.user_a_id,
+        expires_at,
+        "changed@contract.example.com",
+    )
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+        hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest(),
+        contract_two_users.user_b_id,
+        expires_at,
+    )
+
+    a_id, b_id = contract_two_users.user_a_id, contract_two_users.user_b_id
+
+    assert await magic_link_on_cooldown(contract_conn, a_id, email_change=True) is True, (
+        "a recent email-change token must put the email-change flow on cooldown"
+    )
+    assert await magic_link_on_cooldown(contract_conn, a_id, email_change=False) is False, (
+        "a recent email-change token must NOT suppress a sign-in link"
+    )
+    assert await magic_link_on_cooldown(contract_conn, b_id, email_change=False) is True, (
+        "a recent sign-in token must put the sign-in flow on cooldown"
+    )
+    assert await magic_link_on_cooldown(contract_conn, b_id, email_change=True) is False, (
+        "a recent sign-in token must NOT suppress an email-change link"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Non-ASCII api_key body must return 403, not 500
 # ---------------------------------------------------------------------------
@@ -354,12 +417,15 @@ async def test_a17_api_key_session_non_ascii_returns_403(
 
 @pytest.fixture(autouse=True)
 def _reset_api_key_login_cache():
-    """Drop the module-level DB-override cache around each gate test."""
+    """Isolate process-local auth state between contract cases."""
     from jarvis_common.auth import invalidate_api_key_login_cache
+    from paper_ingestion.deps import limiter
 
     invalidate_api_key_login_cache()
+    limiter.reset()
     yield
     invalidate_api_key_login_cache()
+    limiter.reset()
 
 
 async def _seed_user_with_role(conn, email: str, role: str) -> int:
@@ -395,6 +461,35 @@ async def test_owner_exempt_mints_on_multi_user_box_flag_off(
     assert "jarvis_session" in resp.cookies
 
 
+async def test_owner_session_mint_waits_for_admin_role_mutation_lock(
+    _pi_app_with_pool,
+    _configure_api_key,
+    _contract_pool,
+    contract_conn,
+    monkeypatch,
+):
+    """Owner validity and session minting share the role-mutation lock."""
+    owner_id = await _seed_user_with_role(contract_conn, "locked-owner@example.com", "admin")
+    monkeypatch.setenv("OWNER_USER_ID", str(owner_id))
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+        async with _contract_pool.acquire() as lock_conn:
+            async with lock_conn.transaction():
+                await lock_conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))"
+                )
+                request_task = asyncio.create_task(
+                    client.post("/api/auth/api-key-session", json={})
+                )
+                await asyncio.sleep(0.1)
+                assert not request_task.done(), "session mint bypassed the owner mutation lock"
+
+        response = await asyncio.wait_for(request_task, timeout=3)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == owner_id
+
+
 async def test_non_admin_owner_user_id_still_409s(
     _pi_app_with_pool,
     _configure_api_key,
@@ -418,6 +513,53 @@ async def test_non_admin_owner_user_id_still_409s(
         f"Non-admin OWNER_USER_ID must 409, got {resp.status_code}: {resp.text[:300]}"
     )
     assert "non-admin" in resp.json()["detail"]
+
+
+async def test_malformed_owner_user_id_returns_actionable_409_without_fallback(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """An authoritative malformed host override must never select another admin."""
+    await _seed_user_with_role(contract_conn, "fallback-admin@example.com", "admin")
+    monkeypatch.setenv("OWNER_USER_ID", "not-a-user-id")
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+        response = await client.post("/api/auth/api-key-session", json={})
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "OWNER_USER_ID" in detail
+    assert "positive integer" in detail
+
+
+async def test_malformed_database_owner_returns_actionable_409_without_fallback(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """A malformed persisted owner record must be repaired, never bypassed."""
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    await _seed_user_with_role(contract_conn, "other-admin@example.com", "admin")
+    await contract_conn.execute(
+        "INSERT INTO user_config (user_id, key, value) VALUES (NULL, $1, $2::jsonb)",
+        OWNER_USER_ID_CONFIG_KEY,
+        '"invalid"',
+    )
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+        response = await client.post("/api/auth/api-key-session", json={})
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "owner record" in detail
+    assert "jarvis-research owner set" in detail
 
 
 async def test_flag_on_without_owner_user_id_refuses_fallback_409(
@@ -605,8 +747,10 @@ async def _seed_login_token(conn, user_id: int) -> str:
 
 
 async def test_verify_gate_refuses_lan_plaintext(_pi_app_with_pool, _configure_api_key):
-    """POST /api/auth/verify from a non-loopback Host over http → 403 (gate before lookup)."""
-    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+    """POST /api/auth/verify from a non-loopback socket peer is rejected before lookup."""
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+    ) as c:
         resp = await c.post("/api/auth/verify", json={"token": "any-token-1234567890abcd"})
 
     assert resp.status_code == 403, (
@@ -629,34 +773,82 @@ async def test_verify_gate_allows_loopback_host(
     )
 
 
-async def test_verify_gate_allows_forwarded_https(
+async def test_verify_gate_refuses_forged_forwarded_https_from_untrusted_peer(
     contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
 ):
-    """POST /api/auth/verify from a LAN Host but X-Forwarded-Proto https → 200."""
+    """A public socket peer cannot turn cleartext into HTTPS with a header."""
     raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+    ) as c:
         resp = await c.post(
             "/api/auth/verify",
             json={"token": raw_token},
-            headers={"X-Forwarded-Proto": "https"},
+            headers={
+                "Host": "localhost",
+                "Forwarded": "for=127.0.0.1;proto=https;host=localhost",
+                "X-Forwarded-For": "127.0.0.1",
+                "X-Forwarded-Host": "localhost",
+                "X-Forwarded-Proto": "https",
+                "X-Real-IP": "127.0.0.1",
+            },
+        )
+
+    assert resp.status_code == 403, (
+        f"forged forwarding headers must not pass the transport gate; got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_verify_gate_allows_https_from_pinned_dashboard_peer(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+):
+    """The dashboard proxy's normalized HTTPS scheme remains usable."""
+    raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
+
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="10.137.241.253", base_url=_LAN_BASE_URL
+    ) as c:
+        resp = await c.post(
+            "/api/auth/verify",
+            json={"token": raw_token},
+            headers={"X-Forwarded-For": "198.51.100.20", "X-Forwarded-Proto": "https"},
         )
 
     assert resp.status_code == 200, (
-        f"Forwarded-https verify must pass the gate, got {resp.status_code}: {resp.text[:300]}"
+        f"pinned dashboard HTTPS must pass the gate, got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+async def test_request_link_gate_refuses_lan_plaintext_and_forged_localhost(
+    _pi_app_with_pool, _configure_api_key
+):
+    """Email addresses are not accepted over raw LAN HTTP."""
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+    ) as c:
+        resp = await c.post(
+            "/api/auth/request-link",
+            json={"email": "person@example.com"},
+            headers={"Host": "localhost", "X-Forwarded-Proto": "https"},
+        )
+
+    assert resp.status_code == 403
 
 
 async def test_api_key_session_gate_refuses_lan_plaintext(
     _pi_app_with_pool, _configure_api_key, monkeypatch
 ):
-    """POST /api/auth/api-key-session from a non-loopback Host over http → 403 (gate before hmac).
+    """POST /api/auth/api-key-session from a non-loopback socket peer is rejected.
 
     The gate detail names the supported routes, distinguishing it from the
     invalid-key 403.
     """
     monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
-    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+    ) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 403, (
@@ -683,21 +875,25 @@ async def test_api_key_session_gate_allows_loopback_host(
     assert resp.json()["id"] == admin_id
 
 
-async def test_api_key_session_gate_allows_forwarded_https(
+async def test_api_key_session_gate_refuses_forged_forwarded_https(
     _pi_app_with_pool, _configure_api_key, contract_conn, monkeypatch
 ):
-    """POST /api/auth/api-key-session from a LAN Host but X-Forwarded-Proto https → 200."""
+    """A public peer cannot spoof the trusted dashboard's HTTPS signal."""
     monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
     admin_id = await _seed_user_with_role(contract_conn, "gate-fwd-admin@example.com", "admin")
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool, base_url=_LAN_BASE_URL) as c:
+    async with _make_raw_peer_client(
+        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+    ) as c:
         resp = await c.post(
-            "/api/auth/api-key-session", json={}, headers={"X-Forwarded-Proto": "https"}
+            "/api/auth/api-key-session",
+            json={},
+            headers={"Host": "localhost", "X-Forwarded-Proto": "https"},
         )
 
-    assert resp.status_code == 200, (
-        f"Forwarded-https api-key-session must mint, got {resp.status_code}: {resp.text[:300]}"
+    assert resp.status_code == 403, (
+        f"forged forwarded HTTPS must be rejected, got {resp.status_code}: {resp.text[:300]}"
     )
-    assert resp.json()["id"] == admin_id
+    assert admin_id > 0

@@ -364,7 +364,7 @@ async def test_anonymous_list_jobs_returns_401(_jobs_app, _configure_api_key):
     )
 
 
-def test_owner_matches_rejects_none_caller():
+async def test_owner_matches_rejects_none_caller():
     """_owner_matches(None, None) is False — NULL-row jobs require authenticated callers.
 
     The old behaviour returned True for (None, None),

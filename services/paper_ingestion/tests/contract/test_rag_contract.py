@@ -57,6 +57,16 @@ async def pi_test_client(contract_conn):
             yield client
 
 
+async def _add_to_library(conn, user_id: int, paper_id: int) -> None:
+    """Make a private paper visible through explicit caller membership."""
+    await conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) "
+        "VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1. prepare_single_paper_rag: real paper row, title plumbing into messages
 #
@@ -265,12 +275,12 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(contract_conn):
-    """RAG-DB-1: papers owned exclusively by another user are not returned.
+    """A private paper outside the caller's library is not returned.
 
-    The SQL in prepare_cross_paper_rag uses a user_library visibility predicate.
-    When user_id=99 requests chunks, a paper owned only by user_id=1 via
-    user_library must not appear in the sources (it is dropped by the
-    defense-in-depth DB check).
+    ``papers.discovered_by`` records provenance and does not authorize access.
+    The seeded paper keeps the default private scope and belongs only to the
+    importing user's library, so the relational backstop must remove a vector
+    result presented to a different caller.
     """
     from unittest.mock import AsyncMock
 
@@ -280,17 +290,18 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
 
-    # Seed a user to own the paper exclusively (user_library requires FK to users).
+    # Seed the importing user for the attribution and library foreign keys.
     owner_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ('owner@contract.example.com', 'user') RETURNING id"
     )
-    # Seed a paper owned exclusively by that user.
+    # The omitted visibility_scope deliberately keeps the private default.
     pid_owned = await contract_conn.fetchval(
-        "INSERT INTO papers (external_id, source_type, title, authors, url)"
-        " VALUES ('contract-xrag-vis-01', 'arxiv', 'User1 Private Paper', '{\"X\"}', 'http://priv')"
-        " RETURNING id"
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('contract-xrag-vis-01', 'arxiv', 'Another User Paper', '{\"X\"}', 'http://priv', $1)"
+        " RETURNING id",
+        owner_id,
     )
-    # Link it to the owner's library (no other users → exclusively owned).
+    # They have also shelved it, which must not make it reachable by anyone else.
     await contract_conn.execute(
         "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
         owner_id,
@@ -301,7 +312,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     embedder = Embedder(mock_http, mock_qdrant)
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-    # Qdrant returns a chunk for the user-1-owned paper.
+    # Qdrant returns a chunk for the private paper to exercise the SQL backstop.
     embedder.search_chunks_global = AsyncMock(
         return_value=[
             {
@@ -323,7 +334,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
         SharedConnPool(contract_conn),
         body,
         mock_http,
-        user_id=99,  # user 99 does NOT own this paper
+        user_id=99,  # user 99 has no library membership for this paper
     )
 
     # The defense-in-depth DB visibility check should have dropped the chunk.
@@ -332,7 +343,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
     if isinstance(result, CrossPaperRagPrep):
         source_pids = {s["paper_id"] for s in result.sources}
         assert pid_owned not in source_pids, (
-            "RAG-DB-1: paper exclusively owned by user 1 must not be visible to user 99"
+            "RAG-DB-1: a private paper outside user 99's library must not be visible"
         )
     # else CrossPaperRagNoResults is also correct (all chunks dropped)
 
@@ -365,6 +376,7 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
         " VALUES ('contract-ask-01', 'arxiv', 'Ask Contract Paper', '{}', 'http://ask1')"
         " RETURNING id"
     )
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
     chunks = [
         {
             "paper_id": paper_id,
@@ -444,6 +456,7 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
         " VALUES ('contract-ask-timeout-01', 'arxiv', 'Timeout Contract Paper', '{}', 'http://timeout')"
         " RETURNING id"
     )
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
     chunks = [
         {
             "paper_id": paper_id,
@@ -514,6 +527,7 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
         " VALUES ('contract-ask-empty-01', 'arxiv', 'Empty Visible Contract Paper', '{}', 'http://empty')"
         " RETURNING id"
     )
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
     chunks = [
         {
             "paper_id": paper_id,
@@ -647,6 +661,7 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
            RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
     chunks = [
         {
             "content": "Key finding from the paper.",
@@ -724,6 +739,7 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
            RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
     chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
@@ -788,6 +804,7 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
            RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
     chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
@@ -923,6 +940,7 @@ async def test_a105_ask_stream_owner_gets_sse_response(contract_conn, pi_test_cl
            RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
 
     fake_sources = [{"paper_id": paper_id, "content": "chunk.", "page_number": 1, "score": 0.9}]
     fake_messages = [{"role": "user", "content": "stream question?"}]
@@ -1470,6 +1488,7 @@ async def test_ask_endpoint_returns_503_when_openai_client_not_initialized(
         " VALUES ('contract-503-cross-01', 'arxiv', '503 Cross Paper', '{}', 'http://503c')"
         " RETURNING id"
     )
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
     chunks = [
         {
             "paper_id": paper_id,
@@ -1538,6 +1557,7 @@ async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized
            RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
     chunks = [{"content": "Relevant chunk.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
@@ -1614,6 +1634,7 @@ async def test_a105_ask_stream_paper_not_found_maps_404(contract_conn, pi_test_c
                    'http://w4cf1-nf', $1) RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
 
     async def _raise_not_found(embedder, db_pool, paper_id_, body, http_client, **kwargs):
         raise PaperNotFoundError("paper gone")
@@ -1681,6 +1702,7 @@ async def test_a105_ask_stream_no_relevant_chunks_maps_422(contract_conn, pi_tes
                    'http://w4cf1-nc', $1) RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
 
     _error_detail = "No relevant chunks found for this question."
 
@@ -1911,6 +1933,7 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
            VALUES ('contract-w3t2-01', 'arxiv', 'W3T2 User ID Paper', '{}', 'http://w3t2', $1) RETURNING id""",
         user_id,
     )
+    await _add_to_library(contract_conn, user_id, paper_id)
 
     call_capture = []
 

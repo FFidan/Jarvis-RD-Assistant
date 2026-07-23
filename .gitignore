@@ -22,6 +22,10 @@ build/
 .env.*.local
 .env.production
 .env.pre-setup.bak
+.jarvis-setup-transaction
+.jarvis-setup-transaction.pending
+.env.pre-config-key-rotation.bak
+.env.rotation.*
 *.pem
 *.key
 *.p12
@@ -29,6 +33,8 @@ credentials.json
 
 # Docker Secrets — plain-text credential files
 secrets/*.txt
+secrets/*.rotation
+secrets/.jarvis_config_key_rotation.lock
 
 # Docker local overrides
 docker-compose.override.yml

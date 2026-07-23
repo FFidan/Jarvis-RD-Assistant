@@ -18,6 +18,7 @@ the next increment also requires 30 more elapsed seconds.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -54,6 +55,68 @@ async def _drain(ait: AsyncIterator[str], max_items: int = 300) -> list[str]:
         if len(items) >= max_items:
             break
     return items
+
+
+def _make_prow(status: str, *, result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a raw ``procrastinate_jobs`` row as the SELECT in jobs.py shapes it.
+
+    Deliberately NOT pre-normalised: tests that exercise the abort semantics must
+    run the real ``procrastinate_row_to_jarvis_row`` mapping.
+    """
+    return {
+        "status": status,
+        "task_name": "papers.process_library",
+        "args": {"job_id": "test-job-id", "user_id": "1"},
+        "progress": None,
+        "progress_message": None,
+        "result": result,
+        "error": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+def _sse_payloads(frames: list[str]) -> list[dict[str, Any]]:
+    """Parse the JSON body of every ``data:`` frame, skipping keepalive comments."""
+    return [
+        json.loads(frame[len("data: ") :].strip()) for frame in frames if frame.startswith("data: ")
+    ]
+
+
+async def _stream_over(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drive ``stream_job_events`` over a scripted sequence of raw procrastinate rows.
+
+    The last row repeats if the stream keeps polling past the end of the script,
+    so a stream that fails to terminate is caught by the poll-count assertion
+    rather than looping forever.  Returns ``(sse_payloads, poll_count)``.
+    """
+    from jarvis_common import jobs
+
+    polls = [0]
+
+    async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+        index = min(polls[0], len(rows) - 1)
+        polls[0] += 1
+        return dict(rows[index])
+
+    async def mock_wait(_pool: Any, _jid: str, _timeout: float) -> None:
+        return None
+
+    async def not_disconnected() -> bool:
+        return False
+
+    with (
+        patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+        patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+    ):
+        frames = await _drain(
+            jobs.stream_job_events(MagicMock(), "test-job-id", is_disconnected=not_disconnected),
+            max_items=len(rows) + 5,
+        )
+    return _sse_payloads(frames), polls[0]
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +374,225 @@ async def test_adaptive_throttle_resets_idle_start_on_state_change():
 
 
 # ---------------------------------------------------------------------------
+# A cancellation REQUEST is not a terminal outcome
+# ---------------------------------------------------------------------------
+
+
+class TestAbortRequestIsNotTerminal:
+    """Procrastinate's ``aborting`` is a request, not an outcome.
+
+    It is set the instant a user asks to cancel, while the handler is still
+    running. Treating it as terminal closed the SSE stream with ``result: null``
+    and threw away the handler's real final row — for ``papers.process_library``
+    that row carries the counts of everything the run *did* finish before it
+    stopped, which is the only report the user ever gets.
+    """
+
+    def test_aborting_maps_to_running(self) -> None:
+        """The request state must map to a non-terminal status."""
+        from jarvis_common.jobs import TERMINAL_STATUSES, procrastinate_status_to_jarvis
+
+        assert procrastinate_status_to_jarvis("aborting") == "running"
+        assert procrastinate_status_to_jarvis("aborting") not in TERMINAL_STATUSES
+
+    def test_genuine_abort_outcomes_stay_terminal(self) -> None:
+        """``cancelled`` (never ran) and ``aborted`` (handler stopped) are outcomes."""
+        from jarvis_common.jobs import TERMINAL_STATUSES, procrastinate_status_to_jarvis
+
+        for procrastinate_status in ("cancelled", "aborted"):
+            mapped = procrastinate_status_to_jarvis(procrastinate_status)
+            assert mapped == "cancelled"
+            assert mapped in TERMINAL_STATUSES
+
+    def test_aborting_row_reports_running_with_cancel_requested(self) -> None:
+        """The request is carried by ``cancel_requested``, not by the status."""
+        from jarvis_common.jobs import procrastinate_row_to_jarvis_row
+
+        row = procrastinate_row_to_jarvis_row(_make_prow("aborting"))
+
+        assert row["status"] == "running"
+        assert row["cancel_requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_handler_result_survives_an_abort_request(self) -> None:
+        """The stream must stay open across ``aborting`` and deliver the final result.
+
+        Real sequence for a cancelled whole-library run: the handler observes the
+        abort flag, stops early, and RETURNS a result dict, so procrastinate marks
+        the job ``succeeded``. Before the fix the stream broke at ``aborting`` and
+        this result was never sent.
+        """
+        result = {
+            "status": "cancelled",
+            "total": 40,
+            "processed": 11,
+            "errors": [{"paper_id": 7}, {"paper_id": 9}, {"paper_id": 12}],
+        }
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("aborting"),
+                _make_prow("succeeded", result=result),
+            ]
+        )
+
+        assert polls == 4, (
+            f"stream stopped after {polls} polls — an abort REQUEST must not close it "
+            "before the handler's own final row arrives"
+        )
+        assert payloads[-1]["status"] == "succeeded"
+        assert payloads[-1]["result"] == result, (
+            "the handler's accumulated counts must reach the client; "
+            f"got {payloads[-1].get('result')!r}"
+        )
+        # The abort request re-emits the row (the UI needs it — see
+        # test_abort_request_is_streamed_so_the_ui_can_show_it) but must never
+        # move the status to a terminal value before the handler is done.
+        assert [p["status"] for p in payloads] == ["running", "running", "succeeded"]
+        assert all(p["status"] not in {"cancelled", "failed"} for p in payloads), (
+            "an abort request must not be reported as a terminal outcome"
+        )
+
+    @pytest.mark.asyncio
+    async def test_abort_request_is_streamed_so_the_ui_can_show_it(self) -> None:
+        """The request must reach the client even though it does not move ``status``.
+
+        ``doing`` and ``aborting`` both map to ``running``, so ``cancel_requested``
+        is the only field that changes — it must therefore be part of the stream's
+        change-detection key AND of the emitted payload, or the row would stay
+        indistinguishable from an un-cancelled run and the click would look lost.
+        """
+        payloads, _polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("succeeded", result={"status": "cancelled"}),
+            ]
+        )
+
+        assert [(p["status"], p["cancel_requested"]) for p in payloads] == [
+            ("running", False),
+            ("running", True),
+            ("succeeded", False),
+        ]
+
+    def test_running_job_reports_no_cancel_request(self) -> None:
+        """The flag must not be raised for an ordinary running job."""
+        from jarvis_common.jobs import job_sse_payload, procrastinate_row_to_jarvis_row
+
+        payload = job_sse_payload(procrastinate_row_to_jarvis_row(_make_prow("doing")))
+
+        assert payload["status"] == "running"
+        assert payload["cancel_requested"] is False
+
+    @pytest.mark.asyncio
+    async def test_acknowledged_abort_closes_the_stream_promptly(self) -> None:
+        """A handler that really aborts leaves ``aborted`` — still terminal, no hang."""
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("doing"),
+                _make_prow("aborting"),
+                _make_prow("aborted"),
+            ]
+        )
+
+        assert polls == 3, f"stream must stop on the aborted row, polled {polls} times"
+        assert payloads[-1]["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_start_closes_the_stream_promptly(self) -> None:
+        """A queued job cancelled before it ran goes straight to a terminal row."""
+        payloads, polls = await _stream_over(
+            [
+                _make_prow("todo"),
+                _make_prow("cancelled"),
+            ]
+        )
+
+        assert polls == 2, f"stream must stop on the cancelled row, polled {polls} times"
+        assert [p["status"] for p in payloads] == ["queued", "cancelled"]
+
+
+# ---------------------------------------------------------------------------
+# A lookup outage (not a cancellation request) closes the stream
+# ---------------------------------------------------------------------------
+
+
+class TestLookupOutageClosesStream:
+    """A genuine infrastructure failure must close the stream, unlike an abort request.
+
+    ``JobLookupUnavailable`` from the poll's ``get_procrastinate_job_for_jarvis_id``
+    call is not the same event as procrastinate's ``aborting`` status (see
+    ``TestAbortRequestIsNotTerminal``): an abort *request* keeps the stream open
+    so the handler's final result still arrives, while a DB outage during the
+    poll must emit one error frame and terminate — it cannot self-heal by
+    waiting for a future poll the same way a handler eventually finishing can.
+    """
+
+    @pytest.mark.asyncio
+    async def test_lookup_outage_emits_error_frame_then_closes(self) -> None:
+        from jarvis_common import jobs
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        calls = [0]
+
+        async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+            calls[0] += 1
+            if calls[0] == 1:
+                return dict(_make_prow("doing"))
+            raise JobLookupUnavailable("db down")
+
+        async def mock_wait(_pool: Any, _jid: str, _timeout: float) -> None:
+            return None
+
+        async def not_disconnected() -> bool:
+            return False
+
+        with (
+            patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+            patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+        ):
+            frames = await _drain(
+                jobs.stream_job_events(
+                    MagicMock(), "test-job-id", is_disconnected=not_disconnected
+                ),
+                max_items=10,
+            )
+
+        payloads = _sse_payloads(frames)
+        assert payloads[-1] == {"error": "status_unavailable"}, (
+            f"an outage must surface as a single error frame, got {payloads[-1]!r}"
+        )
+        assert calls[0] == 2, (
+            f"the stream must stop polling immediately after the outage, polled {calls[0]} times"
+        )
+
+    @pytest.mark.asyncio
+    async def test_lookup_outage_does_not_raise_out_of_the_generator(self) -> None:
+        """An unhandled raise here would surface to the ASGI layer as an unhandled 500."""
+        from jarvis_common import jobs
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        async def mock_get_proc(_pool: Any, _jid: str) -> dict[str, Any]:
+            raise JobLookupUnavailable("db down")
+
+        async def not_disconnected() -> bool:
+            return False
+
+        with patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc):
+            frames = await _drain(
+                jobs.stream_job_events(
+                    MagicMock(), "test-job-id", is_disconnected=not_disconnected
+                ),
+                max_items=10,
+            )
+
+        assert len(frames) == 1
+        assert _sse_payloads(frames) == [{"error": "status_unavailable"}]
+
+
+# ---------------------------------------------------------------------------
 # list_jobs user_id filter SQL behaviour
 # ---------------------------------------------------------------------------
 
@@ -453,22 +735,22 @@ class _DictRecord:
 
 
 class TestProcrastinateLookupBroadExcept:
-    """A non-schema lookup failure must be logged at WARNING and return None.
+    """A non-schema lookup failure is an infrastructure outage, not a missing job.
 
     Narrow ``Undefined*`` handlers (unmigrated-schema graceful degradation) keep
-    returning None silently; only the trailing broad ``except Exception`` is
-    upgraded from a silent DEBUG swallow to a WARNING with a traceback so an
-    unexpected DB/driver error is observable. It must still return None (no
-    raise) — no caller maps this to a 503.
+    returning None silently; the trailing broad ``except Exception`` logs a
+    WARNING with a traceback (so an unexpected DB/driver error is observable)
+    and re-raises as ``JobLookupUnavailable`` so callers report 503, not the
+    404/None used for a job that genuinely does not exist.
     """
 
     @pytest.mark.asyncio
-    async def test_non_schema_error_logs_warning_and_returns_none(
+    async def test_non_schema_error_logs_warning_and_raises_lookup_unavailable(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         import logging
 
-        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+        from jarvis_common.jobs import JobLookupUnavailable, get_procrastinate_job_for_jarvis_id
 
         # conn.fetchrow raises a generic, non-Undefined* error.
         conn = MagicMock()
@@ -482,9 +764,8 @@ class TestProcrastinateLookupBroadExcept:
         pool.acquire = MagicMock(return_value=pool_cm)
 
         with caplog.at_level(logging.WARNING, logger="jarvis_common.jobs"):
-            result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
-
-        assert result is None, "Unexpected lookup error must degrade to None, not raise"
+            with pytest.raises(JobLookupUnavailable):
+                await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings, "Broad-except branch must emit a WARNING (was a silent DEBUG)"
@@ -494,6 +775,66 @@ class TestProcrastinateLookupBroadExcept:
         assert "job-xyz" in warnings[0].getMessage(), (
             "WARNING must include the jarvis_job_id for triage"
         )
+
+    @pytest.mark.asyncio
+    async def test_get_unified_propagates_lookup_unavailable(self) -> None:
+        """``get_unified`` must not swallow the outage — every caller needs it."""
+        from jarvis_common.jobs import JobLookupUnavailable, get_unified
+
+        with patch(
+            "jarvis_common.jobs.get_procrastinate_job_for_jarvis_id",
+            AsyncMock(side_effect=JobLookupUnavailable("db down")),
+        ):
+            with pytest.raises(JobLookupUnavailable):
+                await get_unified(MagicMock(), "job-xyz")
+
+    @pytest.mark.asyncio
+    async def test_migration_054_missing_fallback_still_returns_a_row(self) -> None:
+        """The ``job_progress`` join-missing fallback is schema degradation, not an outage.
+
+        It must keep returning a row (progress/progress_message as None), never
+        raise ``JobLookupUnavailable`` — that would turn a merely-unmigrated DB
+        into a false 503 on every job lookup.
+        """
+        import asyncpg
+        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+
+        raw_row = {
+            "id": 42,
+            "queue_name": "paper_ingestion",
+            "task_name": "paper.process",
+            "status": "doing",
+            "args": {"job_id": "job-xyz", "user_id": "1"},
+            "attempts": 1,
+            "progress": None,
+            "progress_message": None,
+            "result": None,
+            "error": None,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                asyncpg.UndefinedColumnError("job_progress.progress does not exist"),
+                _DictRecord(raw_row),
+            ]
+        )
+
+        pool_cm = MagicMock()
+        pool_cm.__aenter__ = MagicMock(return_value=_async_return(conn))
+        pool_cm.__aexit__ = MagicMock(return_value=_async_return(None))
+
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=pool_cm)
+
+        result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
+
+        assert result is not None, "migration-054-missing must still return a row, not None/raise"
+        assert result["task_name"] == "paper.process"
+        assert conn.fetchrow.call_count == 2, "must retry without the job_progress JOIN"
 
 
 # ---------------------------------------------------------------------------

@@ -238,11 +238,11 @@ async def test_a24_check_authors_returns_only_own_user_results(
 
 
 # ---------------------------------------------------------------------------
-# T9: POST /api/authors/check — global recent-papers corpus (the bug fix)
+# T9: POST /api/authors/check — visible recent-paper boundary
 #
-# The recent-papers scan must NOT be scoped to the caller's library: discovery
-# is topic-driven, so a tracked author's new paper may never be in the user's
-# library. A library-scoped JOIN silently suppressed those alerts.
+# The scan includes persisted-public discovery results plus private papers in
+# the caller's library. Private papers outside that boundary must not leak
+# through author alert cards.
 # ---------------------------------------------------------------------------
 
 
@@ -256,41 +256,46 @@ async def _track_author(conn, user_id: int, name: str) -> int:
     )
 
 
-async def _insert_recent_paper(conn, *, ext: str, authors: list[str], metadata=None) -> int:
-    """Insert a recent (now()) paper with NO library/user-state rows; return id.
+async def _insert_recent_paper(
+    conn,
+    *,
+    ext: str,
+    authors: list[str],
+    metadata=None,
+    visibility_scope: str = "public",
+) -> int:
+    """Insert a recent paper with explicit visibility and no library row.
 
     Leaving metadata as None exercises the NULL-tolerant path; passing an empty
     list of authors etc. is the caller's choice. created_at defaults to now()
     so the paper is inside the 24h window.
     """
     return await conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, metadata)
-           VALUES ($1, 'arxiv', $2, $3::text[], $4, $5)
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, metadata, visibility_scope
+           )
+           VALUES ($1, 'arxiv', $2, $3::text[], $4, $5, $6)
            RETURNING id""",
         ext,
         f"Recent paper {ext}",
         authors,
         f"https://example.test/{ext}",
         metadata,
+        visibility_scope,
     )
 
 
-async def test_t9_check_matches_global_corpus_paper_not_in_library(
+async def test_t9_check_matches_public_paper_not_in_library(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
-    """Corpus bug (red→green): a tracked author's new paper that is NOT in the
-    caller's library still produces a match.
-
-    Verified: authors.py check_tracked_authors — global recent-papers scan
-    (no user_library JOIN).
-    """
+    """A persisted-public paper can produce an alert without a library row."""
     await _track_author(contract_conn, contract_two_users.user_a_id, "Grace Hopper")
     paper_id = await _insert_recent_paper(
         contract_conn,
-        ext="t9-global",
+        ext="t9-public",
         authors=["Grace Hopper", "Co Author"],
         metadata={"foo": "bar"},
     )
@@ -300,13 +305,66 @@ async def test_t9_check_matches_global_corpus_paper_not_in_library(
 
     assert resp.status_code == 200, resp.text[:300]
     body = resp.json()
-    assert body["new_papers"] >= 1, f"Global corpus paper not matched: {body}"
+    assert body["new_papers"] >= 1, f"Public paper not matched: {body}"
 
     # The matched paper is the one we inserted (not in the user's library).
     matched_ids = {p["id"] for m in body["matches"] for p in m["papers"]}
     assert paper_id in matched_ids, (
         f"Paper {paper_id} (not in library) missing from matches: {body['matches']}"
     )
+
+
+async def test_t9_check_hides_private_paper_outside_library(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A private paper outside the caller's library cannot leak through alerts."""
+    await _track_author(contract_conn, contract_two_users.user_a_id, "Katherine Johnson")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="t9-private-hidden",
+        authors=["Katherine Johnson"],
+        visibility_scope="private",
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    matched_ids = {p["id"] for match in resp.json()["matches"] for p in match["papers"]}
+    assert paper_id not in matched_ids
+
+
+async def test_t9_check_matches_private_paper_in_library(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A private paper explicitly in the caller's library can produce an alert."""
+    user_id = contract_two_users.user_a_id
+    await _track_author(contract_conn, user_id, "Dorothy Vaughan")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="t9-private-library",
+        authors=["Dorothy Vaughan"],
+        visibility_scope="private",
+    )
+    await contract_conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        paper_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    matched_ids = {p["id"] for match in resp.json()["matches"] for p in match["papers"]}
+    assert paper_id in matched_ids
 
 
 async def test_t9_check_uses_owner_override_resolver(_pi_app_with_pool):
@@ -431,9 +489,11 @@ async def test_t9_check_null_metadata_does_not_500(
     await _track_author(contract_conn, contract_two_users.user_a_id, "Margaret Hamilton")
     # Force a genuine SQL NULL metadata (override the '{}' default).
     paper_id = await contract_conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, metadata)
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, metadata, visibility_scope
+           )
            VALUES ('t9-null', 'arxiv', 'Null meta paper', ARRAY['Margaret Hamilton'],
-                   'https://example.test/t9-null', NULL)
+                   'https://example.test/t9-null', NULL, 'public')
            RETURNING id""",
     )
     null_meta = await contract_conn.fetchval("SELECT metadata FROM papers WHERE id = $1", paper_id)

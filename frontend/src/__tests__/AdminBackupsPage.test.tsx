@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminBackupsPage } from '@/pages/AdminBackupsPage';
+import { RESTORE_RECOVERY_STORAGE_KEY } from '@/lib/restore-recovery';
 import { toast } from 'sonner';
 
 import { useMaintenanceStore } from '@/stores/maintenance-store';
@@ -18,6 +19,7 @@ const getRestoreStatusMock = vi.fn();
 const deleteRestorePointMock = vi.fn();
 const getRetentionMock = vi.fn();
 const putRetentionMock = vi.fn();
+const acknowledgeRestoreMock = vi.fn();
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -27,9 +29,15 @@ vi.mock('@/lib/api/backups', () => ({
   getBackupStatus: () => getBackupStatusMock(),
   triggerBackup: () => triggerBackupMock(),
   downloadBackup: (name: string) => downloadBackupMock(name),
-  requestRestore: (timestamp: string, confirm: string, source?: string) =>
-    requestRestoreMock(timestamp, confirm, source),
+  requestRestore: (
+    timestamp: string,
+    confirm: string,
+    source?: string,
+    allowMissingPdfs?: boolean,
+  ) => requestRestoreMock(timestamp, confirm, source, allowMissingPdfs),
   getRestoreStatus: (token?: string) => getRestoreStatusMock(token),
+  acknowledgeRestore: (restoreId: string, source: string, confirm: string, token?: string) =>
+    acknowledgeRestoreMock(restoreId, source, confirm, token),
   deleteRestorePoint: (timestamp: string, confirm: string) =>
     deleteRestorePointMock(timestamp, confirm),
   getRetention: () => getRetentionMock(),
@@ -51,9 +59,11 @@ const _restorePoints = {
     {
       timestamp: '20260617_120000',
       created_at: new Date().toISOString(),
-      stores: ['jarvis', 'secrets'],
+      stores: ['jarvis', 'pdfs', 'secrets'],
       qdrant_collections: ['kg_entities'],
       complete: true,
+      has_pdfs: true,
+      legacy_missing_pdfs: false,
       encrypted: true,
       total_size_bytes: 2560,
       app_version: '1.0.0',
@@ -70,6 +80,12 @@ const _restorePoints = {
           filename: 'secrets_20260617_120000.tar.gz.enc',
           store: 'secrets',
           size_bytes: 512,
+          encrypted: true,
+        },
+        {
+          filename: 'pdfs_20260617_120000.tar.gz.enc',
+          store: 'pdfs',
+          size_bytes: 1024,
           encrypted: true,
         },
       ],
@@ -102,6 +118,29 @@ const _runningRestore = {
   error: null,
 };
 
+const _restoreId = '0123456789abcdef0123456789abcdef';
+
+function recoveryRecord(
+  overrides: Partial<{
+    version: 1;
+    restore_id: string;
+    source: 'local' | 'inbox';
+    status_token: string;
+    expires_at: string;
+    target_timestamp: string;
+  }> = {},
+) {
+  return {
+    version: 1 as const,
+    restore_id: _restoreId,
+    source: 'inbox' as const,
+    status_token: 'session-only-recovery-token',
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    target_timestamp: '20260617_120000',
+    ...overrides,
+  };
+}
+
 const _newerPoints = {
   ..._restorePoints,
   restore_points: [{ ..._restorePoints.restore_points[0], compat: 'newer' }],
@@ -124,12 +163,21 @@ function renderPage() {
 describe('AdminBackupsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    localStorage.clear();
     useMaintenanceStore.getState().clear();
     _mockRole = 'admin';
     getRestorePointsMock.mockResolvedValue(_restorePoints);
     getInboxRestorePointsMock.mockResolvedValue([]);
     getBackupStatusMock.mockResolvedValue(_okStatus);
-    requestRestoreMock.mockResolvedValue({ status: 'started', status_token: 'test-bearer-token' });
+    requestRestoreMock.mockResolvedValue({
+      status: 'scheduled',
+      status_token: 'test-bearer-token',
+      restore_id: _restoreId,
+      source: 'local',
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    acknowledgeRestoreMock.mockResolvedValue({ status: 'acknowledged', restore_id: _restoreId });
     getRestoreStatusMock.mockResolvedValue(_runningRestore);
     deleteRestorePointMock.mockResolvedValue({ status: 'scheduled' });
     getRetentionMock.mockResolvedValue({ keep_last_n: null, max_age_days: 14 });
@@ -178,8 +226,12 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     expect(await screen.findByTestId('restore-point-card')).toBeInTheDocument();
+    expect(
+      screen.getByText(/backups include databases, PDF files, the search index/i),
+    ).toBeInTheDocument();
     expect(screen.getByText('Main database')).toBeInTheDocument();
-    expect(screen.getByText('Secrets')).toBeInTheDocument();
+    expect(screen.getByText('PDF files')).toBeInTheDocument();
+    expect(screen.getByText('Data keys')).toBeInTheDocument();
     expect(screen.getByText('Qdrant: kg_entities')).toBeInTheDocument();
     expect(screen.getByText('Kept for 14 days')).toBeInTheDocument();
 
@@ -248,7 +300,97 @@ describe('AdminBackupsPage', () => {
     await user.click(screen.getByRole('button', { name: /^restore$/i }));
 
     await waitFor(() =>
-      expect(requestRestoreMock).toHaveBeenCalledWith('20260617_120000', 'RESTORE', 'local'),
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20260617_120000',
+        'RESTORE',
+        'local',
+        false,
+      ),
+    );
+  });
+
+  it('blocks a current restore point whose PDF archive is missing', async () => {
+    getRestorePointsMock.mockResolvedValue({
+      ..._restorePoints,
+      restore_points: [
+        {
+          ..._restorePoints.restore_points[0],
+          stores: ['jarvis', 'secrets'],
+          complete: false,
+          has_pdfs: false,
+          legacy_missing_pdfs: false,
+        },
+      ],
+    });
+
+    renderPage();
+    const card = await screen.findByTestId('restore-point-card');
+    expect(within(card).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(card).getByText(/missing its PDF archive/i)).toBeInTheDocument();
+    expect(requestRestoreMock).not.toHaveBeenCalled();
+  });
+
+  it('shows an unavoidable PDF-loss warning before an older backup can be restored', async () => {
+    getRestorePointsMock.mockResolvedValue({
+      ..._restorePoints,
+      restore_points: [
+        {
+          ..._restorePoints.restore_points[0],
+          stores: ['jarvis', 'secrets'],
+          compat: 'older',
+          has_pdfs: false,
+          legacy_missing_pdfs: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderPage();
+    await user.click(
+      within(await screen.findByTestId('restore-point-card')).getByRole('button', {
+        name: /restore to this point/i,
+      }),
+    );
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/does not include PDF files/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/remove the PDF files currently stored/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/papers may still appear in JARVIS/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^restore$/i })).toBeDisabled();
+    expect(requestRestoreMock).not.toHaveBeenCalled();
+  });
+
+  it('opts in to an empty PDF set only for the selected older backup', async () => {
+    getRestorePointsMock.mockResolvedValue({
+      ..._restorePoints,
+      restore_points: [
+        {
+          ..._restorePoints.restore_points[0],
+          stores: ['jarvis', 'secrets'],
+          compat: 'older',
+          has_pdfs: false,
+          legacy_missing_pdfs: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderPage();
+    await user.click(
+      within(await screen.findByTestId('restore-point-card')).getByRole('button', {
+        name: /restore to this point/i,
+      }),
+    );
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20260617_120000',
+        'RESTORE',
+        'local',
+        true,
+      ),
     );
   });
 
@@ -275,8 +417,22 @@ describe('AdminBackupsPage', () => {
 
   it('lists inbox restore points and triggers an inbox restore through the RESTORE confirm', async () => {
     getInboxRestorePointsMock.mockResolvedValue([
-      { timestamp: '20260701_030000', complete: true, has_secrets: true, has_key: true },
-      { timestamp: '20260630_020000', complete: false, has_secrets: false, has_key: false },
+      {
+        timestamp: '20260701_030000',
+        complete: true,
+        has_secrets: true,
+        has_key: true,
+        has_pdfs: true,
+        legacy_missing_pdfs: false,
+      },
+      {
+        timestamp: '20260630_020000',
+        complete: false,
+        has_secrets: false,
+        has_key: false,
+        has_pdfs: true,
+        legacy_missing_pdfs: false,
+      },
     ]);
     const user = userEvent.setup();
     renderPage();
@@ -296,27 +452,95 @@ describe('AdminBackupsPage', () => {
     await user.click(screen.getByRole('button', { name: /^restore$/i }));
 
     await waitFor(() =>
-      expect(requestRestoreMock).toHaveBeenCalledWith('20260701_030000', 'RESTORE', 'inbox'),
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20260701_030000',
+        'RESTORE',
+        'inbox',
+        false,
+      ),
     );
   });
 
-  it('blocks an inbox restore with no secrets archive (would fail post-swap)', async () => {
-    // A complete + keyed point that lacks its secrets archive must not be restorable:
-    // the trigger is disabled and a hint explains the post-swap failure.
+  it('explains that a missing data-key archive is refused before data changes', async () => {
     getInboxRestorePointsMock.mockResolvedValue([
-      { timestamp: '20260701_030000', complete: true, has_secrets: false, has_key: true },
+      {
+        timestamp: '20260701_040000',
+        complete: true,
+        has_secrets: false,
+        has_key: true,
+        has_pdfs: true,
+        legacy_missing_pdfs: false,
+      },
+    ]);
+
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    expect(
+      within(section).getByText(/will not change data without it/i),
+    ).toBeInTheDocument();
+    expect(within(section).queryByText(/after swapping the databases/i)).not.toBeInTheDocument();
+  });
+
+  it('requires the same PDF-loss opt-in for an older inbox backup', async () => {
+    getInboxRestorePointsMock.mockResolvedValue([
+      {
+        timestamp: '20250501_030000',
+        complete: true,
+        has_secrets: true,
+        has_key: true,
+        has_pdfs: false,
+        legacy_missing_pdfs: true,
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderPage();
+    const section = await screen.findByTestId('inbox-restore-section');
+    await user.click(within(section).getByRole('button', { name: /restore to this point/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/remove the PDF files currently stored/i)).toBeInTheDocument();
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20250501_030000',
+        'RESTORE',
+        'inbox',
+        true,
+      ),
+    );
+  });
+
+  it('blocks an inbox restore with no data-key archive', async () => {
+    // Reject the archive before any data changes and explain what is missing.
+    getInboxRestorePointsMock.mockResolvedValue([
+      {
+        timestamp: '20260701_030000',
+        complete: true,
+        has_secrets: false,
+        has_key: true,
+        has_pdfs: true,
+        legacy_missing_pdfs: false,
+      },
     ]);
     renderPage();
     const section = await screen.findByTestId('inbox-restore-section');
     const point = within(section).getByTestId('inbox-restore-point');
-    expect(within(point).getByText('No secrets')).toBeInTheDocument();
+    expect(within(point).getByText('No data keys')).toBeInTheDocument();
     expect(within(point).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
-    expect(within(point).getByText(/no secrets archive/i)).toBeInTheDocument();
+    expect(within(point).getByText(/no data-key archive/i)).toBeInTheDocument();
     expect(requestRestoreMock).not.toHaveBeenCalled();
   });
 
-  it('authenticates the restore-status poll with the captured one-time bearer token', async () => {
-    requestRestoreMock.mockResolvedValue({ status: 'scheduled', status_token: 'poll-bearer-42' });
+  it('authenticates restore-status polling with the saved restore token', async () => {
+    requestRestoreMock.mockResolvedValue({
+      status: 'scheduled',
+      status_token: 'poll-bearer-42',
+      restore_id: _restoreId,
+      source: 'local',
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
@@ -326,6 +550,168 @@ describe('AdminBackupsPage', () => {
 
     // The poll must present the bearer token so it survives the DB swap.
     await waitFor(() => expect(getRestoreStatusMock).toHaveBeenCalledWith('poll-bearer-42'));
+  });
+
+  it('persists the bound recovery record in sessionStorage only', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('restore-point-card');
+    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() => expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).not.toBeNull());
+    const stored = JSON.parse(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY) ?? '{}');
+    expect(stored).toMatchObject({
+      version: 1,
+      restore_id: _restoreId,
+      source: 'local',
+      status_token: 'test-bearer-token',
+      target_timestamp: '20260617_120000',
+    });
+    expect(localStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).toBeNull();
+  });
+
+  it('resumes bound status polling from sessionStorage after remount', async () => {
+    const stored = recoveryRecord();
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(stored));
+
+    const first = renderPage();
+    await waitFor(() =>
+      expect(getRestoreStatusMock).toHaveBeenCalledWith(stored.status_token),
+    );
+    first.unmount();
+    getRestoreStatusMock.mockClear();
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(getRestoreStatusMock).toHaveBeenCalledWith(stored.status_token),
+    );
+    expect(screen.getByTestId('restore-progress')).toBeInTheDocument();
+  });
+
+  it('retains the token through quarantined completion and never renders it', async () => {
+    const stored = recoveryRecord();
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(stored));
+    getRestoreStatusMock.mockResolvedValue({
+      ..._runningRestore,
+      state: 'done',
+      current_step: null,
+      steps: [],
+      finished_at: new Date().toISOString(),
+      restore_id: _restoreId,
+      source: 'inbox',
+      quarantine: 'awaiting_review',
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId('restore-quarantine')).toHaveTextContent(
+      /review restored connections/i,
+    );
+    expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).not.toBeNull();
+    expect(screen.queryByText(stored.status_token)).not.toBeInTheDocument();
+  });
+
+  it('acknowledges the exact quarantined restore and then clears sessionStorage', async () => {
+    const stored = recoveryRecord();
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(stored));
+    getRestoreStatusMock.mockResolvedValue({
+      ..._runningRestore,
+      state: 'done',
+      current_step: null,
+      steps: [],
+      restore_id: _restoreId,
+      source: 'inbox',
+      quarantine: 'awaiting_review',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /acknowledge review/i }));
+    await user.type(
+      screen.getByLabelText(/type I HAVE REVIEWED RESTORED CREDENTIALS to confirm/i),
+      'I HAVE REVIEWED RESTORED CREDENTIALS',
+    );
+    await user.click(screen.getByRole('button', { name: /^acknowledge$/i }));
+
+    await waitFor(() =>
+      expect(acknowledgeRestoreMock).toHaveBeenCalledWith(
+        _restoreId,
+        'inbox',
+        'I HAVE REVIEWED RESTORED CREDENTIALS',
+        stored.status_token,
+      ),
+    );
+    await waitFor(() =>
+      expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).toBeNull(),
+    );
+  });
+
+  it('drops an expired recovery record before polling with its token', async () => {
+    const stored = recoveryRecord({ expires_at: new Date(Date.now() - 1000).toISOString() });
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(stored));
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).toBeNull(),
+    );
+    expect(getRestoreStatusMock).not.toHaveBeenCalledWith(stored.status_token);
+  });
+
+  it.each([
+    ['prior restore', { restore_id: 'fedcba9876543210fedcba9876543210', source: 'inbox' }],
+    ['wrong source', { restore_id: _restoreId, source: 'local' }],
+  ])('rejects a %s recovery record and falls back to owner or host recovery', async (_label, bound) => {
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(recoveryRecord()));
+    getRestoreStatusMock.mockResolvedValue({
+      ..._runningRestore,
+      state: 'done',
+      current_step: null,
+      steps: [],
+      quarantine: 'awaiting_review',
+      ...bound,
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId('restore-quarantine')).toHaveTextContent(
+      /configured owner.*jarvis-research restore acknowledge/i,
+    );
+    await waitFor(() =>
+      expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).toBeNull(),
+    );
+  });
+
+  it('treats a replayed restore token as terminal and shows owner fallback', async () => {
+    const stored = recoveryRecord();
+    sessionStorage.setItem(RESTORE_RECOVERY_STORAGE_KEY, JSON.stringify(stored));
+    getRestoreStatusMock.mockResolvedValue({
+      ..._runningRestore,
+      state: 'done',
+      current_step: null,
+      steps: [],
+      restore_id: _restoreId,
+      source: 'inbox',
+      quarantine: 'awaiting_review',
+    });
+    acknowledgeRestoreMock.mockRejectedValue(Object.assign(new Error('invalid'), { status: 401 }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /acknowledge review/i }));
+    await user.type(
+      screen.getByLabelText(/type I HAVE REVIEWED RESTORED CREDENTIALS to confirm/i),
+      'I HAVE REVIEWED RESTORED CREDENTIALS',
+    );
+    await user.click(screen.getByRole('button', { name: /^acknowledge$/i }));
+
+    await waitFor(() =>
+      expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).toBeNull(),
+    );
+    expect(await screen.findByTestId('restore-quarantine')).toHaveTextContent(
+      /configured owner.*jarvis-research restore acknowledge/i,
+    );
   });
 
   it('drives the guided recovery view (live step, aria-live) while maintenance is active', async () => {

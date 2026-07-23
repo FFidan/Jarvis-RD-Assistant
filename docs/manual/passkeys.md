@@ -1,22 +1,10 @@
-<!-- verified-against-UI: 2026-07-13 | routes: /login, /settings?section=account&item=passkeys -->
+<!-- verified-against-UI: 2026-07-20 | routes: /login, /settings?section=account&item=passkeys, /admin/users -->
 
 # Passkeys
 
-A **passkey** lets you sign in to JARVIS with your fingerprint, face, or device PIN instead of waiting for an email link. Once you have added a passkey on a device, signing in from that device takes one tap.
-
----
-
-## What is a passkey, and why use one?
-
-A passkey is a sign-in credential that lives on your device — your laptop, phone, or a hardware security key. When you sign in, your device asks you to confirm with your fingerprint, face, or PIN, and that's it: no email to open, no link to click, nothing to type or remember.
-
-Passkeys are worth setting up because they are:
-
-- **Faster** — one confirmation on your device replaces the request-email-open-link round trip of a magic link.
-- **Safer** — a passkey only works on your JARVIS address. There is no password or link that could be intercepted or entered on a look-alike site.
-- **Per-device** — each passkey belongs to one device. Add one on every device you regularly use; removing one never affects the others.
-
-Passkeys are optional. Magic-link (and, where enabled, API-key) sign-in always remains available, whether or not you use passkeys.
+A passkey lets you sign in with the fingerprint, face, device PIN, password
+manager, or security key offered by your browser. It is optional and has no
+JARVIS password to remember.
 
 ---
 
@@ -24,11 +12,16 @@ Passkeys are optional. Magic-link (and, where enabled, API-key) sign-in always r
 
 Passkeys need a web address the browser can trust, so they are offered only where they can actually work:
 
-- **On the JARVIS computer itself** (a `localhost` install) — passkeys work.
-- **Through a configured domain** — a secure (HTTPS) address set up by your operator, such as the "From anywhere" tunnel option or your own domain — passkeys work from any device.
-- **On a LAN install reached by a raw IP address** — passkeys are **not** available. The sign-in page keeps magic links and shows a short note instead: *"Passkeys work on the JARVIS computer itself, or from everywhere once you enable the 'From anywhere' access option."*
+- **On the JARVIS computer itself:** use `http://localhost:3001`.
+- **Through a configured domain:** use the exact named HTTPS address selected
+  during setup.
+- **At a numeric LAN address:** the app is not available. An address such as
+  `http://192.168.1.20:3001` serves only `/health/jarvis`; all other paths return
+  HTTP 403.
 
-Your browser must also support passkeys (all current mainstream browsers do). Where passkeys cannot work, JARVIS never shows a broken button — the passkey controls simply don't appear, or a one-line note explains why.
+Where a passkey cannot work, JARVIS hides the control and explains which address
+to use. Configure a named private HTTPS route, Cloudflare Tunnel, or your own
+HTTPS domain for family devices.
 
 ---
 
@@ -36,16 +29,20 @@ Your browser must also support passkeys (all current mainstream browsers do). Wh
 
 <!-- screenshot: Settings → Account → Passkeys, showing the "Add a passkey" button and a list entry "Chrome on macOS — Added 2 days ago · Last used 3 hours ago" -->
 
-1. Sign in as usual (magic link or API key).
+1. Sign in through the finish-setup link, an invitation, an administrator-shared
+   link, delivered email, or the owner's API-key recovery path.
 2. Open **Settings → Account → Passkeys**.
 3. Click **Add a passkey**.
 4. Optionally edit the **Name** — it is pre-filled with something recognisable like "Chrome on macOS" so you can tell your devices apart later.
 5. Click **Create passkey**. Your device asks for your fingerprint, face, or PIN to create it.
 6. A "Passkey added." confirmation appears, and the new passkey shows up in the list.
 
-Repeat on each device you use — one passkey per device.
+Add another passkey from each browser or authenticator you need. Some operating
+systems and password managers sync passkeys between your own devices; that is
+controlled by the provider, not by JARVIS.
 
-> **Tip:** after you request a magic link on a device where passkeys work, the sign-in page shows a one-time suggestion — *"Make sign-in easier on this device"* — reminding you to add a passkey from Settings. You can dismiss it, and it won't come back.
+> **Tip:** after magic-link sign-in on a supported device, JARVIS offers a
+> one-time reminder to add a passkey. Dismissing it hides it on that device.
 
 If you see *"This device already has a passkey for your account"*, there is nothing to do — this device is already set up.
 
@@ -56,10 +53,13 @@ If you see *"This device already has a passkey for your account"*, there is noth
 <!-- screenshot: LoginPage showing the "Sign in with a passkey" button below the magic-link form, separated by an "or" divider -->
 
 1. Open the sign-in page. Below the usual sign-in form, after an "or" divider, you'll find **Sign in with a passkey**. (The button only appears where passkeys work — see [Where passkeys are available](#where-passkeys-are-available).)
-2. Click it and confirm with your fingerprint, face, or device PIN. JARVIS always asks for this confirmation — simply having the device unlocked is not enough.
-3. You're in.
+2. Click it and confirm with your fingerprint, face, or device PIN. An unlocked
+   device alone does not complete the confirmation.
+3. JARVIS opens your account.
 
-If you cancel or the prompt times out, you'll see *"Sign-in was cancelled or timed out. You can try again."* with a **Try again** link — nothing is lost. If a prompt sat open too long and expired, just start again from the button. And if a passkey won't work on this device at all, use the magic-link form on the same page instead.
+If you cancel or the prompt expires, use **Try again**. If the passkey does not
+work on that device, request an emailed sign-in link when email is configured.
+Otherwise ask an administrator for a private 15-minute sign-in link.
 
 ---
 
@@ -70,28 +70,55 @@ If you cancel or the prompt times out, you'll see *"Sign-in was cancelled or tim
 To remove one, click the trash icon next to it and confirm:
 
 - Removing a passkey means you can no longer sign in with that device's passkey. **Your other passkeys keep working.**
-- If it is your **only** passkey, the confirmation says so explicitly: after removing it you'll sign in with a magic link or API key until you add a new one.
+- If it is your **only** passkey, the confirmation says so explicitly. Before
+  removing it, confirm that one of the recovery paths below works.
 
-Remove a passkey whenever you retire a device, hand it to someone else, or simply no longer recognise an entry in the list.
+Remove a passkey when you retire or transfer a device, or when you no longer
+recognise an entry in the list.
 
 ---
 
-## If you lose a device
+## After a restore or hostname change
 
-You are never locked out: **magic-link sign-in always works**, even if the lost device held your only passkey.
+A data restore preserves accounts and registered passkeys, but WebAuthn still
+binds each credential to its original **RP ID**, which is the hostname used when
+the passkey was created. Keep the same hostname and configure the matching
+`APP_BASE_URL` on a replacement host if existing passkeys must continue to
+work.
 
-1. On any other device, sign in with a magic link as usual.
-2. Go to **Settings → Account → Passkeys** and remove the lost device's passkey so it can no longer be used.
-3. Add a fresh passkey on your replacement device when you're ready.
+If the hostname changes, an old passkey cannot authenticate to the new RP ID.
+Recover with email, a private administrator link, or the owner-only operations
+key, then re-register a passkey at the new named HTTPS address. Changing only
+the server data does not retarget an existing credential.
 
-If you'd rather have everything cleared at once — for example after a stolen device — an administrator can remove **all** passkeys from your account from the admin user-management page; you then sign in with a magic link and re-register.
+---
 
-> **Automatic protection:** if JARVIS ever detects that one of your passkeys has been copied onto another device, it removes that passkey automatically and ends any sessions it started. If that happens, sign in with a magic link and add a new passkey.
+## Recovery
+
+Recovery depends on how the instance is operated:
+
+- **Email is working:** request a magic link from the sign-in page.
+- **Email is not configured:** a signed-in administrator opens **Admin → User
+  Management**, uses **Send sign-in link** on the user's row, and shares the
+  returned 15-minute link privately.
+- **Instance owner:** the operations API key can recover the configured owner on
+  localhost or the final HTTPS origin. Keep it available only to the host
+  operator. It is not a shared login for other users; do not send it with an
+  invitation.
+
+If the only administrator has no working session, no passkey, and no email
+delivery, other users cannot generate that administrator's recovery link.
+Avoid that state: keep a second administrator or a second owner passkey, and
+keep the API key available to the operator.
+
+After a device is lost, sign in through a recovery path and remove its passkey.
+An administrator can also revoke all passkeys on a user's account. The user must
+then recover the account and register a new passkey.
 
 ---
 
 ## Related pages
 
-- [Getting Started](getting-started.md) — the sign-in flow and magic links.
+- [First sign-in and setup](getting-started.md) — the sign-in and invitation flow.
 - [Settings](settings.md) — the Account section, where the Passkeys page lives.
-- [Admin & Multi-tenant](admin.md) — user management, where admins can revoke a user's passkeys.
+- [Admin and multi-user operation](admin.md) — manual sign-in links and passkey revocation.

@@ -10,8 +10,13 @@
 #   - compose_meets_floor        : Docker Compose version-floor gate
 #   - registry_profile_host_ports: extra host ports an active profile publishes
 #   - readiness_verdict          : readiness exit-code -> wrapper action (0/2/1)
+#   - tailscale_install_plan     : reviewed package-manager setup commands
+#   - tailscale_serve_https      : privilege-aware private HTTPS configuration
+#   - sync_ingress_ips_from_env  : persist exact proxy peers for an install subnet
 #   - upsert_env_var             : idempotent in-place .env key write
 #   - print_setup_link           : click-to-finish wizard link when token exists
+#   - headless_setup_route       : safe loopback browser base + SSH tunnel port
+#   - is_wsl_host                : Windows/WSL launcher and kernel detection
 #   - latest_stable_tag          : highest vX.Y.Z release tag on a git remote
 #   - install_cli_shim           : install the jarvis-research launcher + registry
 #   - verify_release_manifests   : registry-backed images for a release all exist
@@ -23,6 +28,340 @@
 #   - _default_model_for_tier    : tier+backend -> default model id
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
+
+# sanitize_compose_environment
+# Caller-exported Compose selectors outrank a checkout's .env and can redirect
+# install or rollback mutations to another project. Clear only Compose's control
+# plane here; Docker transport variables and ordinary application overrides keep
+# their documented behavior. Compose can then load COMPOSE_FILE/PROFILES from the
+# repo .env normally.
+sanitize_compose_environment() {
+  unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR
+  unset COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE
+}
+
+# Canonicalize an existing or not-yet-created path with symlink resolution for
+# every component that already exists. Python 3 is a setup prerequisite; using
+# it here avoids GNU-only `realpath -m` and macOS's different realpath surface.
+canonical_path_portable() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -c '
+import os, sys
+print(os.path.realpath(os.path.abspath(sys.argv[1])), end="")
+' "$1"
+}
+
+_lifecycle_operation_valid_kind() {
+  case "$1" in
+    setup|uninstall|control|direct-update) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+host_lifecycle_lock_path() {
+  local repo="$1" state_dir canonical_repo install_key
+  state_dir="${JARVIS_CLI_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-research}"
+  canonical_repo="$(cd "$repo" && pwd -P)" || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  install_key="$(python3 -c \
+    'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' \
+    "$canonical_repo")" || return 1
+  case "$install_key" in
+    (*[!0-9a-f]*|'') return 1 ;;
+  esac
+  [ "${#install_key}" -eq 64 ] || return 1
+  printf '%s/locks/%s.lock' "$state_dir" "$install_key"
+}
+
+# Compare an inherited descriptor with its intended path without relying on
+# Linux-only /dev/fd paths or GNU/BSD stat flags. Python is already a required
+# host prerequisite and fcntl is available on every supported host OS.
+_host_fd_matches_regular_path() {
+  local fd="$1" path="$2"
+  command -v python3 >/dev/null 2>&1 || return 127
+  python3 -c '
+import os, stat, sys
+path_stat = os.lstat(sys.argv[2])
+fd_stat = os.fstat(int(sys.argv[1]))
+same = stat.S_ISREG(path_stat.st_mode) and stat.S_ISREG(fd_stat.st_mode)
+same = same and (path_stat.st_dev, path_stat.st_ino) == (fd_stat.st_dev, fd_stat.st_ino)
+raise SystemExit(0 if same else 1)
+' "$fd" "$path"
+}
+
+_host_flock_nonblocking() {
+  local fd="$1"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n "$fd"
+    return
+  fi
+  command -v python3 >/dev/null 2>&1 || return 127
+  python3 -c '
+import errno, fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError as exc:
+    raise SystemExit(1 if exc.errno in (errno.EACCES, errno.EAGAIN) else 2)
+' "$fd"
+}
+
+_host_flock_unlock() {
+  local fd="$1"
+  if command -v flock >/dev/null 2>&1; then
+    flock -u "$fd"
+    return
+  fi
+  command -v python3 >/dev/null 2>&1 || return 127
+  python3 -c 'import fcntl, sys; fcntl.flock(int(sys.argv[1]), fcntl.LOCK_UN)' "$fd"
+}
+
+# The external lock survives a tier-4 uninstall unlinking secrets/ and the
+# clone. Every host-side mutator takes it first, then a named-volume lease.
+claim_host_lifecycle_lock() {
+  local repo="$1" lock lock_dir
+  lock="$(host_lifecycle_lock_path "$repo")" || return 2
+  lock_dir="$(dirname "$lock")"
+  [ ! -L "$lock_dir" ] || return 2
+  mkdir -p "$lock_dir" || return 2
+  [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 2
+  [ ! -L "$lock" ] || return 2
+  if [ "${JARVIS_HOST_LIFECYCLE_LOCK_HELD:-0}" = 1 ]; then
+    if _host_fd_matches_regular_path 8 "$lock" \
+        && _host_flock_nonblocking 8; then
+      return 0
+    fi
+    return 2
+  fi
+  if [ ! -e "$lock" ]; then
+    (set -C; umask 077; : > "$lock") 2>/dev/null || true
+  fi
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 2
+  # Read/write opening does not wait for a racing FIFO peer. Validate the
+  # opened descriptor before trying to lock it so a symlink/inode swap fails
+  # closed instead of authenticating a different object.
+  exec 8<>"$lock" || return 2
+  if ! _host_fd_matches_regular_path 8 "$lock"; then
+    exec 8>&-
+    return 2
+  fi
+  if ! _host_flock_nonblocking 8; then
+    exec 8>&-
+    return 3
+  fi
+  JARVIS_HOST_LIFECYCLE_LOCK_HELD=1
+  export JARVIS_HOST_LIFECYCLE_LOCK_HELD
+}
+
+# The cross-actor lease lives in postgres_backups, never a host bind mount.
+# Host commands enter that Linux lock domain through short-lived `docker run`
+# helpers, while a detached helper owns the operation flock for the command's
+# lifetime. This remains one lock domain on Linux and Docker Desktop alike.
+_lifecycle_compose_project_name() {
+  local repo="$1" name
+  name="$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$repo/.env" 2>/dev/null | head -1)"
+  case "$name" in
+    \"*\") name="${name#\"}"; name="${name%\"}" ;;
+    \'*\') name="${name#\'}"; name="${name%\'}" ;;
+  esac
+  [ -n "$name" ] \
+    || name="$(basename "$repo" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9_-]*$' || return 1
+  printf '%s' "$name"
+}
+
+_lifecycle_postgres_image() {
+  local repo="$1" image
+  image="$(sed -n 's/^POSTGRES_IMAGE=//p' "$repo/versions.env" 2>/dev/null | head -1)"
+  image="${image:-postgres:16.8}"
+  printf '%s' "$image" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9./:@_-]{0,511}$' || return 1
+  printf '%s' "$image"
+}
+
+_lifecycle_path_inside_repo() {
+  case "$1/" in "$2"/*) return 0 ;; esac
+  return 1
+}
+
+# Render the exact managed Compose model rather than guessing the default
+# `${project}_postgres_backups` name. A repo-local override may assign an
+# explicit volume name; using the guess would put host and sidecar actors in
+# different lock domains.
+_lifecycle_compose_config_json() {
+  local repo="$1" project="$2" raw item candidate canon base env_file seen=""
+  local -a requested=() files=() cmd=()
+  repo="$(cd -- "$repo" 2>/dev/null && pwd -P)" || return 1
+  base="$(canonical_path_portable "$repo/docker-compose.yml" 2>/dev/null || true)"
+  [ -n "$base" ] && [ -f "$base" ] || return 1
+  raw="$(sed -n 's/^COMPOSE_FILE=//p' "$repo/.env" 2>/dev/null | head -1)"
+  case "$raw" in
+    \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+    \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+  esac
+  if [ -z "$raw" ]; then
+    raw=docker-compose.yml
+    [ ! -f "$repo/docker-compose.override.yml" ] \
+      || raw="${raw}:docker-compose.override.yml"
+  fi
+  IFS=: read -r -a requested <<< "$raw"
+  for item in "${requested[@]}"; do
+    [ -n "$item" ] || return 1
+    case "$item" in /*) candidate="$item" ;; *) candidate="$repo/$item" ;; esac
+    canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
+    [ -n "$canon" ] && [ -f "$canon" ] \
+      && _lifecycle_path_inside_repo "$canon" "$repo" || return 1
+    printf '%s\n' "$seen" | grep -qxF "$canon" && return 1
+    files+=("$canon")
+    seen="${seen}${canon}"$'\n'
+  done
+  [ "${files[0]:-}" = "$base" ] || return 1
+  env_file="$repo/.env"
+  [ -f "$env_file" ] || env_file=/dev/null
+  cmd=(docker compose --project-directory "$repo" --env-file "$env_file" -p "$project")
+  for item in "${files[@]}"; do cmd+=(-f "$item"); done
+  env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
+      -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
+      "${cmd[@]}" config --format json 8>&-
+}
+
+# Print: <resolved-name><TAB><managed><TAB><safe-to-create-directly>.
+_lifecycle_volume_spec() {
+  local repo="$1" project="$2" config
+  config="$(_lifecycle_compose_config_json "$repo" "$project")" || return 1
+  printf '%s' "$config" | python3 -c '
+import json
+import re
+import sys
+
+try:
+    document = json.load(sys.stdin)
+    volume = document["volumes"]["postgres_backups"]
+    name = volume["name"]
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", name):
+    raise SystemExit(1)
+external = volume.get("external") is True
+configured_creation = any(key in volume for key in ("driver", "driver_opts", "labels"))
+print(f"{name}\t{0 if external else 1}\t{0 if external or configured_creation else 1}", end="")
+'
+}
+
+prepare_lifecycle_volume() {
+  local repo="$1" project spec volume managed creatable labels
+  project="$(_lifecycle_compose_project_name "$repo")" || return 2
+  spec="$(_lifecycle_volume_spec "$repo" "$project")" || return 2
+  IFS=$'\t' read -r volume managed creatable <<< "$spec"
+  [ "$managed" = 1 ] || return 4
+  if ! docker volume inspect "$volume" >/dev/null 2>&1 8>&-; then
+    [ "$creatable" = 1 ] || return 4
+    docker volume create \
+      --label "com.docker.compose.project=${project}" \
+      --label 'com.docker.compose.volume=postgres_backups' \
+      "$volume" >/dev/null 8>&- || return 2
+  fi
+  labels="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}|{{ index .Labels "com.docker.compose.volume" }}' "$volume" 2>/dev/null 8>&- || true)"
+  [ "$labels" = "${project}|postgres_backups" ] || return 4
+  printf '%s' "$volume"
+}
+
+_lifecycle_docker_run() {
+  local repo="$1" mode="$2"; shift 2
+  local volume image helper
+  volume="$(prepare_lifecycle_volume "$repo")" || return $?
+  image="$(_lifecycle_postgres_image "$repo")" || return 2
+  helper="$repo/scripts/backup-lifecycle.sh"
+  [ -f "$helper" ] && [ ! -L "$helper" ] || return 2
+  if [ "$mode" = detached ]; then
+    docker run --rm -d --network none --read-only \
+      --security-opt no-new-privileges --cap-drop ALL \
+      --mount "type=volume,src=${volume},dst=/backups" \
+      --mount "type=bind,src=${helper},dst=/tmp/backup-lifecycle.sh,readonly" \
+      "$image" bash /tmp/backup-lifecycle.sh "$@" 8>&-
+  else
+    docker run --rm --network none --read-only \
+      --security-opt no-new-privileges --cap-drop ALL \
+      --mount "type=volume,src=${volume},dst=/backups" \
+      --mount "type=bind,src=${helper},dst=/tmp/backup-lifecycle.sh,readonly" \
+      "$image" bash /tmp/backup-lifecycle.sh "$@" 8>&-
+  fi
+}
+
+lifecycle_volume_helper() {
+  local repo="$1"; shift
+  _lifecycle_docker_run "$repo" foreground "$@"
+}
+
+lifecycle_update_guard_is_active() {
+  lifecycle_volume_helper "$1" update-status "$2" >/dev/null 2>&1
+}
+
+lifecycle_update_guard_is_promoted() {
+  lifecycle_volume_helper "$1" update-promoted-status "$2" >/dev/null 2>&1
+}
+
+claim_lifecycle_operation() {
+  local repo="$1" kind="$2" current="" id="" action="" helper=""
+  local attempts="${JARVIS_HOST_GUARD_READY_ATTEMPTS:-100}"
+  local interval="${JARVIS_HOST_GUARD_READY_INTERVAL:-0.1}"
+  local timeout="${JARVIS_HOST_GUARD_TIMEOUT:-21600}"
+  _lifecycle_operation_valid_kind "$kind" || return 2
+  if [ "${JARVIS_SHARED_LIFECYCLE_LOCK_HELD:-0}" = 1 ]; then
+    [ "${JARVIS_SHARED_LIFECYCLE_KIND:-}" = "$kind" ] \
+      && lifecycle_volume_helper "$repo" host-status "$kind" \
+           "${JARVIS_SHARED_LIFECYCLE_ID:-}" >/dev/null 2>&1
+    return
+  fi
+  current="$(lifecycle_volume_helper "$repo" current-host 2>/dev/null || true)"
+  case "$current" in
+    "${kind}:"*) id="${current#*:}" ;;
+    "") id="$(python3 -c 'import secrets; print(secrets.token_hex(16))' 2>/dev/null || true)" ;;
+    *) return 4 ;;
+  esac
+  printf '%s' "$id" | grep -Eq '^[0-9a-f]{32}$' || return 2
+  action="$(lifecycle_volume_helper "$repo" reserve-host "$kind" "$id")" || return 4
+  case "$action" in
+    launch)
+      helper="$(_lifecycle_docker_run "$repo" detached hold-host "$kind" "$id" "$timeout")" \
+        || { lifecycle_volume_helper "$repo" cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 || true; return 2; }
+      ;;
+    adopt) ;;
+    *) return 2 ;;
+  esac
+  if ! lifecycle_volume_helper "$repo" wait-host "$kind" "$id" "$attempts" "$interval" >/dev/null 2>&1; then
+    lifecycle_volume_helper "$repo" cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 \
+      && return 2
+    return 4
+  fi
+  JARVIS_SHARED_LIFECYCLE_LOCK_HELD=1
+  JARVIS_SHARED_LIFECYCLE_KIND="$kind"
+  JARVIS_SHARED_LIFECYCLE_ID="$id"
+  export JARVIS_SHARED_LIFECYCLE_LOCK_HELD JARVIS_SHARED_LIFECYCLE_KIND
+  export JARVIS_SHARED_LIFECYCLE_ID
+}
+
+finish_lifecycle_operation() {
+  local repo="$1" kind="$2" action="${3:-clear}" attempt=0 id
+  [ "${JARVIS_SHARED_LIFECYCLE_LOCK_HELD:-0}" = 1 ] || return 0
+  [ "${JARVIS_SHARED_LIFECYCLE_KIND:-}" = "$kind" ] || return 1
+  id="${JARVIS_SHARED_LIFECYCLE_ID:-}"
+  lifecycle_volume_helper "$repo" release-host "$kind" "$id" "$action" >/dev/null \
+    || return 1
+  while [ "$attempt" -lt 50 ]; do
+    if lifecycle_volume_helper "$repo" host-release-complete \
+        "$kind" "$id" "$action" >/dev/null 2>&1; then
+      JARVIS_SHARED_LIFECYCLE_LOCK_HELD=0
+      export JARVIS_SHARED_LIFECYCLE_LOCK_HELD
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+clear_retained_lifecycle_operation() {
+  lifecycle_volume_helper "$1" clear-retained-host "$2" "$3" >/dev/null
+}
 
 # resolve_nvidia_smi -> echoes a usable nvidia-smi path, or returns 1 if none.
 # WSL2 ships nvidia-smi at /usr/lib/wsl/lib/nvidia-smi but does NOT put it on
@@ -176,17 +515,78 @@ strip_gpu_args() {
 
 
 # compose_meets_floor VERSION FLOOR -> 0 when VERSION >= FLOOR (dotted numeric,
-# an optional leading 'v' tolerated), 1 when it is older, 2 when VERSION is the
-# literal 'unknown' (unreadable — caller decides how to treat it). Used to pin a
-# real Compose floor instead of accepting any v2: the accelerator overlays merge
-# a dev override's `deploy: !reset null`, and the `!reset`/`!override` merge tags
-# require Docker Compose 2.24.4+ (Docker's compose-file merge reference).
+# an optional leading 'v' and build suffix tolerated), 1 when it is older, 2
+# when either value is unreadable. Keep this pure Bash: stock macOS `sort` has
+# no GNU `-V` flag. Used to pin a real Compose floor instead of accepting any
+# v2: the accelerator overlays merge a dev override's `deploy: !reset null`, and
+# the `!reset`/`!override` merge tags require Docker Compose 2.24.4+.
 compose_meets_floor() {
-  local ver="${1#v}" floor="$2"
-  [ "$ver" = unknown ] && return 2
-  # Version-sort the pair: VERSION >= FLOOR exactly when FLOOR sorts first (ties
-  # keep FLOOR first, so an equal version still passes).
-  [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n 1)" = "$floor" ]
+  local ver="${1#v}" floor="${2#v}" ver_core floor_core
+  local ver_major ver_minor ver_patch ver_extra
+  local floor_major floor_minor floor_patch floor_extra
+  [ "$ver" != unknown ] && [ "$floor" != unknown ] || return 2
+  ver_core="${ver%%+*}"; ver_core="${ver_core%%-*}"
+  floor_core="${floor%%+*}"; floor_core="${floor_core%%-*}"
+  IFS=. read -r ver_major ver_minor ver_patch ver_extra <<< "$ver_core"
+  IFS=. read -r floor_major floor_minor floor_patch floor_extra <<< "$floor_core"
+  [ -z "${ver_extra:-}" ] && [ -z "${floor_extra:-}" ] || return 2
+  case "${ver_major:-}:${ver_minor:-}:${ver_patch:-}:${floor_major:-}:${floor_minor:-}:${floor_patch:-}" in
+    *[!0-9:]*) return 2 ;;
+  esac
+  [ -n "${ver_major:-}" ] && [ -n "${ver_minor:-}" ] && [ -n "${ver_patch:-}" ] \
+    && [ -n "${floor_major:-}" ] && [ -n "${floor_minor:-}" ] && [ -n "${floor_patch:-}" ] \
+    || return 2
+  [ "$ver_major" -gt "$floor_major" ] && return 0
+  [ "$ver_major" -lt "$floor_major" ] && return 1
+  [ "$ver_minor" -gt "$floor_minor" ] && return 0
+  [ "$ver_minor" -lt "$floor_minor" ] && return 1
+  [ "$ver_patch" -gt "$floor_patch" ] && return 0
+  [ "$ver_patch" -lt "$floor_patch" ] && return 1
+  # A prerelease of the exact floor is older than the stable floor. A `+...`
+  # suffix is build/package metadata and does not change precedence.
+  case "${ver%%+*}" in
+    *-*) return 1 ;;
+  esac
+  return 0
+}
+
+# rewrite_prereq_command COMMAND NONINTERACTIVE EFFECTIVE_UID
+# Plans use one line-leading sudo for privileged commands. Root does not need
+# sudo; an unattended non-root run must not block on a password prompt.
+rewrite_prereq_command() {
+  local command="$1" noninteractive="${2:-0}" effective_uid="$3"
+  case "$command" in
+    sudo\ *)
+      if [ "$effective_uid" -eq 0 ]; then
+        printf '%s' "${command#sudo }"
+      elif [ "$noninteractive" -eq 1 ]; then
+        printf 'sudo -n %s' "${command#sudo }"
+      else
+        printf '%s' "$command"
+      fi
+      ;;
+    *) printf '%s' "$command" ;;
+  esac
+}
+
+mkcert_toolchain_available() {
+  command -v mkcert >/dev/null 2>&1 || return 1
+  if [ "$(uname -s 2>/dev/null || printf unknown)" = Darwin ]; then
+    command -v brew >/dev/null 2>&1 \
+      && brew list --versions nss >/dev/null 2>&1
+  else
+    command -v certutil >/dev/null 2>&1
+  fi
+}
+
+# is_wsl_host -> 0 when setup is running in WSL. The Windows launcher sets an
+# explicit marker so routing stays deterministic even when a test fixture or an
+# unusual kernel string hides Microsoft's usual WSL identifiers.
+is_wsl_host() {
+  [ "${JARVIS_WINDOWS_LAUNCHER:-0}" = 1 ] && return 0
+  [ -n "${WSL_INTEROP:-}" ] && return 0
+  [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+  grep -qi microsoft "${JARVIS_PROC_VERSION:-/proc/version}" 2>/dev/null
 }
 
 # _wsl_without_systemd -> 0 when running under WSL (a Microsoft kernel) with no
@@ -197,7 +597,7 @@ compose_meets_floor() {
 # JARVIS_PROC_VERSION (the kernel version string) and JARVIS_SYSTEMD_DIR (a
 # present directory means systemd is running).
 _wsl_without_systemd() {
-  grep -qi microsoft "${JARVIS_PROC_VERSION:-/proc/version}" 2>/dev/null || return 1
+  is_wsl_host || return 1
   [ -d "${JARVIS_SYSTEMD_DIR:-/run/systemd/system}" ] && return 1
   return 0
 }
@@ -208,18 +608,19 @@ _wsl_without_systemd() {
 # docker-compose-plugin): stock distro packages miss the compose plugin on
 # Debian/Ubuntu and lag Engine releases. A WSL host without systemd gets NO
 # docker plan (return 1) — see _wsl_without_systemd; the manual guidance points
-# it at Docker Desktop's WSL integration instead. Root-escalation contract (setup.sh
-# prints the plan verbatim for consent and rewrites only LINE-LEADING sudo to
-# `sudo -n` for non-interactive runs): every line is unprivileged or starts
-# with exactly one sudo, and remote content is fetched to a temp file as the
-# user — never piped into a privileged command. `nvidia-toolkit` in MISSING...
+# it at Docker Desktop's WSL integration instead. Root-escalation contract:
+# setup.sh prints the plan verbatim for consent; root drops one line-leading
+# sudo, while unattended non-root runs use `sudo -n`. Every line is unprivileged
+# or starts with exactly one sudo. Remote content is never piped into a shell.
+# `nvidia-toolkit` in MISSING...
 # appends the NVIDIA Container Toolkit + docker runtime wiring. Returns
 # non-zero when the host cannot be installed safely. This function only plans;
 # setup.sh decides whether to prompt and execute the plan.
 prereq_install_plan() {
   local os="$1" os_id="$2" has_apt="$3" has_brew="$4" has_dnf="$5"
   shift 5
-  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0 needs_python3=0 item
+  local needs_docker=0 needs_compose=0 needs_openssl=0 needs_toolkit=0
+  local needs_python3=0 needs_curl=0 needs_mkcert=0 item
   for item in "$@"; do
     case "$item" in
       docker) needs_docker=1 ;;
@@ -227,6 +628,8 @@ prereq_install_plan() {
       openssl) needs_openssl=1 ;;
       nvidia-toolkit) needs_toolkit=1 ;;
       python3) needs_python3=1 ;;
+      curl) needs_curl=1 ;;
+      mkcert) needs_mkcert=1 ;;
     esac
   done
 
@@ -234,7 +637,8 @@ prereq_install_plan() {
   # up a second, systemctl-less daemon shadowing Docker Desktop's; the caller
   # falls through to prereq_manual_guidance, which points at Docker Desktop's WSL
   # integration instead.
-  if [ "$needs_docker" = "1" ] && _wsl_without_systemd; then
+  if { [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; } \
+     && _wsl_without_systemd; then
     return 1
   fi
 
@@ -243,29 +647,677 @@ prereq_install_plan() {
       case "$os_id" in
         debian|ubuntu|linuxmint|pop|popos)
           [ "$has_apt" = "1" ] || return 1
-          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
+          _prereq_plan_apt "$os_id" "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3" "$needs_curl" "$needs_mkcert"
           ;;
         fedora)
           [ "$has_dnf" = "1" ] || return 1
-          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3"
+          _prereq_plan_dnf "$needs_docker" "$needs_compose" "$needs_openssl" "$needs_toolkit" "$needs_python3" "$needs_curl" "$needs_mkcert"
           ;;
         *) return 1 ;;
       esac
       ;;
     Darwin)
       [ "$has_brew" = "1" ] || return 1
-      if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
+      if [ "$needs_docker" = "1" ]; then
         printf 'brew install --cask docker\n'
+      elif [ "$needs_compose" = "1" ]; then
+        printf 'brew upgrade --cask docker\n'
       fi
-      if [ "$needs_openssl" = "1" ]; then
-        printf 'brew install openssl\n'
+      local brew_packages=()
+      [ "$needs_openssl" = "1" ] && brew_packages+=(openssl)
+      [ "$needs_python3" = "1" ] && brew_packages+=(python)
+      [ "$needs_curl" = "1" ] && brew_packages+=(curl)
+      if [ "$needs_mkcert" = "1" ]; then
+        brew_packages+=(mkcert nss)
       fi
-      if [ "$needs_python3" = "1" ]; then
-        printf 'brew install python\n'
+      if [ "${#brew_packages[@]}" -gt 0 ]; then
+        printf 'brew install %s\n' "${brew_packages[*]}"
       fi
       ;;
     *) return 1 ;;
   esac
+}
+
+# tailscale_install_plan OS OS_ID CODENAME HAS_APT HAS_DNF HAS_SYSTEMD
+# Prints the reviewed package-manager commands for the first-class private
+# HTTPS route. The caller previews the plan and obtains consent before running
+# it. macOS and WSL without systemd stay manual because their Tailscale clients
+# require an app/system-extension flow that a shell installer cannot complete.
+tailscale_install_plan() {
+  local os="$1" os_id="$2" codename="$3" has_apt="$4" has_dnf="$5" has_systemd="$6"
+  local repo_base
+
+  [ "$os" = "Linux" ] || return 1
+  [ "$has_systemd" = "1" ] || return 1
+  _wsl_without_systemd && return 1
+
+  case "$os_id" in
+    ubuntu|linuxmint|pop|popos)
+      [ "$has_apt" = "1" ] || return 1
+      repo_base=ubuntu
+      ;;
+    debian)
+      [ "$has_apt" = "1" ] || return 1
+      repo_base=debian
+      ;;
+    fedora)
+      [ "$has_dnf" = "1" ] || return 1
+      printf 'sudo dnf install -y ca-certificates curl\n'
+      printf 'sudo install -d -m 0755 /etc/yum.repos.d\n'
+      printf 'sudo curl -fsSL https://pkgs.tailscale.com/stable/fedora/tailscale.repo -o /etc/yum.repos.d/tailscale.repo\n'
+      printf 'sudo dnf install -y tailscale\n'
+      printf 'sudo systemctl enable --now tailscaled\n'
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+
+  # The codename becomes part of two repository URLs. Accept only the shape
+  # used by /etc/os-release; do not let host metadata introduce shell syntax
+  # or path traversal into a command that will later run with sudo.
+  case "$codename" in
+    ''|*[!a-z0-9._-]*) return 1 ;;
+  esac
+
+  printf 'sudo apt-get update\n'
+  printf 'sudo apt-get install -y ca-certificates curl\n'
+  printf 'sudo install -d -m 0755 /usr/share/keyrings\n'
+  printf 'sudo curl -fsSL https://pkgs.tailscale.com/stable/%s/%s.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg\n' "$repo_base" "$codename"
+  printf 'sudo chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg\n'
+  printf 'sudo curl -fsSL https://pkgs.tailscale.com/stable/%s/%s.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list\n' "$repo_base" "$codename"
+  printf 'sudo apt-get update\n'
+  printf 'sudo apt-get install -y tailscale\n'
+  printf 'sudo systemctl enable --now tailscaled\n'
+}
+
+# tailscale_serve_https PORT NON_INTERACTIVE
+# Configure the daemon-owned Serve state with the privilege level Tailscale
+# requires. Interactive runs show sudo's exact command and may prompt;
+# unattended runs use sudo -n so they fail instead of hanging on a password
+# prompt. Root callers execute tailscale directly.
+tailscale_serve_https() {
+  local port="$1" non_interactive="$2" uid
+  local -a command=(
+    tailscale serve --bg --yes --https=443 "http://127.0.0.1:${port}"
+  )
+
+  uid="$(id -u)" || return $?
+  if [ "$uid" -eq 0 ]; then
+    "${command[@]}"
+  elif [ "$non_interactive" -eq 1 ]; then
+    sudo -n "${command[@]}"
+  else
+    printf '  sudo'
+    printf ' %s' "${command[@]}"
+    printf '\n'
+    sudo "${command[@]}"
+  fi
+}
+
+# tailscale_serve_config_is_jarvis_only PORT
+# Read `tailscale serve status --json` on stdin. Return 0 only when the whole
+# node-scoped Serve configuration is the one route setup.sh owns, 3 when no
+# Serve configuration exists, and 1 for malformed/shared/unexpected state.
+# The reset command is global, so strict shape matching is intentional.
+tailscale_serve_config_is_jarvis_only() {
+  local port="$1"
+  python3 -c '
+import json
+import sys
+
+port = sys.argv[1]
+try:
+    config = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if config == {}:
+    raise SystemExit(3)
+if not isinstance(config, dict) or set(config) != {"TCP", "Web"}:
+    raise SystemExit(1)
+if config.get("TCP") != {"443": {"HTTPS": True}}:
+    raise SystemExit(1)
+web = config.get("Web")
+if not isinstance(web, dict) or len(web) != 1:
+    raise SystemExit(1)
+host_port, server = next(iter(web.items()))
+expected = {"Handlers": {"/": {"Proxy": f"http://127.0.0.1:{port}"}}}
+raise SystemExit(0 if host_port.endswith(":443") and server == expected else 1)
+' "$port"
+}
+
+# tailscale_serve_https_off PORT NON_INTERACTIVE
+# Use the documented `serve reset` primitive only after inspecting live state;
+# targeted `off` grammar has varied between client versions. Reset only when
+# the complete configuration is exactly JARVIS's 443 -> loopback route. Refuse
+# a shared or unfamiliar config rather than deleting another operator's routes.
+tailscale_serve_https_off() {
+  local port="$1" non_interactive="$2" uid
+  local status classification_rc
+
+  uid="$(id -u)" || return $?
+  if [ "$uid" -eq 0 ]; then
+    status="$(tailscale serve status --json)" || return $?
+  elif [ "$non_interactive" -eq 1 ]; then
+    status="$(sudo -n tailscale serve status --json)" || return $?
+  else
+    printf '  sudo tailscale serve status --json\n'
+    status="$(sudo tailscale serve status --json)" || return $?
+  fi
+
+  if printf '%s' "$status" | tailscale_serve_config_is_jarvis_only "$port"; then
+    :
+  else
+    classification_rc=$?
+    if [ "$classification_rc" -eq 3 ]; then
+      return 0
+    fi
+    printf 'Refusing to reset Tailscale Serve: the active configuration is not exclusively the JARVIS route to 127.0.0.1:%s.\n' "$port" >&2
+    return 64
+  fi
+
+  if [ "$uid" -eq 0 ]; then
+    tailscale serve reset
+  elif [ "$non_interactive" -eq 1 ]; then
+    sudo -n tailscale serve reset
+  else
+    printf '  sudo tailscale serve reset\n'
+    sudo tailscale serve reset
+  fi
+}
+
+# access_edge_retirements OLD_MODE OLD_PROFILES NEW_MODE NEW_PROFILES
+# Print the JARVIS-owned access edges present in the old configuration but not
+# the replacement, one `profile|service` row per edge. Tailscale is a host route
+# rather than a Compose profile and is represented as `tailscale|tailscale`.
+access_edge_retirements() {
+  local old_mode="$1" old_profiles="$2" new_mode="$3" new_profiles="$4"
+  local old_has new_has
+
+  old_has=0; new_has=0
+  [ "$old_mode" = "tailscale" ] && old_has=1
+  [ "$new_mode" = "tailscale" ] && new_has=1
+  [ "$old_has" -eq 1 ] && [ "$new_has" -eq 0 ] && printf 'tailscale|tailscale\n'
+
+  old_has=0; new_has=0
+  case ",${old_profiles}," in *,tunnel,*) old_has=1 ;; esac
+  [ "$old_mode" = "tunnel" ] && old_has=1
+  case ",${new_profiles}," in *,tunnel,*) new_has=1 ;; esac
+  [ "$new_mode" = "tunnel" ] && new_has=1
+  [ "$old_has" -eq 1 ] && [ "$new_has" -eq 0 ] && printf 'tunnel|cloudflared\n'
+
+  old_has=0; new_has=0
+  case ",${old_profiles}," in *,caddy-local,*) old_has=1 ;; esac
+  case ",${new_profiles}," in *,caddy-local,*) new_has=1 ;; esac
+  [ "$old_has" -eq 1 ] && [ "$new_has" -eq 0 ] && printf 'caddy-local|caddy_local\n'
+
+  old_has=0; new_has=0
+  case ",${old_profiles}," in *,letsencrypt,*) old_has=1 ;; esac
+  [ "$old_mode" = "letsencrypt" ] && old_has=1
+  case ",${new_profiles}," in *,letsencrypt,*) new_has=1 ;; esac
+  [ "$new_mode" = "letsencrypt" ] && new_has=1
+  [ "$old_has" -eq 1 ] && [ "$new_has" -eq 0 ] && printf 'letsencrypt|caddy\n'
+  return 0
+}
+
+# quiesce_previous_access_runtime OLD_MODE OLD_PROFILES NEW_MODE NEW_PROFILES
+#   OLD_TAILSCALE_PORT NON_INTERACTIVE PROJECT_DIR ENV_FILE
+#
+# Stop every old JARVIS-owned edge that the replacement will retire before the
+# replacement marker is probed. Otherwise an unchanged hostname (or a DNS alias)
+# can let the old edge answer the probe, after which deleting that edge would
+# turn a reported success into an outage. This is reversible: the caller keeps
+# the old tunnel credential and invokes rollback_access_runtime on any failure.
+quiesce_previous_access_runtime() {
+  local old_mode="$1" old_profiles="$2" new_mode="$3" new_profiles="$4"
+  local old_tailscale_port="$5" non_interactive="$6"
+  local project_dir="$7" env_file="$8" edge service failed=0
+
+  while IFS='|' read -r edge service; do
+    [ -n "$edge" ] || continue
+    case "$edge" in
+      tailscale)
+        tailscale_serve_https_off "$old_tailscale_port" "$non_interactive" \
+          || failed=1
+        ;;
+      tunnel|caddy-local|letsencrypt)
+        access_rollback_compose "$project_dir" "$env_file" \
+          --profile "$edge" rm -sf "$service" || failed=1
+        ;;
+    esac
+  done < <(access_edge_retirements "$old_mode" "$old_profiles" \
+    "$new_mode" "$new_profiles")
+
+  [ "$failed" -eq 0 ]
+}
+
+_setup_transaction_path_is_safe() {
+  local transaction_dir="$1"
+  [ -n "$transaction_dir" ] || return 1
+  case "${transaction_dir##*/}" in
+    .jarvis-setup-transaction) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# setup_transaction_owner_state DIR PHASE
+#
+# Inspect, but never delete, a pending or active transaction. Return 0 when its
+# recorded process is live, 1 when the owner is gone, and 2 for an invalid path
+# or owner record. Retaining abandoned staging avoids a validate-then-delete race
+# in which another setup could create a new lock at the same pathname.
+setup_transaction_owner_state() {
+  local transaction_dir="$1" phase="$2" state_dir owner_pid
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  case "$phase" in
+    active) state_dir="$transaction_dir" ;;
+    pending) state_dir="${transaction_dir}.pending" ;;
+    *) return 2 ;;
+  esac
+  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 2
+  [ -f "$state_dir/owner_pid" ] && [ ! -L "$state_dir/owner_pid" ] \
+    || return 2
+  owner_pid="$(cat "$state_dir/owner_pid")" || return 2
+  case "$owner_pid" in ''|*[!0-9]*) return 2 ;; esac
+  [ "$owner_pid" -gt 1 ] || return 2
+  if kill -0 "$owner_pid" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# acquire_setup_transaction_lock DIR / release_setup_transaction_lock DIR
+#
+# The pending directory is the one atomic mutex shared by journal creation and
+# interrupted-journal recovery. An abandoned lock is never reaped automatically:
+# deleting by a reused pathname cannot be made race-free without platform-specific
+# locking. Release removes only a lock whose owner record matches this process.
+acquire_setup_transaction_lock() {
+  local transaction_dir="$1" pending_dir
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  pending_dir="${transaction_dir}.pending"
+  [ ! -e "$pending_dir" ] && [ ! -L "$pending_dir" ] || return 4
+  mkdir -m 700 "$pending_dir" || return 4
+  if ! printf '%s' "$$" > "$pending_dir/owner_pid" \
+      || ! chmod 600 "$pending_dir/owner_pid"; then
+    rm -rf -- "$pending_dir"
+    return 1
+  fi
+}
+
+release_setup_transaction_lock() {
+  local transaction_dir="$1" pending_dir owner_pid
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  pending_dir="${transaction_dir}.pending"
+  [ -d "$pending_dir" ] && [ ! -L "$pending_dir" ] \
+    && [ -f "$pending_dir/owner_pid" ] \
+    && [ ! -L "$pending_dir/owner_pid" ] || return 1
+  owner_pid="$(cat "$pending_dir/owner_pid")" || return 1
+  [ "$owner_pid" = "$$" ] || return 1
+  rm -rf -- "$pending_dir"
+}
+
+_snapshot_optional_setup_secret() {
+  local source="$1" snapshot_dir="$2" name="$3"
+  if [ -e "$source" ]; then
+    [ -f "$source" ] && [ ! -L "$source" ] || return 1
+    cp "$source" "${snapshot_dir}/${name}" || return 1
+    chmod 600 "${snapshot_dir}/${name}" || return 1
+    printf 'present' > "${snapshot_dir}/${name}.state"
+  else
+    printf 'absent' > "${snapshot_dir}/${name}.state"
+  fi
+  chmod 600 "${snapshot_dir}/${name}.state"
+}
+
+# begin_setup_transaction DIR ENV_FILE SECRETS_DIR OLD_MODE OLD_PROFILES
+#   OLD_TAILSCALE_PORT OLD_ORIGIN OLD_DASHBOARD_PORT NEW_MODE NEW_PROFILES
+#   NEW_TAILSCALE_PORT
+#
+# Persist the entire setup-owned credential/config rollback boundary before the
+# first mutation. The fixed, gitignored directory survives SIGKILL; an atomic
+# rename means a rerun sees either no transaction or a complete one.
+begin_setup_transaction() {
+  local transaction_dir="$1" env_file="$2" secrets_dir="$3"
+  local old_mode="$4" old_profiles="$5" old_tailscale_port="$6"
+  local old_origin="$7" old_dashboard_port="$8" new_mode="$9"
+  local new_profiles="${10}" new_tailscale_port="${11}"
+  local pending_dir key value
+
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  [ -f "$env_file" ] || return 1
+  [ ! -e "$transaction_dir" ] || return 3
+  pending_dir="${transaction_dir}.pending"
+  acquire_setup_transaction_lock "$transaction_dir" || return $?
+  # The pending directory is the mutation lock. Recheck the journal after taking
+  # it so a setup that promoted its own lock between our first two tests cannot
+  # be snapshotted over.
+  if [ -e "$transaction_dir" ] || [ -L "$transaction_dir" ]; then
+    release_setup_transaction_lock "$transaction_dir" || true
+    return 3
+  fi
+  if ! mkdir -m 700 "$pending_dir/metadata" "$pending_dir/secrets"; then
+    release_setup_transaction_lock "$transaction_dir" || true
+    return 1
+  fi
+  if ! cp "$env_file" "$pending_dir/old.env" \
+      || ! chmod 600 "$pending_dir/old.env" \
+      || ! _snapshot_optional_setup_secret \
+        "$secrets_dir/cloudflare_tunnel_token.txt" "$pending_dir/secrets" \
+        cloudflare_tunnel_token.txt \
+      || ! _snapshot_optional_setup_secret \
+        "$secrets_dir/smtp_pass.txt" "$pending_dir/secrets" smtp_pass.txt \
+      || ! _snapshot_optional_setup_secret \
+        "$secrets_dir/telegram_bot_token.txt" "$pending_dir/secrets" \
+        telegram_bot_token.txt; then
+    release_setup_transaction_lock "$transaction_dir" || true
+    return 1
+  fi
+
+  for key in old_mode old_profiles old_tailscale_port old_origin \
+      old_dashboard_port new_mode new_profiles new_tailscale_port \
+      tailscale_attempted; do
+    case "$key" in
+      old_mode) value="$old_mode" ;;
+      old_profiles) value="$old_profiles" ;;
+      old_tailscale_port) value="$old_tailscale_port" ;;
+      old_origin) value="$old_origin" ;;
+      old_dashboard_port) value="$old_dashboard_port" ;;
+      new_mode) value="$new_mode" ;;
+      new_profiles) value="$new_profiles" ;;
+      new_tailscale_port) value="$new_tailscale_port" ;;
+      tailscale_attempted) value=0 ;;
+    esac
+    printf '%s' "$value" > "$pending_dir/metadata/$key" || {
+      release_setup_transaction_lock "$transaction_dir" || true; return 1;
+    }
+    chmod 600 "$pending_dir/metadata/$key" || {
+      release_setup_transaction_lock "$transaction_dir" || true; return 1;
+    }
+  done
+  printf 'active' > "$pending_dir/active" \
+    || { release_setup_transaction_lock "$transaction_dir" || true; return 1; }
+  chmod 600 "$pending_dir/active" \
+    || { release_setup_transaction_lock "$transaction_dir" || true; return 1; }
+  if [ -e "$transaction_dir" ] || [ -L "$transaction_dir" ] \
+      || ! mv "$pending_dir" "$transaction_dir"; then
+    release_setup_transaction_lock "$transaction_dir" || true
+    return 1
+  fi
+}
+
+# setup_transaction_value DIR KEY -> validated one-line metadata value.
+setup_transaction_value() {
+  local transaction_dir="$1" key="$2" value
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  case "$key" in
+    old_mode|old_profiles|old_tailscale_port|old_origin|old_dashboard_port|\
+    new_mode|new_profiles|new_tailscale_port|tailscale_attempted) ;;
+    *) return 2 ;;
+  esac
+  [ -f "$transaction_dir/active" ] \
+    && [ -f "$transaction_dir/metadata/$key" ] || return 1
+  value="$(cat "$transaction_dir/metadata/$key")" || return 1
+  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  printf '%s' "$value"
+}
+
+mark_setup_transaction_tailscale_attempted() {
+  local transaction_dir="$1" tmp
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  [ -f "$transaction_dir/active" ] || return 1
+  tmp="$transaction_dir/metadata/tailscale_attempted.tmp.$$"
+  printf '1' > "$tmp" && chmod 600 "$tmp" \
+    && mv "$tmp" "$transaction_dir/metadata/tailscale_attempted"
+}
+
+_restore_optional_setup_secret() {
+  local snapshot_dir="$1" target_dir="$2" name="$3" state tmp
+  [ -f "$snapshot_dir/${name}.state" ] || return 1
+  state="$(cat "$snapshot_dir/${name}.state")" || return 1
+  case "$state" in
+    present)
+      [ -f "$snapshot_dir/$name" ] || return 1
+      tmp="$(mktemp "$target_dir/${name}.restore.XXXXXX")" || return 1
+      if ! cp "$snapshot_dir/$name" "$tmp" || ! chmod 644 "$tmp" \
+          || ! mv "$tmp" "$target_dir/$name"; then
+        rm -f "$tmp"
+        return 1
+      fi
+      ;;
+    absent) rm -f "$target_dir/$name" ;;
+    *) return 1 ;;
+  esac
+}
+
+# restore_setup_secret_snapshot SNAPSHOT_DIR TARGET_SECRETS_DIR
+restore_setup_secret_snapshot() {
+  local snapshot_dir="$1" target_dir="$2" name failed=0
+  mkdir -p "$target_dir" || return 1
+  chmod 700 "$target_dir" || return 1
+  for name in cloudflare_tunnel_token.txt smtp_pass.txt telegram_bot_token.txt; do
+    _restore_optional_setup_secret "$snapshot_dir" "$target_dir" "$name" \
+      || failed=1
+  done
+  [ "$failed" -eq 0 ]
+}
+
+discard_setup_transaction() {
+  local transaction_dir="$1"
+  _setup_transaction_path_is_safe "$transaction_dir" || return 2
+  [ ! -e "$transaction_dir" ] && return 0
+  [ -f "$transaction_dir/active" ] || return 1
+  rm -rf -- "$transaction_dir"
+}
+
+# restore_env_snapshot SNAPSHOT TARGET
+# Replace TARGET atomically from SNAPSHOT without consuming the snapshot.
+# The temporary file lives next to TARGET, so the final rename is same-filesystem.
+restore_env_snapshot() {
+  local snapshot="$1" target="$2" tmp
+  [ -f "$snapshot" ] || return 1
+  tmp="$(mktemp "${target}.restore.XXXXXX")" || return $?
+  if ! cp "$snapshot" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$target"
+}
+
+# restore_secret_from_env ENV_FILE KEY TARGET
+# Reconcile one file-backed credential after an .env rollback without writing
+# the value to stdout or argv. An empty/absent restored value removes the
+# replacement credential; a non-empty value is replaced atomically.
+restore_secret_from_env() {
+  local env_file="$1" key="$2" target="$3" value tmp
+  case "$key" in ''|*[!A-Z0-9_]*) return 2 ;; esac
+  [ -f "$env_file" ] || return 1
+  value="$(awk -v key="$key" '
+    index($0, key "=") == 1 {
+      value = substr($0, length(key) + 2)
+      sub(/\r$/, "", value)
+      if (length(value) > 0) print value
+      exit
+    }
+  ' "$env_file")"
+  if [ -z "$value" ]; then
+    rm -f "$target"
+    return 0
+  fi
+  tmp="$(mktemp "${target}.restore.XXXXXX")" || return $?
+  if ! printf '%s' "$value" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod 644 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$target"
+}
+
+# wait_for_jarvis_marker URL [ATTEMPTS] [DELAY_SECONDS] [CA_FILE]
+# Return only after the exact, bounded JARVIS marker probe succeeds. This is used
+# by access rollback as well as setup verification: a container being "up" is
+# not evidence that its restored origin reaches this installation.
+wait_for_jarvis_marker() {
+  local url="$1" attempts="${2:-12}" delay_seconds="${3:-5}"
+  local ca_file="${4:-}" attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if [ "$(probe_external_app "$url" "$ca_file")" = "verified" ]; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt "$attempts" ] && sleep "$delay_seconds"
+  done
+  return 1
+}
+
+# wait_for_local_https_marker URL [ATTEMPTS] [DELAY_SECONDS]
+# Local HTTPS has two independent requirements: the endpoint must chain to this
+# checkout's mkcert CA, and the host trust store used by ordinary clients must
+# accept it. Keep both checks inside the bounded retry loop.
+wait_for_local_https_marker() {
+  local url="$1" attempts="${2:-12}" delay_seconds="${3:-2}" attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if [ "$(probe_local_https_app "$url")" = "verified" ]; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt "$attempts" ] && sleep "$delay_seconds"
+  done
+  return 1
+}
+
+# access_rollback_compose PROJECT_DIR ENV_FILE ARGS...
+# Compose's control variables can be exported by a caller and override the
+# checkout's .env. Rollback must target the JARVIS project that setup owns, so
+# isolate it from ambient selectors and pin both the working tree and env file.
+access_rollback_compose() (
+  local project_dir="$1" env_file="$2"
+  shift 2
+  sanitize_compose_environment
+  cd "$project_dir" || exit 1
+  docker compose --project-directory "$project_dir" --env-file "$env_file" "$@"
+)
+
+# remove_attempted_access_runtime NEW_MODE NEW_PROFILES NEW_TAILSCALE_PORT
+#   NEW_TAILSCALE_ATTEMPTED NON_INTERACTIVE PROJECT_DIR ENV_FILE
+# Stop only the JARVIS-owned edge selected by the failed attempt. A Tailscale
+# reset remains subject to the strict whole-config ownership check; an invocation
+# that returned nonzero is still inspected because the daemon may have applied it.
+remove_attempted_access_runtime() {
+  local new_mode="$1" new_profiles="$2" new_tailscale_port="$3"
+  local new_tailscale_attempted="$4" non_interactive="$5"
+  local project_dir="$6" env_file="$7" edge service failed=0
+
+  while IFS='|' read -r edge service; do
+    [ -n "$edge" ] || continue
+    case "$edge" in
+      tailscale)
+        if [ "$new_tailscale_attempted" -eq 1 ]; then
+          tailscale_serve_https_off "$new_tailscale_port" "$non_interactive" \
+            || failed=1
+        fi
+        ;;
+      tunnel|caddy-local|letsencrypt)
+        access_rollback_compose "$project_dir" "$env_file" \
+          --profile "$edge" rm -sf "$service" || failed=1
+        ;;
+    esac
+  done < <(access_edge_retirements "$new_mode" "$new_profiles" '' '')
+
+  [ "$failed" -eq 0 ]
+}
+
+# rollback_access_runtime OLD_MODE OLD_PROFILES OLD_TAILSCALE_PORT OLD_ORIGIN
+#   OLD_DASHBOARD_PORT NEW_MODE NEW_PROFILES NEW_TAILSCALE_PORT
+#   NEW_TAILSCALE_ATTEMPTED NON_INTERACTIVE ENV_SNAPSHOT ENV_TARGET SECRET_TARGET
+#   PROJECT_DIR [SECRET_SNAPSHOT_DIR]
+#
+# Undo a failed access replacement at the JARVIS-owned runtime boundary. Order is
+# deliberate: stop only the replacement edge, restore persisted inputs, recreate
+# the dashboard and previous Compose edge from those inputs, then reapply the old
+# Tailscale route. The snapshot is never consumed. Return nonzero if any cleanup,
+# restore, recreation, or exact-marker verification fails so the caller can print
+# manual recovery without claiming that the previous route works.
+rollback_access_runtime() {
+  local old_mode="$1" old_profiles="$2" old_tailscale_port="$3"
+  local old_origin="$4" old_dashboard_port="$5" new_mode="$6"
+  local new_profiles="$7" new_tailscale_port="$8"
+  local new_tailscale_attempted="$9" non_interactive="${10}"
+  local env_snapshot="${11}" env_target="${12}" secret_target="${13}"
+  local project_dir="${14}" secret_snapshot_dir="${15:-}"
+  local compose_env="$env_target"
+  local edge service old_route env_restored=0 failed=0 has_old_tailscale=0
+  local seen_services=" dashboard "
+  local -a previous_profile_args=() previous_services=(dashboard)
+
+  case "$compose_env" in
+    /*) ;;
+    *) compose_env="${project_dir%/}/${compose_env}" ;;
+  esac
+
+  remove_attempted_access_runtime "$new_mode" "$new_profiles" \
+    "$new_tailscale_port" "$new_tailscale_attempted" "$non_interactive" \
+    "$project_dir" "$compose_env" || failed=1
+
+  if restore_env_snapshot "$env_snapshot" "$env_target"; then
+    env_restored=1
+    if [ -n "$secret_snapshot_dir" ]; then
+      restore_setup_secret_snapshot "$secret_snapshot_dir" \
+        "${project_dir%/}/secrets" || failed=1
+    else
+      # Backward-compatible fallback for callers that predate the durable
+      # three-credential transaction snapshot.
+      restore_secret_from_env "$env_target" CLOUDFLARE_TUNNEL_TOKEN \
+        "$secret_target" || failed=1
+    fi
+  else
+    failed=1
+  fi
+
+  if [ "$env_restored" -eq 1 ]; then
+    while IFS='|' read -r edge service; do
+      [ -n "$edge" ] || continue
+      case "$edge" in
+        tailscale) has_old_tailscale=1 ;;
+        tunnel|caddy-local|letsencrypt)
+          previous_profile_args+=(--profile "$edge")
+          case "$seen_services" in
+            *" $service "*) ;;
+            *) previous_services+=("$service"); seen_services="${seen_services}${service} " ;;
+          esac
+          ;;
+      esac
+    done < <(access_edge_retirements "$old_mode" "$old_profiles" '' '')
+
+    access_rollback_compose "$project_dir" "$compose_env" \
+      ${previous_profile_args[@]+"${previous_profile_args[@]}"} up -d \
+      --no-build --force-recreate --no-deps "${previous_services[@]}" || failed=1
+
+    if [ "$has_old_tailscale" -eq 1 ]; then
+      tailscale_serve_https "$old_tailscale_port" "$non_interactive" || failed=1
+    fi
+
+    wait_for_jarvis_marker \
+      "http://127.0.0.1:${old_dashboard_port}/health/jarvis" 15 2 || failed=1
+
+    old_route="$(selected_https_route "$old_mode" "$old_profiles" "$old_origin")"
+    case "$old_route" in
+      none) ;;
+      local-https)
+        wait_for_local_https_marker "https://localhost:3443/health/jarvis" 12 2 \
+          || failed=1
+        ;;
+      *)
+        if [[ "$old_origin" == https://* ]]; then
+          wait_for_jarvis_marker "${old_origin%/}/health/jarvis" 12 5 || failed=1
+        else
+          failed=1
+        fi
+        ;;
+    esac
+  fi
+
+  [ "$failed" -eq 0 ]
 }
 
 # Docker's apt repo serves UBUNTU codename dists: Mint/Pop set VERSION_CODENAME
@@ -274,12 +1326,15 @@ prereq_install_plan() {
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_apt() {
   local os_id="$1" needs_docker="$2" needs_compose="$3" needs_openssl="$4" needs_toolkit="$5" needs_python3="${6:-0}"
+  local needs_curl="${7:-0}" needs_mkcert="${8:-0}"
   local repo_base=ubuntu
   [ "$os_id" = "debian" ] && repo_base=debian
 
   printf 'sudo apt-get update\n'
-  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
+  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ] || [ "$needs_toolkit" = "1" ]; then
     printf 'sudo apt-get install -y ca-certificates curl gnupg\n'
+  fi
+  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
     # Fetch the signing key straight to the root-owned keyring (Docker's own
     # documented apt method) and write the repo list through a root shell — no
     # world-writable /tmp staging that a later sudo would read back (CWE-377).
@@ -301,6 +1356,14 @@ _prereq_plan_apt() {
   fi
   if [ "$needs_python3" = "1" ]; then
     packages+=(python3)
+  fi
+  if [ "$needs_curl" = "1" ] \
+     && [ "$needs_docker" != "1" ] && [ "$needs_compose" != "1" ] \
+     && [ "$needs_toolkit" != "1" ]; then
+    packages+=(curl)
+  fi
+  if [ "$needs_mkcert" = "1" ]; then
+    packages+=(mkcert libnss3-tools)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo apt-get install -y %s\n' "${packages[*]}"
@@ -328,7 +1391,11 @@ _prereq_plan_apt() {
 # shellcheck disable=SC2016  # plan lines expand at execution, not planning
 _prereq_plan_dnf() {
   local needs_docker="$1" needs_compose="$2" needs_openssl="$3" needs_toolkit="$4" needs_python3="${5:-0}"
+  local needs_curl="${6:-0}" needs_mkcert="${7:-0}"
 
+  if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ] || [ "$needs_toolkit" = "1" ]; then
+    printf 'sudo dnf install -y ca-certificates curl\n'
+  fi
   if [ "$needs_docker" = "1" ] || [ "$needs_compose" = "1" ]; then
     # Fetch the repo file straight to its root-owned destination — no /tmp hop.
     printf 'sudo curl -fsSL https://download.docker.com/linux/fedora/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo\n'
@@ -345,6 +1412,14 @@ _prereq_plan_dnf() {
   fi
   if [ "$needs_python3" = "1" ]; then
     packages+=(python3)
+  fi
+  if [ "$needs_curl" = "1" ] \
+     && [ "$needs_docker" != "1" ] && [ "$needs_compose" != "1" ] \
+     && [ "$needs_toolkit" != "1" ]; then
+    packages+=(curl)
+  fi
+  if [ "$needs_mkcert" = "1" ]; then
+    packages+=(mkcert nss-tools)
   fi
   if [ "${#packages[@]}" -gt 0 ]; then
     printf 'sudo dnf install -y %s\n' "${packages[*]}"
@@ -380,6 +1455,8 @@ prereq_manual_guidance() {
       docker)         [ "$wsl" -eq 1 ] || printf 'Install Docker Engine (or review-then-run the convenience script from https://get.docker.com): https://docs.docker.com/engine/install/\n' ;;
       docker-compose) [ "$wsl" -eq 1 ] || printf 'Install the Docker Compose v2 plugin: https://docs.docker.com/compose/install/linux/\n' ;;
       openssl) printf 'Install openssl with your OS package manager.\n' ;;
+      curl) printf 'Install curl with your OS package manager.\n' ;;
+      mkcert) printf 'Install mkcert plus browser trust tooling (libnss3-tools on Debian/Ubuntu, nss-tools on Fedora, or nss with Homebrew).\n' ;;
       nvidia-toolkit) printf 'Install the NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html\n' ;;
       python3) printf 'Install Python 3 with your OS package manager (setup uses it for model selection and disk sizing).\n' ;;
     esac
@@ -684,12 +1761,184 @@ mandatory_health_services() {
 route_claims() {
   cat <<'ROUTES'
 localhost-http|http|3001|localhost|fragment|secure|localhost|none|supported
-raw-ip-lan|http|3001|lan-ip|paste|none|none|none|supported
-named-private-https|https|443|origin-host|fragment|secure|origin-host|external|supported
+raw-ip-lan|http|3001|lan-ip|none|none|none|none|diagnostics-only
+named-private-https|https|443|origin-host|fragment|secure|origin-host|external|manual
+tailscale-serve|https|443|tailnet-host|fragment|secure|tailnet-host|tailscale|supported
 local-https|https|3443|localhost|fragment|secure|localhost|mkcert|experimental
 letsencrypt|https|443|domain|fragment|secure|domain|letsencrypt|supported
 tunnel|https|443|tunnel-host|fragment|secure|tunnel-host|cloudflare|supported
 ROUTES
+}
+
+# selected_https_route MODE PROFILES APP_BASE_URL
+# Classify whether setup selected an off-host HTTPS route whose exact JARVIS
+# marker must be reachable before success. Profiles cover older .env files that
+# predate JARVIS_ACCESS_MODE; a named HTTPS origin layered onto localhost/LAN is
+# still a required route.
+selected_https_route() {
+  local mode="$1" profiles="$2" app_base_url="$3"
+  case "$mode" in
+    tailscale|tunnel|letsencrypt) printf '%s' "$mode"; return 0 ;;
+  esac
+  case ",${profiles}," in
+    *,tunnel,*)      printf 'tunnel'; return 0 ;;
+    *,letsencrypt,*) printf 'letsencrypt'; return 0 ;;
+    *,caddy-local,*) printf 'local-https'; return 0 ;;
+  esac
+  case "$app_base_url" in
+    https://*) printf 'private' ;;
+    *)         printf 'none' ;;
+  esac
+}
+
+# environment_for_access_route MODE PROFILES APP_BASE_URL
+# Loopback-only routes keep developer tolerance. Every off-host authenticated
+# HTTPS origin, including a manual --public-origin layered onto localhost/LAN,
+# receives production startup and readiness enforcement.
+environment_for_access_route() {
+  case "$(selected_https_route "$1" "$2" "$3")" in
+    none|local-https) printf 'development' ;;
+    *)                printf 'production' ;;
+  esac
+}
+
+# selected_https_is_verified ROUTE PROBE_STATE
+# Plain localhost needs no HTTPS probe. Every selected HTTPS route, including
+# loopback mkcert, needs its route-specific exact-marker/trust state.
+selected_https_is_verified() {
+  [ "$1" = "none" ] || [ "$2" = "verified" ]
+}
+
+# allocate_ingress_ips SUBNET -> gateway, Caddy, local Caddy, dashboard, and
+# cloudflared addresses as one space-separated row. Docker keeps its usual low
+# dynamic addresses; trusted ingress peers use the highest four usable addresses
+# so existing networks can adopt the pins without an IPAM/network migration.
+allocate_ingress_ips() {
+  python3 - "$1" <<'PY'
+import ipaddress
+import sys
+
+try:
+    network = ipaddress.ip_network(sys.argv[1], strict=True)
+except ValueError:
+    raise SystemExit(1)
+if network.version != 4 or network.prefixlen > 27:
+    raise SystemExit(1)
+gateway = network.network_address + 1
+edges = [network.broadcast_address - offset for offset in range(4, 0, -1)]
+print(" ".join(str(address) for address in [gateway, *edges]))
+PY
+}
+
+# classify_external_app_probe CURL_RC HTTP LOCATION SERVER CF_MITIGATED BODY
+# -> verified | access | waf | wrong-app | dns-tls | unavailable.
+classify_external_app_probe() {
+  local curl_rc="$1" code="$2" location="$3" server="$4" mitigated="$5" body="$6"
+  local metadata
+  metadata="$(printf '%s %s %s %s' "$location" "$server" "$mitigated" "$body" | tr '[:upper:]' '[:lower:]')"
+  case "$curl_rc" in 6|35|51|58|60) printf 'dns-tls'; return 0 ;; esac
+  if [ "$curl_rc" -ne 0 ]; then printf 'unavailable'; return 0; fi
+  case "$metadata" in
+    *cloudflareaccess.com*|*cdn-cgi/access*) printf 'access'; return 0 ;;
+  esac
+  case "$mitigated:$metadata" in
+    challenge:*|*:*.cloudflare*just\ a\ moment*|*:cloudflare*just\ a\ moment*)
+      printf 'waf'; return 0 ;;
+  esac
+  if [ "$code" = "401" ] && printf '%s' "$metadata" | grep -q cloudflare; then
+    printf 'access'; return 0
+  fi
+  case "$code" in
+    2??)
+      [ "$body" = "jarvis-rd-assistant" ] && printf 'verified' || printf 'wrong-app'
+      ;;
+    403|429|503)
+      printf '%s' "$metadata" | grep -q cloudflare && printf 'waf' || printf 'unavailable'
+      ;;
+    *) printf 'unavailable' ;;
+  esac
+}
+
+# probe_external_app URL [CA_FILE] -> one classifier state. Redirects are deliberately
+# not followed: an Access login redirect is edge-reachable, not proof that the
+# hostname serves this JARVIS instance. The response body is capped at 4 KiB.
+probe_external_app() {
+  local url="$1" ca_file="${2:-}" body_file headers_file code rc
+  local location server mitigated body
+  local -a curl_args=(
+    -sS --connect-timeout 5 --max-time 10 --range 0-4095
+  )
+  if [ -n "$ca_file" ]; then
+    [ -r "$ca_file" ] || { printf 'dns-tls'; return 0; }
+    curl_args+=(--cacert "$ca_file")
+  fi
+  body_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-probe-body.XXXXXX")" || return 1
+  headers_file="$(mktemp "${TMPDIR:-/tmp}/jarvis-probe-headers.XXXXXX")" || {
+    rm -f "$body_file"; return 1;
+  }
+  if code="$(curl "${curl_args[@]}" \
+      --dump-header "$headers_file" --output "$body_file" --write-out '%{http_code}' "$url" 2>/dev/null)"; then
+    rc=0
+  else
+    rc=$?
+    code="${code:-000}"
+  fi
+  location="$(awk 'BEGIN{IGNORECASE=1} /^location:/{sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers_file")"
+  server="$(awk 'BEGIN{IGNORECASE=1} /^server:/{sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers_file")"
+  mitigated="$(awk 'BEGIN{IGNORECASE=1} /^cf-mitigated:/{sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$headers_file")"
+  body="$(head -c 4096 "$body_file")"
+  rm -f "$body_file" "$headers_file"
+  classify_external_app_probe "$rc" "$code" "$location" "$server" "$mitigated" "$body"
+}
+
+# mkcert_ca_file -> absolute root CA path, when mkcert and its CA are present.
+mkcert_ca_file() {
+  local ca_root ca_file
+  command -v mkcert >/dev/null 2>&1 || return 1
+  ca_root="$(mkcert -CAROOT 2>/dev/null)" || return 1
+  ca_file="${ca_root%/}/rootCA.pem"
+  [ -r "$ca_file" ] || return 1
+  printf '%s' "$ca_file"
+}
+
+# probe_local_https_app URL -> the same classifier states as probe_external_app.
+# First bind the certificate to this installation's mkcert CA, then repeat with
+# the normal host trust store so setup never advertises a browser-facing URL
+# solely because a private CA file could validate it explicitly.
+probe_local_https_app() {
+  local url="$1" ca_file chain_state
+  ca_file="$(mkcert_ca_file)" || { printf 'dns-tls'; return 0; }
+  chain_state="$(probe_external_app "$url" "$ca_file")"
+  if [ "$chain_state" != "verified" ]; then
+    printf '%s' "$chain_state"
+    return 0
+  fi
+  probe_external_app "$url"
+}
+
+# cloudflared's process can be alive without a tunnel connection. Its metrics
+# listener exposes /ready=200 only after at least one active edge connection.
+cloudflared_ready() {
+  docker compose exec -T dashboard \
+    curl -fsS --max-time 5 http://cloudflared:2000/ready
+}
+
+# tailscale_dns_name -> the current node's MagicDNS name without its trailing
+# dot. Returns non-zero until the daemon is connected and has a usable name.
+tailscale_dns_name() {
+  tailscale status --json 2>/dev/null | python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+    name = str(data.get("Self", {}).get("DNSName", "")).rstrip(".")
+except (ValueError, TypeError):
+    raise SystemExit(1)
+if not name:
+    raise SystemExit(1)
+print(name)
+'
 }
 
 # registry_profile_host_ports PROFILE... -> the extra HOST TCP ports the named
@@ -787,6 +2036,37 @@ upsert_env_var() {
   mv "$tmp" .env || { rm -f "$tmp"; printf 'upsert_env_var: mv to .env failed\n' >&2; return 1; }
 }
 
+# sync_ingress_ips_from_env — derive and persist the exact trusted ingress peers
+# from the effective JARVIS_NET_SUBNET. This is the upgrade bridge for installs
+# created before v1.2, which recorded only the subnet. Exporting the same values
+# ensures this process cannot be redirected by stale per-address shell variables
+# after the durable .env has been corrected.
+sync_ingress_ips_from_env() {
+  [ -f .env ] || return 0
+  local subnet resolved gateway caddy caddy_local dashboard cloudflared
+  subnet="${JARVIS_NET_SUBNET:-}"
+  if [ -z "$subnet" ]; then
+    subnet="$(sed -n 's/^JARVIS_NET_SUBNET=//p' .env | head -n 1)"
+  fi
+  subnet="${subnet:-10.137.241.0/24}"
+  resolved="$(allocate_ingress_ips "$subnet")" || return 1
+  read -r gateway caddy caddy_local dashboard cloudflared <<< "$resolved"
+
+  upsert_env_var JARVIS_NET_SUBNET "$subnet" || return 1
+  upsert_env_var JARVIS_NET_GATEWAY_IP "$gateway" || return 1
+  upsert_env_var JARVIS_CADDY_IP "$caddy" || return 1
+  upsert_env_var JARVIS_CADDY_LOCAL_IP "$caddy_local" || return 1
+  upsert_env_var JARVIS_DASHBOARD_IP "$dashboard" || return 1
+  upsert_env_var JARVIS_CLOUDFLARED_IP "$cloudflared" || return 1
+
+  export JARVIS_NET_SUBNET="$subnet"
+  export JARVIS_NET_GATEWAY_IP="$gateway"
+  export JARVIS_CADDY_IP="$caddy"
+  export JARVIS_CADDY_LOCAL_IP="$caddy_local"
+  export JARVIS_DASHBOARD_IP="$dashboard"
+  export JARVIS_CLOUDFLARED_IP="$cloudflared"
+}
+
 # print_setup_link -> print the click-to-finish wizard link when a setup token
 # exists. $1 = dashboard base URL (trailing slash optional). Reads
 # secrets/jarvis_setup_token.txt relative to CWD (the repo root both entry
@@ -805,6 +2085,110 @@ print_setup_link() {
     SETUP_LINK="${base}/setup#setup_token=${token}"
     printf '  Finish setup: %s\n' "$SETUP_LINK"
   fi
+}
+
+# headless_setup_route BASE DASHBOARD_HTTP_PORT
+#
+# Print "tunnel-port|browser-base" for a loopback finish-setup route. A local
+# HTTPS certificate is trusted only in the OS where setup installed its CA; an
+# outside browser reached through SSH cannot use it. In that case, forward the
+# dashboard's loopback HTTP listener instead. SSH protects the traffic between
+# the browser machine and the server, while localhost remains a browser secure
+# context for passkeys. Existing localhost HTTP routes keep their exact port.
+headless_setup_route() {
+  local base dashboard_http_port="$2" source_port tunnel_port browser_base
+
+  base="$(printf '%s' "${1%/}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$dashboard_http_port" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$dashboard_http_port" -ge 1 ] 2>/dev/null \
+    && [ "$dashboard_http_port" -le 65535 ] 2>/dev/null \
+    || return 1
+
+  case "$base" in
+    https://localhost|https://*.localhost|https://127.0.0.1)
+      tunnel_port="$dashboard_http_port"
+      browser_base="http://localhost:${dashboard_http_port}"
+      ;;
+    https://localhost:*|https://*.localhost:*|https://127.0.0.1:*)
+      source_port="${base##*:}"
+      case "$source_port" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      [ "$source_port" -ge 1 ] 2>/dev/null \
+        && [ "$source_port" -le 65535 ] 2>/dev/null \
+        || return 1
+      tunnel_port="$dashboard_http_port"
+      browser_base="http://localhost:${dashboard_http_port}"
+      ;;
+    http://localhost|http://*.localhost|http://127.0.0.1)
+      tunnel_port=80
+      browser_base="$base"
+      ;;
+    http://localhost:*|http://*.localhost:*|http://127.0.0.1:*)
+      tunnel_port="${base##*:}"
+      case "$tunnel_port" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      [ "$tunnel_port" -ge 1 ] 2>/dev/null \
+        && [ "$tunnel_port" -le 65535 ] 2>/dev/null \
+        || return 1
+      browser_base="$base"
+      ;;
+    *) return 1 ;;
+  esac
+
+  printf '%s|%s' "$tunnel_port" "$browser_base"
+}
+
+# parse_setup_status_json -> print "configured setup_completed setup_mode" for
+# the public /api/setup/status response read on stdin. Values are type-checked so
+# malformed or partial responses remain unknown instead of reopening bootstrap
+# guidance for an already configured installation.
+parse_setup_status_json() {
+  python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+
+configured = payload.get("configured")
+completed = payload.get("setup_completed")
+mode = payload.get("setup_mode")
+if type(configured) is not bool or type(completed) is not bool:
+    raise SystemExit(1)
+if mode not in {"single", "multi"}:
+    raise SystemExit(1)
+print(str(configured).lower(), str(completed).lower(), mode)
+'
+}
+
+# materialize_api_key_file KEY -> atomically write the local single-user API
+# key and print its path. The secret is handled by shell builtins and file I/O;
+# it is never passed to an external command as an argument.
+materialize_api_key_file() {
+  local api_key="$1" key_dir key_file tmp
+  [ -n "$api_key" ] || {
+    printf 'materialize_api_key_file: API key is empty\n' >&2
+    return 1
+  }
+  key_dir="${HOME}/.config/jarvis"
+  key_file="${key_dir}/api-key"
+  mkdir -p "$key_dir" || return 1
+  chmod 700 "$key_dir" || return 1
+  tmp="$(mktemp "${key_dir}/.api-key.XXXXXX")" || return 1
+  if ! printf '%s' "$api_key" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$key_file" || { rm -f "$tmp"; return 1; }
+  printf '%s' "$key_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -895,15 +2279,27 @@ merge_env_file() {
 # latest_stable_tag [REMOTE] -> the highest STABLE release tag on REMOTE
 # (default: origin), or empty when there are none. Stable means vMAJOR.MINOR.PATCH
 # with no pre-release suffix, so vX.Y.Z-rc1 and other candidates are excluded, and
-# `sort -V` orders them versionally rather than lexically. Pure: it only reads
-# `git ls-remote`, so it is unit-testable behind a git stub.
+# integer-tuple comparison orders them versionally rather than lexically without
+# GNU-only `sort -V`. Pure: it only reads `git ls-remote`, so it is unit-testable
+# behind a git stub.
 latest_stable_tag() {
   local remote="${1:-origin}"
   git ls-remote --tags --refs "$remote" 2>/dev/null \
-    | sed -n 's#.*refs/tags/##p' \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V \
-    | tail -n 1
+    | python3 -c '
+import re
+import sys
+
+best = None
+for line in sys.stdin:
+    match = re.search(r"refs/tags/(v([0-9]+)\.([0-9]+)\.([0-9]+))$", line.strip())
+    if match is None:
+        continue
+    candidate = (tuple(int(part) for part in match.groups()[1:]), match.group(1))
+    if best is None or candidate[0] > best[0]:
+        best = candidate
+if best is not None:
+    print(best[1])
+'
 }
 
 # _cli_shim_body -> the fixed launcher installed as jarvis-research. Logic-free by

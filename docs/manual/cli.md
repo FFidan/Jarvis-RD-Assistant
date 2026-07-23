@@ -24,6 +24,9 @@ on your PATH, or run `./setup.sh` again from your checkout.
 | `logs [args]` | Tail service logs; extra arguments pass through to `docker compose logs` (e.g. `logs -f paper_ingestion`). |
 | `doctor` | Read-only health, disk, registration, and update-availability check, plus host preflight probes. |
 | `repair` | Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service. |
+| `owner status` | Show whether instance ownership comes from the host environment or database and whether it resolves to a live administrator. |
+| `owner set <email>` | Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again. |
+| `restore acknowledge <restore-id>` | After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again. |
 | `register` | Record the current checkout as the managed install and refresh the launcher. |
 | `uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
 | `version` | Print the command name and the installed `JARVIS_VERSION`. |
@@ -31,6 +34,27 @@ on your PATH, or run `./setup.sh` again from your checkout.
 
 Run `jarvis-research help` for the built-in summary. A command can be pointed at
 a specific checkout with `jarvis-research --repo <dir> <command>`.
+
+### Ownership recovery
+
+Run `jarvis-research owner status` after upgrading an installation that already
+had multiple administrators. Migration 0105 assigns the sole live
+administrator automatically, but deliberately leaves a multi-admin choice to
+the operator. If the database owner is missing or invalid, use
+`jarvis-research owner set <admin-email>` and type the same email to confirm.
+The command accepts only a live administrator and commits the repair atomically.
+When `OWNER_USER_ID` manages ownership, change that host setting and restart
+JARVIS instead. A valid database-managed owner transfers ownership in **Admin →
+User Management**, not through the repair command.
+
+### Restore acknowledgement
+
+An off-host restore quarantines restored outbound integrations until their
+credentials have been reviewed. Use the browser progress view or run
+`jarvis-research restore acknowledge <restore-id>` with the exact current
+32-character restore ID, then type it again. A missing, stale, or changed review
+state is refused and leaves quarantine active. See [Backup &
+Restore](backup-and-restore.md#identity-and-credential-boundaries).
 
 ## Exit codes
 
@@ -59,31 +83,39 @@ In order, an update:
 3. **Requires a fast-forward.** If your checkout has diverged from the target so
    that a fast-forward is impossible, the update is refused rather than forced.
    If you are already on the target, it reports "already up to date".
-4. **Verifies the release is fully published.** Every image the target needs must
-   already exist in the registry; a visible tag whose images are still uploading
-   is refused, so you never advance onto a half-published release.
-5. **Enforces a backup before a data-changing migration.** New migrations between
-   your version and the target are inspected. If any one changes data, the update
-   requires a *fresh, checksum-verified* backup before it will proceed: it
-   triggers an on-demand backup, waits for it, and confirms the database archive
-   (and the secrets archive, when backups are encrypted) is present and intact.
-   Without one it refuses. Additive-only migrations apply on restart and only
-   suggest taking a restore point first.
-6. **Stages images, then advances.** The full target image set is pulled *before*
-   the branch moves; a failed pull aborts with the checkout untouched. Only then
-   does the checkout fast-forward to the target tag.
+4. **Verifies the release is fully published.** Every registry-backed image the
+   target needs must already exist; a visible tag whose images are still
+   uploading is refused, so you never advance onto a half-published release.
+5. **Enforces a restore point before a data-changing migration.** New migrations
+   between your version and the target are inspected. If any one changes data,
+   the command triggers a backup and accepts it only when its signed manifest
+   names the exact main-database, model-router, and secrets archives for that
+   run and their sizes and checksums match. A missing, unsigned, incomplete, or
+   mismatched point is refused. Additive-only migrations apply on restart and
+   only suggest taking a restore point first.
+6. **Stages images, then advances.** The target's Compose files are resolved with
+   this install's active profiles. Every exact registry image in that result,
+   including profile dependencies and target-added services, is pulled *before*
+   the branch moves. Services explicitly marked for local builds are not sent to
+   a registry. A failed pull leaves the checkout untouched.
 7. **Applies and verifies health.** It pins `JARVIS_VERSION`, recreates the
    services (via `update.sh`), and waits for them to report healthy. On success
    it clears the pending-transaction record and prints a `doctor` summary.
 
 ### Resuming an interrupted update
 
-Each update writes a small pending-transaction file that records the phase it
-reached. If a run is interrupted, simply run `jarvis-research update` again — it
+Each install writes its own small pending-transaction file, so interrupted
+updates in two clones cannot overwrite each other. On the first update after
+upgrading from an older command, JARVIS moves the former shared record only when
+its recorded commits identify this install unambiguously; otherwise it stops and
+keeps the record untouched. If a run is interrupted, run
+`jarvis-research update` again — it
 resumes deterministically from the recorded phase instead of reporting "up to
-date". A run that stopped before advancing the branch restarts cleanly. If you
-need to drive the post-advance half explicitly, `jarvis-research update --resume
-<tag>` runs only those remaining steps.
+date", even when the checkout already points at the target commit. A run that
+stopped before advancing the branch restarts cleanly. If you need to drive the
+post-advance half explicitly, `jarvis-research update --resume <tag>` runs only
+those remaining steps. The command refuses to resume if the checkout moved to
+an unexpected commit.
 
 ### Rolling back
 
@@ -109,16 +141,17 @@ install rather than trying to update the rc checkout in place.
 
 ## Updating by hand
 
-`jarvis-research update` is the recommended path, but a checkout can always be
-updated manually:
+`jarvis-research update` is the supported path. Use the lower-level fallback
+only when the lifecycle command itself cannot run:
 
 ```bash
-git pull
-./update.sh
+git pull --ff-only
+./update.sh --yes
 ```
 
-See [Deployment → Update Workflow](../DEPLOYMENT.md#update-workflow) for the
-details of the manual path.
+The fallback does not classify migrations, require a signed restore point, or
+resume a recorded transaction. Take a current restore point first, and use this
+path only to repair a lifecycle command that cannot run.
 
 ## Uninstalling
 
@@ -154,6 +187,10 @@ jarvis-research uninstall --dry-run --all
 destructive gates, each of which reads a typed confirmation from stdin:
 
 - **Tier 3** requires typing the compose project name before any volume is deleted.
+  When the stack is running, an interactive run first offers to take a backup
+  inside the backup service, where the required credentials and storage are
+  available. If you accept and that backup fails or another backup is still in
+  progress, uninstall stops before the typed deletion gate.
 - **Tier 4** first offers to copy the backup encryption key
   (`secrets/backup_encrypt_key.txt`) to a path **outside** the clone. That key is
   deliberately excluded from backup archives, so deleting `secrets/` without it

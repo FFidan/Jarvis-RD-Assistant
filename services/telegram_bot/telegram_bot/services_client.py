@@ -6,7 +6,9 @@ Each function is a pure transport + parse layer: it builds the canonical
 and returns parsed JSON.  **No business logic** lives here.
 
 Callers are responsible for:
-- Resolving ``user_id`` to a concrete ``int`` before calling (no ``None`` accepted).
+- Resolving ``user_id`` to a concrete ``int`` before calling.  The sole
+  exception is ``log_focus_session``, whose best-effort scheduled callback may
+  pass ``None`` when its stored job data has no owner id.
 - Catching ``httpx.HTTPStatusError`` / ``httpx.HTTPError`` for user-facing error
   messages (handlers) or silent-skip logic (orchestration).
 """
@@ -30,8 +32,20 @@ __all__ = [
     "complete_task",
     "fetch_upcoming_milestones",
     "fetch_due_card_count",
+    "fetch_stats",
+    "fetch_next_review_card",
+    "submit_review_rating",
+    "log_focus_session",
     "fetch_new_paper_count",
     "check_authors",
+    "search_papers",
+    "fetch_papers_feed",
+    "get_paper",
+    "update_paper_action",
+    "record_paper_feedback",
+    "fetch_pulse_today",
+    "trigger_pulse_generation",
+    "fetch_weekly_digest",
 ]
 
 
@@ -258,6 +272,97 @@ async def fetch_due_card_count(
     return int(data["due_now"])
 
 
+async def fetch_stats(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """GET {learning_engine}/api/stats.
+
+    Returns the raw stats payload (``total_cards``, ``due_now``,
+    ``reviewed_today``, ``average_retention``, ``streak_days``).
+
+    Parameters
+    ----------
+    timeout:
+        Optional per-call override.  Omitted (``None``) uses the shared
+        client's own default timeout.
+    """
+    kwargs: dict[str, Any] = {"headers": _owner_headers(config, user_id)}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    resp = await http.get(f"{config.learning_engine_url}/api/stats", **kwargs)
+    resp.raise_for_status()
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def fetch_next_review_card(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> list[dict[str, Any]]:
+    """GET {learning_engine}/api/review/next?limit=1.
+
+    Returns the raw list payload (empty when no cards are due).
+    """
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/review/next",
+        params={"limit": 1},
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    result: list[dict[str, Any]] = resp.json()
+    return result
+
+
+async def submit_review_rating(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    card_id: int,
+    rating: int,
+) -> dict[str, Any]:
+    """POST {learning_engine}/api/review/{card_id} body {"rating": rating}.
+
+    Returns the parsed review result (``next_due_at``, ...).
+    """
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/review/{card_id}",
+        json={"rating": rating},
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def log_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int | None,
+    duration_hours: float,
+) -> None:
+    """POST {learning_engine}/api/executive/focus/log body {"duration_hours": ...}.
+
+    Fire-and-forget (best-effort scheduled-job callback); the caller only
+    needs success/failure, never the response body.  Unlike other functions
+    here, *user_id* accepts ``None`` — the scheduled job's stored data may not
+    carry an owner id.
+    """
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/log",
+        json={"duration_hours": duration_hours},
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+
+
 # ---------------------------------------------------------------------------
 # Paper Ingestion — feed / author checks
 # ---------------------------------------------------------------------------
@@ -310,6 +415,179 @@ async def check_authors(
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/authors/check",
         headers=_owner_headers(config, user_id),
+    )
+    resp.raise_for_status()
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def search_papers(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    query: str,
+) -> Any:
+    """POST {paper_ingestion}/api/search body {"query": query}.
+
+    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
+    depending on backend version); callers narrow the shape themselves.
+    """
+    resp = await http.post(
+        f"{config.paper_ingestion_url}/api/search",
+        json={"query": query},
+        headers=_owner_headers(config, user_id),
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    result: Any = resp.json()
+    return result
+
+
+async def fetch_papers_feed(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    view: str,
+    limit: int,
+) -> Any:
+    """GET {paper_ingestion}/api/papers/feed?view=&limit=.
+
+    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
+    depending on backend version); callers narrow the shape themselves.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/papers/feed",
+        params={"view": view, "limit": limit},
+        headers=_owner_headers(config, user_id),
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    result: Any = resp.json()
+    return result
+
+
+async def get_paper(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    paper_id: int,
+) -> dict[str, Any]:
+    """GET {paper_ingestion}/api/papers/{paper_id}.
+
+    Returns the raw detail payload (``paper``, ``summary``, ...).
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/papers/{paper_id}",
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def update_paper_action(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    paper_id: int,
+    action: tuple[str, str],
+) -> None:
+    """{method} {paper_ingestion}/api/papers/{paper_id}/{suffix}.
+
+    *action* is ``(method, suffix)`` — e.g. ``("PUT", "trash")``.
+    Fire-and-forget lifecycle/curation action (save/skip/trash/star/...);
+    the caller only needs success/failure, never the response body.
+    """
+    method, suffix = action
+    resp = await http.request(
+        method,
+        f"{config.paper_ingestion_url}/api/papers/{paper_id}/{suffix}",
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+
+
+async def record_paper_feedback(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    paper_id: int,
+    body: dict[str, str],
+) -> None:
+    """POST {paper_ingestion}/api/papers/{paper_id}/feedback body {"signal": ..., "source": ...}.
+
+    *body* is ``{"signal": ..., "source": ...}``.  Fire-and-forget; the
+    caller only needs success/failure.
+    """
+    resp = await http.post(
+        f"{config.paper_ingestion_url}/api/papers/{paper_id}/feedback",
+        json=body,
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+
+
+async def fetch_pulse_today(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    limit: int | None = None,
+) -> dict[str, Any] | None:
+    """GET {paper_ingestion}/api/pulse/today[?limit=].
+
+    Returns the raw deck payload, or ``None`` when no deck exists for today
+    (the endpoint responds 200 with a JSON ``null`` body in that case).
+    """
+    params: dict[str, int] = {}
+    if limit is not None:
+        params["limit"] = limit
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/pulse/today",
+        params=params or None,
+        headers=_owner_headers(config, user_id),
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    result: dict[str, Any] | None = resp.json()
+    return result
+
+
+async def trigger_pulse_generation(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> None:
+    """POST {paper_ingestion}/api/pulse/generate.
+
+    Fire-and-forget; enqueues an on-demand Pulse deck generation job.
+    """
+    resp = await http.post(
+        f"{config.paper_ingestion_url}/api/pulse/generate",
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+
+
+async def fetch_weekly_digest(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> dict[str, Any]:
+    """GET {paper_ingestion}/api/digest/weekly?days=7.
+
+    Returns the parsed digest payload (``topics``, ``total_papers``, ...).
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/digest/weekly",
+        params={"days": 7},
+        headers=_owner_headers(config, user_id),
+        timeout=90.0,
     )
     resp.raise_for_status()
     result: dict[str, Any] = resp.json()

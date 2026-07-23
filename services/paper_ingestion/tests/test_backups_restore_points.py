@@ -49,8 +49,11 @@ def _seed_group(
     manifest_schema_version: int | None = None,
     manifest_app_version: str = "0.9.2",
     manifest_archives: list | None = None,
+    manifest_run_id: str | None = None,
+    include_pdfs: bool = True,
+    include_secrets: bool = True,
 ) -> None:
-    """Write a complete restore-point group (jarvis/litellm/secrets + 2 qdrant).
+    """Write a complete restore-point group (databases/PDFs/secrets + 2 qdrant).
 
     When ``manifest_schema_version`` is given, also writes a ``manifest_<ts>.json``
     describing the group (or ``manifest_archives`` verbatim, for phantom cases).
@@ -59,11 +62,21 @@ def _seed_group(
     names = [
         f"jarvis_{ts}.sql.gz{suffix}",
         f"litellm_{ts}.sql.gz{suffix}",
-        f"secrets_{ts}.tar.gz{suffix}",
-        f"qdrant_kg_entities_{ts}.snapshot{suffix}",
-        f"qdrant_paper_chunks_{ts}.snapshot{suffix}",
     ]
-    payloads = [b"J" * 10, b"L" * 20, b"S" * 30, b"Q" * 40, b"Q" * 50]
+    payloads = [b"J" * 10, b"L" * 20]
+    if include_pdfs:
+        names.append(f"pdfs_{ts}.tar.gz{suffix}")
+        payloads.append(b"P" * 25)
+    if include_secrets:
+        names.append(f"secrets_{ts}.tar.gz{suffix}")
+        payloads.append(b"S" * 30)
+    names.extend(
+        [
+            f"qdrant_kg_entities_{ts}.snapshot{suffix}",
+            f"qdrant_paper_chunks_{ts}.snapshot{suffix}",
+        ]
+    )
+    payloads.extend([b"Q" * 40, b"Q" * 50])
     for name, payload in zip(names, payloads):
         (d / name).write_bytes(payload)
         _touch(d / name, ts)
@@ -74,17 +87,16 @@ def _seed_group(
                 {"filename": n, "sha256": "0" * 64, "size_bytes": len(p)}
                 for n, p in zip(names, payloads)
             ]
-        (d / f"manifest_{ts}.json").write_text(
-            json.dumps(
-                {
-                    "timestamp": ts,
-                    "app_version": manifest_app_version,
-                    "schema_version": manifest_schema_version,
-                    "created_at": "2026-06-26T12:00:00+00:00",
-                    "archives": archives,
-                }
-            )
-        )
+        manifest = {
+            "timestamp": ts,
+            "app_version": manifest_app_version,
+            "schema_version": manifest_schema_version,
+            "created_at": "2026-06-26T12:00:00+00:00",
+            "archives": archives,
+        }
+        if manifest_run_id is not None:
+            manifest["run_id"] = manifest_run_id
+        (d / f"manifest_{ts}.json").write_text(json.dumps(manifest))
 
 
 def test_restore_points_groups_by_timestamp(backup_dir):
@@ -102,16 +114,95 @@ def test_restore_points_groups_by_timestamp(backup_dir):
     complete = points[0]
     assert complete.complete is True
     assert complete.encrypted is True
-    assert complete.stores == ["jarvis", "litellm", "qdrant", "secrets"]
+    assert complete.stores == ["jarvis", "litellm", "pdfs", "qdrant", "secrets"]
+    assert complete.has_pdfs is True
+    assert complete.legacy_missing_pdfs is False
     assert complete.qdrant_collections == ["kg_entities", "paper_chunks"]
-    assert complete.total_size_bytes == 10 + 20 + 30 + 40 + 50
-    assert len(complete.files) == 5
+    assert complete.total_size_bytes == 10 + 20 + 25 + 30 + 40 + 50
+    assert len(complete.files) == 6
 
     incomplete = points[1]
     assert incomplete.complete is False
     assert incomplete.encrypted is False
     assert incomplete.qdrant_collections == ["kg_entities"]
     assert "litellm" not in incomplete.stores
+
+
+def test_current_restore_point_missing_pdfs_is_incomplete(backup_dir, code_max_50):
+    ts = "20260624_120000"
+    _seed_group(
+        backup_dir,
+        ts,
+        encrypted=True,
+        manifest_schema_version=50,
+        manifest_run_id="0123456789abcdef0123456789abcdef",
+        include_pdfs=False,
+    )
+    (backup_dir / f"manifest_{ts}.json.hmac").write_text("0" * 64)
+
+    point = bk._group_restore_points(bk._list_entries())[0]
+
+    assert point.has_pdfs is False
+    assert point.legacy_missing_pdfs is False
+    assert point.complete is False
+
+
+def test_signed_legacy_restore_point_missing_pdfs_is_explicit(backup_dir, code_max_50):
+    ts = "20260624_120000"
+    _seed_group(
+        backup_dir,
+        ts,
+        encrypted=True,
+        manifest_schema_version=50,
+        include_pdfs=False,
+    )
+    (backup_dir / f"manifest_{ts}.json.hmac").write_text("0" * 64)
+
+    point = bk._group_restore_points(bk._list_entries())[0]
+
+    assert point.has_pdfs is False
+    assert point.legacy_missing_pdfs is True
+    assert point.complete is True
+
+
+def test_duplicate_pdf_role_is_not_complete(backup_dir):
+    ts = "20260624_120000"
+    _seed_group(backup_dir, ts, encrypted=True)
+    (backup_dir / f"pdfs_{ts}.tar.gz").write_bytes(b"duplicate")
+    _touch(backup_dir / f"pdfs_{ts}.tar.gz", ts)
+
+    point = bk._group_restore_points(bk._list_entries())[0]
+
+    assert point.has_pdfs is True
+    assert point.complete is False
+
+
+def test_unencrypted_local_current_point_does_not_require_secrets(backup_dir):
+    _seed_group(
+        backup_dir,
+        "20260624_120000",
+        encrypted=False,
+        include_secrets=False,
+    )
+
+    point = bk._group_restore_points(bk._list_entries())[0]
+
+    assert point.encrypted is False
+    assert point.complete is True
+
+
+def test_encrypted_current_point_still_requires_secrets(backup_dir):
+    _seed_group(
+        backup_dir,
+        "20260624_120000",
+        encrypted=True,
+        include_secrets=False,
+    )
+
+    point = bk._group_restore_points(bk._list_entries())[0]
+
+    assert point.encrypted is True
+    assert point.complete is False
 
 
 def test_last_run_surfaces_failure_in_status_and_restore_points(backup_dir):
@@ -190,6 +281,12 @@ def test_filename_allowlist_accepts_encrypted_qdrant_snapshot():
     assert bk._FILENAME_RE.match("qdrant_paper_chunks_20260624_001234.snapshot")
     # _validate_name must not raise for the new encrypted shape.
     bk._validate_name("qdrant_kg_entities_20260624_001234.snapshot.enc")
+
+
+def test_filename_allowlist_accepts_pdf_archive():
+    name = "pdfs_20260624_001234.tar.gz.enc"
+    assert bk._FILENAME_RE.fullmatch(name)
+    bk._validate_name(name)
 
 
 def test_filename_allowlist_still_rejects_traversal():
@@ -300,12 +397,16 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
                     "complete": True,
                     "has_secrets": True,
                     "has_key": True,
+                    "has_pdfs": True,
+                    "legacy_missing_pdfs": False,
                 },
                 {
                     "timestamp": "20260630_020000",
                     "complete": False,
                     "has_secrets": False,
                     "has_key": False,
+                    "has_pdfs": False,
+                    "legacy_missing_pdfs": False,
                 },
             ]
         )
@@ -315,6 +416,8 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
     assert [p.timestamp for p in points] == ["20260701_030000", "20260630_020000"]
     assert points[0].complete is True
     assert points[0].has_key is True
+    assert points[0].has_pdfs is True
+    assert points[0].legacy_missing_pdfs is False
     assert points[1].complete is False
 
 
@@ -338,6 +441,8 @@ def test_read_inbox_manifest_drops_corrupt_entries(tmp_path, monkeypatch):
                     "complete": True,
                     "has_secrets": True,
                     "has_key": True,
+                    "has_pdfs": True,
+                    "legacy_missing_pdfs": False,
                 },
                 {"timestamp": "20260630_020000"},  # missing required booleans
                 "not-an-object",

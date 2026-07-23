@@ -406,11 +406,8 @@ async def log_focus_session(
                 if task_row is None:
                     raise HTTPException(status_code=404, detail="Task not found")
             if payload.paper_id is not None:
-                # B-FOCUSCOL: canonical ownership semantics via assert_paper_ownership
-                # (D4 decision — discovered_by IS NULL means shared/system paper, globally
-                # readable; per-user access also granted via user_library membership).
-                # The old ad-hoc query referenced the legacy `papers.user_id` column which
-                # was renamed to `papers.discovered_by` by migration 072.
+                # Use the central persisted-scope-or-library policy. Discovery
+                # attribution is not an authorization input.
                 await assert_paper_ownership(conn, payload.paper_id, user_id)
 
             if payload.task_id is not None:

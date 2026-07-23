@@ -1,12 +1,4 @@
-"""Tests verifying that the LiteLLM transparent-proxy configuration is in place.
-
-litellm/entrypoint.sh was deleted and master_key removed
-from litellm/config.yaml because litellm is loopback-only and needs no auth.
-
-The compose ``sh -c`` shim is litellm's de-facto entrypoint, so its contracts
-(secret-sourced DATABASE_URL / LITELLM_SALT_KEY, production master-key guards)
-are pinned here too.
-"""
+"""Verify LiteLLM's secret-loading and production-startup configuration."""
 
 from __future__ import annotations
 
@@ -22,23 +14,17 @@ def _litellm_service() -> dict:
     return compose["services"]["litellm"]
 
 
-def _litellm_shim() -> str:
-    command = _litellm_service()["command"]
-    assert isinstance(command, list) and len(command) == 1, (
-        "litellm's command must stay a single sh -c shim string"
-    )
-    return command[0]
+def _litellm_entrypoint_source() -> str:
+    return (REPO_ROOT / "scripts" / "litellm-entrypoint.sh").read_text(encoding="utf-8")
 
 
-def test_litellm_entrypoint_deleted() -> None:
-    """litellm/entrypoint.sh must not exist (transparent proxy, no auth required)."""
-    repo_root = Path(__file__).resolve().parents[3]
-    entrypoint = repo_root / "litellm" / "entrypoint.sh"
-    assert not entrypoint.exists(), (
-        "litellm/entrypoint.sh still exists but was removed during the "
-        "transparent-proxy migration.  Delete it and remove the entrypoint: reference from "
-        "docker-compose.yml to complete the transparent-proxy migration."
-    )
+def test_compose_uses_shared_litellm_entrypoint() -> None:
+    """Compose must invoke the repository's marker-aware LiteLLM entrypoint."""
+    assert _litellm_service()["entrypoint"] == [
+        "sh",
+        "/usr/local/bin/litellm-entrypoint.sh",
+    ]
+    assert not (REPO_ROOT / "litellm" / "entrypoint.sh").exists()
 
 
 def test_litellm_config_requires_master_key() -> None:
@@ -61,7 +47,7 @@ def test_litellm_config_requires_master_key() -> None:
     assert re.search(r"\bmaster_key\s*:", uncommented), (
         "litellm/config.yaml is missing an active master_key setting under "
         "general_settings.  Add 'master_key: os.environ/LITELLM_MASTER_KEY' to "
-        "gate LiteLLM admin endpoints (Group C security hardening)."
+        "protect LiteLLM admin endpoints."
     )
     assert "os.environ/LITELLM_MASTER_KEY" in uncommented, (
         "litellm/config.yaml master_key must be sourced from the environment via "
@@ -69,8 +55,8 @@ def test_litellm_config_requires_master_key() -> None:
     )
 
 
-def test_litellm_shim_builds_database_url_from_secret() -> None:
-    """DATABASE_URL is built inside the shim from the Docker Secret, never in env.
+def test_litellm_entrypoint_builds_database_url_from_secret() -> None:
+    """Build ``DATABASE_URL`` inside the container from its mounted secret.
 
     A compose ``environment:`` entry would expose the postgres password via
     ``docker inspect``. The URL must target the dedicated
@@ -80,57 +66,52 @@ def test_litellm_shim_builds_database_url_from_secret() -> None:
     so that RFC-3986 reserved chars (@ : / # ? & %) in credentials do not
     silently corrupt the URL.
     """
-    shim = _litellm_shim()
-    assert 'export DATABASE_URL="postgresql://' in shim, (
-        "litellm shim must export DATABASE_URL (prisma needs it to attach the admin DB)"
+    entrypoint = _litellm_entrypoint_source()
+    assert 'export DATABASE_URL="postgresql://' in entrypoint, (
+        "LiteLLM's entrypoint must export the Prisma database URL"
     )
-    assert "$(cat /run/secrets/postgres_password)" in shim, (
-        "DATABASE_URL's password must be read from /run/secrets/postgres_password "
-        "at container start, not interpolated by compose"
+    assert 'postgres_password_file="${secret_dir}/postgres_password"' in entrypoint, (
+        "the database password must come from the mounted secret"
     )
-    assert "@postgres:5432/litellm" in shim, (
+    assert "@postgres:5432/litellm" in entrypoint, (
         "DATABASE_URL must target the dedicated 'litellm' database"
     )
     # URL-encoding: both credentials must go through urllib.parse.quote before
     # being embedded in the URL so reserved chars cannot corrupt the authority.
-    assert "urllib.parse.quote" in shim, (
-        "litellm shim must URL-encode DB credentials via urllib.parse.quote "
+    assert "urllib.parse.quote" in entrypoint, (
+        "LiteLLM's entrypoint must URL-encode database credentials "
         "to handle passwords containing RFC-3986 reserved chars"
     )
-    assert "PG_USER_ENC" in shim, "litellm shim must store the URL-encoded username in PG_USER_ENC"
-    assert "PG_PASS_ENC" in shim, "litellm shim must store the URL-encoded password in PG_PASS_ENC"
+    assert "postgres_user_encoded" in entrypoint
+    assert "postgres_password_encoded" in entrypoint
     environment = _litellm_service().get("environment") or {}
     assert "DATABASE_URL" not in environment, (
-        "DATABASE_URL must NOT appear in litellm's compose environment map — "
+        "DATABASE_URL must not appear in LiteLLM's Compose environment map; "
         "docker inspect would leak the postgres password"
     )
     assert "postgres_password" in _litellm_service()["secrets"]
 
 
-def test_litellm_shim_exports_salt_key_from_secret() -> None:
-    """LITELLM_SALT_KEY is pinned as its own secret and exported in the shim.
+def test_litellm_entrypoint_exports_salt_key_from_secret() -> None:
+    """Export the stable LiteLLM salt key from its dedicated secret.
 
-    litellm's salt-key fallback is the master key; rotating the master key
-    would then brick DB-stored encrypted credentials. The shim must fail fast
-    when the secret file is empty, like the master-key guard.
+    LiteLLM otherwise falls back to the master key for encryption, so rotating
+    the master key could make stored credentials unreadable. The entrypoint
+    must reject an empty salt-key file.
     """
-    shim = _litellm_shim()
-    assert 'export LITELLM_SALT_KEY="$(cat /run/secrets/litellm_salt_key)"' in shim
-    assert "if [ ! -s /run/secrets/litellm_salt_key ]" in shim, (
-        "shim must refuse to start when the salt-key secret file is empty/missing"
+    entrypoint = _litellm_entrypoint_source()
+    assert 'export LITELLM_SALT_KEY="$(cat "$salt_key_file")"' in entrypoint
+    assert 'if [ ! -s "$salt_key_file" ]' in entrypoint, (
+        "the entrypoint must refuse an empty or missing salt-key secret"
     )
     assert "litellm_salt_key" in _litellm_service()["secrets"]
 
 
-def test_litellm_shim_production_guards_intact() -> None:
-    """The placeholder/weak-master-key production guards must survive DB wiring."""
-    shim = _litellm_shim()
-    assert "if [ ! -s /run/secrets/litellm_master_key ]" in shim
-    assert 'case "$LITELLM_MASTER_KEY" in' in shim
-    assert '"sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")' in shim
-    assert "-lt 16" in shim, "production minimum-length guard missing"
-    exec_line = "exec litellm --config /app/config.yaml"
-    assert exec_line in shim
-    # DATABASE_URL/SALT_KEY exports must happen before the exec hands off.
-    assert shim.index('export DATABASE_URL="postgresql://') < shim.index(exec_line)
-    assert shim.index("export LITELLM_SALT_KEY=") < shim.index(exec_line)
+def test_litellm_entrypoint_enforces_production_master_key_guards() -> None:
+    """Reject missing, placeholder, and short production master keys."""
+    entrypoint = _litellm_entrypoint_source()
+    assert 'if [ ! -s "$master_key_file" ]' in entrypoint
+    assert 'case "$LITELLM_MASTER_KEY" in' in entrypoint
+    assert '"sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")' in entrypoint
+    assert "-lt 16" in entrypoint, "production minimum-length guard missing"
+    assert "litellm --config /app/config.yaml &" in entrypoint

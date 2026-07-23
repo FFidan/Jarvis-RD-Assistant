@@ -4,6 +4,8 @@ Provides:
 - ``ProgressContext`` — Protocol for handler execution context.
 - ``ProcrastinateJobContextShim`` — concrete adapter (re-exported from ``_ctx_shim``).
 - ``JobError`` for structured errors with an optional action_link payload.
+- ``JobLookupUnavailable`` for an infrastructure-caused lookup failure (503),
+  distinct from a job that genuinely does not exist (404/None).
 - ``get``, ``list_jobs`` — DB helpers.
 - ``get_unified``, ``get_procrastinate_job_for_jarvis_id`` — procrastinate bridge.
 - ``stream_job_events``, ``job_sse_payload`` — SSE streaming.
@@ -43,6 +45,7 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
     "paper.analyze": "paper_ingestion",
     "papers.batch_process": "paper_ingestion",
     "papers.batch_summarize": "paper_ingestion",
+    "papers.process_library": "paper_ingestion",
     "papers.scan_local": "paper_ingestion",
     "paper.summarize": "paper_ingestion",
     "citations.batch_fetch": "paper_ingestion",
@@ -113,13 +116,25 @@ PROCRASTINATE_NOTIFY_CHANNEL = "procrastinate_any_queue_v1"
 
 # Map procrastinate's status enum → JARVIS legacy status strings.
 # Source: db/migrations/052_procrastinate_schema.sql:27-35.
+#
+# ``aborting`` maps to ``running``, NOT to a terminal status: procrastinate sets
+# it the moment cancellation is *requested* while the handler is still executing.
+# It is a request, not an outcome. Mapping it to ``cancelled`` made it terminal
+# (see ``TERMINAL_STATUSES``), which closed the SSE stream with ``result: null``
+# and discarded the handler's real final row — e.g. a ``papers.process_library``
+# run that stopped early still returns its accumulated counts under a
+# ``status: "cancelled"`` result dict, and the client never saw it.
+# The request itself is not lost: ``procrastinate_row_to_jarvis_row`` still
+# raises ``cancel_requested`` for ``aborting``. Only the genuine outcomes
+# ``cancelled`` (aborted before it ever ran) and ``aborted`` (handler
+# acknowledged the abort) are terminal.
 PROCRASTINATE_STATUS_MAP: dict[str, str] = {
     "todo": "queued",
     "doing": "running",
     "succeeded": "succeeded",
     "failed": "failed",
     "cancelled": "cancelled",
-    "aborting": "cancelled",
+    "aborting": "running",
     "aborted": "cancelled",
 }
 
@@ -175,11 +190,19 @@ class _PoolListenConnection:
 
 
 def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Return the public SSE payload for a procrastinate job row."""
+    """Return the public SSE payload for a procrastinate job row.
+
+    ``cancel_requested`` is published alongside ``status`` because the two are
+    orthogonal: a job whose abort was requested keeps reporting ``running``
+    until the handler actually stops (see ``PROCRASTINATE_STATUS_MAP``), so the
+    flag is the only signal that lets the UI show a "Cancelling" state rather
+    than an indicator that looks untouched.
+    """
     event_data: dict[str, Any] = {
         "progress": row.get("progress"),
         "progress_message": row.get("progress_message"),
         "status": row["status"],
+        "cancel_requested": bool(row.get("cancel_requested")),
         "source": "procrastinate",
     }
     if row["status"] in TERMINAL_STATUSES:
@@ -209,7 +232,9 @@ def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
     Returns a dict matching the legacy Job interface (12+ keys) with an
     additional ``source`` discriminator set to ``"procrastinate"``.  The
     ``cancel_requested`` flag is synthesised from the procrastinate status so
-    callers don't need to special-case it.
+    callers don't need to special-case it. It is orthogonal to ``status``: an
+    ``aborting`` row reports ``status="running"`` (the handler has not stopped
+    yet) together with ``cancel_requested=True``.
 
     The extra keys (``id``, ``kind``, ``user_id``, ``created_at``, etc.) are
     required by ``get_unified`` so that route handlers can call
@@ -259,6 +284,10 @@ async def get_procrastinate_job_for_jarvis_id(
     migration 054 has not been applied (older DBs), the JOIN is silently
     dropped and the result still contains the procrastinate columns with
     ``progress`` / ``progress_message`` as ``None``.
+
+    Raises :class:`JobLookupUnavailable` for any other lookup failure (e.g. a
+    DB outage) — an infrastructure failure must not be reported the same way
+    as "no such job".
     """
     sql_with_progress = """
         SELECT
@@ -303,9 +332,9 @@ async def get_procrastinate_job_for_jarvis_id(
     except asyncpg.UndefinedTableError:
         # procrastinate_jobs missing (migration 052 not applied).
         return None
-    except Exception:
+    except Exception as exc:
         logger.warning("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
-        return None
+        raise JobLookupUnavailable(f"job lookup failed for {jarvis_job_id}") from exc
     if row is None:
         return None
     return dict(row)
@@ -315,7 +344,9 @@ async def get_unified(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
     """Lookup a job exclusively from the procrastinate table.
 
     Returns a row dict in the legacy Job interface shape, or None if not found.
-    The ``source`` field is always ``"procrastinate"``.
+    The ``source`` field is always ``"procrastinate"``. Propagates
+    :class:`JobLookupUnavailable` from :func:`get_procrastinate_job_for_jarvis_id`
+    on an infrastructure lookup failure.
     """
     prow = await get_procrastinate_job_for_jarvis_id(pool, job_id)
     if prow is None:
@@ -410,15 +441,31 @@ async def stream_job_events(
     to the legacy SSE payload shape via :func:`procrastinate_row_to_jarvis_row`.
     The stream terminates when the job reaches a JARVIS-terminal status
     (``succeeded`` / ``failed`` / ``cancelled``).
+
+    A cancellation *request* (procrastinate ``aborting``) is deliberately NOT
+    terminal — see ``PROCRASTINATE_STATUS_MAP`` — so the stream stays open until
+    the handler actually stops and its final row, result included, is emitted.
+    A worker that dies mid-abort cannot hang the stream forever: the
+    ``MAX_STREAM_SECONDS`` ceiling still yields ``streaming_timeout`` and exits.
+
+    A lookup failure caused by an infrastructure outage
+    (:class:`JobLookupUnavailable`) is distinct from the job genuinely not
+    existing: it yields a single ``{"error": "status_unavailable"}`` frame and
+    then closes the stream, rather than the silent break used when the
+    procrastinate row is simply absent.
     """
-    last_procrastinate_key: tuple[Any, Any, Any] | None = None
+    # The change-detection key carries ``cancel_requested`` alongside progress and
+    # status because a cancel request no longer moves ``status`` (doing → aborting
+    # both map to "running"); without it the request would never be re-emitted and
+    # the UI could not tell "Cancelling" from an untouched run.
+    last_procrastinate_key: tuple[Any, Any, Any, bool] | None = None
     loop = asyncio.get_running_loop()
     loop_start = loop.time()
     last_keepalive = loop_start
 
     poll_interval = 2.0
     idle_start: float = loop.time()
-    last_state: tuple[Any, Any, Any] | None = None
+    last_state: tuple[Any, Any, Any, bool] | None = None
 
     while True:
         if await is_disconnected():
@@ -437,7 +484,11 @@ async def stream_job_events(
             yield sse_keepalive()
             last_keepalive = now
 
-        procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+        try:
+            procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+        except JobLookupUnavailable:
+            yield sse_event({"error": "status_unavailable"})
+            break
 
         # Emit procrastinate frame if changed.
         procrastinate_row: dict[str, Any] | None = None
@@ -447,6 +498,7 @@ async def stream_job_events(
                 procrastinate_row.get("progress"),
                 procrastinate_row.get("progress_message"),
                 procrastinate_row["status"],
+                bool(procrastinate_row.get("cancel_requested")),
             )
             if procrastinate_key != last_procrastinate_key:
                 last_procrastinate_key = procrastinate_key
@@ -461,6 +513,7 @@ async def stream_job_events(
             procrastinate_row.get("progress"),
             procrastinate_row.get("progress_message"),
             procrastinate_row["status"],
+            bool(procrastinate_row.get("cancel_requested")),
         )
         if current_state != last_state:
             last_state = current_state
@@ -480,6 +533,17 @@ async def stream_job_events(
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
+
+
+class JobLookupUnavailable(RuntimeError):  # noqa: N818 -- distinct concept from JobError below
+    """A job lookup failed for an infrastructure reason, not because the job is missing.
+
+    Raised by :func:`get_procrastinate_job_for_jarvis_id` when the DB call fails
+    for anything other than the two recognised schema-degradation cases
+    (``job_progress``/``procrastinate_jobs`` not yet migrated, which legitimately
+    degrade to ``None``). Callers must report this as 503, never fold it into
+    the same "not found" (404) response used for a job that truly does not exist.
+    """
 
 
 class JobError(Exception):

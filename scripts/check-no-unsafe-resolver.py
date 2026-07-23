@@ -50,7 +50,7 @@ _ROUTE_DECORATORS = frozenset({"get", "post", "put", "patch", "delete"})
 
 # Router files that legitimately serve ops/public traffic (no per-user data
 # to protect) and may keep the permissive resolvers. Paths are relative to the
-# repo root. Be conservative — when unsure, do NOT allowlist.
+# repository root. Add an exception only when the route is demonstrably safe.
 ALLOWLIST = frozenset(
     {
         "services/paper_ingestion/paper_ingestion/routers/system.py",
@@ -62,15 +62,15 @@ ALLOWLIST = frozenset(
 )
 
 # Per-route allowlist for the no-resolver check: routes that are genuinely
-# public, ops, or operate purely on shared-corpus / catalog data with no
-# per-user dimension. Key is ``"<rel_path>::<METHOD> <route_path>"``; value is
-# a one-line justification. Do NOT add per-user data endpoints here — fix them.
+# public, operational, or use shared catalog data without a per-user dimension.
+# Key is ``"<rel_path>::<METHOD> <route_path>"``; value is a one-line
+# justification. Per-user endpoints belong in caller-identity checks, not here.
 ROUTE_ALLOWLIST: dict[str, str] = {
     # Public auth flow — establishes identity, cannot require one first.
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: API-key session bootstrap (dependencies=[] — it IS the auth front door)",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: validates an API key and creates a session",  # noqa: E501
     # Passkey sign-in — the same class as the magic-link flow above: a login
     # ceremony cannot require the session it exists to create. /login/begin is
     # discoverable (username-less), so it takes no identifier and cannot enumerate
@@ -78,26 +78,19 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
-    # NOT public — gated by restore_status_auth (admin session, ops X-API-Key, or
-    # the one-time bearer minted by request_restore). It resolves no *user id*, so
-    # the caller-identity check cannot see its gate. Validated DB-free on purpose:
-    # the poll must keep answering while a restore has the jarvis DB swapped out.
-    # Exposes progress only (step names + state), never archive contents.
-    "services/paper_ingestion/paper_ingestion/routers/backups.py::GET /restore/status": "authenticated by restore_status_auth; DB-free so it survives the restore swap",  # noqa: E501
-    # Shared global catalog tables (tracked_authors, topics, extraction
-    # templates, sources) — not per-user data.
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::GET ": "shared tracked_authors catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::POST ": "shared tracked_authors catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::PUT /{author_id}": "shared tracked_authors catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::DELETE /{author_id}": "shared tracked_authors catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::POST /auto-detect": "shared tracked_authors catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/authors.py::POST /check": "shared tracked_authors catalog",  # noqa: E501
+    # Restore status requires an admin session, operations key, or restore token.
+    # It resolves no user ID, so the caller-identity scan cannot recognize that
+    # authentication. The database-independent poll remains available during a
+    # database swap and exposes progress only, never archive contents.
+    "services/paper_ingestion/paper_ingestion/routers/backups.py::GET /restore/status": "authenticated by restore_status_auth without database access, so it survives the restore swap",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/backups.py::POST /restore/acknowledge": "authenticated by restore_acknowledgement_auth using the one-time restore token or configured-owner session",  # noqa: E501
+    # Shared global catalog tables (topics, extraction templates, sources) —
+    # not per-user data.
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::GET /extraction-templates": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::POST /extraction-templates": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::PUT /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::DELETE /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/settings_sources.py::GET /sources": "shared source-plugin registry",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/snapshots.py::GET /{paper_id}/{page}": "static PDF page image, path-traversal guarded",  # noqa: E501
     # Shared global topics catalog (`topics` has no user_id column;
     # per-user subscriptions live on the *subscription* routes, which do
     # resolve identity). CRUD here mutates the shared catalog only.
@@ -105,10 +98,6 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/topics.py::POST ": "shared topics catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/topics.py::PUT /{topic_id}": "shared topics catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/topics.py::DELETE /{topic_id}": "shared topics catalog",  # noqa: E501
-    # Persisted quote-verified contradictions are shared-corpus analysis,
-    # queried by paper_id (not user-scoped). The scan/mutation routes do
-    # resolve identity.
-    "services/paper_ingestion/paper_ingestion/routers/contradictions.py::GET /contradictions": "shared-corpus contradiction read",  # noqa: E501
 }
 
 
@@ -258,7 +247,7 @@ def main() -> int:
         print(
             "\nWS-AUTH: the files above must use current_user_id_strict (or a "
             "require_admin* guard), be added to ALLOWLIST if the whole file is "
-            "ops/public, or have the specific public/shared-corpus route added "
+            "ops/public, or have the specific public/global-catalog route added "
             "to ROUTE_ALLOWLIST with a justification.",
             file=sys.stderr,
         )

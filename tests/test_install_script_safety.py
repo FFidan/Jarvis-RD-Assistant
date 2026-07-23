@@ -39,6 +39,7 @@ _DOWN_VOL_ALLOWED_FILES = {
     "scripts/uninstall.sh",
     "scripts/ci-smoke.sh",
     "scripts/first-run-smoke.sh",
+    "scripts/lifecycle-smoke.sh",
 }
 _ISOLATION_EXEMPT_FILES = {"scripts/uninstall.sh"}
 
@@ -127,6 +128,18 @@ def test_setup_never_advertises_https_on_a_raw_lan_ip():
     assert "https://${LAN_IP}" not in text, (
         "setup.sh emits https:// against the raw LAN IP, but that endpoint serves "
         "plain HTTP only — advertise/probe it over http://"
+    )
+
+
+def test_setup_migrates_every_retired_dashboard_tls_key():
+    """A reconfigure must remove both inputs from the retired dashboard TLS path."""
+    text = (REPO_ROOT / "setup.sh").read_text()
+    match = re.search(r'^RETIRED_ENV_KEYS="([^"]*)"', text, re.MULTILINE)
+    assert match, "setup.sh must declare RETIRED_ENV_KEYS"
+    retired = set(match.group(1).split())
+    assert {"JARVIS_CERT_SAN", "JARVIS_SKIP_SELFSIGNED_GEN"}.issubset(retired), (
+        "setup.sh must remove both obsolete dashboard certificate inputs from "
+        f"carried-forward .env files; got {sorted(retired)}"
     )
 
 

@@ -68,7 +68,7 @@ const fixtures = vi.hoisted(() => ({
     restart_required: false,
     deliverable: false,
     issues: [
-      'No mail relay is configured — sign-in links are written to the server log, not emailed.',
+      'No mail relay is configured — administrators can create one-time sign-in links and share them directly.',
     ],
   },
   // host set but From missing → not deliverable (partial config)

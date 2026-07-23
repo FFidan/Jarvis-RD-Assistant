@@ -64,6 +64,7 @@ def _paper_row(**overrides):
         metadata={},
         created_at=datetime(2026, 3, 11, tzinfo=UTC),
         user_state=None,
+        is_visible=True,
     )
     defaults.update(overrides)
     return FakeRecord(**defaults)
@@ -75,7 +76,7 @@ def _paper_row(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_download_pdf_releases_conn_before_http():
+async def test_download_pdf_releases_conn_before_http(tmp_path: Path):
     """DB conn must be released (acquire() closes) before the HTTP download begins.
 
     Verifies that db_pool.acquire() is called exactly twice:
@@ -84,7 +85,9 @@ async def test_download_pdf_releases_conn_before_http():
     The download happens between those two calls, with no connection held.
     """
     load_row = _paper_row(pdf_downloaded=False)
-    updated_row = _paper_row(pdf_downloaded=True, pdf_local_path="/data/pdfs/1.pdf")
+    final_path = tmp_path / "1.pdf"
+    staged_path = tmp_path / "_download_1.pdf"
+    updated_row = _paper_row(pdf_downloaded=True, pdf_local_path=str(final_path))
 
     load_conn = _make_conn(fetchrow_return=load_row)
     writeback_conn = _make_conn(fetchrow_return=updated_row)
@@ -97,10 +100,11 @@ async def test_download_pdf_releases_conn_before_http():
         # At this point the load conn should already be released,
         # so acquire has been called once and the write-back has not started yet.
         acquire_call_count_at_download.append(pool.acquire.call_count)
-        return Path("/data/pdfs/1.pdf")
+        staged_path.write_bytes(b"%PDF-1.7\ncontent")
+        return staged_path, final_path
 
-    processor = AsyncMock()
-    processor.download_pdf.side_effect = mock_download
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(side_effect=mock_download)
 
     result = await pdf.download_pdf.__wrapped__(
         MagicMock(),
@@ -121,7 +125,9 @@ async def test_download_pdf_releases_conn_before_http():
     )
 
     assert result.pdf_downloaded is True
-    processor.download_pdf.assert_awaited_once_with("https://arxiv.org/pdf/1234.pdf", 1)
+    processor.stage_pdf_download.assert_awaited_once_with(
+        "https://arxiv.org/pdf/1234.pdf", 1
+    )
 
 
 @pytest.mark.asyncio
@@ -130,8 +136,10 @@ async def test_download_pdf_catches_http_error():
     phase1_conn = _make_conn(fetchrow_return=_paper_row(pdf_downloaded=False))
     pool = _make_pool_multi_conn(phase1_conn)
 
-    processor = AsyncMock()
-    processor.download_pdf.side_effect = httpx.ConnectError("Connection refused")
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await pdf.download_pdf.__wrapped__(

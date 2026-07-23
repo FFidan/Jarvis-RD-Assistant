@@ -21,7 +21,7 @@ import type {
   JobAccepted,
   MissingFoundationalPaper,
   FetchAndProcessFoundationalResponse,
-  UserStateResponse,
+  UserState,
   BulkAction,
   FeedbackListResponse,
   DeleteFeedbackResponse,
@@ -191,8 +191,8 @@ export interface AnnotationsBody {
 }
 
 /** Update per-paper annotations (rating 1-5, user_notes, flagged). Returns the full user state. */
-export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserStateResponse> {
-  return apiFetch<UserStateResponse>(`/api/papers/${paperId}/annotations`, {
+export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserState> {
+  return apiFetch<UserState>(`/api/papers/${paperId}/annotations`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
@@ -368,6 +368,17 @@ export const batchSummarizePapers = (limit?: number) =>
     { method: 'POST' },
   );
 
+/**
+ * Enqueue a whole-library processing job (download → process → opt-in
+ * summarize). Returns the JobCreateResponse envelope; ``job_id`` is null with
+ * ``status: "skipped"`` when the library already needs no work.
+ */
+export const processLibrary = (summarize = false) =>
+  apiFetch<{ job_id: string | null; status: string; reason?: string | null }>(
+    `/api/papers/process-library?summarize=${summarize}`,
+    { method: 'POST' },
+  );
+
 // --- Paper Detail ---
 export const fetchPaperDetail = (paperId: number) =>
   apiFetch<PaperDetail>(`/api/papers/${paperId}`);
@@ -476,6 +487,12 @@ export async function downloadPaperCitation(paperId: number, format: CitationFor
   const blob = await res.blob();
   const ext = format === 'bibtex' ? 'bib' : 'ris';
   triggerBlobDownload(blob, filenameFromDisposition(res, `paper_${paperId}.${ext}`));
+}
+
+export async function downloadPaperMarkdown(paperId: number): Promise<void> {
+  const res = await apiFetchRaw(`/api/papers/${paperId}/export.md`);
+  const blob = await res.blob();
+  triggerBlobDownload(blob, filenameFromDisposition(res, `paper_${paperId}.md`));
 }
 
 export async function copyPaperCitation(paperId: number, format: CitationFormat): Promise<string> {

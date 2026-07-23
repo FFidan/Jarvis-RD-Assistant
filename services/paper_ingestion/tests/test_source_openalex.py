@@ -1,11 +1,4 @@
-"""Tests for OpenAlexSource.
-
-TDD — written before the implementation was added.
-Uses respx to mock the OpenAlex Works API.
-Fixtures: tests/fixtures/openalex_search.json,
-          tests/fixtures/openalex_single_work.json,
-          tests/fixtures/openalex_new_since_2026_04.json
-"""
+"""OpenAlex source parsing, transport, scheduling, and failure-path tests."""
 
 from __future__ import annotations
 
@@ -13,9 +6,13 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 import respx
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources.openalex_source import (
@@ -23,6 +20,7 @@ from paper_ingestion.sources.openalex_source import (
     OpenAlexSource,
     _reconstruct_abstract,
 )
+from pydantic import SecretStr
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SEARCH_FIXTURE = json.loads((FIXTURES / "openalex_search.json").read_text())
@@ -39,6 +37,30 @@ def _make_source(api_key: str | None = "test-oa-key") -> OpenAlexSource:
     )
     client = httpx.AsyncClient()
     return OpenAlexSource(config, client)
+
+
+def _make_source_with_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    database_key: str | None,
+    settings_key: str | None,
+) -> OpenAlexSource:
+    import paper_ingestion.config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(
+            openalex_api_key=SecretStr(settings_key) if settings_key is not None else None
+        ),
+    )
+    config = PaperSourceConfig(
+        id=3,
+        source_type=SourceType.OPENALEX,
+        enabled=True,
+        config={"api_key": database_key},
+    )
+    return OpenAlexSource(config, httpx.AsyncClient())
 
 
 # ---------------------------------------------------------------------------
@@ -270,35 +292,47 @@ async def test_fetch_new_since_deduplication():
 
 
 # ---------------------------------------------------------------------------
-# Missing API key → empty list + log warning
+# Missing API key → no request and an empty return shape
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 async def test_search_missing_api_key_returns_empty(caplog):
     """Missing API key returns [] and logs at INFO level (exactly once)."""
+    route = respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(200, json=SEARCH_FIXTURE))
     source = _make_source(api_key=None)
 
     with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
         papers = await source.search("neural networks")
 
     assert papers == []
+    assert route.call_count == 0
     assert any("OPENALEX_API_KEY" in r.message for r in caplog.records)
 
 
-async def test_fetch_by_id_missing_api_key_returns_none():
+@respx.mock
+async def test_fetch_by_id_missing_api_key_returns_none_without_http_request():
     """fetch_by_id with missing key returns None without raising."""
+    route = respx.get(f"{OPENALEX_API_URL}/W12345").mock(
+        return_value=httpx.Response(200, json=SINGLE_FIXTURE)
+    )
     source = _make_source(api_key=None)
     result = await source.fetch_by_id("W12345")
     assert result is None
+    assert route.call_count == 0
 
 
-async def test_fetch_new_since_missing_api_key_returns_empty():
+@respx.mock
+async def test_fetch_new_since_missing_api_key_returns_empty_without_http_request():
     """fetch_new_since with missing key returns [] without raising."""
+    route = respx.get(OPENALEX_API_URL).mock(
+        return_value=httpx.Response(200, json=NEW_SINCE_FIXTURE)
+    )
     source = _make_source(api_key=None)
     since = datetime(2026, 4, 1, tzinfo=UTC)
     result = await source.fetch_new_since(since=since, topics=[], limit=10)
     assert result == []
+    assert route.call_count == 0
 
 
 async def test_missing_key_logged_only_once(caplog):
@@ -312,6 +346,138 @@ async def test_missing_key_logged_only_once(caplog):
 
     key_msgs = [r for r in caplog.records if "OPENALEX_API_KEY" in r.message]
     assert len(key_msgs) == 1
+
+
+@pytest.mark.parametrize(
+    ("database_key", "settings_key", "expected"),
+    [
+        ("  database-key  ", "settings-key", "database-key"),
+        ("   ", "  settings-key  ", "settings-key"),
+        ("   ", "\t ", None),
+    ],
+)
+def test_api_key_resolution_strips_values_and_falls_back_from_blank_database_key(
+    monkeypatch, database_key, settings_key, expected
+):
+    source = _make_source_with_keys(
+        monkeypatch,
+        database_key=database_key,
+        settings_key=settings_key,
+    )
+    assert source._api_key == expected
+
+
+@respx.mock
+async def test_whitespace_database_and_settings_keys_never_open_http(monkeypatch):
+    source = _make_source_with_keys(
+        monkeypatch,
+        database_key="  ",
+        settings_key="\t ",
+    )
+    try:
+        assert await source.search("test") == []
+        assert await source.fetch_by_id("W12345") is None
+        assert (
+            await source.fetch_new_since(
+                since=datetime(2026, 1, 1, tzinfo=UTC),
+                topics=[],
+                limit=5,
+            )
+            == []
+        )
+        assert not respx.calls
+    finally:
+        await source.http_client.aclose()
+
+
+@pytest.mark.parametrize("operation", ["search", "fetch_by_id", "fetch_new_since"])
+async def test_http_error_never_exposes_query_key_in_logs_or_diagnostics(
+    monkeypatch, caplog, operation
+):
+    secret = "openalex-negative-proof-secret"
+    source = _make_source(secret)
+    attempted_urls: list[str] = []
+
+    async def fail_request(url, *, params, timeout):
+        del timeout
+        request = httpx.Request("GET", url, params=params)
+        attempted_urls.append(str(request.url))
+        raise httpx.ConnectError(
+            f"connection failed for {request.url}",
+            request=request,
+        )
+
+    monkeypatch.setattr(source.http_client, "get", AsyncMock(side_effect=fail_request))
+    monkeypatch.setattr(source, "_rate_limit", AsyncMock())
+    monkeypatch.setattr(source, "apply_startup_grace", AsyncMock())
+    record_outcome = AsyncMock()
+    monkeypatch.setattr(source, "_record_fetch_outcome", record_outcome)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            if operation == "search":
+                assert await source.search("test") == []
+            elif operation == "fetch_by_id":
+                assert await source.fetch_by_id("W12345") is None
+            else:
+                assert (
+                    await source.fetch_new_since(
+                        since=datetime(2026, 1, 1, tzinfo=UTC),
+                        topics=[],
+                        limit=5,
+                    )
+                    == []
+                )
+
+        assert attempted_urls and secret in attempted_urls[0]
+        emitted = caplog.text + repr(source.last_poll_diagnostic) + repr(
+            record_outcome.await_args_list
+        )
+        assert secret not in emitted
+        if operation == "fetch_new_since":
+            assert source.last_poll_diagnostic == {
+                "status": "error",
+                "message": "OpenAlex request failed. It will retry automatically later.",
+                "status_code": None,
+                "retry_after_s": None,
+                "settings_hint": None,
+            }
+            assert record_outcome.await_args.kwargs["log_context"] == {
+                "http_status": None,
+                "exception": "ConnectError",
+            }
+        else:
+            assert source.last_poll_diagnostic is None
+            record_outcome.assert_not_awaited()
+    finally:
+        await source.http_client.aclose()
+
+
+async def test_fetch_new_since_rechecks_quarantine_after_rate_limit(monkeypatch, tmp_path):
+    """A restore beginning during rate-limit wait prevents the outbound request."""
+    source = _make_source()
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    class ActivatingLimiter:
+        async def acquire(self) -> None:
+            quarantine.touch()
+
+    monkeypatch.setattr(
+        source,
+        "make_persistent_rate_limiter",
+        lambda **_kwargs: ActivatingLimiter(),
+    )
+
+    try:
+        with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+            await source.fetch_new_since(
+                since=datetime(2026, 1, 1, tzinfo=UTC),
+                topics=[],
+                limit=5,
+            )
+    finally:
+        await source.http_client.aclose()
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import {
   CheckCircle2, Circle, ArrowRight, X,
   Loader2, ChevronDown, ChevronRight, Cog, FileText, Sparkles,
 } from 'lucide-react';
-import { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } from '@/lib/api';
+import { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities, processLibrary } from '@/lib/api';
 import { MetricTileGrid } from '@/components/home/MetricTileGrid';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -238,14 +238,25 @@ export function HomePage() {
             jobs appear in the jobs panel while they run.
           </p>
           <BatchButton
-            label="Process PDFs"
+            label="Process whole library"
             icon={Cog}
-            mutationFn={() => batchProcessPapers(BATCH_LIMIT)}
-            formatResult={(d) => (d.job_id ? `Queued ${d.queued} PDFs` : 'No PDFs to process')}
-            onSuccessResult={(d) => trackBatchJob(d, 'papers.batch_process')}
-            confirmMessage="This will queue PDF text extraction for papers that already have local PDFs. Continue?"
-            confirmTitle="Process library PDFs?"
+            mutationFn={() => processLibrary(true)}
+            formatResult={(d) => (d.job_id ? 'Processing your library' : 'Library already up to date')}
+            onSuccessResult={(d) => trackBatchJob(d, 'papers.process_library')}
+            confirmMessage="This queues download, PDF processing, and summaries for every library paper that still needs them. Continue?"
+            confirmTitle="Process your whole library?"
           />
+          <div className="mt-3">
+            <BatchButton
+              label="Process PDFs"
+              icon={Cog}
+              mutationFn={() => batchProcessPapers(BATCH_LIMIT)}
+              formatResult={(d) => (d.job_id ? `Queued ${d.queued} PDFs` : 'No PDFs to process')}
+              onSuccessResult={(d) => trackBatchJob(d, 'papers.batch_process')}
+              confirmMessage="This will queue PDF text extraction for papers that already have local PDFs. Continue?"
+              confirmTitle="Process library PDFs?"
+            />
+          </div>
           <div className="mt-4">
             <button
               type="button"

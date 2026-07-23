@@ -36,7 +36,7 @@ class _FakeURL:
     path = "/api/account"
 
     def replace(self, **_kwargs) -> str:
-        return "http://test/account/confirm-email?token=tok"
+        return "http://test/settings?section=account&item=profile"
 
     def __str__(self) -> str:
         return "http://test/api/account"
@@ -47,6 +47,24 @@ def _build_request(pool) -> SimpleNamespace:
     app_state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=app_state)
     return SimpleNamespace(state=state, app=app, url=_FakeURL())
+
+
+def test_email_confirmation_link_targets_the_account_settings_route_without_query_secret(
+    monkeypatch,
+) -> None:
+    """New confirmation links land on the working UI and keep the token off the wire."""
+    from paper_ingestion.routers.account import _build_email_confirm_link
+
+    monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example")
+    request = SimpleNamespace(url=_FakeURL())
+
+    link = _build_email_confirm_link(request, "tok123")
+
+    assert link == (
+        "https://jarvis.example/settings?section=account&item=profile"
+        "#confirm_email_token=tok123"
+    )
+    assert "?token=" not in link
 
 
 @pytest.mark.asyncio

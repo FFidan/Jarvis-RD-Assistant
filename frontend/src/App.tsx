@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { setNavigate } from '@/lib/navigate-bridge';
@@ -19,7 +19,7 @@ const ResearchFeedPage = lazy(() =>
 );
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { AskPage } from '@/pages/AskPage';
-import { fetchAccount, getFirstRunStatus } from '@/lib/api';
+import { ApiError, fetchAccount, getFirstRunStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
@@ -100,6 +100,8 @@ function NavigateBridgeRegistrar() {
 
 export function App() {
   const { isAuthenticated, isSessionValid, expireSession, hydrateFromCookie } = useAuthStore();
+  const { pathname } = useLocation();
+  const isMagicLinkLanding = pathname === '/auth/verify';
 
   // Single onboarding gate (Task A2 — wizard consolidation). Keyed on the
   // PRE-AUTH /api/setup/status (reachable with no session, HTTP 200) so the
@@ -121,11 +123,16 @@ export function App() {
   // restored browser) renders unauthenticated even while a valid HttpOnly
   // session cookie exists. Probe /api/account once (401s cleanly when no
   // cookie) and rehydrate the identity instead of bouncing to Login.
-  const { data: bootstrapAccount, isLoading: bootstrapLoading } = useQuery({
+  const {
+    data: bootstrapAccount,
+    isLoading: bootstrapLoading,
+    error: bootstrapError,
+    refetch: refetchBootstrap,
+  } = useQuery({
     queryKey: QUERY_KEYS.account.self(),
     queryFn: fetchAccount,
-    enabled: !isAuthenticated,
-    retry: false,
+    enabled: !isAuthenticated && !isMagicLinkLanding,
+    retry: (count, err) => !(err instanceof ApiError && err.status === 401) && count < 2,
   });
 
   useEffect(() => {
@@ -213,6 +220,22 @@ export function App() {
           <QueryErrorState
             onRetry={refetchFirstRun}
             message="Couldn't reach the server to check setup status. Confirm the JARVIS services are running, then retry."
+          />
+        </div>
+      );
+    }
+    // A session-probe failure that isn't "no session" (401) must not be
+    // presented as signed-out. Offline is exempt — case (c) of the offline
+    // contract already routes a first visit with no known identity to Login
+    // regardless of probe outcome, so only branch here while online.
+    const bootstrapBroken =
+      online && bootstrapError && !(bootstrapError instanceof ApiError && bootstrapError.status === 401);
+    if (bootstrapBroken) {
+      return (
+        <div className="flex min-h-screen items-center justify-center">
+          <QueryErrorState
+            onRetry={refetchBootstrap}
+            message="Couldn't reach the server to check your session. Confirm the JARVIS services are running, then retry."
           />
         </div>
       );

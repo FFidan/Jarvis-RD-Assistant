@@ -708,8 +708,7 @@ CREATE TABLE public.paper_chunks (
     end_char integer,
     embedding_id character varying(255),
     embedding_model character varying(100),
-    created_at timestamp with time zone DEFAULT now(),
-    user_id integer
+    created_at timestamp with time zone DEFAULT now()
 );
 COMMENT ON TABLE public.paper_chunks IS 'PDF text split into chunks for RAG. Each chunk maps to a Qdrant vector.';
 CREATE SEQUENCE public.paper_chunks_id_seq
@@ -1690,7 +1689,6 @@ CREATE INDEX IF NOT EXISTS idx_magic_link_tokens_user_expires ON public.magic_li
 CREATE INDEX idx_milestones_project ON public.milestones USING btree (project_id);
 CREATE INDEX idx_milestones_user ON public.milestones USING btree (user_id) WHERE (user_id IS NOT NULL);
 CREATE INDEX idx_paper_chunks_paper ON public.paper_chunks USING btree (paper_id);
-CREATE INDEX idx_paper_chunks_user ON public.paper_chunks USING btree (user_id) WHERE (user_id IS NOT NULL);
 CREATE INDEX idx_paper_contradictions_claim_topic ON public.paper_contradictions USING btree (claim_topic) WHERE (claim_topic IS NOT NULL);
 CREATE INDEX idx_paper_contradictions_paper_a ON public.paper_contradictions USING btree (paper_a_id, status, created_at DESC);
 CREATE INDEX idx_paper_contradictions_paper_b ON public.paper_contradictions USING btree (paper_b_id, status, created_at DESC);
@@ -1834,8 +1832,6 @@ ALTER TABLE ONLY public.milestones
     ADD CONSTRAINT milestones_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_chunks
     ADD CONSTRAINT paper_chunks_paper_id_fkey FOREIGN KEY (paper_id) REFERENCES public.papers(id) ON DELETE CASCADE;
-ALTER TABLE ONLY public.paper_chunks
-    ADD CONSTRAINT paper_chunks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_citations
     ADD CONSTRAINT paper_citations_cited_paper_id_fkey FOREIGN KEY (cited_paper_id) REFERENCES public.papers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_citations

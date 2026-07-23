@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 vi.mock('@/lib/api', () => ({
   copyPaperCitation: vi.fn(),
   downloadPaperCitation: vi.fn(),
+  downloadPaperMarkdown: vi.fn(),
   copyBulkCitations: vi.fn(),
   downloadBulkCitations: vi.fn(),
 }));
@@ -25,6 +26,7 @@ vi.mock('sonner', () => ({
 import {
   copyPaperCitation,
   downloadPaperCitation,
+  downloadPaperMarkdown,
   copyBulkCitations,
   downloadBulkCitations,
 } from '@/lib/api';
@@ -32,6 +34,7 @@ import { CitationMenu } from '@/components/citation/CitationMenu';
 
 const mockCopyPaper = vi.mocked(copyPaperCitation);
 const mockDownloadPaper = vi.mocked(downloadPaperCitation);
+const mockDownloadMarkdown = vi.mocked(downloadPaperMarkdown);
 const mockCopyBulk = vi.mocked(copyBulkCitations);
 const mockDownloadBulk = vi.mocked(downloadBulkCitations);
 
@@ -59,6 +62,7 @@ beforeEach(() => {
   mockCopyPaper.mockResolvedValue('@article{x}');
   mockCopyBulk.mockResolvedValue('@article{x}\n@article{y}');
   mockDownloadPaper.mockResolvedValue(undefined);
+  mockDownloadMarkdown.mockResolvedValue(undefined);
   mockDownloadBulk.mockResolvedValue(undefined);
 });
 
@@ -97,6 +101,21 @@ describe('CitationMenu', () => {
 
     await waitFor(() => expect(mockCopyBulk).toHaveBeenCalledWith([1, 2, 3], 'ris'));
     expect(mockCopyPaper).not.toHaveBeenCalled();
+  });
+
+  it('exports a single paper as Markdown via downloadPaperMarkdown', async () => {
+    await openAndSelect([7], /export markdown/i);
+
+    await waitFor(() => expect(mockDownloadMarkdown).toHaveBeenCalledWith(7));
+  });
+
+  it('hides the Markdown export when more than one paper is selected', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<CitationMenu paperIds={[1, 2]} />);
+    await user.click(screen.getByRole('button', { name: /cite/i }));
+
+    expect(await screen.findByRole('menuitem', { name: /download \.bib/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /export markdown/i })).toBeNull();
   });
 
   it('disables the trigger when paperIds is empty', () => {

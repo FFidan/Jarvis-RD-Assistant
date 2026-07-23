@@ -326,7 +326,7 @@ async def test_orchestrator_embed_store_called_when_all_gates_pass(monkeypatch) 
 
 
 # ---------------------------------------------------------------------------
-# Fix 5 — Axis 4 F2: _user_scope_paper_entities_exists direct unit test
+# Visibility SQL fragments
 # ---------------------------------------------------------------------------
 
 
@@ -359,18 +359,23 @@ def test_build_entity_prompt_default_max_chars_unchanged() -> None:
     assert "B" * 100 in prompt, "first portion of text must still appear in the prompt"
 
 
-def test_user_scope_paper_entities_exists_fragment_shape() -> None:
-    """_user_scope_paper_entities_exists returns correctly interpolated SQL fragment."""
-    from paper_ingestion.extraction.entities_sql import _user_scope_paper_entities_exists
+def test_visible_paper_entities_exists_fragment_shape() -> None:
+    """The pure builder composes the entity join with the shared policy."""
+    from paper_ingestion.extraction.entities_sql import _visible_paper_entities_exists
+    from paper_ingestion.queries.predicates import paper_visible_sql
 
-    frag = _user_scope_paper_entities_exists("e.id", 4)
-    assert "EXISTS (SELECT 1 FROM paper_entities pe" in frag
-    assert "pe.entity_id = e.id" in frag
-    assert "pe.user_id IS NOT DISTINCT FROM $4" in frag
+    frag = _visible_paper_entities_exists("e.id", 4)
+    expected = (
+        "EXISTS (SELECT 1 FROM paper_entities pe "
+        "JOIN papers visible_p ON visible_p.id = pe.paper_id "
+        "WHERE pe.entity_id = e.id "
+        f"AND {paper_visible_sql(4, alias='visible_p')})"
+    )
+    assert frag == expected
 
-    frag2 = _user_scope_paper_entities_exists("e1.id", 1)
-    assert "pe.entity_id = e1.id" in frag2
-    assert "IS NOT DISTINCT FROM $1" in frag2
+    frag2 = _visible_paper_entities_exists("e1.id", 1)
+    expected2 = expected.replace("e.id", "e1.id").replace("$4", "$1")
+    assert frag2 == expected2
 
 
 @pytest.mark.asyncio

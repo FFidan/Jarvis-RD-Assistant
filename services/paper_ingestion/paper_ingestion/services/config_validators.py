@@ -360,6 +360,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "observability.langfuse_dashboard_url": _validate_langfuse_dashboard_url,
     # Automation
     "automation.fetch_interval_hours": _validate_positive_int,
+    "automation.auto_summarize_discovered": _validate_bool,
     # Cloud LLM provider keys
     **{key: _validate_nonempty_str for key in PROVIDER_API_KEY_CONFIG_KEYS},
     **{key: validate_custom_openai_base_url for key in PROVIDER_BASE_URL_CONFIG_KEYS},

@@ -72,6 +72,7 @@ JARVIS_API_KEY="${JARVIS_API_KEY:-}"
 SMTP_HOST="${SMTP_HOST:-}"
 SMTP_FROM="${SMTP_FROM:-}"
 LETSENCRYPT_DOMAIN="${LETSENCRYPT_DOMAIN:-}"
+APP_BASE_URL="${APP_BASE_URL:-}"
 
 # Read secrets from files when the _FILE env var convention is used, otherwise
 # fall back to the plain env var (same pattern as the litellm entrypoint shim).
@@ -176,7 +177,7 @@ elif [ "$_key_len" -lt 32 ]; then
     RESULTS+=("INFO|JARVIS_API_KEY|WARN|Key is ${_key_len} chars; recommend >= 32")
   fi
 else
-  RESULTS+=("INFO|JARVIS_API_KEY|OK|Set (${_key_len} chars, starts: ${JARVIS_API_KEY:0:4}...)")
+  RESULTS+=("INFO|JARVIS_API_KEY|OK|Set (${_key_len} chars)")
 fi
 
 # ---------------------------------------------------------------------------
@@ -226,7 +227,7 @@ _check_secret() {
       RESULTS+=("INFO|${name}|WARN|Secret is ${val_len} chars; recommend >= ${min_len}")
     fi
   else
-    RESULTS+=("INFO|${name}|OK|Set (${val_len} chars, starts: ${val:0:4}...)")
+    RESULTS+=("INFO|${name}|OK|Set (${val_len} chars)")
   fi
 }
 
@@ -241,24 +242,38 @@ _check_secret "JARVIS_CONFIG_KEY"  "$JARVIS_CONFIG_KEY"  16
 # reachability, so the effective delivery state lives in the app. This script
 # never calls the app (it runs pre-auth/pre-liveness).
 if [ -n "$SMTP_HOST" ] && [ -n "$SMTP_FROM" ]; then
-  RESULTS+=("INFO|environment SMTP presence|OK|SMTP_HOST and SMTP_FROM set in env; effective delivery state lives in the app: GET /api/setup/status")
+  RESULTS+=("INFO|SMTP|OK|Environment: host and sender set; effective delivery state: GET /api/setup/status")
 else
-  RESULTS+=("WARN|environment SMTP presence|WARN|SMTP_HOST/SMTP_FROM not both set in env — delivery is disabled; admins can generate manual links. Effective delivery state lives in the app: GET /api/setup/status")
+  RESULTS+=("WARN|SMTP|WARN|Environment: host/sender missing; admins can use manual links. Effective state: GET /api/setup/status")
 fi
 
-# Check: HTTPS. When a Let's Encrypt domain is configured, probe it for real —
-# a live TLS request is the only proof HTTPS is actually serving.
+# Check: HTTPS. A successful TLS handshake or arbitrary 2xx page is not enough:
+# require this installation's fixed marker at the same endpoint every other
+# access-edge gate uses.
 if [ -n "$LETSENCRYPT_DOMAIN" ]; then
-  if _https_err="$(curl -fsS --max-time 10 "https://${LETSENCRYPT_DOMAIN}/health" 2>&1 >/dev/null)"; then
-    RESULTS+=("INFO|HTTPS|OK|HTTPS probe succeeded: https://${LETSENCRYPT_DOMAIN}/health")
+  _https_url="https://${LETSENCRYPT_DOMAIN}/health/jarvis"
+  if _https_result="$(curl -fsS --max-time 10 "$_https_url" 2>&1)"; then
+    if [ "$_https_result" = "jarvis-rd-assistant" ]; then
+      RESULTS+=("INFO|HTTPS|OK|HTTPS marker probe succeeded: ${_https_url}")
+    else
+      # Do not echo a foreign service's response body into setup/readiness logs.
+      RESULTS+=("WARN|HTTPS|WARN|HTTPS address answered, but it is a different app (not this JARVIS instance)")
+    fi
   else
-    RESULTS+=("WARN|HTTPS|WARN|HTTPS probe failed for https://${LETSENCRYPT_DOMAIN}/health: ${_https_err:-curl exited non-zero}")
+    RESULTS+=("WARN|HTTPS|WARN|HTTPS marker probe failed for ${_https_url}: ${_https_result:-curl exited non-zero}")
+  fi
+elif [[ "$APP_BASE_URL" == https://* ]]; then
+  if _https_body="$(curl -fsS --max-time 10 "${APP_BASE_URL%/}/health/jarvis" 2>/dev/null)" \
+     && [ "$_https_body" = "jarvis-rd-assistant" ]; then
+    RESULTS+=("INFO|HTTPS|OK|Configured HTTPS origin reaches this JARVIS instance")
+  else
+    RESULTS+=("WARN|HTTPS|WARN|Configured HTTPS origin is not verified; localhost remains available")
   fi
 else
   if is_production; then
     RESULTS+=("WARN|HTTPS|WARN|No LETSENCRYPT_DOMAIN set — HTTPS may not be active")
   else
-    RESULTS+=("INFO|HTTPS|OK|Self-signed cert will be generated on container start (dev default)")
+    RESULTS+=("INFO|HTTPS|OK|Not required for localhost-only use; remote sign-in needs named HTTPS")
   fi
 fi
 

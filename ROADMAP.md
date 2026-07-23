@@ -8,9 +8,13 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.1.2**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current stable release: **v1.1.3**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
+- **Safer install and maintenance (v1.1.3).** Setup re-runs preserve local
+  configuration and data, access-mode output matches the route that is actually
+  served, and the `jarvis-research` command provides checked updates, health
+  diagnostics, bounded repair, and a contained uninstall flow.
 - **Install from prebuilt images (v1.1.0).** A default `./setup.sh` pulls
   multi-architecture application images from the container registry instead of
   building them locally, ending the multi-gigabyte PyTorch/CUDA build that could
@@ -32,9 +36,10 @@ change list since the v1.0.0 public baseline.
   recommender that learns from your ratings.
 - **Knowledge retention.** Anki-style spaced-repetition flashcards (FSRS),
   notes, structured extractions, projects, and a daily-intent workflow.
-- **Shared canonical corpus + private workspace.** The bibliographic corpus is
-  shared across users on an instance; all user activity and intellectual
-  output is strictly private (see the SECURITY.md "Data Sharing Boundary").
+- **Deduplicated papers + private workspaces.** JARVIS avoids duplicating a
+  paper that multiple users save while keeping library state and intellectual
+  output private. Current visibility details live in the SECURITY.md
+  source-aware matrix.
 - **Researcher-grade model plane + trust polish.** Per-hardware model selection
   that actually takes effect, optional admin-wide cloud providers for the `smart`
   and `fast` roles, full-coverage summaries with verified quotes, and a
@@ -49,6 +54,13 @@ change list since the v1.0.0 public baseline.
 
 ## In progress
 
+- **v1.2.0 candidate.** The candidate adds whole-library processing, incremental
+  discovery with optional automatic summaries, per-paper Markdown knowledge
+  export, visible Pulse ranking-model status, repair for stale or missing
+  embeddings, complete PDF-aware restore sets, explicit instance ownership, and
+  persisted source-aware paper visibility. Release review is still in progress;
+  none of this is listed as shipped until the stable tag and images are
+  published from `main`.
 - **First-hour local-first polish.** Tighten the early experience so a fresh
   install is more honest and immediately useful: first-party assets only, clearer
   library-preparation actions, current public version wording, and an onboarding
@@ -60,17 +72,14 @@ change list since the v1.0.0 public baseline.
   optional integrations, not requirements.
 - **Tablet / PWA reading-experience polish.** Refinements to offline reading,
   installable PWA affordances, and tablet layout optimizations for the already-shipped
-  information-architecture redesign so already-processed material (summaries,
-  extractions, notes) and flashcard review work seamlessly offline.
+  information-architecture redesign. Already processed summaries and notes are
+  available offline; a rating for an already-open card can queue for later,
+  while loading the next card still needs a connection.
 
 ## Planned (exploratory — no dates)
 
-- **Day-one library processing.** A clearer whole-library workflow that can
-  download, process, summarize, extract, and show progress for a real imported
-  or discovered corpus without requiring users to understand the internal
-  processing stages.
-- **Knowledge export.** Markdown-friendly exports for generated research
-  knowledge and project-centered research outputs.
+- **Broader knowledge export.** Future releases may add export bundles for
+  answers and project-centred outputs.
 - **Per-user provider keys and routing.** Optional bring-your-own-key behavior,
   per-user routing preferences, and privacy controls for multi-user deployments.
   Current provider settings are admin-wide.
@@ -98,9 +107,9 @@ change list since the v1.0.0 public baseline.
 
 ## Not planned
 
-- Per-tenant private *corpus* partitioning. The corpus is intentionally a
-  shared scholarly library; isolation is at the activity/output layer. See the
-  SECURITY.md "Data Sharing Boundary" for the rationale.
+- Public self-registration or a single family-wide password. Accounts are
+  invited by an administrator, and recovery stays bound to a user or the
+  configured instance owner.
 
 ---
 

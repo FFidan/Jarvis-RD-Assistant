@@ -1,22 +1,19 @@
-"""Embedding generation + Qdrant collection/storage mixin.
-
-Extracted verbatim from ``Embedder`` (C1 God-class decomposition).  Every
-method body below is byte-for-byte identical to the original ``Embedder``
-method; only the enclosing class changed (now a mixin composed into
-``Embedder``).  ``self`` semantics are unchanged, so cross-calls such as
-``self.embed_texts(...)`` resolve through the same MRO.
-"""
+"""Embedding generation and Qdrant collection/storage behavior for ``Embedder``."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import httpcore
 import httpx
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from paper_ingestion.ingestion.embedding_config import (
@@ -31,6 +28,7 @@ from paper_ingestion.ingestion.embedding_config import (
     raise_for_collection_dimension_mismatch,
     validate_embedding_configuration,
 )
+from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.perf_probe import probe_span
 
@@ -39,6 +37,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+EmbeddingProgressCallback = Callable[[int, int], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingRunContext:
+    """Optional resume and progress state for one embedding operation."""
+
+    resume_content: dict[int, str] = field(default_factory=dict)
+    progress_callback: EmbeddingProgressCallback | None = None
+
 
 class EmbeddingBatchError(RuntimeError):
     """A batch failed after one or more earlier batches were upserted.
@@ -46,8 +54,10 @@ class EmbeddingBatchError(RuntimeError):
     Carries the chunk/point-id pairs whose Qdrant upsert *did* succeed so the
     caller can persist their DB rows.  Those vectors are intentionally left in
     Qdrant: discarding them throws away minutes of CPU-bound embedding and
-    makes a retry start from zero.  A retry resumes via the Phase-1 idempotency
-    check + ``ON CONFLICT (paper_id, chunk_index) DO NOTHING``.
+    makes a retry start from zero.  A retry resumes by skipping any chunk
+    whose content is unchanged and was embedded by the current model (see
+    ``embed_and_store``'s ``resume_content``); a chunk with changed content, a
+    stale embedding model, or a missing Qdrant point is re-embedded.
     """
 
     def __init__(
@@ -62,22 +72,57 @@ class EmbeddingBatchError(RuntimeError):
         self.completed_point_ids = completed_point_ids
 
 
+def chunk_point_id(paper_id: int, chunk_index: int) -> str:
+    """Deterministic uuid5 Qdrant point ID for a (paper_id, chunk_index) pair."""
+    return str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, f"{paper_id}:{chunk_index}"))
+
+
+def chunk_embedding_fingerprint(content: str, *, model_name: str | None = None) -> str:
+    """Return the durable identity of a model vector for chunk content."""
+    active_model = EMBEDDING_MODEL_NAME if model_name is None else model_name
+    return hashlib.sha256(f"{active_model}\0{content}".encode()).hexdigest()
+
+
 class EmbeddingStoreMixin:
     """Embedding generation, collection lifecycle, and Qdrant upsert/delete."""
 
     if TYPE_CHECKING:
+        import asyncpg
+
         # Shared state provided by Embedder.__init__ — declared here so pyright
         # resolves attribute access inside this mixin without runtime overhead.
         qdrant: AsyncQdrantClient
         http_client: httpx.AsyncClient
         _collection_lock: asyncio.Lock
         _collection_ensured: bool
+        _db_pool: asyncpg.Pool | None
 
     async def ensure_collection(self) -> None:
-        """Create the Qdrant collection if it does not exist.
+        """Create and validate the Qdrant collection and visibility schema.
 
-        Uses ``EMBEDDING_DIMENSION`` from the environment. Idempotent:
-        skips creation after first successful check.
+        Returns
+        -------
+        None
+            The collection and all required authorization indexes are ready.
+
+        Raises
+        ------
+        RuntimeError
+            If the configured embedding dimension conflicts with the active
+            model or an existing collection.
+        qdrant_client.http.exceptions.UnexpectedResponse
+            If Qdrant rejects collection or payload-index setup.
+        asyncpg.PostgresError
+            If the visibility checkpoint cannot be initialized or validated.
+
+        Notes
+        -----
+        Uses ``EMBEDDING_DIMENSION`` from the environment, creates the payload
+        indexes required by authorization filters, and initializes or rotates
+        the deployment checkpoint when a database pool is available. The
+        method is idempotent after every required step succeeds. Creating a
+        collection with a database pool rotates the visibility generation so
+        authenticated search under-fetches until reconciliation completes.
         """
         if self._collection_ensured:
             return
@@ -87,7 +132,8 @@ class EmbeddingStoreMixin:
             validate_embedding_configuration()
             collections = await self.qdrant.get_collections()
             existing = {c.name for c in collections.collections}
-            if COLLECTION_NAME not in existing:
+            collection_created = COLLECTION_NAME not in existing
+            if collection_created:
                 await self.qdrant.create_collection(
                     collection_name=COLLECTION_NAME,
                     vectors_config=VectorParams(
@@ -102,6 +148,20 @@ class EmbeddingStoreMixin:
                 collection_info = await self.qdrant.get_collection(collection_name=COLLECTION_NAME)
                 current_dimension = extract_qdrant_collection_dimension(collection_info)
                 raise_for_collection_dimension_mismatch(COLLECTION_NAME, current_dimension)
+            from paper_ingestion.ingestion.payload_schema import (  # noqa: PLC0415
+                ensure_visibility_payload_indexes,
+                prepare_visibility_schema,
+            )
+
+            if self._db_pool is None:
+                await ensure_visibility_payload_indexes(self.qdrant)
+            else:
+                async with self._db_pool.acquire() as conn:
+                    await prepare_visibility_schema(
+                        conn,
+                        self.qdrant,
+                        collection_created=collection_created,
+                    )
             self._collection_ensured = True
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -119,6 +179,9 @@ class EmbeddingStoreMixin:
 
         Raises
         ------
+        OutboundEgressBlockedError
+            If restored credentials await review when a non-empty batch is
+            about to send.
         RuntimeError
             If the embedding service times out, is unreachable, or returns
             an HTTP error after up to 3 attempts (5xx / read-timeout are
@@ -147,6 +210,7 @@ class EmbeddingStoreMixin:
         for attempt in range(3):
             try:
                 with probe_span("embed_texts_post", n_texts=len(texts), attempt=attempt):
+                    ensure_outbound_egress_allowed("paper embedding request")
                     response = await self.http_client.post(
                         f"{litellm_config.base_url}/v1/embeddings",
                         json={"model": EMBEDDING_MODEL, "input": texts},
@@ -212,13 +276,15 @@ class EmbeddingStoreMixin:
 
         return embeddings
 
-    async def embed_and_store(
+    async def embed_and_store(  # noqa: PLR0913 - explicit storage boundary inputs
         self,
         paper_id: int,
         chunks: list[ChunkForEmbedding],
         batch_size: int = 32,
         *,
         user_id: int | None = None,
+        visibility: VectorVisibility | None = None,
+        run_context: EmbeddingRunContext | None = None,
     ) -> list[str]:
         """Embed chunks and upsert into Qdrant.
 
@@ -231,8 +297,15 @@ class EmbeddingStoreMixin:
         batch_size : int
             Number of chunks to embed per API call.
         user_id : int | None
-            Owner of the source paper. NULL = canonical/shared (visible to all
-            authenticated users via the OR-IS-NULL leg of the scope filter).
+            Legacy compatibility/audit owner. This payload never grants access.
+        visibility : VectorVisibility | None
+            Persisted source, scope, and current deployment generation. A
+            missing value writes complete fail-closed compatibility metadata;
+            production ingestion always supplies the current value explicitly.
+        run_context : EmbeddingRunContext | None
+            Optional prior chunk content and progress callback for this run.
+            Unchanged prior chunks are skipped, and progress advances only
+            after a successful upsert or fully resume-skipped batch.
 
         Returns
         -------
@@ -247,30 +320,31 @@ class EmbeddingStoreMixin:
             their DB rows; the completed Qdrant points are *kept* so a retry
             resumes instead of re-embedding from zero.
         """
+        run_context = run_context or EmbeddingRunContext()
+        visibility = visibility or VectorVisibility.fail_closed()
+        resume_content = run_context.resume_content
+        progress_callback = run_context.progress_callback
         completed_chunks: list[ChunkForEmbedding] = []
         completed_point_ids: list[str] = []
+        batch_offsets = range(0, len(chunks), batch_size)
+        total_batches = len(batch_offsets)
 
-        for i in range(0, len(chunks), batch_size):
+        for batch_number, i in enumerate(batch_offsets, start=1):
             batch = chunks[i : i + batch_size]
-            texts = [c.content for c in batch]
+            to_embed = [c for c in batch if resume_content.get(c.chunk_index) != c.content]
             try:
-                embeddings = await self.embed_texts(texts)
-                if len(embeddings) != len(texts):
-                    raise RuntimeError(
-                        f"Embedder returned {len(embeddings)} vectors for {len(texts)} texts;"
-                        " refusing partial upsert"
-                    )
+                if to_embed:
+                    texts = [c.content for c in to_embed]
+                    embeddings = await self.embed_texts(texts)
+                    if len(embeddings) != len(texts):
+                        raise RuntimeError(
+                            f"Embedder returned {len(embeddings)} vectors for {len(texts)} texts;"
+                            " refusing partial upsert"
+                        )
 
-                points = []
-                batch_ids: list[str] = []
-                for chunk, embedding in zip(batch, embeddings):
-                    point_id = str(
-                        uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, f"{paper_id}:{chunk.chunk_index}")
-                    )
-                    batch_ids.append(point_id)
-                    points.append(
+                    points = [
                         PointStruct(
-                            id=point_id,
+                            id=chunk_point_id(paper_id, chunk.chunk_index),
                             vector=embedding,
                             payload={
                                 "paper_id": paper_id,
@@ -278,12 +352,18 @@ class EmbeddingStoreMixin:
                                 "page_number": chunk.page_number,
                                 "content": chunk.content,
                                 "embedding_model": EMBEDDING_MODEL_NAME,
+                                "embedding_fingerprint": chunk_embedding_fingerprint(chunk.content),
                                 "user_id": user_id,
+                                **visibility.payload,
                             },
                         )
+                        for chunk, embedding in zip(to_embed, embeddings)
+                    ]
+                    await self.qdrant.upsert(
+                        collection_name=COLLECTION_NAME,
+                        points=points,
+                        wait=True,
                     )
-
-                await self.qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
             except Exception as exc:
                 if not completed_point_ids:
                     # Nothing persisted yet — wrap in EmbeddingBatchError so
@@ -310,7 +390,17 @@ class EmbeddingStoreMixin:
                 ) from exc
 
             completed_chunks.extend(batch)
-            completed_point_ids.extend(batch_ids)
+            completed_point_ids.extend(chunk_point_id(paper_id, c.chunk_index) for c in batch)
+            if progress_callback is not None:
+                try:
+                    await progress_callback(batch_number, total_batches)
+                except Exception as exc:
+                    raise EmbeddingBatchError(
+                        "Embedding progress reporting failed after "
+                        f"{len(completed_point_ids)}/{len(chunks)} chunks persisted: {exc}",
+                        completed_chunks=completed_chunks,
+                        completed_point_ids=completed_point_ids,
+                    ) from exc
 
         return completed_point_ids
 
@@ -323,6 +413,23 @@ class EmbeddingStoreMixin:
         ----------
         paper_id : int
             Database ID of the paper whose vectors should be removed from Qdrant.
+
+        Returns
+        -------
+        None
+            Qdrant confirmed the filtered deletion.
+
+        Raises
+        ------
+        qdrant_client.http.exceptions.UnexpectedResponse
+            If Qdrant rejects the deletion.
+        httpx.HTTPError
+            If the Qdrant transport fails.
+
+        Notes
+        -----
+        The call waits for Qdrant to apply the deletion. It does not alter the
+        relational paper row; hard-delete callers coordinate that transaction.
         """
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 

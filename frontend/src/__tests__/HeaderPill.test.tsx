@@ -17,6 +17,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 import { HeaderPill } from '@/components/logs/HeaderPill';
 import { getSummary } from '@/lib/logs';
+import { useAuthStore } from '@/stores/auth-store';
 
 const mockGetSummary = vi.mocked(getSummary);
 
@@ -36,6 +37,29 @@ function renderPill(initialPath = '/') {
 describe('HeaderPill', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 1, email: 'admin@example.com', role: 'admin' },
+      authTime: Date.now(),
+    });
+  });
+
+  it('does not request the admin-only log summary for a regular user', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 2, email: 'member@example.com', role: 'user' },
+      authTime: Date.now(),
+    });
+    mockGetSummary.mockResolvedValue({
+      by_level: { error: 1 },
+      by_category: {},
+      total: 1,
+    });
+
+    const { container } = renderPill();
+
+    await vi.waitFor(() => expect(mockGetSummary).not.toHaveBeenCalled());
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders nothing when error count is 0', async () => {

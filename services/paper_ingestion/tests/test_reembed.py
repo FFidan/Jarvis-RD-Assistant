@@ -10,11 +10,12 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -25,6 +26,8 @@ if _PROJECT_ROOT not in sys.path:
 _JARVIS_COMMON_ROOT = str(Path(_PROJECT_ROOT) / "libs" / "jarvis_common")
 if _JARVIS_COMMON_ROOT not in sys.path:
     sys.path.insert(0, _JARVIS_COMMON_ROOT)
+
+_TEST_VISIBILITY_GENERATION = "a" * 32
 
 
 class _FakePointIdsList:
@@ -83,6 +86,9 @@ def _make_chunk_row(
     content: str = "chunk text",
     embedding_id: str | None = None,
     embedding_model: str | None = None,
+    discovered_by: int | None = 17,
+    source_type: str = "arxiv",
+    visibility_scope: str = "public",
 ) -> MagicMock:
     """Create a mock asyncpg.Record for a paper_chunks row."""
     row_data = {
@@ -95,6 +101,9 @@ def _make_chunk_row(
         "end_char": len(content),
         "embedding_id": embedding_id or str(uuid.uuid4()),
         "embedding_model": embedding_model,
+        "source_type": source_type,
+        "visibility_scope": visibility_scope,
+        "discovered_by": discovered_by,
     }
     rec = MagicMock()
     rec.__getitem__ = lambda self, key: row_data[key]
@@ -218,6 +227,11 @@ def _collection_info(size: int) -> SimpleNamespace:
     )
 
 
+def _legacy_model_point_id(paper_id: int, chunk_index: int, model_name: str) -> str:
+    digest = hashlib.sha256(f"{paper_id}:{chunk_index}:{model_name}".encode()).hexdigest()
+    return f"{digest[0:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+
+
 # ---------------------------------------------------------------------------
 # Test 1: Old Qdrant points deleted before new ones stored
 # ---------------------------------------------------------------------------
@@ -238,6 +252,34 @@ async def test_ensure_collection_dimension_creates_missing_collection():
     qdrant.create_collection.assert_awaited_once()
     vector_config = qdrant.create_collection.await_args.kwargs["vectors_config"]
     assert vector_config.size == reembed_mod.EMBEDDING_DIMENSION
+
+
+async def test_collection_creation_rotates_visibility_checkpoint() -> None:
+    """Maintenance collection creation publishes a fresh repair generation."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=False)
+    conn = AsyncMock()
+    prepare = AsyncMock(
+        return_value=SimpleNamespace(
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
+    )
+
+    with patch.object(reembed_mod, "prepare_visibility_schema", prepare):
+        generation = await reembed_mod.ensure_collection_dimension(qdrant, conn)
+
+    assert generation == _TEST_VISIBILITY_GENERATION
+    prepare.assert_awaited_once_with(
+        conn,
+        qdrant,
+        collection_created=True,
+        collection_name="paper_chunks",
+    )
 
 
 async def test_ensure_collection_dimension_rejects_model_dimension_env_mismatch():
@@ -324,6 +366,8 @@ async def test_old_qdrant_points_deleted():
 
         importlib.reload(reembed_mod)
 
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+
     old_embedding_ids = [f"old-uuid-{i}" for i in range(3)]
     chunks = [
         _make_chunk_row(
@@ -341,7 +385,14 @@ async def test_old_qdrant_points_deleted():
     http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    count = await reembed_mod.reembed_paper(1, pool, qdrant, http_client, backend)
+    count = await reembed_mod.reembed_paper(
+        1,
+        pool,
+        qdrant,
+        http_client,
+        backend,
+        visibility_generation=_TEST_VISIBILITY_GENERATION,
+    )
 
     assert count == 3
 
@@ -349,21 +400,30 @@ async def test_old_qdrant_points_deleted():
     qdrant.delete.assert_called_once()
     delete_call = qdrant.delete.call_args
     assert delete_call.kwargs["collection_name"] == "paper_chunks"
-    assert delete_call.kwargs["points_selector"].points == old_embedding_ids
+    assert delete_call.kwargs["points_selector"].points == [
+        point_id
+        for index, old_id in enumerate(old_embedding_ids)
+        for point_id in (old_id, _legacy_model_point_id(1, index, "nomic-embed-text"))
+    ]
 
     # Verify new points were upserted
     qdrant.upsert.assert_called()
     upsert_call = qdrant.upsert.call_args
     new_points = upsert_call.kwargs["points"]
     assert len(new_points) == 3
-    # New points should have the new model name in payload
-    for pt in new_points:
+    # New points use the runtime writer's durable identity contract.
+    for index, pt in enumerate(new_points):
         assert pt.payload["embedding_model"] == "nomic-embed-text"
         assert pt.payload["paper_id"] == 1
+        assert pt.payload["source_type"] == "arxiv"
+        assert pt.payload["visibility_scope"] == "public"
+        assert pt.payload["visibility_generation"] == _TEST_VISIBILITY_GENERATION
+        assert (
+            pt.payload["embedding_fingerprint"]
+            == hashlib.sha256(f"nomic-embed-text\0chunk {index}".encode()).hexdigest()
+        )
 
-    assert [pt.id for pt in new_points] == [
-        reembed_mod.deterministic_point_id(1, i, "nomic-embed-text") for i in range(3)
-    ]
+    assert [pt.id for pt in new_points] == [chunk_point_id(1, i) for i in range(3)]
 
 
 async def test_old_qdrant_cleanup_keeps_existing_target_point_ids():
@@ -383,7 +443,11 @@ async def test_old_qdrant_cleanup_keeps_existing_target_point_ids():
 
         importlib.reload(reembed_mod)
 
-    already_target_id = reembed_mod.deterministic_point_id(1, 0, "nomic-embed-text")
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+
+    already_target_id = chunk_point_id(1, 0)
+    legacy_target_id = _legacy_model_point_id(1, 0, "nomic-embed-text")
+    other_legacy_target_id = _legacy_model_point_id(1, 1, "nomic-embed-text")
     stale_id = "old-stale-point"
     chunks = [
         _make_chunk_row(
@@ -405,11 +469,19 @@ async def test_old_qdrant_cleanup_keeps_existing_target_point_ids():
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+    await reembed_mod.reembed_paper(
+        1,
+        pool,
+        qdrant,
+        AsyncMock(),
+        backend,
+        visibility_generation=_TEST_VISIBILITY_GENERATION,
+    )
 
     qdrant.delete.assert_awaited_once()
     deleted_ids = qdrant.delete.await_args.kwargs["points_selector"].points
-    assert deleted_ids == [stale_id]
+    assert deleted_ids == [legacy_target_id, stale_id, other_legacy_target_id]
+    assert already_target_id not in deleted_ids
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +506,8 @@ async def test_db_embedding_model_updated():
 
         importlib.reload(reembed_mod)
 
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+
     chunks = [_make_chunk_row(42, i, f"chunk {i}", embedding_model=None) for i in range(2)]
 
     pool = _make_mock_pool(fetch_return=chunks)
@@ -441,7 +515,14 @@ async def test_db_embedding_model_updated():
     http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    await reembed_mod.reembed_paper(42, pool, qdrant, http_client, backend)
+    await reembed_mod.reembed_paper(
+        42,
+        pool,
+        qdrant,
+        http_client,
+        backend,
+        visibility_generation=_TEST_VISIBILITY_GENERATION,
+    )
 
     # Get the connection mock from the second acquire() call (the UPDATE path)
     # The pool.acquire() is called twice: once for fetch, once for update
@@ -460,8 +541,8 @@ async def test_db_embedding_model_updated():
         assert model_name == "nomic-embed-text"
         assert row_id in {100, 101}
         assert point_id in {
-            reembed_mod.deterministic_point_id(42, 0, "nomic-embed-text"),
-            reembed_mod.deterministic_point_id(42, 1, "nomic-embed-text"),
+            chunk_point_id(42, 0),
+            chunk_point_id(42, 1),
         }
 
 
@@ -511,6 +592,11 @@ async def test_idempotent_skip_already_reembedded():
     with (
         patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(
+            reembed_mod,
+            "ensure_collection_dimension",
+            AsyncMock(return_value=_TEST_VISIBILITY_GENERATION),
+        ),
     ):
         await reembed_mod.main()
 
@@ -520,6 +606,152 @@ async def test_idempotent_skip_already_reembedded():
     # No reembed_paper calls should have happened — verify no Qdrant ops
     qdrant.delete.assert_not_called()
     qdrant.upsert.assert_not_called()
+
+
+async def test_find_candidates_repairs_missing_same_model_vector():
+    """DB model metadata cannot hide a vector missing from Qdrant."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
+
+    rows = [
+        _make_chunk_row(
+            77,
+            0,
+            "current content",
+            embedding_id=chunk_point_id(77, 0),
+            embedding_model=reembed_mod.EMBEDDING_MODEL_NAME,
+        )
+    ]
+    pool = _make_mock_pool()
+    conn = await pool.acquire.return_value.__aenter__()
+    conn.fetch = AsyncMock(side_effect=[rows, []])
+    qdrant = AsyncMock()
+    qdrant.retrieve = AsyncMock(return_value=[])
+
+    paper_ids = await reembed_mod.find_papers_needing_reembed(
+        pool, qdrant, _TEST_VISIBILITY_GENERATION
+    )
+
+    assert paper_ids == [77]
+    qdrant.retrieve.assert_awaited_once()
+
+
+async def test_find_candidates_ignores_legacy_vector_owner():
+    """A legacy audit owner is not part of vector authorization identity."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    from paper_ingestion.ingestion.embed_store import (
+        chunk_embedding_fingerprint,
+        chunk_point_id,
+    )
+
+    point_id = chunk_point_id(79, 0)
+    rows = [
+        _make_chunk_row(
+            79,
+            0,
+            "owned content",
+            embedding_id=point_id,
+            embedding_model=reembed_mod.EMBEDDING_MODEL_NAME,
+            discovered_by=17,
+        )
+    ]
+    pool = _make_mock_pool()
+    conn = await pool.acquire.return_value.__aenter__()
+    conn.fetch = AsyncMock(side_effect=[rows, []])
+    qdrant = AsyncMock()
+    qdrant.retrieve = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id=point_id,
+                payload={
+                    "paper_id": 79,
+                    "chunk_index": 0,
+                    "embedding_model": reembed_mod.EMBEDDING_MODEL_NAME,
+                    "embedding_fingerprint": chunk_embedding_fingerprint(
+                        "owned content", model_name=reembed_mod.EMBEDDING_MODEL_NAME
+                    ),
+                    "user_id": 99,
+                    "source_type": "arxiv",
+                    "visibility_scope": "public",
+                    "visibility_generation": _TEST_VISIBILITY_GENERATION,
+                },
+            )
+        ]
+    )
+
+    assert (
+        await reembed_mod.find_papers_needing_reembed(
+            pool, qdrant, _TEST_VISIBILITY_GENERATION
+        )
+        == []
+    )
+
+
+async def test_reembed_payload_preserves_paper_owner():
+    """Maintenance writes the canonical paper owner into every replacement point."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    rows = [_make_chunk_row(80, 0, "owned content", discovered_by=23)]
+    pool = _make_mock_pool(fetch_return=rows)
+    qdrant = AsyncMock()
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    await reembed_mod.reembed_paper(
+        80,
+        pool,
+        qdrant,
+        AsyncMock(),
+        backend,
+        visibility_generation=_TEST_VISIBILITY_GENERATION,
+    )
+
+    points = qdrant.upsert.await_args.kwargs["points"]
+    assert [point.payload["user_id"] for point in points] == [23]
+
+
+async def test_reembed_aborts_before_qdrant_when_chunk_snapshot_changes():
+    """Concurrent chunk replacement cannot be overwritten by a stale maintenance run."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    old_rows = [_make_chunk_row(78, 0, "old content", embedding_model="old-model")]
+    new_rows = [_make_chunk_row(78, 0, "new content", embedding_model="old-model")]
+    pool = _make_mock_pool()
+    conn = await pool.acquire.return_value.__aenter__()
+    conn.fetch = AsyncMock(side_effect=[old_rows, new_rows])
+    qdrant = AsyncMock()
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    with pytest.raises(reembed_mod.ScriptError, match="chunks changed"):
+        await reembed_mod.reembed_paper(
+            78,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
+
+    qdrant.upsert.assert_not_awaited()
+    conn.execute.assert_has_awaits(
+        [
+            call("SELECT pg_advisory_lock($1, $2)", 1, 78),
+            call("SELECT pg_advisory_unlock($1, $2)", 1, 78),
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +825,14 @@ async def test_reembed_partial_failure_preserves_old_points():
     )
 
     with pytest.raises(RuntimeError, match="Embedding API failure on batch 2"):
-        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+        await reembed_mod.reembed_paper(
+            1,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
 
     # Old points must NOT have been deleted (atomic safety)
     qdrant.delete.assert_not_called()
@@ -606,8 +845,7 @@ async def test_main_raises_after_non_script_error_paper_failures():
     import scripts.reembed as reembed_mod
 
     importlib.reload(reembed_mod)
-    paper_ids = [{"paper_id": 1}, {"paper_id": 2}]
-    pool, _conns = _make_sequenced_pool([paper_ids])
+    pool, _conns = _make_sequenced_pool([[]])
     qdrant = AsyncMock()
     qdrant.collection_exists = AsyncMock(return_value=True)
     qdrant.get_collection = AsyncMock(
@@ -619,7 +857,7 @@ async def test_main_raises_after_non_script_error_paper_failures():
 
     reembed_calls: list[int] = []
 
-    async def _fake_reembed_paper(pid, *_args):
+    async def _fake_reembed_paper(pid, *_args, **_kwargs):
         reembed_calls.append(pid)
         if pid == 1:
             raise RuntimeError("paper exploded")
@@ -629,7 +867,13 @@ async def test_main_raises_after_non_script_error_paper_failures():
     with (
         patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(
+            reembed_mod,
+            "ensure_collection_dimension",
+            AsyncMock(return_value=_TEST_VISIBILITY_GENERATION),
+        ),
         patch.object(reembed_mod, "build_embedding_backend", return_value=fake_backend),
+        patch.object(reembed_mod, "find_papers_needing_reembed", AsyncMock(return_value=[1, 2])),
         patch.object(reembed_mod, "reembed_paper", side_effect=_fake_reembed_paper),
     ):
         with pytest.raises(reembed_mod.ScriptError, match="paper_id=1"):
@@ -653,7 +897,14 @@ async def test_reembed_old_qdrant_delete_failure_is_fatal_by_default():
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
     with pytest.raises(reembed_mod.ScriptError, match="Failed to delete old Qdrant points"):
-        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+        await reembed_mod.reembed_paper(
+            1,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
 
     conn = await pool.acquire.return_value.__aenter__()
     conn.executemany.assert_not_awaited()
@@ -674,7 +925,17 @@ async def test_reembed_old_qdrant_delete_failure_can_continue_with_explicit_flag
     qdrant.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    assert await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend) == 1
+    assert (
+        await reembed_mod.reembed_paper(
+            1,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
+        == 1
+    )
 
 
 async def test_reembed_qdrant_writes_wait_for_completion_before_db_update():
@@ -689,7 +950,14 @@ async def test_reembed_qdrant_writes_wait_for_completion_before_db_update():
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+    await reembed_mod.reembed_paper(
+        1,
+        pool,
+        qdrant,
+        AsyncMock(),
+        backend,
+        visibility_generation=_TEST_VISIBILITY_GENERATION,
+    )
 
     qdrant.upsert.assert_awaited_once()
     qdrant.delete.assert_awaited_once()
@@ -709,7 +977,65 @@ async def test_verify_postconditions_requires_db_target_count_and_qdrant_count_p
     qdrant.count = AsyncMock(return_value=SimpleNamespace(count=8))
 
     with pytest.raises(reembed_mod.ScriptError, match="Postcondition failed"):
-        await reembed_mod.verify_postconditions(pool, qdrant)
+        await reembed_mod.verify_postconditions(
+            pool, qdrant, _TEST_VISIBILITY_GENERATION
+        )
+
+
+async def test_verify_postconditions_rejects_equal_counts_with_wrong_visibility():
+    """Equal aggregate counts cannot hide stale authorization metadata."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    from paper_ingestion.ingestion.embed_store import (
+        chunk_embedding_fingerprint,
+        chunk_point_id,
+    )
+
+    point_id = chunk_point_id(81, 0)
+    rows = [
+        _make_chunk_row(
+            81,
+            0,
+            "current content",
+            embedding_id=point_id,
+            embedding_model=reembed_mod.EMBEDDING_MODEL_NAME,
+            discovered_by=41,
+        )
+    ]
+    pool = _make_mock_pool(fetchval_return=1)
+    conn = await pool.acquire.return_value.__aenter__()
+    conn.fetch = AsyncMock(side_effect=[rows, []])
+    qdrant = AsyncMock()
+    qdrant.count = AsyncMock(return_value=SimpleNamespace(count=1))
+    qdrant.retrieve = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id=point_id,
+                payload={
+                    "paper_id": 81,
+                    "chunk_index": 0,
+                    "embedding_model": reembed_mod.EMBEDDING_MODEL_NAME,
+                    "embedding_fingerprint": chunk_embedding_fingerprint(
+                        "current content", model_name=reembed_mod.EMBEDDING_MODEL_NAME
+                    ),
+                    "user_id": 99,
+                    "source_type": "arxiv",
+                    "visibility_scope": "private",
+                    "visibility_generation": _TEST_VISIBILITY_GENERATION,
+                },
+            )
+        ]
+    )
+
+    with pytest.raises(reembed_mod.ScriptError, match="identity or visibility"):
+        await reembed_mod.verify_postconditions(
+            pool,
+            qdrant,
+            _TEST_VISIBILITY_GENERATION,
+        )
 
 
 async def test_main_runs_postcondition_after_successful_reembed():
@@ -719,8 +1045,7 @@ async def test_main_runs_postcondition_after_successful_reembed():
     import scripts.reembed as reembed_mod
 
     importlib.reload(reembed_mod)
-    paper_ids = [{"paper_id": 1}]
-    pool, _conns = _make_sequenced_pool([paper_ids])
+    pool, _conns = _make_sequenced_pool([[]])
     qdrant = AsyncMock()
     qdrant.collection_exists = AsyncMock(return_value=True)
     qdrant.get_collection = AsyncMock(
@@ -734,13 +1059,23 @@ async def test_main_runs_postcondition_after_successful_reembed():
     with (
         patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(
+            reembed_mod,
+            "ensure_collection_dimension",
+            AsyncMock(return_value=_TEST_VISIBILITY_GENERATION),
+        ),
         patch.object(reembed_mod, "build_embedding_backend", return_value=fake_backend),
+        patch.object(reembed_mod, "find_papers_needing_reembed", AsyncMock(return_value=[1])),
         patch.object(reembed_mod, "reembed_paper", AsyncMock(return_value=3)),
         patch.object(reembed_mod, "verify_postconditions", AsyncMock()) as verify_postconditions,
     ):
         await reembed_mod.main()
 
-    verify_postconditions.assert_awaited_once_with(pool, qdrant)
+    verify_postconditions.assert_awaited_once_with(
+        pool,
+        qdrant,
+        _TEST_VISIBILITY_GENERATION,
+    )
 
 
 async def test_reembed_fails_on_embedding_count_mismatch():
@@ -759,7 +1094,14 @@ async def test_reembed_fails_on_embedding_count_mismatch():
     )
 
     with pytest.raises(reembed_mod.ScriptError, match="Embedding count mismatch"):
-        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+        await reembed_mod.reembed_paper(
+            1,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
 
     qdrant.upsert.assert_not_called()
 
@@ -780,7 +1122,14 @@ async def test_reembed_fails_on_embedding_dimension_mismatch():
     )
 
     with pytest.raises(reembed_mod.ScriptError, match="Embedding dimension mismatch"):
-        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+        await reembed_mod.reembed_paper(
+            1,
+            pool,
+            qdrant,
+            AsyncMock(),
+            backend,
+            visibility_generation=_TEST_VISIBILITY_GENERATION,
+        )
 
     qdrant.upsert.assert_not_called()
 
@@ -862,20 +1211,17 @@ def test_parse_args_supports_safe_help_flags():
     assert args.benchmark_size == 2
 
 
-def test_deterministic_point_id_is_stable_and_model_scoped():
+def test_deterministic_point_id_matches_runtime_across_models():
     import importlib
 
     import scripts.reembed as reembed_mod
+    from paper_ingestion.ingestion.embed_store import chunk_point_id
 
     importlib.reload(reembed_mod)
 
-    first = reembed_mod.deterministic_point_id(1, 2, "qwen3-embedding:0.6b")
-    second = reembed_mod.deterministic_point_id(1, 2, "qwen3-embedding:0.6b")
-    other_model = reembed_mod.deterministic_point_id(1, 2, "nomic-embed-text")
-
-    assert first == second
-    assert first != other_model
-    assert len(first) == 36
+    expected = chunk_point_id(1, 2)
+    assert reembed_mod.deterministic_point_id(1, 2, "qwen3-embedding:0.6b") == expected
+    assert reembed_mod.deterministic_point_id(1, 2, "nomic-embed-text") == expected
 
 
 async def test_run_benchmark_is_read_only():

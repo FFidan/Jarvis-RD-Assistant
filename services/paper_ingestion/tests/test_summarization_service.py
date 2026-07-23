@@ -14,6 +14,7 @@ from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
 from paper_ingestion.models import Confidence
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services import summarization
 from paper_ingestion.services.summarization_models import (
     CondensedDigest,
@@ -512,17 +513,15 @@ async def test_cross_references_filter_unseen_papers():
 
 @pytest.mark.asyncio
 async def test_cross_references_semantic_path_scopes_to_requester_not_owner():
-    """The cross-ref search must bind the REQUESTING user, not the paper owner.
+    """The cross-reference search binds the requester, not audit attribution.
 
-    Inverts the prior owner-scoping pin: binding the owner (``discovered_by``)
-    let one tenant's cross-ref pull in another tenant's chunks.  The requester's
-    own ``user_library`` is threaded as ``library_paper_ids`` (PI-RAG-001) so
-    shared-corpus papers in the requester's library stay reachable — verified
-    by the positive assertion below.
+    Binding ``discovered_by`` previously let one tenant's request use another
+    tenant's vector scope. The requester's own ``user_library`` is threaded as
+    ``library_paper_ids`` so papers they may access stay reachable.
     """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
-    # The requester's own library: a shared-corpus paper embedded by another user.
+    # The requester's own library includes a paper embedded by another user.
     conn.fetch.return_value = [{"paper_id": 7}, {"paper_id": 555}]
     embedder = AsyncMock()
     embedder.search_similar.return_value = []
@@ -539,8 +538,8 @@ async def test_cross_references_semantic_path_scopes_to_requester_not_owner():
     kwargs = embedder.search_similar.call_args.kwargs
     assert kwargs["user_id"] == 42, "search must scope to the requester (42), not the owner (99)"
     assert kwargs["library_paper_ids"] == [7, 555], (
-        "the requester's own user_library must be threaded so a shared-corpus "
-        "paper (555) embedded by another user stays reachable (PI-RAG-001)"
+        "the requester's own user_library must be threaded so paper 555 "
+        "stays reachable despite another user embedding it (PI-RAG-001)"
     )
     # The library lookup must be keyed on the REQUESTER's id.
     assert conn.fetch.await_args.args[-1] == 42
@@ -548,7 +547,7 @@ async def test_cross_references_semantic_path_scopes_to_requester_not_owner():
 
 @pytest.mark.asyncio
 async def test_cross_references_semantic_path_falls_back_to_owner_for_system_jobs():
-    """With no requester (system job), the search falls back to the paper owner."""
+    """A trusted job uses discovery attribution as its bounded library context."""
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
     conn.fetch.return_value = [{"paper_id": 7}]
@@ -569,22 +568,20 @@ async def test_cross_references_semantic_path_falls_back_to_owner_for_system_job
 
 
 @pytest.mark.asyncio
-async def test_cross_references_include_canonical_shared_corpus_paper():
-    """A canonical (shared-corpus) paper in NOBODY's library must NOT be dropped.
+async def test_cross_references_include_public_corpus_paper():
+    """A public paper in nobody's library must not be dropped.
 
     Regression: the visibility filter previously restricted candidates to the
-    caller's own ``user_library``, silently discarding every canonical paper the
-    semantic search surfaced.  The corrected predicate mirrors ``rag/streaming.py``
-    VERBATIM — visible iff the caller owns it OR it is canonical (in nobody's
-    library).  ``papers`` is the shared canonical corpus, visible to every user.
+    caller's own ``user_library``, silently discarding public papers surfaced
+    by semantic search. The corrected predicate is persisted public scope or
+    explicit caller-library membership.
     """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
     conn.fetch.side_effect = [
         # requester's library lookup (paper 7 is the source paper)
         [{"paper_id": 7}],
-        # corrected visibility predicate: canonical 555 (in nobody's library) is
-        # visible to any user and returned keyed on `p.id`.
+        # The public candidate is visible without library membership.
         [{"id": 555}],
     ]
     embedder = AsyncMock()
@@ -599,8 +596,15 @@ async def test_cross_references_include_canonical_shared_corpus_paper():
     )
 
     assert [r.related_paper_id for r in result] == [555], (
-        "a canonical shared-corpus paper must survive the visibility filter"
+        "a public paper must survive the visibility filter"
     )
+    visibility_call = conn.fetch.await_args_list[-1]
+    visibility_sql = visibility_call.args[0]
+    assert paper_visible_sql(2) in visibility_sql
+    assert "NOT EXISTS" not in visibility_sql
+    assert "visibility_ul.user_id = $2" in visibility_sql
+    assert visibility_sql.count("visibility_ul.user_id = $2") == 1
+    assert visibility_call.args[1:] == ([555], 42)
 
 
 @pytest.mark.asyncio
@@ -613,8 +617,7 @@ async def test_cross_references_exclude_other_users_private_paper():
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
     conn.fetch.side_effect = [
         [{"paper_id": 7}, {"paper_id": 555}],  # requester's library
-        # corrected predicate: canonical 555 visible; foreign 888 (only in
-        # another user's library, not canonical) excluded.
+        # Public 555 is visible; private 888 in another user's library is not.
         [{"id": 555}],
     ]
     embedder = AsyncMock()
@@ -1064,8 +1067,10 @@ async def test_paper_summarize_job_forwards_force(monkeypatch):
     """_paper_summarize_job reads payload['force'] and forwards it as a keyword."""
     from paper_ingestion.paper_jobs import _paper_summarize_job
 
-    monkeypatch.setattr(summarization.svc, "verifier", MagicMock())
-    monkeypatch.setattr(summarization.svc, "embedder", MagicMock())
+    services = MagicMock(verifier=MagicMock(), embedder=MagicMock())
+    # test_paper_jobs deliberately reloads paper_jobs and _state; patch the
+    # handler's actual globals so this contract is independent of file order.
+    monkeypatch.setitem(_paper_summarize_job.__globals__, "get_services", lambda: services)
     # _paper_summarize_job imports generate_paper_summary at call time, so
     # patching the module attribute intercepts the call.
     fake_result = MagicMock()
@@ -1076,7 +1081,7 @@ async def test_paper_summarize_job_forwards_force(monkeypatch):
     monkeypatch.setattr(summarization, "generate_paper_summary", gen_mock)
 
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"discovered_by": 42}  # ownership granted
+    conn.fetchrow.return_value = {"id": 7, "is_visible": True}
     pool = _make_pool(conn)
     ctx = MagicMock(update_progress=AsyncMock())
 

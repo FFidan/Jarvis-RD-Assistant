@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# test_jarvis_research_cli.sh — behavioral tests for scripts/jarvis-research.sh,
-# the lifecycle CLI that fronts a managed JARVIS install. No docker daemon,
-# network, or real git repo is needed: git, docker, and `docker compose` are
-# stubbed on a private PATH that LOGS every invocation (the pattern established
-# by test_update_coverage.sh / test_setup_lib_helpers.sh), and the CLI runs
-# against a throwaway fixture repo. State dirs, backup dirs, and the CLI's poll
-# budget are redirected to mktemp fixtures via the CLI's env overrides.
+# Behavioral contract tests for scripts/jarvis-research.sh. Git, Docker, and
+# Compose are replaced with recording stubs, and the CLI runs against a temporary
+# installation. State, backup, and polling paths are redirected to isolated
+# fixtures, so the suite needs no network, Docker daemon, or persistent repository.
 #
 # The refusal matrix and the transaction ordering checks are the specification:
 # every `update` refusal must exit 1 and leave the stub log free of a mutating
@@ -21,6 +18,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 CLI="${REPO_ROOT}/scripts/jarvis-research.sh"
 LIB="${REPO_ROOT}/scripts/setup_lib.sh"
 UPDATE_SCRIPT="${REPO_ROOT}/update.sh"
+LIFECYCLE_HELPER="${REPO_ROOT}/scripts/backup-lifecycle.sh"
 
 fail=0
 pass_n=0
@@ -30,10 +28,62 @@ has()  { printf '%s' "$1" | grep -q -- "$2"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 :: missing /$2/ in <<<$1>>>"; fi; }
 lack() { if has "$1" "$2"; then check_fail "$3 :: unexpected /$2/ in <<<$1>>>"; else pass "$3"; fi; }
 
+# Exercise the recovery epilogues without the wider transaction fixture. This
+# keeps their user-facing contract independently testable when another lane is
+# changing lifecycle-helper integration.
+for recovery_fn in _rollback_pin_lines _schema_not_safe_notice _failure_epilogue _success_epilogue; do
+  recovery_src="$(sed -n "/^${recovery_fn}() {/,/^}/p" "$CLI")"
+  if [ -z "$recovery_src" ]; then
+    printf 'FAIL: could not extract %s from %s\n' "$recovery_fn" "$CLI" >&2
+    exit 1
+  fi
+  eval "$recovery_src"
+done
+REPO=/srv/jarvis-family
+PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+PUBLISHED_SERVICE_TELEGRAM=telegram_bot
+TXN_FROM_VERSION=1.1.2
+MIGRATIONS_RAN=1
+C_BOLD=""; C_RESET=""; C_YELLOW=""; C_RED=""
+err() { printf '[ERROR] %s\n' "$*" >&2; }
+_active_profiles() { printf 'tunnel telegram'; }
+_txn_field() { printf '1.1.2'; }
+cmd_doctor() { :; }
+
+out="$(_failure_epilogue v1.1.3 2>&1)"
+data_line="$(printf '%s\n' "$out" | grep -nF 'Admin > Backups' | cut -d: -f1)"
+image_line="$(printf '%s\n' "$out" | grep -nF 'Application-image recovery (not a full release rollback)' | cut -d: -f1)"
+if has "$out" 'JARVIS_VERSION=1.1.2 docker compose --profile tunnel --profile telegram pull' \
+   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'Repository: /srv/jarvis-family' \
+   && has "$out" 'do not move the Git checkout or restore stored data' \
+   && has "$out" 'A data-changing migration may have run' \
+   && [ -n "$data_line" ] && [ -n "$image_line" ] && [ "$data_line" -lt "$image_line" ] \
+   && has "$out" 'cd /srv/jarvis-family && jarvis-research update --resume v1.1.3' \
+   && ! has "$out" '<previous-version>' \
+   && ! has "$out" 'scripts/restore.sh'; then
+  pass "failure_epilogue_contract_is_exact_scoped_ordered_and_resumable"
+else
+  check_fail "failure epilogue contract: data=$data_line image=$image_line out=<<<$out>>>"
+fi
+
+out="$(_success_epilogue v1.1.3 2>&1)"
+if ! has "$out" '<previous-version>' \
+   && ! has "$out" 'full release rollback' \
+   && ! has "$out" 'If you need to roll back' \
+   && has "$out" 'Now running v1.1.3'; then
+  pass "success_epilogue_omits_speculative_release_rollback"
+else
+  check_fail "success epilogue printed unsupported rollback guidance: out=<<<$out>>>"
+fi
+
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 STUB="$ROOT/stub"
 mkdir -p "$STUB"
+SOURCE_SHA="1111111111111111111111111111111111111111"
+TARGET_SHA="2222222222222222222222222222222222222222"
+OTHER_SHA="3333333333333333333333333333333333333333"
 
 # =============================================================================
 # Stubs: git + docker + docker compose, logging every call to $STUB_LOG.
@@ -46,12 +96,29 @@ case "${1:-} ${2:-}" in
   "status --porcelain")   printf '%s' "${STUB_DIRTY:-}"; [ -n "${STUB_DIRTY:-}" ] && printf '\n'; exit 0 ;;
   "remote get-url")       printf '%s\n' "${STUB_REMOTE:-git@github.com:limitcycle-oss/jarvis-rd-assistant.git}"; exit 0 ;;
 esac
+if [ "${1:-}" = -C ]; then
+  repo="$2"; shift 2
+  case "${1:-}" in
+    rev-parse)
+      case "${2:-}" in
+        HEAD) cat "$repo/.stub-head" 2>/dev/null || exit 1 ;;
+        *) printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
+      esac
+      exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
 case "${1:-}" in
+  describe)
+    [ -n "${STUB_EXACT_TAG:-}" ] || exit 1
+    printf '%s\n' "$STUB_EXACT_TAG"
+    exit 0 ;;
   rev-parse)
-    # rev-parse HEAD -> head sha; rev-parse <ref> -> a per-ref sha.
+    # HEAD is durable across the CLI's post-merge exec. Every fixture release tag
+    # peels to the same deterministic target commit unless a test overrides it.
     case "${2:-}" in
-      HEAD) printf 'sha-head\n' ;;
-      *)    printf 'sha-%s\n' "${2:-}" ;;
+      HEAD) cat "$STUB_HEAD_FILE" ;;
+      *)    printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
     esac
     exit 0 ;;
   fetch) log "$*"; exit 0 ;;
@@ -78,15 +145,37 @@ QDRANT_IMAGE=qdrant/qdrant:v1.13.2
 LITELLM_IMAGE=ghcr.io/berriai/litellm:main-stable
 CLOUDFLARED_IMAGE=cloudflare/cloudflared:2025.1.0
 CADDY_IMAGE=caddy:2.9-alpine
+TARGET_EDGE_IMAGE=registry.example/target-edge:2.0
 VE
         ;;
+      *:docker-compose.yml)
+        printf 'services:\n  dashboard:\n    image: ghcr.io/limitcycle-oss/jarvis-dashboard:1.1.3\n'
+        ;;
+      *:docker-compose.override.yml) exit 1 ;;
       *) printf '%s\n' "${STUB_MIG_CONTENT:-}" ;;
     esac
     exit 0 ;;
   merge)
     # merge --ff-only <ref>  — the ONLY branch advance.
-    [ -n "${PENDING_FILE:-}" ] && [ -f "$PENDING_FILE" ] && printf 'PENDING_EXISTS_AT_MERGE\n' >> "$STUB_LOG"
+    if [ -n "${PENDING_FILE:-}" ] && [ -f "$PENDING_FILE" ]; then
+      printf 'PENDING_EXISTS_AT_MERGE\n' >> "$STUB_LOG"
+      printf 'PENDING_JSON_AT_MERGE=%s\n' "$(cat "$PENDING_FILE")" >> "$STUB_LOG"
+    fi
+    if [ -n "${UPDATE_PIN_FILE:-}" ] && [ -f "$UPDATE_PIN_FILE" ]; then
+      printf 'UPDATE_PIN_AT_MERGE=%s\n' "$(cat "$UPDATE_PIN_FILE")" >> "$STUB_LOG"
+    fi
+    if [ -n "${STUB_BACKUP_DIR:-}" ] && [ -s "$STUB_BACKUP_DIR/.lifecycle/update.guard" ]; then
+      printf 'LIFECYCLE_GUARD_AT_MERGE=%s\n' "$(cat "$STUB_BACKUP_DIR/.lifecycle/update.guard")" >> "$STUB_LOG"
+    fi
     log "$*"
+    if [ "${STUB_MERGE_RC:-0}" = 0 ] || [ "${STUB_MERGE_CRASH:-0}" = 1 ]; then
+      printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_HEAD_FILE"
+      printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_REPO/.stub-head"
+    fi
+    if [ "${STUB_MERGE_CRASH:-0}" = 1 ]; then
+      kill -KILL "$PPID"
+      exit 137
+    fi
     exit "${STUB_MERGE_RC:-0}" ;;
   *) log "$*"; exit 0 ;;
 esac
@@ -105,16 +194,66 @@ running_svc() {
 }
 case "${1:-}" in
   info) [ "${STUB_NO_DAEMON:-0}" = 1 ] && exit 1; exit 0 ;;
+  volume)
+    case "${2:-}" in
+      inspect)
+        if printf '%s\n' "$@" | grep -q -- '--format'; then
+          project="${STUB_COMPOSE_LABEL_PROJECT:-$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
+          printf '%s|postgres_backups\n' "$project"
+        fi
+        exit 0 ;;
+      create) exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  run)
+    raw_args=("$@")
+    detached=0
+    for arg in "${raw_args[@]}"; do [ "$arg" = -d ] && detached=1; done
+    for ((i=0; i<${#raw_args[@]}; i++)); do
+      if [ "${raw_args[$i]}" = /tmp/backup-lifecycle.sh ]; then
+        helper_args=("${raw_args[@]:$((i + 1))}")
+        log "lifecycle ${helper_args[*]}"
+        if [ "$detached" -eq 1 ]; then
+          (
+            exec 8>&-
+            exec env JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" \
+              JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
+              JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
+              bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+          ) >/dev/null 2>&1 &
+          printf '0123456789abcdef0123456789abcdef\n'
+          exit 0
+        fi
+        JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
+          JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
+          bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+        exit $?
+      fi
+    done
+    exit 0 ;;
   manifest)
     # manifest inspect <ref>
     ref="${3:-}"
     log "manifest inspect $ref"
     if [ -n "${MANIFEST_MISS:-}" ] && printf '%s' "$ref" | grep -q -- "$MANIFEST_MISS"; then exit 1; fi
     exit 0 ;;
+  pull)
+    log "image pull ${2:-}"
+    if [ "${STUB_FAIL_STAGE_PULL:-0}" = 1 ] \
+       || { [ -n "${STUB_FAIL_STAGE_PULL:-}" ] \
+            && [ "${STUB_FAIL_STAGE_PULL:-0}" != 0 ] \
+            && printf '%s' "${2:-}" | grep -qF -- "$STUB_FAIL_STAGE_PULL"; }; then
+      exit 1
+    fi
+    exit 0 ;;
   inspect)
     shift; fmt=""
     while [ $# -gt 0 ]; do case "$1" in --format) fmt="$2"; shift 2 ;; *) shift ;; esac; done
     case "$fmt" in
+      *com.docker.compose.project.working_dir*)
+        project="${STUB_COMPOSE_LABEL_PROJECT:-$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
+        printf '%s|%s|%s/docker-compose.yml\n' "$project" "$STUB_REPO" "$STUB_REPO"
+        ;;
       *Config.Image*) printf 'oldimage:running\n' ;;
       *State.Health*) printf '%s\n' "${STUB_HEALTH-healthy}" ;;
       *State.Status*) printf '%s\n' "${STUB_RUN_STATE-running}" ;;
@@ -123,18 +262,104 @@ case "${1:-}" in
     exit 0 ;;
   restart) log "restart ${*:2}"; exit 0 ;;
   compose)
+    log "compose-env file=${COMPOSE_FILE-<unset>} project=${COMPOSE_PROJECT_NAME-<unset>} profiles=${COMPOSE_PROFILES-<unset>} separator=${COMPOSE_PATH_SEPARATOR-<unset>} envfiles=${COMPOSE_ENV_FILES-<unset>} disable=${COMPOSE_DISABLE_ENV_FILE-<unset>}"
+    raw_args=("$@")
+    for ((i=0; i<${#raw_args[@]}; i++)); do
+      if [ "${raw_args[$i]}" = /tmp/backup-lifecycle.sh ]; then
+        helper_args=("${raw_args[@]:$((i + 1))}")
+        log "lifecycle ${helper_args[*]}"
+        if [ "${helper_args[0]:-}" = wait-update ] \
+           && [ -n "${STUB_UPDATE_WAIT_FAIL_ONCE_FILE:-}" ] \
+           && [ ! -e "$STUB_UPDATE_WAIT_FAIL_ONCE_FILE" ]; then
+          : > "$STUB_UPDATE_WAIT_FAIL_ONCE_FILE"
+          exit 75
+        fi
+        if [ "${helper_args[0]:-}" = hold-update ]; then
+          (
+            exec 8>&-
+            exec env JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
+              JARVIS_HOST_SECRETS_DIR="$STUB_REPO/secrets" \
+              JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
+              bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+          ) >/dev/null 2>&1 &
+          printf '0123456789abcdef0123456789abcdef\n'
+          exit 0
+        fi
+        if [ "${helper_args[0]:-}" = acknowledge-quarantine ] \
+           && [ -n "${STUB_QUARANTINE_REPLACE_ON_ACK:-}" ]; then
+          printf '{"version":1,"restore_id":"%s","source":"inbox","requested_at":"2026-07-21T20:00:00+00:00","completed_at":"2026-07-21T20:05:00+00:00","review_state":"awaiting_review"}\n' \
+            "$STUB_QUARANTINE_REPLACE_ON_ACK" \
+            > "$STUB_TRIGGER_DIR/.outbound-quarantine.json"
+        fi
+        JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
+          JARVIS_HOST_SECRETS_DIR="$STUB_REPO/secrets" \
+          JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
+          bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+        exit $?
+      fi
+    done
     shift; args=()
-    while [ $# -gt 0 ]; do case "$1" in --profile) shift 2 ;; --env-file) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+    while [ $# -gt 0 ]; do case "$1" in
+      --profile|--env-file|--project-directory|-p|-f) shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac; done
     set -- "${args[@]:-}"
     case "${1:-}" in
       version) exit 0 ;;
+      config)
+        if [ "${JARVIS_TARGET_COHORT_RENDER:-0}" = 1 ]; then
+          log "target config ${raw_args[*]}"
+          if [ -n "${STUB_TARGET_CONFIG_JSON:-}" ]; then
+            printf '%s\n' "$STUB_TARGET_CONFIG_JSON"
+          else
+            printf '{"services":{"dashboard":{"image":"ghcr.io/limitcycle-oss/jarvis-dashboard:%s","pull_policy":"missing","build":{"context":"frontend"}},"target_worker":{"image":"ghcr.io/limitcycle-oss/jarvis-target-worker:%s","pull_policy":"missing"},"target_edge":{"image":"%s"},"langfuse":{"image":"jarvis/langfuse-hardened:%s","pull_policy":"build","build":{"context":"langfuse"}}}}\n' \
+              "${JARVIS_VERSION:-missing}" "${JARVIS_VERSION:-missing}" \
+              "${TARGET_EDGE_IMAGE:-registry.example/current-edge:1.0}" \
+              "${JARVIS_VERSION:-missing}"
+          fi
+        else
+          project="$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+          printf '{"volumes":{"postgres_backups":{"name":"%s_postgres_backups"}}}\n' "$project"
+        fi
+        exit 0 ;;
+      exec)
+        shift
+        [ "${1:-}" = -T ] && shift
+        service="${1:-}"
+        shift || true
+        log "compose exec ${service} $*"
+        case "$service" in
+          paper_ingestion)
+            printf '%s' "${STUB_OWNER_ENV:-}"
+            exit 0 ;;
+          postgres)
+            payload="$(cat)"
+            if [ -n "${STUB_PSQL_INPUT_FILE:-}" ]; then
+              printf '%s\n' "$payload" > "$STUB_PSQL_INPUT_FILE"
+            fi
+            if printf '%s' "$payload" | grep -q -- '-- jarvis-owner-status'; then
+              printf '%s\n' "${STUB_OWNER_DB_RESULT:-none|missing||}"
+              exit 0
+            fi
+            if printf '%s' "$payload" | grep -q -- '-- jarvis-owner-set'; then
+              exit "${STUB_OWNER_SET_RC:-0}"
+            fi
+            exit 1 ;;
+          *) exit 1 ;;
+        esac ;;
       ps)
         if [ "${2:-}" = "-q" ]; then running_svc "${3:-}" && printf 'cid-%s\n' "${3:-}"; exit 0; fi
         # bare `ps` (status/doctor table)
         printf 'NAME                 STATUS\n'
         printf 'jarvis-dashboard-1   Up 3 minutes (healthy)\n'
         exit 0 ;;
-      pull)  log "compose pull ${*:2}"; [ "${STUB_FAIL_STAGE_PULL:-0}" = 1 ] && exit 1; exit 0 ;;
+      pull)
+        log "compose pull ${*:2}"
+        if [ -n "${STUB_BACKUP_DIR:-}" ] && [ -s "$STUB_BACKUP_DIR/.lifecycle/update.guard" ]; then
+          printf 'LIFECYCLE_GUARD_AT_PULL=%s\n' "$(cat "$STUB_BACKUP_DIR/.lifecycle/update.guard")" >> "$STUB_LOG"
+        fi
+        [ "${STUB_FAIL_STAGE_PULL:-0}" = 1 ] && exit 1
+        exit 0 ;;
       up)    log "compose up ${*:2}"; exit 0 ;;
       build) log "compose build ${*:2}"; exit 0 ;;
       stop|restart|logs) log "compose $*"; exit 0 ;;
@@ -158,6 +383,13 @@ make_repo() {
   ln -sf "$CLI" "$dir/scripts/jarvis-research.sh"
   ln -sf "$LIB" "$dir/scripts/setup_lib.sh"
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
+  cp "$LIFECYCLE_HELPER" "$dir/scripts/backup-lifecycle.sh"
+  chmod +x "$dir/scripts/backup-lifecycle.sh"
+  cat > "$dir/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "1.1.3"
+PYPROJECT
   cat > "$dir/versions.env" <<'VE'
 POSTGRES_IMAGE=postgres:16.8
 OLLAMA_IMAGE=ollama/ollama:0.31.2
@@ -168,6 +400,8 @@ CADDY_IMAGE=caddy:2.9-alpine
 VE
   printf 'services:\n  dashboard:\n    image: x\n' > "$dir/docker-compose.yml"
   printf 'JARVIS_VERSION=1.1.2\nTORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\n' > "$dir/.env"
+  mkdir -p "$dir/secrets"
+  printf 'FIXTURE-BACKUP-KEY\n' > "$dir/secrets/backup_encrypt_key.txt"
   # A setup.sh that doctor can shell for `--check`.
   cat > "$dir/setup.sh" <<'SETUP'
 #!/usr/bin/env bash
@@ -184,16 +418,28 @@ new_env() {
   # next through run_cli's ${VAR:-default} passthrough.
   unset STUB_MIGRATIONS STUB_MIG_CONTENT MANIFEST_MISS STUB_ANCESTOR STUB_MERGE_RC \
         STUB_DIRTY STUB_BRANCH STUB_REMOTE STUB_HEALTH STUB_FAIL_STAGE_PULL \
-        STUB_NO_DAEMON STUB_TAGS STUB_RUN_STATE 2>/dev/null || true
+        STUB_NO_DAEMON STUB_TAGS STUB_RUN_STATE STUB_EXACT_TAG STUB_MERGE_CRASH \
+        STUB_TARGET_SHA STUB_COMPOSE_LABEL_PROJECT STUB_UPDATE_WAIT_FAIL_ONCE_FILE \
+        STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
+        STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK CLI_STDIN_FILE \
+        JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
+        JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
   REPO="$ROOT/repo.$RANDOM.$RANDOM"
   CFG="$ROOT/cfg.$RANDOM.$RANDOM"
   BK="$ROOT/backups.$RANDOM.$RANDOM"
   TRIG="$ROOT/trigger.$RANDOM.$RANDOM"
-  mkdir -p "$CFG" "$BK" "$TRIG"
+  mkdir -p "$CFG" "$BK/.lifecycle" "$TRIG"
   make_repo "$REPO"
   STUB_LOG="$ROOT/log.$RANDOM"
   : > "$STUB_LOG"
-  PENDING_FILE="$CFG/pending-update.json"
+  install_key="$(printf '%s' "$(realpath "$REPO")" | sha256sum | cut -d' ' -f1)"
+  PENDING_FILE="$CFG/pending-update-${install_key}.json"
+  LEGACY_PENDING_FILE="$CFG/pending-update.json"
+  UPDATE_PIN_FILE="$BK/.lifecycle/update-backup-pin.json"
+  STUB_HEAD_FILE="$CFG/head"
+  STUB_PSQL_INPUT_FILE="$CFG/psql-input.sql"
+  printf '%s\n' "$SOURCE_SHA" > "$STUB_HEAD_FILE"
+  printf '%s\n' "$SOURCE_SHA" > "$REPO/.stub-head"
 }
 
 # run_cli [--norepo] <args...>  — invoke the CLI with the stub PATH and the
@@ -203,30 +449,92 @@ run_cli() {
   local norepo=0
   if [ "${1:-}" = "--norepo" ]; then norepo=1; shift; fi
   local -a pre=(env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" "PENDING_FILE=$PENDING_FILE"
+    "UPDATE_PIN_FILE=$UPDATE_PIN_FILE"
+    "STUB_TRIGGER_DIR=$TRIG" "STUB_BACKUP_DIR=$BK"
+    "STUB_BACKUP_KEY_FILE=$REPO/secrets/backup_encrypt_key.txt"
+    "STUB_LIFECYCLE_HELPER=$LIFECYCLE_HELPER"
+    "STUB_REPO=$REPO" "STUB_COMPOSE_LABEL_PROJECT=${STUB_COMPOSE_LABEL_PROJECT:-}"
     "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin"
     "JARVIS_BACKUP_DIR=$BK" "JARVIS_BACKUP_TRIGGER_DIR=$TRIG"
     "JARVIS_BACKUP_POLL_TIMEOUT=1" "JARVIS_BACKUP_POLL_INTERVAL=1"
+    "JARVIS_UPDATE_GUARD_TIMEOUT=${JARVIS_UPDATE_GUARD_TIMEOUT:-21600}"
+    "JARVIS_UPDATE_GUARD_READY_ATTEMPTS=${JARVIS_UPDATE_GUARD_READY_ATTEMPTS:-100}"
+    "JARVIS_UPDATE_GUARD_READY_INTERVAL=${JARVIS_UPDATE_GUARD_READY_INTERVAL:-0.1}"
+    "STUB_UPDATE_WAIT_FAIL_ONCE_FILE=${STUB_UPDATE_WAIT_FAIL_ONCE_FILE:-}"
     "STUB_BRANCH=${STUB_BRANCH:-main}" "STUB_DIRTY=${STUB_DIRTY:-}"
     "STUB_REMOTE=${STUB_REMOTE:-git@github.com:limitcycle-oss/jarvis-rd-assistant.git}"
     "STUB_ANCESTOR=${STUB_ANCESTOR:-0}" "STUB_MERGE_RC=${STUB_MERGE_RC:-0}"
     "STUB_MIGRATIONS=${STUB_MIGRATIONS:-}" "STUB_MIG_CONTENT=${STUB_MIG_CONTENT:-}"
     "MANIFEST_MISS=${MANIFEST_MISS:-}" "STUB_HEALTH=${STUB_HEALTH-healthy}"
     "STUB_FAIL_STAGE_PULL=${STUB_FAIL_STAGE_PULL:-0}" "STUB_TAGS=${STUB_TAGS:-v1.1.3}"
-    "STUB_NO_DAEMON=${STUB_NO_DAEMON:-0}")
-  if [ "$norepo" -eq 1 ]; then
-    ( cd "$REPO" && "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" ) </dev/null 2>&1
+    "STUB_TARGET_CONFIG_JSON=${STUB_TARGET_CONFIG_JSON:-}"
+    "STUB_NO_DAEMON=${STUB_NO_DAEMON:-0}" "STUB_EXACT_TAG=${STUB_EXACT_TAG:-}"
+    "STUB_MERGE_CRASH=${STUB_MERGE_CRASH:-0}" "STUB_HEAD_FILE=$STUB_HEAD_FILE"
+    "STUB_OWNER_ENV=${STUB_OWNER_ENV:-}" "STUB_OWNER_DB_RESULT=${STUB_OWNER_DB_RESULT:-}"
+    "STUB_OWNER_SET_RC=${STUB_OWNER_SET_RC:-0}"
+    "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
+    "STUB_PSQL_INPUT_FILE=$STUB_PSQL_INPUT_FILE"
+    "STUB_TARGET_SHA=${STUB_TARGET_SHA:-$TARGET_SHA}")
+  local stdin_path="${CLI_STDIN_FILE:-/dev/null}"
+  if [ "${RUN_CLI_EXEC:-0}" = 1 ]; then
+    if [ "$norepo" -eq 1 ]; then
+      cd "$REPO" || return 1
+      exec "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" <"$stdin_path" 2>&1
+    fi
+    exec "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" "$@" <"$stdin_path" 2>&1
+  elif [ "$norepo" -eq 1 ]; then
+    ( cd "$REPO" && "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" ) <"$stdin_path" 2>&1
   else
-    "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" "$@" </dev/null 2>&1
+    "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" "$@" <"$stdin_path" 2>&1
   fi
+}
+
+run_cli_with_input() {
+  local input="$1" input_file rc
+  shift
+  input_file="$CFG/cli-input.$RANDOM"
+  printf '%s' "$input" > "$input_file"
+  CLI_STDIN_FILE="$input_file" run_cli "$@"
+  rc=$?
+  rm -f "$input_file"
+  return "$rc"
 }
 
 # register REPO in the state file (so the managed-install guard's (a) leg passes).
 register_repo() { printf '%s\n' "$REPO" > "$CFG/installs"; }
 
+RESTORE_REVIEW_ID=0123456789abcdef0123456789abcdef
+OTHER_RESTORE_REVIEW_ID=fedcba9876543210fedcba9876543210
+
+seed_restore_review() {
+  local restore_id="${1:-$RESTORE_REVIEW_ID}"
+  printf '{"version":1,"restore_id":"%s","source":"inbox","requested_at":"2026-07-21T20:00:00+00:00","completed_at":"2026-07-21T20:05:00+00:00","review_state":"awaiting_review"}\n' \
+    "$restore_id" > "$TRIG/.outbound-quarantine.json"
+  printf '{"version":2,"sha256":"%064d","expires_at":"2099-07-21T22:00:00+00:00","restore_id":"%s","source":"inbox","requested_at":"2026-07-21T20:00:00+00:00"}\n' \
+    0 "$restore_id" > "$TRIG/.restore_status_token.json"
+}
+
+write_pending() {
+  local phase="$1" from_sha="${2:-$SOURCE_SHA}" target_sha="${3:-$TARGET_SHA}"
+  printf '{"schema_version":1,"from_sha":"%s","from_version":"1.1.2","target":"v1.1.3","target_sha":"%s","target_version":"1.1.3","phase":"%s","started_at":"1","backup_id":"","backup_run_id":"","legacy_recovery":false}\n' \
+    "$from_sha" "$target_sha" "$phase" > "$PENDING_FILE"
+}
+
+write_pending_backup() {
+  local phase="$1" run_id="$2" legacy="${3:-false}"
+  printf '{"schema_version":1,"from_sha":"%s","from_version":"1.1.2","target":"v1.1.3","target_sha":"%s","target_version":"1.1.3","phase":"%s","started_at":"1","backup_id":"20991231_235959","backup_run_id":"%s","legacy_recovery":%s}\n' \
+    "$SOURCE_SHA" "$TARGET_SHA" "$phase" "$run_id" "$legacy" > "$PENDING_FILE"
+}
+
+write_update_pin() {
+  local run_id="$1"
+  printf '{"timestamp":"20991231_235959","run_id":"%s"}\n' "$run_id" > "$UPDATE_PIN_FILE"
+}
+
 log_lacks_mutations() {  # $1 = description
   local l; l="$(cat "$STUB_LOG" 2>/dev/null || true)"
-  if printf '%s' "$l" | grep -qE 'merge |checkout |reset |compose (pull|up|build)'; then
-    check_fail "$1 :: stub log has a mutation: $(printf '%s' "$l" | grep -E 'merge |checkout |reset |compose (pull|up|build)' | tr '\n' ';')"
+  if printf '%s' "$l" | grep -qE 'merge |checkout |reset |compose (pull|up|build)|image pull'; then
+    check_fail "$1 :: stub log has a mutation: $(printf '%s' "$l" | grep -E 'merge |checkout |reset |compose (pull|up|build)|image pull' | tr '\n' ';')"
   else
     pass "$1"
   fi
@@ -324,6 +632,16 @@ unset STUB_REMOTE
 if [ "$rc" -eq 1 ]; then pass "update_refuses_wrong_remote: exit 1"; else check_fail "update_refuses_wrong_remote: rc=$rc out=$out"; fi
 log_lacks_mutations "update_refuses_wrong_remote: no mutation"
 
+new_env; register_repo; STUB_COMPOSE_LABEL_PROJECT=another-install
+out="$(run_cli update --yes)"; rc=$?
+unset STUB_COMPOSE_LABEL_PROJECT
+if [ "$rc" -eq 1 ] && has "$out" 'ownership\|install'; then
+  pass "update_refuses_compose_project_owned_by_another_install"
+else
+  check_fail "update accepted mismatched Compose ownership: rc=$rc out=<<<$out>>>"
+fi
+log_lacks_mutations "mismatched Compose ownership: no mutation"
+
 new_env; register_repo; STUB_DIRTY=" M setup.sh"
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_DIRTY
@@ -342,8 +660,9 @@ out="$(run_cli update --yes)"; rc=$?
 unset STUB_ANCESTOR
 if [ "$rc" -eq 1 ]; then pass "update_refuses_diverged_main: exit 1"; else check_fail "update_refuses_diverged_main: rc=$rc out=$out"; fi
 log_lacks_mutations "update_refuses_diverged_main: no compose/branch mutation"
-if [ ! -f "$PENDING_FILE" ] && [ -z "$(ls -A "$TRIG" 2>/dev/null)" ]; then
-  pass "update_refuses_diverged_main: no pending state file, empty backup trigger dir"
+trigger_state="$(find "$TRIG" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)"
+if [ ! -f "$PENDING_FILE" ] && [ -z "$trigger_state" ]; then
+  pass "update_refuses_diverged_main: no pending state or lifecycle trigger"
 else
   check_fail "update_refuses_diverged_main: side effect (pending=$([ -f "$PENDING_FILE" ] && echo yes) trig=$(ls -A "$TRIG"))"
 fi
@@ -385,41 +704,183 @@ fi
 log_lacks_mutations "update_requires_backup_on_destructive_migration(no-backup): no mutation"
 
 # =============================================================================
-# Backup fixture helper: write a fresh (future-dated) manifest + archives.
-#   $1=backup_dir  $2=mode (good|bad_db)
+# Backup fixture helper: write one encrypted, authenticated restore point using
+# the exact request ID observed in the on-demand trigger.
+#   $1=backup_dir  $2=mode  $3=run_id
 # =============================================================================
 seed_fresh_backup() {
-  local dir="$1" mode="$2" ts="20991231_235959"
+  local dir="$1" mode="$2" run_id="$3" ts="20991231_235959"
   local jf="jarvis_${ts}.sql.gz.enc" sf="secrets_${ts}.tar.gz.enc" qf="qdrant_papers_${ts}.snapshot.enc"
+  local lf="litellm_${ts}.sql.gz.enc" pf="pdfs_${ts}.tar.gz.enc"
+  if [ "$mode" = "renamed" ]; then jf="jarvis_20991231_235958.sql.gz.enc"; fi
   printf 'JARVISDBDATA' > "$dir/$jf"
+  [ "$mode" = "missing_litellm" ] || printf 'LITELLMDBDATA' > "$dir/$lf"
+  [ "$mode" = "legacy" ] || printf 'PDFARCHIVE' > "$dir/$pf"
   printf 'SECRETSDATA'  > "$dir/$sf"
   printf 'QDRANTSNAP'   > "$dir/$qf"
-  local jsha ssha qsha jsz ssz qsz
+  local jsha lsha psha ssha qsha jsz lsz psz ssz qsz entries derived
   jsha="$(sha256sum "$dir/$jf" | cut -d' ' -f1)"; jsz="$(stat -c%s "$dir/$jf")"
+  if [ -f "$dir/$lf" ]; then lsha="$(sha256sum "$dir/$lf" | cut -d' ' -f1)"; lsz="$(stat -c%s "$dir/$lf")"; fi
+  if [ -f "$dir/$pf" ]; then psha="$(sha256sum "$dir/$pf" | cut -d' ' -f1)"; psz="$(stat -c%s "$dir/$pf")"; fi
   ssha="$(sha256sum "$dir/$sf" | cut -d' ' -f1)"; ssz="$(stat -c%s "$dir/$sf")"
   qsha="$(sha256sum "$dir/$qf" | cut -d' ' -f1)"; qsz="$(stat -c%s "$dir/$qf")"
   if [ "$mode" = "bad_db" ]; then jsha="deadbeef"; fi   # DB hash mismatch
-  printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[{"filename":"%s","sha256":"%s","size_bytes":%s},{"filename":"%s","sha256":"%s","size_bytes":%s},{"filename":"%s","sha256":"%s","size_bytes":%s}]}' \
-    "$ts" "$jf" "$jsha" "$jsz" "$sf" "$ssha" "$ssz" "$qf" "$qsha" "$qsz" > "$dir/manifest_${ts}.json"
-  touch -d '2099-12-31 23:59:59' "$dir/manifest_${ts}.json"
+  entries="{\"filename\":\"$jf\",\"sha256\":\"$jsha\",\"size_bytes\":$jsz}"
+  if [ -f "$dir/$lf" ]; then entries="$entries,{\"filename\":\"$lf\",\"sha256\":\"$lsha\",\"size_bytes\":$lsz}"; fi
+  if [ -f "$dir/$pf" ]; then entries="$entries,{\"filename\":\"$pf\",\"sha256\":\"$psha\",\"size_bytes\":$psz}"; fi
+  entries="$entries,{\"filename\":\"$sf\",\"sha256\":\"$ssha\",\"size_bytes\":$ssz}"
+  entries="$entries,{\"filename\":\"$qf\",\"sha256\":\"$qsha\",\"size_bytes\":$qsz}"
+  if [ "$mode" = "legacy" ]; then
+    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$entries" > "$dir/manifest_${ts}.json"
+  else
+    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$run_id" "$entries" > "$dir/manifest_${ts}.json"
+  fi
+  if [ "$mode" = "unsigned" ]; then return 0; fi
+  if [ "$mode" = "bad_hmac" ]; then
+    printf '%064d\n' 0 > "$dir/manifest_${ts}.json.hmac"
+    return 0
+  fi
+  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$REPO/secrets/backup_encrypt_key.txt" | cut -d' ' -f1)"
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$dir/manifest_${ts}.json" \
+    | cut -d' ' -f1 > "$dir/manifest_${ts}.json.hmac"
+}
+
+respond_to_backup() {
+  local mode="$1"
+  (
+    local request_id=""
+    for _ in $(seq 1 100); do
+      if [ -e "$TRIG/.backup_now" ]; then
+        request_id="$(tr -d '\r\n' < "$TRIG/.backup_now" 2>/dev/null || true)"
+        break
+      fi
+      sleep 0.02
+    done
+    if [ "$mode" = "replayed" ]; then request_id="00000000000000000000000000000000"; mode="good"; fi
+    seed_fresh_backup "$BK" "$mode" "$request_id"
+  ) >/dev/null 2>&1 &
 }
 
 new_env; register_repo
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
 STUB_MIG_CONTENT="DELETE FROM telegram_user_pairings WHERE chat_id < 0;"
-seed_fresh_backup "$BK" good
+respond_to_backup good
 out="$(run_cli update --yes)"; rc=$?
-if has "$(cat "$STUB_LOG")" 'merge --ff-only'; then
-  pass "update_requires_backup_on_destructive_migration: fresh verified backup -> proceeds to merge"
+if has "$(cat "$STUB_LOG")" 'merge --ff-only' \
+   && has "$(cat "$STUB_LOG")" 'UPDATE_PIN_AT_MERGE={"timestamp":"20991231_235959","run_id":"[0-9a-f]\{32\}"}' \
+   && has "$(cat "$STUB_LOG")" 'LIFECYCLE_GUARD_AT_MERGE=[0-9a-f]\{32\}' \
+   && has "$(cat "$STUB_LOG")" 'LIFECYCLE_GUARD_AT_PULL=[0-9a-f]\{32\}' \
+   && [ ! -e "$UPDATE_PIN_FILE" ]; then
+  pass "update lifecycle flock spans pin publication through merge, pull, health, and commit"
 else
   check_fail "update_requires_backup_on_destructive_migration(with-backup): rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+# A real backup/update mutex wait may exceed the old 10-second readiness poll.
+# The CLI must keep one detached owner and one in-container observer alive until
+# the guard activates, without launching a Compose container for every poll.
+new_env; register_repo
+JARVIS_UPDATE_GUARD_TIMEOUT=30
+mkdir -p "$BK/.lifecycle"
+touch "$BK/.lifecycle/update.lock"
+exec 9>>"$BK/.lifecycle/update.lock"
+flock -n 9 || check_fail "update_guard_waits_past_ten_seconds: fixture lock unavailable"
+long_wait_out="$ROOT/update-long-wait.$RANDOM.log"
+( RUN_CLI_EXEC=1 run_cli update --yes ) >"$long_wait_out" 2>&1 &
+long_wait_pid=$!
+sleep 10.5
+long_wait_alive=0
+kill -0 "$long_wait_pid" 2>/dev/null && long_wait_alive=1
+flock -u 9
+exec 9>&-
+wait "$long_wait_pid"; long_wait_rc=$?
+hold_calls="$(grep -c 'docker lifecycle hold-update ' "$STUB_LOG" 2>/dev/null || true)"
+wait_calls="$(grep -c 'docker lifecycle wait-update ' "$STUB_LOG" 2>/dev/null || true)"
+status_calls="$(grep -c 'docker lifecycle update-status ' "$STUB_LOG" 2>/dev/null || true)"
+if [ "$long_wait_alive" -eq 1 ] && [ "$long_wait_rc" -eq 0 ] \
+   && [ "$hold_calls" -eq 1 ] && [ "$wait_calls" -eq 1 ] \
+   && [ "$status_calls" -lt 10 ]; then
+  pass "update_guard_waits_past_ten_seconds_with_one_owner_and_observer"
+else
+  check_fail "update_guard_waits_past_ten_seconds: alive=$long_wait_alive rc=$long_wait_rc hold=$hold_calls wait=$wait_calls status=$status_calls out=$(cat "$long_wait_out")"
+fi
+
+# Killing the host wrapper while its detached owner is waiting must not leak the
+# host command lock or launch a second owner. A retry adopts the durable ID.
+new_env; register_repo
+JARVIS_UPDATE_GUARD_TIMEOUT=30
+mkdir -p "$BK/.lifecycle"
+touch "$BK/.lifecycle/update.lock"
+exec 9>>"$BK/.lifecycle/update.lock"
+flock -n 9 || check_fail "update_guard_retry_adopts_owner: fixture lock unavailable"
+first_update_out="$ROOT/update-first.$RANDOM.log"
+( RUN_CLI_EXEC=1 run_cli update --yes ) >"$first_update_out" 2>&1 &
+first_update_pid=$!
+reservation="$BK/.lifecycle/update.reservation"
+guard_id=""
+owner_ready=0
+for _ in $(seq 1 200); do
+  if [ -s "$reservation" ]; then
+    guard_id="$(tr -d '\r\n' < "$reservation")"
+    if JARVIS_BACKUP_TRIGGER_DIR="$TRIG" JARVIS_BACKUP_DIR="$BK" \
+         bash "$LIFECYCLE_HELPER" update-reservation-status "$guard_id" \
+         >/dev/null 2>&1; then
+      owner_ready=1
+      break
+    fi
+  fi
+  sleep 0.02
+done
+kill -KILL "$first_update_pid" 2>/dev/null || true
+wait "$first_update_pid" 2>/dev/null || true
+retry_update_out="$ROOT/update-retry.$RANDOM.log"
+( RUN_CLI_EXEC=1 run_cli update --yes ) >"$retry_update_out" 2>&1 &
+retry_update_pid=$!
+sleep 0.4
+retry_alive=0
+kill -0 "$retry_update_pid" 2>/dev/null && retry_alive=1
+same_id=0
+[ -s "$reservation" ] \
+  && [ "$(tr -d '\r\n' < "$reservation")" = "$guard_id" ] \
+  && same_id=1
+hold_calls_before_release="$(grep -c 'docker lifecycle hold-update ' "$STUB_LOG" 2>/dev/null || true)"
+flock -u 9
+exec 9>&-
+wait "$retry_update_pid"; retry_update_rc=$?
+hold_calls_after_release="$(grep -c 'docker lifecycle hold-update ' "$STUB_LOG" 2>/dev/null || true)"
+if [ "$owner_ready" -eq 1 ] && [ "$retry_alive" -eq 1 ] \
+   && [ "$same_id" -eq 1 ] && [ "$retry_update_rc" -eq 0 ] \
+   && [ "$hold_calls_before_release" -eq 1 ] \
+   && [ "$hold_calls_after_release" -eq 1 ] \
+   && [ ! -e "$reservation" ]; then
+  pass "update_guard_retry_adopts_one_pending_owner_after_wrapper_death"
+else
+  check_fail "update_guard_retry_adopts_owner: owner=$owner_ready alive=$retry_alive same_id=$same_id rc=$retry_update_rc holds=$hold_calls_before_release/$hold_calls_after_release first=$(cat "$first_update_out") retry=$(cat "$retry_update_out")"
+fi
+
+# A failed post-merge update keeps both its transaction and exact backup pin so
+# scheduled retention cannot prune the only schema rollback point.
+new_env; register_repo; STUB_HEALTH="unhealthy"
+STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
+STUB_MIG_CONTENT="DROP TABLE old_stuff;"
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+unset STUB_HEALTH
+if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] && [ -f "$UPDATE_PIN_FILE" ] \
+   && grep -q '"phase":"health"' "$PENDING_FILE" \
+   && grep -Eq '^\{"timestamp":"20991231_235959","run_id":"[0-9a-f]{32}"\}$' "$UPDATE_PIN_FILE"; then
+  pass "failed schema update preserves its authenticated rollback pin"
+else
+  check_fail "failed schema update lost transaction/pin: rc=$rc pending=$(cat "$PENDING_FILE" 2>/dev/null) pin=$(cat "$UPDATE_PIN_FILE" 2>/dev/null)"
 fi
 
 # archive-set gate: fresh manifest but DB archive hash-mismatched -> refuse.
 new_env; register_repo
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
 STUB_MIG_CONTENT="DROP TABLE old_stuff;"
-seed_fresh_backup "$BK" bad_db
+respond_to_backup bad_db
 out="$(run_cli update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] && ! grep -q 'merge --ff-only' "$STUB_LOG"; then
   pass "update_backup_gate_requires_archive_set: mismatched DB archive -> refuse, never merges"
@@ -427,16 +888,74 @@ else
   check_fail "update_backup_gate_requires_archive_set: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
 
+for backup_mode in unsigned bad_hmac missing_litellm renamed replayed; do
+  new_env; register_repo
+  STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
+  STUB_MIG_CONTENT="DROP TABLE old_stuff;"
+  respond_to_backup "$backup_mode"
+  out="$(run_cli update --yes)"; rc=$?
+  if [ "$rc" -eq 1 ] && ! grep -q 'merge --ff-only' "$STUB_LOG"; then
+    pass "update_backup_gate_refuses_${backup_mode}: unauthenticated/incomplete/mismatched point never merges"
+  else
+    check_fail "update_backup_gate_refuses_${backup_mode}: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+  fi
+done
+
 # =============================================================================
 # 3. Transaction set.
 # =============================================================================
+# Pre-merge staging is rendered from the target ref, not from the current
+# checkout's service list. This fixture's target adds a registry-backed worker
+# and changes an edge image; both exact refs must be present before the merge.
+# Its build-only Langfuse service must never be sent to the registry.
+new_env; register_repo
+printf 'COMPOSE_PROFILES=nextgen\n' >> "$REPO/.env"
+printf 'TELEGRAM_BOT_TOKEN=configured\n' >> "$REPO/.env"
+out="$(run_cli update --yes)"; rc=$?
+target_worker_line="$(grep -nF 'image pull ghcr.io/limitcycle-oss/jarvis-target-worker:1.1.3' "$STUB_LOG" | head -1 | cut -d: -f1)"
+target_edge_line="$(grep -nF 'image pull registry.example/target-edge:2.0' "$STUB_LOG" | head -1 | cut -d: -f1)"
+target_merge_line="$(grep -nF 'git merge --ff-only v1.1.3' "$STUB_LOG" | head -1 | cut -d: -f1)"
+if [ "$rc" -eq 0 ] && [ -n "$target_worker_line" ] && [ -n "$target_edge_line" ] \
+   && [ -n "$target_merge_line" ] && [ "$target_worker_line" -lt "$target_merge_line" ] \
+   && [ "$target_edge_line" -lt "$target_merge_line" ] \
+   && grep -q 'target config .*--profile nextgen.*--profile telegram' "$STUB_LOG" \
+   && ! grep -q 'image pull jarvis/langfuse-hardened' "$STUB_LOG"; then
+  pass "update_stages_exact_target_ref_registry_images_before_merge"
+else
+  check_fail "target cohort staging: rc=$rc worker=$target_worker_line edge=$target_edge_line merge=$target_merge_line log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# A target-image pull failure leaves both the source checkout and its durable
+# merge intent untouched, so the same install can retry safely.
+new_env; register_repo
+STUB_FAIL_STAGE_PULL='jarvis-target-worker'
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && [ "$(cat "$STUB_HEAD_FILE")" = "$SOURCE_SHA" ] \
+   && [ -f "$PENDING_FILE" ] && grep -q '"phase":"merge_pending"' "$PENDING_FILE" \
+   && ! grep -q 'git merge --ff-only' "$STUB_LOG"; then
+  pass "target_cohort_pull_failure_keeps_checkout_and_per_install_journal_for_retry"
+else
+  check_fail "target pull failure boundary: rc=$rc head=$(cat "$STUB_HEAD_FILE") pending=$(cat "$PENDING_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+unset STUB_FAIL_STAGE_PULL
+
 # additive-only migration: no backup needed, full happy path completes.
 new_env; register_repo
 out="$(run_cli update --yes)"; rc=$?
-if has "$(cat "$STUB_LOG")" 'PENDING_EXISTS_AT_MERGE'; then
-  pass "update_writes_pending_txn_before_merge: pending file exists when merge runs"
+if has "$(cat "$STUB_LOG")" 'PENDING_EXISTS_AT_MERGE' \
+   && has "$(cat "$STUB_LOG")" '"schema_version":1' \
+   && has "$(cat "$STUB_LOG")" '"phase":"merge_pending"' \
+   && has "$(cat "$STUB_LOG")" "\"target_sha\":\"$TARGET_SHA\""; then
+  pass "update_writes_pending_txn_before_merge: atomic schema + merge intent + target HEAD exist at merge"
 else
   check_fail "update_writes_pending_txn_before_merge: rc=$rc log=$(cat "$STUB_LOG")"
+fi
+if ! has "$out" '<previous-version>' \
+   && ! has "$out" 'full release rollback' \
+   && ! has "$out" 'If you need to roll back'; then
+  pass "successful_update_omits_speculative_release_rollback"
+else
+  check_fail "successful update printed unsupported rollback guidance: out=<<<$out>>>"
 fi
 
 # pins the UNPREFIXED version + v-less image refs.
@@ -457,14 +976,17 @@ fi
 new_env; register_repo; STUB_HEALTH="unhealthy"
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_HEALTH
-if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] && ! grep -q '"committed"' "$PENDING_FILE" 2>/dev/null; then
-  pass "update_commits_txn_only_after_health: failed health leaves txn pending, not committed"
+if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] \
+   && ! grep -q '"committed"' "$PENDING_FILE" 2>/dev/null \
+   && grep -qx 'JARVIS_VERSION=1.1.2' "$REPO/.env"; then
+  pass "update_commits_txn_only_after_health: failed health leaves txn pending and old pin intact"
 else
-  check_fail "update_commits_txn_only_after_health: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE")"
+  check_fail "update_commits_txn_only_after_health: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE") env=$(grep JARVIS_VERSION "$REPO/.env")"
 fi
 
 # --to targets an rc tag with the same gates.
 new_env; register_repo
+STUB_EXACT_TAG="v1.1.4-rc.1"
 out="$(run_cli update --to v1.1.4-rc.1 --yes)"; rc=$?
 if grep -q 'git merge --ff-only v1.1.4-rc.1' "$STUB_LOG" && grep -q '^JARVIS_VERSION=1.1.4-rc.1$' "$REPO/.env"; then
   pass "update_to_flag_targets_rc_with_same_gates: rc tag merged + pinned v-less"
@@ -474,7 +996,8 @@ fi
 
 # resume re-enters recorded phase: a pending file at phase=pull resumes pulls, never re-merges.
 new_env; register_repo
-printf '{"from_sha":"sha-head","from_version":"1.1.2","target":"v1.1.3","phase":"pull","started_at":"1"}' > "$PENDING_FILE"
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+write_pending pull
 out="$(run_cli update --yes)"; rc=$?
 if grep -q 'compose pull' "$STUB_LOG" && ! grep -q 'merge --ff-only' "$STUB_LOG"; then
   pass "update_resume_reenters_recorded_phase: pending phase=pull resumes pulls, no re-merge"
@@ -484,7 +1007,8 @@ fi
 
 # explicit --resume skips merge and does not re-exec.
 new_env; register_repo
-printf '{"from_sha":"sha-head","from_version":"1.1.2","target":"v1.1.3","phase":"pull","started_at":"1"}' > "$PENDING_FILE"
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+write_pending pull
 out="$(run_cli update --resume v1.1.3 --yes)"; rc=$?
 if ! grep -q 'merge --ff-only' "$STUB_LOG"; then
   pass "update_resume_skips_merge_and_does_not_reexec: --resume performs no merge"
@@ -492,16 +1016,255 @@ else
   check_fail "update_resume_skips_merge_and_does_not_reexec: log=$(cat "$STUB_LOG")"
 fi
 
+# Backup-bearing resumes re-authenticate the recorded archive set immediately
+# before update.sh. Missing pins or changed bytes fail closed; an intact set runs
+# and removes the retention pin only after the committed phase is durable.
+resume_run="0123456789abcdef0123456789abcdef"
+
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+seed_fresh_backup "$BK" good "$resume_run"
+write_pending_backup pull "$resume_run"
+write_update_pin "$resume_run"
+printf 'CORRUPTED-AFTER-MERGE' > "$BK/jarvis_20991231_235959.sql.gz.enc"
+out="$(run_cli update --resume v1.1.3 --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && ! grep -q 'compose pull' "$STUB_LOG" \
+   && [ -f "$PENDING_FILE" ] && [ -f "$UPDATE_PIN_FILE" ]; then
+  pass "resume refuses a changed rollback archive before update.sh and keeps its pin"
+else
+  check_fail "resume accepted corrupt backup: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+seed_fresh_backup "$BK" good "$resume_run"
+write_pending_backup pull "$resume_run"
+out="$(run_cli update --resume v1.1.3 --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && ! grep -q 'compose pull' "$STUB_LOG" \
+   && [ -f "$PENDING_FILE" ]; then
+  pass "resume refuses a missing rollback retention pin before update.sh"
+else
+  check_fail "resume accepted missing backup pin: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+seed_fresh_backup "$BK" good "$resume_run"
+write_pending_backup pull "$resume_run"
+write_update_pin "$resume_run"
+out="$(run_cli update --resume v1.1.3 --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'compose pull' "$STUB_LOG" \
+   && [ ! -e "$PENDING_FILE" ] && [ ! -e "$UPDATE_PIN_FILE" ]; then
+  pass "valid backup-bearing resume re-verifies then clears its pin after commit"
+else
+  check_fail "valid backup resume contract wrong: rc=$rc pending=$([ -e "$PENDING_FILE" ] && cat "$PENDING_FILE") pin=$([ -e "$UPDATE_PIN_FILE" ] && cat "$UPDATE_PIN_FILE")"
+fi
+
 # an explicit --resume tag that disagrees with the pending target is refused
 # before any pull/merge (a mistyped tag must not re-pin .env to the wrong version).
 new_env; register_repo
-printf '{"from_sha":"sha-head","from_version":"1.1.2","target":"v1.1.3","phase":"pull","started_at":"1"}' > "$PENDING_FILE"
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+write_pending pull
 out="$(run_cli update --resume v9.9.9 --yes)"; rc=$?
 if [ "$rc" -eq 1 ] && has "$out" 'does not match' \
    && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
   pass "resume_tag_must_match_pending: mismatched --resume tag refused, no pull/merge"
 else
   check_fail "resume_tag_must_match_pending: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+# A process death after git moved HEAD but before the CLI advanced its phase must
+# resume post-merge work, not report up-to-date or attempt a second merge.
+new_env; register_repo; STUB_MERGE_CRASH=1
+out="$(run_cli update --yes)"; rc=$?
+unset STUB_MERGE_CRASH
+first_pending="$(cat "$PENDING_FILE" 2>/dev/null || true)"
+out2="$(run_cli update --yes)"; rc2=$?
+merge_count="$(grep -c 'git merge --ff-only' "$STUB_LOG" 2>/dev/null || true)"
+if [ "$rc" -ne 0 ] && [ "$rc2" -eq 0 ] \
+   && has "$first_pending" '"phase":"merge_pending"' \
+   && [ "$merge_count" -eq 1 ] && grep -q 'compose pull' "$STUB_LOG"; then
+  pass "update_resumes_after_post_merge_process_death: target HEAD completes without a second merge"
+else
+  check_fail "update_resumes_after_post_merge_process_death: rc=$rc rc2=$rc2 pending=<<<$first_pending>>> merges=$merge_count log=$(cat "$STUB_LOG") out2=<<<$out2>>>"
+fi
+
+# A valid transaction is still refused when the checkout is neither its source
+# nor target commit.
+new_env; register_repo
+printf '%s\n' "$OTHER_SHA" > "$STUB_HEAD_FILE"
+write_pending pull
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && has "$out" 'HEAD\|checkout\|transaction' \
+   && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+  pass "update_pending_refuses_unrelated_head: no post-merge mutation"
+else
+  check_fail "update_pending_refuses_unrelated_head: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+for bad_state in truncated unknown_phase; do
+  new_env; register_repo
+  if [ "$bad_state" = truncated ]; then
+    printf '{"schema_version":1,"from_sha":"%s"' "$SOURCE_SHA" > "$PENDING_FILE"
+  else
+    write_pending alien
+  fi
+  out="$(run_cli update --yes)"; rc=$?
+  if [ "$rc" -eq 1 ] && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+    pass "update_refuses_${bad_state}_transaction: malformed state fails closed"
+  else
+    check_fail "update_refuses_${bad_state}_transaction: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+  fi
+done
+
+new_env; register_repo
+out="$(run_cli update --resume v1.1.3 --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+  pass "update_resume_without_pending_refuses: explicit resume cannot invent state"
+else
+  check_fail "update_resume_without_pending_refuses: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+new_env; register_repo
+update_lock_id="$(printf '%s' "$(realpath "$REPO")" | sha256sum | cut -d' ' -f1)"
+mkdir -p "$CFG/locks"
+(
+  exec 8>"$CFG/locks/${update_lock_id}.lock"
+  flock -n 8 || exit 1
+  : > "$CFG/update-lock-held"
+  sleep 3
+) &
+lock_holder=$!
+for _ in $(seq 1 40); do [ -e "$CFG/update-lock-held" ] && break; sleep 0.05; done
+out="$(run_cli update --yes)"; rc=$?
+kill "$lock_holder" 2>/dev/null || true; wait "$lock_holder" 2>/dev/null || true
+if [ "$rc" -eq 1 ] && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+  pass "update_refuses_a_concurrent_operation_for_the_same_install"
+else
+  check_fail "update_refuses_a_concurrent_operation_for_the_same_install: rc=$rc"
+fi
+
+# Pending journals share a config directory but not a filename. An interrupted
+# update in one clone must neither block nor be overwritten by another clone.
+new_env; register_repo
+repo_a="$REPO"; pending_a="$PENDING_FILE"
+write_pending merge_pending
+pending_a_before="$(cat "$pending_a")"
+repo_b="$ROOT/repo-b.$RANDOM.$RANDOM"
+make_repo "$repo_b"
+printf '%s\n' "$SOURCE_SHA" > "$repo_b/.stub-head"
+printf '%s\n%s\n' "$repo_a" "$repo_b" > "$CFG/installs"
+REPO="$repo_b"
+STUB_HEAD_FILE="$CFG/head-b"
+printf '%s\n' "$SOURCE_SHA" > "$STUB_HEAD_FILE"
+install_key_b="$(printf '%s' "$(realpath "$REPO")" | sha256sum | cut -d' ' -f1)"
+PENDING_FILE="$CFG/pending-update-${install_key_b}.json"
+STUB_FAIL_STAGE_PULL='jarvis-target-worker'
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && [ "$PENDING_FILE" != "$pending_a" ] \
+   && [ "$(cat "$pending_a")" = "$pending_a_before" ] \
+   && [ -f "$PENDING_FILE" ] && grep -q '"phase":"merge_pending"' "$PENDING_FILE"; then
+  pass "two_installs_keep_independent_interrupted_update_journals"
+else
+  check_fail "per-install journal isolation: rc=$rc a=$(cat "$pending_a" 2>/dev/null) b=$(cat "$PENDING_FILE" 2>/dev/null) out=<<<$out>>>"
+fi
+unset STUB_FAIL_STAGE_PULL
+
+# A current-format journal written by the pre-fix CLI at the old global path is
+# migrated only after its source/target commit pair identifies this clone.
+new_env; register_repo
+write_pending merge_pending
+mv "$PENDING_FILE" "$LEGACY_PENDING_FILE"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$LEGACY_PENDING_FILE" ] \
+   && [ ! -e "$PENDING_FILE" ] && grep -q 'git merge --ff-only' "$STUB_LOG"; then
+  pass "legacy_global_current_journal_migrates_to_the_attributed_install"
+else
+  check_fail "current journal migration: rc=$rc legacy=$(cat "$LEGACY_PENDING_FILE" 2>/dev/null) scoped=$(cat "$PENDING_FILE" 2>/dev/null) out=<<<$out>>>"
+fi
+
+# Malformed or unrelated global state is never moved or deleted on behalf of
+# the selected install.
+for legacy_case in malformed unrelated; do
+  new_env; register_repo
+  if [ "$legacy_case" = malformed ]; then
+    printf '{"from_sha":"broken"' > "$LEGACY_PENDING_FILE"
+  else
+    printf '{"schema_version":1,"from_sha":"%s","from_version":"1.1.2","target":"v1.1.3","target_sha":"%s","target_version":"1.1.3","phase":"merge_pending","started_at":"1","backup_id":"","backup_run_id":"","legacy_recovery":false}\n' \
+      "$OTHER_SHA" "$TARGET_SHA" > "$LEGACY_PENDING_FILE"
+  fi
+  legacy_before="$(cat "$LEGACY_PENDING_FILE")"
+  out="$(run_cli update --yes)"; rc=$?
+  if [ "$rc" -eq 1 ] && [ "$(cat "$LEGACY_PENDING_FILE")" = "$legacy_before" ] \
+     && [ ! -e "$PENDING_FILE" ] && ! grep -qE 'image pull|git merge --ff-only' "$STUB_LOG"; then
+    pass "legacy_global_${legacy_case}_journal_fails_closed_without_moving_state"
+  else
+    check_fail "legacy ${legacy_case} handling: rc=$rc legacy=$(cat "$LEGACY_PENDING_FILE" 2>/dev/null) scoped=$(cat "$PENDING_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+  fi
+done
+
+# If two registered clones are at the same recorded target, the old global
+# journal cannot identify its owner and must remain untouched.
+new_env
+repo_a="$REPO"
+repo_b="$ROOT/repo-ambiguous.$RANDOM.$RANDOM"
+make_repo "$repo_b"
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+printf '%s\n' "$TARGET_SHA" > "$repo_a/.stub-head"
+printf '%s\n' "$TARGET_SHA" > "$repo_b/.stub-head"
+printf '%s\n%s\n' "$repo_a" "$repo_b" > "$CFG/installs"
+printf '{"from_sha":"%s","from_version":"1.1.3","target":"v1.2.0","target_version":"1.2.0","phase":"staging","started_at":"1","backup_id":""}\n' \
+  "$SOURCE_SHA" > "$LEGACY_PENDING_FILE"
+legacy_before="$(cat "$LEGACY_PENDING_FILE")"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] && [ "$(cat "$LEGACY_PENDING_FILE")" = "$legacy_before" ] \
+   && [ ! -e "$PENDING_FILE" ] && ! grep -qE 'image pull|git merge --ff-only' "$STUB_LOG"; then
+  pass "ambiguous_legacy_global_journal_is_not_claimed_by_either_install"
+else
+  check_fail "ambiguous legacy attribution: rc=$rc legacy=$(cat "$LEGACY_PENDING_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# v1.1.3 can leave phase=staging after HEAD already moved because the new CLI is
+# loaded only after that merge. Accept exactly that historical shape once.
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+printf '%s\n' "$TARGET_SHA" > "$REPO/.stub-head"
+printf '{"from_sha":"%s","from_version":"1.1.3","target":"v1.2.0","target_version":"1.2.0","phase":"staging","started_at":"1","backup_id":""}\n' \
+  "$SOURCE_SHA" > "$LEGACY_PENDING_FILE"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'compose pull' "$STUB_LOG" \
+   && [ ! -e "$PENDING_FILE" ] && [ ! -e "$LEGACY_PENDING_FILE" ]; then
+  pass "update_recovers_v113_staging_after_target_head: v1.1.3-era state targeting v1.2.0 reconciled"
+else
+  check_fail "update_recovers_v113_staging_after_target_head: rc=$rc pending=$(cat "$PENDING_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+printf '%s\n' "$TARGET_SHA" > "$REPO/.stub-head"
+seed_fresh_backup "$BK" legacy ""
+printf '{"from_sha":"%s","from_version":"1.1.3","target":"v1.2.0","target_version":"1.2.0","phase":"merged","started_at":"1","backup_id":"20991231_235959"}\n' \
+  "$SOURCE_SHA" > "$LEGACY_PENDING_FILE"
+out="$(run_cli update --resume v1.2.0 --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'compose pull' "$STUB_LOG" \
+   && [ ! -e "$PENDING_FILE" ] && [ ! -e "$LEGACY_PENDING_FILE" ]; then
+  if [ ! -e "$UPDATE_PIN_FILE" ]; then
+    pass "update_recovers_v113_merged_handoff_with_authenticated_legacy_backup"
+  else
+    check_fail "legacy recovery left a stale update backup pin"
+  fi
+else
+  check_fail "update_recovers_v113_merged_handoff_with_authenticated_legacy_backup: rc=$rc"
+fi
+
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+write_pending committed
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$PENDING_FILE" ] && ! grep -qE 'compose pull|merge --ff-only' "$STUB_LOG"; then
+  pass "update_already_complete_transaction_is_clean_noop: stale committed marker removed"
+else
+  check_fail "update_already_complete_transaction_is_clean_noop: rc=$rc pending=$(cat "$PENDING_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # =============================================================================
@@ -537,6 +1300,248 @@ else
   check_fail "status_happy_path: rc=$rc out=$out"
 fi
 
+# Instance-owner status is read-only and resolves the effective environment
+# from the running service, never by sourcing the host .env file.
+new_env; register_repo
+STUB_OWNER_DB_RESULT='database|valid|7|owner@example.com'
+out="$(run_cli owner status)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'Source: database' \
+   && has "$out" 'State: valid' \
+   && has "$out" 'owner@example.com' \
+   && grep -q -- '-- jarvis-owner-status' "$STUB_PSQL_INPUT_FILE" \
+   && grep -q 'compose exec paper_ingestion' "$STUB_LOG" \
+   && ! grep -q 'lifecycle' "$STUB_LOG"; then
+  pass "owner_status_reports_effective_database_owner_without_lifecycle_mutation"
+else
+  check_fail "owner status database path: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+STUB_OWNER_ENV=42
+STUB_OWNER_DB_RESULT='environment|valid|42|host-owner@example.com'
+out="$(run_cli owner status)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'Source: environment' \
+   && has "$out" 'host-owner@example.com' \
+   && grep -q 'compose exec paper_ingestion' "$STUB_LOG"; then
+  pass "owner_status_reads_authoritative_override_from_running_service"
+else
+  check_fail "owner status environment path: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# Owner repair requires exact typed confirmation before taking a lifecycle lock
+# or opening a database transaction.
+new_env; register_repo
+out="$(run_cli_with_input $'wrong@example.com\n' owner set owner@example.com)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'did not match' \
+   && [ ! -e "$STUB_PSQL_INPUT_FILE" ] \
+   && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+  pass "owner_set_refuses_mismatched_confirmation_before_mutation"
+else
+  check_fail "owner set confirmation refusal: rc=$rc out=<<<$out>>>"
+fi
+
+# An effective host override cannot be shadowed by changing only the database.
+new_env; register_repo
+STUB_OWNER_ENV=42
+out="$(run_cli_with_input $'owner@example.com\n' owner set owner@example.com)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'OWNER_USER_ID' \
+   && [ ! -e "$STUB_PSQL_INPUT_FILE" ]; then
+  pass "owner_set_refuses_environment_managed_ownership"
+else
+  check_fail "owner set environment refusal: rc=$rc out=<<<$out>>>"
+fi
+
+# A successful repair is one parameter-bound transaction under both lifecycle
+# and database locks, with its mandatory audit insert in the same stdin script.
+new_env; register_repo
+out="$(run_cli_with_input $'owner@example.com\n' owner set owner@example.com)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'owner@example.com' \
+   && grep -q -- '-- jarvis-owner-set' "$STUB_PSQL_INPUT_FILE" \
+   && grep -q '^BEGIN;' "$STUB_PSQL_INPUT_FILE" \
+   && grep -q "pg_advisory_xact_lock(hashtext('admin_role_mutation'))" "$STUB_PSQL_INPUT_FILE" \
+   && grep -q ":'target_email'" "$STUB_PSQL_INPUT_FILE" \
+   && grep -q 'admin.owner.repair' "$STUB_PSQL_INPUT_FILE" \
+   && grep -q '^COMMIT;' "$STUB_PSQL_INPUT_FILE" \
+   && ! grep -qF 'owner@example.com' "$STUB_PSQL_INPUT_FILE" \
+   && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+  pass "owner_set_is_parameter_bound_locked_audited_and_lifecycle_scoped"
+else
+  check_fail "owner set transaction: rc=$rc sql=$(cat "$STUB_PSQL_INPUT_FILE" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+STUB_OWNER_SET_RC=1
+out="$(run_cli_with_input $'owner@example.com\n' owner set owner@example.com)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'owner status' \
+   && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+  pass "owner_set_database_refusal_clears_lifecycle_state"
+else
+  check_fail "owner set database refusal: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) out=<<<$out>>>"
+fi
+
+new_env; register_repo
+out="$(run_cli owner set)"; rc=$?
+if [ "$rc" -eq 2 ] && has "$out" 'owner set <email>'; then
+  pass "owner_set_requires_one_email_argument"
+else
+  check_fail "owner set usage: rc=$rc out=<<<$out>>>"
+fi
+
+# Restore acknowledgement binds typed confirmation to the exact quarantine,
+# consumes the restore-session token first, and never prints it.
+new_env; register_repo; seed_restore_review
+out="$(run_cli_with_input "${RESTORE_REVIEW_ID}"$'\n' restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" "$RESTORE_REVIEW_ID" \
+   && ! has "$out" 'sha256' \
+   && ! has "$(cat "$STUB_LOG")" 'sha256' \
+   && [ ! -e "$TRIG/.restore_status_token.json" ] \
+   && [ ! -e "$TRIG/.outbound-quarantine.json" ] \
+   && [ ! -e "$BK/.lifecycle/operation.state" ] \
+   && grep -q "lifecycle inspect-quarantine ${RESTORE_REVIEW_ID}" "$STUB_LOG" \
+   && grep -q "lifecycle acknowledge-quarantine ${RESTORE_REVIEW_ID}" "$STUB_LOG"; then
+  pass "restore_acknowledge_exact_id_consumes_token_then_quarantine_under_lifecycle"
+else
+  check_fail "restore acknowledge success: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo; seed_restore_review
+out="$(run_cli_with_input "${OTHER_RESTORE_REVIEW_ID}"$'\n' restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'did not match' \
+   && [ -e "$TRIG/.restore_status_token.json" ] \
+   && [ -e "$TRIG/.outbound-quarantine.json" ] \
+   && [ ! -e "$BK/.lifecycle/operation.state" ] \
+   && ! grep -q 'lifecycle acknowledge-quarantine' "$STUB_LOG"; then
+  pass "restore_acknowledge_refuses_wrong_typed_id_before_lifecycle_or_mutation"
+else
+  check_fail "restore acknowledge wrong confirmation: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo; seed_restore_review
+out="$(run_cli restore acknowledge short)"; rc=$?
+if [ "$rc" -eq 2 ] \
+   && has "$out" 'lowercase 32-hex restore ID' \
+   && [ -e "$TRIG/.restore_status_token.json" ] \
+   && [ -e "$TRIG/.outbound-quarantine.json" ] \
+   && [ ! -s "$STUB_LOG" ]; then
+  pass "restore_acknowledge_rejects_noncanonical_id_before_docker"
+else
+  check_fail "restore acknowledge invalid id: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+for quarantine_kind in malformed dangling_symlink; do
+  new_env; register_repo; seed_restore_review
+  case "$quarantine_kind" in
+    malformed) printf 'not-json\n' > "$TRIG/.outbound-quarantine.json" ;;
+    dangling_symlink)
+      rm -f "$TRIG/.outbound-quarantine.json"
+      ln -s "$TRIG/missing-quarantine" "$TRIG/.outbound-quarantine.json"
+      ;;
+  esac
+  out="$(run_cli restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+  if [ "$rc" -eq 1 ] \
+     && has "$out" 'unavailable or does not match' \
+     && [ -e "$TRIG/.restore_status_token.json" ] \
+     && { [ -e "$TRIG/.outbound-quarantine.json" ] || [ -L "$TRIG/.outbound-quarantine.json" ]; } \
+     && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+    pass "restore_acknowledge_refuses_${quarantine_kind}_sentinel_fail_closed"
+  else
+    check_fail "restore acknowledge ${quarantine_kind}: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+  fi
+done
+
+new_env; register_repo; seed_restore_review
+STUB_QUARANTINE_REPLACE_ON_ACK="$OTHER_RESTORE_REVIEW_ID"
+out="$(run_cli_with_input "${RESTORE_REVIEW_ID}"$'\n' restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'changed before acknowledgement' \
+   && [ -e "$TRIG/.restore_status_token.json" ] \
+   && grep -q "$OTHER_RESTORE_REVIEW_ID" "$TRIG/.outbound-quarantine.json" \
+   && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+  pass "restore_acknowledge_revalidates_exact_sentinel_after_lifecycle_admission"
+else
+  check_fail "restore acknowledge race: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo; seed_restore_review
+rm -f "$TRIG/.restore_status_token.json"
+mkdir "$TRIG/.restore_status_token.json"
+out="$(run_cli_with_input "${RESTORE_REVIEW_ID}"$'\n' restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'quarantine remains active' \
+   && [ -d "$TRIG/.restore_status_token.json" ] \
+   && [ -e "$TRIG/.outbound-quarantine.json" ] \
+   && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+  pass "restore_acknowledge_token_consume_failure_keeps_quarantine"
+else
+  check_fail "restore acknowledge token failure: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo; seed_restore_review
+printf 'restore\n' > "$BK/.lifecycle/operation.state"
+out="$(run_cli_with_input "${RESTORE_REVIEW_ID}"$'\n' restore acknowledge "$RESTORE_REVIEW_ID")"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'lifecycle operation' \
+   && [ -e "$TRIG/.restore_status_token.json" ] \
+   && [ -e "$TRIG/.outbound-quarantine.json" ] \
+   && [ "$(cat "$BK/.lifecycle/operation.state")" = restore ] \
+   && ! grep -q 'lifecycle acknowledge-quarantine' "$STUB_LOG"; then
+  pass "restore_acknowledge_refuses_foreign_lifecycle_without_mutation"
+else
+  check_fail "restore acknowledge foreign lifecycle: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# Managed CLI commands are install-scoped even when the invoking shell exports
+# Compose selectors for a different checkout or project.
+new_env; register_repo
+export COMPOSE_FILE=/tmp/foreign-compose.yml
+export COMPOSE_PROJECT_NAME=foreign-project
+export COMPOSE_PROFILES=foreign-profile
+export COMPOSE_PATH_SEPARATOR=';'
+export COMPOSE_ENV_FILES=/tmp/foreign.env
+export COMPOSE_DISABLE_ENV_FILE=1
+out="$(run_cli status)"; rc=$?
+unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR
+unset COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'compose-env file=<unset> project=<unset> profiles=<unset> separator=<unset> envfiles=<unset> disable=<unset>' "$STUB_LOG"; then
+  pass "managed CLI clears caller Compose selectors before dispatch"
+else
+  check_fail "managed CLI leaked caller Compose selectors: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# Every mutating day-to-day command shares the same host + sidecar lifecycle
+# admission. A durable foreign restore must refuse before even a Docker probe,
+# must not queue a later activation, and a deliberate retry after release works.
+for control_cmd in start stop restart repair; do
+  new_env; register_repo
+  printf 'restore\n' > "$BK/.lifecycle/operation.state"
+  out="$(run_cli "$control_cmd")"; rc=$?
+  if [ "$rc" -eq 1 ] \
+     && ! grep -qE 'docker (compose (up|stop|restart)|restart )' "$STUB_LOG" \
+     && [ "$(cat "$BK/.lifecycle/operation.state")" = restore ]; then
+    pass "${control_cmd}_refuses_foreign_lifecycle_before_service_mutation"
+  else
+    check_fail "${control_cmd}_foreign_lifecycle_refusal: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+  fi
+  rm -f "$BK/.lifecycle/operation.state"
+  : > "$STUB_LOG"
+  out="$(run_cli "$control_cmd")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -s "$STUB_LOG" ] \
+     && [ ! -e "$BK/.lifecycle/operation.state" ]; then
+    pass "${control_cmd}_retry_after_lifecycle_release_succeeds"
+  else
+    check_fail "${control_cmd}_retry_after_release: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+  fi
+done
+
 # doctor warns on a GPU overlay with no DRI render node, exit unchanged.
 new_env; register_repo
 printf 'JARVIS_VERSION=1.1.2\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.vulkan.yml\n' > "$REPO/.env"
@@ -551,18 +1556,36 @@ else
   check_fail "doctor_warns_overlay_without_dri: rc=$rc out=<<<$out>>>"
 fi
 
-# rollback honesty: a migration-bearing update that fails health prints BOTH the
-# image-pin rollback AND the not-schema-safe warning + restore pointer.
+# Recovery honesty: a migration-bearing update that fails health identifies the
+# exact recorded application pin and repository, preserves its configured
+# profiles and services, puts data restoration before image recovery, and never
+# presents that bounded action as a full release rollback.
 new_env; register_repo; STUB_HEALTH="unhealthy"
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
 STUB_MIG_CONTENT="DELETE FROM telegram_user_pairings WHERE chat_id < 0;"
-seed_fresh_backup "$BK" good
+printf 'COMPOSE_PROFILES=tunnel\nTELEGRAM_BOT_TOKEN=configured\n' >> "$REPO/.env"
+respond_to_backup good
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_HEALTH
-if has "$out" 'JARVIS_VERSION=' && has "$out" 'schema' && has "$out" 'restore'; then
-  pass "rollback_honesty: epilogue has image-pin rollback + not-schema-safe + restore pointer"
+data_line="$(printf '%s\n' "$out" | grep -nF 'Admin > Backups' | tail -1 | cut -d: -f1)"
+image_line="$(printf '%s\n' "$out" | grep -nF 'Application-image recovery (not a full release rollback)' | tail -1 | cut -d: -f1)"
+recovery_count="$(printf '%s\n' "$out" | grep -cF 'Application-image recovery (not a full release rollback)' || true)"
+if [ "$rc" -ne 0 ] \
+   && grep -q '"from_version":"1.1.2"' "$PENDING_FILE" \
+   && has "$out" 'Repository:' && has "$out" "$REPO" \
+   && has "$out" 'JARVIS_VERSION=1.1.2 docker compose --profile tunnel --profile telegram pull' \
+   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'do not move the Git checkout or restore stored data' \
+   && has "$out" 'A data-changing migration may have run' \
+   && [ -n "$data_line" ] && [ -n "$image_line" ] && [ "$data_line" -lt "$image_line" ] \
+   && [ "$recovery_count" -eq 1 ] \
+   && has "$out" "cd $REPO && jarvis-research update --resume v1.1.3" \
+   && ! has "$out" '<previous-version>' \
+   && ! has "$out" 'scripts/restore.sh' \
+   && ! has "$out" 'migration already ran'; then
+  pass "failed_transaction_recovery_is_exact_scoped_ordered_and_resumable"
 else
-  check_fail "rollback_honesty: rc=$rc out=<<<$out>>>"
+  check_fail "failed transaction recovery contract: rc=$rc data=$data_line image=$image_line count=$recovery_count out=<<<$out>>>"
 fi
 
 # =============================================================================

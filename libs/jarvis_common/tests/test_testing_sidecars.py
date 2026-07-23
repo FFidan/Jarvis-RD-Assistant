@@ -21,9 +21,8 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-pytestmark = pytest.mark.asyncio
 
-
+@pytest.mark.asyncio
 async def test_faux_ollama_serves_litellm_embedding_and_chat_over_real_http():
     """FauxOllamaServer exercises real HTTP for LiteLLM-compatible calls."""
     async with FauxOllamaServer(
@@ -49,6 +48,7 @@ async def test_faux_ollama_serves_litellm_embedding_and_chat_over_real_http():
     assert content == "deterministic summary"
 
 
+@pytest.mark.asyncio
 async def test_faux_qdrant_filters_scores_counts_and_deletes_points():
     """FauxQdrantClient preserves Qdrant payload filtering semantics."""
     qdrant = FauxQdrantClient()
@@ -83,6 +83,66 @@ async def test_faux_qdrant_filters_scores_counts_and_deletes_points():
     assert remaining.count == 0
 
 
+@pytest.mark.asyncio
+async def test_faux_qdrant_records_payload_indexes_idempotently():
+    """The sidecar implements the payload-index subset used during startup."""
+    from qdrant_client.models import PayloadSchemaType
+
+    qdrant = FauxQdrantClient()
+    await qdrant.create_collection(
+        collection_name="indexed",
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    for _ in range(2):
+        await qdrant.create_payload_index(
+            collection_name="indexed",
+            field_name="visibility_scope",
+            field_schema=PayloadSchemaType.KEYWORD,
+            wait=True,
+        )
+
+    info = await qdrant.get_collection(collection_name="indexed")
+    assert info.payload_schema == {"visibility_scope": PayloadSchemaType.KEYWORD}
+
+
+@pytest.mark.asyncio
+async def test_faux_qdrant_set_payload_filters_without_changing_vectors():
+    """Filtered payload updates preserve vectors and ignore nonmatching points."""
+    qdrant = FauxQdrantClient()
+    await qdrant.create_collection(
+        collection_name="redaction",
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    await qdrant.upsert(
+        collection_name="redaction",
+        points=[
+            PointStruct(id="kept", vector=[1.0, 0.0], payload={"user_id": 7}),
+            PointStruct(id="other", vector=[0.0, 1.0], payload={"user_id": 8}),
+        ],
+    )
+    user_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=7))])
+
+    await qdrant.set_payload(
+        collection_name="redaction",
+        payload={"user_id": None},
+        points=user_filter,
+        wait=True,
+    )
+    points, _ = await qdrant.scroll(
+        collection_name="redaction",
+        limit=10,
+        with_payload=True,
+        with_vectors=True,
+    )
+
+    by_id = {point.id: point for point in points}
+    assert by_id["kept"].payload["user_id"] is None
+    assert by_id["kept"].vector == [1.0, 0.0]
+    assert by_id["other"].payload["user_id"] == 8
+    assert by_id["other"].vector == [0.0, 1.0]
+
+
+@pytest.mark.asyncio
 async def test_faux_qdrant_nested_filter_in_must_is_restrictive():
     """A Filter nested inside an outer ``must`` list is AND-combined, not ignored.
 

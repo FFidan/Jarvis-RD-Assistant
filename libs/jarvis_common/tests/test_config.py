@@ -152,7 +152,6 @@ class TestPaperIngestionSettings:
         assert s.semantic_scholar_api_key is None
         assert s.pubmed_api_key is None
         assert s.openalex_api_key is None
-        assert s.openalex_email == ""
         assert s.infra_ingest_key is None
         assert s.infra_ingest_key_file is None
         assert s.telegram_bot_token is None

@@ -59,13 +59,9 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
         _logger.info("recommendation: disabled via config, skipping")
         return 0
 
-    # --- Pre-read: fetch IDs and project names without holding the conn
-    #     across slow HTTP/Qdrant calls. ---
     async with db_pool.acquire() as conn:
-        starred_ids = await _get_starred_ids(conn, user_id)
-        projects_raw = await conn.fetch(
-            "SELECT name, description FROM projects WHERE status = 'active' AND user_id = $1",
-            user_id,
+        starred_ids, projects_raw, library_paper_ids = await _load_recommendation_inputs(
+            conn, user_id
         )
 
     # --- HTTP / Qdrant calls (no DB connection held) ---
@@ -83,7 +79,11 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
         if not text:
             continue
         results = await embedder.search_similar(
-            text, limit=20, score_threshold=0.3, user_id=user_id
+            text,
+            limit=20,
+            score_threshold=0.3,
+            user_id=user_id,
+            library_paper_ids=library_paper_ids,
         )
         for paper_id, score in _aggregate_to_papers(results):
             existing = project_scores.get(paper_id, (0.0, ""))
@@ -147,6 +147,29 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
         )
     _logger.info("recommendation: saved %d recommendations", len(merged))
     return len(merged)
+
+
+async def _load_recommendation_inputs(
+    conn: asyncpg.Connection,
+    user_id: int,
+) -> tuple[list[int], list[asyncpg.Record], list[int]]:
+    """Load caller-scoped recommendation inputs before external searches.
+
+    The caller releases the database connection before invoking HTTP or
+    Qdrant. The library IDs authorize only that user's private vectors.
+    """
+    starred_ids = await _get_starred_ids(conn, user_id)
+    projects = list(
+        await conn.fetch(
+            "SELECT name, description FROM projects WHERE status = 'active' AND user_id = $1",
+            user_id,
+        )
+    )
+    library_rows = await conn.fetch(
+        "SELECT paper_id FROM user_library WHERE user_id = $1",
+        user_id,
+    )
+    return starred_ids, projects, [int(row["paper_id"]) for row in library_rows]
 
 
 def _safe_float(val: object, default: float) -> float:

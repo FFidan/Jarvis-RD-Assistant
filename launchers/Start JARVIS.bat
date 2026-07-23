@@ -1,9 +1,9 @@
 @echo off
 REM Double-click launcher for Windows. Opens a terminal window and runs the
-REM canonical bootstrap (setup.sh) via WSL, falling back to Git Bash if WSL
-REM is not available. Always pauses at the end so setup.sh's exit code and
-REM any message (especially exit code 3, "log out and back in") stay visible
-REM instead of the window silently closing.
+REM canonical bootstrap (setup.sh) through the supported WSL2 path. Always
+REM pauses at the end so setup.sh's exit code and any message (especially exit
+REM code 3, "log out and back in") stay visible instead of the window silently
+REM closing.
 REM
 REM Uses goto/labels rather than multi-line if (...) blocks on purpose: batch
 REM expands %variables% once when a parenthesized block is parsed, not as
@@ -11,26 +11,20 @@ REM each line inside it runs, so reading %errorlevel% right after a command
 REM inside the same block would see the block's OLD errorlevel instead of
 REM that command's actual exit code.
 
-cd /d "%~dp0.."
-
 where wsl >nul 2>nul
-if not %errorlevel%==0 goto :try_bash
-wsl bash ./setup.sh
+if not %errorlevel%==0 goto :no_wsl
+wsl --cd "%~dp0.." env JARVIS_WINDOWS_LAUNCHER=1 bash ./setup.sh
 set STATUS=%errorlevel%
 goto :report
 
-:try_bash
-where bash >nul 2>nul
-if not %errorlevel%==0 goto :no_shell
-bash ./setup.sh
-set STATUS=%errorlevel%
-goto :report
-
-:no_shell
-echo Could not find WSL or Git Bash to run setup.sh.
-echo Docker Desktop for Windows runs on WSL2, so installing it is the supported path:
+:no_wsl
+echo JARVIS on Windows needs WSL2. Git Bash cannot run this setup safely.
+echo 1. Open PowerShell as Administrator and run: wsl --install
+echo 2. Restart Windows if asked, then open Ubuntu once to finish setup.
+echo 3. In Docker Desktop, open Settings ^> Resources ^> WSL Integration.
+echo 4. Enable Ubuntu, click Apply ^& restart, then run this launcher again.
+echo Help:
 echo   https://learn.microsoft.com/windows/wsl/install
-echo Then re-run this launcher (it will use WSL automatically).
 set STATUS=1
 goto :end
 

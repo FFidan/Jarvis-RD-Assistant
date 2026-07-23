@@ -20,6 +20,7 @@ vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -65,6 +66,17 @@ function makeJob(overrides: Partial<Job> = {}): Job {
   };
 }
 
+/**
+ * Pump microtasks under fake timers until `jobId` reaches `status`.
+ * Fails loudly rather than silently leaving a test vacuously green.
+ */
+async function drainUntilStatus(jobId: string, status: Job['status']): Promise<void> {
+  for (let i = 0; i < 50 && useJobStore.getState().jobs[jobId]?.status !== status; i++) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(requireJob(useJobStore.getState().jobs[jobId], jobId).status).toBe(status);
+}
+
 function createMockSSEStream(frames: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let idx = 0;
@@ -92,10 +104,6 @@ describe('JobStore', () => {
     // so vi.resetAllMocks() is required here to prevent cross-test mock queue bleed.
     vi.resetAllMocks();
     vi.restoreAllMocks();
-    // Re-stub sonner after restoreAllMocks
-    vi.mock('sonner', () => ({
-      toast: { success: vi.fn(), error: vi.fn() },
-    }));
   });
 
   afterEach(() => {
@@ -594,6 +602,121 @@ describe('JobStore', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  // ----- papers.process_library: invalidation + partial honesty -----
+
+  function runLibraryTerminal(id: string, result: Record<string, unknown>) {
+    const job = makeJob({ id, kind: 'papers.process_library', status: 'running' });
+    useJobStore.setState({ jobs: { [id]: job }, activeAborts: {} });
+    const doneEvent = JSON.stringify({
+      status: 'succeeded', progress: 100, progress_message: 'Done', result,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(createMockSSEStream([`data: ${doneEvent}\n\n`]), { status: 200 }),
+    );
+    useJobStore.getState().subscribe(id);
+    return new Promise((r) => setTimeout(r, 50));
+  }
+
+  it('papers.process_library: invalidates papers-feed, feed-counts, action-items on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await runLibraryTerminal('job-lib', {
+      status: 'ok', total: 3, downloaded: 1, processed: 3, summarized: 0, blocked: [], errors: [],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
+  });
+
+  it('papers.process_library: ok result fires toast.success, never warning', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libok', {
+      status: 'ok', total: 2, downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [],
+    });
+    expect(toast.success).toHaveBeenCalledWith('Whole-library processing completed');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('papers.process_library: partial result warns naming failed + skipped, never success', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libpart', {
+      status: 'partial', total: 5, downloaded: 1, processed: 2, summarized: 0,
+      blocked: [{ paper_id: 5, reason: 'no_pdf_source' }],
+      errors: [{ paper_id: 4, stage: 'process', error: 'boom' }],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toContain('1 failed');
+    expect(msg).toContain('1 skipped');
+    expect(msg).toContain('of 5');
+  });
+
+  it('papers.process_library: blocked-only partial warns (never a green success)', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libblock', {
+      status: 'partial', total: 2, downloaded: 0, processed: 0, summarized: 0,
+      blocked: [
+        { paper_id: 10, reason: 'no_pdf_source' },
+        { paper_id: 11, reason: 'no_pdf_source' },
+      ],
+      errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toContain('2 skipped');
+    expect(msg).not.toContain('failed');
+  });
+
+  it('papers.process_library: cancelled result warns (never a green success)', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libcancel', {
+      status: 'cancelled', total: 100, downloaded: 0, processed: 3, summarized: 0,
+      blocked: [], errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    expect(warnCall[0] as string).toMatch(/cancelled/i);
+  });
+
+  it('papers.process_library: cancelled result still names failures accrued before the stop', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libcancelerr', {
+      status: 'cancelled', total: 100, remaining: 96, downloaded: 0, processed: 3, summarized: 0,
+      blocked: [{ paper_id: 9, reason: 'no_pdf_source' }],
+      errors: [
+        { paper_id: 7, stage: 'process', error: 'boom' },
+        { paper_id: 8, stage: 'process', error: 'boom' },
+      ],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const msg = warnCall[0] as string;
+    expect(msg).toMatch(/cancelled/i);
+    expect(msg).toContain('2 failed');
+    expect(msg).toContain('1 skipped');
+    expect(msg).toContain('96 not processed');
+  });
+
+  it('papers.process_library: partial result names papers not reached', async () => {
+    const { toast } = await import('sonner');
+    await runLibraryTerminal('job-libremaining', {
+      status: 'partial', total: 5, examined: 2, remaining: 3,
+      downloaded: 0, processed: 2, summarized: 0, blocked: [], errors: [],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    expect(warnCall[0] as string).toContain('3 not processed');
+  });
+
   it('subscribe: failed terminal event fires toast.error with message', async () => {
     const { toast } = await import('sonner');
 
@@ -653,11 +776,19 @@ describe('JobStore', () => {
 
   // ----- cancelJob -----
 
-  it('cancelJob: calls API and optimistically sets status to cancelled', async () => {
+  it('cancelJob: requests the abort without reporting it as the outcome', async () => {
+    // A cancel is a REQUEST. The handler is still running, so the store must not
+    // mark the job terminal, and must not tear down the stream that will carry
+    // the handler's real final result.
     const { cancelJob: apiCancelJob } = await import('@/lib/api');
     vi.mocked(apiCancelJob).mockResolvedValue(undefined);
 
     vi.useFakeTimers();
+    // Stream stays silent until timers advance, so the post-cancel assertions
+    // observe the state cancelJob itself left behind.
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* () {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    });
 
     useJobStore.setState({
       jobs: { 'j6': makeJob({ id: 'j6', kind: 'pulse.generate', status: 'running' }) },
@@ -667,7 +798,82 @@ describe('JobStore', () => {
     await useJobStore.getState().cancelJob('j6');
 
     expect(apiCancelJob).toHaveBeenCalledWith('j6');
-    expect(requireJob(useJobStore.getState().jobs['j6'], 'j6').status).toBe('cancelled');
+    const job = requireJob(useJobStore.getState().jobs['j6'], 'j6');
+    expect(job.status).toBe('running');
+    // The request is recorded so the row reads "Cancelling" straight away
+    // instead of looking untouched until the handler stops.
+    expect(job.cancel_requested).toBe(true);
+    expect(useJobStore.getState().activeAborts['j6']).toBeDefined();
+  });
+
+  it('cancelJob: a rejected cancel request is not recorded as requested', async () => {
+    const { cancelJob: apiCancelJob } = await import('@/lib/api');
+    vi.mocked(apiCancelJob).mockRejectedValue(new Error('nope'));
+    const { toast } = await import('sonner');
+
+    vi.useFakeTimers();
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* () {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    });
+
+    useJobStore.setState({
+      jobs: { 'j-cancel-fail': makeJob({ id: 'j-cancel-fail', status: 'running' }) },
+      activeAborts: {},
+    });
+
+    await useJobStore.getState().cancelJob('j-cancel-fail');
+
+    const job = requireJob(useJobStore.getState().jobs['j-cancel-fail'], 'j-cancel-fail');
+    expect(job.cancel_requested).toBeFalsy();
+    expect(job.status).toBe('running');
+    expect(vi.mocked(toast.error)).toHaveBeenCalled();
+  });
+
+  it('cancelJob: the handler final result still reaches the store and toasts', async () => {
+    // End-to-end counterpart of the backend fix: procrastinate reports the job
+    // `succeeded` once the handler stops early and returns its accumulated
+    // counts, and that frame must still drive the warning + invalidation.
+    const { cancelJob: apiCancelJob } = await import('@/lib/api');
+    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+    const { toast } = await import('sonner');
+
+    const result = {
+      status: 'cancelled',
+      total: 40,
+      downloaded: 0,
+      processed: 11,
+      summarized: 0,
+      blocked: [],
+      errors: [{ paper_id: 1 }, { paper_id: 2 }, { paper_id: 3 }],
+    };
+    vi.useFakeTimers();
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* (url) {
+      if (url === '/api/jobs/j-cancel-result/stream') {
+        yield JSON.stringify({ status: 'running', progress: 27 });
+        yield JSON.stringify({ status: 'succeeded', progress: 100, result });
+      }
+    });
+
+    useJobStore.setState({
+      jobs: {
+        'j-cancel-result': makeJob({
+          id: 'j-cancel-result',
+          kind: 'papers.process_library',
+          status: 'running',
+        }),
+      },
+      activeAborts: {},
+    });
+
+    await useJobStore.getState().cancelJob('j-cancel-result');
+    await drainUntilStatus('j-cancel-result', 'succeeded');
+
+    const job = requireJob(useJobStore.getState().jobs['j-cancel-result'], 'j-cancel-result');
+    expect(job.result).toEqual(result);
+    expect(vi.mocked(toast.warning)).toHaveBeenCalledWith(
+      expect.stringContaining('Library processing was cancelled'),
+    );
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
   });
 
   // ----- removeJob -----
@@ -1146,17 +1352,21 @@ describe('JobStore', () => {
   }
 
   it('eviction timer fires removeJob after the eviction delay when not cancelled (control)', async () => {
-    // Positive control: proves cancelJob really arms an eviction timer, so the
-    // cancellation tests below are not vacuously green.
+    // Positive control: proves a terminal job really arms an eviction timer, so
+    // the cancellation tests below are not vacuously green.
     vi.useFakeTimers();
-    const { cancelJob: apiCancelJob } = await import('@/lib/api');
-    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* (url) {
+      if (url === '/api/jobs/job-evict-fires/stream') {
+        yield JSON.stringify({ status: 'cancelled' });
+      }
+    });
 
     useJobStore.setState({
       jobs: { 'job-evict-fires': makeJob({ id: 'job-evict-fires', status: 'running' }) },
       activeAborts: {},
     });
-    await useJobStore.getState().cancelJob('job-evict-fires');
+    useJobStore.getState().subscribe('job-evict-fires');
+    await drainUntilStatus('job-evict-fires', 'cancelled');
 
     const { removeSpy, restore } = spyOnRemoveJob();
     try {
@@ -1169,13 +1379,14 @@ describe('JobStore', () => {
 
   it('_reset: cancels both terminal-eviction and cancel-eviction timers', async () => {
     vi.useFakeTimers();
-    const { cancelJob: apiCancelJob } = await import('@/lib/api');
-    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
 
-    // Job A reaches a terminal state via SSE → post-terminal eviction timer.
+    // Both jobs reach a terminal state via SSE → one eviction timer each.
     vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* (url) {
       if (url === '/api/jobs/job-evict-terminal/stream') {
         yield JSON.stringify({ status: 'succeeded', progress: 100 });
+      }
+      if (url === '/api/jobs/job-evict-cancel/stream') {
+        yield JSON.stringify({ status: 'cancelled' });
       }
       // any other URL (zombie reconnects): end immediately
     });
@@ -1187,20 +1398,10 @@ describe('JobStore', () => {
       activeAborts: {},
     });
     useJobStore.getState().subscribe('job-evict-terminal');
+    await drainUntilStatus('job-evict-terminal', 'succeeded');
 
-    // Drain microtasks until the terminal event is processed (eviction armed).
-    for (
-      let i = 0;
-      i < 50 && useJobStore.getState().jobs['job-evict-terminal']?.status !== 'succeeded';
-      i++
-    ) {
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(requireJob(useJobStore.getState().jobs['job-evict-terminal']).status).toBe('succeeded');
-
-    // Job B is cancelled → post-cancel eviction timer.
-    await useJobStore.getState().cancelJob('job-evict-cancel');
-    expect(requireJob(useJobStore.getState().jobs['job-evict-cancel']).status).toBe('cancelled');
+    useJobStore.getState().subscribe('job-evict-cancel');
+    await drainUntilStatus('job-evict-cancel', 'cancelled');
 
     const { removeSpy, restore } = spyOnRemoveJob();
     try {
@@ -1217,14 +1418,18 @@ describe('JobStore', () => {
 
   it('removeJob: clears a pending eviction timer for an early-dismissed job', async () => {
     vi.useFakeTimers();
-    const { cancelJob: apiCancelJob } = await import('@/lib/api');
-    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* (url) {
+      if (url === '/api/jobs/job-dismiss/stream') {
+        yield JSON.stringify({ status: 'cancelled' });
+      }
+    });
 
     useJobStore.setState({
       jobs: { 'job-dismiss': makeJob({ id: 'job-dismiss', status: 'running' }) },
       activeAborts: {},
     });
-    await useJobStore.getState().cancelJob('job-dismiss'); // eviction armed (see control test)
+    useJobStore.getState().subscribe('job-dismiss');
+    await drainUntilStatus('job-dismiss', 'cancelled'); // eviction armed (see control test)
 
     // User dismisses the cancelled job before the eviction delay elapses.
     useJobStore.getState().removeJob('job-dismiss');

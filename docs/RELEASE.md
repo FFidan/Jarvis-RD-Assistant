@@ -8,39 +8,68 @@ CHANGELOG is generated, and how Docker images are versioned and published.
 Releases follow [Semantic Versioning](https://semver.org/): `vMAJOR.MINOR.PATCH`.
 
 - `MAJOR` — breaking API or schema changes that require manual operator steps.
-- `MINOR` — new features; existing deployments can upgrade with `./update.sh`.
+- `MINOR` — new features; existing deployments can upgrade with
+  `jarvis-research update`.
 - `PATCH` — backwards-compatible fixes, security patches, release metadata updates, and maintainer-approved documentation or UX corrections that do not require API, schema, or operator migration changes.
 
 To cut a release:
 
 ```bash
-# 1. Ensure all planned changes have merged and tests pass.
-uv run pytest -x
-npm --prefix frontend run test -- --run
-uv run ruff check services/ libs/ scripts/
+# 1. Start from the current remote main branch.
+git switch main
+git pull --ff-only
+git switch -c chore/release-vX.Y.Z
 
-# 2. Generate CHANGELOG from conventional commits (see cliff.toml).
-git cliff --tag vX.Y.Z -o CHANGELOG.md
+# 2. Prepare and verify the release metadata on this branch.
+git cliff --tag vX.Y.Z -o /tmp/jarvis-changelog-draft.md
+make check
 
-# 3. Commit the CHANGELOG.
-git add CHANGELOG.md
-git commit -m "chore(release): generate CHANGELOG for vX.Y.Z"
-
-# 4. Tag (annotated, not signed — operator choice).
-git tag -a vX.Y.Z -m "Release vX.Y.Z — <one-line summary>"
-
-# 5. Push tag and commits.
-git push origin HEAD vX.Y.Z
+# 3. Commit the reviewed version, CHANGELOG, and roadmap changes, then open a
+#    pull request. Do not push a release commit directly to main.
+git add CHANGELOG.md ROADMAP.md pyproject.toml frontend/package.json \
+  frontend/package-lock.json docker-compose.yml
+git commit -m "chore(release): prepare vX.Y.Z"
+git push -u origin chore/release-vX.Y.Z
 ```
+
+Review the generated draft and incorporate the release notes into
+`CHANGELOG.md` before the commit.
+
+The release metadata may travel in the final feature pull request or in a small
+release-only pull request. In either case, review it and merge it before tagging.
+After the pull request is merged and required checks are green:
+
+```bash
+git switch main
+git pull --ff-only
+
+# The tag target must be the reviewed commit now reachable from origin/main.
+git merge-base --is-ancestor HEAD origin/main
+git tag -a vX.Y.Z -m "Release vX.Y.Z — <one-line summary>"
+git push origin vX.Y.Z
+```
+
+Never point a stable tag at a local candidate commit, and never push a stable
+tag together with an unreviewed branch. The image workflow rejects a stable tag
+that is not main-reachable.
 
 ### Pre-release Tags
 
-For alpha/beta releases, use semantic versioning with pre-release suffix:
+The only supported pre-release tag shape is `vX.Y.Z-rc.N`. Tag the reviewed
+candidate commit before it is squash-merged:
 
 ```bash
-git cliff --tag v0.1.0-alpha --pre-release -o CHANGELOG.md
-git tag -a v0.1.0-alpha -m "Release v0.1.0-alpha"
+git cliff --tag vX.Y.Z-rc.N --pre-release -o /tmp/jarvis-changelog-draft.md
+git tag -a vX.Y.Z-rc.N -m "Release vX.Y.Z-rc.N"
+git push origin vX.Y.Z-rc.N
 ```
+
+The candidate tag does not have to be reachable from `main`; the publishing
+workflow applies the main-ancestry gate only to stable tags. Treat the candidate
+tag as disposable. After the candidate changes are squash-merged, create the
+stable tag separately: the stable tag must point to the reviewed commit on
+`main`. See the [release-candidate update note](manual/cli.md#release-candidate-tags-are-throwaway)
+for the corresponding operator behavior.
 
 ## How CHANGELOG Is Generated
 
@@ -81,7 +110,7 @@ commits since the last Git tag.
 
 Five images are published to GHCR on a release tag by `.github/workflows/ghcr-publish.yml`:
 `ghcr.io/limitcycle-oss/jarvis-{paper-ingestion,learning-engine,telegram-bot,dashboard,restore-uploader}`.
-Image tags drop the leading `v` (`v1.1.2` → `:1.1.2`), matching the `${JARVIS_VERSION}` interpolation in
+Image tags drop the leading `v` (`vX.Y.Z` → `:X.Y.Z`), matching the `${JARVIS_VERSION}` interpolation in
 `docker-compose.yml`. `paper-ingestion` also publishes a `:X.Y.Z-cuda` flavor for NVIDIA hosts; the
 default install selects it from the detected GPU. `langfuse-hardened` is not published — it is
 observability-profile-only and built locally.
@@ -90,27 +119,47 @@ Because the images are published, **rolling forward or back to a specific versio
 not a rebuild. Pin `JARVIS_VERSION` and pull:
 
 ```bash
-JARVIS_VERSION=1.1.2 docker compose pull
-JARVIS_VERSION=1.1.2 docker compose up -d --no-build
+JARVIS_VERSION=X.Y.Z docker compose pull
+JARVIS_VERSION=X.Y.Z docker compose up -d --no-build
 ```
 
 The `build:` blocks remain for contributors; `./setup.sh --build-local` (and `./update.sh --build-local`)
 build from source instead of pulling.
+
+## Release Gate Map
+
+Run every gate against the exact release-candidate ref and confirm the workflow
+run's commit before accepting its result.
+
+| Class | Required path | Acceptance rule |
+|---|---|---|
+| Fast deterministic PR | Run `make check` locally. The pull request runs `CI / Lint + fast test suite`, the complete frontend job, and `Docs / MkDocs build`; release-metadata tests also lock the workflow wiring. | Every job succeeds. The docs job runs in strict mode, where warnings fail the build. |
+| GitHub-hosted integration | Require the CI aggregate's live PostgreSQL cross-user and contract jobs plus `Security / npm-audit`. Dispatch `gh workflow run nightly-llm-smoke.yml --ref <candidate-branch>` for its independent `Corpus visibility (PostgreSQL + Qdrant)` job. | The `CI gate` and `Security gate` succeed. Each required JUnit selection contains at least one pass and no skips, failures, or errors; the frontend audit rejects high-severity advisories. |
+| Isolated release | Dispatch `gh workflow run lifecycle-smoke.yml --ref <candidate-branch> -f leg=all`. | The GitHub-hosted lifecycle run proves CA-verified HTTPS and the generated destructive restore round trip. Its restore leg rejects `SKIP` and removes only its owned fixture project. |
+
+Do not move the Qdrant or destructive restore suites into fast PR CI, and never
+run a public-repository workflow on a self-hosted runner.
 
 ## Release Checklist
 
 Before tagging a release:
 
 - [ ] All planned changes for the milestone have merged to `main`.
-- [ ] Version bumped in lockstep: `pyproject.toml`, `frontend/package.json` (and `package-lock.json`, via `npm version`), the `docker-compose.yml` `JARVIS_VERSION` fallback, and the `CHANGELOG.md` heading + date.
-- [ ] `uv run pytest -x` passes.
-- [ ] `npm --prefix frontend run test -- --run` passes.
-- [ ] `uv run ruff check services/ libs/ scripts/` is clean.
+- [ ] Version bumped in lockstep: `pyproject.toml`, `frontend/package.json`
+      (and `package-lock.json`, via `npm version`), the `docker-compose.yml`
+      `JARVIS_VERSION` fallback, and the `CHANGELOG.md` heading + date.
+- [ ] `make check` passes on the reviewed candidate.
+- [ ] Required CI, Security, and strict Docs workflow gates are green, including
+      the high-severity npm audit and the Python and OSV dependency scans.
+- [ ] The candidate's manually dispatched nightly Qdrant and lifecycle runs pass
+      the acceptance rules above; no required selection is skipped or empty.
 - [ ] `CHANGELOG.md` generated and reviewed.
+- [ ] Release metadata was reviewed in a pull request and the merge commit is on
+      `origin/main`.
 - [ ] `docs/known-residual-risks.md` updated with any newly accepted risks.
 - [ ] Docker images built and smoke-tested against a fresh stack.
 - [ ] All external service keys verified (LiteLLM, Langfuse, SMTP, Telegram).
-- [ ] Tag annotated and pushed.
+- [ ] Annotated tag points to that main-reachable commit, then is pushed by itself.
 
 Publishing a stable image is gated by two independent controls: a `refs/tags/v*` repository ruleset
 (admin-only tag creation) and a `release` deployment environment on the publish job (the owner must
@@ -119,8 +168,8 @@ approve the run). Release-candidate tags (`vX.Y.Z-rc.N`) publish unattended for 
 
 After the final `vX.Y.Z` publish completes:
 
-- [ ] Note that the squash-merge produced a **new commit SHA** — tag that SHA promptly so the published
-      images correspond to the tagged source (the rc images were built from a different SHA).
+- [ ] Confirm the tag still resolves to the reviewed `main` commit. A
+      squash-merged release candidate has a different SHA and must not be reused.
 - [ ] Run the anonymous cold-install smoke against the **final** tags (`gh workflow run first-run-smoke.yml`
       with the release version) and confirm zero app-image builds and all mandatory services healthy.
 - [ ] `docker manifest inspect` every published image from an **empty** `DOCKER_CONFIG` (`DOCKER_CONFIG="$(mktemp -d)"`),
@@ -131,10 +180,9 @@ After the final `vX.Y.Z` publish completes:
 
 ### Code Rollback
 
-> **Database warning:** A `git reset --hard` without a matching database rollback
-> will leave the schema ahead of the code. Always coordinate a code rollback with
-> a database restore from backup (see below), or use a forward-only "reverse
-> migration" instead.
+> **Database warning:** Moving the source checkout back without a matching
+> database restore can leave the schema ahead of the code. Coordinate a code
+> rollback with a restore point, or use a forward-only corrective migration.
 
 To revert to a previously published release after confirming the DB state is compatible, pin
 `JARVIS_VERSION` to that tag and pull it back from the registry:
@@ -153,9 +201,9 @@ images, or you run a `--build-local` install, check out the target tag's source 
 **Important:** Database migrations are intentionally **forward-only**. There is no
 automated rollback mechanism. To revert a schema change:
 
-1. **Restore from backup** — take a snapshot before upgrading; see
-   `scripts/backup.sh` for the backup procedure. The backup is AES-256 encrypted
-   when `ENC_KEYFILE` is set.
+1. **Restore from backup** — take a restore point before upgrading; see
+   [Backup and restore](manual/backup-and-restore.md). The default setup encrypts
+   restore points through `BACKUP_ENCRYPT_KEYFILE`.
 2. **Manually craft a "reverse" migration** — if a change must be undone in-place,
    add a new migration that restores the old schema state (e.g., re-add a dropped
    column with default value).

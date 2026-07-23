@@ -1,0 +1,67 @@
+name: Lifecycle smoke
+
+# Manual GitHub-hosted checks for TLS, interrupted update recovery, uninstall
+# planning, and destructive restore. A passing restore leg is required release
+# evidence; the other legs remain broader lifecycle diagnostics.
+on:
+  workflow_dispatch:
+    inputs:
+      leg:
+        description: Which leg to run
+        type: choice
+        default: all
+        options: [all, tls, update, uninstall, restore]
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lifecycle-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle-smoke:
+    name: Lifecycle smoke (${{ inputs.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # the update leg resolves release tags from origin
+
+      - name: Install mkcert
+        if: inputs.leg == 'all' || inputs.leg == 'tls'
+        # libnss3-tools is not optional: the CA root is always absent on a fresh
+        # runner, so init-mkcert.sh always calls `mkcert -install`, which needs
+        # certutil from that package and aborts the tls leg without it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mkcert libnss3-tools
+
+      - name: Free disk space for the cold installs
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Run the lifecycle smoke
+        env:
+          LEG: ${{ inputs.leg }}
+        run: |
+          args=()
+          if [ "$LEG" != "all" ]; then
+            args+=(--leg "$LEG")
+          fi
+          # Preserve the smoke script's status while still writing a complete log.
+          rc=0
+          bash scripts/lifecycle-smoke.sh "${args[@]}" > lifecycle-smoke.log 2>&1 || rc=$?
+          cat lifecycle-smoke.log
+          exit "$rc"
+
+      - name: Upload the smoke log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lifecycle-smoke-log
+          path: lifecycle-smoke.log
+          if-no-files-found: ignore

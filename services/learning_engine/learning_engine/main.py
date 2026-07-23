@@ -14,7 +14,6 @@ import logging
 from typing import Any
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     ServiceLifespanConfig,
     configure_lifespan,
@@ -47,14 +46,6 @@ configure_logging("learning_engine", log_level=get_core_settings().log_level)
 maybe_init_sentry("learning_engine")
 
 logger = logging.getLogger(__name__)
-
-try:
-    import orjson as _orjson  # noqa: F401
-
-    DEFAULT_RESPONSE_CLASS = ORJSONResponse
-except ImportError:
-    logger.warning("orjson is not installed; falling back to JSONResponse")
-    DEFAULT_RESPONSE_CLASS = JSONResponse
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +139,6 @@ app = FastAPI(
     version=app_version(),
     lifespan=configure_lifespan(_lifespan_config),
     dependencies=[Depends(verify_api_key)],
-    default_response_class=DEFAULT_RESPONSE_CLASS,
 )
 
 configure_middleware_and_errors(

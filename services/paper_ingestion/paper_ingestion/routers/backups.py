@@ -1,30 +1,28 @@
-"""Admin Backup panel — list / status / download / on-demand trigger.
+"""Administrative backup, restore, download, and retention endpoints.
 
-The disaster-recovery archives produced by ``scripts/backup.sh`` (in the
-``postgres-backup`` sidecar) land in the ``postgres_backups`` volume, mounted
-read-only into this service at ``/backups``. These archives contain ALL
-platform secrets (the ``secrets_*.tar.gz`` is the full Docker-secret set,
-plaintext when no backup key is configured), so every route here requires an
-**admin browser session** (``Depends(require_admin)``) — never the ops
-X-API-Key, which must not reach secret-bearing archives.
+Archive-bearing routes require an administrator session; the operations API key
+never authorizes archive access. Restore-status polling additionally accepts a
+restore-session token so it remains available while restored session rows are
+replaced. Off-host quarantine acknowledgement requires that token or the current
+configured-owner session and consumes the token before outbound access resumes.
 
-The app container (python:3.12-slim) cannot run ``pg_dump``/``backup.sh`` and
-has no docker.sock, so the on-demand trigger writes a sentinel flag-file into a
-small RW volume shared with the sidecar; the sidecar loop runs a backup
-immediately when it sees the flag, then removes it.
-
-Registered in main.py with ``dependencies=[]`` + ``router.auth_exempt=True``
-(same exemption shape as admin.py) so a browser session need not send X-API-Key.
+Backup and restore requests are published to a shared trigger volume for the
+dedicated sidecar, keeping database tools and container control out of this
+service.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import os
 import re
 import secrets
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -33,14 +31,24 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
+    current_user_id_strict,
+    read_restore_status_token_record,
     require_admin,
     require_admin_or_api_key,
+    restore_acknowledgement_bearer_valid,
     restore_status_bearer_valid,
     restore_status_token_file,
     verify_api_key,
 )
 from jarvis_common.event_log import log_event
+from jarvis_common.maintenance import (
+    OutboundQuarantineState,
+    OutboundQuarantineStateError,
+    outbound_quarantine_file,
+    read_outbound_quarantine,
+)
 from jarvis_common.migrations import required_code_schema
+from jarvis_common.owner import resolve_owner_identity
 from jarvis_common.paths import secure_path
 from pydantic import BaseModel, Field, ValidationError
 
@@ -49,8 +57,6 @@ from paper_ingestion.deps import limiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin/backups", tags=["admin", "backups"])
-# Session-only admin auth — exempt from the global verify_api_key dep.
-router.auth_exempt = True  # type: ignore[attr-defined]
 
 # Directory the postgres_backups volume is mounted at (read-only) in this service.
 _BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/backups"))
@@ -75,39 +81,44 @@ _DELETE_SENTINEL = (
 _RETENTION_CONFIG = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".retention.json"
 )
-# Off-host (inbox) restore inventory: the postgres-backup sidecar's
-# ``restore.sh --inbox-manifest`` writes this sanitized listing (names + booleans
-# only, never paths or key contents) each loop iteration. The app READS it from the
-# already-mounted backup_trigger volume — it never mounts /restore-inbox and gains
-# no new privilege.
+# The backup sidecar writes an inbox inventory containing names and booleans,
+# without paths or key contents. The application reads it from the existing
+# trigger volume and does not mount the restore inbox.
 _INBOX_MANIFEST = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".inbox_manifest.json"
 )
-# Upload grant the dedicated restore-uploader reads to authorize a browser off-host
-# upload. Written here (app), read by the SEPARATE uploader container over its
-# backup_trigger:ro mount — so the app mints only a control-plane grant and the
-# encrypted archive bytes + operator key never transit this process.
+# The application writes a short-lived upload grant for the restore uploader,
+# which reads it through the trigger volume. Archive bytes and the operator key
+# go directly to the uploader.
 _UPLOAD_GRANT = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".upload_grant.json"
+_RESTORE_STATE_LOCK_FILENAME = ".restore_state.lock"
 
-# Strict allowlist for the four archive shapes scripts/backup.sh emits:
+RESTORE_ACKNOWLEDGEMENT_PHRASE = "I HAVE REVIEWED RESTORED CREDENTIALS"
+_RESTORE_TOKEN_TTL = timedelta(hours=2)
+
+# Strict allowlist for the five archive shapes scripts/backup.sh emits:
 #   jarvis_<ts>.sql.gz[.enc] · litellm_<ts>.sql.gz[.enc]
-#   secrets_<ts>.tar.gz[.enc] · qdrant_<collection>_<ts>.snapshot[.enc]
+#   pdfs_<ts>.tar.gz[.enc] · secrets_<ts>.tar.gz[.enc]
+#   qdrant_<collection>_<ts>.snapshot[.enc]
 # <ts> = %Y%m%d_%H%M%S (backup.sh). The regex pins the whole string and
 # permits no path separators or '..', blocking traversal to /run/secrets/*.
 _TS = r"\d{8}_\d{6}"
 _FILENAME_RE = re.compile(
     rf"^(?:jarvis_{_TS}\.sql\.gz(?:\.enc)?"
     rf"|litellm_{_TS}\.sql\.gz(?:\.enc)?"
+    rf"|pdfs_{_TS}\.tar\.gz(?:\.enc)?"
     rf"|secrets_{_TS}\.tar\.gz(?:\.enc)?"
     rf"|qdrant_[A-Za-z0-9_-]+_{_TS}\.snapshot(?:\.enc)?)$"
 )
-# Globs used to enumerate the directory (mirror the four shapes; '*' here is a
+# Globs used to enumerate the directory (mirror the five shapes; '*' here is a
 # filesystem glob, NOT regex — every match is re-validated by _FILENAME_RE).
 _ARCHIVE_GLOBS = (
     "jarvis_*.sql.gz",
     "jarvis_*.sql.gz.enc",
     "litellm_*.sql.gz",
     "litellm_*.sql.gz.enc",
+    "pdfs_*.tar.gz",
+    "pdfs_*.tar.gz.enc",
     "secrets_*.tar.gz",
     "secrets_*.tar.gz.enc",
     "qdrant_*.snapshot",
@@ -120,14 +131,50 @@ _QDRANT_RE = re.compile(rf"^qdrant_([A-Za-z0-9_-]+)_{_TS}\.snapshot(?:\.enc)?$")
 
 
 class BackupEntry(BaseModel):
+    """One downloadable archive in the local backup store.
+
+    Attributes
+    ----------
+    filename : str
+        Validated archive basename.
+    store : str
+        Logical store represented by the archive.
+    size_bytes : int
+        Archive size in bytes.
+    modified_at : datetime
+        Filesystem modification time.
+    encrypted : bool
+        Whether the archive uses the encrypted filename form.
+
+    """
+
     filename: str
-    store: str  # jarvis | litellm | secrets | qdrant
+    store: str  # jarvis | litellm | pdfs | secrets | qdrant
     size_bytes: int
     modified_at: datetime
     encrypted: bool
 
 
 class BackupStatus(BaseModel):
+    """Summary of local backup availability and trigger state.
+
+    Attributes
+    ----------
+    backup_dir_available : bool
+        Whether the mounted backup directory can be read.
+    archive_count : int
+        Number of validated archives currently present.
+    last_run_at : datetime or None
+        Modification time of the newest archive, used as a success proxy.
+    last_attempt_at : datetime or None
+        Timestamp recorded by the most recent backup attempt.
+    last_run_succeeded : bool or None
+        Recorded outcome of that attempt, or ``None`` when unknown.
+    trigger_pending : bool
+        Whether an on-demand backup request awaits the sidecar.
+
+    """
+
     backup_dir_available: bool
     archive_count: int
     last_run_at: datetime | None  # newest-archive mtime (last *success* proxy)
@@ -137,6 +184,21 @@ class BackupStatus(BaseModel):
 
 
 class RestorePointFile(BaseModel):
+    """One validated archive belonging to a restore point.
+
+    Attributes
+    ----------
+    filename : str
+        Validated archive basename.
+    store : str
+        Logical store represented by the archive.
+    size_bytes : int
+        Archive size in bytes.
+    encrypted : bool
+        Whether the archive is encrypted at rest.
+
+    """
+
     filename: str
     store: str
     size_bytes: int
@@ -144,11 +206,46 @@ class RestorePointFile(BaseModel):
 
 
 class RestorePoint(BaseModel):
+    """Restore-set metadata derived from archives sharing one timestamp.
+
+    Attributes
+    ----------
+    timestamp : str
+        Backup-set timestamp used to bind every archive in the point.
+    created_at : datetime
+        Creation time derived from the backup timestamp.
+    stores : list[str]
+        Logical stores present in the set.
+    qdrant_collections : list[str]
+        Qdrant collection names represented by snapshots.
+    complete : bool
+        Whether the set satisfies the current restore completeness rules.
+    has_pdfs : bool
+        Whether a PDF archive is present.
+    legacy_missing_pdfs : bool
+        Whether a signed older set is eligible for explicit PDF-loss consent.
+    encrypted : bool
+        Whether every security-sensitive archive is encrypted.
+    total_size_bytes : int
+        Combined size of the point's archives.
+    files : list[RestorePointFile]
+        Validated archives that comprise the point.
+    app_version : str or None
+        Application version recorded by the manifest, when available.
+    schema_version : int or None
+        Database schema version recorded by the manifest, when available.
+    compat : {"same", "older", "newer", "unknown"}
+        Compatibility classification against the running code.
+
+    """
+
     timestamp: str
     created_at: datetime
     stores: list[str]
     qdrant_collections: list[str]
     complete: bool
+    has_pdfs: bool
+    legacy_missing_pdfs: bool
     encrypted: bool
     total_size_bytes: int
     files: list[RestorePointFile]
@@ -158,47 +255,154 @@ class RestorePoint(BaseModel):
 
 
 class RestoreLastRun(BaseModel):
+    """Sanitized outcome of the most recent restore attempt.
+
+    Attributes
+    ----------
+    attempted_at : datetime or None
+        Recorded start time, when available.
+    succeeded : bool or None
+        Restore outcome, or ``None`` when no trustworthy result exists.
+    stores : dict[str, str]
+        Per-store status labels without archive content or credentials.
+
+    """
+
     attempted_at: datetime | None
     succeeded: bool | None
     stores: dict[str, str]
 
 
 class RestorePointsResponse(BaseModel):
+    """Restore inventory and retention metadata returned to an administrator.
+
+    Attributes
+    ----------
+    restore_points : list[RestorePoint]
+        Validated local restore sets.
+    retention_days : int or None
+        Effective age-retention window, when configured.
+    last_run : RestoreLastRun or None
+        Sanitized result of the latest restore attempt.
+
+    """
+
     restore_points: list[RestorePoint]
     retention_days: int | None
     last_run: RestoreLastRun | None
 
 
 class RestoreStep(BaseModel):
+    """Named step and state reported by the restore sidecar.
+
+    Attributes
+    ----------
+    name : str
+        Human-readable step label.
+    status : str
+        Current sidecar status for the step.
+
+    """
+
     name: str
     status: str
 
 
 class RestoreRequest(BaseModel):
+    """Validated request to restore one local or staged backup set.
+
+    Attributes
+    ----------
+    timestamp : str
+        Exact restore-point timestamp selected by the operator.
+    confirm : str
+        Typed destructive-action confirmation phrase.
+    source : {"local", "inbox"}
+        Read-only local archive store or staged off-host inbox.
+    allow_missing_pdfs : bool
+        Explicit consent for eligible legacy sets without saved PDFs.
+
+    """
+
     timestamp: str
     confirm: str
     # "local" (default) restores from the read-only /backups mount; "inbox" restores
     # an operator-staged archive set from the sidecar's restore_inbox (off-host DR).
     # The default keeps every existing caller/test valid.
     source: Literal["local", "inbox"] = "local"
+    allow_missing_pdfs: bool = False
+
+
+class RestoreAcknowledgement(BaseModel):
+    """Exact operator acknowledgement for one quarantined off-host restore.
+
+    Attributes
+    ----------
+    restore_id : str
+        Lowercase 128-bit identifier of the current quarantine record.
+    source : {"inbox"}
+        Inbox-only source discriminator; local restores never use quarantine.
+    confirm : str
+        Typed credential-review phrase checked by the route.
+
+    """
+
+    restore_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    source: Literal["inbox"]
+    confirm: str
 
 
 class InboxRestorePoint(BaseModel):
     """One off-host restore point staged in the restore_inbox, per the sidecar manifest.
 
     Names + booleans only — no paths, no key contents. ``complete`` mirrors
-    restore.sh's own completeness gate (jarvis + litellm DB archives present);
-    ``has_secrets`` flags a bundled ``secrets_<ts>`` archive; ``has_key`` flags the
-    one-time operator key the off-host restore requires.
+    restore.sh's own completeness gate. ``has_secrets`` flags a bundled
+    ``secrets_<ts>`` archive; ``has_pdfs`` and ``legacy_missing_pdfs`` distinguish
+    current sets from signed pre-v1.2 sets; ``has_key`` flags the one-time operator
+    key the off-host restore requires.
     """
 
     timestamp: str
     complete: bool
     has_secrets: bool
     has_key: bool
+    has_pdfs: bool
+    legacy_missing_pdfs: bool
 
 
 class RestoreStatus(BaseModel):
+    """Sanitized, database-independent restore progress state.
+
+    Attributes
+    ----------
+    state : str
+        Overall restore state reported to the polling client.
+    current_step : str or None
+        Current human-readable step, when one is active.
+    steps : list[RestoreStep]
+        Per-step progress returned by the sidecar.
+    safety_backup_ts : str or None
+        Timestamp of the pre-restore safety backup, when created.
+    started_at : str or None
+        Restore start timestamp.
+    finished_at : str or None
+        Restore completion timestamp.
+    error : str or None
+        Sanitized failure detail.
+    manual_steps_required : bool
+        Whether operator follow-up remains after the data restore.
+    phase : str or None
+        Sidecar phase used to distinguish destructive progress.
+    restore_id : str or None
+        Current off-host quarantine identifier, when review is pending.
+    source : {"local", "inbox"} or None
+        Archive source associated with the current quarantine.
+    quarantine : {"none", "awaiting_review", "unreadable"}
+        Sanitized outbound-quarantine state. ``unreadable`` remains fail closed
+        without exposing or guessing identity fields.
+
+    """
+
     state: str
     current_step: str | None = None
     steps: list[RestoreStep] = []
@@ -208,9 +412,21 @@ class RestoreStatus(BaseModel):
     error: str | None = None
     manual_steps_required: bool = False
     phase: str | None = None
+    restore_id: str | None = None
+    source: Literal["local", "inbox"] | None = None
+    quarantine: Literal["none", "awaiting_review", "unreadable"] = "none"
 
 
 class DeleteRequest(BaseModel):
+    """Typed confirmation for deleting a restore point.
+
+    Attributes
+    ----------
+    confirm : str
+        Exact destructive-action phrase checked by the delete route.
+
+    """
+
     confirm: str
 
 
@@ -232,13 +448,15 @@ def _classify(name: str) -> str:
         return "jarvis"
     if name.startswith("litellm_"):
         return "litellm"
+    if name.startswith("pdfs_"):
+        return "pdfs"
     if name.startswith("secrets_"):
         return "secrets"
     return "qdrant"
 
 
 def _validate_name(name: str) -> None:
-    """Reject anything that is not one of the four known archive shapes.
+    """Reject anything that is not one of the five known archive shapes.
 
     Pins the whole string and forbids path separators / '..', so a caller can
     never escape _BACKUP_DIR (e.g. into /run/secrets/*).
@@ -285,7 +503,7 @@ def _read_last_run() -> dict | None:
 
 
 def _last_run_succeeded(run: dict | None) -> bool | None:
-    """The truthful ``last_run_succeeded`` value for ``/status``.
+    """Return the accurate ``last_run_succeeded`` value for ``/status``.
 
     A maintenance-skip run (the sidecar stood down for an in-flight restore)
     leaves ``succeeded`` at its startup-default ``false`` — it is never
@@ -394,6 +612,91 @@ def _manifest_compat(
     return app_version, schema_version, _compute_compat(schema_version, code_max)
 
 
+def _legacy_manifest_names(ts: str) -> list[str] | None:
+    """Return a well-formed legacy manifest inventory, otherwise ``None``."""
+    manifest = _read_manifest(ts)
+    if not isinstance(manifest, dict) or manifest.get("timestamp") != ts or "run_id" in manifest:
+        return None
+    archives = manifest.get("archives")
+    if not isinstance(archives, list):
+        return None
+    manifest_names: list[str] = []
+    for archive in archives:
+        if not isinstance(archive, dict):
+            return None
+        filename = archive.get("filename")
+        if not isinstance(filename, str):
+            return None
+        manifest_names.append(filename)
+    return manifest_names
+
+
+def _legacy_manifest_has_signature(ts: str) -> bool:
+    """Return whether the legacy manifest has a regular HMAC sidecar."""
+    try:
+        signature_path = secure_path(_BACKUP_DIR, f"manifest_{ts}.json.hmac")
+        if signature_path.is_symlink() or not signature_path.is_file():
+            return False
+        signature = signature_path.read_text().strip()
+    except (OSError, ValueError):
+        return False
+    return re.fullmatch(r"[0-9a-f]{64}", signature) is not None
+
+
+def _legacy_manifest_missing_pdfs(ts: str, member_filenames: set[str]) -> bool:
+    """Identify a pre-v1.2 inventory with a well-formed signature sidecar.
+
+    This service intentionally has no backup authentication key. The privileged
+    restore sidecar verifies the signature before any mutation.
+    """
+    manifest_names = _legacy_manifest_names(ts)
+    if manifest_names is None:
+        return False
+    if (
+        len(set(manifest_names)) != len(manifest_names)
+        or set(manifest_names) != member_filenames
+        or any(name.startswith("pdfs_") for name in manifest_names)
+    ):
+        return False
+    return _legacy_manifest_has_signature(ts)
+
+
+def _restore_point_completeness(ts: str, members: list[BackupEntry]) -> tuple[bool, bool, bool]:
+    store_counts = {
+        store: sum(member.store == store for member in members)
+        for store in {member.store for member in members}
+    }
+    member_filenames = {member.filename for member in members}
+    has_pdfs = store_counts.get("pdfs", 0) > 0
+    legacy_missing_pdfs = not has_pdfs and _legacy_manifest_missing_pdfs(ts, member_filenames)
+
+    core_stores = {"jarvis", "litellm"}
+    if has_pdfs:
+        core_stores.add("pdfs")
+    core_members = [member for member in members if member.store in core_stores]
+    core_encryption = {member.encrypted for member in core_members}
+    coherent_encryption = (
+        bool(core_members)
+        and len(core_encryption) == 1
+        and all(member.encrypted == core_members[0].encrypted for member in members)
+    )
+    encrypted_core = coherent_encryption and core_members[0].encrypted
+    secrets_count = store_counts.get("secrets", 0)
+    secrets_complete = secrets_count == 1 if encrypted_core else secrets_count <= 1
+
+    required_counts = store_counts.get("jarvis", 0) == 1 and store_counts.get("litellm", 0) == 1
+    if not legacy_missing_pdfs:
+        required_counts = required_counts and store_counts.get("pdfs", 0) == 1
+
+    logical_roles: list[str] = []
+    for member in members:
+        qdrant_match = _QDRANT_RE.match(member.filename)
+        logical_roles.append(f"qdrant:{qdrant_match.group(1)}" if qdrant_match else member.store)
+    duplicate_role = len(logical_roles) != len(set(logical_roles))
+    complete = required_counts and secrets_complete and coherent_encryption and not duplicate_role
+    return has_pdfs, legacy_missing_pdfs, complete
+
+
 def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
     """Group archive entries by their %Y%m%d_%H%M%S timestamp into restore points.
 
@@ -412,7 +715,8 @@ def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
     points: list[RestorePoint] = []
     for ts, members in groups.items():
         stores = sorted({m.store for m in members})
-        collections = sorted(qm.group(1) for m in members if (qm := _QDRANT_RE.match(m.filename)))
+        collections = sorted({qm.group(1) for m in members if (qm := _QDRANT_RE.match(m.filename))})
+        has_pdfs, legacy_missing_pdfs, complete = _restore_point_completeness(ts, members)
         app_version, schema_version, compat = _manifest_compat(
             ts, {m.filename for m in members}, code_max
         )
@@ -422,7 +726,9 @@ def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
                 created_at=max(m.modified_at for m in members),
                 stores=stores,
                 qdrant_collections=collections,
-                complete={"jarvis", "litellm", "secrets"}.issubset(stores),
+                complete=complete,
+                has_pdfs=has_pdfs,
+                legacy_missing_pdfs=legacy_missing_pdfs,
                 encrypted=all(m.encrypted for m in members),
                 total_size_bytes=sum(m.size_bytes for m in members),
                 files=[
@@ -443,45 +749,175 @@ def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
     return points
 
 
-def _write_status_token(token: str) -> bool:
-    """Persist ONLY the sha256 + 2h expiry of a one-time restore-status token.
+def _fsync_directory(directory: Path) -> None:
+    """Persist directory changes after updating restore state."""
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    fd = os.open(directory, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
-    The raw token is returned to the caller ONCE and never stored: ``restore_status``
-    authorizes a presented token by hashing it and matching this file, DB-free (see
-    ``jarvis_common.auth.restore_status_bearer_valid``). It lives in its OWN sentinel
-    file — not ``.restore_request.json``, which ``restore.sh`` consumes before any
-    status is written. Atomic tmp->replace at mode 0600; a new request overwrites it.
-    Best-effort: an I/O failure logs and returns False (the restore is already queued;
-    the poll simply falls back to the session/API-key gate).
+
+def _write_all(fd: int, payload: bytes) -> None:
+    """Write all bytes to an already-open state file."""
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write while persisting restore state")
+        view = view[written:]
+
+
+def _atomic_write_private_json(path: Path, payload: dict[str, object]) -> None:
+    """Durably replace one private JSON record in the trusted trigger volume.
+
+    A random ``O_EXCL|O_NOFOLLOW`` temporary file is written and fsynced before
+    ``os.replace`` publishes it; the parent directory is then fsynced so a clean
+    return means both content and directory entry reached the filesystem. Callers
+    use the restore-state lock when replacement must be ordered with another
+    sentinel. Any failure removes only the uncommitted random temporary name.
     """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(tmp, flags, 0o600)
+        try:
+            _write_all(fd, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _restore_state_lock_file() -> Path:
+    return restore_status_token_file().parent / _RESTORE_STATE_LOCK_FILENAME
+
+
+@contextmanager
+def _restore_state_lock() -> Iterator[None]:
+    """Serialize restore request publication and acknowledgement on one host.
+
+    Containers sharing the trigger volume open the same file with ``O_NOFOLLOW``
+    and reject non-regular or multiply linked lock files. While the exclusive
+    lock is held, request creation checks quarantine and publishes one matching
+    token record and request file; acknowledgement removes the matching token and
+    quarantine in order. The lock does not coordinate separate hosts.
+
+    Yields
+    ------
+    None
+        Control while the exclusive trigger-volume lock is held.
+
+    Raises
+    ------
+    OSError
+        If the lock cannot be securely opened, validated, or acquired.
+
+    """
+    path = _restore_state_lock_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        lock_stat = os.fstat(fd)
+        if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_nlink != 1:
+            raise OSError("restore state lock is not a singly-linked regular file")
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _write_status_token(
+    token: str,
+    *,
+    restore_id: str,
+    source: Literal["local", "inbox"],
+    requested_at: str,
+    expires_at: datetime | None = None,
+) -> bool:
+    """Persist the current restore-session record without its raw token.
+
+    The record is committed before the request file so status polling remains
+    available if the restore replaces session rows. Polling may reuse the token;
+    acknowledgement consumes the matching record.
+
+    Parameters
+    ----------
+    token : str
+        Raw restore-session token to hash; it is never written to server storage.
+    restore_id : str
+        Lowercase 128-bit restore identifier.
+    source : {"local", "inbox"}
+        Archive source stored in the restore-session record.
+    requested_at : str
+        Aware request timestamp shared with the restore sentinel.
+    expires_at : datetime or None
+        Exact aware expiry returned to the browser. When omitted, the standard
+        two-hour lifetime is measured at this call.
+
+    Returns
+    -------
+    bool
+        ``True`` only after the private record and parent directory are durable;
+        ``False`` for invalid binding data or an I/O failure.
+
+    """
+    if re.fullmatch(r"[0-9a-f]{32}", restore_id) is None:
+        return False
+    try:
+        requested = datetime.fromisoformat(requested_at)
+    except ValueError:
+        return False
+    expiry = expires_at or datetime.now(UTC) + _RESTORE_TOKEN_TTL
+    if (
+        requested.tzinfo is None
+        or expiry.tzinfo is None
+        or expiry <= requested
+        or expiry <= datetime.now(UTC)
+    ):
+        return False
     path = restore_status_token_file()
     payload = {
+        "version": 2,
         "sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        "expires_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+        "expires_at": expiry.isoformat(),
+        "restore_id": restore_id,
+        "source": source,
+        "requested_at": requested_at,
     }
-    tmp = path.parent / f"{path.name}.tmp"
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        _atomic_write_private_json(path, payload)
     except OSError as exc:
         logger.error("restore status-token write failed: %r", exc)
-        tmp.unlink(missing_ok=True)
         return False
     return True
 
 
 def _write_upload_grant(token: str) -> bool:
-    """Persist ONLY the sha256 + 30-min expiry of a one-time off-host upload grant.
+    """Persist a one-time off-host upload grant's hash and 30-minute expiry.
 
-    Modeled on ``_write_status_token``: the raw token is returned to the caller ONCE
-    and never stored; the restore-uploader authorizes a presented ``X-Upload-Grant``
-    by hashing it and matching this file (never the archive bytes or operator key).
-    Written 0644 — NOT 0600 like the status token — because the uploader is a SEPARATE
-    container running under a different uid and reads this over its backup_trigger:ro
-    mount; the file holds only a hash + expiry (no secret), so world-read leaks nothing.
-    Atomic tmp->replace; best-effort — an I/O failure logs and returns False.
+    The raw token is returned once and never stored. The uploader authorizes a
+    presented ``X-Upload-Grant`` by hashing it and matching this record. Mode
+    ``0644`` permits the separate uploader container to read the non-secret hash
+    and expiry through its read-only trigger mount. Atomic replacement prevents
+    partial reads; an I/O failure logs and returns ``False``.
     """
     payload = {
         "sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
@@ -501,14 +937,23 @@ def _write_upload_grant(token: str) -> bool:
 
 
 async def restore_status_auth(request: Request) -> None:
-    """Authorize the restore-status poll: DB-free bearer token, or the existing gate.
+    """Authorize a restore-status request.
 
-    Three accepted credentials: (a) a valid one-time bearer token minted by
-    ``request_restore`` — authorized with ZERO DB access, the only credential that
-    survives after an in-flight restore has torn down the admin's session (the same
-    token is validated at the global front door in ``jarvis_common.auth``); otherwise
-    (b) the ops X-API-Key or (c) an admin browser session, via the existing
-    ``verify_api_key`` + ``require_admin_or_api_key`` gate, unchanged.
+    Accept the current restore token, the operations key, or an administrator
+    browser session. The restore token is validated without database access so
+    polling survives replacement of session rows. This check does not consume
+    the token or acknowledge quarantine.
+
+    Parameters
+    ----------
+    request : Request
+        Current progress request and its candidate credentials.
+
+    Raises
+    ------
+    HTTPException
+        If none of the three status credentials is valid.
+
     """
     if restore_status_bearer_valid(request):
         return
@@ -642,7 +1087,7 @@ async def trigger_backup(request: Request) -> dict[str, str]:
     return {"status": "scheduled"}
 
 
-def _validate_local_restore(timestamp: str) -> None:
+def _validate_local_restore(timestamp: str, *, allow_missing_pdfs: bool) -> None:
     """Validate a LOCAL restore target against the read-only /backups listing.
 
     The point must exist and be complete, must not be newer than this deployment, and
@@ -658,6 +1103,14 @@ def _validate_local_restore(timestamp: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No complete backup at that time",
+        )
+    if pt.legacy_missing_pdfs and not allow_missing_pdfs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This pre-v1.2 backup has no saved PDFs. Confirm that restoring it may "
+                "leave papers without their local PDF files."
+            ),
         )
     if pt.compat == "newer":
         raise HTTPException(
@@ -679,16 +1132,14 @@ def _validate_local_restore(timestamp: str) -> None:
         )
 
 
-def _validate_inbox_restore(timestamp: str) -> None:
+def _validate_inbox_restore(timestamp: str, *, allow_missing_pdfs: bool) -> None:
     """Validate an INBOX (off-host) restore target against the sidecar's inbox manifest.
 
-    The point must be present in the manifest, complete (jarvis + litellm archives, and
-    the manifest restore.sh STEP 2 requires), carry a secrets archive, and have its
-    one-time operator key staged. Without the secrets archive the off-host restore swaps
-    both DBs then fails at STEP 8 (a shredded key + a durable maintenance hold), so it is
-    rejected up front here too. The local group/compat/manifest checks do not apply —
-    restore.sh STEP 2 compat-gates the off-host archive itself before any destruction.
-    Raises 404 (absent/incomplete) or 409 (no secrets / no key); returns None when valid.
+    The point must be present in the manifest, complete, carry a secrets archive, and
+    have its one-time operator key staged. A pre-v1.2 set without PDFs additionally
+    needs the explicit missing-PDF authorization. The local group/compat/manifest checks
+    do not apply — restore.sh authenticates and compatibility-gates the off-host archive
+    before any destructive mutation. Raises 404 or 409; returns None when valid.
     """
     pt = next((p for p in _read_inbox_manifest() if p.timestamp == timestamp), None)
     if pt is None or not pt.complete:
@@ -700,15 +1151,129 @@ def _validate_inbox_restore(timestamp: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "This off-host backup has no secrets archive; the restore would fail "
-                "after swapping the databases. Stage the secrets archive before restoring."
+                "This off-host backup has no secrets archive. Add it before restoring; "
+                "JARVIS will not change data without it."
             ),
         )
+    if not pt.has_pdfs:
+        if not pt.legacy_missing_pdfs:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No complete backup at that time",
+            )
+        if not allow_missing_pdfs:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This pre-v1.2 backup has no saved PDFs. Confirm that restoring it may "
+                    "leave papers without their local PDF files."
+                ),
+            )
     if not pt.has_key:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Upload or drop the one-time operator key before restoring from the inbox.",
         )
+
+
+def _ensure_restore_queue_available() -> None:
+    """Reject a new restore while request, operation, or review state exists.
+
+    Raises
+    ------
+    HTTPException
+        With status 409 for a pending request, active lifecycle operation, or
+        valid quarantine, or 503 when quarantine cannot be parsed safely.
+
+    """
+    try:
+        quarantine = read_outbound_quarantine()
+    except OutboundQuarantineStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Restore review state is unreadable. Nothing was queued; inspect it "
+                "on the host before running jarvis-research restore acknowledge "
+                "<restore-id>."
+            ),
+        ) from exc
+    if quarantine is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Review and acknowledge the previous off-host restore before "
+                "requesting another restore."
+            ),
+        )
+    if os.path.lexists(_BACKUP_DIR / ".lifecycle" / "operation.state"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A lifecycle operation is already active. "
+                "Wait for it to finish before requesting a restore."
+            ),
+        )
+    if os.path.lexists(_RESTORE_SENTINEL):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A restore is already pending or running. "
+                "Wait for it to complete before requesting another."
+            ),
+        )
+
+
+def _write_restore_request(payload: dict[str, object]) -> None:
+    """Exclusively publish a complete request after its restore session is durable.
+
+    The request is fully written and fsynced under a random private name. A hard
+    link then creates the final sentinel only if no directory entry already owns
+    that name, preserving an existing request without an overwrite race. Removing
+    the temporary link leaves a singly linked final file. The directory is fsynced
+    before return; if that post-publication fsync fails, the visible request and
+    its token record are retained and the event is logged because reporting failure
+    could let the sidecar consume a request whose raw token was never returned.
+    The caller holds :func:`_restore_state_lock` throughout.
+    """
+    _RESTORE_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _RESTORE_SENTINEL.parent / f".{_RESTORE_SENTINEL.name}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(tmp, flags, 0o600)
+        try:
+            _write_all(fd, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(tmp, _RESTORE_SENTINEL, follow_symlinks=False)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        tmp.unlink()
+    except OSError:
+        logger.error("restore request temporary-link cleanup failed", exc_info=True)
+    try:
+        _fsync_directory(_RESTORE_SENTINEL.parent)
+    except OSError:
+        logger.error("restore request directory fsync failed after publication", exc_info=True)
+
+
+def _remove_current_token_record(restore_id: str) -> None:
+    """Remove only the matching restore-session record after publication fails.
+
+    The caller still holds the shared lock. Re-reading the strict v2 record and
+    comparing its restore ID prevents a losing request from deleting a later
+    request's token record. Missing, expired, malformed, or mismatched state is
+    retained for fail-closed recovery rather than guessed away.
+    """
+    token_record = read_restore_status_token_record()
+    if token_record is None or token_record.restore_id != restore_id:
+        return
+    restore_status_token_file().unlink()
+    _fsync_directory(restore_status_token_file().parent)
 
 
 @router.post(
@@ -718,12 +1283,38 @@ def _validate_inbox_restore(timestamp: str) -> None:
 )
 @limiter.limit("3/minute")
 async def request_restore(req: RestoreRequest, request: Request) -> dict[str, str]:
-    """Schedule a one-click restore by writing a sentinel the sidecar consumes.
+    """Schedule a sidecar restore with one bound restore-session token.
 
     The app gains no new privilege: it only writes a JSON request file into the
     shared trigger volume; the postgres-backup sidecar's ``restore.sh`` performs
     the destructive restore. Only the validated ``timestamp`` selects the archive
     set — a client filename is never accepted, closing path traversal.
+
+    Pending and quarantine state is refused before audit. After audit succeeds,
+    the route repeats the check under the shared lock, persists the hashed
+    token record, and exclusively publishes the request sentinel. Publication
+    failure removes only the matching record; concurrent callers cannot
+    replace or delete an existing request.
+
+    Parameters
+    ----------
+    req : RestoreRequest
+        Validated restore target, source, compatibility override, and typed
+        confirmation.
+    request : Request
+        Authenticated admin request used for audit identity and application state.
+
+    Returns
+    -------
+    dict[str, str]
+        Scheduled state, raw restore-session token, restore ID, and source.
+
+    Raises
+    ------
+    HTTPException
+        If confirmation, target validation, audit, recovery-state preflight, or
+        pre-publication persistence fails. No new request is queued on those paths.
+
     """
     if req.confirm != "RESTORE":
         raise HTTPException(
@@ -733,19 +1324,23 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
     # Source-specific target validation (both raise on a bad target, return on valid).
     # local → the read-only /backups listing; inbox → the sidecar's inbox manifest.
     if req.source == "inbox":
-        _validate_inbox_restore(req.timestamp)
+        _validate_inbox_restore(req.timestamp, allow_missing_pdfs=req.allow_missing_pdfs)
     else:
-        _validate_local_restore(req.timestamp)
-    # Reject a duplicate request BEFORE auditing: an already-pending sentinel means
-    # a restore is queued or running; no audit row should be produced for a no-op.
-    if _RESTORE_SENTINEL.exists():
+        _validate_local_restore(req.timestamp, allow_missing_pdfs=req.allow_missing_pdfs)
+    # Reject stable no-op state before auditing. The same checks run again under
+    # the same lock at commit time, because two requests may both pass this
+    # preflight while their asynchronous audit writes are in progress.
+    try:
+        with _restore_state_lock():
+            _ensure_restore_queue_available()
+    except HTTPException:
+        raise
+    except OSError as exc:
+        logger.error("restore state preflight failed: %r", exc)
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "A restore is already pending or running. "
-                "Wait for it to complete before requesting another."
-            ),
-        )
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Restore recovery state is unavailable; nothing was queued.",
+        ) from exc
     # Audit the destructive request BEFORE writing the sentinel: if the audit
     # write fails we 500 without ever queuing a restore (the action stays
     # consistent with what the operator is told), rather than firing a restore
@@ -764,30 +1359,49 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
         message="Restore requested",
         context={"timestamp": req.timestamp},
     )
+    restore_id = secrets.token_hex(16)
+    status_token = secrets.token_urlsafe(32)
+    requested_at = datetime.now(UTC).isoformat()
+    expires_at = datetime.now(UTC) + _RESTORE_TOKEN_TTL
     try:
-        _RESTORE_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic exclusive create: O_EXCL catches the TOCTOU race where two
-        # concurrent requests both pass the exists() check above. write_text
-        # would silently overwrite in that window.
-        with _RESTORE_SENTINEL.open("x") as fh:
-            fh.write(
-                json.dumps(
+        with _restore_state_lock():
+            _ensure_restore_queue_available()
+            if not _write_status_token(
+                status_token,
+                restore_id=restore_id,
+                source=req.source,
+                requested_at=requested_at,
+                expires_at=expires_at,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Restore session is unavailable; nothing was queued.",
+                )
+            try:
+                _write_restore_request(
                     {
                         "timestamp": req.timestamp,
                         "confirm": "RESTORE",
                         "source": req.source,
-                        "requested_at": datetime.now(UTC).isoformat(),
+                        "allow_missing_pdfs": req.allow_missing_pdfs,
+                        "requested_at": requested_at,
+                        "restore_id": restore_id,
                     }
                 )
-            )
-    except FileExistsError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "A restore is already pending or running. "
-                "Wait for it to complete before requesting another."
-            ),
-        )
+            except FileExistsError:
+                _remove_current_token_record(restore_id)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "A restore is already pending or running. "
+                        "Wait for it to complete before requesting another."
+                    ),
+                ) from None
+            except OSError:
+                _remove_current_token_record(restore_id)
+                raise
+    except HTTPException:
+        raise
     except OSError as exc:
         logger.error("restore request sentinel write failed: %r", exc)
         raise HTTPException(
@@ -797,28 +1411,305 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
                 "Ensure the postgres-backup service is running."
             ),
         ) from exc
-    # Mint a one-time status token AFTER the request sentinel is committed: the
-    # initiating admin's browser session dies when the restore rewrites the sessions
-    # table, so this token is what keeps their progress poll (GET .../restore/status)
-    # authorized DB-free. Only its hash + expiry are persisted; the raw token is
-    # handed back ONCE here and never stored or logged.
-    status_token = secrets.token_urlsafe(32)
-    if _write_status_token(status_token):
-        return {"status": "scheduled", "status_token": status_token}
-    return {"status": "scheduled"}
+    return {
+        "status": "scheduled",
+        "status_token": status_token,
+        "restore_id": restore_id,
+        "source": req.source,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+async def restore_acknowledgement_auth(
+    request: Request,
+) -> Literal["token", "owner"]:
+    """Authorize restore review by browser token or configured owner.
+
+    An inbox-bound bearer is validated without database access so the initiating
+    browser can recover after restored session rows disappear. Without that
+    bearer, the request must carry an authenticated session for the configured,
+    active administrator. The operations API key and an arbitrary administrator are
+    insufficient. The route re-reads and consumes state under the restore-state
+    lock.
+
+    Parameters
+    ----------
+    request : Request
+        Current FastAPI request after session middleware and application
+        authentication have run.
+
+    Returns
+    -------
+    Literal["token", "owner"]
+        ``"token"`` for the restore-session bearer, otherwise ``"owner"``.
+
+    Raises
+    ------
+    HTTPException
+        If no current restore-session token or configured-owner session exists.
+
+    """
+    if restore_acknowledgement_bearer_valid(request):
+        return "token"
+
+    user_id = await current_user_id_strict(request)
+    pool = getattr(getattr(request.app, "state", None), "db_pool", None)
+    if pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Configured-owner recovery is temporarily unavailable.",
+        )
+    try:
+        async with pool.acquire() as conn:
+            owner = await resolve_owner_identity(conn)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - DB availability is an auth boundary here.
+        logger.warning("configured-owner acknowledgement lookup failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Configured-owner recovery is temporarily unavailable.",
+        ) from exc
+    if not owner.is_valid or owner.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the configured owner may acknowledge this restore.",
+        )
+    return "owner"
+
+
+def _presented_bearer_token(request: Request) -> str | None:
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    return token if scheme.lower() == "bearer" and token else None
+
+
+def _current_quarantine_for_acknowledgement(
+    acknowledgement: RestoreAcknowledgement,
+) -> OutboundQuarantineState:
+    """Load and bind acknowledgement input to the exact durable quarantine.
+
+    Parameters
+    ----------
+    acknowledgement : RestoreAcknowledgement
+        Exact restore ID and inbox source supplied by the operator.
+
+    Returns
+    -------
+    OutboundQuarantineState
+        Validated current state matching the acknowledgement.
+
+    Raises
+    ------
+    HTTPException
+        With status 409 when quarantine is absent or belongs to another restore,
+        or 503 when the existing record is unreadable or malformed.
+
+    """
+    try:
+        quarantine = read_outbound_quarantine()
+    except OutboundQuarantineStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Restore review state is unreadable; quarantine remains active.",
+        ) from exc
+    if quarantine is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No off-host restore is awaiting acknowledgement.",
+        )
+    if (
+        quarantine.restore_id != acknowledgement.restore_id
+        or quarantine.source != acknowledgement.source
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Acknowledgement does not match the current off-host restore.",
+        )
+    return quarantine
+
+
+def _remove_token_file() -> None:
+    path = restore_status_token_file()
+    path.unlink()
+    _fsync_directory(path.parent)
+
+
+def _remove_quarantine_file(path: Path) -> None:
+    path.unlink()
+    _fsync_directory(path.parent)
+
+
+def _acknowledge_outbound_quarantine(
+    acknowledgement: RestoreAcknowledgement,
+    request: Request,
+    *,
+    authority: Literal["token", "owner"],
+) -> None:
+    """Validate and consume acknowledgement state before clearing quarantine.
+
+    The shared advisory lock coordinates acknowledgement with restore requests.
+    For browser-token authentication, the stored record must match the quarantine
+    ID, inbox source, request timestamp, and presented token before it is removed.
+    The configured owner may proceed when that record is absent or damaged, but
+    must still provide the exact quarantined restore ID.
+
+    The browser token is removed before quarantine. An interruption between
+    those writes therefore leaves outbound connections blocked; the configured
+    owner or ``jarvis-research restore acknowledge <restore-id>`` can finish the
+    acknowledgement.
+
+    Parameters
+    ----------
+    acknowledgement : RestoreAcknowledgement
+        Validated restore ID, inbox source, and typed confirmation phrase.
+    request : Request
+        Request carrying the raw restore token when ``authority`` is
+        ``"token"``.
+    authority : Literal["token", "owner"]
+        Authentication result returned by :func:`restore_acknowledgement_auth`.
+
+    Raises
+    ------
+    HTTPException
+        If state is missing, mismatched, invalid, replayed, or cannot be durably
+        consumed.
+
+    """
+    try:
+        with _restore_state_lock():
+            quarantine = _current_quarantine_for_acknowledgement(acknowledgement)
+            token_path = restore_status_token_file()
+            if authority == "token":
+                token = _presented_bearer_token(request)
+                token_record = read_restore_status_token_record()
+                if token is None or token_record is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Restore session token is invalid or expired.",
+                    )
+                presented_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                if (
+                    token_record.source != "inbox"
+                    or token_record.restore_id != quarantine.restore_id
+                    or token_record.requested_at != quarantine.requested_at
+                    or not secrets.compare_digest(presented_hash, token_record.sha256)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Restore session token does not match this restore.",
+                    )
+                _remove_token_file()
+            elif os.path.lexists(token_path):
+                # The configured owner may proceed when the restore token is
+                # expired, consumed, or malformed. Removing the file entry does
+                # not follow links; any failure leaves quarantine active.
+                _remove_token_file()
+
+            try:
+                _remove_quarantine_file(outbound_quarantine_file())
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        "The restore token was consumed but quarantine remains active. "
+                        "Sign in as the configured owner or run jarvis-research "
+                        "restore acknowledge <restore-id> on the host."
+                    ),
+                ) from exc
+    except HTTPException:
+        raise
+    except OSError as exc:
+        logger.error("restore acknowledgement state transition failed: %r", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Restore review state is unavailable; quarantine remains active.",
+        ) from exc
+
+
+@router.post("/restore/acknowledge")
+@limiter.limit("5/minute")
+async def acknowledge_restore(
+    acknowledgement: RestoreAcknowledgement,
+    request: Request,
+    authority: Literal["token", "owner"] = Depends(restore_acknowledgement_auth),
+) -> dict[str, str]:
+    """Confirm review of restored credentials and allow outbound connections.
+
+    The operator must submit the exact current restore ID and documented phrase.
+    A current inbox restore token or the configured-owner session is revalidated
+    under the restore-state lock. The token is consumed before quarantine is
+    removed, so an interrupted write leaves outbound connections blocked. The
+    operations API key and arbitrary admin sessions cannot authorize this route.
+
+    Parameters
+    ----------
+    acknowledgement : RestoreAcknowledgement
+        Exact restore ID, inbox source, and typed credential-review phrase.
+    request : fastapi.Request
+        Request carrying application state and any raw restore token.
+    authority : {"token", "owner"}
+        Authentication result from :func:`restore_acknowledgement_auth`.
+
+    Returns
+    -------
+    dict[str, str]
+        Acknowledged status and the exact restore ID whose quarantine was cleared.
+
+    Raises
+    ------
+    HTTPException
+        With status 400 for the wrong phrase, 401 or 403 for failed authentication,
+        409 for absent or mismatched quarantine, or 503 when the fail-closed
+        filesystem transition cannot complete.
+
+    """
+    if acknowledgement.confirm != RESTORE_ACKNOWLEDGEMENT_PHRASE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Type {RESTORE_ACKNOWLEDGEMENT_PHRASE} to confirm",
+        )
+    _acknowledge_outbound_quarantine(
+        acknowledgement,
+        request,
+        authority=authority,
+    )
+    try:
+        await log_audit(
+            request.app.state.db_pool,
+            action="backup.restore_acknowledged",
+            resource=f"backups/restore/{acknowledgement.restore_id}",
+            user_id=_caller_id(request),
+            metadata={"authority": authority},
+        )
+    except Exception:  # noqa: BLE001 - the fail-closed state change already committed.
+        logger.warning("restore acknowledgement audit write failed", exc_info=True)
+    return {"status": "acknowledged", "restore_id": acknowledgement.restore_id}
 
 
 @router.post("/upload-grant", dependencies=[Depends(require_admin)])
 @limiter.limit("5/minute")
 async def create_upload_grant(request: Request) -> dict[str, str | int]:
-    """Mint a time-boxed grant authorizing a browser off-host archive upload.
+    """Create a short-lived token for an off-host archive upload.
 
-    Returns the raw grant token ONCE; only its sha256 + a 30-min expiry are persisted
-    (``.upload_grant.json``) for the dedicated restore-uploader to check. The app never
-    sees the uploaded archive bytes or the operator key — Caddy routes
-    ``/restore-upload/*`` straight to that container — so this endpoint is purely
-    control-plane. First-admin (setup token -> admin session) can mint it on a fresh
-    host, the same trust anchor as today's runbook.
+    The response contains the raw token once. Server storage keeps only its hash
+    and a 30-minute expiry. Upload traffic goes directly to the restore uploader,
+    so this application does not receive archive bytes or the operator key.
+
+    Parameters
+    ----------
+    request : fastapi.Request
+        Authenticated administrator request and application state.
+
+    Returns
+    -------
+    dict[str, str | int]
+        Grant token and lifetime in seconds.
+
+    Raises
+    ------
+    HTTPException
+        With status 503 when the grant record cannot be written.
+
     """
     await log_audit(
         request.app.state.db_pool,
@@ -842,37 +1733,58 @@ async def create_upload_grant(request: Request) -> dict[str, str | int]:
 )
 @limiter.limit("60/minute")
 async def restore_status(request: Request) -> RestoreStatus:
-    """Report live restore progress from the sidecar's status file (NO DB write).
+    """Return sidecar restore progress without consulting the application database.
 
-    Polled every few seconds AND must keep answering during the brief window in
-    a restore where ``restore.sh`` drops/recreates the jarvis DB — exactly when a
-    session lookup against that DB fails. So this route is gated by
-    ``restore_status_auth``: an admin session, the ops X-API-Key, OR the one-time
-    bearer token minted by ``request_restore`` — the last validated DB-free
-    (``restore_status_bearer_valid``) so the initiating admin's poll survives even
-    after the restore has dropped the session store. It exposes only progress (step
-    names + state), never archive contents, so the wider gate is safe here; the
-    destructive ``POST /restore`` stays session-admin-only.
+    Authentication accepts an admin session, the operations key, or the bound
+    restore bearer. Bearer validation does not access the database, so polling
+    continues after restored session rows replace the current session store. The response contains
+    progress only; archive selection remains restricted to the admin-only restore
+    request endpoint.
 
-    When a restore is queued but the sidecar (a few-second poll loop) has not yet
-    written the first status, the request sentinel still exists — report
-    ``state="pending"`` so the UI keeps tracking instead of treating the gap (or a
-    leftover status file from a prior run) as "nothing running". A missing or
-    malformed status file with no pending request degrades to ``state="idle"`` —
-    it never 500s. The sidecar's extra ``drop_started`` key is ignored.
+    A queued request without a status record returns ``pending``. Missing or
+    malformed status without a queued request returns ``idle``. Unknown sidecar
+    fields are ignored.
+
+    Parameters
+    ----------
+    request : fastapi.Request
+        Authenticated request; retained for FastAPI dependency and rate-limit
+        integration without consulting the restored database here.
+
+    Returns
+    -------
+    RestoreStatus
+        Pending, idle, or validated sidecar progress without archive contents.
+
     """
     # The sidecar consumes the request sentinel before writing any status, so its
     # presence means a restore is queued and any existing status file is stale.
     if _RESTORE_SENTINEL.exists():
-        return RestoreStatus(state="pending", current_step="Queued")
+        progress = RestoreStatus(state="pending", current_step="Queued")
+    else:
+        try:
+            data = json.loads(_RESTORE_STATUS.read_text())
+        except (OSError, ValueError):
+            progress = RestoreStatus(state="idle")
+        else:
+            try:
+                progress = RestoreStatus.model_validate(data)
+            except ValidationError:
+                progress = RestoreStatus(state="idle")
+
     try:
-        data = json.loads(_RESTORE_STATUS.read_text())
-    except (OSError, ValueError):
-        return RestoreStatus(state="idle")
-    try:
-        return RestoreStatus.model_validate(data)
-    except ValidationError:
-        return RestoreStatus(state="idle")
+        quarantine = read_outbound_quarantine()
+    except OutboundQuarantineStateError:
+        return progress.model_copy(update={"quarantine": "unreadable"})
+    if quarantine is None:
+        return progress
+    return progress.model_copy(
+        update={
+            "restore_id": quarantine.restore_id,
+            "source": "inbox",
+            "quarantine": "awaiting_review",
+        }
+    )
 
 
 @router.get("/{name}/download", dependencies=[Depends(require_admin)])

@@ -13,6 +13,7 @@ Runs the real script in an isolated temp dir (never touches the repo's .env).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -48,12 +49,15 @@ def _stage(tmp: Path, env_body: str) -> None:
     (tmp / ".env").write_text(env_body)
 
 
-def _run(tmp: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    tmp: Path, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "scripts/init-secrets.sh"],
         cwd=str(tmp),
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -108,3 +112,85 @@ def test_is_idempotent_and_preserves_existing_values(tmp_path: Path) -> None:
     assert _mode(tmp_path / "secrets" / "jarvis_config_key.txt") == SECRET_FILE_MODE
     for key in ("POSTGRES_PASSWORD", "JARVIS_CONFIG_KEY"):
         assert _count_lines(tmp_path / ".env", key) == 1, "duplicate KEY= line after re-run"
+
+
+def test_restored_data_keys_are_file_authoritative_but_host_credentials_are_not(
+    tmp_path: Path,
+) -> None:
+    _stage(
+        tmp_path,
+        "JARVIS_CONFIG_KEY=stale-config-env\n"
+        "JARVIS_MODEL_HMAC_KEY=stale-hmac-env-value-that-is-long-enough\n"
+        "LITELLM_SALT_KEY=stale-salt-env\n"
+        "POSTGRES_PASSWORD=target-postgres-env\n",
+    )
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    restored = {
+        "JARVIS_CONFIG_KEY": ("jarvis_config_key.txt", "restored-config-file"),
+        "JARVIS_MODEL_HMAC_KEY": (
+            "jarvis_model_hmac_key.txt",
+            "restored-hmac-file-value-that-is-long-enough",
+        ),
+        "LITELLM_SALT_KEY": ("litellm_salt_key.txt", "restored-salt-file"),
+    }
+    for filename, value in restored.values():
+        (secrets / filename).write_text(value)
+    (secrets / "postgres_password.txt").write_text("source-postgres-file")
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    env_values = dict(
+        line.split("=", 1)
+        for line in (tmp_path / ".env").read_text().splitlines()
+        if "=" in line and not line.startswith("#")
+    )
+    for key, (filename, value) in restored.items():
+        assert env_values[key] == value
+        assert (secrets / filename).read_text() == value
+    assert env_values["POSTGRES_PASSWORD"] == "target-postgres-env"
+    assert (secrets / "postgres_password.txt").read_text() == "target-postgres-env"
+
+
+def test_restored_data_key_validation_does_not_require_gnu_stat(tmp_path: Path) -> None:
+    _stage(tmp_path, "LITELLM_SALT_KEY=stale-env-value\n")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "litellm_salt_key.txt").write_text("restored-portable-key")
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    stat_stub = stub_bin / "stat"
+    stat_stub.write_text("#!/usr/bin/env bash\nexit 99\n")
+    stat_stub.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '/usr/bin:/bin')}"
+
+    result = _run(tmp_path, env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LITELLM_SALT_KEY=restored-portable-key" in (tmp_path / ".env").read_text()
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "empty", "oversized"])
+def test_invalid_restored_data_key_files_fail_closed(tmp_path: Path, kind: str) -> None:
+    _stage(tmp_path, "LITELLM_SALT_KEY=stale-env-value\n")
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    key_file = secrets / "litellm_salt_key.txt"
+    if kind == "symlink":
+        target = tmp_path / "outside-key"
+        target.write_text("do-not-import")
+        key_file.symlink_to(target)
+    elif kind == "directory":
+        key_file.mkdir()
+    elif kind == "empty":
+        key_file.touch()
+    else:
+        key_file.write_bytes(b"x" * 4097)
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 1
+    assert "refusing" in result.stderr.lower() or "no usable data key" in result.stderr.lower()
+    assert "LITELLM_SALT_KEY=stale-env-value" in (tmp_path / ".env").read_text()

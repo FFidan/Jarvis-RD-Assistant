@@ -223,24 +223,32 @@ def test_both_weak_secrets_both_reported_in_production() -> None:
 
 
 def _run_with_stub_curl(
-    env_overrides: dict[str, str], curl_exit: int, curl_stderr: str = ""
-) -> subprocess.CompletedProcess[str]:
+    env_overrides: dict[str, str],
+    curl_exit: int,
+    curl_stdout: str = "",
+    curl_stderr: str = "",
+) -> tuple[subprocess.CompletedProcess[str], str]:
     """Run the script with a fake ``curl`` on PATH that exits ``curl_exit``.
 
-    The stub ignores its arguments, writes ``curl_stderr`` to stderr, and exits
-    with the requested status, so a test drives the HTTPS probe outcome without
-    any network access.
+    The stub records its arguments, writes the supplied streams, and exits with
+    the requested status, so a test drives the HTTPS probe without network access.
     """
     stub_dir = tempfile.mkdtemp()
     curl_path = Path(stub_dir) / "curl"
+    curl_log = Path(stub_dir) / "curl.args"
     curl_path.write_text(
-        f"#!/usr/bin/env bash\nprintf '%s' {shlex.quote(curl_stderr)} >&2\nexit {int(curl_exit)}\n"
+        "#!/usr/bin/env bash\n"
+        f"printf '%s' \"$*\" > {shlex.quote(str(curl_log))}\n"
+        f"printf '%s' {shlex.quote(curl_stdout)}\n"
+        f"printf '%s' {shlex.quote(curl_stderr)} >&2\n"
+        f"exit {int(curl_exit)}\n"
     )
     curl_path.chmod(0o755)
     real_path = os.environ.get("PATH", "/usr/bin:/bin")
     overrides = dict(env_overrides)
     overrides["PATH"] = f"{stub_dir}{os.pathsep}{real_path}"
-    return _run(overrides)
+    result = _run(overrides)
+    return result, curl_log.read_text()
 
 
 def _row(output: str, name: str) -> str:
@@ -252,7 +260,7 @@ def _row(output: str, name: str) -> str:
 
 
 def test_https_probe_failure_warns() -> None:
-    result = _run_with_stub_curl(
+    result, _ = _run_with_stub_curl(
         {"ENVIRONMENT": "production", "LETSENCRYPT_DOMAIN": "example.test"},
         curl_exit=7,
         curl_stderr="curl: (7) Failed to connect to example.test port 443",
@@ -264,20 +272,45 @@ def test_https_probe_failure_warns() -> None:
 
 
 def test_https_probe_success_is_ok() -> None:
-    result = _run_with_stub_curl(
+    result, curl_args = _run_with_stub_curl(
         {"ENVIRONMENT": "production", "LETSENCRYPT_DOMAIN": "example.test"},
         curl_exit=0,
+        curl_stdout="jarvis-rd-assistant",
     )
     row = _row(result.stdout, "HTTPS")
     assert "OK" in row, f"Expected HTTPS OK on probe success, got: {row}"
     assert "WARN" not in row, f"Expected no WARN on probe success, got: {row}"
     assert "probe" in row.lower(), f"Expected probe-derived OK, got: {row}"
+    assert "https://example.test/health/jarvis" in curl_args
+
+
+def test_https_probe_rejects_a_different_2xx_app_without_echoing_its_body() -> None:
+    foreign_body = "private response from a different service"
+    result, _ = _run_with_stub_curl(
+        {"ENVIRONMENT": "production", "LETSENCRYPT_DOMAIN": "example.test"},
+        curl_exit=0,
+        curl_stdout=foreign_body,
+    )
+
+    row = _row(result.stdout, "HTTPS")
+    assert "WARN" in row
+    assert "different" in row.lower() or "not this jarvis" in row.lower()
+    assert foreign_body not in result.stdout + result.stderr
 
 
 def test_cert_san_arm_removed() -> None:
     text = _SCRIPT.read_text()
     assert "JARVIS_CERT_SAN" not in text, "SAN string-match arm must be deleted"
     assert "Self-signed cert SAN" not in text
+
+
+def test_localhost_https_row_does_not_claim_an_unused_certificate() -> None:
+    result = _run({"ENVIRONMENT": "development"})
+    row = _row(result.stdout, "HTTPS")
+
+    assert "localhost" in row.lower()
+    assert "self-signed" not in row.lower()
+    assert "generated" not in row.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +327,30 @@ def test_smtp_row_reports_presence_not_stdout() -> None:
         }
     )
     combined = result.stdout + result.stderr
-    assert "environment SMTP presence" in combined, combined
+    row = _row(result.stdout, "SMTP")
+    assert "Environment:" in row, row
     assert "GET /api/setup/status" in combined, combined
     assert "stdout" not in combined.lower(), "the stdout-delivery claim must be gone"
     # The false claim must not survive in the script source either.
     text = _SCRIPT.read_text()
     assert "logged to stdout" not in text
     assert "stdout" not in text
+
+
+def test_success_rows_do_not_print_secret_prefixes() -> None:
+    secrets = {
+        "JARVIS_API_KEY": "api-prefix-unique-" + "a" * 32,
+        "LITELLM_MASTER_KEY": "litellm-prefix-unique-" + "b" * 16,
+        "POSTGRES_PASSWORD": "postgres-prefix-unique-" + "c" * 16,
+        "QDRANT_API_KEY": "qdrant-prefix-unique-" + "d" * 16,
+        "JARVIS_CONFIG_KEY": "config-prefix-unique-" + "e" * 16,
+    }
+    result = _run({"ENVIRONMENT": "development", **secrets})
+    combined = result.stdout + result.stderr
+
+    assert "starts:" not in combined
+    for secret in secrets.values():
+        assert secret[:4] not in combined
 
 
 # ---------------------------------------------------------------------------

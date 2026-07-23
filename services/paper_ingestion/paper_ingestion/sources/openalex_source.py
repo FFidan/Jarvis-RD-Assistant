@@ -2,11 +2,10 @@
 
 Uses the OpenAlex Works API (https://api.openalex.org/works).
 
-As of February 2026 OpenAlex requires an API key (polite pool token) for
-non-trivial query volumes.  Pass your key via the ``OPENALEX_API_KEY``
-environment variable or the ``api_key`` field in the source config.  If no
-key is present, all methods return ``[]`` and log once at INFO level — the
-source degrades gracefully rather than raising.
+OpenAlex requires an API key for API access. Pass your free key via the ``OPENALEX_API_KEY``
+environment variable or the ``api_key`` field in the source config. If no
+key is present, list-returning methods return ``[]``, ``fetch_by_id`` returns
+``None``, and the source logs once at INFO level rather than raising.
 
 Abstract reconstruction note
 ------------------------------
@@ -20,8 +19,7 @@ word at its positions in an output list, then joining with spaces.
 
 Rate limiting
 -------------
-OpenAlex recommends ≤10 requests/second for polite-pool users.  This plugin
-enforces ~9 req/s (0.11 s interval) via an asyncio.Lock-based rate limiter
+This plugin enforces ~9 requests/second (0.11 s interval) via an asyncio.Lock-based rate limiter
 shared across all calls on the same instance.
 """
 
@@ -35,6 +33,7 @@ if TYPE_CHECKING:
 from urllib.parse import urlparse
 
 import httpx
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS
@@ -77,6 +76,7 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str | None:
     'Hello world'
     >>> _reconstruct_abstract(None) is None
     True
+
     """
     if not inverted_index:
         return None
@@ -116,6 +116,13 @@ class OpenAlexSource(PaperSource):
     ----------
     source_type : str
         Always ``"openalex"``.
+
+    Notes
+    -----
+    Network methods propagate ``OutboundEgressBlockedError`` while restored
+    credentials await review; quarantine is not reported as an empty provider
+    result.
+
     """
 
     source_type = "openalex"
@@ -126,14 +133,25 @@ class OpenAlexSource(PaperSource):
         http_client: httpx.AsyncClient,
         db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
+        """Initialize an OpenAlex source with a normalized API key.
+
+        Parameters
+        ----------
+        config : PaperSourceConfig
+            Persisted OpenAlex source configuration.
+        http_client : httpx.AsyncClient
+            Shared asynchronous HTTP client.
+        db_pool : asyncpg.Pool or None
+            Optional database pool for rate limiting and run history.
+
+        """
         super().__init__(config, http_client, db_pool)
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         _cfg = get_paper_ingestion_settings()
         self._api_key: str | None = self._resolve_api_key(_cfg.openalex_api_key)
-        self._email: str = _cfg.openalex_email
         self._missing_key_warned = False
-        # rate: ~9 req/s (polite-pool target ≤10 req/s)
+        # Rate limit requests to roughly nine per second.
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / 0.11)
 
     def consolidate_topics(self, topics: list[TopicRef]) -> list[SourceQuery]:
@@ -147,6 +165,7 @@ class OpenAlexSource(PaperSource):
         -------
         list[SourceQuery]
             A single :class:`SourceQuery` covering all topics.
+
         """
         if not topics:
             return []
@@ -175,42 +194,31 @@ class OpenAlexSource(PaperSource):
         return [SourceQuery(topics=list(topics), extra_params=extra)]
 
     async def _rate_limit(self) -> None:
-        """Enforce OpenAlex polite-pool rate limit: ≤10 req/s (~9 req/s target)."""
+        """Rate-limit OpenAlex requests to roughly nine per second."""
         await self._rate_limiter.acquire()
 
     def _check_api_key(self) -> bool:
-        """Return True if the source has at least an email or API key configured.
+        """Return whether the source has an API key configured.
 
-        Logs once at INFO level when neither ``OPENALEX_EMAIL`` nor
-        ``OPENALEX_API_KEY`` is set, then returns ``False`` so callers can
-        degrade gracefully.
+        Logs once at INFO level when ``OPENALEX_API_KEY`` is absent, then
+        returns ``False`` so callers can degrade gracefully.
         """
-        if self._api_key or self._email:
+        if self._api_key:
             return True
         if not self._missing_key_warned:
             logger.info(
-                "OpenAlex source: neither OPENALEX_EMAIL nor OPENALEX_API_KEY is set. "
-                "Set OPENALEX_EMAIL for polite-pool access (recommended) or "
-                "OPENALEX_API_KEY for authenticated access. "
-                "Returning empty results."
+                "OpenAlex source: OPENALEX_API_KEY is required. "
+                "Set a free OpenAlex API key; returning empty results."
             )
             self._missing_key_warned = True
         return False
 
     def _build_params(self, extra: dict | None = None) -> dict:
-        """Build base query params including the polite-pool ``mailto`` token.
+        """Build query parameters with the configured API key.
 
-        ``OPENALEX_EMAIL`` is sent as the ``mailto`` query parameter which
-        places this client in OpenAlex's polite pool (higher rate limits,
-        better cache behaviour).  ``OPENALEX_API_KEY``, when set, is sent as
-        the ``api_key`` query parameter (the correct OpenAlex auth mechanism —
-        Bearer header auth is not supported by the OpenAlex API).
+        OpenAlex expects the API key in its ``api_key`` query parameter.
         """
-        params: dict = {}
-        if self._email:
-            params["mailto"] = self._email
-        if self._api_key:
-            params["api_key"] = self._api_key
+        params: dict = {"api_key": self._api_key}
         if extra:
             params.update(extra)
         return params
@@ -227,6 +235,7 @@ class OpenAlexSource(PaperSource):
         -------
         PaperCreate
             Paper with metadata populated entirely from the OpenAlex API.
+
         """
         raw_id: str = work.get("id", "")
         # Strip the URL prefix → "W12345678"
@@ -329,11 +338,18 @@ class OpenAlexSource(PaperSource):
         -------
         list[PaperCreate]
             Papers parsed from the OpenAlex response.  Returns ``[]`` if
-            neither ``OPENALEX_EMAIL`` nor ``OPENALEX_API_KEY`` is configured,
+            ``OPENALEX_API_KEY`` is not configured,
             or on HTTP 429/5xx.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before the request.
+
         """
         if not self._check_api_key():
             return []
+        ensure_outbound_egress_allowed("OpenAlex search")
 
         await self._rate_limit()
 
@@ -359,6 +375,7 @@ class OpenAlexSource(PaperSource):
 
         params = self._build_params(extra)
         try:
+            ensure_outbound_egress_allowed("OpenAlex search")
             response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
             if response.status_code in (429, 500, 502, 503, 504):
                 self._record_transient_poll_diagnostic(response)
@@ -369,8 +386,8 @@ class OpenAlexSource(PaperSource):
                 return []
             response.raise_for_status()
             data = response.json()
-        except httpx.HTTPError as exc:
-            logger.warning("OpenAlex search failed: %s", exc)
+        except httpx.HTTPError:
+            logger.warning("OpenAlex search request failed")
             return []
 
         papers = []
@@ -394,9 +411,16 @@ class OpenAlexSource(PaperSource):
         -------
         PaperCreate | None
             The paper if found, ``None`` on 404.  Returns ``None`` on error.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before the request.
+
         """
         if not self._check_api_key():
             return None
+        ensure_outbound_egress_allowed("OpenAlex paper fetch")
 
         # Normalise: strip openalex: prefix if present
         oa_id = external_id.removeprefix("openalex:")
@@ -408,6 +432,7 @@ class OpenAlexSource(PaperSource):
         url = f"{OPENALEX_API_URL}/{oa_id}"
         params = self._build_params()
         try:
+            ensure_outbound_egress_allowed("OpenAlex paper fetch")
             response = await self.http_client.get(url, params=params, timeout=30.0)
             if response.status_code == 404:
                 return None
@@ -417,8 +442,8 @@ class OpenAlexSource(PaperSource):
                 return None
             response.raise_for_status()
             work = response.json()
-        except httpx.HTTPError as exc:
-            logger.warning("OpenAlex fetch_by_id failed for %s: %s", oa_id, exc)
+        except httpx.HTTPError:
+            logger.warning("OpenAlex paper request failed")
             return None
 
         try:
@@ -438,7 +463,7 @@ class OpenAlexSource(PaperSource):
 
         Consolidates all topics into a single API query via
         :meth:`consolidate_topics` (concept-ID filter when available, falling
-        back to free-text search).  Wires the persistent rate limiter when
+        back to free-text search). Uses the persistent rate limiter when
         ``db_pool`` is set and records each attempt in ``source_run_history``.
 
         Parameters
@@ -451,16 +476,26 @@ class OpenAlexSource(PaperSource):
             An empty list triggers a single date-only query.
         limit : int
             Maximum total papers to return.
+        user_id : int or None
+            Caller identity for per-user rate limiting and run history, when
+            available.
 
         Returns
         -------
         list[PaperCreate]
-            Deduplicated works newer than *since*.  Returns ``[]`` if neither
-            ``OPENALEX_EMAIL`` nor ``OPENALEX_API_KEY`` is configured, or on
-            HTTP errors.
+            Deduplicated works newer than *since*. Returns ``[]`` if
+            ``OPENALEX_API_KEY`` is not configured or on HTTP errors.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before or during a scheduled
+            request.
+
         """
         if not self._check_api_key():
             return []
+        ensure_outbound_egress_allowed("OpenAlex scheduled fetch")
 
         # Startup grace — see ArxivSource.fetch_new_since for details.
         await self.apply_startup_grace()
@@ -508,6 +543,7 @@ class OpenAlexSource(PaperSource):
             else:
                 await self._rate_limit()
 
+            ensure_outbound_egress_allowed("OpenAlex scheduled fetch")
             try:
                 response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
                 if response.status_code in (429, 500, 502, 503, 504):
@@ -577,12 +613,12 @@ class OpenAlexSource(PaperSource):
                 else:
                     self._set_poll_diagnostic(
                         status="error",
-                        message=str(exc),
+                        message="OpenAlex request failed. It will retry automatically later.",
                         status_code=None,
                         retry_after_s=None,
                         settings_hint=None,
                     )
-                logger.warning("OpenAlex fetch_new_since failed: %s", exc)
+                logger.warning("OpenAlex scheduled request failed")
                 _exc_status = getattr(getattr(exc, "response", None), "status_code", None)
                 await self._record_fetch_outcome(
                     started_at=started_at,
@@ -592,7 +628,10 @@ class OpenAlexSource(PaperSource):
                     p_limiter=p_limiter,
                     log_level="error",
                     log_message="fetch_failed",
-                    log_context={"http_status": _exc_status, "exception": repr(exc)[:300]},
+                    log_context={
+                        "http_status": _exc_status,
+                        "exception": type(exc).__name__,
+                    },
                 )
                 continue
 

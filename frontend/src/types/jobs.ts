@@ -24,20 +24,6 @@ export interface JobErrorPayload {
   action_link?: JobActionLink;
 }
 
-export interface JobRow {
-  id: string;
-  kind: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-  progress: number | null;
-  progress_message: string | null;
-  payload: Record<string, unknown>;
-  result: Record<string, unknown> | null;
-  error: JobErrorPayload | string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-}
-
 export interface GenerateJobAccepted {
   job_id: string;
   status: 'queued';

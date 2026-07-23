@@ -15,6 +15,7 @@ from jarvis_common.auth import (
     current_user_id_strict_with_owner_override,
 )
 from jarvis_common.db_helpers import record_author_alert
+from jarvis_common.paper_visibility import paper_visibility_sql
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -236,12 +237,11 @@ async def check_tracked_authors(
     Matches papers by S2 author ID (if available) or normalized name.
     Logs matches in author_alert_log for deduplication.
 
-    The recent-papers scan is GLOBAL: papers are a shared corpus and
-    discovery is topic-driven, not author-driven, so a tracked author's new
-    paper may never be in the caller's library. Per-user scoping stays
-    correct via the tracked_authors query and the per-user author_alert_log
-    dedup. Newly-alerted papers are returned grouped by author in ``matches``
-    so callers (web app + Telegram bot) can render alert cards.
+    The recent-papers scan includes persisted-public papers plus private papers
+    in the caller's library. This keeps public discovery useful without leaking
+    private paper metadata through alerts. Per-user tracked-author rows and
+    alert-log deduplication provide the remaining tenant boundary. Newly
+    alerted papers are grouped by author in ``matches`` for web and bot clients.
     """
     async with db_pool.acquire() as conn:
         authors = await conn.fetch(
@@ -252,15 +252,18 @@ async def check_tracked_authors(
         if not authors:
             return AuthorCheckResponse(new_papers=0, authors_checked=0, matches=[])
 
-        # Fetch papers from the last 24 hours across the whole shared corpus.
+        # Fetch only papers the caller can currently see.
         # Columns selected are exactly what the bot's format_paper_card consumes
         # (NULL-tolerant); tldr/summary_brief live on paper_summaries, not papers,
         # and are rendered as empty by the card when absent.
+        visibility_sql = paper_visibility_sql(1, alias="p")
         recent_papers = await conn.fetch(
-            """SELECT p.id, p.title, p.authors, p.published_date,
+            f"""SELECT p.id, p.title, p.authors, p.published_date,
                       p.source_type, p.url, p.metadata
             FROM papers p
-            WHERE p.created_at >= NOW() - INTERVAL '24 hours'""",
+            WHERE p.created_at >= NOW() - INTERVAL '24 hours'
+              AND {visibility_sql}""",
+            user_id,
         )
 
         total_new = 0

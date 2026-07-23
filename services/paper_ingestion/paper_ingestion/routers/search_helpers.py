@@ -426,7 +426,7 @@ async def _load_local_library_matches(
         """
 
     # Scope library-preview to the caller's user_library when authenticated;
-    # single-user fallback returns canonical-corpus matches. The Zotero "in
+    # the trusted single-user fallback can inspect all local papers. The Zotero "in
     # library" indicator is per-user: it is read from paper_user_zotero_links
     # keyed on the resolved link owner (the caller, or the sole active user in
     # single-user mode), never the vestigial global papers.zotero_item_key.

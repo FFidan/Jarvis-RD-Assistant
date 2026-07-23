@@ -39,6 +39,23 @@ def test_no_duplicate_migration_versions() -> None:
     assert not duplicates, "Duplicate migration versions found:\n" + "\n".join(duplicates)
 
 
+def test_paper_chunks_have_no_user_ownership_in_fresh_or_upgraded_schema() -> None:
+    """Canonical chunks must survive deletion of the user who first created them."""
+    repo_root = Path(__file__).resolve().parents[3]
+    init_sql = (repo_root / "db" / "init.sql").read_text()
+    chunk_table = init_sql.split("CREATE TABLE public.paper_chunks (", 1)[1].split(");", 1)[0]
+
+    assert "user_id" not in chunk_table
+    assert "idx_paper_chunks_user" not in init_sql
+    assert "paper_chunks_user_id_fkey" not in init_sql
+
+    migration = (
+        repo_root / "db" / "migrations" / "0104_drop_paper_chunks_user_ownership.sql"
+    ).read_text()
+    assert migration.count("ALTER TABLE IF EXISTS paper_chunks") == 2
+    assert "DROP COLUMN IF EXISTS user_id" in migration
+
+
 _BOOTSTRAP_SEED_LO = 1
 _BOOTSTRAP_SEED_HI = 102  # next runner-owned migration; init.sql owns 1..(HI-1)
 

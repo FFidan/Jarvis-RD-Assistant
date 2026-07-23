@@ -3,7 +3,6 @@
 #
 # The mkcert root CA is installed in your local trust store via `make certs`,
 # so browsers see a valid cert with no warnings on jarvis.localhost / localhost.
-
 {
 	auto_https off
 	servers {
@@ -18,8 +17,9 @@
 :3443 {
 	tls /certs/cert.pem /certs/key.pem
 
-	# Match prod hardening — HSTS belongs at the TLS terminator only.
-	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+	# Do not pin localhost to HTTPS: the supported HTTP fallback uses the same
+	# hostname on port 3001, and browser transport policy is not port-scoped.
+	header Strict-Transport-Security "max-age=0"
 	header >X-Frame-Options "DENY"
 	header >X-Content-Type-Options "nosniff"
 	header >Referrer-Policy "strict-origin-when-cross-origin"
@@ -41,13 +41,8 @@
 		request_body {
 			max_size 50MB
 		}
-		reverse_proxy http://dashboard:3000 {
-			header_up Host localhost
-			# Stamp the real client IP so nginx can bucket rate-limits per client
-			# instead of collapsing all requests into the Caddy→bridge IP.
-			# {http.request.remote.host} is the Caddy v2 placeholder for the
-			# connecting peer IP (i.e. the TLS-terminated client address).
-			header_up X-Real-IP {http.request.remote.host}
+		reverse_proxy http://dashboard:3002 {
+			header_up Host {hostport}
 		}
 	}
 }

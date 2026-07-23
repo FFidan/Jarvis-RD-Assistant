@@ -10,7 +10,7 @@
  * the manual host runbook as the advanced fallback.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   useQuery,
   useMutation,
@@ -26,6 +26,7 @@ import {
   downloadBackup,
   requestRestore,
   getRestoreStatus,
+  acknowledgeRestore,
   deleteRestorePoint,
   getRetention,
   putRetention,
@@ -33,7 +34,13 @@ import {
   type InboxRestorePoint,
   type RestoreSource,
   type RetentionConfig,
+  type RestoreRecoveryRecord,
 } from '@/lib/api/backups';
+import {
+  clearRestoreRecovery,
+  loadRestoreRecovery,
+  saveRestoreRecovery,
+} from '@/lib/restore-recovery';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { OffHostUploadSection } from '@/components/admin/OffHostUploadSection';
@@ -44,7 +51,8 @@ import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
 const STORE_LABELS: Record<string, string> = {
   jarvis: 'Main database',
   litellm: 'AI model router database',
-  secrets: 'Secrets',
+  pdfs: 'PDF files',
+  secrets: 'Data keys',
   qdrant: 'Search index (Qdrant)',
 };
 
@@ -89,11 +97,12 @@ function InboxBadge({ ok, okLabel, badLabel }: { ok: boolean; okLabel: string; b
 /**
  * Off-host recovery: list the backup sets the operator has staged in this server's
  * restore inbox and trigger a cross-host restore. The trigger is disabled (with an
- * inline hint) until a set is complete, carries its secrets archive, AND its one-time
- * key is present, and while any restore is already in flight. A secrets-less set would
- * fail post-swap, so it is blocked here. Files are staged by the in-browser uploader
- * (OffHostUploadSection) or a host-side copy; the app only lists what the sidecar
- * reports and requests the restore.
+ * inline hint) until a set is complete, carries its data-key archive, AND its one-time
+ * key is present, and while any restore is already in flight. Current backups also
+ * require PDFs; an eligible older backup without PDFs gets a separate warning.
+ * A set without data keys would fail post-swap, so it is blocked here. Files are staged by
+ * the in-browser uploader (OffHostUploadSection) or a host-side copy; the app only
+ * lists what the sidecar reports and requests the restore.
  */
 function InboxRestoreSection({
   points,
@@ -102,7 +111,7 @@ function InboxRestoreSection({
 }: {
   points: InboxRestorePoint[];
   restoringTimestamp: string | null;
-  onRestore: (timestamp: string) => void;
+  onRestore: (timestamp: string, allowMissingPdfs: boolean) => void;
 }) {
   return (
     <div className="rounded-md border p-4 space-y-3" data-testid="inbox-restore-section">
@@ -125,15 +134,28 @@ function InboxRestoreSection({
       ) : (
         <ul className="space-y-2">
           {points.map((p) => {
+            const legacyMissingPdfs = !p.has_pdfs && p.legacy_missing_pdfs;
+            const missingCurrentPdfs = !p.has_pdfs && !p.legacy_missing_pdfs;
             const disabled =
-              !p.complete || !p.has_secrets || !p.has_key || restoringTimestamp !== null;
-            const hint = !p.complete
-              ? 'This backup is missing a required database archive.'
-              : !p.has_secrets
-                ? 'This backup has no secrets archive; the restore would fail after swapping the databases. Stage the secrets archive before restoring.'
-                : !p.has_key
-                  ? 'Drop the one-time operator key into the restore inbox before restoring.'
-                  : null;
+              !p.complete ||
+              !p.has_secrets ||
+              !p.has_key ||
+              missingCurrentPdfs ||
+              restoringTimestamp !== null;
+            let hint: string | null = null;
+            if (missingCurrentPdfs) {
+              hint = 'This backup is missing its required PDF archive and cannot be restored.';
+            } else if (!p.complete) {
+              hint = 'This backup is missing a required database archive.';
+            } else if (!p.has_secrets) {
+              hint =
+                'This backup has no data-key archive. Add it before restoring; JARVIS will not change data without it.';
+            } else if (!p.has_key) {
+              hint = 'Drop the one-time operator key into the restore inbox before restoring.';
+            } else if (legacyMissingPdfs) {
+              hint =
+                "This older backup has no PDF files. Restoring it will clear this server's current PDF files.";
+            }
             return (
               <li
                 key={p.timestamp}
@@ -146,7 +168,16 @@ function InboxRestoreSection({
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <InboxBadge ok={p.complete} okLabel="Complete" badLabel="Incomplete" />
-                    <InboxBadge ok={p.has_secrets} okLabel="Secrets" badLabel="No secrets" />
+                    <InboxBadge
+                      ok={p.has_pdfs}
+                      okLabel="PDFs included"
+                      badLabel={legacyMissingPdfs ? 'Older backup: no PDFs' : 'PDFs missing'}
+                    />
+                    <InboxBadge
+                      ok={p.has_secrets}
+                      okLabel="Data keys"
+                      badLabel="No data keys"
+                    />
                     <InboxBadge ok={p.has_key} okLabel="Key ready" badLabel="Key missing" />
                   </div>
                   {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
@@ -155,7 +186,7 @@ function InboxRestoreSection({
                   type="button"
                   className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
                   disabled={disabled}
-                  onClick={() => onRestore(p.timestamp)}
+                  onClick={() => onRestore(p.timestamp, legacyMissingPdfs)}
                 >
                   Restore to this point
                 </button>
@@ -179,14 +210,17 @@ function RestorePointCard({
   point: RestorePoint;
   retentionDays: number | null;
   onDownload: (name: string) => void;
-  onRestore: (timestamp: string) => void;
+  onRestore: (timestamp: string, allowMissingPdfs: boolean) => void;
   onDelete: (timestamp: string) => void;
   restoringTimestamp: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isNewer = point.compat === 'newer';
   const isThisRestoring = restoringTimestamp === point.timestamp;
-  const restoreDisabled = isNewer || !point.complete || restoringTimestamp !== null;
+  const legacyMissingPdfs = !point.has_pdfs && point.legacy_missing_pdfs;
+  const missingCurrentPdfs = !point.has_pdfs && !point.legacy_missing_pdfs;
+  const restoreDisabled =
+    isNewer || !point.complete || missingCurrentPdfs || restoringTimestamp !== null;
   const storeBadges = [
     ...point.stores.map(storeLabel),
     ...point.qdrant_collections.map((c) => `Qdrant: ${c}`),
@@ -286,7 +320,7 @@ function RestorePointCard({
             type="button"
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
             disabled={restoreDisabled}
-            onClick={() => onRestore(point.timestamp)}
+            onClick={() => onRestore(point.timestamp, legacyMissingPdfs)}
           >
             {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
           </button>
@@ -304,6 +338,17 @@ function RestorePointCard({
             This backup is newer than the current app version — update first.
           </span>
         )}
+        {missingCurrentPdfs && (
+          <span className="text-xs text-muted-foreground">
+            This backup is missing its PDF archive and cannot be restored.
+          </span>
+        )}
+        {legacyMissingPdfs && (
+          <span className="text-xs text-muted-foreground">
+            Older backup: PDF files were not included. Restoring it will clear this server&apos;s
+            current PDF files.
+          </span>
+        )}
       </div>
     </div>
   );
@@ -312,15 +357,18 @@ function RestorePointCard({
 export function AdminBackupsPage() {
   const queryClient = useQueryClient();
   const maintenanceActive = useMaintenanceStore((s) => s.active);
+  const [recovery, setRecovery] = useState<RestoreRecoveryRecord | null>(loadRestoreRecovery);
   const [confirming, setConfirming] = useState(false);
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
   const [confirmSource, setConfirmSource] = useState<RestoreSource>('local');
+  const [confirmAllowMissingPdfs, setConfirmAllowMissingPdfs] = useState(false);
   const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
-  const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(null);
-  // One-time bearer token from POST /restore: keeps the progress poll authorized
-  // DB-free after the restore tears down the admin session (see getRestoreStatus).
-  const [restoreToken, setRestoreToken] = useState<string | null>(null);
+  const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(
+    recovery?.target_timestamp ?? null,
+  );
   const [manualStepsNotice, setManualStepsNotice] = useState<string | null>(null);
+  const [recoveryIssue, setRecoveryIssue] = useState<string | null>(null);
+  const [acknowledgementOpen, setAcknowledgementOpen] = useState(false);
   const [keepLastN, setKeepLastN] = useState('');
   const [maxAgeDays, setMaxAgeDays] = useState('');
 
@@ -364,24 +412,69 @@ export function AdminBackupsPage() {
     },
   });
 
-  // Poll restore progress while a restore is being tracked — either one we started
-  // this session, or (after the 503 interceptor flips maintenance) as long as we still
-  // hold the one-time token. The token authorizes the poll DB-free so it survives the
-  // DB swap that drops the admin session. A numeric refetchInterval keeps polling even
-  // when the query errors, so the brief app-down window mid-restore degrades (below)
-  // instead of dropping out.
-  const trackingRestore = restoringTimestamp !== null || (maintenanceActive && restoreToken !== null);
+  const discardRecovery = useCallback(() => {
+    clearRestoreRecovery();
+    setRecovery(null);
+  }, []);
+
+  useEffect(() => {
+    if (!recovery) return;
+    const remainingMs = Date.parse(recovery.expires_at) - Date.now();
+    if (remainingMs <= 0) {
+      discardRecovery();
+      setRecoveryIssue(
+        'This restore session expired. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
+      );
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      discardRecovery();
+      setRecoveryIssue(
+        'This restore session expired. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
+      );
+    }, Math.min(remainingMs, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [discardRecovery, recovery]);
+
+  // Fetch once on every visit so a configured owner can see quarantine without
+  // the initiating tab. A restore-session token keeps polling available while
+  // the restore replaces session rows.
+  const trackingRestore = restoringTimestamp !== null || recovery !== null;
   const restoreStatus = useQuery({
     queryKey: ['admin', 'restore-status'],
-    queryFn: () => getRestoreStatus(restoreToken ?? undefined),
-    enabled: trackingRestore,
+    queryFn: () => getRestoreStatus(recovery?.status_token),
     refetchInterval: trackingRestore ? 3000 : false,
     retry: false,
   });
 
   const restoreState = restoreStatus.data?.state;
   useEffect(() => {
-    if (!restoringTimestamp) return;
+    const status = restoreStatus.data;
+    if (!status) return;
+    const quarantine = status.quarantine ?? 'none';
+    if (quarantine === 'unreadable') {
+      setRestoringTimestamp(null);
+      setRecoveryIssue(
+        'Restore review state is unreadable. Keep outbound access blocked and inspect it on the host before running jarvis-research restore acknowledge <restore-id>.',
+      );
+      return;
+    }
+    if (quarantine === 'awaiting_review') {
+      setRestoringTimestamp(null);
+      if (
+        recovery &&
+        (recovery.restore_id !== status.restore_id ||
+          recovery.source !== status.source ||
+          recovery.source !== 'inbox')
+      ) {
+        discardRecovery();
+        setRecoveryIssue(
+          'This tab belongs to a different restore. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
+        );
+      }
+      return;
+    }
+    if (!restoringTimestamp && !recovery) return;
     // Only a terminal state stops tracking. 'pending' (queued — the sidecar
     // polls every few seconds before it writes the first status), 'running', and
     // a transient 'idle'/undefined all keep the poll alive. The backend reports
@@ -403,28 +496,84 @@ export function AdminBackupsPage() {
       }
       void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
       setRestoringTimestamp(null);
-      setRestoreToken(null);
+      discardRecovery();
     } else if (restoreState === 'failed') {
       setRestoringTimestamp(null);
-      setRestoreToken(null);
+      discardRecovery();
     }
-  }, [restoreState, restoringTimestamp, restoreStatus.data, queryClient]);
+  }, [discardRecovery, queryClient, recovery, restoreState, restoreStatus.data, restoringTimestamp]);
 
   const restoreMutation = useMutation({
-    mutationFn: ({ timestamp, source }: { timestamp: string; source: RestoreSource }) =>
-      requestRestore(timestamp, 'RESTORE', source),
+    mutationFn: ({
+      timestamp,
+      source,
+      allowMissingPdfs,
+    }: {
+      timestamp: string;
+      source: RestoreSource;
+      allowMissingPdfs: boolean;
+    }) => requestRestore(timestamp, 'RESTORE', source, allowMissingPdfs),
     onSuccess: (data, { timestamp }) => {
       // Evict any terminal state (e.g. 'done') left by a previous restore so the
       // new restore starts from a clean fetch rather than the stale cached state.
       queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] });
-      // Capture the one-time bearer token so the poll survives the session teardown.
-      setRestoreToken(data.status_token ?? null);
+      const nextRecovery: RestoreRecoveryRecord = {
+        version: 1,
+        restore_id: data.restore_id,
+        source: data.source,
+        status_token: data.status_token,
+        expires_at: data.expires_at,
+        target_timestamp: timestamp,
+      };
+      saveRestoreRecovery(nextRecovery);
+      setRecovery(nextRecovery);
+      setRecoveryIssue(null);
       setRestoringTimestamp(timestamp);
       setConfirmTs(null);
+      setConfirmAllowMissingPdfs(false);
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not start the restore.');
       setConfirmTs(null);
+      setConfirmAllowMissingPdfs(false);
+    },
+  });
+
+  const acknowledgementMutation = useMutation({
+    mutationFn: ({
+      restoreId,
+      token,
+    }: {
+      restoreId: string;
+      token?: string;
+    }) =>
+      acknowledgeRestore(
+        restoreId,
+        'inbox',
+        'I HAVE REVIEWED RESTORED CREDENTIALS',
+        token,
+      ),
+    onSuccess: () => {
+      discardRecovery();
+      setRestoringTimestamp(null);
+      setRecoveryIssue(null);
+      setAcknowledgementOpen(false);
+      toast.success('Restore review acknowledged. Outbound connections are available again.');
+      void restoreStatus.refetch();
+    },
+    onError: (error: unknown) => {
+      const statusCode =
+        typeof error === 'object' && error !== null && 'status' in error
+          ? Number(error.status)
+          : null;
+      if (statusCode === 401 || statusCode === 403 || statusCode === 409) {
+        discardRecovery();
+        setRecoveryIssue(
+          'This restore session is no longer usable. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
+        );
+      }
+      setAcknowledgementOpen(false);
+      toast.error(error instanceof Error ? error.message : 'Could not acknowledge restore review.');
     },
   });
 
@@ -507,16 +656,31 @@ export function AdminBackupsPage() {
     ? (points.find((p) => p.timestamp === deleteConfirmTs) ?? null)
     : null;
   const restoreData = restoreStatus.data;
+  const quarantineState = restoreData?.quarantine ?? 'none';
+  const quarantineRestoreId = restoreData?.restore_id ?? null;
+  const recoveryMatchesQuarantine =
+    recovery !== null &&
+    quarantineState === 'awaiting_review' &&
+    recovery.restore_id === quarantineRestoreId &&
+    recovery.source === 'inbox' &&
+    restoreData?.source === 'inbox';
   // Open the shared typed-RESTORE confirm, remembering which source it targets.
-  const askRestore = (timestamp: string, source: RestoreSource) => {
+  const askRestore = (
+    timestamp: string,
+    source: RestoreSource,
+    allowMissingPdfs: boolean,
+  ) => {
     setConfirmSource(source);
+    setConfirmAllowMissingPdfs(allowMissingPdfs);
     setConfirmTs(timestamp);
   };
   const showRestorePanel =
-    restoringTimestamp !== null ||
+    trackingRestore ||
     restoreData?.state === 'failed' ||
     manualStepsNotice !== null ||
-    (maintenanceActive && restoreToken !== null);
+    quarantineState !== 'none' ||
+    recoveryIssue !== null ||
+    maintenanceActive;
 
   return (
     <div className="p-6 space-y-6">
@@ -524,8 +688,10 @@ export function AdminBackupsPage() {
         <AdminBreadcrumb page="Backups" />
         <h1 className="text-2xl font-semibold">Backups</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Disaster-recovery archives (databases, vectors, and secrets). Archives contain platform
-          secrets — keep downloads secure.
+          Backups include databases, PDF files, the search index, and the data keys used to read
+          saved settings. A restore keeps this host&apos;s infrastructure credentials, while an
+          off-host restore holds restored outbound connections for review. Downloads can contain
+          private data and credentials, so keep them secure.
         </p>
       </div>
 
@@ -606,7 +772,9 @@ export function AdminBackupsPage() {
                 point={point}
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
-                onRestore={(ts) => askRestore(ts, 'local')}
+                onRestore={(ts, allowMissingPdfs) =>
+                  askRestore(ts, 'local', allowMissingPdfs)
+                }
                 onDelete={(ts) => setDeleteConfirmTs(ts)}
                 restoringTimestamp={restoringTimestamp}
               />
@@ -625,7 +793,7 @@ export function AdminBackupsPage() {
         <InboxRestoreSection
           points={inboxPoints}
           restoringTimestamp={restoringTimestamp}
-          onRestore={(ts) => askRestore(ts, 'inbox')}
+          onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs)}
         />
       )}
 
@@ -696,6 +864,15 @@ export function AdminBackupsPage() {
           pollError={restoreStatus.isError}
           status={restoreData}
           manualStepsNotice={manualStepsNotice}
+          quarantine={quarantineState}
+          quarantineRestoreId={quarantineRestoreId}
+          recoveryIssue={recoveryIssue}
+          acknowledgementPending={acknowledgementMutation.isPending}
+          onAcknowledge={
+            quarantineState === 'awaiting_review' && quarantineRestoreId !== null
+              ? () => setAcknowledgementOpen(true)
+              : null
+          }
           onDismissFailed={() =>
             queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })
           }
@@ -704,24 +881,75 @@ export function AdminBackupsPage() {
       )}
 
       <TypedConfirmDialog
-        requiredWord="RESTORE"
-        open={confirmTs !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirmTs(null);
-        }}
-        title="Restore from this backup?"
-        confirmLabel="Restore"
+        requiredWord="I HAVE REVIEWED RESTORED CREDENTIALS"
+        open={acknowledgementOpen}
+        onOpenChange={setAcknowledgementOpen}
+        title="Enable restored outbound connections?"
+        confirmLabel="Acknowledge"
         description={
           <span>
-            This replaces the current databases, search index, and provider keys with the contents
-            of this backup
-            {confirmPoint ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}` : ''}. A
-            safety backup is taken first, and the app is briefly unavailable while it restores. Type{' '}
-            <span className="font-mono font-semibold">RESTORE</span> to confirm.
+            Confirm that you reviewed SMTP, Telegram, AI providers, Zotero, research sources, and
+            scheduled deliveries for restore <span className="font-mono">{quarantineRestoreId}</span>.
+            This enables outbound use of restored database credentials. Type{' '}
+            <span className="font-mono font-semibold">
+              I HAVE REVIEWED RESTORED CREDENTIALS
+            </span>{' '}
+            to confirm.
           </span>
         }
         onConfirm={() => {
-          if (confirmTs) restoreMutation.mutate({ timestamp: confirmTs, source: confirmSource });
+          if (quarantineRestoreId) {
+            acknowledgementMutation.mutate({
+              restoreId: quarantineRestoreId,
+              token: recoveryMatchesQuarantine ? recovery.status_token : undefined,
+            });
+          }
+        }}
+      />
+
+      <TypedConfirmDialog
+        requiredWord="RESTORE"
+        open={confirmTs !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmTs(null);
+            setConfirmAllowMissingPdfs(false);
+          }
+        }}
+        title={
+          confirmAllowMissingPdfs
+            ? 'Restore this older backup without PDFs?'
+            : 'Restore from this backup?'
+        }
+        confirmLabel="Restore"
+        description={
+          confirmAllowMissingPdfs ? (
+            <span>
+              This older backup does not include PDF files. Restoring it will remove the PDF files
+              currently stored on this server. Papers may still appear in JARVIS, but their PDF
+              files will not open. A safety backup is taken first. Type{' '}
+              <span className="font-mono font-semibold">RESTORE</span> to confirm.
+            </span>
+          ) : (
+            <span>
+              This replaces the current JARVIS data, saved database settings and credentials,
+              data keys, search index, and PDF files with the contents of this backup
+              {confirmPoint ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}` : ''}. A
+              safety backup is taken first. This host&apos;s infrastructure credentials stay
+              unchanged; off-host outbound connections remain blocked until reviewed. The app is
+              briefly unavailable while it restores. Type{' '}
+              <span className="font-mono font-semibold">RESTORE</span> to confirm.
+            </span>
+          )
+        }
+        onConfirm={() => {
+          if (confirmTs) {
+            restoreMutation.mutate({
+              timestamp: confirmTs,
+              source: confirmSource,
+              allowMissingPdfs: confirmAllowMissingPdfs,
+            });
+          }
         }}
       />
 

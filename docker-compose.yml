@@ -11,7 +11,7 @@ x-shared-env: &shared-env
   # Release version surfaced by /health/internal + FastAPI metadata + the UI.
   # The service images don't install the root distribution, so app_version()
   # reads this env; defaults to the release tag (same var drives the image tags).
-  JARVIS_VERSION: ${JARVIS_VERSION:-1.1.3}
+  JARVIS_VERSION: ${JARVIS_VERSION:-1.2.0}
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
@@ -48,6 +48,10 @@ x-shared-env: &shared-env
   # empty for local/LAN installs where the origin is implicit.
   APP_BASE_URL: ${APP_BASE_URL:-}
   JARVIS_ACCESS_MODE: ${JARVIS_ACCESS_MODE:-localhost}
+  # Sign-in preference selected by setup.sh; conservative startup and
+  # model-signing checks also consult it. It is not the tenancy authority.
+  # Leaving it only in .env would hide a requested family sign-in flow.
+  JARVIS_SETUP_MODE: ${JARVIS_SETUP_MODE:-single}
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}
@@ -60,17 +64,18 @@ x-shared-env: &shared-env
   # this follows it. Loopback covers same-host calls.
   OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
   # Source CIDRs trusted as reverse-proxy hops when extracting the real client IP
-  # from X-Forwarded-For (rate-limit keying). Trusts loopback + the jarvis bridge
-  # subnet so the nginx hop is honoured; tracks JARVIS_NET_SUBNET. Empty in code
-  # falls back to loopback-only so a bridge container cannot spoof X-Forwarded-For.
-  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
+  # from X-Forwarded-For (rate-limit keying). Trusts loopback plus only the
+  # dashboard's pinned address. Empty in code falls back to loopback-only.
+  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8,${JARVIS_DASHBOARD_IP:-10.137.241.253}/32}
   # Numeric CIDRs uvicorn's ProxyHeadersMiddleware trusts as the immediate proxy
   # hop before rewriting scope["client"] from X-Forwarded-For. Distinct from
   # TRUSTED_PROXY_CIDRS above (rate-limit keying) — this one drives the client
   # rewrite the X-Owner-User-Id guard depends on to reject nginx-relayed browser
-  # requests. MUST include the bridge subnet so the nginx hop is trusted; tracks
-  # JARVIS_NET_SUBNET.
-  TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
+  # requests. MUST include the dashboard's exact pinned address.
+  TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.0/8,${JARVIS_DASHBOARD_IP:-10.137.241.253}/32}
+  # Plain HTTP may carry setup/auth secrets only when nginx can prove that the
+  # client is the Docker host itself. Remote LAN clients remain diagnostics-only.
+  TRUSTED_LOCAL_CLIENT_CIDRS: ${TRUSTED_LOCAL_CLIENT_CIDRS:-127.0.0.0/8,::1/128,${JARVIS_NET_GATEWAY_IP:-10.137.241.1}/32}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
   LANGFUSE_HOST: ${LANGFUSE_HOST:-}
@@ -252,87 +257,27 @@ services:
       - "127.0.0.1:${LITELLM_HOST_PORT:-4000}:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-      - backup_trigger:/backup-trigger:ro  # ro: the shim watches .secrets_rotated so an off-host restore's rotated litellm/postgres secrets are picked up by a self-restart
-    # OPENAI_API_KEY and ANTHROPIC_API_KEY are intentionally omitted here.
-    # Cloud-key injection happens via Fernet user_config + the LiteLLM admin DB
-    # (/model/new payloads, encrypted at rest under LITELLM_SALT_KEY).
-    # The startup env vars are dead and their presence would expose keys via
-    # ``docker inspect``.
+      - ./scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro
+      - backup_trigger:/backup-trigger:ro  # restore safety markers stop provider access; secret changes trigger a reload
+    # Provider credentials are stored in the LiteLLM database under the mounted
+    # salt key; plaintext provider-key environment variables are not used.
     environment:
-      # DATABASE_URL deliberately absent — the shim builds it from
-      # /run/secrets/postgres_password so the password never appears in
-      # ``docker inspect``.
+      # The entrypoint builds DATABASE_URL from the mounted password file so
+      # the database password is not exposed by ``docker inspect``.
       STORE_MODEL_IN_DB: "true"
     secrets:
       - litellm_master_key
       - litellm_salt_key
       - postgres_password
-    # litellm/config.yaml uses ``master_key: os.environ/LITELLM_MASTER_KEY`` and
-    # the upstream image does not honour the ``_FILE`` convention.  This shim
-    # reads the secret file into LITELLM_MASTER_KEY at container start and
-    # refuses to start when the file is empty.  Both
-    # ``entrypoint`` and ``command`` are overridden — the upstream image sets
-    # entrypoint=["litellm"], so without overriding it our ``sh`` would be
-    # passed as a positional arg to litellm.
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        if [ ! -s /run/secrets/litellm_master_key ]; then
-          echo 'FATAL: /run/secrets/litellm_master_key is empty or missing.' >&2
-          exit 1
-        fi
-        export LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
-        # H-5: Reject known placeholder/weak values in production so a deploy
-        # with an unchanged secrets/litellm_master_key.txt fails fast here
-        # rather than silently running with a public default.
-        if [ "$${ENVIRONMENT:-development}" = "production" ]; then
-          case "$LITELLM_MASTER_KEY" in
-            "sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")
-              echo 'FATAL: LITELLM_MASTER_KEY is a known placeholder value.' \
-                   'Replace secrets/litellm_master_key.txt before deploying to production.' >&2
-              exit 1 ;;
-          esac
-          if [ "$${#LITELLM_MASTER_KEY}" -lt 16 ]; then
-            echo 'FATAL: LITELLM_MASTER_KEY is too short (< 16 chars) for production.' >&2
-            exit 1
-          fi
-        fi
-        if [ ! -s /run/secrets/litellm_salt_key ]; then
-          echo 'FATAL: /run/secrets/litellm_salt_key is empty or missing.' >&2
-          exit 1
-        fi
-        # Pinned salt key: litellm's fallback salt is the master key, so a
-        # master-key rotation would brick DB-stored encrypted model credentials.
-        # A dedicated, never-rotated salt decouples the two.
-        export LITELLM_SALT_KEY="$(cat /run/secrets/litellm_salt_key)"
-        # DATABASE_URL is built here because litellm has no _FILE convention
-        # and a compose env entry would leak the password via ``docker inspect``.
-        # RFC-3986 reserved chars (@ : / # ? & %) in the user or password would
-        # silently corrupt a bare URL; percent-encode both parts via python3.
-        PG_USER_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "${POSTGRES_USER:-jarvis}")"
-        PG_PASS_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "$(cat /run/secrets/postgres_password)")"
-        export DATABASE_URL="postgresql://$${PG_USER_ENC}:$${PG_PASS_ENC}@postgres:5432/litellm"
-        # Defensive self-restart on off-host secrets rotation: an inbox restore
-        # rebinds the postgres role and rotates the litellm master/salt secrets,
-        # which this process reads once at start. A background watcher polls the
-        # shared marker and, when it is newer than this boot, kills PID 1 (the
-        # exec'd litellm below) so restart:unless-stopped revives it against the
-        # rotated /run/secrets/* inodes. It never interferes with normal boot: it
-        # backgrounds immediately and no-ops until a newer integer marker appears.
-        LSTART=$(date +%s)
-        ( while sleep 5; do
-            m=$(cat /backup-trigger/.secrets_rotated 2>/dev/null || echo 0)
-            case "$$m" in ''|*[!0-9]*) continue ;; esac
-            [ "$$m" -gt "$$LSTART" ] && { echo '[litellm] secrets rotated; exiting to reload' >&2; kill 1; }
-          done ) &
-        exec litellm --config /app/config.yaml
+    # Secret files are loaded only when restore safety markers are absent.
+    entrypoint: ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
+    command: []
     # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
     mem_limit: 4g
     healthcheck:
-      # /health/liveliness, NOT /health/readiness: with a configured DB,
-      # readiness returns 503 whenever postgres blips, which would cascade
-      # ``service_healthy`` failures through the whole app stack.
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      # During restore review the entrypoint reports the intentional pause as
+      # healthy so the dashboard and recovery API can start without provider access.
+      test: ["CMD", "sh", "/usr/local/bin/litellm-entrypoint.sh", "--healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -353,7 +298,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_VERSION:-1.1.3}${TORCH_VARIANT_SUFFIX:-}
+    image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_VERSION:-1.2.0}${TORCH_VARIANT_SUFFIX:-}
     pull_policy: missing
     build:
       context: .
@@ -383,6 +328,9 @@ services:
       # Opt-in for bench/multi-user deployments: bypasses the single-tenant
       # session-mint guardrail so API-key sessions can be created without a DB user.
       API_KEY_LOGIN_ENABLED: ${API_KEY_LOGIN_ENABLED:-false}
+      # Advanced host-owned recovery override. Empty means the database owner
+      # row remains authoritative; ordinary repairs use jarvis-research owner.
+      OWNER_USER_ID: ${OWNER_USER_ID:-}
       # JARVIS_CONFIG_KEY (Fernet) is injected via Docker Secret (_FILE convention)
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       # Vector sidecar uses this to authenticate to POST /infra-events
@@ -450,7 +398,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: ghcr.io/limitcycle-oss/jarvis-learning-engine:${JARVIS_VERSION:-1.1.3}
+    image: ghcr.io/limitcycle-oss/jarvis-learning-engine:${JARVIS_VERSION:-1.2.0}
     pull_policy: missing
     build:
       context: .
@@ -479,7 +427,7 @@ services:
       # paper_ingestion; this service gains no destructive privilege.
       - ./db/migrations:/app/db/migrations:ro
       # Read-only: this service only os.stat()s the maintenance sentinel (so the
-      # P6 maintenance middleware can 503 it too during a restore). Read-only
+      # maintenance middleware can return 503 there too during a restore). Read-only
       # prevents it from writing a restore-request/backup sentinel — only
       # paper_ingestion (the admin API) may do that.
       - backup_trigger:/backup-trigger:ro
@@ -509,7 +457,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: ghcr.io/limitcycle-oss/jarvis-telegram-bot:${JARVIS_VERSION:-1.1.3}
+    image: ghcr.io/limitcycle-oss/jarvis-telegram-bot:${JARVIS_VERSION:-1.2.0}
     pull_policy: missing
     build:
       context: .
@@ -525,9 +473,13 @@ services:
       <<: *shared-env
       # TELEGRAM_BOT_TOKEN is injected via Docker Secret (_FILE convention) only
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      # The setup UI stores the Telegram token encrypted in PostgreSQL. The bot
+      # needs the matching data key to read that value after setup or restore.
+      JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     secrets:
       - jarvis_api_key
+      - jarvis_config_key
       - jarvis_model_hmac_key
       - langfuse_init_pk
       - langfuse_init_sk
@@ -541,7 +493,7 @@ services:
       - backup_trigger:/backup-trigger:ro
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health\", timeout=5).read()'"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health/live\", timeout=5).read()'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -562,7 +514,7 @@ services:
       - jarvis
 
   dashboard:
-    image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_VERSION:-1.1.3}
+    image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_VERSION:-1.2.0}
     pull_policy: missing
     build:
       context: ./frontend
@@ -577,15 +529,22 @@ services:
       # caddy-local profile: `docker compose --profile caddy-local up -d`.
       # Override DASHBOARD_HOST_PORT in .env if you need a different port.
       - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3001}:3000"
+      # Separate host-loopback ingress for Tailscale Serve. nginx accepts proxy
+      # headers here only from the pinned gateway/edge peers.
+      - "127.0.0.1:${DASHBOARD_TRUSTED_HOST_PORT:-3003}:3002"
     environment:
-      JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
-      JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}
       # Extra Host header(s) the dashboard nginx accepts, for DIRECT remote access
       # without Caddy (e.g. a Tailscale MagicDNS name). Empty = localhost-only.
       # Must be set (even empty) so envsubst resolves it in nginx.conf.
       DASHBOARD_SERVER_NAME: ${DASHBOARD_SERVER_NAME:-}
-    volumes:
-      - ./certs:/etc/nginx/certs:ro
+      # The nginx raw-listener gate consumes the exact same value as the host
+      # port publication above. A LAN bind therefore remains diagnostics-only
+      # even on Desktop/VM forwarding that presents every peer as the gateway.
+      DASHBOARD_BIND_HOST: ${DASHBOARD_BIND_HOST:-127.0.0.1}
+      JARVIS_NET_GATEWAY_IP: ${JARVIS_NET_GATEWAY_IP:-10.137.241.1}
+      JARVIS_CADDY_IP: ${JARVIS_CADDY_IP:-10.137.241.251}
+      JARVIS_CADDY_LOCAL_IP: ${JARVIS_CADDY_LOCAL_IP:-10.137.241.252}
+      JARVIS_CLOUDFLARED_IP: ${JARVIS_CLOUDFLARED_IP:-10.137.241.254}
     mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ > /dev/null || exit 1"]
@@ -603,7 +562,8 @@ services:
         max-size: "50m"
         max-file: "5"
     networks:
-      - jarvis
+      jarvis:
+        ipv4_address: ${JARVIS_DASHBOARD_IP:-10.137.241.253}
 
   postgres-backup:
     image: ${POSTGRES_IMAGE:-postgres:16.8}
@@ -634,7 +594,7 @@ services:
       SECRETS_DIR: /secrets
       # Stamped into each backup manifest's app_version (so a restore point shows
       # the JARVIS version it was taken on, not a constant "unknown").
-      JARVIS_VERSION: ${JARVIS_VERSION:-1.1.3}
+      JARVIS_VERSION: ${JARVIS_VERSION:-1.2.0}
     secrets:
       - postgres_password
       - backup_encrypt_key
@@ -644,17 +604,19 @@ services:
       - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro  # one-click DR restore (runs in this already-privileged sidecar; the app gains zero new privilege)
       - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
       - ./secrets:/secrets:ro
-      - ./secrets:/host-secrets:rw  # rw: an off-host (inbox) restore materializes the restored ./secrets/*.txt here so the app containers self-restart onto the rotated secrets (the sidecar is the trusted DR component; the app's zero-privilege invariant is untouched)
+      - ./secrets:/host-secrets:rw  # rw: restore installs only the three data-coupled keys; target-host credentials remain unchanged
+      - ./shared/pdf_storage:/pdf-storage:rw  # stable bind root used for PDF backup and crash-safe in-place restore
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears
       - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
       - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
       - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
+      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro  # ro: after a schema squash db/migrations/ is empty, so that same gate falls back to this baseline floor — unmounted, the fallback reads nothing and the gate drops to a hardcoded default
       - postgres_data:/postgres-data:ro  # ro: restore.sh's disk preflight sizes the free space on the live DB volume to refuse a restore that would exhaust it (rename-swap keeps both live DBs while it reloads a transient tmp DB)
     # Loop dispatch by sentinel: a restore request runs restore.sh (rename-swap both
     # DBs + recover Qdrant behind the maintenance gate); a delete request runs
     # prune.sh (delete named restore points); otherwise take the scheduled backup.
-    # On startup, a leftover .restore_swap_state.json means a prior restore crashed
+    # On startup, a leftover private restore-swap state means a prior restore crashed
     # mid-swap: run restore.sh --recover ONCE first to reconcile the stranded db to
     # untouched-or-completed (it never consumes a request or runs the full flow).
     # `sh -uc` deliberately drops -e so ONE failed run cannot kill the loop (a
@@ -663,9 +625,9 @@ services:
     # inner poll breaks early on ANY of the three sentinels so an on-demand backup,
     # restore, or delete fires within ~5s rather than after the full interval.
     entrypoint: >
-      sh -uc "[ -f /backup-trigger/.restore_swap_state.json ] && /usr/local/bin/restore.sh --recover || true;
-      while true;
-      do /usr/local/bin/restore.sh --inbox-manifest || true;
+      sh -uc "while true;
+      do { [ -d /backups/.lifecycle/data-key-restore ] || [ -f /backups/.lifecycle/restore-swap-state.json ]; } && /usr/local/bin/restore.sh --recover || true;
+      /usr/local/bin/restore.sh --inbox-manifest || true;
       if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
       elif [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
       else /usr/local/bin/backup.sh || echo \"[sidecar] backup failed rc=$$?\" >&2; fi;
@@ -695,7 +657,7 @@ services:
   # (a drop-in for the previous manual scp step). See services/restore_uploader.
   restore-uploader:
     build: ./services/restore_uploader
-    image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_VERSION:-1.1.3}
+    image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_VERSION:-1.2.0}
     pull_policy: missing
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -766,7 +728,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.1.3}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.2.0}
     pull_policy: build
     build:
       context: ./langfuse
@@ -804,8 +766,8 @@ services:
       # consume them via the _FILE → SecretsSettings path (appuser uid=1000 can
       # read the 0600/uid-1000 mounts). The image's init logic still reads
       # them from env, so they remain interpolated here. Their exposure via
-      # `docker inspect` is bounded to this single self-hosted operator's
-      # Langfuse project and is rotated by the gen-langfuse-keys script.
+      # `docker inspect` is limited to this deployment's Langfuse project, and
+      # the generation script rotates them.
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
     healthcheck:
@@ -828,11 +790,13 @@ services:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.1.0}
     container_name: jarvis-cloudflared
     # cloudflared natively supports --token-file; no entrypoint shim needed.
-    command: tunnel --token-file /run/secrets/cloudflare_tunnel_token run
+    command: tunnel --metrics 0.0.0.0:2000 --token-file /run/secrets/cloudflare_tunnel_token run
     secrets:
       - cloudflare_tunnel_token
     profiles: [tunnel]
-    networks: [jarvis]
+    networks:
+      jarvis:
+        ipv4_address: ${JARVIS_CLOUDFLARED_IP:-10.137.241.254}
     depends_on:
       dashboard:
         condition: service_healthy
@@ -877,7 +841,7 @@ services:
         max-file: "3"
     networks:
       jarvis:
-        ipv4_address: 10.137.241.3
+        ipv4_address: ${JARVIS_CADDY_LOCAL_IP:-10.137.241.252}
 
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.9-alpine}
@@ -911,7 +875,7 @@ services:
         max-file: "3"
     networks:
       jarvis:
-        ipv4_address: 10.137.241.2
+        ipv4_address: ${JARVIS_CADDY_IP:-10.137.241.251}
 
   vector:
     image: ${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}
@@ -968,8 +932,9 @@ networks:
     ipam:
       config:
         - subnet: ${JARVIS_NET_SUBNET:-10.137.241.0/24}
-          # gateway: auto-assigned by Docker (first host in subnet); omit to avoid
-          # hard-fail when JARVIS_NET_SUBNET is overridden to a different range.
+          # Docker chooses the first usable address as its gateway. Trusted
+          # ingress peers are pinned at the high end by setup.sh, away from the
+          # low addresses allocated dynamically to application services.
 
 secrets:
   postgres_password:

@@ -23,6 +23,7 @@ vi.mock('@/lib/api', () => ({
   batchProcessPapers: vi.fn(),
   batchSummarizePapers: vi.fn(),
   batchExtractEntities: vi.fn(),
+  processLibrary: vi.fn(),
   getSetupStatus: vi.fn().mockResolvedValue({
     setup_completed: true,
     models_ready: true,
@@ -33,8 +34,14 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } =
-  await import('@/lib/api');
+const {
+  fetchDashboardMetrics,
+  batchProcessPapers,
+  batchSummarizePapers,
+  batchExtractEntities,
+  processLibrary,
+  getSetupStatus,
+} = await import('@/lib/api');
 
 function renderHomePage() {
   const queryClient = new QueryClient({
@@ -75,6 +82,28 @@ describe('HomePage', () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
+  });
+
+  it('does not request the admin-only setup status for a regular user', async () => {
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+
+    renderHomePage();
+
+    await screen.findByText('Papers');
+    expect(getSetupStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the setup-status check for administrators', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 1, email: 'admin@example.com', role: 'admin' },
+      authTime: Date.now(),
+    });
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+
+    renderHomePage();
+
+    await waitFor(() => expect(getSetupStatus).toHaveBeenCalledTimes(1));
   });
 
   it('shows skeleton loaders while loading', () => {
@@ -210,6 +239,32 @@ describe('HomePage', () => {
       await userEvent.click(screen.getByRole('button', { name: /Process PDFs/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       expect(await screen.findByText('No PDFs to process')).toBeInTheDocument();
+      expect(trackExternalJobMock).not.toHaveBeenCalled();
+    });
+
+    it('Process whole library tracks the returned durable job id', async () => {
+      vi.mocked(processLibrary).mockResolvedValue({ job_id: 'job-lib', status: 'queued' });
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Process whole library/i });
+      await userEvent.click(button);
+      expect(screen.getByText('Process your whole library?')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      await waitFor(() => expect(processLibrary).toHaveBeenCalledWith(true));
+      expect(await screen.findByText('Processing your library')).toBeInTheDocument();
+      expect(trackExternalJobMock).toHaveBeenCalledWith({
+        jobId: 'job-lib',
+        kind: 'papers.process_library',
+        payload: { limit: 10 },
+        status: 'queued',
+      });
+    });
+
+    it('Process whole library does not track a job when the library is already up to date', async () => {
+      vi.mocked(processLibrary).mockResolvedValue({ job_id: null, status: 'skipped', reason: 'library_already_processed' });
+      renderHomePage();
+      await userEvent.click(screen.getByRole('button', { name: /Process whole library/i }));
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+      expect(await screen.findByText('Library already up to date')).toBeInTheDocument();
       expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
   });

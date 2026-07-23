@@ -274,18 +274,17 @@ describe('FacetRail', () => {
     );
   });
 
-  it('shows shared-library empty copy when feedScope=corpus — no "your library" wording', () => {
+  it('shows visible-paper empty copy when feedScope=corpus', () => {
     render(
       <FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline feedScope="corpus" />,
     );
     const sourceEmpty = screen.getByTestId('facet-source-empty');
     const topicEmpty = screen.getByTestId('facet-topic-empty');
-    // Must not mention "your library" in the shared-library scope
+    // Corpus scope contains public rows plus the caller's private library.
     expect(sourceEmpty.textContent).not.toMatch(/your library/i);
     expect(topicEmpty.textContent).not.toMatch(/your library/i);
-    // Shared-library copy should mention the shared library
-    expect(sourceEmpty.textContent).toMatch(/shared library/i);
-    expect(topicEmpty.textContent).toMatch(/shared library/i);
+    expect(sourceEmpty.textContent).toMatch(/visible papers/i);
+    expect(topicEmpty.textContent).toMatch(/visible papers/i);
   });
 
   // ── Mobile drawer ─────────────────────────────────────────────────────────

@@ -205,7 +205,7 @@ async def test_get_citations_strips_invisible_counter_parties() -> None:
     # assert_paper_ownership calls fetchrow to verify caller owns P1
     # Then the router calls fetch for citation rows
     # Then _filter_visible_paper_ids is called for counter-party IDs
-    conn.fetchrow = AsyncMock(return_value=FakeRecord({"id": p1_id, "discovered_by": user_a_id}))
+    conn.fetchrow = AsyncMock(return_value=FakeRecord({"id": p1_id, "is_visible": True}))
     conn.fetch = AsyncMock(
         side_effect=[
             # citation rows: P1→P2
@@ -263,7 +263,7 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
 
     pool, conn = make_pool_and_conn()
 
-    conn.fetchrow = AsyncMock(return_value=FakeRecord({"id": p1_id, "discovered_by": user_a_id}))
+    conn.fetchrow = AsyncMock(return_value=FakeRecord({"id": p1_id, "is_visible": True}))
     conn.fetch = AsyncMock(
         side_effect=[
             # citation rows: P1→P2
@@ -330,7 +330,7 @@ async def test_citation_key_flows_from_link_table_single() -> None:
     # 2. per-user JOIN query — link_citation_key comes from paper_user_zotero_links
     conn.fetchrow = AsyncMock(
         side_effect=[
-            FakeRecord({"id": paper_id, "discovered_by": user_a_id}),
+            FakeRecord({"id": paper_id, "is_visible": True}),
             _citation_paper_row(paper_id=paper_id, link_citation_key="Smith2024"),
         ]
     )
@@ -379,7 +379,7 @@ async def test_citation_key_other_user_without_link_gets_fallback() -> None:
 
     conn.fetchrow = AsyncMock(
         side_effect=[
-            FakeRecord({"id": paper_id, "discovered_by": user_b_id}),
+            FakeRecord({"id": paper_id, "is_visible": True}),
             # LEFT JOIN finds no link row for user_b → link_citation_key is NULL
             _citation_paper_row(paper_id=paper_id, link_citation_key=None),
         ]

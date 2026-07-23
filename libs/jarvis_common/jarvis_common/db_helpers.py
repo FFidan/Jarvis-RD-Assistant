@@ -9,6 +9,8 @@ from typing import Any, Literal
 import asyncpg
 from fastapi import HTTPException
 
+from jarvis_common.paper_visibility import paper_visibility_sql
+
 logger = logging.getLogger(__name__)
 
 _ALLOWED_TABLES = frozenset(
@@ -386,75 +388,41 @@ async def assert_paper_ownership(
     paper_id: int,
     user_id: int | None,
 ) -> None:
-    """Raise HTTPException if the caller does not own the paper.
-
-    Canonical-corpus ownership semantics (D4 — decided, see docs/SECURITY.md)
-    --------------------------------------------------------------------------
-    The bibliographic corpus is intentionally shared across all users on an
-    instance. ``discovered_by IS NULL`` means the paper was ingested by
-    instance-level feeds (Pulse, scheduler, Zotero sync) and is visible to
-    every authenticated user without requiring a ``user_library`` row.
-    Per-user isolation lives in the activity/output layer (library membership,
-    notes, cards, projects, ratings, intent), not in corpus access.
-
-    Rules:
-
-    * Single-user mode (``user_id=None``): all papers are accessible — no check.
-    * Multi-user mode (``user_id`` is set):
-      - Paper not found → 404.
-      - ``discovered_by == user_id`` → allowed (caller's own paper).
-      - ``discovered_by IS NULL`` → allowed (shared canonical/system paper).
-      - Another user's explicitly-owned paper, NOT in caller's
-        ``user_library`` → 403.
-      - Paper not owned by caller but present in caller's
-        ``user_library`` → allowed.
+    """Require a paper to be public or present in the caller's library.
 
     Parameters
     ----------
-    conn:
-        An open ``asyncpg.Connection`` (not a pool — caller must acquire).
-    paper_id:
+    conn : asyncpg.Connection
+        Open database connection owned by the caller.
+    paper_id : int
         The paper primary key to check.
-    user_id:
-        The caller's user ID from ``current_user_id_or_none()``.
-        ``None`` means single-user mode; all access is allowed.
+    user_id : int | None
+        Authenticated caller ID. ``None`` is reserved for trusted internal or
+        compatibility paths that intentionally bypass user authorization.
 
+    Raises
+    ------
+    fastapi.HTTPException
+        With status 404 when the paper is absent, or 403 when it is private and
+        not explicitly present in the caller's ``user_library``.
+
+    Notes
+    -----
+    ``source_type`` and ``discovered_by`` are descriptive/audit fields and never
+    grant access.
     """
     if user_id is None:
-        # Single-user mode: skip ownership check entirely.
         return
 
+    visibility_sql = paper_visibility_sql(2, alias="p")
     row = await conn.fetchrow(
-        "SELECT discovered_by FROM papers WHERE id = $1",
-        paper_id,
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="paper not found")
-
-    # Defensive: tolerate fixtures that still expose the legacy ``user_id``
-    # key while production rows ship with ``discovered_by``.
-    discovered_by: int | None
-    try:
-        discovered_by = row["discovered_by"]
-    except (KeyError, IndexError):
-        try:
-            discovered_by = row["user_id"]
-        except (KeyError, IndexError):
-            discovered_by = None
-
-    # Fast-grant: same owner, OR NULL discovered_by (shared canonical paper).
-    # D4 decision: discovered_by IS NULL == system/instance paper, globally
-    # readable by all authenticated users. Behavior pinned by
-    # tests/test_ownership_canonical_invariant.py.
-    if discovered_by == user_id or discovered_by is None:
-        return
-
-    in_library = await conn.fetchval(
-        "SELECT 1 FROM user_library WHERE paper_id = $1 AND user_id = $2",
+        f"SELECT p.id, {visibility_sql} AS is_visible FROM papers p WHERE p.id = $1",
         paper_id,
         user_id,
     )
-    if in_library is None:
+    if row is None:
+        raise HTTPException(status_code=404, detail="paper not found")
+    if not bool(row["is_visible"]):
         raise HTTPException(status_code=403, detail="paper not owned by current user")
 
 
@@ -463,49 +431,42 @@ async def assert_papers_ownership(
     paper_ids: list[int],
     user_id: int | None,
 ) -> None:
-    """Raise HTTPException if the caller lacks access to any paper in *paper_ids*.
+    """Require every requested paper to satisfy the shared visibility policy.
 
-    Batch form of :func:`assert_paper_ownership`. Single-user/API-key-only
-    mode keeps the legacy permissive behavior. In browser-authenticated mode
-    this checks the whole batch at once so public batch job routes cannot
-    enqueue work for another user's library entries.
+    Parameters
+    ----------
+    conn : asyncpg.Connection
+        Open database connection owned by the caller.
+    paper_ids : list[int]
+        Paper primary keys to validate as one batch.
+    user_id : int | None
+        Authenticated caller ID. ``None`` is reserved for trusted internal or
+        compatibility paths that intentionally bypass user authorization.
 
-    Same canonical-corpus semantics as the singular helper: ``discovered_by
-    IS NULL`` papers are shared by design and never require a ``user_library``
-    row. See docs/SECURITY.md for the D4 boundary guarantee.
+    Raises
+    ------
+    fastapi.HTTPException
+        With status 404 for the first missing paper, or 403 when any existing
+        paper is private and absent from the caller's ``user_library``.
     """
     if user_id is None or not paper_ids:
         return
 
     unique_ids = sorted(set(paper_ids))
+    visibility_sql = paper_visibility_sql(2, alias="p")
     rows = await conn.fetch(
-        "SELECT id, discovered_by FROM papers WHERE id = ANY($1::int[])",
+        f"SELECT p.id, {visibility_sql} AS is_visible "
+        "FROM papers p WHERE p.id = ANY($1::int[])",
         unique_ids,
+        user_id,
     )
     by_id = {int(row["id"]): row for row in rows}
     missing = [paper_id for paper_id in unique_ids if paper_id not in by_id]
     if missing:
         raise HTTPException(status_code=404, detail=f"paper not found: {missing[0]}")
 
-    candidate_ids: list[int] = []
     for paper_id in unique_ids:
-        discovered_by = by_id[paper_id]["discovered_by"]
-        # Fast-grant: same owner, or NULL (shared canonical paper — D4 decided).
-        if discovered_by == user_id or discovered_by is None:
-            continue
-        candidate_ids.append(paper_id)
-
-    if not candidate_ids:
-        return
-
-    owned_rows = await conn.fetch(
-        "SELECT paper_id FROM user_library WHERE user_id = $1 AND paper_id = ANY($2::int[])",
-        user_id,
-        candidate_ids,
-    )
-    owned = {int(row["paper_id"]) for row in owned_rows}
-    for paper_id in candidate_ids:
-        if paper_id not in owned:
+        if not bool(by_id[paper_id]["is_visible"]):
             raise HTTPException(status_code=403, detail="paper not owned by current user")
 
 

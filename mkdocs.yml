@@ -42,22 +42,12 @@ edit_uri: edit/main/
 
 docs_dir: docs
 
-# Link-validation tuning.
-#
-# `readme-shim.md` includes the repo-root README.md verbatim onto the on-site
-# Quickstart page. The README links to repo files that are not site pages
-# (SECURITY.md, CONTRIBUTING.md, CHANGELOG.md, .env.example, secrets/README.md,
-# .github/ISSUE_TEMPLATE/*) — valid on GitHub, but "not found among documentation
-# files" on the rendered site. (Contract-doc source-code references were converted
-# to absolute GitHub blob URLs and are no longer flagged.)
-#
-# CI runs `mkdocs build --strict`, which turns warnings into errors, so
-# links.not_found MUST stay 'ignore' here — otherwise the unavoidable README-shim
-# links fail the build. nav.not_found stays 'warn' (default) so broken NAV entries
-# still fail.
+# Strict builds treat missing internal pages, anchors, and navigation targets as
+# errors. Links to repository files outside docs_dir must use absolute GitHub
+# URLs so they do not weaken validation for the published guide.
 validation:
   links:
-    not_found: ignore
+    not_found: warn
     absolute_links: ignore
     unrecognized_links: ignore
 
@@ -81,6 +71,7 @@ exclude_docs: |
   perf/
   audit/
   personal/
+  decisions/
   manual/_meta.md
   PRD.md
   # System Contracts: demoted from the public site (internal full-fidelity
@@ -102,9 +93,10 @@ nav:
   - Methods and limitations: METHODS_AND_LIMITATIONS.md
   - User Guide:
       - Overview: manual/index.md
-      - Getting Started: manual/getting-started.md
-      - Choosing how you access JARVIS: manual/access-modes.md
-      - Passkeys: manual/passkeys.md
+      - First sign-in and setup: manual/getting-started.md
+      - Access from other devices: manual/access-modes.md
+      - Sign in with passkeys: manual/passkeys.md
+      - Install the web app and use it offline: manual/install-and-offline.md
       - My Day & Home: manual/home-my-day.md
       - Navigation: manual/navigation.md
       - Research Feed & Library: manual/research-feed.md
@@ -123,12 +115,12 @@ nav:
       - Hardware support matrix: manual/hardware-support-matrix.md
       - Context window: manual/context-window.md
       - Telegram: manual/telegram.md
-      - Backup & Restore: manual/backup-and-restore.md
-      - Admin & Multi-tenant: manual/admin.md
+      - Backup and restore: manual/backup-and-restore.md
+      - Admin and multi-user operation: manual/admin.md
   - Install & Operate:
-      - Quickstart: readme-shim.md
-      - Deployment: DEPLOYMENT.md
-      - Command line (jarvis-research): manual/cli.md
+      - Install JARVIS: readme-shim.md
+      - Deployment and troubleshooting: DEPLOYMENT.md
+      - Command-line maintenance: manual/cli.md
       - Requirements: REQUIREMENTS.md
       - Security: SECURITY.md
       - Risk Register: known-residual-risks.md

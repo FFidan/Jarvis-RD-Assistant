@@ -58,6 +58,7 @@ const DISPLAY_LABELS: Record<string, string> = {
   smtp: 'Email delivery (SMTP)',
   https: 'HTTPS / TLS',
   audit_log: 'Audit log',
+  owner_identity: 'Instance owner',
 };
 
 /**
@@ -73,7 +74,7 @@ const CHECK_EXPLANATIONS: Record<string, string> = {
   dev_cors_open:
     'Cross-origin API access unrestricted.',
   dev_smtp_log_only:
-    'Sign-in emails printed to logs instead of sent.',
+    'Email delivery suppressed; logs contain only non-secret status metadata.',
   dev_crypto_relaxed:
     'Weakened session token security.',
   environment:
@@ -86,6 +87,8 @@ const CHECK_EXPLANATIONS: Record<string, string> = {
     'Transport-layer encryption.',
   audit_log:
     'Security event logging.',
+  owner_identity:
+    'Account allowed to recover and transfer ownership of this JARVIS instance.',
 };
 
 const STATUS_VERDICT: Record<StatusLevel, string> = {

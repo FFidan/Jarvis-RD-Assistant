@@ -428,6 +428,12 @@ async def test_generation_w2_deck_create_persists_cards(
         user_id,
     )
     await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) "
+        "VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    await contract_conn.execute(
         "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
         " VALUES ($1, 0, 'Attention mechanism enables parallel processing in transformers.')",
         paper_id,

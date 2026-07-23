@@ -1,6 +1,7 @@
 """Provider connectivity probe: test cloud LLM API keys via live HTTP."""
 
 import httpx
+from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from pydantic import BaseModel
 
 from paper_ingestion.services.llm_provider_registry import (
@@ -35,13 +36,11 @@ _OPENAI_COMPATIBLE_MODEL_URLS = {
 
 def _bearer_headers(api_key: str) -> dict[str, str]:
     """Return standard bearer-auth headers for model-list probes."""
-
     return {"Authorization": f"Bearer {api_key}"}
 
 
 async def _probe_anthropic(client: httpx.AsyncClient, api_key: str) -> httpx.Response:
     """Use Anthropic's token-count endpoint as a low-cost credential probe."""
-
     return await client.post(
         "https://api.anthropic.com/v1/messages/count_tokens",
         json={
@@ -64,7 +63,6 @@ async def _probe_provider_models(
     base_url: str | None,
 ) -> httpx.Response | None:
     """Dispatch provider model-list probes, returning ``None`` when unsupported."""
-
     if provider == "anthropic":
         return await _probe_anthropic(client, api_key)
     if provider == "google":
@@ -84,17 +82,45 @@ async def _probe_provider_models(
     return None
 
 
+def _result_from_provider_response(response: httpx.Response | None) -> ProviderTestResult:
+    """Convert a provider probe response into a non-raising result."""
+    if response is None:
+        return ProviderTestResult(ok=False, error="unsupported provider")
+    if response.is_success:
+        return ProviderTestResult(ok=True)
+    return ProviderTestResult(ok=False, error=f"provider returned HTTP {response.status_code}")
+
+
 async def test_provider_connectivity(
     provider: str,
     api_key: str,
     *,
     base_url: str | None = None,
 ) -> ProviderTestResult:
-    """Probe a cloud LLM provider with *api_key* to verify connectivity.
+    """Probe a cloud LLM provider with an operator-supplied API key.
 
-    Returns a :class:`ProviderTestResult` and never raises for network or
-    provider HTTP failures.
+    Parameters
+    ----------
+    provider : str
+        Registered provider identifier.
+    api_key : str
+        Credential used only at the provider request boundary.
+    base_url : str or None
+        Validated custom OpenAI-compatible endpoint, when applicable.
+
+    Returns
+    -------
+    ProviderTestResult
+        Non-raising connectivity outcome for quarantine, validation, network,
+        unsupported-provider, and provider HTTP failures.
     """
+    try:
+        ensure_outbound_egress_allowed("cloud provider connectivity probe")
+    except OutboundEgressBlockedError:
+        return ProviderTestResult(
+            ok=False,
+            error="provider access is disabled until restored credentials are reviewed",
+        )
 
     if provider == "custom_openai_compatible" and base_url:
         try:
@@ -103,13 +129,15 @@ async def test_provider_connectivity(
             return ProviderTestResult(ok=False, error=str(exc))
 
     try:
+        ensure_outbound_egress_allowed("cloud provider connectivity probe")
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             resp = await _probe_provider_models(client, provider, api_key, base_url=base_url)
+    except OutboundEgressBlockedError:
+        return ProviderTestResult(
+            ok=False,
+            error="provider access is disabled until restored credentials are reviewed",
+        )
     except httpx.HTTPError:
         return ProviderTestResult(ok=False, error="provider request failed")
 
-    if resp is None:
-        return ProviderTestResult(ok=False, error="unsupported provider")
-    if resp.is_success:
-        return ProviderTestResult(ok=True)
-    return ProviderTestResult(ok=False, error=f"provider returned HTTP {resp.status_code}")
+    return _result_from_provider_response(resp)

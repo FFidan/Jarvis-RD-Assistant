@@ -68,4 +68,11 @@ regexes = [
   '''xK9mP2qR7nL4wJ8vB5hC1dG6tF3sY0uA''',
   '''pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=''',
   '''correct-key-1234567890abcdefghij''',
+  # v1.2.0 fixtures (config-key rotation, restore round-trip, account email token).
+  # Base64 values decode to descriptive placeholders (e.g. "new-key-for-workflow-test-123456").
+  '''fragment-tok-123''',
+  '''c291cmNlLWNvbmZpZy1rZXktMDEyMzQ1Njc4OWFiY2Q=''',
+  '''dGFyZ2V0LWNvbmZpZy1rZXktMDEyMzQ1Njc4OWFiY2Q=''',
+  '''b2xkLWtleS1mb3Itd29ya2Zsb3ctdGVzdC0xMjM0NTY=''',
+  '''bmV3LWtleS1mb3Itd29ya2Zsb3ctdGVzdC0xMjM0NTY=''',
 ]

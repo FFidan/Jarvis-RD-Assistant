@@ -37,17 +37,19 @@ _READ_CHUNK = 1024 * 1024
 # the sidecar's decrypt/extract staging that a restore performs next to the file).
 _FREE_MARGIN_BYTES = 1024**3
 
-# Allowlist mirrors scripts/restore.sh:valid_archive_name (the four archive shapes)
-# PLUS the per-restore ``manifest_<ts>.json`` (an inbox restore requires it) and the
-# literal one-time ``operator_key``. Pins the whole string; the timestamp groups are
-# exactly ``\d{8}_\d{6}`` as in the restore regex, so a tampered name cannot match.
+# Allowlist mirrors scripts/restore.sh:valid_archive_name (the five archive shapes)
+# PLUS the per-restore ``manifest_<ts>.json`` and its ``.hmac`` signature (an off-host
+# restore requires both) and the literal one-time ``operator_key``. Pins the whole
+# string; the timestamp groups are exactly ``\d{8}_\d{6}`` as in the restore regex, so a
+# tampered name cannot match.
 _TS = r"\d{8}_\d{6}"
 _FILENAME_RE = re.compile(
     rf"^(?:jarvis_{_TS}\.sql\.gz(?:\.enc)?"
     rf"|litellm_{_TS}\.sql\.gz(?:\.enc)?"
+    rf"|pdfs_{_TS}\.tar\.gz(?:\.enc)?"
     rf"|secrets_{_TS}\.tar\.gz(?:\.enc)?"
     rf"|qdrant_[A-Za-z0-9_-]+_{_TS}\.snapshot(?:\.enc)?"
-    rf"|manifest_{_TS}\.json"
+    rf"|manifest_{_TS}\.json(?:\.hmac)?"
     rf"|operator_key)$"
 )
 
@@ -221,9 +223,18 @@ class UploadHandler(BaseHTTPRequestHandler):
 
     def _store(self, filename: str, content_length: int | None, cap: int) -> None:
         """Stream the body into the inbox atomically, then respond (handles its own errors)."""
-        inbox = Path(_inbox_dir())
-        part = inbox / f"{filename}.part"
-        final = inbox / filename
+        # Resolve the target inside the inbox and confirm it did not escape before
+        # writing. _resolve_filename has already allowlisted the name upstream; resolving
+        # and containment-checking again at the write site keeps this handler safe on its
+        # own, regardless of the caller.
+        inbox = os.path.realpath(_inbox_dir())
+        resolved = os.path.realpath(os.path.join(inbox, filename))
+        if not resolved.startswith(inbox + os.sep):
+            self.close_connection = True
+            self._deny(400, "unsafe path", filename)
+            return
+        final = Path(resolved)
+        part = final.with_name(f"{final.name}.part")
         try:
             with open(part, "wb") as out:
                 written = self._stream_body(out, content_length, cap)

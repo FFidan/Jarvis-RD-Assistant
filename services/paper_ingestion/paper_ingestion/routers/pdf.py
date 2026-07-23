@@ -30,9 +30,16 @@ from paper_ingestion.pdf_processor import (
     MAX_PDF_SIZE,
     PDF_STORAGE_PATH,
     PDFProcessor,
+    PDFPublishBlockedError,
     check_pdf_path_safe,
+    pdf_publish_operation,
 )
-from paper_ingestion.services.pdf_workflow import ProcessPdfResult, run_process_pdf
+from paper_ingestion.services.pdf_workflow import (
+    PDFRecordMissingError,
+    ProcessPdfResult,
+    download_and_store_pdf,
+    run_process_pdf,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
@@ -79,7 +86,17 @@ async def download_pdf(
 
     # Download (no DB connection held across slow HTTP)
     try:
-        pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
+        updated = await download_and_store_pdf(
+            db_pool,
+            pdf_processor,
+            row["pdf_url"],
+            paper_id,
+        )
+    except PDFPublishBlockedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="A restore is in progress. Try downloading the PDF again shortly.",
+        ) from exc
     except ValueError as e:
         request_id = getattr(request.state, "request_id", None) or str(paper_id)
         logger.exception("PDF download validation failed", extra={"request_id": request_id})
@@ -89,18 +106,8 @@ async def download_pdf(
         ) from e
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="PDF download failed")
-
-    # Write back (new short transaction — pdf_downloaded=TRUE is idempotent guard)
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            updated = await conn.fetchrow(
-                """
-                UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE
-                WHERE id = $2 RETURNING *
-                """,
-                str(pdf_path),
-                paper_id,
-            )
+    except PDFRecordMissingError as exc:
+        raise HTTPException(status_code=404, detail="Paper not found") from exc
     return row_to_paper_response(updated)
 
 
@@ -295,53 +302,52 @@ async def upload_pdf(
             # Parse authors
             author_list = [a.strip() for a in authors.split(",") if a.strip()] if authors else []
 
-            # Insert paper + rename atomically inside a transaction
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                        url, metadata, discovered_by, discovery_origin)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
-                    RETURNING *
-                    """,
-                    external_id,
-                    "local",
-                    title,
-                    author_list,
-                    abstract or None,
-                    f"local://{file_hash}",
-                    {},
-                    user_id,
-                )
-                paper_id = row["id"]
-                if user_id is not None:
-                    await add_to_library(
-                        conn,
-                        user_id=user_id,
-                        paper_id=paper_id,
-                        added_via="manual_save",
-                    )
+            try:
+                # The restore-shared lock remains held through transaction
+                # commit. A failed commit removes the promoted request file
+                # before restore can swap the numeric PDF set.
+                async with pdf_publish_operation(storage_path) as publication:
+                    async with conn.transaction():
+                        row = await conn.fetchrow(
+                            """
+                            INSERT INTO papers (external_id, source_type, title, authors, abstract,
+                                                url, metadata, discovered_by, discovery_origin)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
+                            RETURNING *
+                            """,
+                            external_id,
+                            "local",
+                            title,
+                            author_list,
+                            abstract or None,
+                            f"local://{file_hash}",
+                            {},
+                            user_id,
+                        )
+                        paper_id = row["id"]
+                        if user_id is not None:
+                            await add_to_library(
+                                conn,
+                                user_id=user_id,
+                                paper_id=paper_id,
+                                added_via="manual_save",
+                            )
 
-                # Rename to final path using paper_id (atomic on Linux same filesystem)
-                pdf_path = storage_path / f"{paper_id}.pdf"
-                temp_path.rename(pdf_path)
-
-                try:
-                    updated = await conn.fetchrow(
-                        """
-                        UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
-                        WHERE id = $2 RETURNING *
-                        """,
-                        str(pdf_path),
-                        paper_id,
-                    )
-                except Exception:
-                    # DB update failed — remove the renamed file to avoid dangling artifact
-                    try:
-                        pdf_path.unlink()
-                    except OSError:
-                        pass
-                    raise
+                        pdf_path = storage_path / f"{paper_id}.pdf"
+                        await publication.promote(temp_path, pdf_path)
+                        updated = await conn.fetchrow(
+                            """
+                            UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
+                            WHERE id = $2 RETURNING *
+                            """,
+                            str(pdf_path),
+                            paper_id,
+                        )
+            except PDFPublishBlockedError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="A restore is in progress. Try uploading the PDF again shortly.",
+                ) from exc
     finally:
         # No-op after successful rename (file no longer at temp_path); cleans up on any exception
         temp_path.unlink(missing_ok=True)

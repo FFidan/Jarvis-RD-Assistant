@@ -140,11 +140,18 @@ def test_startup_warning_fires_for_loopback_only_default(
     ], "no loopback warning when the operator widens the allowlist"
 
 
-def test_compose_trusted_proxy_hosts_tracks_the_bridge_subnet() -> None:
-    """Compose must inject a NUMERIC TRUSTED_PROXY_HOSTS covering
-    the bridge, so ProxyHeadersMiddleware trusts the nginx hop and rewrites the
-    client IP the owner-override guard checks. A bare hostname (the old
-    'dashboard' default) can never match a numeric peer."""
+def test_compose_trusted_proxy_hosts_pins_only_the_dashboard() -> None:
+    """Proxy-header trust is the exact dashboard hop, not every bridge peer.
+
+    OWNER_OVERRIDE_ALLOWED_CIDRS still covers the bridge for direct bot calls;
+    TRUSTED_PROXY_HOSTS has a narrower purpose and must not let a sibling
+    container rewrite the client IP seen by the owner-override guard.
+    """
     text = _COMPOSE.read_text()
-    subnet = _net_subnet_default(text)
-    _assert_compose_var_tracks_bridge_subnet(text, subnet, "TRUSTED_PROXY_HOSTS")
+    line = next(
+        (line for line in text.splitlines() if "TRUSTED_PROXY_HOSTS:" in line),
+        "",
+    )
+    assert "${JARVIS_DASHBOARD_IP:-10.137.241.253}/32" in line
+    assert "JARVIS_NET_SUBNET" not in line
+    assert "10.137.241.0/24" not in line

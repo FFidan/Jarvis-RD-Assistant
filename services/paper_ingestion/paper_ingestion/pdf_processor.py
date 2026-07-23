@@ -6,28 +6,36 @@ page-bounded chunking + embedding storage.
 """
 
 import asyncio
+import fcntl
 import ipaddress
 import logging
 import os
 import socket
+import stat
 import threading
-from collections.abc import Awaitable, Callable
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urljoin, urlparse
 
 import httpx
 import pypdfium2 as pdfium  # page snapshot generation only; text extraction uses Docling
+from jarvis_common.maintenance import maintenance_active
 from jarvis_common.paths import secure_path
 from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS, get_paper_ingestion_settings
-from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder, EmbeddingRunContext
+from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "PDFProcessor",
+    "PDFPublishBlockedError",
     "PDF_STORAGE_PATH",
     "ALLOWED_PDF_DOMAINS",
     "MAX_PDF_PAGES",
@@ -35,6 +43,8 @@ __all__ = [
     "SNAPSHOT_DPI",
     "SNAPSHOT_STORAGE_PATH",
     "check_pdf_path_safe",
+    "pdf_publish_operation",
+    "publish_pdf",
     "quote_to_rects",
     "_validate_pdf_url",
 ]
@@ -53,6 +63,11 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 # Sentinel: resolve the live module-level PDF_STORAGE_PATH at call time rather
 # than freezing it as a default-arg value (keeps monkeypatch.setattr working).
 _STORAGE_DEFAULT = object()
+_PUBLISH_LOCK_NAME = ".publish.lock"
+
+
+class PDFPublishBlockedError(RuntimeError):
+    """Raised when restore maintenance prevents a PDF from being published."""
 
 
 def check_pdf_path_safe(pdf_path: Path, storage: Path | str = _STORAGE_DEFAULT) -> bool:  # type: ignore[assignment]
@@ -67,6 +82,213 @@ def check_pdf_path_safe(pdf_path: Path, storage: Path | str = _STORAGE_DEFAULT) 
     except ValueError:
         return False
     return True
+
+
+def _lock_path_matches_fd(directory_fd: int, lock_fd: int) -> bool:
+    """Return whether the stable-root lock path still names ``lock_fd``."""
+    opened = os.fstat(lock_fd)
+    try:
+        current = os.stat(_PUBLISH_LOCK_NAME, dir_fd=directory_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(opened.st_mode)
+        and stat.S_ISREG(current.st_mode)
+        and (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+    )
+
+
+def _validate_pdf_publish_paths(staged_path: Path, final_path: Path) -> None:
+    """Require distinct sibling paths and a numeric final PDF name."""
+    if staged_path.parent != final_path.parent or staged_path.name == final_path.name:
+        raise ValueError("PDF publication requires distinct sibling paths")
+    if (
+        final_path.suffix != ".pdf"
+        or not final_path.stem.isascii()
+        or not final_path.stem.isdecimal()
+    ):
+        raise ValueError("Published PDF filenames must be numeric")
+
+
+def _validate_publish_files(directory_fd: int, staged_name: str, final_name: str) -> None:
+    """Require a regular staged file and a regular target when one exists."""
+    staged = os.stat(staged_name, dir_fd=directory_fd, follow_symlinks=False)
+    if not stat.S_ISREG(staged.st_mode):
+        raise ValueError("Staged PDF must be a regular file")
+    try:
+        current = os.stat(final_name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(current.st_mode):
+        raise ValueError("Published PDF target must be a regular file")
+
+
+def _open_pdf_publish_operation(storage_path: Path) -> "PDFPublishOperation":
+    """Acquire the storage-root writer lock and reject restore maintenance."""
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC
+    directory_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(storage_path, directory_flags)
+    lock_fd = -1
+    locked = False
+    try:
+        lock_flags = os.O_RDONLY | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(_PUBLISH_LOCK_NAME, lock_flags, 0o644, dir_fd=directory_fd)
+        if not _lock_path_matches_fd(directory_fd, lock_fd):
+            raise RuntimeError("PDF publication lock changed while opening")
+
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locked = True
+        if not _lock_path_matches_fd(directory_fd, lock_fd):
+            raise RuntimeError("PDF publication lock changed while waiting")
+        if maintenance_active():
+            raise PDFPublishBlockedError(
+                "PDF publication is paused while restore maintenance is active"
+            )
+        if not _lock_path_matches_fd(directory_fd, lock_fd):
+            raise RuntimeError("PDF publication lock changed before use")
+        return PDFPublishOperation(storage_path, directory_fd, lock_fd)
+    except BaseException:
+        if locked:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if lock_fd >= 0:
+            os.close(lock_fd)
+        os.close(directory_fd)
+        raise
+
+
+class PDFPublishOperation:
+    """One locked filesystem/DB publication boundary.
+
+    Callers keep this context open until the matching database transaction has
+    committed. If that transaction fails, every promoted file is removed (and
+    any prior regular target is restored) before the shared restore lock is
+    released.
+    """
+
+    def __init__(self, storage_path: Path, directory_fd: int, lock_fd: int) -> None:
+        self._storage_path = storage_path
+        self._directory_fd = directory_fd
+        self._lock_fd = lock_fd
+        self._promoted: list[tuple[str, tuple[int, int], str | None]] = []
+        self._closed = False
+
+    def _require_matching_parent(self, staged_path: Path, final_path: Path) -> None:
+        _validate_pdf_publish_paths(staged_path, final_path)
+        if staged_path.parent != self._storage_path:
+            raise ValueError("PDF publication paths must use the locked storage root")
+
+    def _promote_sync(self, staged_path: Path, final_path: Path) -> None:
+        self._require_matching_parent(staged_path, final_path)
+        _validate_publish_files(self._directory_fd, staged_path.name, final_path.name)
+
+        previous_name: str | None = None
+        try:
+            os.stat(final_path.name, dir_fd=self._directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            previous_name = f".{final_path.name}.publish-backup-{uuid.uuid4().hex}"
+            os.replace(
+                final_path.name,
+                previous_name,
+                src_dir_fd=self._directory_fd,
+                dst_dir_fd=self._directory_fd,
+            )
+
+        try:
+            os.replace(
+                staged_path.name,
+                final_path.name,
+                src_dir_fd=self._directory_fd,
+                dst_dir_fd=self._directory_fd,
+            )
+            published = os.stat(
+                final_path.name,
+                dir_fd=self._directory_fd,
+                follow_symlinks=False,
+            )
+        except BaseException:
+            if previous_name is not None:
+                os.replace(
+                    previous_name,
+                    final_path.name,
+                    src_dir_fd=self._directory_fd,
+                    dst_dir_fd=self._directory_fd,
+                )
+            raise
+        self._promoted.append(
+            (final_path.name, (published.st_dev, published.st_ino), previous_name)
+        )
+
+    async def promote(self, staged_path: Path, final_path: Path) -> Path:
+        """Promote one staged PDF while retaining rollback ownership."""
+        if self._closed:
+            raise RuntimeError("PDF publication operation is closed")
+        await asyncio.to_thread(self._promote_sync, staged_path, final_path)
+        return final_path
+
+    def _rollback_sync(self) -> None:
+        for final_name, published_id, previous_name in reversed(self._promoted):
+            try:
+                current = os.stat(
+                    final_name,
+                    dir_fd=self._directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                current = None
+            if current is not None and (current.st_dev, current.st_ino) == published_id:
+                os.unlink(final_name, dir_fd=self._directory_fd)
+            if previous_name is not None:
+                os.replace(
+                    previous_name,
+                    final_name,
+                    src_dir_fd=self._directory_fd,
+                    dst_dir_fd=self._directory_fd,
+                )
+        self._promoted.clear()
+
+    def _commit_sync(self) -> None:
+        for _final_name, _published_id, previous_name in self._promoted:
+            if previous_name is not None:
+                try:
+                    os.unlink(previous_name, dir_fd=self._directory_fd)
+                except FileNotFoundError:
+                    pass
+        self._promoted.clear()
+
+    def _close_sync(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        os.close(self._lock_fd)
+        os.close(self._directory_fd)
+
+
+@asynccontextmanager
+async def pdf_publish_operation(storage_path: Path) -> AsyncIterator[PDFPublishOperation]:
+    """Hold the restore-shared lock through file promotion and DB commit."""
+    operation = await asyncio.to_thread(_open_pdf_publish_operation, storage_path)
+    try:
+        yield operation
+    except BaseException:
+        try:
+            await asyncio.to_thread(operation._rollback_sync)
+        finally:
+            await asyncio.to_thread(operation._close_sync)
+        raise
+    else:
+        try:
+            await asyncio.to_thread(operation._commit_sync)
+        finally:
+            await asyncio.to_thread(operation._close_sync)
+
+
+async def publish_pdf(staged_path: Path, final_path: Path) -> None:
+    """Atomically publish a numeric PDF unless restore maintenance is active."""
+    async with pdf_publish_operation(staged_path.parent) as publication:
+        await publication.promote(staged_path, final_path)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +437,30 @@ async def _validate_pdf_url(url: str) -> None:
     # and complex HTTPS/SNI handling — not warranted for this threat model.
 
 
+async def _resolve_validated_pdf_url(
+    http_client: httpx.AsyncClient,
+    pdf_url: str,
+) -> str:
+    """Follow the bounded HEAD redirect chain, validating every target."""
+    current_url = pdf_url
+    response = await http_client.request(
+        "HEAD", current_url, timeout=30.0, follow_redirects=False
+    )
+    for _ in range(4):
+        if response.status_code not in (301, 302, 303, 307, 308):
+            break
+        location = response.headers.get("Location") or response.headers.get("location")
+        if not location:
+            break
+        current_url = urljoin(current_url, location)
+        await _validate_pdf_url(current_url)
+        response = await http_client.request(
+            "HEAD", current_url, timeout=30.0, follow_redirects=False
+        )
+    response.raise_for_status()
+    return current_url
+
+
 class PDFProcessor:
     """Handles PDF download, text extraction, chunking, snapshotting, and embedding.
 
@@ -230,8 +476,8 @@ class PDFProcessor:
         self.http_client = http_client
         self.embedder = embedder
 
-    async def download_pdf(self, pdf_url: str, paper_id: int) -> Path:
-        """Download a PDF to local storage.
+    async def stage_pdf_download(self, pdf_url: str, paper_id: int) -> tuple[Path, Path]:
+        """Download a PDF to a unique staged sibling of its numeric path.
 
         Parameters
         ----------
@@ -242,8 +488,9 @@ class PDFProcessor:
 
         Returns
         -------
-        Path
-            Absolute path to the downloaded PDF.
+        tuple[Path, Path]
+            ``(staged_path, final_path)``. The caller owns the staged file and
+            must promote it through :func:`pdf_publish_operation`.
 
         Raises
         ------
@@ -257,27 +504,11 @@ class PDFProcessor:
         pdf_dir = Path(PDF_STORAGE_PATH)
         pdf_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = pdf_dir / f"{paper_id}.pdf"
-        tmp_path = pdf_path.with_suffix(".tmp")
+        tmp_path = pdf_dir / f".{paper_id}.download-{uuid.uuid4().hex}.tmp"
 
         bytes_written = 0
-        # Resolve redirects manually to re-validate each target against SSRF
-        current_url = pdf_url
-        head_resp = await self.http_client.request(
-            "HEAD", current_url, timeout=30.0, follow_redirects=False
-        )
-        for _ in range(4):  # Up to 4 additional redirects
-            if head_resp.status_code not in (301, 302, 303, 307, 308):
-                break
-            location = head_resp.headers.get("Location") or head_resp.headers.get("location")
-            if not location:
-                break
-            redirect_url = urljoin(current_url, location)
-            await _validate_pdf_url(redirect_url)
-            current_url = redirect_url
-            head_resp = await self.http_client.request(
-                "HEAD", current_url, timeout=30.0, follow_redirects=False
-            )
-        head_resp.raise_for_status()
+        # Resolve redirects manually to re-validate each target against SSRF.
+        current_url = await _resolve_validated_pdf_url(self.http_client, pdf_url)
 
         # Stream download directly to disk to avoid memory accumulation
         total_size = 0
@@ -316,16 +547,29 @@ class PDFProcessor:
 
             if bytes_written == 0:
                 raise ValueError("PDF download resulted in 0 bytes")
+        except BaseException:
+            await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
+            raise
 
-            # Atomically promote the validated temp file to its final name.
-            await asyncio.to_thread(os.replace, tmp_path, pdf_path)
+        logger.info("Staged PDF for paper %d (%d bytes)", paper_id, bytes_written)
+        return tmp_path, pdf_path
+
+    async def download_pdf(self, pdf_url: str, paper_id: int) -> Path:
+        """Download and publish a PDF without a coupled database write.
+
+        Database-backed callers should use ``stage_pdf_download`` and retain a
+        :func:`pdf_publish_operation` until their transaction commits.
+        """
+        tmp_path, pdf_path = await self.stage_pdf_download(pdf_url, paper_id)
+        try:
+            await publish_pdf(tmp_path, pdf_path)
         finally:
-            # On any failure path, ensure no stale temp survives. After a
-            # successful os.replace the temp no longer exists, so this is a no-op.
+            # On any failure path, ensure no staged download survives. After a
+            # successful publish the path no longer exists, so this is a no-op.
             await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
 
         logger.info(
-            "Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path
+            "Downloaded PDF for paper %d to %s", paper_id, pdf_path
         )
         return pdf_path
 
@@ -378,13 +622,19 @@ class PDFProcessor:
         finally:
             pdf.close()
 
-    async def process(
+    async def process(  # noqa: PLR0913 - explicit pipeline inputs
         self,
         pdf_path: Path,
         paper_id: int,
         *,
         user_id: int | None = None,
-        progress_callback: Callable[..., Awaitable[None]] | None = None,
+        visibility: VectorVisibility | None = None,
+        progress_callback: Callable[
+            [Literal["extracted", "chunked", "embedding"], int, int],
+            Awaitable[None],
+        ]
+        | None = None,
+        resume_content: dict[int, str] | None = None,
     ) -> tuple[str, list[ChunkForEmbedding], list[str]]:
         """Full PDF processing pipeline: extract, chunk, snapshot, embed.
 
@@ -395,8 +645,21 @@ class PDFProcessor:
         paper_id : int
             Paper DB ID.
         user_id : int | None
-            Owner of the source paper (resolved by the caller from
-            ``papers.discovered_by``). NULL = canonical/shared chunk.
+            Legacy audit owner retained for payload compatibility. It never
+            grants access to the vector.
+        visibility : VectorVisibility | None
+            Persisted source, scope, and current deployment generation.
+            Production calls always provide it; isolated callers without a
+            checkpoint receive fail-closed metadata from ``embed_and_store``.
+        progress_callback : Callable | None
+            Receives real phase completions. Extraction and chunking emit
+            ``(phase, 1, 1)`` after completing; embedding emits one event per
+            successful or valid resume-skipped batch.
+        resume_content : dict[int, str] | None
+            chunk_index -> content already embedded by the current model in a
+            prior run (see ``run_process_pdf``); threaded through to
+            ``embed_and_store`` so unchanged chunks are skipped instead of
+            re-embedded.
 
         Returns
         -------
@@ -406,6 +669,8 @@ class PDFProcessor:
         # 1. Extract Markdown + per-page anchors via Docling (null bytes already
         #    stripped per page inside _extract_text_sync so anchors stay aligned).
         full_text, page_anchors = await extract_text(pdf_path)
+        if progress_callback is not None:
+            await progress_callback("extracted", 1, 1)
 
         if not full_text.strip():
             logger.warning("No text extracted from PDF for paper %d", paper_id)
@@ -416,9 +681,26 @@ class PDFProcessor:
 
         # 3. Chunk text (page-bounded: each chunk lies on exactly one page)
         chunks = await asyncio.to_thread(self.embedder.chunk_text, full_text, page_anchors)
+        if progress_callback is not None:
+            await progress_callback("chunked", 1, 1)
+
+        async def _report_embedding_batch(completed: int, total: int) -> None:
+            if progress_callback is not None:
+                await progress_callback("embedding", completed, total)
 
         # 4. Embed and store in Qdrant
-        point_ids = await self.embedder.embed_and_store(paper_id, chunks, user_id=user_id)
+        point_ids = await self.embedder.embed_and_store(
+            paper_id,
+            chunks,
+            user_id=user_id,
+            visibility=visibility,
+            run_context=EmbeddingRunContext(
+                resume_content=resume_content or {},
+                progress_callback=(
+                    _report_embedding_batch if progress_callback is not None else None
+                ),
+            ),
+        )
 
         return full_text, chunks, point_ids
 

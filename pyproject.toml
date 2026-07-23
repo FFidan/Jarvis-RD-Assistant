@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "1.1.3"
+version = "1.2.0"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
@@ -29,7 +29,7 @@ jarvis-common = [
     "cryptography>=48.0.1",  # >=48.0.1 clears GHSA-537c-gmf6-5ccf
     "email-validator>=2.0",  # backs pydantic EmailStr
     "fastapi>=0.136.1,<0.140.0",
-    "gitpython>=3.1.50",
+    "gitpython>=3.1.54",  # >=3.1.54 clears GHSA-2f96-g7mh-g2hx, -v396-v7q4-x2qj, -956x-8gvw-wg5v, -rwj8-pgh3-r573
     "httpx>=0.27.0",
     "idna>=3.15",
     "instructor>=1.15.0",
@@ -57,13 +57,14 @@ paper-ingestion-base = [
     "lxml>=6.1.0",
     "docling[rapidocr]>=2.96.0,<2.112.0",
     "markdownify>=0.14.1",
-    "orjson>=3.11.6",
     "pydantic>=2.0,<3.0.0",
     "pypdfium2>=4.30.0",
     "pillow>=12.3.0",  # >=12.3.0 clears PYSEC-2026-2253..2257
     "python-multipart>=0.0.31",  # >=0.0.31 clears CVE-2026-53538/53539/53540
     "pyyaml>=6.0",
-    "qdrant-client>=1.12.0,<2.0.0",
+    # Keep the client within one minor of the persisted Qdrant 1.13.x runtime.
+    # Upgrade both sides together; newer clients reject this server pairing.
+    "qdrant-client>=1.14.3,<1.15.0",
     "rapidfuzz>=3.0.0",
     "rispy>=0.9,<1.0",  # RIS citation export
     "scikit-learn>=1.6.0",
@@ -72,7 +73,6 @@ paper-ingestion-base = [
     "tiktoken>=0.7.0",
     "transformers>=5.4.0,<6.0.0",
     "uvicorn[standard]>=0.30.0",
-    "uvloop>=0.19,<1",
     "webauthn>=3.0.0,<4.0.0",  # server-side passkey/WebAuthn ceremonies (torch-independent)
 ]
 paper-ingestion = [
@@ -112,12 +112,10 @@ learning-engine = [
     "fsrs>=4.0.0,<6.0.0",
     "genanki>=0.13.0",
     "httpx>=0.27.0",
-    "orjson>=3.11.6",
     "pydantic>=2.0,<3.0.0",
     "sentry-sdk>=2.29.0",
     "slowapi>=0.1.9",
     "uvicorn[standard]>=0.30.0",
-    "uvloop>=0.19,<1",
 ]
 telegram-bot = [
     { include-group = "jarvis-common" },
@@ -217,12 +215,13 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # findings). scripts/check-complexity-budget.py fails only when a count GROWS;
 # lower a cap whenever a refactor reduces the real number. Tests are excluded
 # from the scan (see _EXCLUDE there) so the budget tracks production only.
-max = { C901 = 58, PLR0911 = 8, PLR0912 = 28, PLR0913 = 86, PLR0915 = 22 }
+max = { C901 = 57, PLR0911 = 8, PLR0912 = 28, PLR0913 = 86, PLR0915 = 22 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
     "live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1",
+    "live_qdrant: requires an isolated Qdrant container and managed PostgreSQL",
     "integration: integration tests that may need explicit opt-in dependencies",
     "slow: slower tests excluded from ordinary host runs",
     "real_auth: opt out of the autouse user-id stub; exercise the real session resolver",
@@ -245,7 +244,7 @@ pythonpath = [
 # (e.g. paper_ingestion/tests/test_health.py and
 # learning_engine/tests/test_health.py). Safe to use here because after
 # the R12 package rename no two services share a top-level package name.
-addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow' --ignore=tests/integration"
+addopts = "--import-mode=importlib -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",

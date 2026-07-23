@@ -228,10 +228,10 @@ function FacetListContent({
   // Scope-honest copy for Source/Topic empty states.
   const isCorpus = feedScope === 'corpus';
   const sourceEmptyCopy = isCorpus
-    ? 'No papers found in the shared library for this source.'
+    ? 'No visible papers found for this source.'
     : 'No papers in your library yet — papers you save or that match your topics appear here.';
   const topicEmptyCopy = isCorpus
-    ? 'No papers in the shared library are tagged with a topic yet.'
+    ? 'No visible papers are tagged with a topic yet.'
     : 'No library papers tagged with a topic yet — add a topic in Settings and turn on "Auto-add matches".';
 
   return (

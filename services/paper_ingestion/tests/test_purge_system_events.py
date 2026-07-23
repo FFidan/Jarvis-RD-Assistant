@@ -11,10 +11,15 @@ import pytest
 from paper_ingestion.scheduler import purge_system_events_task
 
 
-# Keep local: returns a bare AsyncMock pool (not a (pool, conn) pair) — purge task calls pool.execute() directly without acquire().
 def _make_pool_and_conn():
-    """Create mock asyncpg Pool."""
-    pool = AsyncMock()
+    """Create a pool supporting both purge writes and event-log acquisition."""
+    pool = MagicMock()
+    pool.execute = AsyncMock()
+    event_conn = AsyncMock()
+    acquire_context = MagicMock()
+    acquire_context.__aenter__ = AsyncMock(return_value=event_conn)
+    acquire_context.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire = MagicMock(return_value=acquire_context)
     return pool
 
 

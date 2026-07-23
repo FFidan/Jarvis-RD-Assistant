@@ -31,6 +31,7 @@ from jarvis_common.paper_state import (
 from jarvis_common.paper_state import (
     trash_paper as _trash_paper,
 )
+from jarvis_common.paper_visibility import paper_visibility_sql
 
 from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
@@ -54,58 +55,84 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+_CALLER_PRIVATE_PAPER_DELETES = (
+    "DELETE FROM author_alert_log WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM cards WHERE paper_id = $1 AND user_id = $2",
+    """DELETE FROM paper_contradictions
+       WHERE (paper_a_id = $1 OR paper_b_id = $1) AND user_id = $2""",
+    """WITH deleted AS (
+           DELETE FROM paper_entities
+           WHERE paper_id = $1 AND user_id = $2
+           RETURNING entity_id
+       )
+       UPDATE entities AS entity
+       SET paper_count = (
+           SELECT count(*)
+           FROM paper_entities AS remaining
+           WHERE remaining.entity_id = entity.id
+             AND NOT (remaining.paper_id = $1 AND remaining.user_id = $2)
+       )
+       WHERE entity.id IN (SELECT entity_id FROM deleted)""",
+    "DELETE FROM paper_extractions WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM paper_highlights WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM paper_notes WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM paper_recommendations WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM paper_summaries WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM paper_user_zotero_links WHERE paper_id = $1 AND user_id = $2",
+    """WITH deleted AS (
+           DELETE FROM pulse_cards
+           WHERE paper_id = $1 AND user_id = $2
+           RETURNING deck_id
+       )
+       UPDATE pulse_decks AS deck
+       SET card_count = (
+           SELECT count(*)
+           FROM pulse_cards AS remaining
+           WHERE remaining.deck_id = deck.id
+             AND NOT (remaining.paper_id = $1 AND remaining.user_id = $2)
+       )
+       WHERE deck.id IN (SELECT deck_id FROM deleted)""",
+    "DELETE FROM recommendation_feedback WHERE paper_id = $1 AND user_id = $2",
+    """DELETE FROM task_paper_links AS link
+       USING tasks AS owner
+       WHERE link.task_id = owner.id
+         AND link.paper_id = $1
+         AND owner.user_id = $2""",
+    """DELETE FROM project_papers AS link
+       USING projects AS owner
+       WHERE link.project_id = owner.id
+         AND link.paper_id = $1
+         AND owner.user_id = $2""",
+    "DELETE FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
+    "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2",
+)
+
 
 async def _hard_delete_scoped(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
     user_id: int | None,
 ) -> bool:
-    """Remove the caller's claim on *paper_id*; physically delete the shared row
-    only when it is safe to do so.
+    """Remove the caller's claim on *paper_id* without deleting shared data.
 
     Single-user mode (``user_id is None``) keeps the legacy full delete.
 
-    Multi-tenant mode removes the caller's ``user_library`` membership and their
-    per-user rows, then deletes the canonical ``papers`` row ONLY when no other
-    ``user_library`` row references it AND ``discovered_by`` is the caller or NULL.
-    Other tenants' data and the shared Qdrant vectors are never destroyed on a
-    membership-only removal.
+    Multi-user mode removes the caller's private data and links while preserving
+    the canonical row and shared processing artifacts. The row may still be used
+    by another person even when no other ``user_library`` membership currently
+    exists, so a session-scoped deletion must never cascade through it.
 
-    Returns ``True`` iff the physical ``papers`` row was deleted, so the caller
-    knows whether to run the (shared, by-paper_id) Qdrant cleanup.
+    Returns ``True`` only for the legacy unscoped delete, so the caller runs shared
+    Qdrant cleanup only when the canonical row was deliberately removed.
     """
     if user_id is None:
         await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
         return True
 
-    await conn.execute(
-        "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2",
-        paper_id,
-        user_id,
-    )
-    await conn.execute(
-        "DELETE FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
-        paper_id,
-        user_id,
-    )
+    for statement in _CALLER_PRIVATE_PAPER_DELETES:
+        await conn.execute(statement, paper_id, user_id)
 
-    others_hold = await conn.fetchval(
-        "SELECT 1 FROM user_library WHERE paper_id = $1 AND user_id <> $2 LIMIT 1",
-        paper_id,
-        user_id,
-    )
-    if others_hold is not None:
-        return False
-
-    discovered_by = await conn.fetchval(
-        "SELECT discovered_by FROM papers WHERE id = $1",
-        paper_id,
-    )
-    if discovered_by is not None and discovered_by != user_id:
-        return False
-
-    await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
-    return True
+    return False
 
 
 async def _apply_bulk_action(
@@ -173,9 +200,14 @@ async def _apply_bulk_action(
 async def get_feed_counts(
     scope: str,
     db_pool: asyncpg.Pool,
-    user_id: int,
+    user_id: int | None,
 ) -> FeedCountsResponse:
-    """Return per-bucket paper counts for the current user (10 named views)."""
+    """Return feed and facet counts under the requested visibility scope.
+
+    Library scope counts exact caller membership. Authenticated corpus scope
+    counts persisted public rows plus the caller's private library rows. A
+    `None` caller uses the trusted internal corpus path.
+    """
     # Normalise sentinel: .__wrapped__ callers bypass FastAPI DI so `scope`
     # may arrive as the Query(…) FieldInfo object rather than a plain str.
     if not isinstance(scope, str):
@@ -192,48 +224,45 @@ async def get_feed_counts(
             f"THEN 1 ELSE 0 END), 0)::int AS {alias}"
         )
 
-    # Scope feed counts via the caller's user_library; single-user
-    # mode (user_id=None) falls back to the canonical corpus.
-    if user_id is not None:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id = $1
+    select_sql = f"""
+        SELECT
+            {_sum("inbox", "inbox")},
+            {_sum("library", "library")},
+            {_sum("reading_list", "reading_list")},
+            {_sum("reading", "reading")},
+            {_sum("done", "done")},
+            {_sum("starred", "starred")},
+            {_sum("trash", "trash")},
+            {_sum("active", "active")},
+            {_sum("kept", "kept")},
+            {_sum("all_non_trash", "all_non_trash")}
+    """
+    if user_id is None:
+        from_sql = """
+          FROM papers p
+          LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+            AND pus.user_id IS NULL
         """
+        query_args: tuple[object, ...] = ()
+    elif scope == "library":
+        from_sql = """
+          FROM papers p
+          JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+          LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+            AND pus.user_id = $1
+        """
+        query_args = (user_id,)
     else:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id IS NULL
+        from_sql = f"""
+          FROM papers p
+          LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+            AND pus.user_id = $1
+         WHERE {paper_visibility_sql(1, alias="p")}
         """
+        query_args = (user_id,)
+    sql = select_sql + from_sql
     async with db_pool.acquire() as conn:
-        if user_id is not None:
-            row = await conn.fetchrow(sql, user_id)
-        else:
-            row = await conn.fetchrow(sql)
+        row = await conn.fetchrow(sql, *query_args)
         if row is None:
             raise RuntimeError(
                 f"get_feed_counts: aggregate SELECT returned no row (user_id={user_id!r})"

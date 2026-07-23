@@ -109,6 +109,15 @@ def serialise_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _job_lookup_unavailable() -> HTTPException:
+    """503 raised when a job lookup fails for an infrastructure reason.
+
+    Distinguishes "the status store is unreachable" from "no such job" (404) —
+    conflating the two hid outages behind a client-facing not-found.
+    """
+    return HTTPException(status_code=503, detail="Job status temporarily unavailable")
+
+
 def _owner_matches(row_user_id: Any, caller_user_id: int | None) -> bool:
     """Ownership check that tolerates str/int mismatches between DB row + caller.
 
@@ -203,6 +212,7 @@ def build_jobs_router(
             400: {"model": ErrorResponse},
             404: {"model": ErrorResponse},
             500: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
         },
     )
 
@@ -282,8 +292,15 @@ def build_jobs_router(
         db_pool: asyncpg.Pool = Depends(get_db_pool),
         user_id: int = Depends(current_user_id_strict),
     ) -> dict[str, Any]:
-        """Return the full job row for the given job_id."""
-        row = await jobs_lib.get_unified(db_pool, job_id)
+        """Return the full job row for the given job_id.
+
+        Raises 503 (not 404) when the lookup itself fails — see
+        ``jobs_lib.JobLookupUnavailable``.
+        """
+        try:
+            row = await jobs_lib.get_unified(db_pool, job_id)
+        except jobs_lib.JobLookupUnavailable as exc:
+            raise _job_lookup_unavailable() from exc
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         return serialise_row(row)
@@ -332,8 +349,16 @@ def build_jobs_router(
         legacy ``jobs`` table; procrastinate-only jobs therefore returned 404.
         ``get_unified`` falls through to the procrastinate table when the
         legacy lookup misses.
+
+        Raises 503 (not 404) when the initial lookup itself fails — see
+        ``jobs_lib.JobLookupUnavailable``. A failure once the stream has
+        started is instead reported as an in-band error frame (see
+        ``jobs_lib.stream_job_events``).
         """
-        initial = await jobs_lib.get_unified(db_pool, job_id)
+        try:
+            initial = await jobs_lib.get_unified(db_pool, job_id)
+        except jobs_lib.JobLookupUnavailable as exc:
+            raise _job_lookup_unavailable() from exc
         if initial is None or not _owner_matches(initial.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
@@ -357,14 +382,25 @@ def build_jobs_router(
         db_pool: asyncpg.Pool = Depends(get_db_pool),
         user_id: int = Depends(current_user_id_strict),
     ) -> dict[str, Any]:
-        """Request cancellation of a running or queued job."""
-        row = await jobs_lib.get_unified(db_pool, job_id)
+        """Request cancellation of a running or queued job.
+
+        Raises 503 (not 404) when either lookup — the ownership check or the
+        raw procrastinate-id fetch needed by ``cancel_job_by_id_async`` — fails
+        for an infrastructure reason. See ``jobs_lib.JobLookupUnavailable``.
+        """
+        try:
+            row = await jobs_lib.get_unified(db_pool, job_id)
+        except jobs_lib.JobLookupUnavailable as exc:
+            raise _job_lookup_unavailable() from exc
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
         from jarvis_common.task_registry import app as procrastinate_app
 
-        prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
+        try:
+            prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
+        except jobs_lib.JobLookupUnavailable as exc:
+            raise _job_lookup_unavailable() from exc
         if prow:
             await procrastinate_app.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
         return {"ok": True}

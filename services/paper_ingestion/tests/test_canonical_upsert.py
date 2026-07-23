@@ -46,7 +46,7 @@ async def test_upsert_paper_signature_no_user_id_kwarg():
 
 
 @pytest.mark.asyncio
-async def test_upsert_paper_inserts_into_canonical_corpus_with_discovered_by():
+async def test_upsert_paper_inserts_canonical_record_with_discovered_by():
     """The INSERT writes the discoverer to ``papers.discovered_by`` (audit)."""
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=FakeRecord(id=42, is_insert=True))
@@ -61,8 +61,8 @@ async def test_upsert_paper_inserts_into_canonical_corpus_with_discovered_by():
     assert "INSERT INTO papers" in sql
     assert "discovered_by" in sql
     assert "ON CONFLICT (external_id)" in sql
-    # Last positional argument is discovered_by (matching column order).
-    assert args[-1] == 7
+    assert args[-2] == 7
+    assert args[-1] == "private"
     assert row["id"] == 42
 
 
@@ -95,11 +95,11 @@ async def test_upsert_paper_idempotent_same_paper_returns_same_row():
 
 @pytest.mark.asyncio
 async def test_upsert_paper_accepts_none_discovered_by_for_system_papers():
-    """System-discovered papers (auto_fetch / pulse / recommender) pass
-    ``discovered_by=None`` so the audit column records "system"."""
+    """A missing discoverer remains an audit null without changing private scope."""
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=FakeRecord(id=42, is_insert=True))
 
     await upsert_paper(conn, _make_paper())  # default: discovered_by=None
     args = conn.fetchrow.await_args.args[1:]
-    assert args[-1] is None
+    assert args[-2] is None
+    assert args[-1] == "private"

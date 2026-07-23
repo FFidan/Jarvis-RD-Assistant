@@ -4,15 +4,22 @@ import functools
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast, overload
 
 import httpx
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import BaseModel
 
 from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.litellm_observer import record_serve
+from jarvis_common.maintenance import (
+    OutboundEgressBlockedError,
+    ensure_outbound_egress_allowed,
+    outbound_quarantine_active,
+)
 from jarvis_common.settings import get_secrets_settings
 
 if TYPE_CHECKING:
@@ -180,10 +187,10 @@ class VisibleWorkNoteDetection:
 
     Attributes
     ----------
-    has_work_notes
+    has_work_notes : bool
         Whether the visible answer starts with reasoning/process prose that
         should not be shown as the final RAG answer.
-    marker
+    marker : str or None
         The matched leading marker, when available. The marker is safe for
         assertions and metrics but never contains the discarded answer text.
 
@@ -279,7 +286,19 @@ def _normalize_visible_work_note_prefix(answer: str) -> str:
 
 
 def could_be_visible_work_note_prefix(answer: str) -> bool:
-    """Return whether partial visible text could still become a work-note marker."""
+    """Return whether partial text can still match a blocked status marker.
+
+    Parameters
+    ----------
+    answer : str
+        Partial user-visible model output.
+
+    Returns
+    -------
+    bool
+        Whether more streamed text could complete a blocked leading marker.
+
+    """
     normalized = _normalize_visible_work_note_prefix(answer)
     if not normalized:
         return True
@@ -287,11 +306,22 @@ def could_be_visible_work_note_prefix(answer: str) -> bool:
 
 
 def detect_visible_work_notes(answer: str) -> VisibleWorkNoteDetection:
-    """Detect visible reasoning/process prose in a candidate final answer.
+    """Detect leading status text that should not appear in a final answer.
 
     The detector is deliberately conservative: it catches common leading
-    assistant work-notes while allowing ordinary final-answer language such as
+    status markers while allowing ordinary final-answer language such as
     "The problem is..." or domain uses of "analysis".
+
+    Parameters
+    ----------
+    answer : str
+        Complete candidate answer.
+
+    Returns
+    -------
+    VisibleWorkNoteDetection
+        Whether a blocked marker was found and its normalized text when present.
+
     """
     match = _WORK_NOTE_MARKER_RE.search(answer)
     if match is None:
@@ -303,7 +333,19 @@ def detect_visible_work_notes(answer: str) -> VisibleWorkNoteDetection:
 
 
 def strip_think_blocks(raw: str) -> str:
-    """Strip thinking-model markup (including nested tags) before downstream JSON parsing."""
+    """Remove nested ``<think>`` regions before parsing model output.
+
+    Parameters
+    ----------
+    raw : str
+        Model output that may contain nested or unterminated thinking regions.
+
+    Returns
+    -------
+    str
+        Visible text outside the thinking regions, stripped at both ends.
+
+    """
     open_tag, close_tag = "<think>", "</think>"
     out: list[str] = []
     depth = 0
@@ -335,13 +377,27 @@ def strip_think_blocks(raw: str) -> str:
 
 
 def strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:
-    """Stateful streaming filter that drops <think>...</think> blocks across chunks.
+    """Remove ``<think>`` regions that may span streamed chunks.
 
     Tokens may split arbitrarily across SSE deltas (e.g. ``<th`` + ``ink>``).
-    Caller threads (in_think, carry) across calls; carry holds a partial
+    The caller passes ``in_think`` and ``carry`` to the next call; ``carry`` holds a partial
     open/close tag that straddles the chunk boundary.
 
-    Returns (visible_text, new_in_think_state, new_carry).
+    Parameters
+    ----------
+    chunk : str
+        Next streamed text fragment.
+    in_think : bool
+        Whether the preceding fragment ended inside a thinking region.
+    carry : str
+        Partial opening or closing tag retained from the preceding fragment.
+
+    Returns
+    -------
+    tuple[str, bool, str]
+        Visible text, the updated thinking-region state, and the next partial-tag
+        carry value.
+
     """
     buf = carry + chunk
     out: list[str] = []
@@ -388,18 +444,18 @@ async def request_chat_completion_content(
 
     Parameters
     ----------
-    http_client:
+    http_client : httpx.AsyncClient
         Shared ``httpx.AsyncClient`` from the service lifespan.
-    prompt:
+    prompt : str or None
         Convenience single user-role message.  Supply either *prompt* or
         *messages*, not both independently (if both are provided, *messages*
         is used as-is and *prompt* is ignored).
-    messages:
+    messages : list[dict[str, str]] or None
         Full message list.  When ``None`` a list is built from *options.system*
         + *prompt*.
-    options:
+    options : ChatCompletionOptions
         Model, token, temperature, and timeout settings.
-    config:
+    config : LiteLLMConfig or None
         LiteLLM connection config; defaults to env-resolved config.
 
     Returns
@@ -409,12 +465,15 @@ async def request_chat_completion_content(
 
     Raises
     ------
+    OutboundEgressBlockedError
+        If restored credentials await review when the request is about to send.
     RuntimeError
         On HTTP error, timeout, or connection failure.
     EmptyVisibleLLMContentError
         If the response only contains whitespace or stripped think-block text.
     ValueError
-        If the response body does not contain ``choices[0].message.content``.
+        If neither ``prompt`` nor ``messages`` is provided, or if the response
+        body does not contain ``choices[0].message.content``.
 
     """
     litellm = config or get_litellm_config()
@@ -435,6 +494,7 @@ async def request_chat_completion_content(
         payload["response_format"] = options.response_format
 
     try:
+        ensure_outbound_egress_allowed("LiteLLM chat completion")
         resp = await http_client.post(
             f"{litellm.base_url}/v1/chat/completions",
             json=payload,
@@ -486,21 +546,35 @@ async def call_llm_structured(
 
     Parameters
     ----------
-    openai_client:
+    openai_client : openai.AsyncOpenAI
         An ``openai.AsyncOpenAI`` client patched with ``instructor.from_openai``.
         Build once in the service lifespan (see ``_langfuse_lifespan_hook``).
-    response_model:
+    response_model : type[T]
         Pydantic model class that defines the expected response shape.
-    prompt:
+    prompt : str or None
         Convenience shorthand for a single user-role message.  Mutually
         exclusive with ``messages``.
-    messages:
+    messages : list[dict[str, str]] or None
         Full message list (system + user).  If both ``prompt`` and ``messages``
         are provided, ``prompt`` is appended as a final user message.
-    options:
+    options : ChatCompletionOptions or None
         Model / token / temperature options.  Defaults to ChatCompletionOptions().
-    max_retries:
+    max_retries : int
         Instructor retry budget (default 2).
+
+    Returns
+    -------
+    T
+        Validated response model returned by Instructor.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If post-restore credential review currently prohibits LLM egress.
+    ValueError
+        If neither prompt nor messages is provided, or the model alias is empty.
+    RuntimeError
+        If no patched client is provided.
 
     """
     _options = options or ChatCompletionOptions()
@@ -526,6 +600,7 @@ async def call_llm_structured(
     # openai_client is already instructor-patched (wrapped in the service lifespan).
     # Do NOT call instructor.from_openai() again — double-wrapping returns None on
     # some instructor versions, causing 'NoneType has no attribute chat'.
+    ensure_outbound_egress_allowed("structured LLM completion")
     result = await openai_client.chat.completions.create(
         model=_options.model,
         response_model=response_model,
@@ -543,22 +618,67 @@ async def call_llm_structured(
     return result
 
 
-def _langfuse_lifespan_hook() -> None:
-    """Init Langfuse once at startup. No-op (logs) unless OBSERVABILITY_ENABLED
-    and host+keys are all present.
+class _QuarantineAwareSpanExporter(SpanExporter):
+    """Drop Langfuse span batches while outbound quarantine is active."""
 
-    Design constraints (do NOT relax):
-    * Runs as the FIRST init task, before DB migrations — must touch NO database.
-    * Must NEVER raise: every disabled/misconfigured combination returns cleanly
-      so it cannot break startup.  The broad ``except Exception`` is load-bearing.
-    * The enable-gate (``OBSERVABILITY_ENABLED``) and host (``LANGFUSE_HOST``)
-      are read from :class:`jarvis_common.config.JarvisCommonSettings` (plain
-      env vars, set by compose as-is).
-    * Keys (``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY``) are read from
-      :class:`jarvis_common.settings.SecretsSettings` — the ``_FILE``-aware
-      model — so compose's ``LANGFUSE_PUBLIC_KEY_FILE=/run/secrets/…`` indirection
-      is honoured without any custom resolver.  Never read from ``os.environ``
-      directly, which would ``KeyError`` when absent.
+    def __init__(self, delegate: SpanExporter) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if outbound_quarantine_active():
+            return SpanExportResult.SUCCESS
+        return self._delegate.export(spans)
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        if outbound_quarantine_active():
+            return True
+        return self._delegate.force_flush(timeout_millis=timeout_millis)
+
+
+def _build_langfuse_span_exporter(
+    base_url: str, public_key: str, secret_key: str
+) -> _QuarantineAwareSpanExporter:
+    """Build the authenticated exporter with a final quarantine check."""
+    import base64  # noqa: PLC0415
+
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # noqa: PLC0415
+        OTLPSpanExporter,
+    )
+
+    from langfuse import __version__ as langfuse_version  # noqa: PLC0415
+
+    export_path = os.environ.get(
+        "LANGFUSE_OTEL_TRACES_EXPORT_PATH", "api/public/otel/v1/traces"
+    ).lstrip("/")
+    endpoint = f"{base_url.rstrip('/')}/{export_path}"
+    authorization = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
+    delegate = OTLPSpanExporter(
+        endpoint=endpoint,
+        headers={
+            "Authorization": f"Basic {authorization}",
+            "x-langfuse-sdk-name": "python",
+            "x-langfuse-sdk-version": langfuse_version,
+            "x-langfuse-public-key": public_key,
+        },
+    )
+    return _QuarantineAwareSpanExporter(delegate)
+
+
+def _langfuse_lifespan_hook() -> None:
+    """Initialize Langfuse once when configuration and egress policy permit it.
+
+    Notes
+    -----
+    This startup hook runs before database migrations and never accesses the
+    database. If observability is disabled, configuration is incomplete,
+    quarantine is active, or initialization fails, telemetry remains disabled
+    and service startup continues. Host settings come from
+    :class:`jarvis_common.config.JarvisCommonSettings`; ``_FILE``-aware keys
+    come from :class:`jarvis_common.settings.SecretsSettings`.
+
     """
     settings = get_jarvis_common_settings()
     if not settings.observability_enabled:
@@ -578,11 +698,21 @@ def _langfuse_lifespan_hook() -> None:
         logging.getLogger("langfuse").setLevel(logging.ERROR)
         return
     try:
+        ensure_outbound_egress_allowed("Langfuse telemetry initialization")
+    except OutboundEgressBlockedError:
+        logger.info("Langfuse disabled while restored credentials await review")
+        return
+    try:
         from langfuse import (
             Langfuse,  # noqa: PLC0415  # pyright: ignore[reportAttributeAccessIssue]
         )
 
-        Langfuse(host=host, public_key=pk, secret_key=sk)
+        Langfuse(
+            base_url=host,
+            public_key=pk,
+            secret_key=sk,
+            span_exporter=_build_langfuse_span_exporter(host, pk, sk),
+        )
         logger.info("Langfuse configured, tracing to %s", host)
     except Exception as exc:  # noqa: BLE001 — must never break startup
         logger.warning("Langfuse init failed (non-fatal): %s", exc, exc_info=True)
@@ -605,15 +735,15 @@ async def embed_texts(
 
     Parameters
     ----------
-    http_client:
+    http_client : httpx.AsyncClient
         Shared ``httpx.AsyncClient`` from the service lifespan.
-    texts:
+    texts : list[str]
         List of strings to embed.  An empty list returns ``[]`` immediately.
-    model:
+    model : str
         LiteLLM model alias (default ``"embed"``).
-    timeout:
+    timeout : float
         HTTP timeout in seconds (default 60.0).
-    config:
+    config : LiteLLMConfig or None
         LiteLLM connection config; defaults to env-resolved config.
 
     Returns
@@ -623,6 +753,9 @@ async def embed_texts(
 
     Raises
     ------
+    OutboundEgressBlockedError
+        If restored credentials await review when a non-empty request is about
+        to send. Empty input returns before the egress check.
     RuntimeError
         On HTTP error, timeout, connection failure, or malformed response body.
 
@@ -632,6 +765,7 @@ async def embed_texts(
 
     litellm = config or get_litellm_config()
     try:
+        ensure_outbound_egress_allowed("LiteLLM embeddings")
         response = await http_client.post(
             f"{litellm.base_url}/v1/embeddings",
             json={"model": model, "input": texts},

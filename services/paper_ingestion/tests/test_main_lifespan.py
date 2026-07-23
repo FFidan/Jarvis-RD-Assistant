@@ -1,18 +1,9 @@
-"""Lifespan tests for paper_ingestion — B.4 Step 4 procrastinate worker wiring.
+"""Paper-ingestion lifespan and background-worker lifecycle tests.
 
-Covers the ``_start_procrastinate_worker`` /
-``_shutdown_procrastinate_worker`` hooks added in Task B.2:
-
-- the procrastinate worker is created as a named asyncio.Task during startup
-- ``set_dependencies`` is called with the lifespan-owned pool + http_client
-- on shutdown the worker task is cancelled cleanly without an unawaited
-  coroutine warning, and the procrastinate connector is closed.
-
-We don't drive the full real lifespan (real run_migrations, telegram
-bootstrap, scheduler init, etc. all need live DBs/HTTP) — instead we
-construct a minimal ``ServiceLifespanConfig`` that exercises ONLY the
-broker hook and assert the documented post-conditions. The full main.py
-config is checked by structural assertions on the hook list.
+A minimal ``ServiceLifespanConfig`` isolates broker startup and shutdown while
+structural assertions verify the production hook ordering. The suite covers
+dependency injection, named worker-task creation, clean cancellation, and
+connector shutdown without requiring live databases or external services.
 """
 
 from __future__ import annotations
@@ -27,9 +18,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_reconciler_log_state():
-    """The reconciler's transition-only logging keeps module-level state
-    (failure streaks + once-per-value seen-sets) — clear it per test so the
-    first-failure / first-anomaly log assertions are deterministic."""
+    """Reset reconciler logging state before each test."""
     from paper_ingestion import litellm_reconciler
 
     litellm_reconciler._RECONCILE_FAILURE_STREAKS.clear()
@@ -98,6 +87,90 @@ def test_lifespan_config_includes_procrastinate_hooks() -> None:
     init_idx = _lifespan_config.custom_init_tasks.index(_start_procrastinate_worker)
     # Same index in teardown list = compensating teardown wiring.
     assert _lifespan_config.custom_teardown_tasks[init_idx] is _shutdown_procrastinate_worker
+
+
+@pytest.mark.asyncio
+async def test_qdrant_pipeline_runs_generation_repair_and_cancels_before_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant startup binds PostgreSQL visibility state and teardown is ordered."""
+    from paper_ingestion import main
+    from paper_ingestion import _state as service_state
+
+    app = MagicMock()
+    app.state = MagicMock()
+    app.state.http_client = AsyncMock()
+    app.state.db_pool = AsyncMock()
+    qdrant = MagicMock()
+    qdrant.close = AsyncMock()
+    embedder = MagicMock()
+    embedder.ensure_collection = AsyncMock()
+    processor = MagicMock()
+    verifier = MagicMock()
+    reconciler_started = asyncio.Event()
+    reconciler_cancelled = asyncio.Event()
+
+    async def _reconcile(_pool, _embedder) -> None:
+        reconciler_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            reconciler_cancelled.set()
+            raise
+
+    settings = MagicMock()
+    settings.qdrant_url = "http://qdrant.test"
+    settings.qdrant_api_key = None
+    qdrant_factory = MagicMock(return_value=qdrant)
+    embedder_factory = MagicMock(return_value=embedder)
+    monkeypatch.setattr(main, "get_paper_ingestion_settings", lambda: settings)
+    monkeypatch.setattr(main, "AsyncQdrantClient", qdrant_factory)
+    monkeypatch.setattr(main, "Embedder", embedder_factory)
+    monkeypatch.setattr(main, "PDFProcessor", MagicMock(return_value=processor))
+    monkeypatch.setattr(main, "QuoteVerifier", MagicMock(return_value=verifier))
+    monkeypatch.setattr(main, "run_visibility_reconciler", _reconcile)
+    monkeypatch.setattr(service_state, "set_services", MagicMock())
+
+    await main._init_qdrant_and_pdf_pipeline(app)
+    await asyncio.wait_for(reconciler_started.wait(), timeout=1)
+
+    embedder_factory.assert_called_once_with(
+        app.state.http_client,
+        qdrant,
+        db_pool=app.state.db_pool,
+    )
+    embedder.ensure_collection.assert_awaited_once()
+    assert app.state.vector_visibility_task.get_name() == "vector_visibility_reconciler"
+
+    await main._shutdown_qdrant(app)
+
+    assert reconciler_cancelled.is_set()
+    qdrant.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_telegram_username_refresh_refuses_quarantine_before_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The startup helper must not load or transmit a restored Telegram token."""
+    from paper_ingestion.services import telegram_bootstrap
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    def unexpected_settings_read():
+        raise AssertionError("quarantine must be checked before secrets are loaded")
+
+    monkeypatch.setattr(telegram_bootstrap, "get_secrets_settings", unexpected_settings_read)
+    pool = AsyncMock()
+    http_client = AsyncMock()
+
+    await telegram_bootstrap.refresh_telegram_bot_username(pool, http_client)
+
+    pool.acquire.assert_not_called()
+    http_client.get.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

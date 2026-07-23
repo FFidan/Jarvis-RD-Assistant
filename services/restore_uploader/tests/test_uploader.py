@@ -24,6 +24,7 @@ import pytest
 import uploader
 
 _VALID = "jarvis_20260101_120000.sql.gz.enc"
+_VALID_PDFS = "pdfs_20260101_120000.tar.gz.enc"
 _TOKEN = "grant-token-abcdef0123456789"
 
 
@@ -131,7 +132,28 @@ def test_missing_grant_header_rejected(monkeypatch, tmp_path):
     assert list(inbox.iterdir()) == []
 
 
-@pytest.mark.parametrize("name", ["evil.sh", "jarvis_bad.sql", "operator_key.txt"])
+def test_manifest_signature_accepted(monkeypatch, tmp_path):
+    # An off-host restore verifies the manifest signature, so the browser upload flow
+    # must be able to deliver it alongside the manifest itself.
+    name = "manifest_20260101_120000.json.hmac"
+    with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
+        _write_grant(trigger)
+        status = _put(port, f"/restore-upload/{name}", b"0" * 64, _grant_headers())
+    assert status == 201
+    assert (inbox / name).read_bytes() == b"0" * 64
+
+
+def test_pdf_archive_accepted(monkeypatch, tmp_path):
+    with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
+        _write_grant(trigger)
+        status = _put(port, f"/restore-upload/{_VALID_PDFS}", b"pdf-archive", _grant_headers())
+    assert status == 201
+    assert (inbox / _VALID_PDFS).read_bytes() == b"pdf-archive"
+
+
+@pytest.mark.parametrize(
+    "name", ["evil.sh", "jarvis_bad.sql", "operator_key.txt", "manifest_20260101_120000.json.hma"]
+)
 def test_disallowed_name_rejected(monkeypatch, tmp_path, name):
     with _server(monkeypatch, tmp_path) as (port, inbox, trigger):
         _write_grant(trigger)

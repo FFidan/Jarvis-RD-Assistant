@@ -2,6 +2,8 @@
 secrets/
 .env
 .env.*
+.jarvis-setup-transaction
+.jarvis-setup-transaction.pending
 
 # Git internals
 .git/

@@ -39,6 +39,7 @@ def test_core_settings_defaults(monkeypatch):
         "LOG_LEVEL",
         "ENVIRONMENT",
         "TRUSTED_PROXY_HOSTS",
+        "TRUSTED_LOCAL_CLIENT_CIDRS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -46,8 +47,13 @@ def test_core_settings_defaults(monkeypatch):
     assert settings.dev_mode is False
     assert settings.log_level == "INFO"
     assert settings.environment == "development"
-    assert settings.trusted_proxy_hosts == "127.0.0.0/8,10.137.241.0/24"
-    assert settings.trusted_proxy_hosts_list == ["127.0.0.0/8", "10.137.241.0/24"]
+    assert settings.trusted_proxy_hosts == "127.0.0.0/8,10.137.241.253/32"
+    assert settings.trusted_proxy_hosts_list == ["127.0.0.0/8", "10.137.241.253/32"]
+    assert settings.trusted_local_client_cidrs_list == [
+        "127.0.0.0/8",
+        "::1/128",
+        "10.137.241.1/32",
+    ]
 
 
 def test_core_settings_reads_env(monkeypatch):
@@ -62,6 +68,16 @@ def test_core_settings_reads_env(monkeypatch):
     assert settings.log_level == "DEBUG"
     assert settings.environment == "production"
     assert settings.trusted_proxy_hosts_list == ["dashboard", "nginx", "cf"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("", None), ("   ", None), ("17", "17"), ("not-an-id", "not-an-id")],
+)
+def test_core_settings_preserves_owner_override_for_typed_resolution(monkeypatch, raw, expected):
+    """Blank overrides are unset; malformed nonblank values stay diagnosable."""
+    monkeypatch.setenv("OWNER_USER_ID", raw)
+    assert CoreSettings().owner_user_id == expected
 
 
 def test_secrets_settings_do_not_leak_in_repr(monkeypatch):

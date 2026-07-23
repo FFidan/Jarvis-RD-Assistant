@@ -3,9 +3,9 @@ name: Security
 # Supply-chain security CI.
 # Runs pip-audit + npm-audit (Python and JS dependency CVE scans), osv-scanner
 # (multi-ecosystem OSV database scan), and a docker-build smoke test to confirm
-# all service images build cleanly.  SBOM generation on release is handled by
-# .github/workflows/sbom.yml.  The terminal `security-gate` job can be added
-# to ci.yml gate.needs once the workflow has a green baseline.
+# all service images build cleanly. SBOM generation on release is handled by
+# .github/workflows/sbom.yml. Branch protection requires the terminal
+# `security-gate` job below.
 on:
   public:
   push:
@@ -29,10 +29,10 @@ jobs:
     name: pip-audit (Python SCA)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -68,10 +68,10 @@ jobs:
     name: npm-audit (JS SCA)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
           cache: npm
@@ -79,6 +79,9 @@ jobs:
 
       - name: Install
         run: npm --prefix frontend ci
+
+      - name: Validate audited parser tree
+        run: npm ls --prefix frontend js-yaml brace-expansion eslint --all
 
       - name: Audit (fail on high severity)
         run: npm audit --prefix frontend --audit-level=high
@@ -92,7 +95,7 @@ jobs:
     name: osv-scanner (multi-ecosystem CVE)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install osv-scanner v2.0.2 (prebuilt binary; no Go toolchain)
         run: |
@@ -119,7 +122,7 @@ jobs:
       # BuildKit, so the `# syntax`/`--mount` Dockerfiles build everywhere.
       DOCKER_BUILDKIT: "1"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Build paper_ingestion image
         run: |
@@ -192,7 +195,7 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # full history — `gitleaks detect` scans every commit
 
@@ -215,9 +218,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # codeql — Static analysis (code scanning) for Python and JS/TS.
   # Interpreted languages use the no-build path (build-mode: none).
-  # Pin: github/codeql-action v4.36.3.
-  # NOTE: this job's green run is deferred to the v0.9.0 PR (no CodeQL CLI to
-  # validate locally); the YAML/SHAs/permissions are pinned and reviewed here.
+  # Pin: github/codeql-action v4.36.3. The public-repository job uploads SARIF;
+  # local release checks validate its YAML, immutable pin, and permissions.
   # ---------------------------------------------------------------------------
   codeql:
     name: CodeQL (${{ matrix.language }})
@@ -236,7 +238,7 @@ jobs:
       matrix:
         language: [python, javascript-typescript]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a  # v4.36.3

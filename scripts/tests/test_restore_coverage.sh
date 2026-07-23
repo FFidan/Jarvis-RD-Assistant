@@ -57,12 +57,20 @@ check "consumes the .restore_request.json sentinel" '\.restore_request\.json'
 # on it. (The swap's own reload into a tmp db is non-destructive, so this anchor is
 # strictly conservative — every pre-destruction guard genuinely runs before it.)
 drop_call_line="$(line_of 'restore_one_db_swap "\$JARVIS_DB"')"
-consume_line="$(line_of '^rm -f "\$REQUEST_FILE"')"
+consume_line="$(line_of 'REQ_CONTENT=.*consume_restore_request')"
 if [ -n "$consume_line" ] && [ -n "$drop_call_line" ] && [ "$consume_line" -lt "$drop_call_line" ]; then
-  pass "request sentinel is rm -f'd BEFORE the destructive restore_one_db_swap call"
+  pass "request consumption succeeds before the destructive restore_one_db_swap call"
 else
-  printf 'FAIL: request consume (%s) is not before the restore_one_db_swap call (%s)\n' \
+  printf 'FAIL: request consumption (%s) is not before the restore_one_db_swap call (%s)\n' \
     "$consume_line" "$drop_call_line" >&2
+  fail=1
+fi
+consume_fn="$(sed -n '/^consume_restore_request()/,/^}/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$consume_fn" | grep -q 'rm -f -- "\$REQUEST_FILE"' \
+   && ! printf '%s' "$consume_fn" | grep -q 'rm -f -- "\$REQUEST_FILE".*|| true'; then
+  pass "request consumption requires the sentinel unlink to succeed"
+else
+  printf 'FAIL: request consumption can proceed after a failed sentinel unlink\n' >&2
   fail=1
 fi
 
@@ -318,9 +326,10 @@ check "preflight is additive per-DB (fresh-DB floor + content factor)" 'content_
 check "preflight fails before destruction on a tight disk" \
   'insufficient disk for a safe restore'
 
-# S2. Swap-state file: written BEFORE each of the four transitions and read by
+# S2. Private swap-state file: written BEFORE each of the four transitions and read by
 #     --recover to know which db to reconcile.
-check "records the swap state in .restore_swap_state.json" '\.restore_swap_state\.json'
+check "records swap state in the private lifecycle directory" \
+  'SWAP_STATE_FILE="\$\{LOCK_DIR\}/restore-swap-state\.json"'
 for ph in reload_tmp swapping_out swapping_in verified; do
   check "swap-state records the '$ph' phase" "write_swap_state \"\\\$db\" \"$ph\""
 done
@@ -349,10 +358,28 @@ else
   printf 'FAIL: the --recover branch runs more than the leftover-handler\n' >&2
   fail=1
 fi
-check "--recover marks RECOVER_MODE so the EXIT trap skips the request re-consume" \
-  'RECOVER_MODE=1'
-check "the EXIT trap skips the request re-consume in --recover mode" \
-  '\[ "\$RECOVER_MODE" = "1" \] \|\| rm -f "\$REQUEST_FILE"'
+cleanup_block="$(sed -n '/^_cleanup()/,/^}/p' "$RESTORE_SCRIPT")"
+if ! printf '%s' "$cleanup_block" | grep -q 'REQUEST_FILE' \
+   && [ "$(grep -c 'rm -f -- "\$REQUEST_FILE"' "$RESTORE_SCRIPT")" -eq 1 ]; then
+  pass "the main flow consumes each request once and EXIT cleanup cannot consume a later request"
+else
+  printf 'FAIL: restore requests must be consumed exactly once outside EXIT cleanup\n' >&2
+  fail=1
+fi
+check "detects every outbound quarantine directory entry" \
+  '\[ -e "\$OUTBOUND_QUARANTINE_SENTINEL" \] \|\| \[ -L "\$OUTBOUND_QUARANTINE_SENTINEL" \]'
+check "publishes outbound quarantine without replacing an existing review" \
+  'ln -- "\$tmp" "\$OUTBOUND_QUARANTINE_SENTINEL"'
+check "flushes outbound quarantine data before reporting success" \
+  'sync -d "\$OUTBOUND_QUARANTINE_SENTINEL"'
+check "flushes the quarantine filesystem before reporting success" \
+  'sync -f "\$\(dirname "\$OUTBOUND_QUARANTINE_SENTINEL"\)"'
+if grep -q 'mv -T -- "\$tmp" "\$OUTBOUND_QUARANTINE_SENTINEL"' "$RESTORE_SCRIPT"; then
+  printf 'FAIL: outbound quarantine publication can replace an existing review\n' >&2
+  fail=1
+else
+  pass "outbound quarantine publication has no replacing move"
+fi
 check "--recover holds maintenance when the durable .destructive sentinel is present" \
   'if \[ -f "\$MAINTENANCE_DESTRUCTIVE" \]; then DROP_STARTED=1'
 
@@ -373,6 +400,22 @@ fi
 #     restore's own .maintenance is already up, so the backup must be told to run.
 check "safety pre-backup is forced past the maintenance skip-guard" 'export BACKUP_FORCE=1'
 
+litellm_pause_line="$(line_of '^wait_for_litellm_quarantine[[:space:]]+\\$')"
+maintenance_on_line="$(line_of '^touch "\$MAINTENANCE_SENTINEL"$')"
+if [ -n "$maintenance_on_line" ] && [ -n "$litellm_pause_line" ] \
+   && [ "$maintenance_on_line" -lt "$litellm_pause_line" ] \
+   && [ "$litellm_pause_line" -lt "$safety_line" ]; then
+  pass "LiteLLM stops after maintenance starts and before the safety backup"
+else
+  printf 'FAIL: LiteLLM stop proof (%s) must follow maintenance (%s) and precede backup (%s)\n' \
+    "$litellm_pause_line" "$maintenance_on_line" "$safety_line" >&2
+  fail=1
+fi
+check "LiteLLM stop proof requires two connection failures" \
+  '\[ "\$failures" -ge 2 \]'
+check "LiteLLM stop proof has a bounded default timeout" \
+  'LITELLM_PAUSE_TIMEOUT_SECONDS:-60'
+
 # 7. The maintenance sentinel is heartbeated for the whole run (re-touch loop) so
 #    a long restore does not auto-expire mid-flight.
 check "heartbeats the maintenance sentinel during the run" \
@@ -388,15 +431,15 @@ check "computes a bounded restore deadline" 'RESTORE_DEADLINE='
 check "defaults the restore time limit to 3600s (never fires on a slow safety backup)" \
   'RESTORE_MAX_SECONDS:-3600'
 check "captures the main PID so the watchdog can signal it" 'MAIN_PID=\$\$'
-check "the watchdog drops a .restore_timeout marker on deadline" \
-  ': > "\$\{TRIGGER_DIR\}/\.restore_timeout"'
+check "the watchdog drops a private timeout marker on deadline" \
+  ': > "\$RESTORE_TIMEOUT_FILE"'
 check "the watchdog signals the main process on deadline" 'kill "\$MAIN_PID"'
 check "routes SIGTERM into the single EXIT trap" "trap 'exit 143' TERM"
 check "routes SIGINT into the single EXIT trap" "trap 'exit 130' INT"
 check "_cleanup words a timeout distinctly from a mid-reload failure" \
   'restore exceeded its time limit'
-check "clears a stale .restore_timeout marker at the start of a run" \
-  'rm -f "\$\{TRIGGER_DIR\}/\.restore_timeout"'
+check "clears a stale private timeout marker at the start of a run" \
+  'rm -f "\$RESTORE_TIMEOUT_FILE"'
 
 # The watchdog lifts .maintenance ONLY when .destructive is absent. This is the
 # SECOND (later-in-file) maintenance removal; the first is the EXIT-trap clean
@@ -415,22 +458,29 @@ fi
 
 # Behavioral: single-source the deadline-decision block from restore.sh and run
 # both branches (no live sidecar, no 60s sleep). With .destructive ABSENT it must
-# lift .maintenance + drop .restore_timeout; with it PRESENT it must HOLD
+# lift .maintenance + drop the private timeout marker; with it PRESENT it must HOLD
 # .maintenance (never re-expose a destroyed DB).
-wd_block="$(sed -n '/: >/,/^      fi/p' "$RESTORE_SCRIPT")"
+# Anchor on the watchdog's unique timeout marker. Other safe file-creation
+# helpers may also use `: >`; selecting the first one made this behavioral test
+# silently execute an unrelated lifecycle-lock branch.
+wd_block="$(sed -n \
+  '/^[[:space:]]*: > "\$RESTORE_TIMEOUT_FILE"/,/^[[:space:]]*fi$/p' \
+  "$RESTORE_SCRIPT")"
 run_wd() {
   # $1 = "destroyed" -> pre-create .destructive; anything else -> absent.
   local d; d="$(mktemp -d)"
+  mkdir -p "${d}/.lifecycle"
   touch "${d}/.maintenance"
   [ "$1" = "destroyed" ] && touch "${d}/.destructive"
   TRIGGER_DIR="$d" MAINTENANCE_SENTINEL="${d}/.maintenance" \
-  MAINTENANCE_DESTRUCTIVE="${d}/.destructive" bash -c '
+  MAINTENANCE_DESTRUCTIVE="${d}/.destructive" \
+  RESTORE_TIMEOUT_FILE="${d}/.lifecycle/restore-timeout" bash -c '
     set -euo pipefail
     '"$wd_block"'
   ' 2>/dev/null
   local maint=absent timeout=absent
   [ -f "${d}/.maintenance" ] && maint=present
-  [ -f "${d}/.restore_timeout" ] && timeout=present
+  [ -f "${d}/.lifecycle/restore-timeout" ] && timeout=present
   printf '%s %s' "$maint" "$timeout"
   rm -rf "$d"
 }
@@ -444,21 +494,21 @@ else
   fail=1
 fi
 
-# 8. exit 0 after a recorded terminal failure: every non-zero exit in the file is
-#    a perl statement (semicolon-terminated) inside qdrant_http_body — there is NO
-#    bash-level non-zero exit that could crash-restart the sidecar.
+# 8. exit 0 after a recorded terminal failure. Non-zero exits are allowed only
+#    inside guarded helper subshells, the embedded Perl parser, and signal traps;
+#    there is no unguarded script-level exit that could crash-loop the sidecar.
 check "fails before destruction with exit 0" 'fail_before_destruction\(\)'
 check "fails during/after the drop with exit 0" 'step5_fail\(\)'
-nonzero_all="$(grep -Ec 'exit[[:space:]]+[1-9]' "$RESTORE_SCRIPT" || true)"
-# Whitelisted non-zero exits: the perl (semicolon-terminated) exits inside
-# qdrant_http_body, and the TERM/INT trap handlers (exit 143/130 route a signal
-# into the single EXIT trap, which then forces exit 0 — a real script exit is
-# still always 0, so the sidecar never crash-restarts).
-nonzero_ok="$(grep -Ec "exit[[:space:]]+[1-9];|trap 'exit [0-9]+'" "$RESTORE_SCRIPT" || true)"
-if [ "$nonzero_all" -eq "$nonzero_ok" ]; then
+unexpected_nonzero="$(awk '
+  /^swap_restored_pdfs\(\)|^recover_pdf_swap\(\)|^qdrant_http_body\(\)/ { guarded=1 }
+  guarded && /^}/ { guarded=0; next }
+  /trap '\''exit (130|143)'\''/ { next }
+  /exit[[:space:]]+[1-9]/ && !guarded { print NR ":" $0 }
+' "$RESTORE_SCRIPT")"
+if [ -z "$unexpected_nonzero" ]; then
   pass "no unguarded bash-level non-zero exit (terminal failures exit 0; sidecar never crash-restarts)"
 else
-  printf 'FAIL: an unguarded bash-level non-zero exit exists (all=%s ok=%s)\n' "$nonzero_all" "$nonzero_ok" >&2
+  printf 'FAIL: an unguarded bash-level non-zero exit exists: %s\n' "$unexpected_nonzero" >&2
   fail=1
 fi
 
@@ -512,7 +562,7 @@ else
 fi
 rm -rf "$dp_dir"
 
-# B2. valid_archive_name accepts the four shapes, rejects path-seps / .. / junk.
+# B2. valid_archive_name accepts every archive role, rejects path-seps / .. / junk.
 vfn="$(sed -n '/^valid_archive_name()/,/^}/p' "$RESTORE_SCRIPT")"
 run_valid() {
   bash -c '
@@ -525,6 +575,7 @@ vfail=0
 for good in \
   "jarvis_20260626_120000.sql.gz" \
   "litellm_20260626_120000.sql.gz.enc" \
+  "pdfs_20260626_120000.tar.gz.enc" \
   "secrets_20260626_120000.tar.gz" \
   "qdrant_kg_entities_20260626_120000.snapshot.enc"; do
   [ "$(run_valid "$good")" = "OK" ] || { printf 'FAIL: valid name rejected: %s\n' "$good" >&2; vfail=1; }
@@ -539,12 +590,12 @@ for bad in \
   [ "$(run_valid "$bad")" = "NO" ] || { printf 'FAIL: invalid name accepted: %s\n' "$bad" >&2; vfail=1; }
 done
 if [ "$vfail" -eq 0 ]; then
-  pass "valid_archive_name accepts the 4 shapes, rejects path-seps/../junk"
+  pass "valid_archive_name accepts all archive roles and rejects path-seps/../junk"
 else
   fail=1
 fi
 
-# B3. write_status emits the P6.3 RestoreStatus shape as valid JSON (5 named
+# B3. write_status emits the RestoreStatus API shape as valid JSON (5 named
 #     steps, escaped error string, all required keys present).
 if command -v python3 >/dev/null 2>&1; then
   st_dir="$(mktemp -d)"
@@ -588,15 +639,13 @@ else
 fi
 
 # === Off-host (inbox) disaster recovery ======================================
-# P6.8: an ADDITIVE source="inbox" branch restores from the rw restore_inbox
-# volume on a fresh host — operator-supplied archive set + one-time key, secrets
-# materialized to a writable staging (never /secrets), postgres role rebound via
-# ALTER ROLE. Every pre-ALTER-ROLE failure must destroy nothing; the operator key
-# + plaintext staging are shredded on every exit. The local path stays unchanged.
+# Inbox recovery reads an operator-provided archive set and one-time key from the
+# writable restore_inbox volume. It materializes secrets in a temporary directory
+# outside /secrets, preserves the target host's database password, and securely
+# removes the key and plaintext directory on every exit.
 BACKUP_SCRIPT="${SCRIPT_DIR}/../backup.sh"
 
-# I1. The request source is parsed and defaults to local; an unsupported value
-#     fails safe (it is NOT silently treated as local).
+# The request source defaults to local and rejects unsupported values.
 check "parses the request source field" '"source"'
 check "defaults the restore source to local when absent" 'SOURCE="\$\{SOURCE_RAW:-local\}"'
 check "rejects an unsupported source (fail-safe, not silent-local)" 'expected local or inbox'
@@ -625,21 +674,19 @@ else
   fail=1
 fi
 
-# I4. STEP 8 rebinds the postgres role AFTER the DB restore, doubling the
-#     password's single quotes for the SQL string literal.
-alter_role_line="$(line_of 'ALTER ROLE .*WITH PASSWORD')"
-if [ -n "$alter_role_line" ] && [ -n "$drop_call_line" ] && [ "$drop_call_line" -lt "$alter_role_line" ]; then
-  pass "the ALTER ROLE rebind runs AFTER the destructive DB restore"
-else
-  printf 'FAIL: ALTER ROLE (%s) does not run after the destructive restore (%s)\n' \
-    "$alter_role_line" "$drop_call_line" >&2
+# I4. The target host's postgres role and its mounted password file are one local
+#     infrastructure identity. Restoring neither side avoids an uncloseable crash
+#     window where one changes before the other.
+if grep -vE '^[[:space:]]*#' "$RESTORE_SCRIPT" \
+    | grep -Eq 'ALTER[[:space:]]+ROLE|OLD_PG_PW'; then
+  printf 'FAIL: off-host restore still mutates the target postgres role password\n' >&2
   fail=1
+else
+  pass "off-host restore preserves the target postgres role password"
 fi
-check "doubles single quotes in the rebind password literal (no SQL injection)" \
-  'OLD_PG_PW//'
 
-# I5. All inbox additions are guarded by source=inbox (the local path is unchanged).
-check "guards the inbox secrets/role step behind source=inbox" \
+# I5. Inbox-only handling remains guarded by source=inbox.
+check "guards inbox-only handling behind source=inbox" \
   'if \[ "\$SOURCE" = "inbox" \]'
 
 # I6. The operator key is shredded + the plaintext staging removed on EVERY exit.
@@ -655,16 +702,9 @@ else
   pass "secrets staging is never under the RO /secrets"
 fi
 
-# I8b. The operator-supplied secrets archive is untrusted: reject symlink/hardlink
-#      members before extraction (a symlink could redirect a write into the now-rw
-#      /host-secrets mount), in addition to the absolute/'..' path check.
-check "rejects symlink/hardlink members in the secrets archive" \
-  'contains a symlink or hardlink member'
-
 # I9. A clean restore now lifts maintenance regardless of source: the inbox path
-#     materializes the restored ./secrets into HOST_SECRETS_DIR and writes the
-#     rotation marker, so the app containers self-restart onto the rebound role —
-#     no operator step, no hold. The lift gate no longer excludes inbox.
+#     installs only restored data keys and writes the rotation marker, so services
+#     reload keys while every target-host credential stays authoritative.
 check "lifts maintenance on any clean restore (inbox self-recovers)" \
   '\[ "\$RESTORE_CLEAN" = "1" \] \|\| \[ "\$DROP_STARTED" = "0" \]'
 if grep -Eq '!= "inbox"' "$RESTORE_SCRIPT"; then
@@ -674,21 +714,219 @@ else
   pass "the lift gate no longer excludes inbox (old operator hold removed)"
 fi
 
-# I9b. Zero-touch off-host recovery: STEP 8 materializes the restored secrets into
-#      HOST_SECRETS_DIR and writes the .secrets_rotated marker that drives each
-#      postgres-connecting service's self-restart, replacing the old "recreate the
-#      containers / clear .destructive" operator step.
-check "inbox restore materializes the restored secrets into the host secrets dir" \
-  'cp -- "\$sfile" "\$\{HOST_SECRETS_DIR\}'
-check "inbox restore writes the .secrets_rotated marker for self-restart" \
-  'mv -f "\$\{TRIGGER_DIR\}/\.secrets_rotated\.tmp" "\$\{TRIGGER_DIR\}/\.secrets_rotated"'
-check "the STEP-9 inbox echo reports automatic self-restart (no manual recreate)" \
-  'off-host restore complete.*self-restarting'
+# I9b. Exercise the real staging and installation helpers. Current archives must
+# contain exactly the three data keys. Authenticated historical archives may carry
+# obsolete host credentials, but only the three data keys may be extracted or
+# installed. Non-regular members fail before installation.
+dk_dir="$(mktemp -d)"
+dk_exact="${dk_dir}/exact"; dk_legacy="${dk_dir}/legacy"
+dk_missing="${dk_dir}/missing"; dk_symlink="${dk_dir}/symlink"
+dk_hardlink="${dk_dir}/hardlink"
+mkdir -p "$dk_exact" "$dk_legacy" "$dk_missing" "$dk_symlink" "$dk_hardlink"
+for dir in "$dk_exact" "$dk_legacy" "$dk_missing" "$dk_symlink" "$dk_hardlink"; do
+  printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' > "${dir}/jarvis_config_key.txt"
+  printf 'model-hmac-key-0123456789abcdefX' > "${dir}/jarvis_model_hmac_key.txt"
+  printf 'litellm-salt-key' > "${dir}/litellm_salt_key.txt"
+done
+rm -f "${dk_missing}/litellm_salt_key.txt"
+printf 'archived-postgres-password' > "${dk_legacy}/postgres_password.txt"
+printf 'archived-api-key' > "${dk_legacy}/jarvis_api_key.txt"
+rm -f "${dk_symlink}/jarvis_model_hmac_key.txt"
+ln -s /etc/passwd "${dk_symlink}/jarvis_model_hmac_key.txt"
+printf 'model-hmac-key-0123456789abcdefX' > "${dk_hardlink}/hardlink-source"
+rm -f "${dk_hardlink}/jarvis_model_hmac_key.txt"
+ln "${dk_hardlink}/hardlink-source" "${dk_hardlink}/jarvis_model_hmac_key.txt"
+tar -czf "${dk_dir}/exact.tar.gz" -C "$dk_exact" \
+  jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt
+tar -czf "${dk_dir}/legacy.tar.gz" -C "$dk_legacy" \
+  jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt \
+  postgres_password.txt jarvis_api_key.txt
+tar -czf "${dk_dir}/missing.tar.gz" -C "$dk_missing" \
+  jarvis_config_key.txt jarvis_model_hmac_key.txt
+tar -czf "${dk_dir}/symlink.tar.gz" -C "$dk_symlink" \
+  jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt
+tar -czf "${dk_dir}/hardlink.tar.gz" -C "$dk_hardlink" \
+  hardlink-source jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt
 
-# I10. An empty restored postgres_password fails safe instead of setting a blank
-#      role password (the [ ! -s ] file-size guard alone would pass a newline-only file).
-check "rejects an empty restored postgres password before ALTER ROLE" \
-  'if \[ -z "\$OLD_PG_PW" \]'
+run_data_key_stage() {
+  local archive="$1" exact="$2" work="$3"
+  mkdir -p "${work}/inbox" "${work}/host" "${work}/trigger"
+  RESTORE_INBOX_DIR="${work}/inbox" HOST_SECRETS_DIR="${work}/host" \
+    BACKUP_TRIGGER_DIR="${work}/trigger" bash -c '
+      set -euo pipefail
+      source "$1" --functions-only
+      stage_restored_data_keys "$2" "$3"
+    ' _ "$RESTORE_SCRIPT" "$archive" "$exact" 2>/dev/null
+}
+
+dk_exact_rc=0; run_data_key_stage "${dk_dir}/exact.tar.gz" 1 "${dk_dir}/work-exact" \
+  || dk_exact_rc=$?
+dk_legacy_rc=0; run_data_key_stage "${dk_dir}/legacy.tar.gz" 0 "${dk_dir}/work-legacy" \
+  || dk_legacy_rc=$?
+dk_extra_rc=0; run_data_key_stage "${dk_dir}/legacy.tar.gz" 1 "${dk_dir}/work-extra" \
+  || dk_extra_rc=$?
+dk_missing_rc=0; run_data_key_stage "${dk_dir}/missing.tar.gz" 1 "${dk_dir}/work-missing" \
+  || dk_missing_rc=$?
+dk_symlink_rc=0; run_data_key_stage "${dk_dir}/symlink.tar.gz" 0 "${dk_dir}/work-symlink" \
+  || dk_symlink_rc=$?
+dk_hardlink_rc=0; run_data_key_stage "${dk_dir}/hardlink.tar.gz" 0 "${dk_dir}/work-hardlink" \
+  || dk_hardlink_rc=$?
+if [ "$dk_exact_rc" -eq 0 ] && [ "$dk_legacy_rc" -eq 0 ] \
+   && [ "$dk_extra_rc" -ne 0 ] && [ "$dk_missing_rc" -ne 0 ] \
+   && [ "$dk_symlink_rc" -ne 0 ] && [ "$dk_hardlink_rc" -ne 0 ] \
+   && [ ! -e "${dk_dir}/work-legacy/inbox/.secrets-staging/postgres_password.txt" ] \
+   && [ ! -e "${dk_dir}/work-legacy/inbox/.secrets-staging/jarvis_api_key.txt" ]; then
+  pass "data-key staging enforces the current exact set and safely filters historical archives"
+else
+  printf 'FAIL: data-key staging contract wrong (exact=%s legacy=%s extra=%s missing=%s symlink=%s hardlink=%s)\n' \
+    "$dk_exact_rc" "$dk_legacy_rc" "$dk_extra_rc" "$dk_missing_rc" \
+    "$dk_symlink_rc" "$dk_hardlink_rc" >&2
+  fail=1
+fi
+
+dk_install_work="${dk_dir}/install"
+mkdir -p "${dk_install_work}/inbox" "${dk_install_work}/host" \
+  "${dk_install_work}/trigger" "${dk_install_work}/backups/.lifecycle"
+for name in jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt; do
+  cp "${dk_exact}/${name}" "${dk_install_work}/host/${name}"
+done
+for name in postgres_password.txt qdrant_api_key.txt jarvis_api_key.txt \
+            litellm_master_key.txt smtp_password.txt telegram_bot_token.txt \
+            backup_encrypt_key.txt future_target_credential.txt; do
+  printf 'target-%s' "$name" > "${dk_install_work}/host/${name}"
+done
+dk_install_rc=0
+RESTORE_INBOX_DIR="${dk_install_work}/inbox" HOST_SECRETS_DIR="${dk_install_work}/host" \
+  BACKUP_TRIGGER_DIR="${dk_install_work}/trigger" BACKUP_DIR="${dk_install_work}/backups" bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    stage_restored_data_keys "$2" 1
+    install_restored_data_keys
+  ' _ "$RESTORE_SCRIPT" "${dk_dir}/exact.tar.gz" 2>/dev/null || dk_install_rc=$?
+dk_credentials_unchanged=1
+for name in postgres_password.txt qdrant_api_key.txt jarvis_api_key.txt \
+            litellm_master_key.txt smtp_password.txt telegram_bot_token.txt \
+            backup_encrypt_key.txt future_target_credential.txt; do
+  [ "$(cat "${dk_install_work}/host/${name}")" = "target-${name}" ] \
+    || dk_credentials_unchanged=0
+done
+if [ "$dk_install_rc" -eq 0 ] && [ "$dk_credentials_unchanged" -eq 1 ] \
+   && cmp -s "${dk_exact}/jarvis_config_key.txt" "${dk_install_work}/host/jarvis_config_key.txt" \
+   && cmp -s "${dk_exact}/jarvis_model_hmac_key.txt" "${dk_install_work}/host/jarvis_model_hmac_key.txt" \
+   && cmp -s "${dk_exact}/litellm_salt_key.txt" "${dk_install_work}/host/litellm_salt_key.txt" \
+   && [ -s "${dk_install_work}/trigger/.secrets_rotated" ]; then
+  pass "data-key installation replaces only three keys and then publishes the reload marker"
+else
+  printf 'FAIL: data-key installation changed a target credential or published an incomplete set\n' >&2
+  fail=1
+fi
+
+dk_partial="${dk_dir}/partial"
+mkdir -p "${dk_partial}/inbox" "${dk_partial}/host" "${dk_partial}/trigger" \
+  "${dk_partial}/backups/.lifecycle"
+cp "${dk_exact}/jarvis_config_key.txt" "${dk_partial}/host/jarvis_config_key.txt"
+cp "${dk_exact}/litellm_salt_key.txt" "${dk_partial}/host/litellm_salt_key.txt"
+printf 'do-not-change' > "${dk_partial}/symlink-target"
+ln -s "${dk_partial}/symlink-target" "${dk_partial}/host/jarvis_model_hmac_key.txt"
+dk_partial_rc=0
+RESTORE_INBOX_DIR="${dk_partial}/inbox" HOST_SECRETS_DIR="${dk_partial}/host" \
+  BACKUP_TRIGGER_DIR="${dk_partial}/trigger" BACKUP_DIR="${dk_partial}/backups" bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    stage_restored_data_keys "$2" 1
+    install_restored_data_keys
+  ' _ "$RESTORE_SCRIPT" "${dk_dir}/exact.tar.gz" 2>/dev/null || dk_partial_rc=$?
+if [ "$dk_partial_rc" -ne 0 ] && [ ! -e "${dk_partial}/trigger/.secrets_rotated" ] \
+   && [ "$(cat "${dk_partial}/symlink-target")" = "do-not-change" ]; then
+  pass "data-key installation never publishes the reload marker after a partial copy"
+else
+  printf 'FAIL: data-key installation marked a partial or unsafe copy complete\n' >&2
+  fail=1
+fi
+rm -rf "$dk_dir"
+
+# I10. PDF staging accepts a complete flat numeric set (including empty), and
+# rejects names or member types that could escape or corrupt the library swap.
+pdf_dir="$(mktemp -d)"
+mkdir -p "${pdf_dir}/good" "${pdf_dir}/bad-name" "${pdf_dir}/bad-link"
+printf 'PDF-ONE' > "${pdf_dir}/good/1.pdf"
+printf 'PDF-FORTY-TWO' > "${pdf_dir}/good/42.pdf"
+printf 'not-a-pdf-id' > "${pdf_dir}/bad-name/notes.txt"
+ln -s /etc/passwd "${pdf_dir}/bad-link/2.pdf"
+tar -czf "${pdf_dir}/good.tar.gz" -C "${pdf_dir}/good" 1.pdf 42.pdf
+tar -czf "${pdf_dir}/empty.tar.gz" --files-from /dev/null
+tar -czf "${pdf_dir}/bad-name.tar.gz" -C "${pdf_dir}/bad-name" notes.txt
+tar -czf "${pdf_dir}/bad-link.tar.gz" -C "${pdf_dir}/bad-link" 2.pdf
+run_pdf_stage() {
+  local archive="$1" run_id="$2" storage="$3"
+  mkdir -p "$storage"
+  PDF_STORAGE_DIR="$storage" bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    stage_restored_pdfs "$2" "$3"
+  ' _ "$RESTORE_SCRIPT" "$archive" "$run_id" 2>/dev/null
+}
+pdf_good_run="11111111111111111111111111111111"
+pdf_empty_run="22222222222222222222222222222222"
+pdf_bad_name_run="33333333333333333333333333333333"
+pdf_bad_link_run="44444444444444444444444444444444"
+pdf_good_storage="${pdf_dir}/storage-good"
+pdf_empty_storage="${pdf_dir}/storage-empty"
+pdf_bad_name_storage="${pdf_dir}/storage-bad-name"
+pdf_bad_link_storage="${pdf_dir}/storage-bad-link"
+pdf_good_rc=0; run_pdf_stage "${pdf_dir}/good.tar.gz" "$pdf_good_run" "$pdf_good_storage" \
+  || pdf_good_rc=$?
+pdf_empty_rc=0; run_pdf_stage "${pdf_dir}/empty.tar.gz" "$pdf_empty_run" "$pdf_empty_storage" \
+  || pdf_empty_rc=$?
+pdf_bad_name_rc=0; run_pdf_stage "${pdf_dir}/bad-name.tar.gz" "$pdf_bad_name_run" "$pdf_bad_name_storage" \
+  || pdf_bad_name_rc=$?
+pdf_bad_link_rc=0; run_pdf_stage "${pdf_dir}/bad-link.tar.gz" "$pdf_bad_link_run" "$pdf_bad_link_storage" \
+  || pdf_bad_link_rc=$?
+if [ "$pdf_good_rc" -eq 0 ] && [ "$pdf_empty_rc" -eq 0 ] \
+   && [ "$pdf_bad_name_rc" -ne 0 ] && [ "$pdf_bad_link_rc" -ne 0 ] \
+   && cmp -s "${pdf_dir}/good/1.pdf" "${pdf_good_storage}/.restore-stage-${pdf_good_run}/1.pdf" \
+   && cmp -s "${pdf_dir}/good/42.pdf" "${pdf_good_storage}/.restore-stage-${pdf_good_run}/42.pdf" \
+   && [ "$(wc -l < "${pdf_good_storage}/.restore-stage-${pdf_good_run}/.inventory.tsv")" -eq 2 ] \
+   && [ ! -s "${pdf_empty_storage}/.restore-stage-${pdf_empty_run}/.inventory.tsv" ]; then
+  pass "PDF staging accepts exact numeric sets and rejects unsafe archive members"
+else
+  printf 'FAIL: PDF staging contract wrong (good=%s empty=%s bad-name=%s bad-link=%s)\n' \
+    "$pdf_good_rc" "$pdf_empty_rc" "$pdf_bad_name_rc" "$pdf_bad_link_rc" >&2
+  fail=1
+fi
+
+run_pdf_consent() {
+  local request="$1" authenticated="$2" legacy="$3"
+  bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    if parse_allow_missing_pdfs_request "$2"; then parsed=OK; else parsed=BAD; fi
+    MANIFEST_AUTHENTICATED="$3"; MANIFEST_LEGACY="$4"
+    if missing_pdf_restore_is_authorized; then authorized=YES; else authorized=NO; fi
+    printf "%s:%s:%s" "$parsed" "$ALLOW_MISSING_PDFS" "$authorized"
+  ' _ "$RESTORE_SCRIPT" "$request" "$authenticated" "$legacy" 2>/dev/null
+}
+pdf_consent_absent="$(run_pdf_consent '{}' 1 1)"
+pdf_consent_true="$(run_pdf_consent '{"allow_missing_pdfs":true}' 1 1)"
+pdf_consent_false="$(run_pdf_consent '{"allow_missing_pdfs":false}' 1 1)"
+pdf_consent_unsigned="$(run_pdf_consent '{"allow_missing_pdfs":true}' 0 1)"
+pdf_consent_current="$(run_pdf_consent '{"allow_missing_pdfs":true}' 1 0)"
+pdf_consent_duplicate="$(run_pdf_consent \
+  '{"allow_missing_pdfs":true,"allow_missing_pdfs":false}' 1 1)"
+pdf_consent_string="$(run_pdf_consent '{"allow_missing_pdfs":"true"}' 1 1)"
+if [ "$pdf_consent_absent" = "OK:0:NO" ] \
+   && [ "$pdf_consent_true" = "OK:1:YES" ] \
+   && [ "$pdf_consent_false" = "OK:0:NO" ] \
+   && [ "$pdf_consent_unsigned" = "OK:1:NO" ] \
+   && [ "$pdf_consent_current" = "OK:1:NO" ] \
+   && [ "$pdf_consent_duplicate" = "BAD:0:NO" ] \
+   && [ "$pdf_consent_string" = "BAD:0:NO" ]; then
+  pass "missing PDFs require explicit consent plus an authenticated strict legacy manifest"
+else
+  printf 'FAIL: missing-PDF consent gate accepted an unsafe request or manifest state\n' >&2
+  fail=1
+fi
+rm -rf "$pdf_dir"
 
 # I11. The decrypted plaintext secret bundle is shredded (not just rm'd) on exit.
 check "shreds the staged plaintext secret files (not a bare rm)" \
@@ -708,26 +946,74 @@ check "the inbox-manifest branch sets MANIFEST_MODE" 'MANIFEST_MODE=1'
 check "the EXIT trap short-circuits in MANIFEST_MODE (no consume/status/shred)" \
   '\[ "\$MANIFEST_MODE" = "1" \] && exit 0'
 check "the manifest emits only names/booleans (no path/key fields)" \
-  '"timestamp":"%s","complete":%s,"has_secrets":%s,"has_key":%s'
+  '"timestamp":"%s","complete":%s,"has_pdfs":%s,"legacy_missing_pdfs":%s,"has_secrets":%s,"has_key":%s'
 
 if command -v python3 >/dev/null 2>&1; then
   im_dir="$(mktemp -d)"
   im_inbox="${im_dir}/inbox"
   im_trig="${im_dir}/trig"
   mkdir -p "$im_inbox" "$im_trig"
-  # complete (DB + manifest) + secrets + key at ts A; jarvis-only (incomplete) at ts B;
-  # DB-complete but MANIFEST-LESS at ts C (must NOT read complete); junk ignored.
-  : > "${im_inbox}/jarvis_20260701_030000.sql.gz"
-  : > "${im_inbox}/litellm_20260701_030000.sql.gz.enc"
-  : > "${im_inbox}/secrets_20260701_030000.tar.gz.enc"
-  : > "${im_inbox}/manifest_20260701_030000.json"
-  : > "${im_inbox}/jarvis_20260630_020000.sql.gz"
-  : > "${im_inbox}/jarvis_20260702_040000.sql.gz"
-  : > "${im_inbox}/litellm_20260702_040000.sql.gz"
+  # Current unencrypted sets need both databases, PDFs, and a manifest; they may
+  # omit the data-key archive. A missing-PDF legacy set is complete only when its
+  # strict pre-v1.2 manifest and exact inventory authenticate with the supplied key.
+  current_ts="20260701_030000"
+  printf 'CURRENT-J' > "${im_inbox}/jarvis_${current_ts}.sql.gz"
+  printf 'CURRENT-L' > "${im_inbox}/litellm_${current_ts}.sql.gz"
+  printf 'CURRENT-P' > "${im_inbox}/pdfs_${current_ts}.tar.gz"
+  printf '{"timestamp":"%s","run_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","archives":[]}' \
+    "$current_ts" > "${im_inbox}/manifest_${current_ts}.json"
+
+  legacy_ts="20260630_020000"
+  unsigned_legacy_ts="20260629_010000"
+  for ts in "$legacy_ts" "$unsigned_legacy_ts"; do
+    printf 'LEGACY-J-%s' "$ts" > "${im_inbox}/jarvis_${ts}.sql.gz.enc"
+    printf 'LEGACY-L-%s' "$ts" > "${im_inbox}/litellm_${ts}.sql.gz.enc"
+    printf 'LEGACY-S-%s' "$ts" > "${im_inbox}/secrets_${ts}.tar.gz.enc"
+    legacy_j_sha="$(sha256sum "${im_inbox}/jarvis_${ts}.sql.gz.enc" | cut -d' ' -f1)"
+    legacy_l_sha="$(sha256sum "${im_inbox}/litellm_${ts}.sql.gz.enc" | cut -d' ' -f1)"
+    legacy_s_sha="$(sha256sum "${im_inbox}/secrets_${ts}.tar.gz.enc" | cut -d' ' -f1)"
+    legacy_j_size="$(stat -c%s "${im_inbox}/jarvis_${ts}.sql.gz.enc")"
+    legacy_l_size="$(stat -c%s "${im_inbox}/litellm_${ts}.sql.gz.enc")"
+    legacy_s_size="$(stat -c%s "${im_inbox}/secrets_${ts}.tar.gz.enc")"
+    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":102,"created_at":"2026-06-30T02:00:00+00:00","archives":[{"filename":"jarvis_%s.sql.gz.enc","sha256":"%s","size_bytes":%s},{"filename":"litellm_%s.sql.gz.enc","sha256":"%s","size_bytes":%s},{"filename":"secrets_%s.tar.gz.enc","sha256":"%s","size_bytes":%s}]}' \
+      "$ts" "$ts" "$legacy_j_sha" "$legacy_j_size" \
+      "$ts" "$legacy_l_sha" "$legacy_l_size" \
+      "$ts" "$legacy_s_sha" "$legacy_s_size" \
+      > "${im_inbox}/manifest_${ts}.json"
+  done
+
+  incomplete_ts="20260702_040000"
+  printf 'INCOMPLETE-J' > "${im_inbox}/jarvis_${incomplete_ts}.sql.gz"
+  printf 'INCOMPLETE-L' > "${im_inbox}/litellm_${incomplete_ts}.sql.gz"
+  printf 'INCOMPLETE-P' > "${im_inbox}/pdfs_${incomplete_ts}.tar.gz"
+  signed_current_ts="20260703_050000"
+  printf 'SIGNED-CURRENT-J' > "${im_inbox}/jarvis_${signed_current_ts}.sql.gz.enc"
+  printf 'SIGNED-CURRENT-L' > "${im_inbox}/litellm_${signed_current_ts}.sql.gz.enc"
+  printf 'SIGNED-CURRENT-S' > "${im_inbox}/secrets_${signed_current_ts}.tar.gz.enc"
+  current_j_sha="$(sha256sum "${im_inbox}/jarvis_${signed_current_ts}.sql.gz.enc" | cut -d' ' -f1)"
+  current_l_sha="$(sha256sum "${im_inbox}/litellm_${signed_current_ts}.sql.gz.enc" | cut -d' ' -f1)"
+  current_s_sha="$(sha256sum "${im_inbox}/secrets_${signed_current_ts}.tar.gz.enc" | cut -d' ' -f1)"
+  current_j_size="$(stat -c%s "${im_inbox}/jarvis_${signed_current_ts}.sql.gz.enc")"
+  current_l_size="$(stat -c%s "${im_inbox}/litellm_${signed_current_ts}.sql.gz.enc")"
+  current_s_size="$(stat -c%s "${im_inbox}/secrets_${signed_current_ts}.tar.gz.enc")"
+  printf '{"timestamp":"%s","run_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","archives":[{"filename":"jarvis_%s.sql.gz.enc","sha256":"%s","size_bytes":%s},{"filename":"litellm_%s.sql.gz.enc","sha256":"%s","size_bytes":%s},{"filename":"secrets_%s.tar.gz.enc","sha256":"%s","size_bytes":%s}]}' \
+    "$signed_current_ts" "$signed_current_ts" "$current_j_sha" "$current_j_size" \
+    "$signed_current_ts" "$current_l_sha" "$current_l_size" \
+    "$signed_current_ts" "$current_s_sha" "$current_s_size" \
+    > "${im_inbox}/manifest_${signed_current_ts}.json"
   : > "${im_inbox}/not-an-archive.txt"
-  printf 'SECRETKEYBYTES' > "${im_inbox}/operator_key"
+  printf 'restore-inbox-test-key' > "${im_inbox}/operator_key"
+  im_derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r \
+    < "${im_inbox}/operator_key" | cut -d' ' -f1)"
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${im_derived}" -r \
+    < "${im_inbox}/manifest_${legacy_ts}.json" | cut -d' ' -f1 \
+    > "${im_inbox}/manifest_${legacy_ts}.json.hmac"
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${im_derived}" -r \
+    < "${im_inbox}/manifest_${signed_current_ts}.json" | cut -d' ' -f1 \
+    > "${im_inbox}/manifest_${signed_current_ts}.json.hmac"
   # A pending restore request the inventory pass must NOT consume.
-  printf '{"timestamp":"20260701_030000","confirm":"RESTORE"}' > "${im_trig}/.restore_request.json"
+  printf '{"timestamp":"%s","confirm":"RESTORE"}' "$current_ts" \
+    > "${im_trig}/.restore_request.json"
   im_rc=0
   RESTORE_INBOX_DIR="$im_inbox" BACKUP_TRIGGER_DIR="$im_trig" \
     bash "$RESTORE_SCRIPT" --inbox-manifest >/dev/null 2>&1 || im_rc=$?
@@ -736,19 +1022,33 @@ import json, sys
 raw = open(sys.argv[1]).read()
 d = json.loads(raw)
 by = {e["timestamp"]: e for e in d}
-assert set(by) == {"20260701_030000", "20260630_020000", "20260702_040000"}, by
+assert set(by) == {
+    "20260701_030000", "20260630_020000", "20260629_010000", "20260702_040000",
+    "20260703_050000"
+}, by
+expected_keys = {
+    "timestamp", "complete", "has_pdfs", "legacy_missing_pdfs", "has_secrets", "has_key"
+}
+assert all(set(entry) == expected_keys for entry in d), d
 assert by["20260701_030000"] == {
-    "timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}, by
-assert by["20260630_020000"]["complete"] is False, by
-assert by["20260630_020000"]["has_secrets"] is False, by
-# DB archives present but manifest_<ts>.json absent is NOT complete (restore.sh
-# STEP 2 hard-requires the manifest for an inbox restore).
+    "timestamp": "20260701_030000", "complete": True, "has_pdfs": True,
+    "legacy_missing_pdfs": False, "has_secrets": False, "has_key": True
+}, by
+assert by["20260630_020000"] == {
+    "timestamp": "20260630_020000", "complete": True, "has_pdfs": False,
+    "legacy_missing_pdfs": True, "has_secrets": True, "has_key": True
+}, by
+assert by["20260629_010000"]["complete"] is False, by
+assert by["20260629_010000"]["legacy_missing_pdfs"] is False, by
 assert by["20260702_040000"]["complete"] is False, by
+assert by["20260702_040000"]["has_pdfs"] is True, by
+assert by["20260703_050000"]["complete"] is False, by
+assert by["20260703_050000"]["legacy_missing_pdfs"] is False, by
 # Sanitized: no path or key material anywhere in the JSON.
-assert "operator_key" not in raw and "SECRETKEYBYTES" not in raw and "/" not in raw, raw
+assert "operator_key" not in raw and "restore-inbox-test-key" not in raw and "/" not in raw, raw
 PY
   then
-    pass "--inbox-manifest writes a correct SANITIZED manifest (complete/has_secrets/has_key)"
+    pass "--inbox-manifest distinguishes current PDF sets from authenticated PDF-less legacy sets"
   else
     printf 'FAIL: --inbox-manifest manifest wrong or leaked a path/key\n' >&2
     fail=1
@@ -781,10 +1081,8 @@ else
   printf 'SKIP: python3 unavailable; skipping --inbox-manifest behavioral test\n' >&2
 fi
 
-# === Verify-before-destroy: secrets preflight ========================
-# An off-host (inbox) set with NO secrets archive must abort BEFORE any DROP (nothing
-# destroyed) instead of swapping both DBs and only failing at STEP 8, and it must
-# report manual_steps_required so the admin panel tells the operator recovery is needed.
+# === Verify-before-destroy: data-key preflight ===============================
+# An off-host set with no data-key archive must abort before any database change.
 
 # V1a. resolve_secrets_archive (the shared detector used by the preflight AND STEP 8)
 #      genuinely finds the secrets archive when present and returns non-zero when absent.
@@ -810,70 +1108,227 @@ else
   fail=1
 fi
 
-# V1b. The STEP-2.5 secrets preflight runs BEFORE the destructive swap (so DROP_STARTED
-#      is never set on this path), is inbox-scoped, sets manual_steps, and fails before
-#      destruction. Placement proven by line-ordering vs the STEP-5 restore_one_db_swap.
-secgate_line="$(line_of 'off-host restore requires the secrets archive' || true)"
+# V1b. The STEP-2.5 data-key preflight runs before the destructive swap, is
+# inbox-scoped when the archive is absent, and fails without claiming manual work.
+secgate_line="$(line_of '^SECRETS_ARCHIVE="\$\(resolve_secrets_archive' || true)"
 if [ -n "$secgate_line" ] && [ -n "$drop_call_line" ] && [ "$secgate_line" -lt "$drop_call_line" ]; then
-  pass "the secrets preflight aborts before the destructive swap (DROP_STARTED never set)"
+  pass "the data-key preflight runs before the destructive swap"
 else
-  printf 'FAIL: secrets preflight (%s) does not precede the destructive swap (%s)\n' \
+  printf 'FAIL: data-key preflight (%s) does not precede the destructive swap (%s)\n' \
     "$secgate_line" "$drop_call_line" >&2
   fail=1
 fi
 sec_block="$(sed -n '/=== STEP 2.5:/,/=== STEP 3:/p' "$RESTORE_SCRIPT")"
 if printf '%s' "$sec_block" | grep -q 'if \[ "\$SOURCE" = "inbox" \]' \
    && printf '%s' "$sec_block" | grep -q 'resolve_secrets_archive' \
-   && printf '%s' "$sec_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && ! printf '%s' "$sec_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
    && printf '%s' "$sec_block" | grep -q 'fail_before_destruction'; then
-  pass "the secrets preflight is inbox-scoped, sets manual_steps_required, and fails before destruction"
+  pass "the data-key preflight is inbox-scoped and fails before destruction without claiming manual steps"
 else
-  printf 'FAIL: the STEP-2.5 secrets preflight is missing its inbox guard / manual_steps / fail-before-destruction\n' >&2
+  printf 'FAIL: the STEP-2.5 data-key preflight is missing its inbox guard / fail-before-destruction, or wrongly claims manual steps on a path that changed nothing\n' >&2
   fail=1
 fi
 
-# === Verify-before-destroy: FRESH safety pre-backup ====================
-# The STEP-4 safety pre-backup is the only rollback point, so it must be proven fresh
-# for THIS run (exit 0 + succeeded + attempted_at newer than STARTED_AT). A stale
-# succeeded record (e.g. left when a full/read-only /backups blocked the write) must
-# NOT count — otherwise the restore proceeds believing it has a rollback point it lacks.
-sbf_fn="$(sed -n '/^safety_backup_is_fresh()/,/^}/p' "$RESTORE_SCRIPT")"
-run_sbf() {
-  # $1 = backup rc, $2 = .last_run.json content ("" omits the file); echoes FRESH/STALE.
-  local d; d="$(mktemp -d)"
-  [ -n "$2" ] && printf '%s' "$2" > "${d}/.last_run.json"
-  BACKUP_DIR="$d" STARTED_AT="2026-07-15T12:00:00+00:00" bash -c '
-    set -euo pipefail
-    '"$sbf_fn"'
-    if safety_backup_is_fresh "'"$1"'"; then echo FRESH; else echo STALE; fi
-  ' 2>/dev/null
-  rm -rf "$d"
+# === Authenticated inventory binding =========================================
+PARSE_INV_FN="$(sed -n '/^parse_authenticated_manifest()/,/^}/p' "$RESTORE_SCRIPT")"
+VERIFY_INV_FN="$(sed -n '/^verify_manifest_inventory()/,/^}/p' "$RESTORE_SCRIPT")"
+STAGE_INV_FN="$(sed -n '/^stage_manifest_inventory()/,/^}/p' "$RESTORE_SCRIPT")"
+inv_dir="$(mktemp -d)"; inv_ts="20260715_120000"
+inv_run="0123456789abcdef0123456789abcdef"
+inv_manifest="${inv_dir}/manifest_${inv_ts}.json"
+printf 'ORIGINAL-J' > "${inv_dir}/jarvis_${inv_ts}.sql.gz"
+printf 'ORIGINAL-L' > "${inv_dir}/litellm_${inv_ts}.sql.gz"
+printf 'ORIGINAL-P' > "${inv_dir}/pdfs_${inv_ts}.tar.gz"
+j_sha="$(sha256sum "${inv_dir}/jarvis_${inv_ts}.sql.gz" | cut -d' ' -f1)"
+l_sha="$(sha256sum "${inv_dir}/litellm_${inv_ts}.sql.gz" | cut -d' ' -f1)"
+p_sha="$(sha256sum "${inv_dir}/pdfs_${inv_ts}.tar.gz" | cut -d' ' -f1)"
+j_size="$(stat -c%s "${inv_dir}/jarvis_${inv_ts}.sql.gz")"
+l_size="$(stat -c%s "${inv_dir}/litellm_${inv_ts}.sql.gz")"
+p_size="$(stat -c%s "${inv_dir}/pdfs_${inv_ts}.tar.gz")"
+write_inv_manifest() {
+  printf '{"timestamp":"%s","run_id":"%s","archives":%s}' "$1" "$2" "$3" \
+    > "$inv_manifest"
 }
-fresh_lr='{"attempted_at":"2026-07-15T12:00:05+00:00","timestamp":"20260715_120005","succeeded":true}'
-stale_lr='{"attempted_at":"2026-07-14T09:00:00+00:00","timestamp":"20260714_090000","succeeded":true}'
-failed_lr='{"attempted_at":"2026-07-15T12:00:05+00:00","timestamp":"20260715_120005","succeeded":false}'
-sbf_fresh="$(run_sbf 0 "$fresh_lr")"
-sbf_stale="$(run_sbf 0 "$stale_lr")"
-sbf_rcfail="$(run_sbf 1 "$fresh_lr")"
-sbf_notok="$(run_sbf 0 "$failed_lr")"
-if [ -n "$sbf_fn" ] && [ "$sbf_fresh" = "FRESH" ] && [ "$sbf_stale" = "STALE" ] \
-   && [ "$sbf_rcfail" = "STALE" ] && [ "$sbf_notok" = "STALE" ]; then
-  pass "safety_backup_is_fresh: fresh=FRESH; a stale succeeded record, a non-zero rc, and succeeded:false all read STALE"
+good_archives='[{"filename":"jarvis_'"${inv_ts}"'.sql.gz","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'},{"filename":"pdfs_'"${inv_ts}"'.tar.gz","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$good_archives"
+inv_file="${inv_dir}/inventory.tsv"; parse_rc=0
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "$inv_file" 2>/dev/null || parse_rc=$?
+if [ "$parse_rc" -eq 0 ] && [ "$(wc -l < "$inv_file")" -eq 3 ]; then
+  pass "current unencrypted manifest requires databases and PDFs but may omit data keys"
 else
-  printf 'FAIL: safety_backup_is_fresh wrong (fresh=%s stale=%s rcfail=%s notok=%s)\n' \
-    "$sbf_fresh" "$sbf_stale" "$sbf_rcfail" "$sbf_notok" >&2
+  printf 'FAIL: authenticated manifest parser missing/wrong (rc=%s)\n' "$parse_rc" >&2; fail=1
+fi
+
+bad_parse_count=0
+write_inv_manifest "20260715_120001" "$inv_run" "$good_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+dup_archives='[{"filename":"jarvis_'"${inv_ts}"'.sql.gz","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"jarvis_'"${inv_ts}"'.sql.gz","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'},{"filename":"pdfs_'"${inv_ts}"'.tar.gz","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$dup_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+write_inv_manifest "$inv_ts" bad-run-id "$good_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+path_archives='[{"filename":"../jarvis_'"${inv_ts}"'.sql.gz","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'},{"filename":"pdfs_'"${inv_ts}"'.tar.gz","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$path_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+missing_pdf_archives='[{"filename":"jarvis_'"${inv_ts}"'.sql.gz","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$missing_pdf_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+encrypted_without_secrets='[{"filename":"jarvis_'"${inv_ts}"'.sql.gz.enc","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz.enc","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'},{"filename":"pdfs_'"${inv_ts}"'.tar.gz.enc","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$encrypted_without_secrets"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/bad.tsv" 2>/dev/null || bad_parse_count=$((bad_parse_count + 1))
+if [ "$bad_parse_count" -eq 6 ]; then
+  pass "current manifests reject substitution, duplicate roles, traversal, and missing required roles"
+else
+  printf 'FAIL: authenticated manifest accepted an invalid binding\n' >&2; fail=1
+fi
+
+encrypted_archives='[{"filename":"jarvis_'"${inv_ts}"'.sql.gz.enc","sha256":"'"${j_sha}"'","size_bytes":'"${j_size}"'},{"filename":"litellm_'"${inv_ts}"'.sql.gz.enc","sha256":"'"${l_sha}"'","size_bytes":'"${l_size}"'},{"filename":"pdfs_'"${inv_ts}"'.tar.gz.enc","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'},{"filename":"secrets_'"${inv_ts}"'.tar.gz.enc","sha256":"'"${p_sha}"'","size_bytes":'"${p_size}"'}]'
+write_inv_manifest "$inv_ts" "$inv_run" "$encrypted_archives"
+encrypted_parse_rc=0
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "${inv_dir}/encrypted.tsv" 2>/dev/null || encrypted_parse_rc=$?
+if [ "$encrypted_parse_rc" -eq 0 ] && [ "$(wc -l < "${inv_dir}/encrypted.tsv")" -eq 4 ]; then
+  pass "current encrypted manifests require the exact data-key archive role"
+else
+  printf 'FAIL: current encrypted manifest with all mandatory roles was rejected\n' >&2
   fail=1
 fi
+
+write_inv_manifest "$inv_ts" "$inv_run" "$good_archives"
+bash -c 'set -euo pipefail; '"$PARSE_INV_FN"'; parse_authenticated_manifest "$1" "$2" "$3"' \
+  _ "$inv_manifest" "$inv_ts" "$inv_file" 2>/dev/null || true
+printf EXTRA > "${inv_dir}/qdrant_extra_${inv_ts}.snapshot"
+extra_rc=0
+bash -c 'set -euo pipefail; '"$VERIFY_INV_FN"'; verify_manifest_inventory "$1" "$2" "$3"' \
+  _ "$inv_dir" "$inv_ts" "$inv_file" 2>/dev/null || extra_rc=$?
+rm -f "${inv_dir}/qdrant_extra_${inv_ts}.snapshot"
+stage_dir="${inv_dir}/private"; mkdir -m 700 "$stage_dir"; stage_rc=0
+bash -c 'set -euo pipefail; '"$VERIFY_INV_FN"$'\n'"$STAGE_INV_FN"'; stage_manifest_inventory "$1" "$2" "$3" "$4"' \
+  _ "$inv_dir" "$inv_ts" "$inv_file" "$stage_dir" 2>/dev/null || stage_rc=$?
+printf 'SWAPPED-J' > "${inv_dir}/jarvis_${inv_ts}.sql.gz"
+staged_rc=0
+bash -c 'set -euo pipefail; '"$VERIFY_INV_FN"'; verify_manifest_inventory "$1" "$2" "$3"' \
+  _ "$stage_dir" "$inv_ts" "$inv_file" 2>/dev/null || staged_rc=$?
+if [ "$extra_rc" -ne 0 ] && [ "$stage_rc" -eq 0 ] && [ "$staged_rc" -eq 0 ] \
+   && [ "$(cat "${stage_dir}/jarvis_${inv_ts}.sql.gz" 2>/dev/null || true)" = ORIGINAL-J ] \
+   && [ "$(cat "${stage_dir}/pdfs_${inv_ts}.tar.gz" 2>/dev/null || true)" = ORIGINAL-P ]; then
+  pass "inventory rejects extras and private staging defeats a post-check path swap"
+else
+  printf 'FAIL: exact inventory/staging wrong (extra=%s stage=%s staged=%s)\n' \
+    "$extra_rc" "$stage_rc" "$staged_rc" >&2; fail=1
+fi
+rm -rf "$inv_dir"
+
+# === Verify-before-destroy: exact safety pre-backup ====================
+# Correlate the rollback point by a caller-assigned run ID and its authenticated,
+# complete archive inventory. A successful check must copy the exact signed set
+# into a mode-700 directory on the durable backup volume before any DROP.
+run_sbf() {
+  # $1 = backup rc, $2 = expected run id, $3 = last-run run id, $4 = fixture mode.
+  local d key ts="20260715_120000" manifest derived out
+  d="$(mktemp -d)"; key="${d}/backup.key"; manifest="${d}/manifest_${ts}.json"
+  printf 'fixture-backup-key\n' > "$key"
+  printf 'JARVISDBDATA' > "${d}/jarvis_${ts}.sql.gz.enc"
+  printf 'LITELLMDBDATA' > "${d}/litellm_${ts}.sql.gz.enc"
+  printf 'PDFDATA' > "${d}/pdfs_${ts}.tar.gz.enc"
+  printf 'SECRETSDATA' > "${d}/secrets_${ts}.tar.gz.enc"
+  local jsha lsha psha ssha jsz lsz psz ssz entries
+  jsha="$(sha256sum "${d}/jarvis_${ts}.sql.gz.enc" | cut -d' ' -f1)"
+  lsha="$(sha256sum "${d}/litellm_${ts}.sql.gz.enc" | cut -d' ' -f1)"
+  psha="$(sha256sum "${d}/pdfs_${ts}.tar.gz.enc" | cut -d' ' -f1)"
+  ssha="$(sha256sum "${d}/secrets_${ts}.tar.gz.enc" | cut -d' ' -f1)"
+  jsz="$(stat -c%s "${d}/jarvis_${ts}.sql.gz.enc")"
+  lsz="$(stat -c%s "${d}/litellm_${ts}.sql.gz.enc")"
+  psz="$(stat -c%s "${d}/pdfs_${ts}.tar.gz.enc")"
+  ssz="$(stat -c%s "${d}/secrets_${ts}.tar.gz.enc")"
+  entries='[{"filename":"jarvis_'"${ts}"'.sql.gz.enc","sha256":"'"${jsha}"'","size_bytes":'"${jsz}"'},{"filename":"litellm_'"${ts}"'.sql.gz.enc","sha256":"'"${lsha}"'","size_bytes":'"${lsz}"'},{"filename":"pdfs_'"${ts}"'.tar.gz.enc","sha256":"'"${psha}"'","size_bytes":'"${psz}"'},{"filename":"secrets_'"${ts}"'.tar.gz.enc","sha256":"'"${ssha}"'","size_bytes":'"${ssz}"'}]'
+  case "$4" in
+    empty) entries='[]' ;;
+    missing_secrets)
+      entries='[{"filename":"jarvis_'"${ts}"'.sql.gz.enc","sha256":"'"${jsha}"'","size_bytes":'"${jsz}"'},{"filename":"litellm_'"${ts}"'.sql.gz.enc","sha256":"'"${lsha}"'","size_bytes":'"${lsz}"'},{"filename":"pdfs_'"${ts}"'.tar.gz.enc","sha256":"'"${psha}"'","size_bytes":'"${psz}"'}]'
+      rm -f "${d}/secrets_${ts}.tar.gz.enc" ;;
+    missing_pdfs)
+      entries='[{"filename":"jarvis_'"${ts}"'.sql.gz.enc","sha256":"'"${jsha}"'","size_bytes":'"${jsz}"'},{"filename":"litellm_'"${ts}"'.sql.gz.enc","sha256":"'"${lsha}"'","size_bytes":'"${lsz}"'},{"filename":"secrets_'"${ts}"'.tar.gz.enc","sha256":"'"${ssha}"'","size_bytes":'"${ssz}"'}]'
+      rm -f "${d}/pdfs_${ts}.tar.gz.enc" ;;
+    duplicate)
+      entries='[{"filename":"jarvis_'"${ts}"'.sql.gz.enc","sha256":"'"${jsha}"'","size_bytes":'"${jsz}"'},{"filename":"jarvis_'"${ts}"'.sql.gz.enc","sha256":"'"${jsha}"'","size_bytes":'"${jsz}"'},{"filename":"litellm_'"${ts}"'.sql.gz.enc","sha256":"'"${lsha}"'","size_bytes":'"${lsz}"'},{"filename":"pdfs_'"${ts}"'.tar.gz.enc","sha256":"'"${psha}"'","size_bytes":'"${psz}"'},{"filename":"secrets_'"${ts}"'.tar.gz.enc","sha256":"'"${ssha}"'","size_bytes":'"${ssz}"'}]' ;;
+  esac
+  printf '{"timestamp":"%s","run_id":"%s","app_version":"1.2.0","schema_version":200,"created_at":"2026-07-15T12:00:00+00:00","archives":%s}' \
+    "$ts" "$2" "$entries" > "$manifest"
+  if [ "$4" != "unsigned" ]; then
+    derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$key" | cut -d' ' -f1)"
+    openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" \
+      | cut -d' ' -f1 > "${manifest}.hmac"
+  fi
+  [ "$4" = "swapped" ] && printf 'SWAPPED' > "${d}/jarvis_${ts}.sql.gz.enc"
+  printf '{"attempted_at":"2026-07-15T12:00:00+00:00","timestamp":"%s","run_id":"%s","succeeded":true}' \
+    "$ts" "$3" > "${d}/.last_run.json"
+  out="$(BACKUP_DIR="$d" BACKUP_TRIGGER_DIR="${d}/trigger" \
+    RESTORE_INBOX_DIR="${d}/inbox" HOST_SECRETS_DIR="${d}/host-secrets" \
+    BACKUP_ENCRYPT_KEYFILE="$key" bash -c '
+      set -euo pipefail
+      source "$1" --functions-only
+      if safety_backup_is_fresh "$2" "$3"; then
+        staged="${SAFETY_STAGING_DIR:-}"
+        if [ -d "$staged" ]; then
+          printf "FRESH|%s|%s|%s" "$(stat -c %a "$staged")" \
+            "$(cat "$staged/jarvis_20260715_120000.sql.gz.enc")" \
+            "$(find "$staged" -maxdepth 1 -type f | wc -l)"
+        else
+          printf "FRESH|NO-STAGE"
+        fi
+      else
+        printf STALE
+      fi
+    ' _ "$RESTORE_SCRIPT" "$1" "$2" 2>/dev/null || true)"
+  rm -rf "$d"
+  printf '%s' "$out"
+}
+expected_run="0123456789abcdef0123456789abcdef"
+other_run="fedcba9876543210fedcba9876543210"
+sbf_fresh="$(run_sbf 0 "$expected_run" "$expected_run" good)"
+sbf_mismatch="$(run_sbf 0 "$expected_run" "$other_run" good)"
+sbf_rcfail="$(run_sbf 1 "$expected_run" "$expected_run" good)"
+sbf_empty="$(run_sbf 0 "$expected_run" "$expected_run" empty)"
+sbf_missing="$(run_sbf 0 "$expected_run" "$expected_run" missing_secrets)"
+sbf_missing_pdfs="$(run_sbf 0 "$expected_run" "$expected_run" missing_pdfs)"
+sbf_duplicate="$(run_sbf 0 "$expected_run" "$expected_run" duplicate)"
+sbf_swapped="$(run_sbf 0 "$expected_run" "$expected_run" swapped)"
+sbf_unsigned="$(run_sbf 0 "$expected_run" "$expected_run" unsigned)"
+if [ "$sbf_fresh" = "FRESH|700|JARVISDBDATA|7" ] \
+   && [ "$sbf_mismatch" = "STALE" ] && [ "$sbf_rcfail" = "STALE" ] \
+   && [ "$sbf_empty" = "STALE" ] && [ "$sbf_missing" = "STALE" ] \
+   && [ "$sbf_missing_pdfs" = "STALE" ] \
+   && [ "$sbf_duplicate" = "STALE" ] && [ "$sbf_swapped" = "STALE" ] \
+   && [ "$sbf_unsigned" = "STALE" ]; then
+  pass "safety backup requires an authenticated exact inventory and stages immutable recovery bytes"
+else
+  printf 'FAIL: safety backup contract wrong (fresh=%s mismatch=%s rcfail=%s empty=%s missing-secrets=%s missing-pdfs=%s duplicate=%s swapped=%s unsigned=%s)\n' \
+    "$sbf_fresh" "$sbf_mismatch" "$sbf_rcfail" "$sbf_empty" "$sbf_missing" \
+    "$sbf_missing_pdfs" "$sbf_duplicate" "$sbf_swapped" "$sbf_unsigned" >&2
+  fail=1
+fi
+check "post-DROP cleanup preserves and reports the staged safety recovery directory" \
+  'Recovery copy: .*SAFETY_STAGING_DIR'
 # STEP 4 must capture backup.sh's exit code (not merely WARN) and gate on freshness,
-# failing before destruction with manual_steps when it is stale/failed.
+# failing before destruction when it is stale/failed. It must NOT claim manual steps
+# are required: nothing has been changed yet on that path, and the EXIT trap sets the
+# flag for real post-destruction failures.
 step4_block="$(sed -n '/=== STEP 4:/,/=== STEP 4.5:/p' "$RESTORE_SCRIPT")"
 if printf '%s' "$step4_block" | grep -q 'SAFETY_RC=' \
-   && printf '%s' "$step4_block" | grep -q 'safety_backup_is_fresh "\$SAFETY_RC"' \
-   && printf '%s' "$step4_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
+   && printf '%s' "$step4_block" | grep -q 'safety_backup_is_fresh "\$SAFETY_RC" "\$SAFETY_RUN_ID"' \
+   && ! printf '%s' "$step4_block" | grep -q 'MANUAL_STEPS_REQUIRED=1' \
    && printf '%s' "$step4_block" | grep -q 'fail_before_destruction'; then
-  pass "STEP 4 captures backup.sh's rc, gates on freshness, and fails before destruction with manual_steps"
+  pass "STEP 4 captures backup.sh's rc, gates on freshness, and fails before destruction without claiming manual steps"
 else
-  printf 'FAIL: STEP 4 does not capture the backup rc / gate on freshness / set manual_steps before destruction\n' >&2
+  printf 'FAIL: STEP 4 does not capture the backup rc / gate on freshness / fail before destruction, or wrongly claims manual steps on a path that changed nothing\n' >&2
   fail=1
 fi
 
@@ -907,8 +1362,8 @@ cmp_check "named volume restore_staging is declared" '^  restore_staging:'
 cmp_check "sidecar mounts the migrations dir (ro) for the compat code-max read" 'db/migrations:/app/db/migrations:ro'
 cmp_check "sidecar mounts postgres_data (ro) so the disk preflight can size free space" \
   'postgres_data:/postgres-data:ro'
-cmp_check "entrypoint reconciles a stranded swap on startup (restore.sh --recover)" \
-  'restore_swap_state\.json.*restore\.sh --recover'
+cmp_check "entrypoint reconciles private stranded swap state on startup" \
+  '/backups/\.lifecycle/restore-swap-state\.json.*restore\.sh --recover'
 cmp_check "entrypoint refreshes the inbox manifest each loop (restore.sh --inbox-manifest)" \
   'restore\.sh --inbox-manifest'
 

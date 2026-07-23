@@ -27,7 +27,7 @@ export const SOURCE_DESCRIPTIONS: Record<string, string> = {
   semantic_scholar:
     'AI-powered academic search by Allen Institute for AI. Optional API key raises rate limits.',
   openalex:
-    'Free, open catalog of the global research graph (250M+ works). Provide your email for the polite pool.',
+    'Free, open catalog of the global research graph (250M+ works). A free API key is required.',
   pubmed:
     'NCBI\'s biomedical literature database. No API key required but one increases rate limits.',
 };
@@ -202,7 +202,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
                   {requiresKey
-                    ? 'API key enables higher rate limits. Changes effective after service restart.'
+                    ? 'API key is required. Changes effective after service restart.'
                     : 'No API key required; without one this source uses its standard rate limit.'}
                 </p>
               </div>

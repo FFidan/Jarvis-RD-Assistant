@@ -51,7 +51,9 @@ vi.mock('@/lib/api', async () => {
     }),
     // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
     // unauthenticated tests deterministically stay unauthenticated.
-    fetchAccount: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
+    fetchAccount: vi.fn().mockRejectedValue(
+      new actual.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
+    ),
   };
 });
 

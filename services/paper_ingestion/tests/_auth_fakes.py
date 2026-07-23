@@ -66,7 +66,7 @@ def build_request_auth(
     app = SimpleNamespace(state=state)
     url = SimpleNamespace(
         path=url_path,
-        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify?token=t"),
+        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify"),
     )
     return SimpleNamespace(
         url=url,
@@ -93,7 +93,7 @@ def build_request_admin(
     app = SimpleNamespace(state=state)
     url = SimpleNamespace(
         path="/api/admin/users",
-        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify?token=t"),
+        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify"),
     )
     return SimpleNamespace(
         url=url,
@@ -115,7 +115,7 @@ def build_request_account(
     url = SimpleNamespace(
         path="/api/account",
         replace=lambda **kw: SimpleNamespace(
-            __str__=lambda self: "https://x/account/confirm-email?token=t"
+            __str__=lambda self: "https://x/settings?section=account&item=profile"
         ),
     )
     return SimpleNamespace(

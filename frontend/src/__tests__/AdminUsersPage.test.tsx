@@ -29,6 +29,7 @@ const updateUserRoleMock = vi.fn();
 const deleteUserMock = vi.fn();
 const restoreUserMock = vi.fn();
 const sendSignInLinkMock = vi.fn();
+const transferOwnerMock = vi.fn();
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -103,6 +104,8 @@ vi.mock('@/lib/api', async () => {
     deleteUser: (userId: number) => deleteUserMock(userId),
     restoreUser: (userId: number) => restoreUserMock(userId),
     sendSignInLink: (userId: number) => sendSignInLinkMock(userId),
+    transferOwner: (userId: number, confirmation: string) =>
+      transferOwnerMock(userId, confirmation),
   };
 });
 
@@ -128,6 +131,9 @@ const _sampleUsers = [
     role: 'admin',
     created_at: new Date().toISOString(),
     last_login_at: null,
+    is_owner: true,
+    owner_source: 'database',
+    owner_state: 'valid',
   },
   {
     id: 2,
@@ -135,6 +141,9 @@ const _sampleUsers = [
     role: 'user',
     created_at: new Date().toISOString(),
     last_login_at: null,
+    is_owner: false,
+    owner_source: 'database',
+    owner_state: 'valid',
   },
 ];
 
@@ -286,6 +295,108 @@ describe('AdminUsersPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/send sign-in link/i);
     });
+  });
+});
+
+describe('AdminUsersPage — instance owner lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+    _roleSelectCallbacks.clear();
+  });
+
+  it('marks the owner and disables demotion and removal even for another admin', async () => {
+    _mockUserId = 2;
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    renderPage();
+
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    expect(screen.getByText('instance owner')).toBeInTheDocument();
+    expect(
+      screen.getByRole('combobox', { name: /role for admin@example\.com/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: /remove admin@example\.com/i }),
+    ).toBeDisabled();
+  });
+
+  it('shows host-only guidance when OWNER_USER_ID controls ownership', async () => {
+    const environmentUsers = _sampleUsers.map((user) => ({
+      ...user,
+      owner_source: 'environment',
+    }));
+    listUsersMock.mockResolvedValueOnce(environmentUsers);
+    renderPage();
+
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    expect(screen.getByText(/ownership is managed on the host with OWNER_USER_ID/i))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /transfer ownership to/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('shows the host recovery command when ownership is missing or invalid', async () => {
+    const invalidUsers = _sampleUsers.map((user) => ({
+      ...user,
+      is_owner: false,
+      owner_source: 'database',
+      owner_state: 'missing',
+    }));
+    listUsersMock.mockResolvedValueOnce(invalidUsers);
+    renderPage();
+
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    expect(screen.getByText(/jarvis-research owner status/i)).toBeInTheDocument();
+    expect(screen.getByText(/jarvis-research owner set/i)).toBeInTheDocument();
+  });
+
+  it('requires the target email before transferring to another administrator', async () => {
+    const targetEmail = 'alice@example.com';
+    listUsersMock.mockResolvedValueOnce([
+      _sampleUsers[0],
+      { ..._sampleUsers[1], role: 'admin' },
+    ]);
+    transferOwnerMock.mockResolvedValueOnce({
+      source: 'database',
+      state: 'valid',
+      user_id: 2,
+    });
+    renderPage();
+
+    await waitFor(() => screen.getByText(targetEmail));
+    await userEvent.click(
+      screen.getByRole('button', { name: /transfer ownership to alice@example\.com/i }),
+    );
+
+    const confirmation = screen.getByLabelText(/type alice@example\.com to confirm/i);
+    const submit = screen.getByRole('button', { name: /^transfer ownership$/i });
+    expect(submit).toBeDisabled();
+
+    await userEvent.type(confirmation, targetEmail);
+    expect(submit).not.toBeDisabled();
+    await userEvent.click(submit);
+
+    await waitFor(() => {
+      expect(transferOwnerMock).toHaveBeenCalledWith(2, targetEmail);
+    });
+  });
+
+  it('does not offer transfer controls to an administrator who is not the owner', async () => {
+    _mockUserId = 2;
+    listUsersMock.mockResolvedValueOnce([
+      _sampleUsers[0],
+      { ..._sampleUsers[1], role: 'admin' },
+    ]);
+    renderPage();
+
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    expect(screen.queryByRole('button', { name: /transfer ownership to/i }))
+      .not.toBeInTheDocument();
   });
 });
 
@@ -538,7 +649,7 @@ describe('AdminUsersPage — send sign-in link', () => {
     listUsersMock.mockResolvedValueOnce(_sampleUsers);
     sendSignInLinkMock.mockResolvedValueOnce({ sent: true, sent_link: link });
 
-    renderPage();
+    renderPageWithCache(true);
     await waitFor(() => screen.getByText('alice@example.com'));
 
     await userEvent.click(
@@ -548,6 +659,8 @@ describe('AdminUsersPage — send sign-in link', () => {
     await waitFor(() => {
       expect(screen.getByLabelText(/sign-in link to share/i)).toHaveValue(link);
     });
+    expect(screen.getByRole('status')).toHaveTextContent(/could not deliver/i);
+    expect(screen.getByRole('status')).not.toHaveTextContent(/smtp is not configured/i);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // The link goes to the dialog, not a transient toast.
     expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
@@ -729,10 +842,34 @@ describe('AdminUsersPage — invite deliverability (B2/OPS-2)', () => {
 
     // Modal stays open, shows the SMTP notice + the link to copy.
     await waitFor(() => {
-      expect(screen.getByText(/smtp is not configured/i)).toBeInTheDocument();
+      expect(screen.getByText(/automatic email is not configured/i)).toBeInTheDocument();
     });
     expect(screen.getByLabelText(/invite sign-in link/i)).toHaveValue(link);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('does not blame missing SMTP when a configured relay fails', async () => {
+    const link = 'https://localhost:3001/auth/verify?token=relay-failed';
+    listUsersMock.mockResolvedValue(_sampleUsers);
+    inviteUserMock.mockResolvedValueOnce({
+      id: 3,
+      email: 'new@example.com',
+      role: 'user',
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+      invite_link: link,
+    });
+
+    renderPageWithCache(true);
+    await waitFor(() => screen.getByText('admin@example.com'));
+    await userEvent.click(screen.getByRole('button', { name: /invite user/i }));
+    await userEvent.type(screen.getByLabelText(/email address/i), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: /send invite/i }));
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/could not deliver/i);
+    expect(notice).not.toHaveTextContent(/smtp is not configured/i);
+    expect(screen.getByLabelText(/invite sign-in link/i)).toHaveValue(link);
   });
 
   it('closes the modal with no link shown when SMTP is configured', async () => {

@@ -108,6 +108,35 @@ async def _post_provider_test(app, provider: str, *, role: str | None = "admin")
         return await client.post(f"/api/providers/{provider}/test")
 
 
+@pytest.mark.asyncio
+async def test_provider_probe_route_refuses_quarantine_before_database(_app, monkeypatch, tmp_path):
+    """A quarantined provider test returns 503 before its database lookup."""
+    app, conn = _app
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.write_text("malformed")
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    response = await _post_provider_test(app, "openai")
+
+    assert response.status_code == 503
+    assert "read-only" in response.json()["detail"]
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_probe_sink_refuses_quarantine_before_http(monkeypatch, tmp_path):
+    from paper_ingestion.services.provider_test import test_provider_connectivity
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    result = await test_provider_connectivity("openai", "restored-key")
+
+    assert result.ok is False
+    assert result.error == "provider access is disabled until restored credentials are reviewed"
+
+
 # ---------------------------------------------------------------------------
 # Tests: set_config writes encrypted_value
 # ---------------------------------------------------------------------------

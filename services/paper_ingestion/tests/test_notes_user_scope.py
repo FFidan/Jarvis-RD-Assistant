@@ -22,8 +22,8 @@ def _note_row() -> FakeRecord:
 
 
 def _paper_row() -> FakeRecord:
-    """Canonical paper (discovered_by=None) — accessible to all authenticated users."""
-    return FakeRecord({"discovered_by": None})
+    """Represent a paper accepted by the central visibility predicate."""
+    return FakeRecord({"id": 1, "is_visible": True})
 
 
 def _full_note_row() -> FakeRecord:

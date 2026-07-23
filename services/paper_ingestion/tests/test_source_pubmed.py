@@ -1,8 +1,7 @@
-"""Tests for PubMedSource.
+"""Tests for ``PubMedSource``.
 
-TDD — written before the implementation was added.
-Uses respx to mock the NCBI E-utilities (esearch + efetch).
-Fixtures: tests/fixtures/pubmed_esearch.xml, tests/fixtures/pubmed_efetch.xml
+NCBI E-utilities are mocked with respx and use the shared esearch and efetch XML
+fixtures.
 """
 
 from __future__ import annotations
@@ -11,7 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from lxml import etree
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.pubmed_source import (
@@ -415,6 +416,23 @@ async def test_fetch_new_since_429_records_rate_limit_diagnostic():
     assert source.last_poll_diagnostic["status"] == "rate_limit"
     assert source.last_poll_diagnostic["status_code"] == 429
     assert source.last_poll_diagnostic["retry_after_s"] == 7
+
+
+async def test_fetch_new_since_propagates_outbound_quarantine(monkeypatch):
+    """A quarantine race remains retryable instead of looking like no data."""
+    source = _make_source()
+
+    async def blocked_search(*_args, **_kwargs):
+        raise OutboundEgressBlockedError("outbound work is quarantined")
+
+    monkeypatch.setattr(source, "_esearch", blocked_search)
+
+    with pytest.raises(OutboundEgressBlockedError, match="quarantined"):
+        await source.fetch_new_since(
+            since=datetime(2026, 5, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="oncology", query_terms=["oncology"])],
+            limit=10,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -840,13 +858,13 @@ async def test_fetch_new_since_rate_limiter_acquired_per_term():
 
 
 # ---------------------------------------------------------------------------
-# MED-PI-EXT-05: NCBI User-Agent + tool + email query params
+# NCBI client identification headers and query parameters
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 async def test_esearch_carries_ncbi_identification_headers_and_params():
-    """MED-PI-EXT-05: esearch request must carry User-Agent header + tool= + email= params."""
+    """An esearch request identifies the client in headers and query parameters."""
     route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
     respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
 

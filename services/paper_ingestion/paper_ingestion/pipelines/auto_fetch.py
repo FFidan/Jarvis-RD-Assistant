@@ -6,19 +6,32 @@ Called by the APScheduler job registered in ``scheduler.start_scheduler``.
 
 import asyncio
 import logging
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from jarvis_common.library import fan_out_to_topic_users
 from jarvis_common.maintenance import skip_for_maintenance
+from jarvis_common.serialization import read_global_config_flag
 
 from paper_ingestion.config import get_paper_ingestion_settings
-from paper_ingestion.models import PaperSourceConfig
+from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME
+from paper_ingestion.models import PaperSourceConfig, TopicRef
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
-from paper_ingestion.services.pdf_workflow import run_process_pdf, upsert_paper
+from paper_ingestion.services.pdf_workflow import (
+    download_and_store_pdf,
+    run_process_pdf,
+    upsert_verified_public_paper,
+)
 from paper_ingestion.sources.registry import get_source_class
 
 logger = logging.getLogger(__name__)
+
+# Discovery lookback window — mirrors pulse.profile.PulseProfile.lookback_days' default.
+_DISCOVERY_LOOKBACK_DAYS = 7
+_AUTO_PROCESS_PAGE_SIZE = 20
+_AUTO_PROCESS_CONCURRENCY = 3
 
 
 def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
@@ -51,12 +64,13 @@ def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
 
 
 async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
-    """For each enabled source: search per topic and save results.
+    """For each enabled source: fetch papers new since the lookback window, per topic.
 
     Returns the number of newly-inserted canonical papers. Each saved paper
     is fanned out (idempotently) to users subscribed to the matching topic.
     """
     papers_added = 0
+    since = datetime.now(UTC) - timedelta(days=_DISCOVERY_LOOKBACK_DAYS)
     for src_row in sources_rows:
         source_type = src_row["source_type"]
         try:
@@ -70,10 +84,14 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                 enabled=src_row["enabled"],
                 config=src_row["config"] or {},
             )
-            source = source_class(config, app.state.http_client)
+            source = source_class(config, app.state.http_client, db_pool=db_pool)
             for topic_id, topic_name in topic_pairs:
+                if topic_id is None:
+                    continue
                 try:
-                    results = await source.search(topic_name, max_results=20)
+                    results = await source.fetch_new_since(
+                        since, [TopicRef(id=topic_id, name=topic_name)], limit=20
+                    )
                     if results:
                         # batch save via internal function (bypasses HTTP rate limiter)
                         async with db_pool.acquire() as conn:
@@ -81,13 +99,13 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                                 try:
                                     # system-initiated bulk discovery
                                     paper.discovery_origin = "recommender"
-                                    row = await upsert_paper(conn, paper)
+                                    row = await upsert_verified_public_paper(conn, paper)
                                     if row and row["is_insert"]:
                                         papers_added += 1
                                     # Fan out to every user subscribed to
                                     # this topic. Idempotent via
                                     # ON CONFLICT DO NOTHING.
-                                    if row and topic_id is not None:
+                                    if row:
                                         try:
                                             await fan_out_to_topic_users(
                                                 conn,
@@ -144,14 +162,7 @@ async def _download_pending_pdfs(app, db_pool, sem) -> None:
     async def _download_and_store_pdf(paper_id: int, pdf_url: str) -> None:
         async with sem:
             try:
-                pdf_path = await pdf_processor.download_pdf(pdf_url, paper_id)
-                async with db_pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE papers SET pdf_local_path = $1,"
-                        " pdf_downloaded = TRUE WHERE id = $2",
-                        str(pdf_path),
-                        paper_id,
-                    )
+                await download_and_store_pdf(db_pool, pdf_processor, pdf_url, paper_id)
                 logger.info("auto_pipeline: downloaded PDF for paper %d", paper_id)
             except Exception as exc:
                 logger.warning(
@@ -173,8 +184,47 @@ async def _download_pending_pdfs(app, db_pool, sem) -> None:
                 logger.warning("auto_pipeline: download task failed: %s", r, exc_info=r)
 
 
+async def _is_auto_summarize_enabled(db_pool: Any) -> bool:
+    """Read ``user_config['automation.auto_summarize_discovered']`` — defaults to False."""
+    return await read_global_config_flag(
+        db_pool, "automation.auto_summarize_discovered", log_label="auto_pipeline"
+    )
+
+
+_UNSUMMARIZED_HOLDERS_SQL = """
+    SELECT ul.user_id FROM user_library ul
+    WHERE ul.paper_id = $1
+      AND NOT EXISTS (
+          SELECT 1 FROM paper_summaries s
+          WHERE s.paper_id = ul.paper_id AND s.user_id = ul.user_id
+      )
+"""
+
+
+async def _maybe_defer_summarize(db_pool, paper_id: int) -> None:
+    """Best-effort defer ``paper.summarize`` once per library holder lacking a summary.
+
+    Summaries are per-user by schema and every reader binds a strict integer
+    owner, so a NULL-owned summary is unreadable. A paper nobody holds gets
+    no summary at all.
+    """
+    async with db_pool.acquire() as conn:
+        holders = await conn.fetch(_UNSUMMARIZED_HOLDERS_SQL, paper_id)
+    if not holders:
+        return
+    try:
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+        for row in holders:
+            await KIND_TO_TASK["paper.summarize"].defer_async(
+                job_id=str(uuid.uuid4()), user_id=row["user_id"], paper_id=paper_id
+            )
+    except Exception:
+        logger.exception("paper.summarize enqueue failed for paper %d", paper_id)
+
+
 async def _process_pending_papers(app, db_pool, sem) -> None:
-    """Process papers that have a PDF but haven't been chunked/embedded yet.
+    """Process incomplete PDFs and reconcile a bounded page of completed papers.
 
     ``sem`` is the function-local concurrency limiter created per
     ``run_auto_pipeline`` invocation and passed in here.
@@ -187,11 +237,22 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
             """SELECT p.id, p.pdf_local_path FROM papers p
                WHERE p.pdf_downloaded = TRUE
                  AND p.pdf_local_path IS NOT NULL
-                 AND p.chunked_at IS NULL
-               ORDER BY p.id
-               LIMIT 20"""
+               ORDER BY CASE
+                          WHEN p.chunked_at IS NULL OR EXISTS (
+                              SELECT 1 FROM paper_chunks c
+                               WHERE c.paper_id = p.id
+                                 AND (c.embedding_model IS DISTINCT FROM $1
+                                      OR c.embedding_id IS NULL)
+                          ) THEN 0 ELSE 1
+                        END,
+                        p.chunked_at NULLS FIRST,
+                        p.id
+               LIMIT $2""",
+            EMBEDDING_MODEL_NAME,
+            _AUTO_PROCESS_PAGE_SIZE,
         )
     logger.info("auto_pipeline: %d papers to process", len(to_process))
+    auto_summarize_enabled = await _is_auto_summarize_enabled(db_pool)
 
     async def _extract_and_embed_paper(paper_id: int, pdf_path: Path) -> None:
         async with sem:
@@ -205,6 +266,8 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
                     force=False,
                 )
                 logger.info("auto_pipeline: processed paper %d", paper_id)
+                if auto_summarize_enabled:
+                    await _maybe_defer_summarize(db_pool, paper_id)
             except Exception as exc:
                 logger.warning(
                     "auto_pipeline: failed to process paper %d: %s",
@@ -245,7 +308,9 @@ async def run_auto_pipeline(app) -> None:
         return
 
     db_pool = app.state.db_pool
-    sem = asyncio.Semaphore(3)  # cap concurrent embedding tasks; leaves headroom for HTTP requests
+    sem = asyncio.Semaphore(
+        _AUTO_PROCESS_CONCURRENCY
+    )  # leaves headroom for interactive HTTP requests
 
     logger.info("auto_pipeline: starting run")
     try:
@@ -259,7 +324,7 @@ async def run_auto_pipeline(app) -> None:
 
         topic_pairs = _resolve_topic_pairs(topics_rows)
 
-        # 2. For each enabled source: search per topic and save results
+        # 2. For each enabled source: fetch new-since results per topic and save
         papers_added = await _discover_and_save(app, db_pool, sources_rows, topic_pairs)
         logger.info("auto_pipeline: saved %d papers", papers_added)
 

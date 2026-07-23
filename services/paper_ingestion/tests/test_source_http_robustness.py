@@ -1,19 +1,19 @@
-"""Source plugin robustness tests.
-
-Covers:
-- H13: SemanticScholarSource._fetch_json returns {} on 429/5xx (no exception)
-- H21: OpenAlexSource rejects pdf_url with non-http(s) scheme even if hostname is in allowlist
-- M4: OpenAlexSource sends api_key as ?api_key= query param, NOT Authorization Bearer header
-"""
+"""Source HTTP failure, URL validation, credential, and quarantine tests."""
 
 from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 import respx
 from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
+from jarvis_common.maintenance import OutboundEgressBlockedError
+from paper_ingestion.sources.arxiv_source import ArxivSource
 from paper_ingestion.sources.openalex_source import OPENALEX_API_URL, OpenAlexSource
+from paper_ingestion.sources.pubmed_source import PubMedSource
 from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
 
 # ---------------------------------------------------------------------------
@@ -21,24 +21,37 @@ from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, Semantic
 # ---------------------------------------------------------------------------
 
 
-def _make_s2_source(api_key: str | None = None) -> SemanticScholarSource:
+def _make_s2_source(
+    api_key: str | None = None,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> SemanticScholarSource:
     config = PaperSourceConfig(
         id=2,
         source_type=SourceType.SEMANTIC_SCHOLAR,
         enabled=True,
         config={"api_key": api_key} if api_key else {},
     )
-    return SemanticScholarSource(config, httpx.AsyncClient())
+    return SemanticScholarSource(config, http_client or httpx.AsyncClient())
 
 
-def _make_oa_source(api_key: str | None = "test-oa-key") -> OpenAlexSource:
+def _make_oa_source(
+    api_key: str | None = "test-oa-key",
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> OpenAlexSource:
     config = PaperSourceConfig(
         id=3,
         source_type=SourceType.OPENALEX,
         enabled=True,
         config={"api_key": api_key} if api_key else {},
     )
-    return OpenAlexSource(config, httpx.AsyncClient())
+    return OpenAlexSource(config, http_client or httpx.AsyncClient())
+
+
+def _make_source(source_type: SourceType, source_class, http_client=None):
+    config = PaperSourceConfig(id=9, source_type=source_type, enabled=True, config={})
+    return source_class(config, http_client or httpx.AsyncClient())
 
 
 def _oa_work(pdf_url_value: str | None) -> dict:
@@ -56,7 +69,7 @@ def _oa_work(pdf_url_value: str | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# H13: S2 _fetch_json returns {} on 429 (no exception raised)
+# Semantic Scholar transient responses
 # ---------------------------------------------------------------------------
 
 
@@ -99,7 +112,7 @@ async def test_s2_fetch_by_id_returns_none_for_malformed_payload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H21: OpenAlex pdf_url scheme check — file:// rejected even if hostname in allowlist
+# OpenAlex PDF URL scheme validation
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +142,7 @@ async def test_openalex_rejects_file_scheme_pdf_url() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M4: OpenAlex api_key sent as ?api_key= query param, NOT Authorization Bearer header
+# OpenAlex API-key transport
 # ---------------------------------------------------------------------------
 
 
@@ -156,3 +169,140 @@ async def test_openalex_api_key_sent_as_query_param() -> None:
     assert "authorization" not in {k.lower() for k in request.headers}, (
         f"Unexpected Authorization header: {dict(request.headers)!r}"
     )
+
+
+@pytest.mark.parametrize(
+    ("source_factory", "invoke"),
+    [
+        (_make_s2_source, lambda source: source._fetch_json("/paper/search")),
+        (_make_oa_source, lambda source: source.search("quarantine")),
+        (
+            lambda: _make_source(SourceType.ARXIV, ArxivSource),
+            lambda source: source._fetch_xml({"search_query": "all:test"}),
+        ),
+        (
+            lambda: _make_source(SourceType.PUBMED, PubMedSource),
+            lambda source: source._esearch("quarantine", 1),
+        ),
+    ],
+    ids=["semantic-scholar", "openalex", "arxiv", "pubmed"],
+)
+async def test_source_sinks_refuse_quarantine_before_http(
+    monkeypatch, tmp_path, source_factory, invoke
+) -> None:
+    """Quarantine prevents each scholarly source from opening an HTTP request."""
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    source = source_factory()
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await invoke(source)
+
+    await source.http_client.aclose()
+
+
+class _BarrierLimiter:
+    """Pause one rate-limit acquisition until a test releases it."""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def acquire(self) -> None:
+        """Signal entry and wait for the test to activate quarantine."""
+        self.entered.set()
+        await self.release.wait()
+
+
+@pytest.mark.parametrize(
+    ("source_factory", "invoke", "persistent_limiter"),
+    [
+        (
+            lambda client: _make_s2_source(http_client=client),
+            lambda source: source._fetch_json("/paper/search"),
+            False,
+        ),
+        (
+            lambda client: _make_source(SourceType.PUBMED, PubMedSource, client),
+            lambda source: source._esearch("quarantine", 1),
+            False,
+        ),
+        (
+            lambda client: _make_source(SourceType.PUBMED, PubMedSource, client),
+            lambda source: source._efetch(["1"]),
+            False,
+        ),
+        (
+            lambda client: _make_source(SourceType.ARXIV, ArxivSource, client),
+            lambda source: source._fetch_xml({"search_query": "all:test"}),
+            False,
+        ),
+        (
+            lambda client: _make_oa_source(http_client=client),
+            lambda source: source.search("quarantine"),
+            False,
+        ),
+        (
+            lambda client: _make_oa_source(http_client=client),
+            lambda source: source.fetch_by_id("W123"),
+            False,
+        ),
+        (
+            lambda client: _make_oa_source(http_client=client),
+            lambda source: source.fetch_new_since(
+                since=datetime(2026, 1, 1, tzinfo=UTC),
+                topics=[],
+                limit=1,
+            ),
+            True,
+        ),
+    ],
+    ids=[
+        "semantic-scholar",
+        "pubmed-search",
+        "pubmed-fetch",
+        "arxiv",
+        "openalex-search",
+        "openalex-fetch",
+        "openalex-scheduled-fetch",
+    ],
+)
+async def test_source_sinks_recheck_quarantine_after_rate_limit(
+    monkeypatch,
+    tmp_path,
+    source_factory,
+    invoke,
+    persistent_limiter,
+) -> None:
+    """A restore beginning during a limiter wait prevents every source request."""
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    requests = 0
+
+    def handle_request(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json={})
+
+    barrier = _BarrierLimiter()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle_request)) as client:
+        source = source_factory(client)
+        if persistent_limiter:
+            monkeypatch.setattr(
+                source,
+                "make_persistent_rate_limiter",
+                lambda **_kwargs: barrier,
+            )
+        else:
+            monkeypatch.setattr(source, "_rate_limit", barrier.acquire)
+
+        task = asyncio.create_task(invoke(source))
+        await asyncio.wait_for(barrier.entered.wait(), timeout=1.0)
+        quarantine.touch()
+        barrier.release.set()
+
+        with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+            await task
+
+    assert requests == 0

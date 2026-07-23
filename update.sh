@@ -3,12 +3,11 @@
 #
 #   --build-local   Rebuild the application images from source instead of pulling
 #                   the prebuilt ones published to GHCR. Slower and needs far more
-#                   disk; for development or an air-gapped host.
+#                   disk; base images and build inputs must be cached or reachable.
 #   --yes           Assume "yes" for every confirmation prompt (unattended runs).
 #
-# Never auto-rollbacks. On failure, prints the recovery commands for both the
-# third-party pins (versions.env) and the application images (JARVIS_VERSION
-# tag). macOS-safe: no `sed -i`, no GNU-only flags.
+# Never rolls back automatically. A direct-run failure prints bounded recovery
+# commands for the affected image set. macOS-safe: no `sed -i`, no GNU-only flags.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -47,6 +46,7 @@ die() {
 print_split_recovery() {
   local svc
   local -a failed_app=() failed_third=()
+  local -a recovery_profiles=()
   for svc in "$@"; do
     if _env_key_in_list "$svc" "${THIRD_PARTY_SET:-}"; then
       failed_third+=("$svc")
@@ -54,7 +54,13 @@ print_split_recovery() {
       failed_app+=("$svc")
     fi
   done
-  printf '\nRecovery — the two image sets roll back differently:\n'
+  if declare -p APP_PROFILE_ARGS >/dev/null 2>&1; then
+    recovery_profiles=("${APP_PROFILE_ARGS[@]}")
+  fi
+
+  printf '\nRecovery is limited to the failed image services.\n'
+  printf '  Repository: %s\n' "${SCRIPT_DIR:-.}"
+  printf '    cd %q\n' "${SCRIPT_DIR:-.}"
 
   if [ "${#failed_third[@]}" -gt 0 ]; then
 cat <<EOF
@@ -66,16 +72,36 @@ EOF
   fi
 
   if [ "${#failed_app[@]}" -gt 0 ]; then
-cat <<EOF
-
-  ${C_BOLD}Application services${C_RESET} are tagged by JARVIS_VERSION in docker-compose.yml —
-  versions.env does NOT pin them, so the command above re-pulls the same
-  images. To return them to a previously PUBLISHED release, pin that tag and
-  pull it back (only tags already in the registry can be rolled back; a
-  --build-local install rebuilds from source with --build-local instead):
-    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose pull ${failed_app[*]}${C_RESET}
-    ${C_BOLD}JARVIS_VERSION=<previous-version> docker compose up -d --no-build ${failed_app[*]}${C_RESET}
-EOF
+    printf '\n  %sApplication-image recovery (not a full release rollback):%s\n' "$C_BOLD" "$C_RESET"
+    printf '  Application services use JARVIS_VERSION; these commands do not move the Git checkout or restore stored data.\n'
+    if ! printf '%s' "${PREVIOUS_APP_VERSION:-}" \
+        | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+      printf '  The previous application version could not be read safely from .env, so no image command was printed.\n'
+    elif [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
+      printf '  Use this only if the previous application image is still cached locally:\n'
+      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      if [ "${#recovery_profiles[@]}" -gt 0 ]; then
+        printf ' %q' "${recovery_profiles[@]}"
+      fi
+      printf ' up -d --no-build'
+      printf ' %q' "${failed_app[@]}"
+      printf '\n'
+    else
+      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      if [ "${#recovery_profiles[@]}" -gt 0 ]; then
+        printf ' %q' "${recovery_profiles[@]}"
+      fi
+      printf ' pull'
+      printf ' %q' "${failed_app[@]}"
+      printf '\n'
+      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      if [ "${#recovery_profiles[@]}" -gt 0 ]; then
+        printf ' %q' "${recovery_profiles[@]}"
+      fi
+      printf ' up -d --no-build'
+      printf ' %q' "${failed_app[@]}"
+      printf '\n'
+    fi
   fi
 
 cat <<EOF
@@ -92,7 +118,9 @@ fail_with_recovery() {
   local msg="$1" hint="$2"; shift 2
   err "$msg"
   printf '        %s%s%s\n' "$C_YELLOW" "$hint" "$C_RESET" >&2
-  print_split_recovery "$@"
+  if [ "${UPDATE_MANAGED_TRANSACTION:-0}" -eq 0 ]; then
+    print_split_recovery "$@"
+  fi
   exit 1
 }
 
@@ -135,8 +163,74 @@ confirm() {
 # shellcheck disable=SC1091  # resolved at runtime relative to SCRIPT_DIR
 . scripts/setup_lib.sh
 
+# Caller-exported Compose selectors outrank this checkout's .env. Clear them
+# before any Docker command so a direct update cannot target another project;
+# Compose will still load this install's persisted selectors from .env.
+sanitize_compose_environment
+
+UPDATE_LIFECYCLE_OWNED=0
+UPDATE_MUTATION_STARTED=0
+UPDATE_MANAGED_TRANSACTION=0
+_cleanup_direct_update_lifecycle() {
+  local rc=$? action=clear
+  trap - EXIT
+  if [ "$UPDATE_LIFECYCLE_OWNED" -eq 1 ]; then
+    [ "$UPDATE_MUTATION_STARTED" -ne 1 ] || action=retain
+    [ "$rc" -ne 0 ] || action=clear
+    finish_lifecycle_operation "$SCRIPT_DIR" direct-update "$action" 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+
+_update_lock_rc=0
+claim_host_lifecycle_lock "$SCRIPT_DIR" || _update_lock_rc=$?
+case "$_update_lock_rc" in
+  0) ;;
+  3) die "Another lifecycle operation is already running for this JARVIS install." \
+       "No services were changed. Wait for it to finish, then retry." ;;
+  *) die "The per-install lifecycle lock is unavailable or unsafe." \
+       "No services were changed. Run: jarvis-research doctor" ;;
+esac
+
 # -----------------------------------------------------------------------------
-# 1-2. Load pinned versions
+# 1. Resolve this checkout's application image tag.
+# -----------------------------------------------------------------------------
+# An exact release tag is authoritative for release-candidate checkouts, whose
+# pyproject version intentionally remains the eventual stable version. Otherwise
+# read the project version from this checkout. The result is exported before the
+# first Compose invocation so it overrides any stale JARVIS_VERSION in .env.
+resolve_checkout_app_version() {
+  local exact_tag="" version=""
+  if command -v git >/dev/null 2>&1; then
+    exact_tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+  fi
+
+  case "$exact_tag" in
+    v[0-9]*) version="${exact_tag#v}" ;;
+    *)
+      [ -r pyproject.toml ] || return 1
+      version="$(awk '
+        /^\[project\][[:space:]]*$/ { in_project = 1; next }
+        in_project && /^\[/ { exit }
+        in_project && /^[[:space:]]*version[[:space:]]*=/ {
+          line = $0
+          if (line !~ /^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"[[:space:]]*$/) exit
+          sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*"/, "", line)
+          sub(/"[[:space:]]*$/, "", line)
+          print line
+          exit
+        }
+      ' pyproject.toml 2>/dev/null)"
+      ;;
+  esac
+
+  [ "${#version}" -le 128 ] || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || return 1
+  printf '%s' "$version"
+}
+
+# -----------------------------------------------------------------------------
+# 2. Load pinned versions
 # -----------------------------------------------------------------------------
 if [ ! -f versions.env ]; then
   die "versions.env not found in $SCRIPT_DIR." \
@@ -145,18 +239,65 @@ fi
 # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
 set -a && . ./versions.env && set +a
 
+if ! CHECKOUT_APP_VERSION="$(resolve_checkout_app_version)"; then
+  die "Could not determine a valid application version from this checkout." \
+      "Use an exact vMAJOR.MINOR.PATCH[-PRERELEASE] tag, or fix [project].version in pyproject.toml."
+fi
+PREVIOUS_APP_VERSION="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+if ! printf '%s' "$PREVIOUS_APP_VERSION" \
+    | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+  PREVIOUS_APP_VERSION=""
+fi
+export JARVIS_VERSION="$CHECKOUT_APP_VERSION"
+
 command -v docker >/dev/null 2>&1 \
   || die "Docker not found in PATH." \
          "Install Docker Engine: https://docs.docker.com/engine/install/"
 docker compose version >/dev/null 2>&1 \
   || die "Docker Compose v2 required ('docker compose' plugin)." \
          "Install it: https://docs.docker.com/compose/install/"
+docker info >/dev/null 2>&1 \
+  || die "The Docker daemon is not reachable." \
+         "Start Docker, then re-run: ./update.sh"
+
+if printf '%s' "${JARVIS_UPDATE_VOLUME_GUARD_ID:-}" | grep -Eq '^[0-9a-f]{32}$' \
+    && lifecycle_update_guard_is_promoted \
+         "$SCRIPT_DIR" "$JARVIS_UPDATE_VOLUME_GUARD_ID"; then
+  # jarvis-research owns the promoted sidecar lease and inherited host lock.
+  [ "${JARVIS_TRANSACTIONAL_UPDATE:-0}" != 1 ] || UPDATE_MANAGED_TRANSACTION=1
+else
+  _update_lock_rc=0
+  claim_lifecycle_operation "$SCRIPT_DIR" direct-update || _update_lock_rc=$?
+  case "$_update_lock_rc" in
+    0) UPDATE_LIFECYCLE_OWNED=1; trap _cleanup_direct_update_lifecycle EXIT ;;
+    3|4) die "Another lifecycle operation is active or needs recovery." \
+           "No services were changed. Finish it, then retry." ;;
+    *) die "The private lifecycle volume is unavailable or unsafe." \
+         "No services were changed. Run: jarvis-research doctor" ;;
+  esac
+fi
 
 # Every published service pairs `pull_policy: missing` with a `build:` block, so a
 # missing image turns any `up` into a silent multi-GB rebuild. Guard every bring-up
 # below unless the user explicitly asked to build from source.
 UP_NO_BUILD=()
 [ "$BUILD_LOCAL" -eq 1 ] || UP_NO_BUILD=(--no-build)
+
+# v1.2 narrows proxy trust to exact pinned container addresses. Older installs
+# recorded only JARVIS_NET_SUBNET, so materialize those peers before any Compose
+# pull or recreate can resolve the new network configuration.
+_ingress_keys_missing=0
+for _key in JARVIS_NET_GATEWAY_IP JARVIS_CADDY_IP JARVIS_CADDY_LOCAL_IP \
+  JARVIS_DASHBOARD_IP JARVIS_CLOUDFLARED_IP; do
+  grep -q "^${_key}=" .env 2>/dev/null || _ingress_keys_missing=1
+done
+if ! sync_ingress_ips_from_env; then
+  die "Could not derive trusted ingress addresses from JARVIS_NET_SUBNET." \
+      "JARVIS_NET_SUBNET must be a valid IPv4 /27 or larger network, such as 10.137.241.0/24."
+fi
+if [ "$_ingress_keys_missing" -eq 1 ]; then
+  info "Recorded this install's trusted ingress addresses in .env."
+fi
 
 # A pre-1.1 .env carries no TORCH_VARIANT, so the image tag would resolve to the
 # CPU flavour even on a CUDA host. Backfill BEFORE anything resolves an image —
@@ -184,15 +325,15 @@ get_running_image() {
 # Parallel arrays keep ordering deterministic and avoid assoc-array iter gotchas.
 # The always-on third-party set plus the disaster-recovery backup sidecar, which
 # shares the Postgres pin and drifts otherwise.
-SERVICES=(postgres        ollama       qdrant       litellm       cloudflared       postgres-backup)
-VAR_NAMES=(POSTGRES_IMAGE OLLAMA_IMAGE QDRANT_IMAGE LITELLM_IMAGE CLOUDFLARED_IMAGE POSTGRES_IMAGE)
+SERVICES=(postgres        ollama       qdrant       litellm       postgres-backup)
+VAR_NAMES=(POSTGRES_IMAGE OLLAMA_IMAGE QDRANT_IMAGE LITELLM_IMAGE POSTGRES_IMAGE)
 
 # Optional third-party services (an active TLS edge, the observability stack) are
 # reconciled only when actually deployed — a running container exists — so an
 # install that never enabled them stays quiet instead of reporting them "not
 # running". Their distinctive image is pinned in versions.env like the rest.
-OPTIONAL_TP_SVCS=(caddy       caddy_local vector       langfuse-postgres)
-OPTIONAL_TP_VARS=(CADDY_IMAGE CADDY_IMAGE VECTOR_IMAGE LANGFUSE_POSTGRES_IMAGE)
+OPTIONAL_TP_SVCS=(cloudflared       caddy       caddy_local vector       langfuse-postgres)
+OPTIONAL_TP_VARS=(CLOUDFLARED_IMAGE CADDY_IMAGE CADDY_IMAGE VECTOR_IMAGE LANGFUSE_POSTGRES_IMAGE)
 for _i in "${!OPTIONAL_TP_SVCS[@]}"; do
   if [ -n "$(get_running_image "${OPTIONAL_TP_SVCS[$_i]}")" ]; then
     SERVICES+=("${OPTIONAL_TP_SVCS[$_i]}")
@@ -203,6 +344,16 @@ done
 # The full third-party set for this run, used to classify recovery guidance
 # (versions.env pins vs. JARVIS_VERSION-tagged application images).
 THIRD_PARTY_SET="${SERVICES[*]}"
+
+# In v1.2 the trusted ingress containers and dashboard use pinned source IPs.
+# Recreate every active edge in the same Compose transaction as dashboard so an
+# upgrade cannot leave an old container attached at a now-untrusted address.
+ACTIVE_INGRESS_SERVICES=()
+for svc in caddy caddy_local cloudflared; do
+  if [ -n "$(get_running_image "$svc")" ]; then
+    ACTIVE_INGRESS_SERVICES+=("$svc")
+  fi
+done
 
 # Columns for diff table.
 printf '\n%s%-18s %-40s %-40s %s%s\n' "$C_BOLD" "SERVICE" "RUNNING" "PINNED" "STATUS" "$C_RESET"
@@ -335,27 +486,37 @@ fi
 # -----------------------------------------------------------------------------
 # 6. Recreate — every image is staged, so a bring-up only swaps containers.
 # -----------------------------------------------------------------------------
+UPDATE_MUTATION_STARTED=1
 TO_UPDATE=()
 if [ "$DO_TP" -eq 1 ]; then
-  info "Recreating third-party services..."
-  # cloudflared depends on dashboard, so this bring-up can reach an application
-  # service whose image may be absent — hence the same no-build guard.
-  if ! docker compose up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} "${TP_TO_UPDATE[@]}"; then
-    fail_with_recovery "docker compose up failed." \
-        "Inspect logs: docker compose logs --tail=200 ${TP_TO_UPDATE[*]}" \
-        "${TP_TO_UPDATE[@]}"
+  TP_RECREATE_SERVICES=()
+  for svc in "${TP_TO_UPDATE[@]}"; do
+    if [ "$DO_APP" -eq 1 ] && _env_key_in_list "$svc" "${ACTIVE_INGRESS_SERVICES[*]}"; then
+      continue
+    fi
+    TP_RECREATE_SERVICES+=("$svc")
+  done
+  if [ "${#TP_RECREATE_SERVICES[@]}" -gt 0 ]; then
+    info "Recreating third-party services..."
+    if ! docker compose up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} \
+        --no-deps "${TP_RECREATE_SERVICES[@]}"; then
+      fail_with_recovery "docker compose up failed." \
+          "Inspect logs: docker compose logs --tail=200 ${TP_RECREATE_SERVICES[*]}" \
+          "${TP_RECREATE_SERVICES[@]}"
+    fi
+    TO_UPDATE+=("${TP_RECREATE_SERVICES[@]}")
   fi
-  TO_UPDATE+=("${TP_TO_UPDATE[@]}")
 fi
 
 if [ "$DO_APP" -eq 1 ]; then
-  info "Recreating application services..."
-  if ! docker compose ${APP_PROFILE_ARGS[@]+"${APP_PROFILE_ARGS[@]}"} up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} "${APP_SERVICES[@]}"; then
+  APP_RECREATE_SERVICES=("${APP_SERVICES[@]}" "${ACTIVE_INGRESS_SERVICES[@]}")
+  info "Recreating application services and active ingress..."
+  if ! docker compose ${APP_PROFILE_ARGS[@]+"${APP_PROFILE_ARGS[@]}"} up -d ${UP_NO_BUILD[@]+"${UP_NO_BUILD[@]}"} "${APP_RECREATE_SERVICES[@]}"; then
     fail_with_recovery "docker compose up failed." \
-        "Inspect logs: docker compose logs --tail=200 ${APP_SERVICES[*]}" \
-        "${APP_SERVICES[@]}"
+        "Inspect logs: docker compose logs --tail=200 ${APP_RECREATE_SERVICES[*]}" \
+        "${APP_RECREATE_SERVICES[@]}"
   fi
-  TO_UPDATE+=("${APP_SERVICES[@]}")
+  TO_UPDATE+=("${APP_RECREATE_SERVICES[@]}")
 fi
 
 # -----------------------------------------------------------------------------
@@ -414,6 +575,14 @@ done
 # 8. Report
 # -----------------------------------------------------------------------------
 if [ "${#FAILED[@]}" -eq 0 ]; then
+  if [ "$DO_APP" -eq 1 ]; then
+    if ! upsert_env_var JARVIS_VERSION "$CHECKOUT_APP_VERSION"; then
+      err "Application services are healthy, but JARVIS_VERSION could not be recorded in .env."
+      printf '        %sFix .env permissions, then re-run ./update.sh so future Compose commands keep version %s.%s\n' \
+        "$C_YELLOW" "$CHECKOUT_APP_VERSION" "$C_RESET" >&2
+      exit 1
+    fi
+  fi
   if [ "${#UNVERIFIED[@]}" -gt 0 ]; then
     ok "Updated ${#TO_UPDATE[@]} service(s); ${#UNVERIFIED[@]} running without a healthcheck (not health-verified): ${UNVERIFIED[*]}"
   else
@@ -425,5 +594,7 @@ fi
 
 printf '\n'
 warn "The following service(s) failed health checks: ${FAILED[*]}"
-print_split_recovery "${FAILED[@]}"
+if [ "$UPDATE_MANAGED_TRANSACTION" -eq 0 ]; then
+  print_split_recovery "${FAILED[@]}"
+fi
 exit 1

@@ -11,6 +11,15 @@ from httpx import ASGITransport  # noqa: E402
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
+def test_smtp_log_only_remediation_does_not_claim_bearer_links_are_logged() -> None:
+    """Readiness copy must direct operators to the manual-link recovery path."""
+    from paper_ingestion.routers.system_readiness import _DEV_REMEDIATION
+
+    remediation = _DEV_REMEDIATION["dev_smtp_log_only"]
+    assert "manual sign-in links" in remediation
+    assert "emails print" not in remediation
+
+
 @pytest.fixture()
 def _app(monkeypatch):
     # Deterministic baseline: no dev flags, no configured API key/SMTP.
@@ -28,6 +37,7 @@ def _app(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     from jarvis_common import verify_api_key
+    from jarvis_common.owner import OwnerIdentity
     from jarvis_common.settings import get_secrets_settings
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
@@ -41,6 +51,21 @@ def _app(monkeypatch):
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness.resolve_owner_identity",
+        AsyncMock(return_value=OwnerIdentity("database", "valid", 1)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness.visibility_checkpoint_progress",
+        AsyncMock(
+            return_value={
+                "status": "complete",
+                "last_chunk_id": 4,
+                "total_chunk_id": 4,
+            }
+        ),
+    )
     yield app, conn
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
@@ -76,6 +101,8 @@ async def test_readiness_shape_and_baseline(_app):
         "smtp",
         "https",
         "audit_log",
+        "owner_identity",
+        "vector_visibility_metadata",
     } <= names
 
     # Baseline: dev flags off (green), env amber (development), api_key red
@@ -86,6 +113,8 @@ async def test_readiness_shape_and_baseline(_app):
     assert by_name["api_key"]["status"] == "red"
     assert by_name["audit_log"]["status"] == "green"
     assert by_name["audit_log"]["detail"] == "0 rows"
+    assert by_name["owner_identity"]["status"] == "green"
+    assert by_name["vector_visibility_metadata"]["status"] == "green"
     assert body["status"] == "red"
 
 
@@ -148,6 +177,37 @@ async def test_readiness_all_green_aggregate(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_readiness_vector_visibility_stays_amber_until_current_generation_complete(
+    _app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pending checkpoint progress is bounded and never exposes its generation token."""
+    app, _conn = _app
+    generation = "f" * 32
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness.visibility_checkpoint_progress",
+        AsyncMock(
+            return_value={
+                "status": "pending",
+                "visibility_generation": generation,
+                "last_chunk_id": 12,
+                "total_chunk_id": 30,
+            }
+        ),
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/system/readiness")
+
+    check = {item["name"]: item for item in response.json()["checks"]}["vector_visibility_metadata"]
+    assert check["status"] == "amber"
+    assert check["detail"] == "pending: 12/30"
+    assert generation not in response.text
+
+
+@pytest.mark.asyncio
 async def test_readiness_smtp_amber_when_username_without_password(_app, monkeypatch):
     """host+sender present but SMTP_USER set with no SMTP_PASS → readiness SMTP must not be green.
 
@@ -180,12 +240,8 @@ async def test_readiness_smtp_amber_when_username_without_password(_app, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_readiness_smtp_red_on_production_multiuser(_app, monkeypatch):
-    """Production + >1 user + no deliverable SMTP → smtp readiness is red, not amber.
-
-    On a multi-user production box magic-link is the only login path for
-    non-owner users, so a missing relay is a hard failure.
-    """
+async def test_readiness_smtp_optional_with_manual_admin_links(_app, monkeypatch):
+    """A family instance can invite and recover users without an SMTP relay."""
     app, conn = _app
     monkeypatch.setenv("ENVIRONMENT", "production")
     # >1 non-deleted user → the box is multi-user.
@@ -202,8 +258,47 @@ async def test_readiness_smtp_red_on_production_multiuser(_app, monkeypatch):
 
     assert resp.status_code == 200
     by_name = {c["name"]: c for c in resp.json()["checks"]}
-    assert by_name["smtp"]["status"] == "red", by_name["smtp"]
-    assert resp.json()["status"] == "red"
+    assert by_name["smtp"]["status"] == "amber", by_name["smtp"]
+    copy = f"{by_name['smtp']['detail']} {by_name['smtp']['remediation']}".lower()
+    assert "admin" in copy and "manual" in copy and "link" in copy
+    assert "stdout" not in copy and "log" not in copy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "state", "expected_words"),
+    [
+        ("none", "missing", ("jarvis-research", "owner")),
+        ("database", "invalid_value", ("jarvis-research", "owner")),
+        ("database", "missing_or_deleted_user", ("jarvis-research", "owner")),
+        ("database", "non_admin_user", ("jarvis-research", "owner")),
+        ("environment", "invalid_value", ("OWNER_USER_ID", "restart")),
+    ],
+)
+async def test_readiness_owner_identity_is_actionable_amber(
+    _app, monkeypatch, source, state, expected_words
+):
+    """Owner recovery problems stay available and point to the right authority."""
+    from jarvis_common.owner import OwnerIdentity
+
+    app, _conn = _app
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness.resolve_owner_identity",
+        AsyncMock(return_value=OwnerIdentity(source, state, 9)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/system/readiness")
+
+    assert resp.status_code == 200
+    check = {c["name"]: c for c in resp.json()["checks"]}["owner_identity"]
+    assert check["status"] == "amber"
+    assert check["detail"] == f"{source}: {state}"
+    copy = check["remediation"]
+    assert all(word in copy for word in expected_words)
+    assert "SMTP" not in copy
 
 
 @pytest.mark.asyncio

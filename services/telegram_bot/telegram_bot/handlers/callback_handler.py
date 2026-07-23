@@ -21,7 +21,6 @@ from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
-from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import format_paper_detail, format_project_status
 from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
@@ -116,13 +115,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     config = get_config(context)
     http = get_http(context)
     try:
-        resp = await http.get(
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}",
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = await services_client.get_paper(http, config, jarvis_user_id, paper_id)
     except Exception:
         logger.exception("Failed to fetch paper detail for id=%s", paper_id)
         await query.message.reply_text("Failed to load paper details.", parse_mode="HTML")
@@ -159,20 +152,14 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     action = m.group("action")
     paper_id = int(m.group("id"))
-
-    method, suffix = _PAPER_ACTION_ENDPOINTS[action]
     label = _PAPER_ACTION_LABELS[action]
 
     config = get_config(context)
     http = get_http(context)
     try:
-        resp = await http.request(
-            method,
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}/{suffix}",
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
+        await services_client.update_paper_action(
+            http, config, jarvis_user_id, paper_id, _PAPER_ACTION_ENDPOINTS[action]
         )
-        resp.raise_for_status()
         await query.answer(text=label)
         await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
     except Exception:
@@ -212,13 +199,9 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
     config = get_config(context)
     http = get_http(context)
     try:
-        resp = await http.post(
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}/feedback",
-            json={"signal": signal, "source": source},
-            headers=_owner_headers(config, jarvis_user_id),
-            timeout=15.0,
+        await services_client.record_paper_feedback(
+            http, config, jarvis_user_id, paper_id, {"signal": signal, "source": source}
         )
-        resp.raise_for_status()
         await query.answer(text=label)
     except Exception:
         logger.exception("Failed to record feedback for paper id=%s signal=%s", paper_id, signal)

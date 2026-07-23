@@ -1,8 +1,8 @@
-"""Tests for snapshot endpoint user-library scoping for local/uploaded PDFs.
+"""Tests for snapshot authorization through the central paper policy.
 
 Coverage:
-  (a) Tenant B gets 404 for tenant A's uploaded/local paper snapshot.
-  (b) A public-source paper snapshot is still served to a non-owner (D4).
+  (a) Private papers require explicit caller-library membership.
+  (b) Persisted-public paper snapshots are served to authenticated users.
   (c) Unknown paper_id returns opaque 404 (no existence oracle).
   (d) Path-traversal guard: secure_path blocks escaping paths (400).
 """
@@ -13,12 +13,9 @@ from httpx import ASGITransport
 from jarvis_common.testing import make_pool_and_conn
 
 
-def _paper_row(source_type: str, in_library: bool, discovered_by: int | None = None) -> dict:
-    return {
-        "source_type": source_type,
-        "in_library": in_library,
-        "discovered_by": discovered_by,
-    }
+def _visible_paper_row(source_type: str = "local") -> dict[str, str]:
+    """Represent a row returned after the database visibility predicate passes."""
+    return {"source_type": source_type}
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +63,7 @@ async def test_local_paper_snapshot_denied_to_non_owner(_snap_app):
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 2  # Tenant B
-    conn.fetchrow.return_value = _paper_row("local", in_library=False, discovered_by=1)
+    conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -78,13 +75,45 @@ async def test_local_paper_snapshot_denied_to_non_owner(_snap_app):
     assert "library" not in resp.text.lower()
 
 
+async def test_unattributed_private_snapshot_denied_without_library(_snap_app):
+    """Erasing the discoverer cannot turn a private-origin snapshot public."""
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 2
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
+
+    assert resp.status_code == 404
+
+
+async def test_unattributed_zotero_snapshot_allowed_via_library(_snap_app):
+    """A surviving library membership still authorizes an erased discoverer's item."""
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 2
+    conn.fetchrow.return_value = _visible_paper_row("zotero")
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
+
+    assert resp.status_code == 200
+
+
 async def test_local_paper_snapshot_allowed_for_owner(_snap_app):
-    """Owner of a local paper can retrieve its snapshot."""
+    """A caller with a local paper in their library can retrieve its snapshot."""
     app, conn = _snap_app
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 1  # Owner
-    conn.fetchrow.return_value = _paper_row("local", in_library=True)
+    conn.fetchrow.return_value = _visible_paper_row("local")
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -96,7 +125,7 @@ async def test_local_paper_snapshot_allowed_for_owner(_snap_app):
 
 
 # ---------------------------------------------------------------------------
-# (a') ZOTERO (private-origin) papers are ownership-scoped, not public
+# (a') Provenance and discoverer metadata do not grant access
 # ---------------------------------------------------------------------------
 
 
@@ -110,7 +139,7 @@ async def test_zotero_paper_snapshot_denied_to_non_discoverer(_snap_app):
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 2  # Non-discoverer
-    conn.fetchrow.return_value = _paper_row("zotero", in_library=False, discovered_by=1)
+    conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -122,30 +151,29 @@ async def test_zotero_paper_snapshot_denied_to_non_discoverer(_snap_app):
     assert "library" not in resp.text.lower()
 
 
-async def test_zotero_paper_snapshot_allowed_for_discoverer(_snap_app):
-    """The caller who discovered a ZOTERO paper can retrieve its snapshot."""
+async def test_zotero_paper_snapshot_denied_to_discoverer_without_library(_snap_app):
+    """Discoverer attribution alone does not authorize a private snapshot."""
     app, conn = _snap_app
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 1  # Discoverer
-    conn.fetchrow.return_value = _paper_row("zotero", in_library=False, discovered_by=1)
+    conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.get("/api/snapshots/1/1")
 
-    assert resp.status_code == 200
-    assert resp.headers["content-type"] == "image/png"
+    assert resp.status_code == 404
 
 
 async def test_private_paper_snapshot_allowed_via_library(_snap_app):
-    """A private paper discovered by another user but in the caller's library is served."""
+    """A private paper in the caller's library is served regardless of discoverer."""
     app, conn = _snap_app
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 2  # Not the discoverer
-    conn.fetchrow.return_value = _paper_row("zotero", in_library=True, discovered_by=1)
+    conn.fetchrow.return_value = _visible_paper_row("zotero")
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -157,18 +185,18 @@ async def test_private_paper_snapshot_allowed_via_library(_snap_app):
 
 
 # ---------------------------------------------------------------------------
-# (b) Public-source papers remain shared per D4
+# (b) Persisted-public papers remain shared
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("source_type", ["arxiv", "semantic_scholar", "openalex", "pubmed"])
-async def test_public_source_snapshot_accessible_to_non_owner(_snap_app, source_type):
-    """Public-corpus papers are served to any authenticated user (D4 preserved)."""
+async def test_persisted_public_snapshot_accessible_to_authenticated_user(_snap_app, source_type):
+    """A row accepted by the persisted-public predicate is served regardless of source."""
     app, conn = _snap_app
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 99  # Not in library
-    conn.fetchrow.return_value = _paper_row(source_type, in_library=False)
+    conn.fetchrow.return_value = _visible_paper_row(source_type)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -177,6 +205,12 @@ async def test_public_source_snapshot_accessible_to_non_owner(_snap_app, source_
 
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
+
+    visibility_query = str(conn.fetchrow.await_args.args[0])
+    assert "p.visibility_scope = 'public'" in visibility_query
+    assert "user_library" in visibility_query
+    assert "discovered_by" not in visibility_query
+    assert "source_type IN" not in visibility_query
 
 
 # ---------------------------------------------------------------------------
@@ -229,8 +263,9 @@ async def test_path_traversal_guard_still_active(_snap_app, monkeypatch):
 
     app, conn = _snap_app
     app.dependency_overrides[get_current_user_id] = lambda: 1
-    # Use a public-source paper so the DB scoping gate does not fire first.
-    conn.fetchrow.return_value = _paper_row("arxiv", in_library=False)
+    # Represent a paper accepted by the central visibility predicate so the
+    # filesystem guard is the first failing boundary.
+    conn.fetchrow.return_value = _visible_paper_row("arxiv")
 
     def _escape(*_args, **_kwargs):
         raise ValueError("path escapes base directory")

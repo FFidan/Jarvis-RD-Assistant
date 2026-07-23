@@ -7,7 +7,8 @@ import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot import owner as _owner
-from telegram_bot.config import BotConfig, _owner_headers
+from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +36,8 @@ async def _send_reminder_to_chat(
         DB user PK. Adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
         so the backend scopes stats to that user.
     """
-    headers = _owner_headers(config, user_id)
-
     try:
-        resp = await http_client.get(
-            f"{config.learning_engine_url}/api/stats",
-            headers=headers,
-        )
-        resp.raise_for_status()
-        stats = resp.json()
+        stats = await services_client.fetch_stats(http_client, config, user_id)
     except (httpx.HTTPError, KeyError, ValueError):
         logger.warning(
             "Could not fetch learning engine stats for review reminder (chat_id=%d)", chat_id

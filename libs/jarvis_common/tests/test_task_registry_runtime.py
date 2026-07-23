@@ -14,12 +14,13 @@ class _FakeProcrastinateApp:
     def __init__(self) -> None:
         self.tasks: dict[str, object] = {}
 
-    def task(self, *, name: str, queue: str, pass_context: bool):
+    def task(self, *, name: str, queue: str, pass_context: bool, retry):
         """Return a decorator matching the Procrastinate task-registration shape."""
 
         def _decorate(fn):
             fn.queue = queue
             fn.pass_context = pass_context
+            fn.retry_strategy = retry
             self.tasks[name] = fn
             return fn
 

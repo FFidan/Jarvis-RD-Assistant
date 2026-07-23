@@ -15,6 +15,20 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
+_VISIBILITY_GENERATION = "a" * 32
+
+
+async def _current_visibility_generation() -> str:
+    """Return the fixed generation shared by isolated vector tests."""
+    return _VISIBILITY_GENERATION
+
+
+def _private_visibility(source_type: str):
+    """Build complete private-vector metadata for a test paper."""
+    from paper_ingestion.ingestion.payload_schema import VectorVisibility
+
+    return VectorVisibility(source_type, "private", _VISIBILITY_GENERATION)
+
 
 async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatch):
     """Embedder uses real HTTP embeddings plus Qdrant-compatible search/storage.
@@ -31,7 +45,11 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
         monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
         async with httpx.AsyncClient() as http_client:
             qdrant = FauxQdrantClient()
-            embedder = Embedder(http_client, qdrant)
+            embedder = Embedder(
+                http_client,
+                qdrant,
+                visibility_generation_provider=_current_visibility_generation,
+            )
             await embedder.ensure_collection()
 
             await embedder.embed_and_store(
@@ -53,6 +71,7 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
                     ),
                 ],
                 user_id=7,
+                visibility=_private_visibility("arxiv"),
             )
             await embedder.embed_and_store(
                 11,
@@ -66,6 +85,7 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
                     )
                 ],
                 user_id=8,
+                visibility=_private_visibility("upload"),
             )
 
             in_paper = await embedder.search_chunks_in_paper(
@@ -77,6 +97,7 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
             scoped_global = await embedder.search_chunks_global(
                 "paper",
                 user_id=7,
+                library_paper_ids=[10],
                 limit=10,
                 score_threshold=0.0,
             )
@@ -90,8 +111,8 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
 #
 # Proves through the REAL prepare_cross_paper_rag path (real Embedder + faux
 # Qdrant + real DB visibility check) that:
-#   POSITIVE: caller B retrieves a SHARED paper P that user A embedded
-#             (chunks payload user_id=A) because P is in B's user_library.
+#   POSITIVE: caller B retrieves private paper P that user A embedded because
+#             P is also present in B's user_library.
 #   NEGATIVE: a paper Q PRIVATE to A (in A's library only, NOT B's) is NOT
 #             retrievable by B — neither via the widened Qdrant branch (Q not
 #             in B's library) nor past the defense-in-depth DB visibility check.
@@ -108,7 +129,7 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
 async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
     contract_conn, monkeypatch
 ):
-    """Caller B retrieves shared paper P (embedded by A) but never A-private Q."""
+    """Caller B retrieves a joint-library paper but never A-only private Q."""
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
     from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
@@ -122,7 +143,7 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
         "INSERT INTO users (email, role) VALUES ('rag-b@test', 'user') RETURNING id"
     )
 
-    # Paper P — shared corpus, processed by A; Paper Q — private upload owned by A.
+    # Paper P is in both libraries; paper Q is an A-only private upload.
     paper_p = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
            VALUES ('rag-shared-P', 'arxiv', 'Shared Reproducibility Paper', '{}',
@@ -148,11 +169,15 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
         monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
         async with httpx.AsyncClient() as http_client:
             qdrant = FauxQdrantClient()
-            embedder = Embedder(http_client, qdrant)
+            embedder = Embedder(
+                http_client,
+                qdrant,
+                visibility_generation_provider=_current_visibility_generation,
+            )
             await embedder.ensure_collection()
 
-            # Both P's and Q's chunks were embedded BY A (payload user_id=A) — the
-            # secondary-owner under-fetch scenario the fix targets.
+            # Both vectors retain A as legacy attribution, but authorization
+            # depends only on complete private-scope metadata plus membership.
             await embedder.embed_and_store(
                 paper_p,
                 [
@@ -165,6 +190,7 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("arxiv"),
             )
             await embedder.embed_and_store(
                 paper_q,
@@ -178,6 +204,7 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("upload"),
             )
 
             # Isolate filter behaviour: identity rerank (no reranker config / network).
@@ -197,9 +224,9 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
     assert isinstance(result, CrossPaperRagPrep), f"expected results, got {result!r}"
     retrieved_paper_ids = {s["paper_id"] for s in result.sources}
 
-    # POSITIVE — B retrieves shared paper P even though A embedded its chunks.
+    # POSITIVE — B retrieves paper P from B's library although A embedded it.
     assert paper_p in retrieved_paper_ids, (
-        "caller B must retrieve shared paper P (in B's library) despite A embedding it — "
+        "caller B must retrieve paper P from B's library despite A embedding it — "
         "this is the PI-RAG-001 under-fetch the widening fixes"
     )
     # NEGATIVE / no-leak — Q is private to A; B must never see it.
@@ -217,12 +244,12 @@ async def _identity_rerank(query, chunks, top_k):  # noqa: ARG001
 # ---------------------------------------------------------------------------
 # search_chunks_in_paper defense-in-depth user scope
 #
-# Same shared-corpus topology as the PI-RAG-001 cross-paper test above, but at
+# Same joint-library topology as the PI-RAG-001 cross-paper test above, but at
 # the paper-scoped search boundary:
-#   POSITIVE: caller B retrieves chunks of shared paper P that user A embedded
-#             (payload user_id=A) because P is in B's library — guards the
+#   POSITIVE: caller B retrieves chunks of library paper P that user A embedded
+#             because P is in B's library — guards the
 #             RAG-DB-1 regression class (a scoping "fix" must never break
-#             legitimate shared-corpus retrieval).
+#             legitimate library retrieval).
 #   EXCLUSION: paper Q (embedded by A, NOT in B's library) yields NOTHING for
 #             B when scope params are passed.
 #   DEFAULT:  no user params → identical unscoped behaviour (extraction/core.py
@@ -238,22 +265,26 @@ async def _identity_rerank(query, chunks, top_k):  # noqa: ARG001
 async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_default(
     monkeypatch,
 ):
-    """Paper-scoped search: shared-corpus positive, cross-user exclusion, default-None."""
+    """Paper search permits caller-library vectors and excludes other private vectors."""
     from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
     from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
     from paper_ingestion.models import ChunkForEmbedding
 
     user_a, user_b = 7, 8
-    paper_p, paper_q = 10, 11  # P: shared, in B's library; Q: private to A
+    paper_p, paper_q = 10, 11  # P: in B's library; Q: private to A
 
     async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
         monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
         async with httpx.AsyncClient() as http_client:
             qdrant = FauxQdrantClient()
-            embedder = Embedder(http_client, qdrant)
+            embedder = Embedder(
+                http_client,
+                qdrant,
+                visibility_generation_provider=_current_visibility_generation,
+            )
             await embedder.ensure_collection()
 
-            # Both papers' chunks embedded BY A — payload user_id=A.
+            # Both vectors retain A as legacy attribution; neither is authorized by it.
             await embedder.embed_and_store(
                 paper_p,
                 [
@@ -266,6 +297,7 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("arxiv"),
             )
             await embedder.embed_and_store(
                 paper_q,
@@ -279,9 +311,10 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("upload"),
             )
 
-            # POSITIVE — B + library widening retrieves A-embedded shared P.
+            # POSITIVE — B's library widening retrieves A-embedded paper P.
             shared = await embedder.search_chunks_in_paper(
                 "reproducibility",
                 paper_id=paper_p,
@@ -305,7 +338,7 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
             )
 
     assert {row["chunk_index"] for row in shared} == {0}, (
-        "caller B must retrieve shared paper P's chunks despite A embedding them — "
+        "caller B must retrieve library paper P's chunks despite A embedding them — "
         "RAG-DB-1 class guard: user scoping must not break legitimate retrieval"
     )
     assert excluded == [], (
@@ -329,7 +362,7 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
 async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
     contract_conn, monkeypatch
 ):
-    """B asks about shared P (A embedded) → sources; B asks about A-private Q → no chunks."""
+    """B can ask about joint-library P but receives no chunks from A-only Q."""
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
     from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
@@ -367,10 +400,14 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
         monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
         async with httpx.AsyncClient() as http_client:
             qdrant = FauxQdrantClient()
-            embedder = Embedder(http_client, qdrant)
+            embedder = Embedder(
+                http_client,
+                qdrant,
+                visibility_generation_provider=_current_visibility_generation,
+            )
             await embedder.ensure_collection()
 
-            # Both papers' chunks embedded BY A (payload user_id=A).
+            # Both vectors retain A as legacy attribution; neither is authorized by it.
             await embedder.embed_and_store(
                 paper_p,
                 [
@@ -383,6 +420,7 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("arxiv"),
             )
             await embedder.embed_and_store(
                 paper_q,
@@ -396,13 +434,14 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
                     )
                 ],
                 user_id=user_a,
+                visibility=_private_visibility("upload"),
             )
 
             embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
             pool = SharedConnPool(contract_conn)
             body = AskRequest(question="reproducibility", max_chunks=5)
 
-            # POSITIVE — B retrieves shared P even though A embedded its chunks.
+            # POSITIVE — B retrieves joint-library P although A embedded its chunks.
             messages, sources = await prepare_single_paper_rag(
                 embedder,
                 pool,
@@ -424,7 +463,7 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
                 )
 
     assert len(sources) >= 1, (
-        "caller B must get sources for shared paper P (in B's library) — "
+        "caller B must get sources for paper P in B's library — "
         "RAG-DB-1 class guard: scope threading must not break legitimate asks"
     )
     assert all("private to user A" not in s["content"] for s in sources), (
@@ -524,7 +563,13 @@ async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn
         async with httpx.AsyncClient() as http_client:
             # Act: ScriptError must be raised because Qdrant delete fails (step 4)
             with _pytest.raises(ScriptError, match="Failed to delete old Qdrant"):
-                await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+                await reembed_paper(
+                    paper_id,
+                    shared_pool,
+                    faux_qdrant,
+                    http_client,
+                    visibility_generation=_VISIBILITY_GENERATION,
+                )
 
     # Assert: DB embedding_id must still be the old value — step 5 was never reached
     row = await contract_conn.fetchrow(
@@ -598,7 +643,13 @@ async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_c
         )
         shared_pool = SharedConnPool(contract_conn)
         async with httpx.AsyncClient() as http_client:
-            count = await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+            count = await reembed_paper(
+                paper_id,
+                shared_pool,
+                faux_qdrant,
+                http_client,
+                visibility_generation=_VISIBILITY_GENERATION,
+            )
 
     assert count == 1
     row = await contract_conn.fetchrow(
@@ -678,7 +729,13 @@ async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_c
         shared_pool = SharedConnPool(contract_conn)
         async with httpx.AsyncClient() as http_client:
             with _pytest.raises(RuntimeError, match="Qdrant upsert unavailable"):
-                await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+                await reembed_paper(
+                    paper_id,
+                    shared_pool,
+                    faux_qdrant,
+                    http_client,
+                    visibility_generation=_VISIBILITY_GENERATION,
+                )
 
     row = await contract_conn.fetchrow(
         "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1", chunk_id
@@ -750,7 +807,13 @@ async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, 
         )
         shared_pool = SharedConnPool(contract_conn)
         async with httpx.AsyncClient() as http_client:
-            count = await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+            count = await reembed_paper(
+                paper_id,
+                shared_pool,
+                faux_qdrant,
+                http_client,
+                visibility_generation=_VISIBILITY_GENERATION,
+            )
 
     assert count == 3
     db_count = await contract_conn.fetchval(
@@ -831,7 +894,13 @@ async def test_reembed_w2_chunk_shape_preserved_through_pipeline(contract_conn, 
         )
         shared_pool = SharedConnPool(contract_conn)
         async with httpx.AsyncClient() as http_client:
-            await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+            await reembed_paper(
+                paper_id,
+                shared_pool,
+                faux_qdrant,
+                http_client,
+                visibility_generation=_VISIBILITY_GENERATION,
+            )
 
     points, _ = await faux_qdrant.scroll(collection_name="paper_chunks", with_vectors=True)
     assert len(points) == 1
@@ -839,7 +908,18 @@ async def test_reembed_w2_chunk_shape_preserved_through_pipeline(contract_conn, 
     assert len(pt.vector) == EMBEDDING_DIMENSION, (
         f"vector dim must be {EMBEDDING_DIMENSION}, got {len(pt.vector)}"
     )
-    required_keys = {"paper_id", "chunk_index", "content", "embedding_model", "page_number"}
+    required_keys = {
+        "paper_id",
+        "chunk_index",
+        "content",
+        "embedding_model",
+        "page_number",
+        "source_type",
+        "visibility_scope",
+        "visibility_generation",
+        "embedding_fingerprint",
+    }
     assert required_keys <= pt.payload.keys(), f"missing keys: {required_keys - pt.payload.keys()}"
     assert pt.payload["content"] == content
     assert pt.payload["paper_id"] == paper_id
+    assert pt.payload["visibility_generation"] == _VISIBILITY_GENERATION

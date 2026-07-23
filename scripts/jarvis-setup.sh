@@ -36,6 +36,7 @@ cd "${REPO_ROOT}"
 
 # shellcheck source=setup_lib.sh
 source "${SCRIPT_DIR}/setup_lib.sh"
+COMPOSE_MIN=2.24.4
 
 # ---------------------------------------------------------------------------
 # Pretty output
@@ -95,7 +96,75 @@ if ! docker compose version >/dev/null 2>&1; then
   err "the docker-compose-plugin package."
   exit 1
 fi
-ok "docker compose plugin OK"
+COMPOSE_VERSION="$(docker compose version --short 2>/dev/null || printf unknown)"
+compose_meets_floor "$COMPOSE_VERSION" "$COMPOSE_MIN" \
+  || die "Docker Compose v2.24.4 or newer is required; found ${COMPOSE_VERSION#v}." \
+         "Update Docker Desktop or the docker-compose-plugin, or run ./setup.sh --install-prereqs."
+ok "Docker Compose v${COMPOSE_VERSION#v}"
+
+if ! command -v openssl >/dev/null 2>&1; then
+  die "OpenSSL is required before JARVIS can generate secrets." \
+    "Install openssl, or run ./setup.sh --install-prereqs for guided installation."
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  die "curl is required for downloads and health checks." \
+    "Install curl, or run ./setup.sh --install-prereqs for guided installation."
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  die "Python 3 is required for lifecycle locking and install sizing." \
+    "Install python3, or run ./setup.sh --install-prereqs for guided installation."
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  die "Docker is installed, but its daemon is not reachable." \
+    "Start Docker Desktop or the Docker service, then re-run this installer."
+fi
+
+_ENV_EXISTED_AT_START=0
+[ ! -f .env ] || _ENV_EXISTED_AT_START=1
+_SETUP_LIFECYCLE_CLAIMED=0
+_SETUP_MUTATION_STARTED=0
+_setup_lock_rc=0
+claim_host_lifecycle_lock "$REPO_ROOT" || _setup_lock_rc=$?
+case "$_setup_lock_rc" in
+  0) ;;
+  3) die "Another JARVIS lifecycle operation is already running." \
+       "Wait for it to finish, then re-run this installer." ;;
+  *) die "The per-install lifecycle lock is unavailable or unsafe." \
+       "Check ~/.config/jarvis-research, then re-run this installer." ;;
+esac
+
+claim_setup_volume_lease() {
+  [ "$_SETUP_LIFECYCLE_CLAIMED" -ne 1 ] || return 0
+  local rc=0
+  claim_lifecycle_operation "$REPO_ROOT" setup || rc=$?
+  case "$rc" in
+    0) _SETUP_LIFECYCLE_CLAIMED=1 ;;
+    3|4) die "Another lifecycle operation is active or needs recovery." \
+           "Finish that operation, then re-run this installer." ;;
+    *) die "The private lifecycle volume is unavailable or unsafe." \
+         "Check Docker and this install's postgres_backups volume, then retry." ;;
+  esac
+}
+
+# A missing .env can also be a damaged existing install. Resolve and claim the
+# Compose-owned backup volume before creating config, directories, or secrets;
+# otherwise deleting .env would bypass exclusion with update/restore/rotation.
+claim_setup_volume_lease
+
+cleanup_jarvis_setup_lifecycle() {
+  local rc=$? action=clear
+  trap - EXIT
+  if [ "$_SETUP_LIFECYCLE_CLAIMED" -eq 1 ]; then
+    [ "$_SETUP_MUTATION_STARTED" -ne 1 ] || action=retain
+    [ "$rc" -ne 0 ] || action=clear
+    finish_lifecycle_operation "$REPO_ROOT" setup "$action" 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+trap cleanup_jarvis_setup_lifecycle EXIT
 
 # ---------------------------------------------------------------------------
 # .env generation (idempotent — never clobber; see the header comment above
@@ -118,6 +187,7 @@ fi
 # resolve to the CPU flavour even on a kept GPU install — pulling a CPU image
 # under a still-active GPU overlay. Backfill it (nvidia overlay -> cuda, else
 # cpu) before anything resolves an image, exactly as setup.sh and update.sh do.
+_SETUP_MUTATION_STARTED=1
 if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; then
   info "Recorded this host's torch image variant in .env: ${_bf_variant}"
 fi

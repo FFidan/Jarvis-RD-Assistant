@@ -26,7 +26,40 @@ interface OnboardingWizardProps {
   authed: boolean;
 }
 
-export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
+export function isRemotePlainHttp(
+  location: Pick<Location, 'protocol' | 'hostname'>,
+): boolean {
+  const loopback = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+  return location.protocol === 'http:' && !loopback.has(location.hostname.toLowerCase());
+}
+
+function RemoteHttpSetupBlock() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="w-full max-w-lg rounded-lg border bg-card p-6">
+        <h1 className="text-xl font-semibold">Use a private HTTPS address to finish setup</h1>
+        <p className="mt-3 text-sm text-muted-foreground">
+          This plain-HTTP LAN address is for status checks only. Do not enter a setup token,
+          sign-in link, or API key here.
+        </p>
+        <p className="mt-3 text-sm text-muted-foreground">
+          On the server, open the localhost setup link printed by <code>./setup.sh</code>. For
+          another device, finish the Tailscale or named-HTTPS step and use the verified address
+          it prints.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+export function OnboardingWizard(props: OnboardingWizardProps) {
+  if (isRemotePlainHttp(window.location)) {
+    return <RemoteHttpSetupBlock />;
+  }
+  return <OnboardingWizardContent {...props} />;
+}
+
+function OnboardingWizardContent({ firstRun, authed }: OnboardingWizardProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();

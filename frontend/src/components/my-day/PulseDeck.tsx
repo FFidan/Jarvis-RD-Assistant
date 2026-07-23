@@ -11,12 +11,13 @@ import { PulseCard } from '@/components/pulse/PulseCard';
 import { StaleBadge } from '@/components/pulse/StaleBadge';
 import {
   fetchPulseToday,
+  fetchPulseStats,
   ApiError,
 } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 import { usePulseRating } from '@/hooks/usePulseRating';
-import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
+import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic, PulseStats } from '@/types';
 import { LLM_SCORING_FAILED, suppressScoringFailed } from '@/components/pulse/reasoning-display';
 
 function sourceDiagnosticsFromStats(
@@ -47,6 +48,11 @@ export function PulseDeck() {
   } = useQuery<PulseDeckType | null>({
     queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
+  });
+
+  const { data: stats } = useQuery<PulseStats>({
+    queryKey: QUERY_KEYS.pulse.statsAll(),
+    queryFn: () => fetchPulseStats(),
   });
 
   const startJob = useJobStore((s) => s.startJob);
@@ -213,6 +219,11 @@ export function PulseDeck() {
       <p className="text-sm text-muted-foreground -mt-1">
         Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
       </p>
+      {stats?.has_learned_model === false && (
+        <p className="text-xs text-muted-foreground">
+          Basic ranking (learning from your feedback)
+        </p>
+      )}
       {deck.degraded_reason && (
         <div className="rounded-md border border-amber-400/60 bg-amber-500/10 px-3 py-2 text-sm text-[hsl(var(--badge-warn-fg))]">
           <div className="font-medium text-[hsl(var(--badge-warn-fg))]">{deck.degraded_reason}</div>

@@ -12,12 +12,14 @@ relying on verification badges, consensus views, or extracted evidence.
 
 ---
 
-## Get started
+## Start here
 
-- **[Read the User Guide](manual/index.md)** — what JARVIS does and how to use
-  every feature, from your first sign-in to Telegram check-ins.
-- **[Install & operate it](readme-shim.md)** — clone, run the onboarding
-  wizard, and deploy solo, on a LAN, or behind a tunnel.
+- **[Install JARVIS](readme-shim.md)** — the shortest supported path from a new
+  host to the finish-setup link.
+- **[First sign-in and setup](manual/getting-started.md)** — create the first
+  administrator, invite people, and add a passkey at the final family address.
+- **[Read the User Guide](manual/index.md)** — research workflows and every
+  user-facing area of the application.
 
 ## Explore
 
@@ -31,8 +33,3 @@ relying on verification badges, consensus views, or extracted evidence.
   **[Security](SECURITY.md)** — everything an operator needs.
 - **[Architecture](ARCHITECTURE.md)** and **[Engineering Standards](ENGINEERING_STANDARDS.md)**
   — for contributors.
-
----
-
-> This site is a generated read-only view. Canonical edit targets are the
-> Markdown files in the repository — always edit the source, not the HTML.

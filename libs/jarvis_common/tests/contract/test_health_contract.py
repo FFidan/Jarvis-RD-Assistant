@@ -357,11 +357,14 @@ async def test_health_live_and_public_stay_minimal(rhr_app):
 
 
 # ---------------------------------------------------------------------------
-# telegram_bot._internal_app: minimal health surface
+# telegram_bot._internal_app: health surface
 #
-# The bot exposes GET /health on _internal_app (not via register_health_routes).
-# It returns {"status": "ok"} unconditionally with no auth required.
-# There is no degraded path and no /health/internal route.
+# The bot exposes its health routes through register_health_routes, like the
+# other services, with a postgres probe resolved from app.state.db_pool at call
+# time. GET /health reports degraded (503) when that probe fails; GET
+# /health/live stays 200 regardless, which is what the container healthcheck
+# uses so a database blip cannot cascade through service_healthy dependents.
+# Neither route requires an API key.
 # ---------------------------------------------------------------------------
 
 
@@ -369,6 +372,9 @@ async def test_health_live_and_public_stay_minimal(rhr_app):
 def tg_internal_app():
     from telegram_bot.internal_api import _internal_app
 
+    # The probe reads app.state.db_pool when the route is called; without a pool
+    # every request here would report degraded.
+    _internal_app.state.db_pool = _make_mock_pool()
     return _internal_app
 
 

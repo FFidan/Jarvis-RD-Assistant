@@ -57,6 +57,7 @@ async def _enforce_startup_grace(grace_seconds: float) -> None:
     grace_seconds:
         Minimum number of seconds that must elapse from process start before
         this coroutine returns.  A value <= 0 is a no-op.
+
     """
     if grace_seconds <= 0:
         return
@@ -76,6 +77,7 @@ class SourceQuery:
         Topics whose results should be merged from this query.
     extra_params : dict[str, Any]
         Source-specific query parameters (e.g. ``{"sort": "date"}``).
+
     """
 
     topics: list["TopicRef"] = field(default_factory=list)
@@ -109,6 +111,7 @@ class PaperSource(ABC):
     ----------
     source_type : str
         Class-level identifier matching ``paper_sources.source_type``.
+
     """
 
     source_type: str  # must be set by subclass as class variable
@@ -120,6 +123,18 @@ class PaperSource(ABC):
         http_client: httpx.AsyncClient,
         db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
+        """Store the source configuration and shared runtime collaborators.
+
+        Parameters
+        ----------
+        config : PaperSourceConfig
+            Persisted source configuration.
+        http_client : httpx.AsyncClient
+            Shared asynchronous HTTP client.
+        db_pool : asyncpg.Pool or None
+            Optional database pool for rate limiting and run history.
+
+        """
         self.config = config
         self.http_client = http_client
         self.db_pool: asyncpg.Pool | None = db_pool
@@ -128,12 +143,16 @@ class PaperSource(ABC):
     def _resolve_api_key(self, settings_key: "SecretStr | None") -> str | None:
         """Resolve the source API key, preferring the DB config over settings.
 
-        The per-source ``config`` row may carry an ``api_key`` override; when it
-        does not, fall back to the process-level ``settings_key`` secret (the
-        env/config-file value). Returns ``None`` when neither is set.
+        Whitespace-only values are absent. A non-empty per-source ``api_key``
+        wins; otherwise the process-level secret supplies the key. Returned
+        values never retain surrounding whitespace.
         """
         cfg_key = self.config.config.get("api_key") if self.config.config else None
-        return cfg_key or (settings_key.get_secret_value() if settings_key else None)
+        if isinstance(cfg_key, str) and (resolved := cfg_key.strip()):
+            return resolved
+        if settings_key is None:
+            return None
+        return settings_key.get_secret_value().strip() or None
 
     @property
     def last_poll_diagnostic(self) -> SourcePollDiagnostic | None:
@@ -218,6 +237,7 @@ class PaperSource(ABC):
         list[PaperCreate]
             Papers with metadata populated entirely from the source API.
             No fields may be LLM-generated.
+
         """
         ...
 
@@ -234,6 +254,7 @@ class PaperSource(ABC):
         -------
         PaperCreate | None
             The paper if found, None otherwise.
+
         """
         ...
 
@@ -331,6 +352,7 @@ class PaperSource(ABC):
         retry_after_s:
             Optional Retry-After hint forwarded to ``update_last_request`` on
             rate-limit paths.
+
         """
         # Capture duration before the limiter update so the audit row reflects
         # the fetch latency only (matches the pre-consolidation call-site timing).
@@ -447,5 +469,6 @@ class PaperSource(ABC):
         list[SourceQuery]
             One or more queries. Default implementation returns one
             :class:`SourceQuery` per topic.
+
         """
         return [SourceQuery(topics=[t]) for t in topics]

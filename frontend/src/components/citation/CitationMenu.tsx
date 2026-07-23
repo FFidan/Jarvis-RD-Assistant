@@ -14,6 +14,7 @@ import {
   copyPaperCitation,
   downloadBulkCitations,
   downloadPaperCitation,
+  downloadPaperMarkdown,
   type CitationFormat,
 } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
@@ -69,6 +70,16 @@ export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuPr
     }
   }
 
+  async function handleExportMarkdown() {
+    const [first] = paperIds;
+    if (first === undefined) return;
+    try {
+      await downloadPaperMarkdown(first);
+    } catch (err) {
+      toast.error('Could not export Markdown', { description: errorMessage(err) });
+    }
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -83,6 +94,14 @@ export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuPr
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void handleDownload('bibtex')}>Download .bib</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void handleDownload('ris')}>Download .ris</DropdownMenuItem>
+        {!isBulk && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void handleExportMarkdown()}>
+              Export Markdown
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

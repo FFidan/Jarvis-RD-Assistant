@@ -27,6 +27,7 @@ break ``app.openapi()``. Body annotations must remain concrete types.
 import logging
 import secrets
 from datetime import UTC, datetime
+from urllib.parse import urlencode
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -41,8 +42,8 @@ from paper_ingestion.models.account import (
     AccountUpdateResponse,
     ConfirmEmailChangeBody,
 )
+from paper_ingestion.routers._auth_shared import magic_link_on_cooldown
 from paper_ingestion.routers.auth import (
-    MAGIC_LINK_COOLDOWN,
     MAGIC_LINK_TTL,
     _audit_pool,
     _hash_email,
@@ -58,15 +59,20 @@ def _build_email_confirm_link(request: Request, token: str) -> str:
     """URL the user clicks to confirm an email change.
 
     Same derivation strategy as ``auth._build_magic_link`` (honours
-    ``APP_BASE_URL`` / ProxyHeaders) but targets the account confirm route
-    instead of ``/auth/verify``.
+    ``APP_BASE_URL`` / ProxyHeaders), but lands on the existing account pane.
+    The bearer token rides a fragment, which browsers do not send in request
+    lines or Referer headers.
     """
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     base = get_paper_ingestion_settings().app_base_url
+    query = "section=account&item=profile"
+    fragment = urlencode({"confirm_email_token": token})
     if base:
-        return f"{base.rstrip('/')}/account/confirm-email?token={token}"
-    return str(request.url.replace(path="/account/confirm-email", query=f"token={token}"))
+        settings_url = f"{base.rstrip('/')}/settings?{query}"
+    else:
+        settings_url = str(request.url.replace(path="/settings", query=query))
+    return f"{settings_url}#{fragment}"
 
 
 def _row_to_account(row) -> AccountResponse:
@@ -84,23 +90,6 @@ _ACCOUNT_SELECT = (
     "SELECT id, email, role, display_name, created_at, last_login_at "
     "FROM users WHERE id = $1 AND deleted_at IS NULL"
 )
-
-
-async def _is_email_change_on_cooldown(conn, user_id: int) -> bool:
-    """Return True when a pending email-change token was minted within MAGIC_LINK_COOLDOWN.
-
-    Scoped to ``pending_email IS NOT NULL`` so login links don't suppress
-    email-change links and vice versa.
-    """
-    recent = await conn.fetchval(
-        "SELECT created_at FROM magic_link_tokens"
-        " WHERE user_id = $1 AND pending_email IS NOT NULL"
-        " ORDER BY created_at DESC LIMIT 1",
-        user_id,
-    )
-    return (
-        recent is not None and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
-    )
 
 
 @router.get("", response_model=AccountResponse)
@@ -149,7 +138,7 @@ async def _stage_email_change(
     )
     if clash is not None:
         return None, None, True
-    if await _is_email_change_on_cooldown(conn, user_id):
+    if await magic_link_on_cooldown(conn, user_id, email_change=True):
         return None, None, False
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)

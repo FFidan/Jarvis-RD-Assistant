@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -91,10 +92,23 @@ async def get_litellm_deployments() -> list[LiteLLMDeployment]:
     ``litellm_params.api_key`` is masked by LiteLLM and never round-trips.
     Malformed elements are logged as WARNING and skipped.
 
-    Raises ``RuntimeError`` on transport failure or any HTTP >= 400.
+    Returns
+    -------
+    list[LiteLLMDeployment]
+        Validated deployment records; malformed individual elements are skipped.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials remain quarantined.
+    RuntimeError
+        If the admin endpoint is unreachable, returns an error, or has an
+        invalid top-level response shape.
     """
+    ensure_outbound_egress_allowed("LiteLLM deployment listing")
     litellm_cfg = get_litellm_config()
     try:
+        ensure_outbound_egress_allowed("LiteLLM deployment listing")
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(
                 f"{litellm_cfg.base_url}/v1/model/info",
@@ -122,11 +136,27 @@ async def get_litellm_deployments() -> list[LiteLLMDeployment]:
 async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | None:
     """Create a deployment for *alias* via ``POST /model/new``.
 
-    Returns the new deployment id when LiteLLM reports one, else None.
-    Raises ``RuntimeError`` on transport failure or HTTP >= 400; the message
-    carries the response body so callers can detect the "No DB Connected"
-    degraded state.
+    Parameters
+    ----------
+    alias : str
+        LiteLLM alias assigned to the deployment.
+    litellm_params : dict[str, Any]
+        Provider parameters; any API key is redacted from raised details.
+
+    Returns
+    -------
+    str or None
+        New deployment ID when LiteLLM reports one.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials remain quarantined.
+    RuntimeError
+        On transport or HTTP failure. The sanitized message retains enough
+        response detail for callers to detect a missing admin database.
     """
+    ensure_outbound_egress_allowed("LiteLLM deployment creation")
     litellm_cfg = get_litellm_config()
     payload = {"model_name": alias, "litellm_params": litellm_params}
     # The payload may carry a decrypted cloud api_key, and FastAPI 422s echo the
@@ -135,6 +165,7 @@ async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | N
     # tracebacks (docker logs -> Vector), and setup.py warnings.
     api_key = litellm_params.get("api_key")
     try:
+        ensure_outbound_egress_allowed("LiteLLM deployment creation")
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/model/new",
@@ -165,10 +196,22 @@ async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | N
 async def _post_model_delete(deployment_id: str) -> None:
     """Delete a DB deployment by id via ``POST /model/delete``.
 
-    Raises ``RuntimeError`` on transport failure or HTTP >= 400.
+    Parameters
+    ----------
+    deployment_id : str
+        Exact LiteLLM database deployment identifier.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials remain quarantined.
+    RuntimeError
+        On transport failure or an HTTP error response.
     """
+    ensure_outbound_egress_allowed("LiteLLM deployment deletion")
     litellm_cfg = get_litellm_config()
     try:
+        ensure_outbound_egress_allowed("LiteLLM deployment deletion")
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/model/delete",

@@ -5,7 +5,9 @@ Ensures critical services have proper secret mounts (e.g., langfuse tracing keys
 and that locally-built images carry explicit pull semantics.
 """
 
+import json
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -62,6 +64,130 @@ def test_telegram_bot_has_langfuse_init_secrets(compose):
         "telegram_bot service missing langfuse_init_sk secret mount; "
         "langfuse tracing will be silently disabled"
     )
+
+
+def test_setup_mode_reaches_every_application_service(compose):
+    """The installer's single/multi choice must reach runtime settings.
+
+    ``setup.sh`` persists JARVIS_SETUP_MODE in .env. If Compose omits it, every
+    fresh family install silently falls back to ``single`` and the backend also
+    skips multi-user security gates that depend on this value.
+    """
+    expected = "${JARVIS_SETUP_MODE:-single}"
+    for service in ("paper_ingestion", "learning_engine", "telegram_bot"):
+        assert compose["services"][service]["environment"].get("JARVIS_SETUP_MODE") == expected, (
+            f"{service} does not receive the setup mode selected by setup.sh"
+        )
+
+
+def test_owner_override_reaches_only_the_resolver_service(compose):
+    """The advanced host override is optional and never exposed stack-wide."""
+    services = compose["services"]
+    assert services["paper_ingestion"]["environment"].get("OWNER_USER_ID") == ("${OWNER_USER_ID:-}")
+    for name, service in services.items():
+        if name != "paper_ingestion":
+            assert "OWNER_USER_ID" not in _env_keys(service), (
+                f"{name} receives an owner override it does not consume"
+            )
+
+
+def test_dashboard_has_no_tls_material_or_generator(compose):
+    """TLS belongs to an edge service, never to the plain-HTTP dashboard.
+
+    Keep the recovery capability split explicit while removing the dead
+    dashboard certificate path: the application may request work, the lifecycle
+    sidecar owns destructive restore mounts, and the upload ingress can write
+    only its staging inbox.
+    """
+    services = compose["services"]
+    dashboard = services["dashboard"]
+    dashboard_env = _env_keys(dashboard)
+    assert {"JARVIS_CERT_SAN", "JARVIS_SKIP_SELFSIGNED_GEN"}.isdisjoint(dashboard_env)
+    assert all("/etc/nginx/certs" not in str(mount) for mount in dashboard.get("volumes", []))
+
+    cert_consumers = {
+        name: mount
+        for name, service in services.items()
+        for mount in service.get("volumes", []) or []
+        if isinstance(mount, str) and mount.startswith("./certs:")
+    }
+    assert cert_consumers == {"caddy_local": "./certs:/certs:ro"}
+    assert {"caddy_data:/data", "caddy_config:/config"}.issubset(set(services["caddy"]["volumes"]))
+
+    app_mounts = set(services["paper_ingestion"]["volumes"])
+    assert "postgres_backups:/backups:ro" in app_mounts
+    assert "backup_trigger:/backup-trigger" in app_mounts
+    assert all(
+        forbidden not in mount
+        for mount in app_mounts
+        for forbidden in ("/host-secrets", "/postgres-data", "/restore-inbox")
+    )
+
+    sidecar_mounts = set(services["postgres-backup"]["volumes"])
+    assert "./secrets:/secrets:ro" in sidecar_mounts
+    assert "./secrets:/host-secrets:rw" in sidecar_mounts
+    assert "postgres_data:/postgres-data:ro" in sidecar_mounts
+    assert "restore_inbox:/restore-inbox" in sidecar_mounts
+
+    uploader = services["restore-uploader"]
+    assert uploader.get("read_only") is True
+    assert uploader.get("cap_drop") == ["ALL"]
+    assert set(uploader["volumes"]) == {
+        "restore_inbox:/restore-inbox:rw",
+        "backup_trigger:/backup-trigger:ro",
+    }
+
+    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text()
+    assert "openssl" not in dockerfile.lower()
+    assert "generate-certs" not in dockerfile
+    assert "USER root" not in dockerfile
+    assert re.search(r"^USER nginx$", dockerfile, re.MULTILINE)
+    assert not (REPO_ROOT / "frontend" / "scripts" / "generate-certs.sh").exists()
+
+
+def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
+    """Applications may request work, but cannot replace lifecycle mutex inodes."""
+    backup_mounts: dict[str, str] = {}
+    for service_name, service in compose["services"].items():
+        for mount in service.get("volumes", []):
+            if isinstance(mount, str) and mount.startswith("postgres_backups:/backups"):
+                backup_mounts[service_name] = mount
+
+    assert backup_mounts.get("postgres-backup") == "postgres_backups:/backups"
+    assert backup_mounts.get("paper_ingestion") == "postgres_backups:/backups:ro"
+    assert all(
+        service_name == "postgres-backup" or mount.endswith(":ro")
+        for service_name, mount in backup_mounts.items()
+    ), f"only postgres-backup may write lifecycle mutexes under /backups: {backup_mounts}"
+
+
+def test_backup_sidecar_mounts_the_live_pdf_store_for_backup_and_restore(compose):
+    mounts = compose["services"]["postgres-backup"]["volumes"]
+    assert "./shared/pdf_storage:/pdf-storage:rw" in mounts
+
+
+def test_litellm_uses_the_restore_aware_entrypoint(compose):
+    litellm = compose["services"]["litellm"]
+    assert "./scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro" in set(
+        litellm["volumes"]
+    )
+    assert litellm["entrypoint"] == ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
+    assert litellm["command"] == []
+    assert litellm["healthcheck"]["test"] == [
+        "CMD",
+        "sh",
+        "/usr/local/bin/litellm-entrypoint.sh",
+        "--healthcheck",
+    ]
+
+
+def test_telegram_can_decrypt_the_token_saved_by_the_setup_ui(compose):
+    telegram = compose["services"]["telegram_bot"]
+    assert telegram["environment"]["JARVIS_CONFIG_KEY_FILE"] == "/run/secrets/jarvis_config_key"
+    secret_names = {
+        entry if isinstance(entry, str) else entry.get("source") for entry in telegram["secrets"]
+    }
+    assert "jarvis_config_key" in secret_names
 
 
 def test_langfuse_service_secrets_mounted_and_not_in_env(compose):
@@ -176,6 +302,41 @@ def test_jarvis_version_defaults_agree():
         f"docker-compose.yml defaults JARVIS_VERSION to {defaults[0]!r} but pyproject.toml "
         f"declares {declared.group(1)!r} — the image tags and the release version must agree"
     )
+
+
+def test_app_version_sources_agree():
+    """Every application-version source must move in one release change."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    package = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
+    package_lock = json.loads((REPO_ROOT / "frontend" / "package-lock.json").read_text())
+    uv_lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    compose_defaults = re.findall(
+        r"\$\{JARVIS_VERSION:-([^}]*)\}",
+        (REPO_ROOT / "docker-compose.yml").read_text(),
+    )
+
+    assert len(compose_defaults) == 8, (
+        "docker-compose.yml must carry exactly eight application-version defaults; "
+        f"found {len(compose_defaults)}"
+    )
+    root_packages = [
+        entry
+        for entry in uv_lock["package"]
+        if entry["name"] == pyproject["project"]["name"] and entry.get("source") == {"virtual": "."}
+    ]
+    assert len(root_packages) == 1, "uv.lock must contain one virtual root-project entry"
+
+    versions = {
+        "pyproject.toml": pyproject["project"]["version"],
+        "frontend/package.json": package["version"],
+        "frontend/package-lock.json": package_lock["version"],
+        "frontend/package-lock.json packages['']": package_lock["packages"][""]["version"],
+        "uv.lock": root_packages[0]["version"],
+    }
+    for index, version in enumerate(compose_defaults, start=1):
+        versions[f"docker-compose.yml default {index}"] = version
+
+    assert len(set(versions.values())) == 1, f"application version sources disagree: {versions}"
 
 
 def _bash_array_items(text: str, name: str) -> set[str]:
@@ -355,3 +516,18 @@ def test_restore_upload_ingress_exists_in_every_same_origin_mode():
         assert "reverse_proxy http://restore-uploader:8090" in handle, (
             f"caddy/{name} must reverse_proxy /restore-upload/* to restore-uploader:8090"
         )
+
+
+def test_public_caddy_hsts_is_host_only_and_not_preloaded():
+    """The default public policy must not make claims for sibling hostnames.
+
+    ``includeSubDomains`` is safe only when every current and future subdomain
+    supports HTTPS, while browser preload requires a separate deliberate
+    submission. JARVIS owns neither commitment for an operator's domain.
+    """
+    text = (REPO_ROOT / "caddy" / "Caddyfile").read_text()
+    assert 'header Strict-Transport-Security "max-age=31536000"' in text
+    assert "includeSubDomains" not in text
+    assert "preload" not in text.lower()
+    for header in ("X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy"):
+        assert header in text

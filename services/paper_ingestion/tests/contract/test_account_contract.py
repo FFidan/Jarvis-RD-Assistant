@@ -26,6 +26,46 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 
+async def test_a1_get_account_without_browser_identity_returns_401(
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://localhost",
+    ) as client:
+        response = await client.get("/api/account")
+
+    assert response.status_code == 401
+
+
+async def test_a1_anonymous_patch_stays_globally_blocked_without_mutation(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    before = await contract_conn.fetchval(
+        "SELECT display_name FROM users WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://localhost",
+    ) as client:
+        response = await client.patch(
+            "/api/account",
+            json={"display_name": "anonymous-mutation-must-not-land"},
+        )
+    after = await contract_conn.fetchval(
+        "SELECT display_name FROM users WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+
+    assert response.status_code == 403
+    assert after == before
+
+
 async def test_a1_get_account_returns_own_profile(
     contract_two_users,
     _pi_app_with_pool,
@@ -137,8 +177,8 @@ async def test_a2_patch_account_email_clash_returns_409(
 # E1.PI extensions — magic-link token race conditions
 #
 # The verify endpoint lives in routers/auth.py; we reuse _pi_app_with_pool
-# (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify
-# which is registered without verify_api_key (auth_exempt).
+# (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify,
+# which verify_api_key exempts by path prefix before any key comparison.
 #
 # Verified: auth.py:184-295 (verify — used_at guard + expires_at guard + pending_email guard)
 # ---------------------------------------------------------------------------

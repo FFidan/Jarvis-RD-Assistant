@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 from urllib.parse import urlparse
 
 import httpx
+from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.net import parse_retry_after
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
@@ -86,6 +87,12 @@ class ArxivSource(PaperSource):
     ----------
     source_type : str
         Always ``"arxiv"``.
+
+    Notes
+    -----
+    Network methods propagate ``OutboundEgressBlockedError`` while restored
+    credentials await review; quarantine is not reported as an empty provider
+    result.
     """
 
     source_type = "arxiv"
@@ -226,12 +233,19 @@ class ArxivSource(PaperSource):
 
         Retries 429 / 5xx responses with bounded backoff so a transient arXiv
         throttle does not immediately erase the whole Pulse deck.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before an attempt.
         """
         saw_429 = False
         for attempt in range(_MAX_FETCH_ATTEMPTS):
             try:
+                ensure_outbound_egress_allowed("arXiv request")
                 async with _ARXIV_REQUEST_LOCK:
                     await self._rate_limit()
+                    ensure_outbound_egress_allowed("arXiv request")
                     response = await self.http_client.get(
                         ARXIV_API_URL,
                         params=params,
@@ -498,11 +512,20 @@ class ArxivSource(PaperSource):
             triggers a single undirected date-range query.
         limit : int
             Maximum total results to return (across all consolidated queries).
+        user_id : int or None
+            Caller identity for per-user rate limiting and run history, when
+            available.
 
         Returns
         -------
         list[PaperCreate]
             Deduplicated papers newer than *since*, ordered by submission date.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before or during a scheduled
+            request.
         """
         # Startup grace — lets containers finish their warm-up before first burst.
         await self.apply_startup_grace()
@@ -565,6 +588,8 @@ class ArxivSource(PaperSource):
 
             try:
                 root = await self._fetch_xml(params)
+            except OutboundEgressBlockedError:
+                raise
             except Exception as _exc:
                 logger.warning(
                     "arXiv fetch_new_since failed for query: %s", search_query, exc_info=True

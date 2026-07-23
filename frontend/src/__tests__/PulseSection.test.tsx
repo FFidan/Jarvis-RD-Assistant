@@ -452,10 +452,10 @@ describe('PulseSection', () => {
         },
         openalex: {
           status: 'unconfigured',
-          message: 'OpenAlex needs contact settings.',
+          message: 'OpenAlex requires an API key.',
           status_code: null,
           retry_after_s: null,
-          settings_hint: 'Set OPENALEX_EMAIL for polite pool access.',
+          settings_hint: 'Set OPENALEX_API_KEY for OpenAlex access.',
         },
       },
       topic_embeddings: [],
@@ -475,7 +475,7 @@ describe('PulseSection', () => {
     expect(await screen.findByText(/source diagnostics/i)).toBeInTheDocument();
     expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
     expect(screen.getByText(/retry after 60s/i)).toBeInTheDocument();
-    expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
+    expect(screen.getByText(/set OPENALEX_API_KEY/i)).toBeInTheDocument();
   });
 
   // ── Config/stats error states ─────────────────────────────────────────────
@@ -549,7 +549,7 @@ describe('PulseSection', () => {
     // Default mock is non-admin
     renderSection();
     await screen.findByRole('switch', { name: /pulse/i });
-    expect(screen.queryByLabelText(/openalex contact email/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/openalex api key/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/semantic scholar api key/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clear arxiv cooldown/i })).not.toBeInTheDocument();
   });
@@ -561,27 +561,27 @@ describe('PulseSection', () => {
     );
     renderSection();
     await waitFor(() => {
-      expect(screen.getByLabelText(/openalex contact email/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/openalex api key/i)).toBeInTheDocument();
     });
     expect(screen.getByLabelText(/semantic scholar api key/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /clear arxiv cooldown/i })).toBeInTheDocument();
   });
 
-  it('calls patchSourceConfig for openalex with the entered email (admin)', async () => {
+  it('calls patchSourceConfig for openalex with the entered API key (admin)', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockUseAuthStore.mockImplementation((selector: (s: any) => unknown) =>
       selector({ user: { id: 1, email: 'admin@example.com', role: 'admin' } }),
     );
     const user = userEvent.setup();
     renderSection();
-    const emailInput = await screen.findByLabelText(/openalex contact email/i);
-    await user.type(emailInput, 'contact@lab.org');
+    const apiKeyInput = await screen.findByLabelText(/openalex api key/i);
+    await user.type(apiKeyInput, 'oa_test_key');
     const [saveBtn] = screen.getAllByRole('button', { name: /save/i });
     expect(saveBtn).toBeTruthy();
     await user.click(saveBtn!);
     await waitFor(() => {
       expect(vi.mocked(patchSourceConfig)).toHaveBeenCalledWith('openalex', {
-        email: 'contact@lab.org',
+        api_key: 'oa_test_key',
       });
     });
   });

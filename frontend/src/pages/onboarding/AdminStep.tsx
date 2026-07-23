@@ -81,7 +81,8 @@ export function AdminStep({
           autoComplete="email"
         />
         <p className="mt-1 text-xs text-muted-foreground">
-          Future admins/users go through the standard magic-link invite flow.
+          Add family members later from Admin → Users. You can copy a one-time sign-in link
+          to them without email; after signing in, they can add a passkey for future logins.
         </p>
       </div>
       {needsSetupToken && (

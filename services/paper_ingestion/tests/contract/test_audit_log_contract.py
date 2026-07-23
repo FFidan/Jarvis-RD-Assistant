@@ -85,6 +85,70 @@ async def test_data_purge_anonymizes_audit_log_rows(
     assert metadata.get("action_detail") == "login", "non-PII metadata retained"
 
 
+async def test_data_purge_protects_public_and_survivor_library_papers(
+    contract_conn: asyncpg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production purge derives its Qdrant retention set from real rows.
+
+    A public paper and a private paper held by a surviving user must retain
+    their vectors. A private paper held only by the expired user must not enter
+    the retained set. Qdrant itself remains the registered external-boundary
+    mock; PostgreSQL selection and purge orchestration are production code.
+    """
+    expired_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, deleted_at)"
+        " VALUES ('purge-expired@contract.example.com', NOW() - INTERVAL '60 days')"
+        " RETURNING id"
+    )
+    survivor_id = await contract_conn.fetchval(
+        "INSERT INTO users (email) VALUES ('purge-survivor@contract.example.com') RETURNING id"
+    )
+    papers = await contract_conn.fetch(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url,
+               discovered_by, visibility_scope
+           ) VALUES
+               ('purge-public', 'arxiv', 'Public retained', ARRAY['A'],
+                'https://example.test/purge-public', $1, 'public'),
+               ('purge-survivor-library', 'local', 'Library retained', ARRAY['A'],
+                'https://example.test/purge-library', $1, 'private'),
+               ('purge-expired-only', 'local', 'Expired only', ARRAY['A'],
+                'https://example.test/purge-expired', $1, 'private')
+           RETURNING external_id, id""",
+        expired_id,
+    )
+    paper_ids = {row["external_id"]: row["id"] for row in papers}
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        survivor_id,
+        paper_ids["purge-survivor-library"],
+    )
+
+    purge = AsyncMock(return_value=data_purge.QdrantPurgeCounts(deleted=1, redacted=2))
+    monkeypatch.setattr(data_purge, "_purge_qdrant_for_user", purge)
+    monkeypatch.setattr(
+        data_purge,
+        "_anonymize_audit_log_for_users",
+        AsyncMock(return_value=0),
+    )
+    monkeypatch.setattr(data_purge, "log_audit", AsyncMock())
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=SharedConnPool(contract_conn),
+            qdrant_client=AsyncMock(),
+        )
+    )
+
+    await data_purge.data_purge_task(app)
+
+    purge.assert_awaited_once()
+    protected_ids = set(purge.await_args.args[2])
+    assert paper_ids["purge-public"] in protected_ids
+    assert paper_ids["purge-survivor-library"] in protected_ids
+    assert paper_ids["purge-expired-only"] not in protected_ids
+
+
 async def test_data_purge_task_delete_and_anonymize_are_atomic(
     contract_conn: asyncpg.Connection,
     monkeypatch: pytest.MonkeyPatch,
@@ -121,7 +185,11 @@ async def test_data_purge_task_delete_and_anonymize_are_atomic(
 
     # Qdrant purge "succeeds" so the uid is NOT excluded from the hard DELETE,
     # and the anonymize raises INSIDE the production transaction AFTER the DELETE.
-    monkeypatch.setattr(data_purge, "_purge_qdrant_for_user", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        data_purge,
+        "_purge_qdrant_for_user",
+        AsyncMock(return_value=data_purge.QdrantPurgeCounts(deleted=0, redacted=0)),
+    )
     monkeypatch.setattr(
         data_purge,
         "_anonymize_audit_log_for_users",

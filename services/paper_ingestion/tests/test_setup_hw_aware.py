@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -34,10 +35,10 @@ _requires_openssl = pytest.mark.skipif(
 
 
 def _stage_hw_tmpdir(tmp: Path) -> None:
-    """Copy setup.sh, .env.example, scripts/, config/, and litellm/ into tmpdir.
+    """Copy setup.sh, Compose config, .env.example, scripts/, config/, and litellm/ into tmpdir.
 
     setup.sh --non-interactive needs:
-    - setup.sh + .env.example in the working directory
+    - setup.sh + docker-compose.yml + .env.example in the working directory
     - scripts/ (init-secrets.sh, gen-langfuse-keys.sh, render-litellm-config.sh, …)
     - config/llm-tier-candidates.yaml  (read by _default_model_for_tier and render-litellm-config.sh)
     - litellm/config.yaml              (written by render-litellm-config.sh)
@@ -46,6 +47,7 @@ def _stage_hw_tmpdir(tmp: Path) -> None:
     (tmp / "setup.sh").chmod(0o755)
     if (REPO_ROOT / ".env.example").exists():
         shutil.copy2(REPO_ROOT / ".env.example", tmp / ".env.example")
+    shutil.copy2(REPO_ROOT / "docker-compose.yml", tmp / "docker-compose.yml")
 
     scripts_src = REPO_ROOT / "scripts"
     if scripts_src.is_dir():
@@ -88,20 +90,42 @@ def _write_python3_wrapper(tmp: Path) -> Path:
 def _write_docker_shim(tmp: Path, *, up_exit_code: int) -> tuple[Path, Path]:
     """Return (PATH dir with a ``docker`` stub, invocation log path).
 
-    The stub logs every invocation, reports a v2 compose version, succeeds for
-    ``docker info`` (the fatal daemon probe), and exits ``up_exit_code`` for
-    any ``compose ... up -d ...`` call.
+    The stub logs every invocation, reports a v2 compose version, and models
+    the successful setup lifecycle lease: Compose config exposes the managed
+    backup volume, the volume is created and ownership-checked, and the
+    short-lived lifecycle helpers reserve, hold, wait for, and release it.
+    It exits ``up_exit_code`` for any ``compose ... up -d ...`` call.
     """
     bin_dir = tmp / "dockerbin"
     bin_dir.mkdir()
     log = tmp / "docker-invocations.log"
     log.touch()
+    volume_state = tmp / "docker-volume-state"
     stub = bin_dir / "docker"
     stub.write_text(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"$*\" >> '{log}'\n"
+        f"volume_state='{volume_state}'\n"
         'case "$*" in\n'
         '  "compose version --short") echo "2.99.0" ;;\n'
+        '  compose*"config --format json") '
+        'echo \'{"volumes":{"postgres_backups":{"name":"test_postgres_backups"}}}\' ;;\n'
+        '  "volume inspect test_postgres_backups") '
+        '[ -f "$volume_state" ] || exit 1 ;;\n'
+        '  "volume create"*) \n'
+        '    printf "%s\\n" "$*" | sed -n "s/.*com.docker.compose.project=\\([^ ]*\\).*/\\1/p" '
+        '> "$volume_state" ;;\n'
+        '  "volume inspect --format"*) \n'
+        '    [ -f "$volume_state" ] || exit 1; '
+        '    printf "%s|postgres_backups\\n" "$(cat "$volume_state")" ;;\n'
+        '  run*" current-host") ;;\n'
+        '  run*" reserve-host setup "*) echo "launch" ;;\n'
+        '  run*" hold-host setup "*) echo "lifecycle-holder" ;;\n'
+        '  run*" wait-host setup "*) ;;\n'
+        '  run*" release-host setup "*) ;;\n'
+        '  run*" host-release-complete setup "*) ;;\n'
+        '  compose*"ps -q "*) echo "healthy-container" ;;\n'
+        '  inspect*"healthy-container"*) echo "healthy" ;;\n'
         f'  compose*"up -d"*) exit {up_exit_code} ;;\n'
         "esac\n"
         "exit 0\n"
@@ -278,11 +302,14 @@ def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
     """
     _stage_hw_tmpdir(tmp_path)
     # Minimal .env: no TELEGRAM_BOT_TOKEN, no COMPOSE_PROFILES → KEEP_PROFILE_ARGS stays empty.
-    env_before = "JARVIS_SECRET_KEY=existing_secret\n"
+    env_before = f"JARVIS_SECRET_KEY=existing_secret\nJARVIS_API_KEY={'k' * 64}\n"
     (tmp_path / ".env").write_text(env_before)
     docker_bin, log = _write_docker_shim(tmp_path, up_exit_code=0)
     env = dict(os.environ)
     env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    env["HOME"] = str(test_home)
 
     result = subprocess.run(
         ["bash", "setup.sh"],
@@ -331,11 +358,16 @@ def test_setup_rerun_keep_env_starts_stack(tmp_path):
     docker is PATH-shimmed; the invocation log proves the path taken.
     """
     _stage_hw_tmpdir(tmp_path)
-    env_before = "TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+    env_before = (
+        f"TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\nJARVIS_API_KEY={'k' * 64}\n"
+    )
     (tmp_path / ".env").write_text(env_before)
     docker_bin, log = _write_docker_shim(tmp_path, up_exit_code=0)
     env = dict(os.environ)
     env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
+    test_home = tmp_path / "home"
+    test_home.mkdir()
+    env["HOME"] = str(test_home)
 
     result = subprocess.run(
         ["bash", "setup.sh"],
@@ -593,9 +625,15 @@ def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
     assert any(line.startswith("sudo curl -fsSL") and keyring in line for line in plan), (
         f"signing key must be fetched straight to the root-owned keyring: {plan}"
     )
-    assert any(f"signed-by={keyring}" in line and "download.docker.com" in line for line in plan), (
-        f"apt repo must be pinned to the fetched key: {plan}"
-    )
+    assert any(
+        f"signed-by={keyring}" in line
+        and any(
+            urllib.parse.urlparse(token).hostname == "download.docker.com"
+            for token in line.split()
+            if token.startswith("https://")
+        )
+        for line in plan
+    ), f"apt repo must be pinned to the fetched key at download.docker.com: {plan}"
     for line in plan:
         # No root-consumed file may be staged at a predictable /tmp path (CWE-377):
         # a local attacker could pre-plant it before the sudo reads it back.

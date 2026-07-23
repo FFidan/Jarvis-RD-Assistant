@@ -4,69 +4,59 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from jarvis_common.auth import get_current_user_id
+from jarvis_common.paper_visibility import paper_visibility_sql
 from jarvis_common.paths import secure_path
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
-from paper_ingestion.models import SourceType
 
 router = APIRouter(prefix="/api/pdfs", tags=["pdfs"])
 
 PDF_STORAGE_PATH = get_paper_ingestion_settings().pdf_storage_path
-
-# Public-corpus source types whose PDFs are shared with any authenticated user
-# (D4 shared-corpus decision). All other source types (LOCAL uploads, ZOTERO
-# library imports) are private-origin and scoped to their discoverer / library.
-_PUBLIC_SOURCE_TYPES: frozenset[str] = frozenset(
-    {
-        SourceType.ARXIV.value,
-        SourceType.SEMANTIC_SCHOLAR.value,
-        SourceType.OPENALEX.value,
-        SourceType.PUBMED.value,
-    }
-)
-
 
 async def assert_paper_pdf_visible(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     paper_id: int,
     user_id: int,
 ) -> str:
-    """Return the paper's ``source_type`` if the caller may view its PDF, else 404.
+    """Return ``source_type`` when the caller may view the paper's PDF.
 
-    Public-source papers (arXiv, S2, OpenAlex, PubMed) are visible to any
-    authenticated user (shared-corpus decision). Private-origin papers (LOCAL
-    uploads, ZOTERO imports) are visible only to the caller who discovered them
-    (``discovered_by``), to anyone with the paper in their ``user_library``, or
-    when the row is unattributed (``discovered_by IS NULL``, legacy/shared
-    corpus — matches ``paper_visible_sql``). An unknown or out-of-scope paper
-    raises an opaque 404 — a 403 would leak whether the paper exists.
+    Parameters
+    ----------
+    conn : asyncpg.Connection | asyncpg.pool.PoolConnectionProxy
+        Open database connection used for the authorization lookup.
+    paper_id : int
+        Paper whose stored PDF is being requested.
+    user_id : int
+        Authenticated caller.
 
-    Shared by the PDF endpoint and the highlights CRUD router so that anyone who
-    can *view* a PDF can *annotate* it.
+    Returns
+    -------
+    str
+        The paper's descriptive source type.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        With an opaque 404 when the paper is absent or outside the caller's
+        visibility scope.
+
+    Notes
+    -----
+    Authorization uses the central persisted-scope-or-library predicate;
+    provenance and discoverer fields never grant access. The PDF, snapshot,
+    and highlights routes share this guard so their read boundary is symmetric.
     """
+    visibility_sql = paper_visibility_sql(2, alias="p")
     row = await conn.fetchrow(
-        """
-        SELECT p.source_type,
-               p.discovered_by,
-               EXISTS (
-                   SELECT 1 FROM user_library ul
-                   WHERE ul.paper_id = p.id AND ul.user_id = $2
-               ) AS in_library
-        FROM papers p
-        WHERE p.id = $1
-        """,
+        f"SELECT p.source_type FROM papers p "
+        f"WHERE p.id = $1 AND {visibility_sql}",
         paper_id,
         user_id,
     )
-    if row is None or (
-        row["source_type"] not in _PUBLIC_SOURCE_TYPES
-        and row["discovered_by"] is not None
-        and row["discovered_by"] != user_id
-        and not row["in_library"]
-    ):
+    if row is None:
         raise HTTPException(404, f"Paper not found: {paper_id}")
-    return row["source_type"]
+    return str(row["source_type"])
 
 
 @router.get("/{paper_id}")
@@ -79,9 +69,10 @@ async def get_pdf(
 ) -> FileResponse:
     """Serve a paper's raw PDF for the in-browser annotation reader.
 
-    Visibility mirrors the snapshot endpoint: public-source papers are served to
-    any authenticated user; uploaded/local papers are scoped to the caller's
-    library, with an opaque 404 for everything out of scope.
+    Visibility mirrors the snapshot endpoint: persisted-public papers are
+    served to every authenticated user, while private papers require explicit
+    membership in the caller's library. Out-of-scope papers return an opaque
+    404.
 
     Parameters
     ----------

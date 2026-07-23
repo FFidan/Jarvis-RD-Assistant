@@ -134,6 +134,30 @@ async def test_feed_library_scope_user_isolation(contract_two_users, _pi_app, _c
     )
 
 
+async def test_feed_library_scope_does_not_widen_to_unshelved_public_papers(
+    contract_conn,
+    contract_two_users,
+    _pi_app,
+    _configure_api_key,
+) -> None:
+    """Library scope remains exact membership even for persisted-public rows."""
+    public_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, visibility_scope
+           ) VALUES (
+               'feed-public-unshelved', 'arxiv', 'Public but unshelved', ARRAY['A'],
+               'https://example.test/feed-public-unshelved', 'public'
+           ) RETURNING id"""
+    )
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as client:
+        response = await client.get("/api/papers/feed?scope=library")
+
+    assert response.status_code == 200, response.text[:300]
+    returned_ids = {paper["id"] for paper in response.json()["papers"]}
+    assert public_id not in returned_ids
+
+
 # ---------------------------------------------------------------------------
 # §A-FEED-03 — feed view=inbox returns paper with state='to_read' (inbox-equivalent)
 # Verified: feed.py:95-138 (view predicate dispatch via VIEW_PREDICATES)
@@ -445,8 +469,8 @@ async def test_feed_summary_join_scoped_to_calling_user(
     _configure_api_key,
     contract_conn,
 ):
-    # WHY the seed shape matters: the paper is canonical (discovered_by NULL) and
-    # in BOTH libraries, but only user A owns a paper_summaries row. An unscoped
+    # WHY the seed shape matters: the private paper is in BOTH libraries, but
+    # only user A owns a paper_summaries row. An unscoped
     # LEFT JOIN paper_summaries would match A's row for B's feed, which both leaks
     # A's summary fields and emits an extra row per matching summary (duplication +
     # count inflation). The three assertion clusters below pin those three failure

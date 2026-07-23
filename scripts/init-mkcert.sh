@@ -12,19 +12,28 @@ if ! command -v mkcert >/dev/null 2>&1; then
 mkcert is not installed.
 
 Install it:
-  macOS:        brew install mkcert
-  Debian/Ubuntu: sudo apt-get install -y mkcert
-  Arch:          sudo pacman -S mkcert
+  macOS:          brew install mkcert nss
+  Debian/Ubuntu: sudo apt-get install -y mkcert libnss3-tools
+  Fedora:         sudo dnf install -y mkcert nss-tools
+  Arch:           sudo pacman -S mkcert nss
   Other:         https://github.com/FiloSottile/mkcert#installation
+
+The NSS package lets mkcert add its CA to Firefox and Chromium-compatible
+browser stores on this operating system.
 EOF
     exit 1
 fi
 
-# Install root CA into local trust store if not already
-if ! mkcert -CAROOT >/dev/null 2>&1 || [ ! -f "$(mkcert -CAROOT)/rootCA.pem" ]; then
-    echo "Installing mkcert root CA into local trust store..."
-    mkcert -install
+if ! command -v openssl >/dev/null 2>&1; then
+    printf '%s\n' "openssl is required to inspect and validate the generated certificate." >&2
+    exit 1
 fi
+
+# `mkcert -install` is idempotent and repairs a trust store whose CA entry was
+# removed even when CAROOT/rootCA.pem still exists. Run it every time so
+# `make certs` means both "certificate exists" and "this host trusts its CA".
+echo "Installing mkcert root CA into local trust store..."
+mkcert -install
 
 mkdir -p "$CERTS_DIR"
 

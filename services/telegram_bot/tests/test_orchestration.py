@@ -372,18 +372,13 @@ async def test_review_reminder_skips_when_no_owner():
 # ---------------------------------------------------------------------------
 
 
-def test_owner_headers_all_orchestrators_use_canonical():
-    """All orchestrators must emit the canonical owner headers — never a private copy.
+def test_owner_headers_are_confined_to_the_canonical_client():
+    """Migrated orchestrators must delegate canonical owner headers to the client.
 
     The canonical ``_owner_headers`` lives in ``telegram_bot.config`` (the leaf
     module — transport callers must not drag in the handler chain).
-    Orchestrators that still issue HTTP calls inline (paper_digest,
-    research_pulse, review_reminder) import it from config.  daily_briefing /
-    deadline_warning / author_alerts now route every backend call through
-    ``services_client``, which builds the same canonical headers internally —
-    so for those the contract is verified at the services_client layer (and
-    per-call in the daily_briefing / author_alerts / deadline_warning header
-    tests above).
+    Migrated orchestrators route every backend call through ``services_client``
+    and therefore must not import the helper themselves.
     """
 
     from telegram_bot import config as config_mod
@@ -393,19 +388,13 @@ def test_owner_headers_all_orchestrators_use_canonical():
     from telegram_bot.orchestration import research_pulse as rp_mod
     from telegram_bot.orchestration import review_reminder as rr_mod
 
-    # Inline-HTTP orchestrators must use the canonical function (not a copy).
-    assert pd_mod._owner_headers is config_mod._owner_headers, (
-        "paper_digest has its own _owner_headers"
-    )
-    assert rp_mod._owner_headers is config_mod._owner_headers, (
-        "research_pulse has its own _owner_headers"
-    )
-    assert rr_mod._owner_headers is config_mod._owner_headers, (
-        "review_reminder has its own _owner_headers"
-    )
+    # Backend transport belongs to services_client, not orchestration modules.
+    for module in (pd_mod, rp_mod, rr_mod):
+        assert not hasattr(module, "_owner_headers"), (
+            f"{module.__name__} bypasses the services_client auth boundary"
+        )
 
-    # services_client (used by daily_briefing / deadline_warning / author_alerts)
-    # uses the same canonical helper — no private copy.
+    # services_client uses the same canonical helper -- no private copy.
     assert services_client._owner_headers is config_mod._owner_headers, (
         "services_client has its own _owner_headers"
     )

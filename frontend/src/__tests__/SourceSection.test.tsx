@@ -47,7 +47,7 @@ describe('SourceSection', () => {
     expect(screen.queryByText(/^API key: not set$/i)).not.toBeInTheDocument();
   });
 
-  it('keeps required-key warning for enabled OpenAlex without contact settings', () => {
+  it('keeps required-key warning for enabled OpenAlex without an API key', () => {
     renderSource(
       source({
         source_type: 'openalex',

@@ -4,9 +4,9 @@ Three endpoints:
 
 - ``POST /api/auth/request-link`` — body ``{email}`` → always returns
   ``{"sent": true}``. If the email belongs to a real user, a one-shot
-  15-minute magic-link is generated and either emailed or logged to stdout
-  in dev-mode. Unknown emails get the same response shape (don't leak which
-  emails exist).
+  15-minute magic-link is generated and emailed when SMTP is available. If it
+  cannot be delivered, the bearer link is dropped rather than logged. Unknown
+  emails get the same response shape (don't leak which emails exist).
 - ``POST /api/auth/verify`` — body ``{token}`` → looks up SHA-256(token) in
   ``magic_link_tokens``. Rejects on missing/expired/already-used. Otherwise
   marks ``used_at``, creates a 30-day session row, sets the ``jarvis_session``
@@ -22,34 +22,36 @@ dependency) since they ARE the auth bootstrap.
 import contextlib
 import hashlib
 import hmac
+import ipaddress
 import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.email import MagicLinkDelivery, send_magic_link
 from jarvis_common.event_log import log_event
-from jarvis_common.owner import resolve_owner_user_id
+from jarvis_common.owner import OwnerIdentity, resolve_owner_identity
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME, mint_session
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
 from paper_ingestion.deps import limiter
+from paper_ingestion.routers._auth_shared import build_verify_link, magic_link_on_cooldown
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# Auth router endpoints are exempt from the global verify_api_key dependency.
-# They're explicitly registered with `dependencies=[]` overrides at include time
-# (see main.py). Marker attribute so future linters can audit.
-router.auth_exempt = True  # type: ignore[attr-defined]
+# Exempt from the app-level verify_api_key by the `/api/auth/` path check inside
+# it — this router IS the auth bootstrap, so it cannot require a credential the
+# caller has not been issued yet. Each endpoint enforces its own token TTL and
+# single-use semantics.
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
-MAGIC_LINK_COOLDOWN = timedelta(minutes=2)
 MAX_EMAIL_LEN = 320  # RFC 5321 cap
 
 
@@ -93,58 +95,94 @@ def _audit_pool(request: Request):
 
 def _build_magic_link(request: Request, token: str) -> str:
     """Construct the URL the user clicks. Honours X-Forwarded-* via ProxyHeadersMiddleware."""
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    base = get_paper_ingestion_settings().app_base_url
-    if base:
-        return f"{base.rstrip('/')}/auth/verify?token={token}"
-    # Fallback: derive from the incoming request. ProxyHeadersMiddleware has
-    # already substituted the public scheme/host before this code runs.
-    if get_core_settings().environment == "production":
-        logger.warning(
-            "APP_BASE_URL is unset in production; the magic link is derived from the "
-            "request origin and may be wrong behind a tunnel or proxy. Set APP_BASE_URL "
-            "to the public URL."
-        )
-    return str(request.url.replace(path="/auth/verify", query=f"token={token}"))
+    return build_verify_link(request, token, logger=logger, link_kind="magic link")
 
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+async def _deliver_requested_magic_link(email: str, link: str, pool: Any) -> None:
+    """Deliver a persisted login link after its request response has been sent."""
+    try:
+        result = await send_magic_link(email, link, pool=pool)
+    except Exception:  # noqa: BLE001 — the background task must not leak SMTP detail
+        logger.exception("send_magic_link failed for email_hash=%s", _hash_email(email))
+        result = MagicLinkDelivery.FAILED
+    if result is MagicLinkDelivery.FAILED:
+        # Best-effort and PII-free: delivery failure is visible to the operator,
+        # while neither the raw recipient nor the bearer-token link is recorded.
+        with contextlib.suppress(Exception):
+            await log_event(
+                pool=pool,
+                level="warning",
+                category="auth",
+                source="auth",
+                message="magic_link_send_failed",
+                context={"email_hash": _hash_email(email)},
+            )
 
 
-def _host_is_loopback(host: str) -> bool:
-    """True iff a Host header names a loopback address (port + IPv6 brackets stripped)."""
-    host = host.strip()
-    if host.startswith("["):
-        hostname = host[1:].split("]", 1)[0]
-    elif ":" in host:
-        hostname = host.rsplit(":", 1)[0]
-    else:
-        hostname = host
-    return hostname.lower() in _LOOPBACK_HOSTS
+def _ip_in_cidrs(value: str | None, cidrs: list[str]) -> bool:
+    """Return whether a concrete peer address belongs to an explicit allowlist."""
+    if not value:
+        return False
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    for index, cidr in enumerate(cidrs):
+        if cidr == "*":
+            continue
+        try:
+            if address in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            # Log the position rather than the raw entry: the allowlist is
+            # operator-controlled configuration, and keeping raw values out of log
+            # records is good hygiene while still pointing at which element to fix.
+            logger.warning("Ignoring malformed transport-allowlist CIDR at index %d", index)
+    return False
+
+
+def _raw_peer_host(request: Request) -> str | None:
+    """Read the socket peer captured before proxy-header rewriting."""
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, dict) and RAW_CLIENT_SCOPE_KEY in scope:
+        raw = scope.get(RAW_CLIENT_SCOPE_KEY)
+        if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], str):
+            return raw[0]
+        return None
+    # Direct handler unit tests may not install the app middleware. Production
+    # requests always take the stashed branch above.
+    client = getattr(request, "client", None)
+    return getattr(client, "host", None)
 
 
 def _require_local_or_https(request: Request) -> None:
-    """Refuse a cleartext credential exchange from a non-loopback origin.
+    """Permit credential exchange only through a verifiable transport path.
 
-    A loopback Host (localhost / SSH-forward) or an nginx-derived
-    ``X-Forwarded-Proto: https`` satisfies the gate. This protects the credential
-    OWNER from sending a bearer secret in cleartext over a LAN; it is a foot-gun
-    guard, not authentication — Host is client-controllable, but a forged
-    loopback Host only endangers the forging client's own secret.
+    Host and forwarding headers are client-controlled and are never consulted
+    here. ``RawClientStashMiddleware`` identifies the actual dashboard proxy;
+    only that pinned peer may convey the rewritten HTTPS scheme or the small
+    host-local HTTP allowlist.
     """
-    headers = getattr(request, "headers", None)
-    if headers is None:
+    settings = get_core_settings()
+    raw_peer = _raw_peer_host(request)
+    if _ip_in_cidrs(raw_peer, ["127.0.0.0/8", "::1/128"]):
         return
-    if headers.get("x-forwarded-proto", "").lower() == "https":
-        return
-    if _host_is_loopback(headers.get("host", "")):
-        return
+
+    if _ip_in_cidrs(raw_peer, settings.trusted_proxy_hosts_list):
+        scheme = str(getattr(getattr(request, "url", None), "scheme", "")).lower()
+        if scheme == "https":
+            return
+        client = getattr(request, "client", None)
+        client_host = getattr(client, "host", None)
+        if scheme == "http" and _ip_in_cidrs(client_host, settings.trusted_local_client_cidrs_list):
+            return
+
     raise HTTPException(
         status_code=403,
         detail=(
-            "Refusing to exchange a credential over an insecure origin. Use https, "
-            "http://localhost, or an SSH-forwarded localhost tunnel."
+            "This address is for diagnostics only. Open JARVIS through verified "
+            "HTTPS, or use http://localhost on the server, before entering a "
+            "setup token, sign-in link, or API key."
         ),
     )
 
@@ -164,11 +202,16 @@ def _cookie_secure() -> bool:
     dependencies=[],  # exempt from verify_api_key
 )
 @limiter.limit("5/minute")
-async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkResponse:
+async def request_link(
+    body: RequestLinkBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> RequestLinkResponse:
     """Issue a magic-link for ``body.email`` if the email matches a known user.
 
     Always returns ``{"sent": true}`` regardless of whether the email exists,
-    so an attacker cannot enumerate valid accounts by timing/response shape.
+    with SMTP delivery deferred until after the response so relay latency cannot
+    reveal valid accounts.
 
     When SMTP is unconfigured (no relay in DB or env) the link is silently
     dropped after token generation: ``send_magic_link`` takes the dev-mode
@@ -178,6 +221,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     MUST use the ``smtp_configured`` field on ``GET /api/setup/status`` to
     surface this condition in the UI before the user submits an email.
     """
+    _require_local_or_https(request)
     pool = request.app.state.db_pool
     email_norm = body.email.lower().strip()
 
@@ -196,15 +240,9 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
         )
 
     if row is None:
-        # Don't leak account existence. Equalise the application-side work the
-        # known-email branch does so there is no trivial fast/slow timing split:
-        # always mint + SHA-256-hash a throwaway token (the CPU oracle) and
-        # always perform an equivalent connection-acquire round-trip (mirrors
-        # the known branch's second pool.acquire). We deliberately do NOT
-        # INSERT or call send_magic_link — the DB write + SMTP send cannot be
-        # safely faked and true constant-time across real SMTP is infeasible;
-        # this closes the order-of-magnitude split, not the residual µs-level
-        # one, which is the accepted bar here.
+        # Equalise bounded application-side work without scheduling delivery:
+        # hash a throwaway token and mirror the known branch's second pool
+        # acquire. SMTP never runs on either request path.
         _hash_token(secrets.token_urlsafe(32))  # decoy: equalise CPU work
         async with pool.acquire():
             pass
@@ -217,16 +255,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
 
     async with pool.acquire() as conn:
-        recent = await conn.fetchval(
-            "SELECT created_at FROM magic_link_tokens"
-            " WHERE user_id = $1 AND pending_email IS NULL"
-            " ORDER BY created_at DESC LIMIT 1",
-            user_id,
-        )
-        if (
-            recent is not None
-            and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
-        ):
+        if await magic_link_on_cooldown(conn, user_id, email_change=False):
             logger.info("auth_request_link_cooldown email_hash=%s", _hash_email(email_norm))
             return RequestLinkResponse(sent=True)
 
@@ -240,27 +269,12 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
             expires_at,
         )
 
-    link = _build_magic_link(request, raw_token)
-    try:
-        result = await send_magic_link(email_norm, link, pool=pool)
-    except Exception:  # noqa: BLE001 — never leak SMTP detail to the response
-        logger.exception("send_magic_link failed for email_hash=%s", _hash_email(email_norm))
-        result = MagicLinkDelivery.FAILED
-    if result is MagicLinkDelivery.FAILED:
-        # Record a server-side event so an operator can see the outage in Logs
-        # Live. Suppress ANY error from the write: this unauthenticated path MUST
-        # always return sent=True (its shape + timing are the anti-enumeration
-        # defense), and the event is best-effort. The payload carries only a
-        # PII-free email hash. We do NOT advertise the outage to the caller.
-        with contextlib.suppress(Exception):
-            await log_event(
-                pool=pool,
-                level="warning",
-                category="auth",
-                source="auth",
-                message="magic_link_send_failed",
-                context={"email_hash": _hash_email(email_norm)},
-            )
+    background_tasks.add_task(
+        _deliver_requested_magic_link,
+        email_norm,
+        _build_magic_link(request, raw_token),
+        pool,
+    )
 
     return RequestLinkResponse(sent=True)
 
@@ -381,6 +395,32 @@ def _submitted_api_key(body: ApiKeySessionBody, request: Request) -> str:
     return ""
 
 
+def _owner_configuration_conflict(identity: OwnerIdentity) -> HTTPException:
+    """Build an actionable error for an authoritative but unusable owner."""
+    if identity.source == "environment":
+        if identity.state == "invalid_value":
+            problem = "OWNER_USER_ID must be a positive integer"
+        elif identity.state == "non_admin_user":
+            problem = "OWNER_USER_ID references a non-admin user"
+        else:
+            problem = "OWNER_USER_ID references a missing or deleted user"
+        return HTTPException(
+            status_code=409,
+            detail=f"{problem}; correct OWNER_USER_ID on the host and restart JARVIS",
+        )
+
+    if identity.state == "invalid_value":
+        problem = "the stored owner record is not a positive integer"
+    elif identity.state == "non_admin_user":
+        problem = "the stored owner record references a non-admin user"
+    else:
+        problem = "the stored owner record references a missing or deleted user"
+    return HTTPException(
+        status_code=409,
+        detail=f"{problem}; repair it with jarvis-research owner set <admin-email>",
+    )
+
+
 @router.post(
     "/api-key-session",
     response_model=UserResponse,
@@ -396,9 +436,9 @@ async def api_key_session(
 
     API-key-to-session exchange (decision A2). Three non-negotiable guardrails:
 
-    1. Bind to ONE explicit owner — ``OWNER_USER_ID`` setting if present,
-       else the lowest-id non-deleted ``role='admin'`` user. Never a
-       synthetic / shared / auto-created user. No admin → 409 (no creation).
+    1. Bind to ONE explicit owner when configured. A single-user install may
+       fall back to its only live admin. Never create or silently substitute a
+       user when an authoritative owner setting is invalid.
     2. Audit + rate-limit — ``auth.api_key.session.minted`` on success,
        ``auth.api_key.session.failure`` on bad key, via the same ``log_audit``
        helper magic-link uses; ``@limiter.limit`` matches the tighter auth
@@ -438,99 +478,72 @@ async def api_key_session(
     from jarvis_common.auth import api_key_login_enabled  # noqa: PLC0415
 
     async with pool.acquire() as conn:
-        resolved_owner_id = await resolve_owner_user_id(conn)
-        # Guardrail 3: single-tenant gate.
-        user_count = await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL")
-        multi_user = int(user_count or 0) != 1
-        flag_enabled = await api_key_login_enabled(conn)
+        async with conn.transaction():
+            # Coordinate with owner transfer, owner repair, and admin role/delete
+            # mutations. The final lookup and session insert therefore observe
+            # one stable owner identity for every cooperating writer.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))")
+            owner_identity = await resolve_owner_identity(conn)
 
-        # B1 (owner self-lockout exemption): a configured OWNER_USER_ID that
-        # resolves to a live admin can ALWAYS mint via API key — even on a
-        # multi-user box with the flag OFF — so the operator is never locked out
-        # once magic-link is the only path and SMTP is down. Pre-resolve with the
-        # SAME role='admin' lookup the explicit-owner branch uses; members never
-        # match (the lookup requires admin), so this exempts the owner only.
-        owner: Any = None
-        if resolved_owner_id is not None:
-            owner = await conn.fetchrow(
-                "SELECT id, email, role FROM users "
-                "WHERE id = $1 AND deleted_at IS NULL AND role = 'admin'",
-                int(resolved_owner_id),
-            )
-        owner_exempt = owner is not None
+            if owner_identity.source != "none" and not owner_identity.is_valid:
+                raise _owner_configuration_conflict(owner_identity)
 
-        if multi_user and not flag_enabled and not owner_exempt:
-            raise HTTPException(
-                status_code=403,
-                detail=("API-key login disabled for multi-tenant deployments; use magic-link"),
-            )
+            user_count = await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL")
+            multi_user = int(user_count or 0) != 1
+            flag_enabled = await api_key_login_enabled(conn)
+            owner_exempt = owner_identity.is_valid
 
-        # Fallback gate: when the gate passed ONLY because the flag is on
-        # (multi-user box, flag enabled, no exempt owner), an explicit
-        # OWNER_USER_ID is mandatory — binding the session to an arbitrary
-        # lowest-id admin on a shared box is a silent privilege grant. Refuse the
-        # fallback; the explicit-owner branch below handles a set-but-unresolved
-        # OWNER_USER_ID with its own 409s. Single-user keeps the fallback.
-        if multi_user and flag_enabled and not owner_exempt and resolved_owner_id is None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "set OWNER_USER_ID (or create the first admin via the setup "
-                    "wizard) for multi-user API-key login; refusing to bind the "
-                    "session to an arbitrary admin"
-                ),
-            )
-
-        # Guardrail 1: resolve the single explicit owner. Never create one.
-        if resolved_owner_id is not None:
-            # A-3 (defense-in-depth): the explicit-owner lookup (pre-resolved as
-            # ``owner`` above) enforces role='admin' symmetrically with the
-            # fallback branch below. A configured owner that resolves to a
-            # non-admin must NOT silently mint a member "owner" session —
-            # distinguish "missing" (deleted/absent) from "exists but not admin"
-            # so the operator gets an actionable error instead of a privilege
-            # downgrade. The owner is sourced from either OWNER_USER_ID env or the
-            # first-admin owner record, so both are named in the errors below.
-            if owner is None:
-                non_admin = await conn.fetchrow(
-                    "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",
-                    int(resolved_owner_id),
+            if multi_user and not flag_enabled and not owner_exempt:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "API-key recovery is reserved for the configured instance owner; "
+                        "use a passkey or sign-in link"
+                    ),
                 )
-                if non_admin is not None:
+
+            if multi_user and flag_enabled and not owner_exempt:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "set OWNER_USER_ID (or create the first admin via the setup "
+                        "wizard) for multi-user API-key login; refusing to bind the "
+                        "session to an arbitrary admin"
+                    ),
+                )
+
+            owner: Any
+            if owner_identity.is_valid:
+                owner = await conn.fetchrow(
+                    "SELECT id, email, role FROM users "
+                    "WHERE id = $1 AND deleted_at IS NULL AND role = 'admin'",
+                    owner_identity.user_id,
+                )
+                if owner is None:
                     raise HTTPException(
                         status_code=409,
                         detail=(
-                            "the configured owner (OWNER_USER_ID env or the "
-                            "first-admin owner record) references a non-admin "
-                            "user; no session minted (promote the user to admin "
-                            "or set OWNER_USER_ID to a live admin)"
+                            "the configured owner changed while sign-in was in progress; "
+                            "retry after repairing the owner configuration"
                         ),
                     )
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "the configured owner (OWNER_USER_ID env or the "
-                        "first-admin owner record) references a missing or "
-                        "deleted user; no session minted (no user is created)"
-                    ),
+            else:
+                owner = await conn.fetchrow(
+                    "SELECT id, email, role FROM users "
+                    "WHERE role = 'admin' AND deleted_at IS NULL "
+                    "ORDER BY id ASC LIMIT 1"
                 )
-        else:
-            owner = await conn.fetchrow(
-                "SELECT id, email, role FROM users "
-                "WHERE role = 'admin' AND deleted_at IS NULL "
-                "ORDER BY id ASC LIMIT 1"
-            )
-            if owner is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "No admin user exists; cannot mint an API-key session "
-                        "(no user is created — provision an admin first)"
-                    ),
-                )
+                if owner is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "No admin user exists; cannot mint an API-key session "
+                            "(no user is created — provision an admin first)"
+                        ),
+                    )
 
-        owner_id = int(owner["id"])
-        await mint_session(conn, response, owner_id, now=now)
+            owner_id = int(owner["id"])
+            await mint_session(conn, response, owner_id, now=now)
 
     if _audit is not None:
         await log_audit(

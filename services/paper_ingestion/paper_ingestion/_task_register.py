@@ -32,6 +32,7 @@ from paper_ingestion.paper_jobs import (
     _paper_summarize_job,
     _papers_batch_process_job,
     _papers_batch_summarize_job,
+    _papers_process_library_job,
     _papers_scan_local_job,
 )
 from paper_ingestion.pulse.job import _pulse_generate_job
@@ -48,6 +49,7 @@ KIND_TO_HANDLER: dict[str, object] = {
     "paper.summarize": _paper_summarize_job,
     "papers.batch_process": _papers_batch_process_job,
     "papers.batch_summarize": _papers_batch_summarize_job,
+    "papers.process_library": _papers_process_library_job,
     "papers.scan_local": _papers_scan_local_job,
     "citations.batch_fetch": _citations_batch_fetch_job,
     "digest.weekly": _digest_weekly_job,

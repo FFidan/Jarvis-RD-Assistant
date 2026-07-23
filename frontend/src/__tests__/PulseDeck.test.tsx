@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
-import type { PulseDeck as PulseDeckType } from '@/types';
+import type { PulseDeck as PulseDeckType, PulseStats } from '@/types';
 
 const mockStartJob = vi.fn();
 const mockHasRunning = vi.fn().mockReturnValue(false);
@@ -20,6 +20,7 @@ vi.mock('@/stores/job-store', () => ({
 
 vi.mock('@/lib/api', () => ({
   fetchPulseToday: vi.fn(),
+  fetchPulseStats: vi.fn().mockResolvedValue({ has_learned_model: true }),
   ratePulseCard: vi.fn(),
   explainPulseCard: vi.fn().mockResolvedValue({
     card_id: 1,
@@ -30,7 +31,7 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchPulseToday } = await import(
+const { fetchPulseToday, fetchPulseStats } = await import(
   '@/lib/api'
 );
 
@@ -73,6 +74,21 @@ function makeDeck(overrides: Partial<PulseDeckType> = {}): PulseDeckType {
         signals: {},
       },
     ],
+    ...overrides,
+  };
+}
+
+function makeStats(overrides: Partial<PulseStats> = {}): PulseStats {
+  return {
+    window_days: 30,
+    decks_generated: 1,
+    avg_candidates: null,
+    avg_llm_calls: null,
+    avg_duration_s: null,
+    last_run_at: null,
+    last_error: null,
+    degraded_reason: null,
+    has_learned_model: true,
     ...overrides,
   };
 }
@@ -140,6 +156,26 @@ describe('PulseDeck', () => {
     expect(screen.getByText(/2 papers/i)).toBeInTheDocument();
   });
 
+  it('shows the basic-ranking caption when has_learned_model is false', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    vi.mocked(fetchPulseStats).mockResolvedValueOnce(makeStats({ has_learned_model: false }));
+    renderDeck();
+    await screen.findByText('Paper One');
+    expect(
+      screen.getByText(/basic ranking \(learning from your feedback\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the basic-ranking caption when has_learned_model is true', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    vi.mocked(fetchPulseStats).mockResolvedValueOnce(makeStats({ has_learned_model: true }));
+    renderDeck();
+    await screen.findByText('Paper One');
+    expect(
+      screen.queryByText(/basic ranking \(learning from your feedback\)/i),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows degraded reason and source diagnostics for an empty generated deck', async () => {
     vi.mocked(fetchPulseToday).mockResolvedValue(
       makeDeck({
@@ -157,10 +193,10 @@ describe('PulseDeck', () => {
             },
             openalex: {
               status: 'unconfigured',
-              message: 'OpenAlex needs contact settings.',
+              message: 'OpenAlex requires an API key.',
               status_code: null,
               retry_after_s: null,
-              settings_hint: 'Set OPENALEX_EMAIL for polite pool access.',
+              settings_hint: 'Set OPENALEX_API_KEY for OpenAlex access.',
             },
           },
         },
@@ -171,7 +207,7 @@ describe('PulseDeck', () => {
 
     expect(await screen.findByText(/arxiv rate limit reached/i)).toBeInTheDocument();
     expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
-    expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
+    expect(screen.getByText(/set OPENALEX_API_KEY/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
   });
 

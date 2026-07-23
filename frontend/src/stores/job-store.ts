@@ -48,6 +48,7 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => readonly (readonly unk
     return paperId == null ? [] : [QUERY_KEYS.papers.detail(paperId)];
   },
   'papers.batch_process':   () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts(), QUERY_KEYS.actionItems.unprocessed()],
+  'papers.process_library': () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts(), QUERY_KEYS.actionItems.unprocessed()],
   'papers.scan_local':      () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
   'papers.batch_summarize': () => [QUERY_KEYS.papers.feedAll()],
   'extraction.single':      (j) => {
@@ -97,6 +98,61 @@ const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
 };
 const zoteroPushWarning = (status: string): string =>
   ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
+
+/** Failed, skipped, untouched and total counts from a process-library result. */
+const libraryCounts = (result: Job['result']) => {
+  const r = (result ?? {}) as {
+    total?: number;
+    remaining?: number;
+    errors?: unknown[];
+    blocked?: unknown[];
+  };
+  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
+  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const remaining = typeof r.remaining === 'number'
+    && Number.isInteger(r.remaining)
+    && r.remaining >= 0
+    ? r.remaining
+    : 0;
+  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  return { failed, skipped, remaining, total };
+};
+
+/** The count fragments a library warning names, omitting the zero ones. */
+const libraryOutcomeParts = (failed: number, skipped: number): string[] => {
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped (no PDF source)`);
+  return parts;
+};
+
+/**
+ * A `papers.process_library` job reaches `succeeded` even when some papers
+ * failed or were skipped (no PDF source) — the handler returns a `status`
+ * rather than raising. A green "completed" toast would misreport that, so a
+ * `partial` result gets a warning naming both counts.
+ */
+const libraryPartialWarning = (result: Job['result']): string => {
+  const { failed, skipped, remaining, total } = libraryCounts(result);
+  const parts = libraryOutcomeParts(failed, skipped);
+  if (remaining > 0) parts.push(`${remaining} not processed`);
+  const detail = parts.length > 0 ? parts.join(', ') : 'no work completed';
+  return `Library processing finished - ${detail} of ${total}; open Jobs for details`;
+};
+
+/**
+ * A cancelled run also reaches `succeeded` — it stopped early rather than
+ * failing — so the warning names both the papers it never reached and whatever
+ * had already failed or been skipped before the stop.
+ */
+const libraryCancelledWarning = (result: Job['result']): string => {
+  const { failed, skipped, remaining, total } = libraryCounts(result);
+  const parts = [
+    remaining > 0 ? `${remaining} not processed` : `stopped before finishing ${total} papers`,
+    ...libraryOutcomeParts(failed, skipped),
+  ];
+  return `Library processing was cancelled - ${parts.join(', ')}; open Jobs for details`;
+};
 
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -192,6 +248,13 @@ export interface Job {
   id: string;
   kind: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  /**
+   * A cancellation has been REQUESTED. Orthogonal to `status`: the handler keeps
+   * running (status stays `running`) until it observes the flag and returns its
+   * own final result, so this is what distinguishes "Cancelling" from "Running".
+   * Optional — the list endpoint does not carry it.
+   */
+  cancel_requested?: boolean;
   progress: number;
   progress_message: string | null;
   payload?: Record<string, unknown> | null;
@@ -322,8 +385,18 @@ export const useJobStore = create<JobStore>()(
               job.kind === 'zotero.push_highlights'
                 ? (job.result as { status?: string } | null)?.status
                 : undefined;
+            // A whole-library run can succeed-with-failures or stop on cancel;
+            // `partial` and `cancelled` warn instead of a green success toast.
+            const libraryStatus =
+              job.kind === 'papers.process_library'
+                ? (job.result as { status?: string } | null)?.status
+                : undefined;
             if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
               toast.warning(zoteroPushWarning(zoteroPushStatus));
+            } else if (libraryStatus === 'cancelled') {
+              toast.warning(libraryCancelledWarning(job.result));
+            } else if (libraryStatus === 'partial') {
+              toast.warning(libraryPartialWarning(job.result));
             } else if (!zeroCards) {
               toast.success(`${kindLabel(job.kind)} completed`);
             }
@@ -477,19 +550,24 @@ export const useJobStore = create<JobStore>()(
         try {
           await apiCancelJob(jobId);
         } catch (err) {
-          const msg = errorMessage(err, 'Failed to cancel job');
-          toast.error(msg);
+          toast.error(errorMessage(err, 'Failed to cancel job'));
           get().subscribe(jobId);
           return;
         }
-        get()._cleanupSubscription(jobId);
-        // Optimistically update local status
+        // A cancel is a REQUEST, not an outcome: the handler keeps running until
+        // it observes the flag, then returns its own final result — for a
+        // whole-library run, the counts of everything it did finish before
+        // stopping. Optimistically writing status 'cancelled' here would report
+        // the request as the outcome and tear the stream down before that result
+        // arrived, so record the REQUEST instead: it makes the row read
+        // "Cancelling" immediately rather than looking untouched, and the SSE
+        // stream confirms it on the next poll (the flag is part of the stream's
+        // change-detection key). Stay subscribed — and open a stream if this job
+        // had none — so the terminal frame still drives the toast, the query
+        // invalidation, and the eviction timer in _handleTerminal.
         const job = get().jobs[jobId];
-        if (job) {
-          get()._upsertJob({ ...job, status: 'cancelled' });
-          // Schedule eviction (handle tracked so removeJob/_reset can cancel it)
-          scheduleEviction(jobId, () => get().removeJob(jobId));
-        }
+        if (job) get()._upsertJob({ ...job, cancel_requested: true });
+        get().subscribe(jobId);
       },
 
       removeJob(jobId) {

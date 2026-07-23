@@ -2,7 +2,10 @@
 
 # Ask — Cross-paper RAG
 
-The **Ask** workspace at `/ask` lets you pose questions that are answered from your entire library at once, rather than from a single paper. It uses a retrieval-augmented generation (RAG) pipeline that searches across all your embedded paper chunks, re-ranks results, and streams a grounded answer with citations.
+The **Ask** workspace at `/ask` lets you pose questions across papers visible to
+you, rather than one paper at a time. It uses a retrieval-augmented generation
+(RAG) pipeline that searches eligible embedded chunks, re-ranks results, and
+streams a grounded answer with citations.
 
 <!-- screenshot: /ask — chat interface with a question, a streaming answer containing a ConfidenceBadge, and an open SourcesAccordion showing three chunk citations -->
 
@@ -59,7 +62,13 @@ Conversation messages persist across navigation within the same session using th
 
 ## Differences from single-paper Ask
 
-The Ask workspace at `/ask` searches across **all embedded papers** in your library. The in-paper Ask section on the [Paper Detail](paper-detail.md) page is scoped to a single paper's chunks. Use the cross-paper Ask workspace when you want an answer synthesised from multiple sources.
+The Ask workspace at `/ask` searches embedded papers that are visible to the
+signed-in user: verified public papers plus private papers in that user's
+library. The database rechecks vector candidates before they can appear in an
+answer. The in-paper Ask section on the [Paper Detail](paper-detail.md) page is
+scoped to one visible paper's chunks. See [Source-aware paper
+visibility](../SECURITY.md#source-aware-paper-visibility) for the canonical
+boundary.
 
 ---
 

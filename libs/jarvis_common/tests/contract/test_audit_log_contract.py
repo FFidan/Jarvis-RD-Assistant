@@ -20,6 +20,8 @@ Supersedes: mock-unit tests asserting conn.execute called with correct SQL
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from jarvis_common.testing import SharedConnPool
@@ -129,6 +131,41 @@ async def test_log_audit_truncates_oversized_metadata(contract_conn):
     assert "_size" in stored
 
 
+async def test_log_audit_stores_row_for_non_json_native_metadata_under_cap(contract_conn):
+    """Metadata under the size cap containing a datetime and a UUID still writes a row.
+
+    The size-cap guard measures bytes with ``json.dumps(default=str)``, but the
+    asyncpg JSONB codec that performs the actual INSERT is registered with plain
+    ``json.dumps`` (no ``default``), which raises on a raw ``datetime``/``UUID``.
+    A guard that approves the payload but hands the codec a still-unencodable
+    dict causes the INSERT to fail and the row to be silently dropped.
+
+    Verified: audit.py:18-39 — _cap_metadata; db_helpers.py:68-71 — init_pg_connection
+    registers the jsonb/json codecs with encoder=json.dumps (no default=str).
+    """
+    from jarvis_common.audit import log_audit
+
+    action = f"test.nonjson.{uuid.uuid4().hex[:6]}"
+    at = datetime.now(UTC)
+    the_id = uuid.uuid4()
+
+    await log_audit(
+        _pool(contract_conn),
+        action=action,
+        resource="/api/test",
+        metadata={"at": at, "id": the_id},
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT metadata FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert row is not None, "log_audit silently dropped the row (codec mismatch)"
+    stored = row["metadata"]
+    assert stored["at"] == str(at)
+    assert stored["id"] == str(the_id)
+
+
 async def test_log_audit_no_user_id_stores_null(contract_conn):
     """log_audit with user_id=None stores NULL in the user_id column.
 
@@ -147,3 +184,55 @@ async def test_log_audit_no_user_id_stores_null(contract_conn):
     )
     assert row is not None
     assert row["user_id"] is None
+
+
+async def test_log_audit_strict_uses_the_supplied_connection(contract_conn):
+    """Security-critical callers can join the audit insert to their transaction."""
+    from jarvis_common.audit import log_audit_strict
+
+    action = f"test.strict.{uuid.uuid4().hex[:8]}"
+    await log_audit_strict(
+        contract_conn,
+        action=action,
+        resource="owner.user_id",
+        user_id="17",
+        metadata={"reason": "owner_transfer"},
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT user_id, resource, metadata FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert row is not None
+    assert row["user_id"] == "17"
+    assert row["resource"] == "owner.user_id"
+    assert row["metadata"] == {"reason": "owner_transfer"}
+
+
+async def test_log_audit_strict_propagates_insert_failure():
+    from jarvis_common.audit import log_audit_strict
+
+    conn = AsyncMock()
+    conn.execute.side_effect = RuntimeError("audit unavailable")
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await log_audit_strict(conn, action="owner.transfer", resource="owner.user_id")
+
+
+async def test_log_audit_strict_rolls_back_with_caller_transaction(contract_conn):
+    from jarvis_common.audit import log_audit_strict
+
+    action = f"test.strict.rollback.{uuid.uuid4().hex[:8]}"
+    with pytest.raises(RuntimeError, match="force rollback"):
+        async with contract_conn.transaction():
+            await log_audit_strict(
+                contract_conn,
+                action=action,
+                resource="owner.user_id",
+            )
+            raise RuntimeError("force rollback")
+
+    assert (
+        await contract_conn.fetchval("SELECT COUNT(*) FROM audit_log WHERE action = $1", action)
+        == 0
+    )

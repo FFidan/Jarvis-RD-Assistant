@@ -12,16 +12,56 @@ from paper_ingestion.queries.predicates import paper_visible_sql
 logger = logging.getLogger(__name__)
 
 
-def _user_scope_paper_entities_exists(entity_alias: str, param_idx: int) -> str:
-    """SQL fragment: EXISTS scoping paper_entities to caller's user_id.
+def _visible_paper_entities_exists(entity_alias: str, param_idx: int) -> str:
+    """Build an entity-existence check over caller-visible papers.
 
-    Callers hard-code entity_alias (SQL identifier) and param_idx (literal int),
-    never user input — f-string interpolation is safe.
+    Parameters
+    ----------
+    entity_alias : str
+        Trusted SQL expression identifying an entity row.
+    param_idx : int
+        One-based PostgreSQL placeholder containing the caller's user ID.
+
+    Returns
+    -------
+    str
+        An ``EXISTS`` fragment joining entity mentions to papers that are
+        public or explicitly present in the caller's library.
+
+    Notes
+    -----
+    Both arguments are static application SQL, never request text. The user
+    recorded on ``paper_entities`` is extraction attribution, not authority.
     """
     return (
         f"EXISTS (SELECT 1 FROM paper_entities pe "
+        f"JOIN papers visible_p ON visible_p.id = pe.paper_id "
         f"WHERE pe.entity_id = {entity_alias} "
-        f"AND pe.user_id IS NOT DISTINCT FROM ${param_idx})"
+        f"AND {paper_visible_sql(param_idx, alias='visible_p')})"
+    )
+
+
+def visible_entity_paper_count_sql(entity_alias: str, param_idx: int) -> str:
+    """Build a scalar count of distinct caller-visible papers for an entity.
+
+    Parameters
+    ----------
+    entity_alias : str
+        Trusted SQL expression identifying an entity row.
+    param_idx : int
+        One-based PostgreSQL placeholder containing the caller's user ID.
+
+    Returns
+    -------
+    str
+        A scalar subquery counting distinct visible papers. Multiple
+        extraction-attribution rows for one paper count only once.
+    """
+    return (
+        "(SELECT COUNT(DISTINCT pe.paper_id) FROM paper_entities pe "
+        "JOIN papers visible_p ON visible_p.id = pe.paper_id "
+        f"WHERE pe.entity_id = {entity_alias} "
+        f"AND {paper_visible_sql(param_idx, alias='visible_p')})"
     )
 
 
@@ -104,9 +144,9 @@ async def get_knowledge_graph(
 ) -> dict:
     """Get the full knowledge graph or a filtered subset.
 
-    When *user_id* is provided the result is scoped to entities that the
-    caller has at least one ``paper_entities`` row.  Passing
-    ``None`` preserves the legacy owner/server path (unscoped).
+    When *user_id* is provided, nodes and edges are derived only from public
+    papers or papers explicitly present in the caller's library. Passing
+    ``None`` preserves the trusted internal path (unscoped).
     """
     try:
         if entity_type:
@@ -114,16 +154,11 @@ async def get_knowledge_graph(
                 entities = await conn.fetch(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id,
-                              (SELECT COUNT(*) FROM paper_entities pe
-                               WHERE pe.entity_id = e.id
-                                 AND pe.user_id IS NOT DISTINCT FROM $4) AS paper_count,
+                              {visible_entity_paper_count_sql("e.id", 4)} AS paper_count,
                               e.created_at
                        FROM entities e
                        WHERE e.entity_type = $1
-                         AND (SELECT COUNT(*) FROM paper_entities pe
-                              WHERE pe.entity_id = e.id
-                                AND pe.user_id IS NOT DISTINCT FROM $4) >= $2
-                         AND {_user_scope_paper_entities_exists("e.id", 4)}
+                         AND {visible_entity_paper_count_sql("e.id", 4)} >= $2
                        ORDER BY paper_count DESC LIMIT $3""",
                     entity_type,
                     min_paper_count,
@@ -145,15 +180,10 @@ async def get_knowledge_graph(
                 entities = await conn.fetch(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id,
-                              (SELECT COUNT(*) FROM paper_entities pe
-                               WHERE pe.entity_id = e.id
-                                 AND pe.user_id IS NOT DISTINCT FROM $3) AS paper_count,
+                              {visible_entity_paper_count_sql("e.id", 3)} AS paper_count,
                               e.created_at
                        FROM entities e
-                       WHERE (SELECT COUNT(*) FROM paper_entities pe
-                              WHERE pe.entity_id = e.id
-                                AND pe.user_id IS NOT DISTINCT FROM $3) >= $1
-                         AND {_user_scope_paper_entities_exists("e.id", 3)}
+                       WHERE {visible_entity_paper_count_sql("e.id", 3)} >= $1
                        ORDER BY paper_count DESC LIMIT $2""",
                     min_paper_count,
                     limit,
@@ -176,29 +206,18 @@ async def get_knowledge_graph(
         return {"entities": [], "relationships": []}
 
     if user_id is not None:
-        # Scope edges to caller-visible papers under the canonical-corpus
-        # rule (mirrors list_contradictions' user_library EXISTS +
-        # discovered_by-NULL predicate). Without this an edge whose
-        # ``paper_id`` is another user's explicitly-owned paper would still
-        # be returned whenever both endpoint entities are visible. A NULL
-        # ``paper_id`` (paper deleted → ON DELETE SET NULL) is unattributable
-        # and stays visible.
+        # An authenticated edge must retain a caller-visible source paper.
+        # NULL paper references fail closed because their prior visibility can
+        # no longer be established after the source row was deleted.
         relationships = await conn.fetch(
             f"""SELECT id, source_entity_id, target_entity_id, relationship_type,
                       paper_id, evidence_quote, confidence, metadata, created_at
                FROM entity_relationships er
                WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
-                 AND (
-                     er.paper_id IS NULL
-                     OR EXISTS (
-                         SELECT 1 FROM papers p
-                         WHERE p.id = er.paper_id
-                           AND {paper_visible_sql(2)}
-                     )
-                     OR EXISTS (
-                         SELECT 1 FROM user_library ul
-                         WHERE ul.paper_id = er.paper_id AND ul.user_id = $2
-                     )
+                 AND EXISTS (
+                     SELECT 1 FROM papers p
+                     WHERE p.id = er.paper_id
+                       AND {paper_visible_sql(2)}
                  )
                ORDER BY confidence DESC""",
             entity_ids,
@@ -254,9 +273,9 @@ async def query_knowledge_graph(
       2. "outperforms" | "better than" → outperformance relationship search
       3. else → generic name LIKE search across entities joined to paper_entities
 
-    When *user_id* is provided the result is scoped to entities and
-    relationships the caller has ``paper_entities`` rows for.
-    Passing ``None`` preserves the legacy owner/server path (unscoped).
+    When *user_id* is provided, results are restricted through the papers'
+    persisted visibility and caller-library membership. Passing ``None``
+    preserves the trusted internal path (unscoped).
     """
     # Simple keyword extraction for SQL matching
     query_lower = query.lower()
@@ -282,19 +301,11 @@ async def query_knowledge_graph(
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
                          AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
-                         AND {_user_scope_paper_entities_exists("e1.id", 2)}
-                         AND (
-                             er.paper_id IS NULL
-                             OR EXISTS (
-                                 SELECT 1 FROM papers p
-                                 WHERE p.id = er.paper_id
-                                   AND {paper_visible_sql(2)}
-                             )
-                             OR EXISTS (
-                                 SELECT 1 FROM user_library ul
-                                 WHERE ul.paper_id = er.paper_id
-                                   AND ul.user_id = $2
-                             )
+                         AND {_visible_paper_entities_exists("e1.id", 2)}
+                         AND EXISTS (
+                             SELECT 1 FROM papers p
+                             WHERE p.id = er.paper_id
+                               AND {paper_visible_sql(2)}
                          )
                        ORDER BY er.confidence DESC""",
                     f"%{escape_like(target_name)}%",
@@ -324,19 +335,11 @@ async def query_knowledge_graph(
                        JOIN entities e1 ON er.source_entity_id = e1.id
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE er.relationship_type = 'outperforms'
-                         AND {_user_scope_paper_entities_exists("e1.id", 1)}
-                         AND (
-                             er.paper_id IS NULL
-                             OR EXISTS (
-                                 SELECT 1 FROM papers p
-                                 WHERE p.id = er.paper_id
-                                   AND {paper_visible_sql(1)}
-                             )
-                             OR EXISTS (
-                                 SELECT 1 FROM user_library ul
-                                 WHERE ul.paper_id = er.paper_id
-                                   AND ul.user_id = $1
-                             )
+                         AND {_visible_paper_entities_exists("e1.id", 1)}
+                         AND EXISTS (
+                             SELECT 1 FROM papers p
+                             WHERE p.id = er.paper_id
+                               AND {paper_visible_sql(1)}
                          )
                        ORDER BY er.confidence DESC
                        LIMIT 50""",
@@ -359,12 +362,12 @@ async def query_knowledge_graph(
             # Generic: search entities by name
             if user_id is not None:
                 rows = await conn.fetch(
-                    """SELECT e.*, pe.paper_id,
-                              (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
+                    f"""SELECT DISTINCT e.*, pe.paper_id, p.title AS paper_title
                        FROM entities e
                        JOIN paper_entities pe ON e.id = pe.entity_id
+                       JOIN papers p ON p.id = pe.paper_id
                        WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
-                         AND pe.user_id IS NOT DISTINCT FROM $2
+                         AND {paper_visible_sql(2)}
                        ORDER BY e.paper_count DESC
                        LIMIT 20""",
                     f"%{escape_like(query_lower.strip().rstrip('?. '))}%",

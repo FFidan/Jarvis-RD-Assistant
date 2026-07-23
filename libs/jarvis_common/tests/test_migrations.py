@@ -154,7 +154,7 @@ def test_code_max_migration_returns_floor_on_empty_dir(tmp_path, monkeypatch) ->
 
 def test_required_code_schema_reads_schema_version_file() -> None:
     """required_code_schema() reads db/SCHEMA_VERSION, the single source of truth."""
-    assert required_code_schema() == 102
+    assert required_code_schema() == 106
 
 
 def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplog) -> None:
@@ -166,7 +166,7 @@ def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplo
     )
 
     with caplog.at_level(logging.WARNING):
-        assert required_code_schema() == 102
+        assert required_code_schema() == 106
 
     assert not any("could not read" in r.getMessage() for r in caplog.records)
 
@@ -179,7 +179,7 @@ def test_required_code_schema_warns_on_corrupt_file(tmp_path, monkeypatch, caplo
     monkeypatch.setattr("jarvis_common.migrations._schema_version_path", lambda: bad)
 
     with caplog.at_level(logging.WARNING):
-        assert required_code_schema() == 102
+        assert required_code_schema() == 106
 
     assert any("could not read" in r.getMessage() for r in caplog.records)
 

@@ -282,6 +282,40 @@ async def test_embed_texts_sorts_embeddings_by_index():
     assert result == [[1.0], [2.0]]
 
 
+@pytest.mark.asyncio
+async def test_chat_sink_refuses_quarantine_before_http(monkeypatch, tmp_path):
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    http_client = AsyncMock()
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await llm_client.request_chat_completion_content(
+            http_client,
+            prompt="hello",
+            options=llm_client.ChatCompletionOptions(),
+        )
+
+    http_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_embedding_sink_refuses_quarantine_before_http(monkeypatch, tmp_path):
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.write_text("malformed")
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    http_client = AsyncMock()
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await llm_client.embed_texts(http_client, ["hello"])
+
+    http_client.post.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # call_llm_structured guards (timeout passthrough, model fallback, validation)
 # ---------------------------------------------------------------------------
@@ -333,6 +367,30 @@ async def test_call_llm_structured_passes_timeout_through():
 
     assert recorded.get("timeout") == 42.0
     assert recorded.get("model") == "smart"
+
+
+@pytest.mark.asyncio
+async def test_structured_llm_sink_refuses_quarantine_before_sdk_call(monkeypatch, tmp_path):
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+    from pydantic import BaseModel
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.touch()
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    recorded: dict = {}
+    fake_client, _ = _make_instructor_recorder(recorded)
+
+    class _Out(BaseModel):
+        pass
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await llm_client.call_llm_structured(
+            fake_client,
+            response_model=_Out,
+            prompt="hello",
+        )
+
+    assert recorded == {}
 
 
 @pytest.mark.asyncio
@@ -469,6 +527,68 @@ def test_boundary_functions_are_observed():
         "Trace-boundary functions missing @observe() (per docs/contracts/04-observability.md §3): "
         + ", ".join(missing)
     )
+
+
+def test_langfuse_export_rechecks_quarantine_after_initialization(monkeypatch, tmp_path):
+    """A quarantine transition must stop queued spans before transport export."""
+    import types  # noqa: PLC0415
+
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter  # noqa: PLC0415
+    from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
+    from pydantic import SecretStr  # noqa: PLC0415
+
+    import langfuse  # noqa: PLC0415
+
+    class RecordingExporter:
+        def __init__(self) -> None:
+            self.batches: list[object] = []
+
+        def export(self, spans):
+            self.batches.append(spans)
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self) -> None:
+            return None
+
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return True
+
+    delegate = RecordingExporter()
+    captured: dict[str, object] = {}
+
+    class FakeLangfuse:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        llm_client,
+        "get_jarvis_common_settings",
+        lambda: types.SimpleNamespace(
+            observability_enabled=True,
+            langfuse_host="https://langfuse.test",
+        ),
+    )
+    monkeypatch.setattr(
+        llm_client,
+        "get_secrets_settings",
+        lambda: types.SimpleNamespace(
+            langfuse_public_key=SecretStr("public-key"),
+            langfuse_secret_key=SecretStr("secret-key"),
+        ),
+    )
+    monkeypatch.setattr(langfuse, "Langfuse", FakeLangfuse)
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", lambda **_kwargs: delegate)
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    llm_client._langfuse_lifespan_hook()
+    exporter = captured["span_exporter"]
+    assert exporter.export(["before"]) is SpanExportResult.SUCCESS
+    assert delegate.batches == [["before"]]
+
+    quarantine.touch()
+    assert exporter.export(["after"]) is SpanExportResult.SUCCESS
+    assert delegate.batches == [["before"]]
 
 
 # ---------------------------------------------------------------------------

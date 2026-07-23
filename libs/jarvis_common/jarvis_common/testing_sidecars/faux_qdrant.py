@@ -1,7 +1,7 @@
 """In-process Qdrant sidecar for boundary-adapter tests.
 
 The class implements the async subset used by JARVIS' embedding/search code:
-collection lifecycle, upsert, query, scroll, count, and delete.  It preserves
+collection lifecycle, upsert, query, scroll, count, payload update, and delete. It preserves
 Qdrant's payload-filter semantics closely enough for user-scope and paper-scope
 contracts without requiring a Qdrant container.
 """
@@ -28,6 +28,7 @@ class FauxQdrantPoint:
 class _Collection:
     dimension: int
     points: dict[Any, FauxQdrantPoint] = field(default_factory=dict)
+    payload_indexes: dict[str, Any] = field(default_factory=dict)
 
 
 class FauxQdrantClient:
@@ -62,7 +63,23 @@ class FauxQdrantClient:
         """Return a namespace mirroring the Qdrant ``CollectionInfo`` shape."""
         collection = self._require_collection(collection_name)
         vectors = SimpleNamespace(size=collection.dimension)
-        return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(vectors=vectors)))
+        return SimpleNamespace(
+            config=SimpleNamespace(params=SimpleNamespace(vectors=vectors)),
+            payload_schema=dict(collection.payload_indexes),
+        )
+
+    async def create_payload_index(
+        self,
+        *,
+        collection_name: str,
+        field_name: str,
+        field_schema: Any,
+        **_: Any,
+    ) -> SimpleNamespace:
+        """Record an idempotent payload index on an existing collection."""
+        collection = self._require_collection(collection_name)
+        collection.payload_indexes[field_name] = field_schema
+        return SimpleNamespace(status="completed", operation_id=1)
 
     async def upsert(self, *, collection_name: str, points: list[Any], **_: Any) -> SimpleNamespace:
         """Insert or overwrite *points* in the named collection; validates vector dimension."""
@@ -171,6 +188,34 @@ class FauxQdrantClient:
             for point_id, point in list(collection.points.items()):
                 if _matches_filter(point.payload, selector_filter):
                     collection.points.pop(point_id, None)
+        return SimpleNamespace(status="completed", operation_id=1)
+
+    async def set_payload(
+        self,
+        *,
+        collection_name: str,
+        payload: dict[str, Any],
+        points: Any,
+        **_: Any,
+    ) -> SimpleNamespace:
+        """Merge *payload* into points selected by IDs or a Qdrant filter."""
+        collection = self._require_collection(collection_name)
+        ids = _selector_ids(points)
+        if ids is not None:
+            selected = (
+                collection.points[point_id]
+                for point_id in ids
+                if point_id in collection.points
+            )
+        else:
+            selector_filter = _selector_filter(points)
+            selected = (
+                point
+                for point in collection.points.values()
+                if _matches_filter(point.payload, selector_filter)
+            )
+        for point in selected:
+            point.payload.update(payload)
         return SimpleNamespace(status="completed", operation_id=1)
 
     def _require_collection(self, collection_name: str) -> _Collection:

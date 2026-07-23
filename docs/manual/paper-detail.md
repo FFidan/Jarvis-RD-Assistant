@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /paper/:paperId -->
+<!-- verified-against-UI: 2026-07-20 | routes: /paper/:paperId -->
 
 # Paper Detail
 
@@ -144,8 +144,12 @@ A visual step tracker shows which steps are complete, running, or queued. You ca
 | Generate Cards | Create spaced-repetition cards from this paper's source passages |
 | Extract Entities | Run the entity extraction pipeline for the Knowledge Graph |
 | Zotero push | Push this paper's metadata to your configured Zotero library |
+| Export Markdown | Download a Markdown export containing the paper's summaries, personal notes, cards, extractions, and BibTeX citation metadata |
+| Copy BibTeX / Copy RIS | Copy a citation in BibTeX or RIS format |
 
 > **Offline:** All pipeline action buttons are disabled offline.
+
+Spatial PDF highlights are not included in the Markdown export because their positions only make sense inside the rendered PDF canvas and are not portable to a text document.
 
 ### Library actions
 
@@ -153,7 +157,7 @@ Controls for managing this paper within your library:
 
 - **Star** — toggle a star on the paper for quick filtering in the Library.
 - **State transitions** — move the paper through its reading workflow: Inbox → To Read → Reading → Done. Papers can be moved to **Trash** at any state (except trash itself); trashed papers can be restored or permanently deleted.
-- **Hard-delete** — permanently delete the paper and all associated data after confirmation (available from the Trash state).
+- **Hard-delete** — permanently remove the paper from your library, including your private notes, summaries, highlights, and activity (available from the Trash state). This cannot be undone. The shared paper record and processed search content may remain; the web action is not a system-wide delete.
 
 The five lifecycle states are:
 

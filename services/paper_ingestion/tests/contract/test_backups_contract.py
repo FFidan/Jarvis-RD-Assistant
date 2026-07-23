@@ -1,8 +1,10 @@
 """Contract tests for the admin Backup router (GET/POST /api/admin/backups).
 
-Auth: routers/backups.py is included with ``dependencies=[]`` (no global
-verify_api_key) and ``router.auth_exempt=True``; every route is gated by
-``Depends(require_admin)`` (session role=='admin' only). We seed a real
+Auth: the app-level ``verify_api_key`` runs on these routes and is satisfied by
+a valid session (it returns early once SessionMiddleware has set
+``request.state.user_id``), so no X-API-Key is sent here. Authorization is
+``Depends(require_admin)`` (session role=='admin' only) on every route except
+``GET /restore/status``, which uses ``restore_status_auth``. We seed a real
 users+sessions row so SessionMiddleware sets request.state.user_role='admin'.
 
 The backup directory + trigger sentinel are pointed at a tmp_path via the
@@ -23,11 +25,34 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
+_RESTORE_ID = "0123456789abcdef0123456789abcdef"
+_ACKNOWLEDGEMENT_PHRASE = "I HAVE REVIEWED RESTORED CREDENTIALS"
 
-async def _seed_admin_user(conn) -> tuple[int, str]:
+
+def _write_quarantine(trigger, *, restore_id: str = _RESTORE_ID):
+    path = trigger / ".outbound-quarantine.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "restore_id": restore_id,
+                "source": "inbox",
+                "requested_at": "2026-07-21T20:00:00+00:00",
+                "completed_at": "2026-07-21T20:05:00+00:00",
+                "review_state": "awaiting_review",
+            }
+        )
+    )
+    return path
+
+
+async def _seed_admin_user(
+    conn,
+    email: str = "backup-admin-contract@example.com",
+) -> tuple[int, str]:
     user_id = await conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
-        "backup-admin-contract@example.com",
+        email,
     )
     session_id = await conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)
@@ -50,6 +75,19 @@ async def _seed_plain_user(conn) -> tuple[int, str]:
     return int(user_id), str(session_id)
 
 
+async def _set_database_owner(conn, user_id: int) -> None:
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    await conn.execute(
+        """
+        INSERT INTO user_config (user_id, key, value)
+        VALUES (NULL, $1, to_jsonb($2::bigint))
+        """,
+        OWNER_USER_ID_CONFIG_KEY,
+        user_id,
+    )
+
+
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def backups_dir(tmp_path_factory, monkeypatch):
     """Point the router's backup dir + sentinel at a tmp dir with two fake archives."""
@@ -57,7 +95,7 @@ async def backups_dir(tmp_path_factory, monkeypatch):
 
     d = tmp_path_factory.mktemp("backups")
     (d / "jarvis_20260617_120000.sql.gz").write_bytes(b"FAKE-JARVIS-DUMP")
-    (d / "secrets_20260617_120000.tar.gz.enc").write_bytes(b"FAKE-ENC-SECRETS")
+    (d / "secrets_20260617_120000.tar.gz").write_bytes(b"FAKE-SECRETS")
     monkeypatch.setattr(backups_router, "_BACKUP_DIR", d)
     monkeypatch.setattr(backups_router, "_TRIGGER_SENTINEL", d / ".backup_now")
     return d
@@ -118,6 +156,36 @@ async def plain_client(contract_conn, backups_dir):
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def owner_client(contract_conn, backups_dir, monkeypatch):
+    """Yield a real-session client whose user is the database-configured owner."""
+    from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    owner_id, cookie = await _seed_admin_user(contract_conn)
+    await _set_database_owner(contract_conn, owner_id)
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    shared = SharedConnPool(contract_conn)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app, set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None}
+            ),
+        ):
+            async with make_contract_client(app, cookie) as client:
+                yield client
+    finally:
+        app.state.limiter.enabled = True
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def restore_paths(tmp_path_factory, monkeypatch):
     """Point the restore request/status sentinels + trigger dir at a tmp dir."""
     from paper_ingestion.routers import backups as backups_router
@@ -133,12 +201,13 @@ async def restore_paths(tmp_path_factory, monkeypatch):
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def restore_ready(backups_dir):
-    """Complete the restore point in backups_dir by adding the missing litellm archive.
+    """Complete the restore point by adding the missing LiteLLM and PDF archives.
 
-    backups_dir ships jarvis + secrets only; adding litellm makes the
+    backups_dir ships jarvis + secrets only; adding both current mandatory roles makes the
     ``20260617_120000`` point ``complete`` so /restore accepts it.
     """
     (backups_dir / "litellm_20260617_120000.sql.gz").write_bytes(b"FAKE-LITELLM-DUMP")
+    (backups_dir / "pdfs_20260617_120000.tar.gz").write_bytes(b"FAKE-PDFS")
     return "20260617_120000"
 
 
@@ -160,7 +229,8 @@ async def restore_newer(backups_dir, restore_ready, tmp_path_factory, monkeypatc
         "archives": [
             {"filename": f"jarvis_{ts}.sql.gz"},
             {"filename": f"litellm_{ts}.sql.gz"},
-            {"filename": "secrets_20260617_120000.tar.gz.enc"},
+            {"filename": f"pdfs_{ts}.tar.gz"},
+            {"filename": "secrets_20260617_120000.tar.gz"},
         ],
     }
     (backups_dir / f"manifest_{ts}.json").write_text(json.dumps(manifest))
@@ -192,7 +262,8 @@ async def restore_no_schema_version(backups_dir, restore_ready):
         "archives": [
             {"filename": f"jarvis_{ts}.sql.gz", "sha256": "a" * 64},
             {"filename": f"litellm_{ts}.sql.gz", "sha256": "b" * 64},
-            {"filename": "secrets_20260617_120000.tar.gz.enc", "sha256": "c" * 64},
+            {"filename": f"pdfs_{ts}.tar.gz", "sha256": "c" * 64},
+            {"filename": "secrets_20260617_120000.tar.gz", "sha256": "d" * 64},
         ],
     }
     (backups_dir / f"manifest_{ts}.json").write_text(json.dumps(manifest))
@@ -224,13 +295,13 @@ async def test_list_returns_archive_metadata(admin_client):
     body = resp.json()
     names = {e["filename"]: e for e in body}
     assert "jarvis_20260617_120000.sql.gz" in names
-    assert "secrets_20260617_120000.tar.gz.enc" in names
+    assert "secrets_20260617_120000.tar.gz" in names
     jarvis = names["jarvis_20260617_120000.sql.gz"]
     assert jarvis["store"] == "jarvis"
     assert jarvis["encrypted"] is False
     assert jarvis["size_bytes"] == len(b"FAKE-JARVIS-DUMP")
-    assert names["secrets_20260617_120000.tar.gz.enc"]["encrypted"] is True
-    assert names["secrets_20260617_120000.tar.gz.enc"]["store"] == "secrets"
+    assert names["secrets_20260617_120000.tar.gz"]["encrypted"] is False
+    assert names["secrets_20260617_120000.tar.gz"]["store"] == "secrets"
 
 
 async def test_list_non_admin_gets_403(plain_client):
@@ -254,7 +325,7 @@ async def test_download_streams_known_archive(admin_client):
     assert "attachment" in resp.headers["content-disposition"]
 
 
-def test_validate_name_rejects_traversal():
+async def test_validate_name_rejects_traversal():
     """Routing-independent: the validator itself rejects a traversal name with 400.
 
     This is the load-bearing traversal assertion — it does not depend on how the
@@ -325,7 +396,7 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "scheduled"
-    # A one-time restore-status bearer token is minted and returned exactly once.
+    # The response returns one restore token for polling until expiry or use.
     token = body["status_token"]
     assert token
     sentinel = restore_paths / ".restore_request.json"
@@ -335,13 +406,25 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     assert written["confirm"] == "RESTORE"
     # The sentinel carries the source restore.sh keys its archive lookup on.
     assert written["source"] == "local"
+    assert written["allow_missing_pdfs"] is False
     assert "requested_at" in written
-    # The token HASH lives in its own file — never in the request sentinel restore.sh
-    # consumes — and the raw token is never persisted.
+    assert written["restore_id"] == body["restore_id"]
+    # Only the token hash is stored, in a file separate from the restore request.
+    # The raw token is not persisted.
     token_file = restore_paths / ".restore_status_token.json"
     persisted = json.loads(token_file.read_text())
-    assert set(persisted) == {"sha256", "expires_at"}
+    assert set(persisted) == {
+        "version",
+        "sha256",
+        "expires_at",
+        "restore_id",
+        "source",
+        "requested_at",
+    }
     assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert persisted["restore_id"] == written["restore_id"]
+    assert persisted["source"] == written["source"]
+    assert persisted["requested_at"] == written["requested_at"]
     assert token not in token_file.read_text()
     assert token not in sentinel.read_text()
 
@@ -432,14 +515,70 @@ async def test_restore_non_admin_gets_403(plain_client, restore_paths, restore_r
     assert resp.status_code == 403, resp.text
 
 
+async def test_restore_signed_legacy_missing_pdfs_requires_explicit_authorization(
+    admin_client, backups_dir, restore_paths
+):
+    ts = "20260616_110000"
+    names = [
+        f"jarvis_{ts}.sql.gz.enc",
+        f"litellm_{ts}.sql.gz.enc",
+        f"secrets_{ts}.tar.gz.enc",
+    ]
+    for name in names:
+        (backups_dir / name).write_bytes(b"legacy")
+    (backups_dir / f"manifest_{ts}.json").write_text(
+        json.dumps(
+            {
+                "timestamp": ts,
+                "app_version": "1.1.3",
+                "schema_version": 100,
+                "archives": [{"filename": name} for name in names],
+            }
+        )
+    )
+    (backups_dir / f"manifest_{ts}.json.hmac").write_text("0" * 64)
+
+    refused = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": ts, "confirm": "RESTORE"},
+    )
+    assert refused.status_code == 409, refused.text
+    assert "pdf" in refused.json()["detail"].lower()
+    assert not (restore_paths / ".restore_request.json").exists()
+
+    accepted = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": ts, "confirm": "RESTORE", "allow_missing_pdfs": True},
+    )
+    assert accepted.status_code == 202, accepted.text
+    written = json.loads((restore_paths / ".restore_request.json").read_text())
+    assert written["allow_missing_pdfs"] is True
+
+
 async def test_inbox_list_returns_manifest(admin_client, inbox_manifest):
     inbox_manifest(
-        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}]
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": True,
+                "has_secrets": True,
+                "has_key": True,
+                "has_pdfs": True,
+                "legacy_missing_pdfs": False,
+            }
+        ]
     )
     resp = await admin_client.get("/api/admin/backups/inbox")
     assert resp.status_code == 200, resp.text
     assert resp.json() == [
-        {"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}
+        {
+            "timestamp": "20260701_030000",
+            "complete": True,
+            "has_secrets": True,
+            "has_key": True,
+            "has_pdfs": True,
+            "legacy_missing_pdfs": False,
+        }
     ]
 
 
@@ -466,7 +605,16 @@ async def test_inbox_list_non_admin_gets_403(plain_client):
 
 async def test_restore_inbox_source_writes_sentinel(admin_client, restore_paths, inbox_manifest):
     inbox_manifest(
-        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": True}]
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": True,
+                "has_secrets": True,
+                "has_key": True,
+                "has_pdfs": True,
+                "legacy_missing_pdfs": False,
+            }
+        ]
     )
     resp = await admin_client.post(
         "/api/admin/backups/restore",
@@ -477,11 +625,21 @@ async def test_restore_inbox_source_writes_sentinel(admin_client, restore_paths,
     # restore.sh keys its inbox archive lookup on this source field.
     assert written["source"] == "inbox"
     assert written["timestamp"] == "20260701_030000"
+    assert written["allow_missing_pdfs"] is False
 
 
 async def test_restore_inbox_incomplete_or_absent_404(admin_client, restore_paths, inbox_manifest):
     inbox_manifest(
-        [{"timestamp": "20260701_030000", "complete": False, "has_secrets": True, "has_key": True}]
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": False,
+                "has_secrets": True,
+                "has_key": True,
+                "has_pdfs": False,
+                "legacy_missing_pdfs": False,
+            }
+        ]
     )
     resp = await admin_client.post(
         "/api/admin/backups/restore",
@@ -500,7 +658,16 @@ async def test_restore_inbox_incomplete_or_absent_404(admin_client, restore_path
 
 async def test_restore_inbox_missing_key_409(admin_client, restore_paths, inbox_manifest):
     inbox_manifest(
-        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": True, "has_key": False}]
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": True,
+                "has_secrets": True,
+                "has_key": False,
+                "has_pdfs": True,
+                "legacy_missing_pdfs": False,
+            }
+        ]
     )
     resp = await admin_client.post(
         "/api/admin/backups/restore",
@@ -512,11 +679,19 @@ async def test_restore_inbox_missing_key_409(admin_client, restore_paths, inbox_
 
 
 async def test_restore_inbox_missing_secrets_409(admin_client, restore_paths, inbox_manifest):
-    # A secrets-less off-host set would swap both DBs then fail post-swap: the
-    # validator must reject it up front with a 409 and never write the restore sentinel,
-    # even when the point is otherwise complete and keyed.
+    # The validator rejects a secrets-less off-host set before it can write the
+    # restore sentinel, even when the point is otherwise complete and keyed.
     inbox_manifest(
-        [{"timestamp": "20260701_030000", "complete": True, "has_secrets": False, "has_key": True}]
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": True,
+                "has_secrets": False,
+                "has_key": True,
+                "has_pdfs": True,
+                "legacy_missing_pdfs": False,
+            }
+        ]
     )
     resp = await admin_client.post(
         "/api/admin/backups/restore",
@@ -524,7 +699,45 @@ async def test_restore_inbox_missing_secrets_409(admin_client, restore_paths, in
     )
     assert resp.status_code == 409, resp.text
     assert "secrets" in resp.json()["detail"].lower()
+    assert "will not change data" in resp.json()["detail"].lower()
+    assert "after swapping" not in resp.json()["detail"].lower()
     assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_inbox_legacy_missing_pdfs_requires_explicit_authorization(
+    admin_client, restore_paths, inbox_manifest
+):
+    inbox_manifest(
+        [
+            {
+                "timestamp": "20260701_030000",
+                "complete": True,
+                "has_secrets": True,
+                "has_key": True,
+                "has_pdfs": False,
+                "legacy_missing_pdfs": True,
+            }
+        ]
+    )
+    refused = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260701_030000", "confirm": "RESTORE", "source": "inbox"},
+    )
+    assert refused.status_code == 409, refused.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+    accepted = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={
+            "timestamp": "20260701_030000",
+            "confirm": "RESTORE",
+            "source": "inbox",
+            "allow_missing_pdfs": True,
+        },
+    )
+    assert accepted.status_code == 202, accepted.text
+    written = json.loads((restore_paths / ".restore_request.json").read_text())
+    assert written["allow_missing_pdfs"] is True
 
 
 async def test_restore_status_idle_when_absent(admin_client, restore_paths):
@@ -592,6 +805,35 @@ async def test_restore_status_reflects_status_file(admin_client, restore_paths):
     assert "drop_started" not in body
 
 
+async def test_restore_status_reports_bound_outbound_quarantine(admin_client, restore_paths):
+    """The status route exposes sanitized quarantine identity without database access."""
+    _write_quarantine(restore_paths)
+    (restore_paths / ".restore_status.json").write_text(
+        '{"state":"done","steps":[],"manual_steps_required":false}'
+    )
+
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["restore_id"] == _RESTORE_ID
+    assert resp.json()["source"] == "inbox"
+    assert resp.json()["quarantine"] == "awaiting_review"
+
+
+async def test_restore_status_reports_unreadable_quarantine_without_identity(
+    admin_client, restore_paths
+):
+    """Malformed quarantine remains visible without guessed binding fields."""
+    (restore_paths / ".outbound-quarantine.json").write_text("not-json")
+
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["restore_id"] is None
+    assert resp.json()["source"] is None
+    assert resp.json()["quarantine"] == "unreadable"
+
+
 async def test_restore_status_malformed_degrades_to_idle(admin_client, restore_paths):
     (restore_paths / ".restore_status.json").write_text("{ not valid json")
     resp = await admin_client.get("/api/admin/backups/restore/status")
@@ -630,6 +872,80 @@ async def test_restore_duplicate_request_409(
     # The sentinel must not have been overwritten.
     written = sentinel.read_text()
     assert "20260617_120000" in written
+
+
+async def test_restore_acknowledgement_accepts_current_configured_owner(
+    owner_client, restore_paths
+):
+    quarantine = _write_quarantine(restore_paths)
+
+    response = await owner_client.post(
+        "/api/admin/backups/restore/acknowledge",
+        json={
+            "restore_id": _RESTORE_ID,
+            "source": "inbox",
+            "confirm": _ACKNOWLEDGEMENT_PHRASE,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "acknowledged", "restore_id": _RESTORE_ID}
+    assert not quarantine.exists()
+
+
+async def test_restore_acknowledgement_rejects_arbitrary_admin(
+    admin_client, contract_conn, restore_paths, monkeypatch
+):
+    owner_id, _cookie = await _seed_admin_user(contract_conn, "backup-owner-contract@example.com")
+    await _set_database_owner(contract_conn, owner_id)
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    quarantine = _write_quarantine(restore_paths)
+
+    response = await admin_client.post(
+        "/api/admin/backups/restore/acknowledge",
+        json={
+            "restore_id": _RESTORE_ID,
+            "source": "inbox",
+            "confirm": _ACKNOWLEDGEMENT_PHRASE,
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert quarantine.exists()
+
+
+async def test_restore_acknowledgement_rejects_unbound_operations_key(
+    contract_conn, backups_dir, restore_paths, monkeypatch
+):
+    from jarvis_common.testing_contract_apps import (
+        configure_contract_api_key,
+        make_contract_client,
+        patch_app_state,
+    )
+    from paper_ingestion.main import app
+
+    quarantine = _write_quarantine(restore_paths)
+    shared = SharedConnPool(contract_conn)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            configure_contract_api_key(monkeypatch),
+        ):
+            async with make_contract_client(app, None) as client:
+                response = await client.post(
+                    "/api/admin/backups/restore/acknowledge",
+                    json={
+                        "restore_id": _RESTORE_ID,
+                        "source": "inbox",
+                        "confirm": _ACKNOWLEDGEMENT_PHRASE,
+                    },
+                )
+    finally:
+        app.state.limiter.enabled = True
+
+    assert response.status_code == 401, response.text
+    assert quarantine.exists()
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")

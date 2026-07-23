@@ -10,26 +10,71 @@ import { Button } from '@/components/ui/button';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { kindLabel } from '@/lib/labels/jobKinds';
 
-function statusColor(status: Job['status']): string {
+type DisplayStatus = Job['status'] | 'partial';
+
+function statusColor(status: DisplayStatus): string {
   switch (status) {
     case 'queued': return 'text-muted-foreground';
     case 'running': return 'text-blue-500';
     case 'succeeded': return 'text-green-500';
+    case 'partial': return 'text-[var(--status-warn)]';
     case 'failed': return 'text-destructive';
     case 'cancelled': return 'text-muted-foreground';
     default: return 'text-muted-foreground';
   }
 }
 
-function statusLabel(status: Job['status']): string {
+function statusLabel(status: DisplayStatus): string {
   switch (status) {
     case 'queued': return 'Queued';
     case 'running': return 'Running';
     case 'succeeded': return 'Done';
+    case 'partial': return 'Partial';
     case 'failed': return 'Failed';
     case 'cancelled': return 'Cancelled';
     default: return status;
   }
+}
+
+/**
+ * A job that reached `succeeded` but reports a `partial` or `cancelled` result
+ * (e.g. `papers.process_library`) left work undone. Returns a short
+ * "N failed, M skipped, R not processed of T" line, or null for a plain
+ * success. Older results without a trustworthy remaining count keep their
+ * existing summary.
+ */
+function outcomeSummary(job: Job): string | null {
+  const r = (job.result ?? {}) as {
+    status?: string;
+    total?: number;
+    remaining?: number;
+    errors?: unknown[];
+    blocked?: unknown[];
+  };
+  if (job.status !== 'succeeded') return null;
+  if (r.status !== 'partial' && r.status !== 'cancelled') return null;
+  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
+  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
+  const remaining = typeof r.remaining === 'number'
+    && Number.isInteger(r.remaining)
+    && r.remaining >= 0
+    ? r.remaining
+    : 0;
+  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  const remainingSummary = remaining > 0 ? `, ${remaining} not processed` : '';
+  return `${failed} failed, ${skipped} skipped${remainingSummary} of ${total}`;
+}
+
+/**
+ * Some handlers return a terminal outcome instead of raising. Keep the API job
+ * status unchanged while showing users whether work completed only partially
+ * or stopped through cancellation.
+ */
+function effectiveStatus(job: Job): DisplayStatus {
+  const resultStatus = (job.result as { status?: string } | null)?.status;
+  if (job.status !== 'succeeded') return job.status;
+  if (resultStatus === 'partial' || resultStatus === 'cancelled') return resultStatus;
+  return job.status;
 }
 
 interface JobRowProps {
@@ -41,20 +86,32 @@ interface JobRowProps {
 function JobRow({ job, onCancel, onRemove }: JobRowProps) {
   const isActive = job.status === 'queued' || job.status === 'running';
   const isTerminal = job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled';
+  const summary = outcomeSummary(job);
+  const shownStatus = effectiveStatus(job);
+  // A cancel REQUEST does not move `status` — the handler keeps running until it
+  // observes the flag — so an in-flight cancel is its own display state: neither
+  // the `running` it still technically is, nor the `cancelled` it has not
+  // reached. Without it the row would look untouched after the click.
+  const isCancelling = job.cancel_requested === true && !isTerminal;
 
   return (
     <div className="flex flex-col gap-1 py-2 border-b last:border-b-0">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium truncate">{kindLabel(job.kind)}</span>
         <div className="flex items-center gap-1 shrink-0">
-          <span className={`text-xs ${statusColor(job.status)}`}>{statusLabel(job.status)}</span>
+          {isCancelling ? (
+            <span className="text-xs text-[var(--status-warn)]">Cancelling…</span>
+          ) : (
+            <span className={`text-xs ${statusColor(shownStatus)}`}>{statusLabel(shownStatus)}</span>
+          )}
           {isActive && (
             <Button
               variant="ghost"
               size="icon"
               className="h-5 w-5"
               onClick={() => onCancel(job.id)}
-              title="Cancel job"
+              disabled={isCancelling}
+              title={isCancelling ? 'Cancellation requested — finishing current step' : 'Cancel job'}
             >
               <X className="h-3 w-3" />
             </Button>
@@ -83,6 +140,16 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
 
       {job.status === 'failed' && job.error && (
         <p className="text-xs text-destructive truncate">{job.error.message}</p>
+      )}
+
+      {summary && (
+        <p
+          role="status"
+          aria-label={`Incomplete: ${summary}`}
+          className="text-xs text-[var(--status-warn)] truncate"
+        >
+          {summary}
+        </p>
       )}
     </div>
   );

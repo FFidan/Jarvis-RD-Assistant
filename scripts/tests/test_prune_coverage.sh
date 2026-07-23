@@ -16,6 +16,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRUNE_SCRIPT="${SCRIPT_DIR}/../prune.sh"
 BACKUP_SCRIPT="${SCRIPT_DIR}/../backup.sh"
+LIFECYCLE_SCRIPT="${SCRIPT_DIR}/../backup-lifecycle.sh"
 RESTORE_SCRIPT="${SCRIPT_DIR}/../restore.sh"
 COMPOSE="${SCRIPT_DIR}/../../docker-compose.yml"
 
@@ -28,7 +29,7 @@ checkf() {
 }
 line_of() { grep -nE "$2" "$1" | head -1 | cut -d: -f1; }
 
-for f in "$PRUNE_SCRIPT" "$BACKUP_SCRIPT" "$RESTORE_SCRIPT" "$COMPOSE"; do
+for f in "$PRUNE_SCRIPT" "$BACKUP_SCRIPT" "$LIFECYCLE_SCRIPT" "$RESTORE_SCRIPT" "$COMPOSE"; do
   [ -r "$f" ] || { printf 'FAIL: cannot read %s\n' "$f" >&2; exit 1; }
 done
 
@@ -49,7 +50,9 @@ checkf "$PRUNE_SCRIPT" "prune.sh re-validates candidate files (valid_archive_nam
   '^valid_archive_name\(\)'
 checkf "$PRUNE_SCRIPT" "prune.sh version-gates the request" 'SUPPORTED_VERSION'
 checkf "$PRUNE_SCRIPT" "prune.sh requires the DELETE confirm token" '"confirm".*DELETE'
-checkf "$PRUNE_SCRIPT" "prune.sh refuses an in-flight restore timestamp" '^restore_in_flight_ts\(\)'
+checkf "$PRUNE_SCRIPT" "prune.sh refuses an in-flight restore or update timestamp" '^restore_in_flight_ts\(\)'
+checkf "$PRUNE_SCRIPT" "prune.sh reads the private pending-update rollback pin" \
+  'update-backup-pin\.json'
 checkf "$PRUNE_SCRIPT" "prune.sh consumes the delete request sentinel" '\.delete_request\.json'
 
 # AT-MOST-ONCE: the request is rm -f'd BEFORE any rm of an archive file.
@@ -80,8 +83,9 @@ seed_backups() {
   local ts
   for ts in "$@"; do
     touch "${dir}/jarvis_${ts}.sql.gz" "${dir}/litellm_${ts}.sql.gz.enc" \
+          "${dir}/pdfs_${ts}.tar.gz" \
           "${dir}/secrets_${ts}.tar.gz" "${dir}/qdrant_kg_entities_${ts}.snapshot" \
-          "${dir}/manifest_${ts}.json"
+          "${dir}/manifest_${ts}.json" "${dir}/manifest_${ts}.json.hmac"
   done
 }
 run_prune() { BACKUP_TRIGGER_DIR="$1" BACKUP_DIR="$2" bash "$PRUNE_SCRIPT"; }
@@ -90,7 +94,7 @@ ts_present() { ls "$2"/*_"$1".* >/dev/null 2>&1; }
 # 1) A delete request removes ONLY the named point's archives + manifest; a second
 #    point and a glob-matching non-archive decoy both survive; the request is
 #    consumed and .last_delete.json records the deletions.
-d="$(mktemp -d)"; b="$(mktemp -d)"
+d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
 seed_backups "$b" 20260101_010101 20260202_020202
 touch "${b}/evilscript_20260101_010101.sh"   # matches *_TS.* but is not an archive
 printf '{"timestamps": ["20260101_010101"], "confirm": "DELETE", "requested_at": "2026-07-08T10:00:00+00:00", "version": 1}' \
@@ -101,12 +105,15 @@ b1ok=1
 # target archives gone (check the actual archive files, not the glob — the decoy
 # also matches *_TS.*, so a glob check would falsely see the point as present).
 for a in jarvis_20260101_010101.sql.gz litellm_20260101_010101.sql.gz.enc \
+         pdfs_20260101_010101.tar.gz \
          secrets_20260101_010101.tar.gz manifest_20260101_010101.json \
+         manifest_20260101_010101.json.hmac \
          qdrant_kg_entities_20260101_010101.snapshot; do
   [ -f "${b}/${a}" ] && b1ok=0
 done
 ts_present 20260202_020202 "$b" || b1ok=0            # other point survives
 [ -f "${b}/evilscript_20260101_010101.sh" ] || b1ok=0 # decoy survives (re-validated)
+[ -f "${b}/manifest_20260202_020202.json.hmac" ] || b1ok=0 # other signature survives
 [ -f "${d}/.delete_request.json" ] && b1ok=0         # request consumed
 [ -f "${d}/.last_delete.json" ] || b1ok=0
 grep -q '"jarvis_20260101_010101.sql.gz"' "${d}/.last_delete.json" 2>/dev/null || b1ok=0
@@ -121,7 +128,7 @@ fi
 rm -rf "$d" "$b"
 
 # 2) A timestamp named by a present .restore_request.json is REFUSED.
-d="$(mktemp -d)"; b="$(mktemp -d)"
+d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
 seed_backups "$b" 20260101_010101
 printf '{"timestamps": ["20260101_010101"], "confirm": "DELETE", "version": 1}' > "${d}/.delete_request.json"
 printf '{"timestamp": "20260101_010101", "confirm": "RESTORE"}' > "${d}/.restore_request.json"
@@ -146,6 +153,78 @@ else
 fi
 rm -rf "$d" "$b"
 
+# 2c) A valid pending-update rollback pin is REFUSED while an unrelated,
+#     confirmed timestamp is still deleted. This pin is the only protection for
+#     the first update backup between update phases, so every archive and its
+#     manifest must remain intact.
+d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
+pin_ts=20260101_010101; other_ts=20260202_020202
+seed_backups "$b" "$pin_ts" "$other_ts"
+printf '{"timestamp":"%s","run_id":"0123456789abcdef0123456789abcdef"}\n' "$pin_ts" \
+  > "${b}/.lifecycle/update-backup-pin.json"
+printf '{"timestamps": ["%s", "%s"], "confirm": "DELETE", "version": 1}' \
+  "$pin_ts" "$other_ts" > "${d}/.delete_request.json"
+run_prune "$d" "$b" >/dev/null 2>&1
+pin_ok=1
+for a in "jarvis_${pin_ts}.sql.gz" "litellm_${pin_ts}.sql.gz.enc" \
+         "pdfs_${pin_ts}.tar.gz" \
+         "secrets_${pin_ts}.tar.gz" "manifest_${pin_ts}.json" \
+         "manifest_${pin_ts}.json.hmac" \
+         "qdrant_kg_entities_${pin_ts}.snapshot"; do
+  [ -f "${b}/${a}" ] || pin_ok=0
+done
+for a in "jarvis_${other_ts}.sql.gz" "litellm_${other_ts}.sql.gz.enc" \
+         "pdfs_${other_ts}.tar.gz" \
+         "secrets_${other_ts}.tar.gz" "manifest_${other_ts}.json" \
+         "manifest_${other_ts}.json.hmac" \
+         "qdrant_kg_entities_${other_ts}.snapshot"; do
+  [ -f "${b}/${a}" ] && pin_ok=0
+done
+grep -q "${pin_ts} (in-flight restore or update)" "${d}/.last_delete.json" 2>/dev/null || pin_ok=0
+if [ "$pin_ok" -eq 1 ]; then
+  pass "pending-update rollback pin preserves its full archive set; unrelated confirmed delete still works"
+else
+  printf 'FAIL: update rollback pin did not preserve exactly its timestamp (outcome: %s)\n' \
+    "$(cat "${d}/.last_delete.json" 2>/dev/null)" >&2; fail=1
+fi
+rm -rf "$d" "$b"
+
+# 2d) The updater/prune lifecycle mutex closes the selection-to-pin TOCTOU gap.
+# While the updater holds the sidecar-private lock, prune must neither consume the
+# request nor delete anything. Once a pin is published and the lock is released,
+# the retried prune consumes the request but preserves the exact rollback point.
+d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
+pin_ts=20260303_030303
+seed_backups "$b" "$pin_ts"
+printf '{"timestamps": ["%s"], "confirm": "DELETE", "version": 1}' "$pin_ts" \
+  > "${d}/.delete_request.json"
+(
+  exec 7>>"${b}/.lifecycle/update.lock"
+  flock 7
+  : > "${d}/.lifecycle-lock-held"
+  while [ ! -e "${d}/.release-lifecycle-lock" ]; do sleep 0.02; done
+) &
+lifecycle_holder=$!
+for _ in $(seq 1 100); do [ -e "${d}/.lifecycle-lock-held" ] && break; sleep 0.02; done
+run_prune "$d" "$b" >/dev/null 2>&1
+toctou_ok=1
+[ -f "${d}/.delete_request.json" ] || toctou_ok=0
+ts_present "$pin_ts" "$b" || toctou_ok=0
+printf '{"timestamp":"%s","run_id":"0123456789abcdef0123456789abcdef"}\n' "$pin_ts" \
+  > "${b}/.lifecycle/update-backup-pin.json"
+: > "${d}/.release-lifecycle-lock"
+wait "$lifecycle_holder"
+run_prune "$d" "$b" >/dev/null 2>&1
+[ -e "${d}/.delete_request.json" ] && toctou_ok=0
+ts_present "$pin_ts" "$b" || toctou_ok=0
+if [ "$toctou_ok" -eq 1 ]; then
+  pass "update/prune flock closes selection-to-pin TOCTOU and pin protects retry"
+else
+  printf 'FAIL: prune raced the update lifecycle lock or ignored its published pin\n' >&2
+  fail=1
+fi
+rm -rf "$d" "$b"
+
 # 3) Version gate + confirm gate both delete NOTHING and record a reason.
 for scenario in "version" "confirm"; do
   d="$(mktemp -d)"; b="$(mktemp -d)"
@@ -167,6 +246,107 @@ for scenario in "version" "confirm"; do
   rm -rf "$d" "$b"
 done
 
+# === backup-lifecycle.sh — authenticated PDF role parity =====================
+sign_set_manifest() {
+  local dir="$1" ts="$2" key manifest derived
+  key="${dir}/backup.key"
+  manifest="${dir}/manifest_${ts}.json"
+  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$key" | cut -d' ' -f1)"
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" \
+    | cut -d' ' -f1 > "${manifest}.hmac"
+}
+
+write_signed_set() {
+  # $1 dir, $2 timestamp, $3 current|legacy, $4 include_pdf(true|false)
+  local dir="$1" ts="$2" shape="$3" include_pdf="$4" key manifest run_id
+  local name sha size entries="" comma=""
+  key="${dir}/backup.key"
+  manifest="${dir}/manifest_${ts}.json"
+  run_id=0123456789abcdef0123456789abcdef
+  printf 'test-backup-auth-key' > "$key"
+  for name in "jarvis_${ts}.sql.gz.enc" "litellm_${ts}.sql.gz.enc" \
+              "secrets_${ts}.tar.gz.enc"; do
+    printf '%s' "$name" > "${dir}/${name}"
+  done
+  if [ "$include_pdf" = true ]; then
+    name="pdfs_${ts}.tar.gz.enc"
+    printf '%s' "$name" > "${dir}/${name}"
+  fi
+  for name in "jarvis_${ts}.sql.gz.enc" "litellm_${ts}.sql.gz.enc" \
+              "secrets_${ts}.tar.gz.enc"; do
+    sha="$(sha256sum "${dir}/${name}" | cut -d' ' -f1)"
+    size="$(stat -c%s "${dir}/${name}")"
+    entries="${entries}${comma}{\"filename\":\"${name}\",\"sha256\":\"${sha}\",\"size_bytes\":${size}}"
+    comma=,
+  done
+  if [ "$include_pdf" = true ]; then
+    name="pdfs_${ts}.tar.gz.enc"
+    sha="$(sha256sum "${dir}/${name}" | cut -d' ' -f1)"
+    size="$(stat -c%s "${dir}/${name}")"
+    entries="${entries}${comma}{\"filename\":\"${name}\",\"sha256\":\"${sha}\",\"size_bytes\":${size}}"
+  fi
+  if [ "$shape" = current ]; then
+    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.2.0","schema_version":100,"created_at":"2026-07-21T08:00:00+00:00","archives":[%s]}' \
+      "$ts" "$run_id" "$entries" > "$manifest"
+  else
+    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":100,"created_at":"2026-07-20T08:00:00+00:00","archives":[%s]}' \
+      "$ts" "$entries" > "$manifest"
+  fi
+  sign_set_manifest "$dir" "$ts"
+}
+
+verify_set() {
+  # $1 dir, $2 timestamp, $3 current|legacy
+  local run_id=""
+  [ "$3" = legacy ] || run_id=0123456789abcdef0123456789abcdef
+  JARVIS_BACKUP_DIR="$1" JARVIS_BACKUP_KEY_FILE="$1/backup.key" \
+    bash "$LIFECYCLE_SCRIPT" verify "$2" "$run_id" "$3"
+}
+
+ts=20260721_080000
+b="$(mktemp -d)"
+write_signed_set "$b" "$ts" current false
+if verify_set "$b" "$ts" current >/dev/null 2>&1; then
+  printf 'FAIL: current authenticated update restore point passed without PDFs\n' >&2; fail=1
+else
+  pass "current authenticated update restore point requires the PDF archive role"
+fi
+rm -rf "$b"
+
+b="$(mktemp -d)"
+write_signed_set "$b" "$ts" current true
+if verify_set "$b" "$ts" current >/dev/null 2>&1; then
+  pass "current authenticated update restore point accepts exactly one PDF archive"
+else
+  printf 'FAIL: current authenticated update restore point rejected its PDF archive\n' >&2; fail=1
+fi
+rm -rf "$b"
+
+b="$(mktemp -d)"
+write_signed_set "$b" "$ts" current true
+pdf_entry="$(grep -oE '\{"filename":"pdfs_[^"]+","sha256":"[0-9a-f]{64}","size_bytes":[0-9]+\}' \
+  "${b}/manifest_${ts}.json")"
+manifest_body="$(cat "${b}/manifest_${ts}.json")"
+manifest_body="${manifest_body%?}"
+manifest_body="${manifest_body%?}"
+printf '%s,%s]}' "$manifest_body" "$pdf_entry" > "${b}/manifest_${ts}.json"
+sign_set_manifest "$b" "$ts"
+if verify_set "$b" "$ts" current >/dev/null 2>&1; then
+  printf 'FAIL: current authenticated restore point accepted a duplicate PDF role\n' >&2; fail=1
+else
+  pass "current authenticated restore point rejects a duplicate PDF role"
+fi
+rm -rf "$b"
+
+b="$(mktemp -d)"
+write_signed_set "$b" "$ts" legacy false
+if verify_set "$b" "$ts" legacy >/dev/null 2>&1; then
+  pass "signed pre-v1.2 update restore point remains compatible without PDFs"
+else
+  printf 'FAIL: signed pre-v1.2 restore point lost missing-PDF compatibility\n' >&2; fail=1
+fi
+rm -rf "$b"
+
 # === backup.sh — keep-last-N retention (single-sourced helper) ================
 checkf "$BACKUP_SCRIPT" "backup.sh reads UI retention (.retention.json)" '\.retention\.json'
 checkf "$BACKUP_SCRIPT" "backup.sh honors keep_last_n" 'KEEP_LAST_N'
@@ -185,7 +365,8 @@ distinct_ts() { ls "$1" 2>/dev/null | grep -oE '[0-9]{8}_[0-9]{6}' | sort -u | t
 b="$(mktemp -d)"
 for ts in 20260101_010101 20260102_010101 20260103_010101 20260104_010101; do
   touch "${b}/jarvis_${ts}.sql.gz" "${b}/litellm_${ts}.sql.gz.enc" \
-        "${b}/manifest_${ts}.json" "${b}/qdrant_kg_${ts}.snapshot"
+        "${b}/pdfs_${ts}.tar.gz" "${b}/manifest_${ts}.json" \
+        "${b}/qdrant_kg_${ts}.snapshot"
 done
 run_keep "$b" 2 ""
 kept="$(distinct_ts "$b")"
@@ -199,7 +380,8 @@ rm -rf "$b"
 # in-flight restore timestamp is never pruned even when past the keep window.
 b="$(mktemp -d)"
 for ts in 20260101_010101 20260102_010101 20260103_010101; do
-  touch "${b}/jarvis_${ts}.sql.gz" "${b}/manifest_${ts}.json"
+  touch "${b}/jarvis_${ts}.sql.gz" "${b}/pdfs_${ts}.tar.gz" \
+        "${b}/manifest_${ts}.json"
 done
 run_keep "$b" 1 "20260101_010101"
 kept="$(distinct_ts "$b")"
@@ -214,7 +396,8 @@ rm -rf "$b"
 # reading is floored, symmetric with the max_age_days=0 floor below.
 b="$(mktemp -d)"
 for ts in 20260101_010101 20260102_010101 20260103_010101; do
-  touch "${b}/jarvis_${ts}.sql.gz" "${b}/manifest_${ts}.json"
+  touch "${b}/jarvis_${ts}.sql.gz" "${b}/pdfs_${ts}.tar.gz" \
+        "${b}/manifest_${ts}.json"
 done
 run_keep "$b" 0 ""
 kept="$(distinct_ts "$b")"
@@ -258,44 +441,36 @@ else
 fi
 rm -rf "$rdir"
 
-# === restore.sh — inbox-tar sanitization =====================================
-# The old unguarded `decrypt | tar -xzf -` extraction is GONE; the new path lists
-# members first and rejects absolute / traversal paths, and extracts with the
-# no-same-owner/no-same-permissions hardening.
+# === restore.sh — data-key archive sanitization ===============================
+# The archive is staged and listed before extraction. Only the three data-coupled
+# keys are accepted, each member must be a bounded regular file, and extraction
+# keeps the no-same-owner/no-same-permissions hardening.
 if grep -q 'tar -xzf - -C "\$SECRETS_STAGING"' "$RESTORE_SCRIPT"; then
   printf 'FAIL: restore.sh still pipes decrypt straight into tar -xzf - (no member check)\n' >&2; fail=1
 else
   pass "restore.sh no longer pipes decrypt straight into tar -xzf -"
 fi
-checkf "$RESTORE_SCRIPT" "restore.sh lists tar members before extracting" 'tar -tzf "\$SECRETS_TAR_TMP"'
-checkf "$RESTORE_SCRIPT" "restore.sh rejects absolute / traversal members" "grep -Eq '\\^/"
+checkf "$RESTORE_SCRIPT" "restore.sh lists staged data-key members before extracting" \
+  'tar --quoting-style=escape -tzf "\$incoming"'
+checkf "$RESTORE_SCRIPT" "restore.sh checks each data-key member is a regular file" \
+  'tar --numeric-owner --quoting-style=escape -tvzf "\$incoming"'
 checkf "$RESTORE_SCRIPT" "restore.sh extracts with --no-same-owner --no-same-permissions" \
   'tar --no-same-owner --no-same-permissions -xzf'
 
-# Behavioral: the exact rejection regex used by restore.sh rejects a real
-# malicious tar (traversal / absolute) and accepts a legit relative archive.
-UNSAFE_RE='^/|\.\.|^[A-Za-z]:'
-grep -qF "grep -Eq '${UNSAFE_RE}'" "$RESTORE_SCRIPT" \
-  && pass "the test's rejection regex matches restore.sh's" \
-  || { printf 'FAIL: restore.sh rejection regex drifted from the test\n' >&2; fail=1; }
-tdir="$(mktemp -d)"
-mkdir -p "${tdir}/sec"; printf 'pw' > "${tdir}/sec/postgres_password.txt"
-tar -czf "${tdir}/legit.tar.gz" -C "${tdir}/sec" .
-tar -czf "${tdir}/trav.tar.gz" -C "${tdir}/sec" postgres_password.txt \
-  --transform='s|postgres_password.txt|../../evil|' 2>/dev/null
-judge() { # $1 archive, $2 expected(ACCEPT|REJECT)
-  local m got
-  m="$(tar -tzf "$1" 2>/dev/null || true)"
-  # here-string, mirroring restore.sh (no pipe -> no pipefail+SIGPIPE misread).
-  if grep -Eq "$UNSAFE_RE" <<<"$m"; then got=REJECT; else got=ACCEPT; fi
-  [ "$got" = "$2" ]
+allowfn="$(sed -n '/^restorable_inbox_secret_basename()/,/^}/p' "$RESTORE_SCRIPT")"
+allowed_key() {
+  bash -c "set -euo pipefail; ${allowfn}; restorable_inbox_secret_basename \"\$1\"" _ "$1"
 }
-if judge "${tdir}/legit.tar.gz" ACCEPT && judge "${tdir}/trav.tar.gz" REJECT; then
-  pass "inbox-tar guard: accepts a legit relative archive, rejects a '../..' traversal member"
+if allowed_key jarvis_config_key.txt \
+   && allowed_key jarvis_model_hmac_key.txt \
+   && allowed_key litellm_salt_key.txt \
+   && ! allowed_key postgres_password.txt \
+   && ! allowed_key '../jarvis_config_key.txt'; then
+  pass "data-key allowlist accepts exactly restorable keys and rejects host/traversal names"
 else
-  printf 'FAIL: inbox-tar member guard behaved wrong\n' >&2; fail=1
+  printf 'FAIL: restore data-key member allowlist accepted an unsafe or host-local name\n' >&2
+  fail=1
 fi
-rm -rf "$tdir"
 
 # === docker-compose.yml — loop hardening + delete branch =====================
 cmp_check() {

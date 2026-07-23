@@ -66,6 +66,18 @@ async def test_create_item_success(client):
     assert result["successful"]["0"]["key"] == "ABCD1234"
 
 
+async def test_zotero_sink_refuses_quarantine_before_http(monkeypatch, tmp_path, http_client):
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    quarantine.write_text("malformed")
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    client = ZoteroClient(api_key="restored-key", user_id=USER_ID, http_client=http_client)
+
+    with pytest.raises(OutboundEgressBlockedError, match="credential review"):
+        await client.create_item({"itemType": "journalArticle", "title": "Blocked"})
+
+
 # ---------------------------------------------------------------------------
 # search_by_doi
 # ---------------------------------------------------------------------------

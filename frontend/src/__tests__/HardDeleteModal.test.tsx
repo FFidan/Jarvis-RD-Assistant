@@ -20,7 +20,26 @@ describe('HardDeleteModal', () => {
   it('renders confirm dialog when open', () => {
     wrap(<HardDeleteModal open={true} onOpenChange={vi.fn()} paperId={1} paperTitle="My Paper" />);
     expect(screen.getByText(/Permanently delete this paper\?/i)).toBeInTheDocument();
+    expect(screen.getByText(/removed from your library/i)).toBeInTheDocument();
+    expect(screen.getByText(/shared search content may remain/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not remove the paper system-wide/i)).toBeInTheDocument();
+    expect(screen.queryByText(/removed from JARVIS/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Delete$/i })).toBeInTheDocument();
+  });
+
+  it('describes bulk removal as caller-scoped', () => {
+    wrap(
+      <HardDeleteModal
+        count={2}
+        onConfirm={vi.fn()}
+        trigger={<button type="button">Open bulk delete</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open bulk delete' }));
+    expect(screen.getByText(/removed from your library/i)).toBeInTheDocument();
+    expect(screen.getByText(/shared search content may remain/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not remove these papers system-wide/i)).toBeInTheDocument();
+    expect(screen.queryByText(/removed from the database and search index/i)).not.toBeInTheDocument();
   });
 
   it('clicking Delete calls hardDeletePaper', async () => {

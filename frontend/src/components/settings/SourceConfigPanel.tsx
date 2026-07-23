@@ -15,7 +15,7 @@ interface SourceConfigPanelProps {
 }
 
 export function SourceConfigPanel({ isAdmin, onArxivCooldownCleared }: SourceConfigPanelProps) {
-  const [openAlexEmail, setOpenAlexEmail] = useState('');
+  const [openAlexApiKey, setOpenAlexApiKey] = useState('');
   const [s2ApiKey, setS2ApiKey] = useState('');
   const [savingOpenAlex, setSavingOpenAlex] = useState(false);
   const [savingS2, setSavingS2] = useState(false);
@@ -24,14 +24,14 @@ export function SourceConfigPanel({ isAdmin, onArxivCooldownCleared }: SourceCon
   if (!isAdmin) return null;
 
   const handleSaveOpenAlex = async () => {
-    if (!openAlexEmail.trim()) return;
+    if (!openAlexApiKey.trim()) return;
     setSavingOpenAlex(true);
     try {
-      await patchSourceConfig('openalex', { email: openAlexEmail.trim() });
-      toast.success('OpenAlex email saved.');
-      setOpenAlexEmail('');
+      await patchSourceConfig('openalex', { api_key: openAlexApiKey.trim() });
+      toast.success('OpenAlex API key saved.');
+      setOpenAlexApiKey('');
     } catch {
-      toast.error('Failed to save OpenAlex email.');
+      toast.error('Failed to save OpenAlex API key.');
     } finally {
       setSavingOpenAlex(false);
     }
@@ -73,27 +73,29 @@ export function SourceConfigPanel({ isAdmin, onArxivCooldownCleared }: SourceCon
         </p>
       </div>
 
-      {/* OpenAlex email */}
+      {/* OpenAlex API key */}
       <div className="space-y-1.5">
-        <Label className="text-xs font-medium">OpenAlex contact email</Label>
+        <Label className="text-xs font-medium">OpenAlex API key</Label>
         <p className="text-xs text-muted-foreground">
-          OpenAlex asks for a contact email for reliable access — no account or signup required.
-          Without it you may hit stricter rate limits.
+          A free API key is required for OpenAlex. Create one at{' '}
+          <a className="underline" href="https://openalex.org/settings/api" target="_blank" rel="noreferrer">
+            openalex.org/settings/api
+          </a>.
         </p>
         <div className="flex gap-2">
           <input
-            type="email"
-            aria-label="OpenAlex contact email"
-            placeholder="your@email.com"
-            value={openAlexEmail}
-            onChange={(e) => setOpenAlexEmail(e.target.value)}
+            type="password"
+            aria-label="OpenAlex API key"
+            placeholder="Enter API key"
+            value={openAlexApiKey}
+            onChange={(e) => setOpenAlexApiKey(e.target.value)}
             className="flex-1 rounded-md border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <Button
             size="sm"
             variant="outline"
             onClick={() => void handleSaveOpenAlex()}
-            disabled={savingOpenAlex || !openAlexEmail.trim()}
+            disabled={savingOpenAlex || !openAlexApiKey.trim()}
           >
             {savingOpenAlex ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
           </Button>

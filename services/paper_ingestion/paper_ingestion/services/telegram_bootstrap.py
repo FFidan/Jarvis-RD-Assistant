@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from jarvis_common.maintenance import outbound_quarantine_active
 from jarvis_common.settings import get_secrets_settings
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,21 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
     """Call Telegram ``getMe`` and cache the bot username in ``user_config``.
 
     No-op if ``TELEGRAM_BOT_TOKEN`` is unset, if the cached entry is fresh
-    (<24h old), or if the API call fails. Never raises: the lifespan hook
-    must stay resilient to network/token errors.
+    (<24h old), while restored credentials are quarantined, or if the API call
+    fails. Never raises: the lifespan hook must stay resilient to database,
+    network, and token errors.
+
+    Parameters
+    ----------
+    db_pool : asyncpg.Pool
+        Pool used to read and update the non-secret username cache.
+    http_client : httpx.AsyncClient
+        Lifespan-owned client used for Telegram ``getMe``.
     """
+    if outbound_quarantine_active():
+        logger.info("skip Telegram username refresh: outbound quarantine awaiting review")
+        return
+
     _token_secret = get_secrets_settings().telegram_bot_token
     token = _token_secret.get_secret_value() if _token_secret else ""
     if not token:
@@ -54,6 +67,9 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
                 pass  # stale or malformed -> refresh
 
     try:
+        if outbound_quarantine_active():
+            logger.info("skip Telegram username refresh: outbound quarantine awaiting review")
+            return
         resp = await http_client.get(
             f"https://api.telegram.org/bot{token}/getMe",
             timeout=5.0,

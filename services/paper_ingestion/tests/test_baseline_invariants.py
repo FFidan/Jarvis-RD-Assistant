@@ -340,17 +340,18 @@ async def test_baseline_paper_user_state_trash_restore_round_trip(
 # Re-homed from: test_migration_077.py:103-200 (live).
 # Original 077 asserted delete_rule == 'SET NULL' on 18 tables. That delete
 # rule is HISTORICAL: migration 080 flipped 17 of them to CASCADE (079's job is
-# 080; asserted there). The surviving 077 invariant is FK *existence* on all 18
-# user-owned tables + the papers/discovered_by exception. Re-home form:
+# 080; asserted there). The surviving 077 invariant is FK *existence* on 17
+# user-owned tables + the papers/discovered_by exception (paper_chunks dropped
+# its user_id FK in migration 0104 — now shared-corpus data). Re-home form:
 # schema-introspection (FK presence + papers exclusion column).
 # ---------------------------------------------------------------------------
 
-# The 18 user-owned tables 077 added FK constraints to. `papers` is keyed on
-# `discovered_by` (renamed from user_id in mig 072); the rest on `user_id`.
+# The 17 user-owned tables that still carry a user_id FK to users(id) (077
+# originally added FKs to 18; paper_chunks lost user ownership in migration
+# 0104). `papers` is keyed on `discovered_by` (renamed from user_id in mig 072).
 _INV077_USER_ID_TABLES: tuple[str, ...] = (
     "paper_notes",
     "paper_summaries",
-    "paper_chunks",
     "paper_user_state",
     "pulse_cards",
     "paper_contradictions",
@@ -370,7 +371,7 @@ _INV077_USER_ID_TABLES: tuple[str, ...] = (
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_baseline_user_owned_tables_have_users_fk(baseline_conn: asyncpg.Connection) -> None:
-    """All 18 user-owned tables 077 covered have an FK to users(id); papers'
+    """All 17 user-owned tables 077 still covers have an FK to users(id); papers'
     FK is on the `discovered_by` column (canonical-corpus exception). The
     SET NULL→CASCADE flip is historical (asserted in the 080 invariant)."""
     conn = baseline_conn
@@ -474,21 +475,23 @@ async def test_baseline_jsonb_columns_are_jsonb_and_roundtrip_object(
 
 
 # ---------------------------------------------------------------------------
-# Invariant 080 — user-deletion CASCADE on owned data; papers.discovered_by is
-# the explicit non-cascade exception (shared-corpus model).
+# Invariant 080 — user-deletion CASCADE on user data; papers.discovered_by is
+# the explicit non-cascade exception because it stores audit attribution.
 # Re-homed from: test_migration_080.py:37-71 (mock-only today — UPGRADED to a
 # real schema test).
 # Re-home form: schema-introspection (FK delete_rule == CASCADE × 17 + papers
 # exclusion is SET NULL, not CASCADE).
 # ---------------------------------------------------------------------------
 
-# The 18 owned-data tables with ON DELETE CASCADE — papers is NOT here.
+# The 17 owned-data tables with ON DELETE CASCADE — papers is NOT here.
 # paper_entities was SET NULL until migration 0095 (DB-01 fix); added here then.
+# paper_chunks was removed by migration 0104: canonical paper data, no longer
+# user-owned — a user deletion must never cascade into chunks retained by
+# another user's library.
 _INV080_CASCADE_TABLES: tuple[str, ...] = (
     "paper_entities",
     "paper_notes",
     "paper_summaries",
-    "paper_chunks",
     "paper_user_state",
     "pulse_cards",
     "paper_contradictions",
@@ -525,7 +528,7 @@ async def _fk_delete_rule(conn: asyncpg.Connection, table: str, constraint: str)
 async def test_baseline_owned_data_cascades_on_user_delete(
     baseline_conn: asyncpg.Connection,
 ) -> None:
-    """All 18 owned-data tables FK users(id) ON DELETE CASCADE; papers'
+    """All 17 owned-data tables FK users(id) ON DELETE CASCADE; papers'
     discovered_by FK is explicitly SET NULL (shared/system papers survive a
     user deletion under the canonical-corpus model). author_alert_log was
     removed from this set when its user_id FK was flipped to SET NULL by

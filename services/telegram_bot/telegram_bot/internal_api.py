@@ -7,11 +7,13 @@ Exposes a minimal FastAPI application on :8002 that allows other services
 import asyncio
 import logging
 
+import asyncpg
 import uvicorn
 from fastapi import Depends, FastAPI
 from jarvis_common import create_limiter
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import verify_api_key
+from jarvis_common.health import make_postgres_probe, register_health_routes
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.version import app_version
 
@@ -51,10 +53,12 @@ class _ServerState:
 _server_state = _ServerState()
 
 
-@_internal_app.get("/health")
-async def health() -> dict[str, str]:
-    """Health check — no authentication required."""
-    return {"status": "ok"}
+register_health_routes(
+    _internal_app,
+    service_name="telegram_bot",
+    checks=[("postgres", make_postgres_probe())],
+    limiter=limiter,
+)
 
 
 @_internal_app.post("/internal/reload-nudges", dependencies=[Depends(verify_api_key)])
@@ -70,13 +74,16 @@ async def reload_nudges() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def start_internal_server(scheduler: object, port: int = 8002) -> None:
+async def start_internal_server(scheduler: object, db_pool: asyncpg.Pool, port: int = 8002) -> None:
     """Start the internal uvicorn server as an asyncio task.
 
     Parameters
     ----------
     scheduler:
         The :class:`~telegram_bot.scheduler.JarvisScheduler` instance to attach.
+    db_pool:
+        The bot's asyncpg connection pool, attached to app state so the
+        ``/health`` postgres probe can reach it.
     port:
         TCP port to listen on (default 8002).
     """
@@ -92,6 +99,7 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         return
 
     _internal_app.state.scheduler = scheduler  # type: ignore[attr-defined]
+    _internal_app.state.db_pool = db_pool  # type: ignore[attr-defined]
     # H.9: bind to 0.0.0.0 inside the container so the paper_ingestion sibling
     # service can reach this endpoint over the Docker bridge network at
     # http://telegram_bot:8002. The telegram_bot service does NOT publish

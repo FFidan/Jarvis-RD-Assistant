@@ -11,14 +11,23 @@ import os
 import signal
 import sys
 import time
+from typing import Any
 
 import httpx
 from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
-from jarvis_common.maintenance import maintenance_active, secrets_rotated_since
+from jarvis_common.maintenance import (
+    ensure_outbound_egress_allowed,
+    maintenance_active,
+    outbound_quarantine_active,
+    secrets_rotated_since,
+    skip_for_maintenance,
+)
+from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
 from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
+from telegram.request import HTTPXRequest
 
 from telegram_bot.config import BotConfig, create_db_pool
 from telegram_bot.handlers import (
@@ -30,20 +39,49 @@ from telegram_bot.internal_api import start_internal_server
 from telegram_bot.scheduler import JarvisScheduler
 
 configure_logging("telegram_bot", log_level=get_core_settings().log_level)
+maybe_init_sentry("telegram_bot")
 logger = logging.getLogger(__name__)
 
 
-async def _secrets_rotation_watcher(started_at: float, poll_interval_s: float = 5.0) -> None:
-    """Exit the bot when an off-host restore rotates secrets, so it reloads them.
+class _QuarantineAwareHTTPXRequest(HTTPXRequest):
+    """Telegram transport that enforces quarantine at the network boundary."""
 
-    The bot reads its telegram_bot_token + the postgres password once at start
-    (compose file-secrets are per-inode bind mounts), so a role/secret rotation
-    during a restore is only picked up by a full process exit + ``restart:
-    unless-stopped`` revive. Polls the shared marker and, once the restore has
-    finished (maintenance lifted) AND the marker post-dates this boot, sends SIGINT
-    — python-telegram-bot's ``run_polling`` installs a clean SIGINT/SIGTERM shutdown
-    — so the container exits and Docker restarts it against the rotated secrets.
-    Self-limiting: the restarted process's ``started_at`` exceeds the marker epoch.
+    async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+        """Send a Telegram request only when outbound egress is permitted.
+
+        Parameters
+        ----------
+        *args : Any
+            Positional arguments accepted by :meth:`HTTPXRequest.do_request`.
+        **kwargs : Any
+            Keyword arguments accepted by :meth:`HTTPXRequest.do_request`.
+
+        Returns
+        -------
+        tuple[int, bytes]
+            HTTP status code and response body from Telegram.
+
+        Raises
+        ------
+        OutboundEgressBlockedError
+            If restored credentials await review before the request.
+        """
+        ensure_outbound_egress_allowed("Telegram Bot API request")
+        return await super().do_request(*args, **kwargs)
+
+
+async def _secrets_rotation_watcher(started_at: float, poll_interval_s: float = 5.0) -> None:
+    """Restart the bot after a completed restore refreshes mounted secrets.
+
+    The watcher waits until maintenance ends before requesting a clean shutdown.
+    Container restart policy then starts the bot with the refreshed files.
+
+    Parameters
+    ----------
+    started_at : float
+        Bot start time expressed as a Unix epoch.
+    poll_interval_s : float
+        Seconds between marker checks.
     """
     while True:
         try:
@@ -67,7 +105,13 @@ async def post_init(application: Application) -> None:
     ----------
     application : Application
         The python-telegram-bot Application instance.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials await review before Telegram resources start.
     """
+    ensure_outbound_egress_allowed("Telegram bot startup")
     config: BotConfig = application.bot_data["config"]
     application.bot_data["db_pool"] = await create_db_pool(config.database_url)
     application.bot_data["http_client"] = httpx.AsyncClient(
@@ -89,7 +133,7 @@ async def post_init(application: Application) -> None:
 
     # Start internal HTTP API in the background (for reload-nudges endpoint)
     _internal_api_task = asyncio.get_running_loop().create_task(
-        start_internal_server(scheduler),
+        start_internal_server(scheduler, application.bot_data["db_pool"]),
         name="internal_api",
     )
     application.bot_data["internal_api_task"] = _internal_api_task
@@ -102,8 +146,7 @@ async def post_init(application: Application) -> None:
 
     _internal_api_task.add_done_callback(_log_internal_api_exception)
 
-    # Self-restart onto rotated secrets after an off-host restore. The bot bypasses
-    # the app_factory maintenance watcher, so it runs its own equivalent here.
+    # Restart the bot when an off-host restore replaces its configured secrets.
     _secrets_watcher_task = asyncio.get_running_loop().create_task(
         _secrets_rotation_watcher(time.time()),
         name="secrets_rotation_watcher",
@@ -179,16 +222,19 @@ async def post_shutdown(application: Application) -> None:
 
 
 async def _maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Short-circuit every update while a restore holds a maintenance sentinel.
+    """Short-circuit updates during restore maintenance or outbound quarantine.
 
     The bot bypasses the HTTP :class:`MaintenanceMiddleware`, so this handler is
     registered in group ``-1`` to run before every command/callback handler:
     during a restore it replies once and raises ``ApplicationHandlerStop`` so no
-    downstream handler writes to the (being-restored) database.
+    downstream handler writes to the database. Quarantine stops silently because
+    even a denial reply would use the restored Telegram token.
     """
+    if outbound_quarantine_active():
+        raise ApplicationHandlerStop
     if not maintenance_active():
         return
-    notice = "⏳ Restore in progress — please try again shortly."
+    notice = "Restore in progress — please try again shortly."
     if update.callback_query is not None:
         with contextlib.suppress(Exception):
             await update.callback_query.answer(notice, show_alert=True)
@@ -205,7 +251,15 @@ def main() -> None:
     ``python-telegram-bot`` ``Application``, registers all command and
     callback handlers, and runs the event loop with ``run_polling``.
     Exits with code 1 when configuration is invalid.
+
+    Notes
+    -----
+    Active restore maintenance or outbound quarantine causes a clean return
+    before configuration is read or Telegram polling begins.
     """
+    if skip_for_maintenance("Telegram polling"):
+        return
+
     reload_fernet_on_sighup()
 
     try:
@@ -213,9 +267,11 @@ def main() -> None:
     except SystemExit:
         sys.exit(1)
 
+    builder = Application.builder()
+    builder.request(_QuarantineAwareHTTPXRequest())
+    builder.get_updates_request(_QuarantineAwareHTTPXRequest(connection_pool_size=1))
     application = (
-        Application.builder()
-        .token(config.telegram_token.get_secret_value())
+        builder.token(config.telegram_token.get_secret_value())
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()

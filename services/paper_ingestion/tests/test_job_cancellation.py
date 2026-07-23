@@ -4,6 +4,8 @@ Verifies:
 - cancel_job route calls procrastinate cancel_job_by_id_async for procrastinate rows.
 - cancel_job route returns 404 when the job is not found.
 - JobContext.is_cancelled() works correctly with a mock DB.
+- get_job, stream_job, and cancel_job report 503 (not 404) when a lookup fails
+  for an infrastructure reason rather than the job genuinely being absent.
 """
 
 from __future__ import annotations
@@ -93,3 +95,152 @@ async def test_cancel_job_route_404_when_not_found():
         result = await jobs_router_mod.jobs_lib.get_unified(pool, str(uuid.uuid4()))
         # No row → route would raise 404
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: infrastructure lookup failures are 503, not 404
+# ---------------------------------------------------------------------------
+
+
+def _identity_limiter() -> MagicMock:
+    """A SlowAPI Limiter stub whose .limit(spec) is an identity decorator."""
+    limiter = MagicMock()
+    limiter.enabled = False
+    limiter.limit = lambda _spec: lambda f: f
+    return limiter
+
+
+def _build_handlers() -> dict:
+    """Build the real /api/jobs router and return its endpoints keyed by name.
+
+    Exercises the actual GET/stream/cancel closures (not a hand-simulated
+    replay of the jobs_lib calls) so a broken try/except in jobs_router.py
+    itself, not just in jobs_lib, would fail these tests.
+    """
+    from jarvis_common.jobs_router import build_jobs_router, collect_handlers
+
+    router = build_jobs_router(
+        service_name="test",
+        public_kinds=frozenset({"noop.test"}),
+        get_db_pool=lambda: MagicMock(),
+        limiter=_identity_limiter(),
+    )
+    return collect_handlers(router)
+
+
+class TestJobLookupOutageReturns503:
+    """A DB outage during a job lookup is a 503, never the 404 used for a job
+    that genuinely does not exist. GET, the SSE stream's initial lookup, and
+    cancel's two lookup sites each wrap ``jobs_lib.JobLookupUnavailable``
+    independently — this pins all four wrap sites through the real handlers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_job_returns_503_on_lookup_outage(self):
+        import jarvis_common.jobs_router as jobs_router_mod
+        from fastapi import HTTPException
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        handlers = _build_handlers()
+
+        with patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_unified",
+            AsyncMock(side_effect=JobLookupUnavailable("db down")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handlers["get_job"](
+                    request=MagicMock(),
+                    job_id=str(uuid.uuid4()),
+                    db_pool=MagicMock(),
+                    user_id=1,
+                )
+
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_stream_job_returns_503_on_initial_lookup_outage(self):
+        import jarvis_common.jobs_router as jobs_router_mod
+        from fastapi import HTTPException
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        handlers = _build_handlers()
+
+        with patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_unified",
+            AsyncMock(side_effect=JobLookupUnavailable("db down")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handlers["stream_job"](
+                    request=MagicMock(),
+                    job_id=str(uuid.uuid4()),
+                    db_pool=MagicMock(),
+                    user_id=1,
+                )
+
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_cancel_job_returns_503_when_ownership_lookup_fails(self):
+        import jarvis_common.jobs_router as jobs_router_mod
+        from fastapi import HTTPException
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        handlers = _build_handlers()
+
+        with patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_unified",
+            AsyncMock(side_effect=JobLookupUnavailable("db down")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handlers["cancel_job"](
+                    request=MagicMock(),
+                    job_id=str(uuid.uuid4()),
+                    db_pool=MagicMock(),
+                    user_id=1,
+                )
+
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_cancel_job_returns_503_when_procrastinate_id_lookup_fails(self):
+        """The second lookup — the raw procrastinate id ``cancel_job_by_id_async``
+        needs — must be wrapped independently of the first ownership-check lookup.
+        """
+        import jarvis_common.jobs_router as jobs_router_mod
+        from fastapi import HTTPException
+        from jarvis_common.jobs import JobLookupUnavailable
+
+        handlers = _build_handlers()
+
+        job_uuid = str(uuid.uuid4())
+        owned_row = {
+            "id": job_uuid,
+            "kind": "paper.process",
+            "status": "running",
+            "user_id": "1",
+        }
+
+        with (
+            patch.object(
+                jobs_router_mod.jobs_lib,
+                "get_unified",
+                AsyncMock(return_value=owned_row),
+            ),
+            patch.object(
+                jobs_router_mod.jobs_lib,
+                "get_procrastinate_job_for_jarvis_id",
+                AsyncMock(side_effect=JobLookupUnavailable("db down")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handlers["cancel_job"](
+                    request=MagicMock(),
+                    job_id=job_uuid,
+                    db_pool=MagicMock(),
+                    user_id=1,
+                )
+
+        assert exc_info.value.status_code == 503

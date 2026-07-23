@@ -4,7 +4,7 @@
 
 JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.
 
-📖 **Docs:** https://limitcycle-oss.github.io/jarvis-rd-assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/limitcycle-oss/jarvis-rd-assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md)
+**Docs:** https://limitcycle-oss.github.io/jarvis-rd-assistant/ &nbsp;·&nbsp; **Releases:** https://github.com/limitcycle-oss/jarvis-rd-assistant/releases &nbsp;·&nbsp; **Security:** [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md)
 
 [![CI](https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/ci.yml)
 [![Docs](https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/docs.yml)
@@ -15,10 +15,10 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 
 ## Highlights
 
-- 📰 **Research Feed** — daily ranked briefings from arXiv, OpenAlex, Semantic Scholar, and PubMed, with per-topic Pulse digests delivered at the time you choose.
-- 💬 **Ask** — cross-paper RAG over your library with inline citations and verified quote spans.
-- 🧠 **Cards** — FSRS spaced-repetition for long-term retention of paper findings.
-- 📂 **Projects** — lightweight task + milestone tracking tied to source papers, with optional Zotero push.
+- **Research Feed** — daily ranked briefings from arXiv, OpenAlex, Semantic Scholar, and PubMed, with per-topic Pulse digests delivered at the time you choose.
+- **Ask** — cross-paper RAG over your library with inline citations and verified quote spans.
+- **Cards** — FSRS spaced-repetition for long-term retention of paper findings.
+- **Projects** — lightweight task + milestone tracking tied to source papers, with optional Zotero push.
 
 <details markdown="1">
 <summary><b>More screenshots</b> — Dashboard · Pulse · Library · Discover · Knowledge Graph · Ask</summary>
@@ -37,29 +37,59 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 
 **Before you start:**
 
-- Docker Engine 24+ with Compose v2, `openssl`, `git`
+- Docker Engine 24+ with Compose v2.24.4+, Python 3, `openssl`, `curl`, `git`
 - **~25–53 GB free disk space** for the first install — a one-time peak, not the ongoing footprint. The exact figure depends on your GPU tier and whether images are pulled prebuilt or built locally; see [Disk budget](docs/REQUIREMENTS.md#disk-budget).
 - GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 5 GB on the smallest tier, up to 22 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
-- AMD (ROCm, or Vulkan without `/dev/kfd`) and Intel (Vulkan) GPUs are auto-detected and accelerate Ollama too, labeled **[Experimental]** — same tier-based model selection, lower validation confidence, and it may not accelerate on every card. Vulkan is opt-in (`./setup.sh --gpu vulkan`) and passes `/dev/dri` through by numeric render-node GIDs (`JARVIS_VIDEO_GID`/`JARVIS_RENDER_GID`, resolved from the host). `paper_ingestion` (PDF parsing, reranking) stays CPU-only on AMD/Intel regardless. See the [hardware support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/) for caveats and how to report your results.
+- AMD ROCm is selected only when `/dev/kfd` is available. Other AMD and
+  Intel hosts stay on the supported CPU path unless Vulkan is selected
+  explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan remain
+  experimental, and PDF parsing and reranking stay on CPU. See the [hardware
+  support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/).
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
-- `./setup.sh --check` verifies required runtime prerequisites and reports advisory hardware/disk status (read-only preflight). If Docker, Docker Compose, or `openssl` are missing, `./setup.sh --install-prereqs` can run the guided installer after showing the exact commands.
+- Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On
+  supported hosts it can install missing packages after showing the commands and
+  asking permission. `./setup.sh --check` runs the same preflight without making
+  changes.
 - **Windows:** use WSL2 + Docker Desktop
-- **Non-interactive installs:** use `scripts/jarvis-setup.sh` for CI / cloud-init
+- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full
+  installer. `scripts/jarvis-setup.sh` is a local-only compatibility bootstrap
+  for older CI jobs; it does not configure TLS or remote access.
 
 ```bash
 git clone https://github.com/limitcycle-oss/jarvis-rd-assistant.git
 cd jarvis-rd-assistant
-./setup.sh --check   # preflight (read-only, exits 0 on pass)
-./setup.sh             # add --install-prereqs only if you want setup to install missing host packages
+./setup.sh
 ```
 
-`setup.sh` asks how you'll access JARVIS (this computer only / home or lab network / Cloudflare Tunnel / your own domain with Let's Encrypt), generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens the printed URL (**http://localhost:3001** in localhost mode) — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off. Once signed in, any user can add a passkey (fingerprint / face / PIN) for password-free sign-in — see the [User Guide → Passkeys](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/passkeys/).
+`setup.sh` generates the repository-controlled secrets and configuration, pulls
+the selected images and Ollama models, waits for the services, and prints one
+finish-setup link. Its access chooser covers this computer, a guided private
+HTTPS address for family devices, LAN diagnostics, Cloudflare Tunnel, and a
+domain with Let's Encrypt.
+
+Choose the sign-in preference: single-user mode puts API-key login first;
+multi-user mode puts email magic links first. Accounts and private libraries are
+isolated in either mode. SMTP is optional: without it, an administrator can
+create a one-time invite and share it privately. Family sessions and passkeys
+require the final named HTTPS address. Continue with [First sign-in and
+setup](docs/manual/getting-started.md).
+
+Setup handles JARVIS configuration for the selected route. For Tailscale, it can
+preview and offer the official package install on supported Linux hosts; other
+hosts receive manual guidance. Account sign-in, Cloudflare configuration, DNS,
+and router changes still require the account or network owner.
 
 Prefer not to open a terminal? Double-click a launcher in `launchers/` — `Start JARVIS.command` (macOS), `jarvis.desktop` (Linux), or `Start JARVIS.bat` (Windows) — each runs the same `setup.sh` and keeps the window open so you can read its output.
 
-Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (tier-dependent, roughly 5–22 GB — see [Disk budget](docs/REQUIREMENTS.md#disk-budget)) streams its progress directly to your terminal after the application images are pulled, so the initial download shows visible progress instead of a silent wait.
-
-In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
+Re-running `./setup.sh` keeps the current configuration by default and restarts
+that stack. To change the access route, accept the **Overwrite** prompt (or use
+`--overwrite-env`). Papers, accounts, secrets, and operator-added settings stay
+in place. Setup snapshots its configuration and setup-managed credentials,
+accepts the new route only after its exact health marker and readiness gates
+pass, and restores the last verified route if a change fails. An interrupted
+change resumes safely the next time setup runs. If automated recovery cannot be
+verified, setup stops and prints exact operator steps; see [Changing access
+routes safely](docs/DEPLOYMENT.md#changing-access-routes-safely).
 
 **Everyday commands.** Setup puts a `jarvis-research` launcher on your PATH for day-to-day operation from any directory:
 
@@ -70,20 +100,29 @@ jarvis-research doctor      # read-only health, disk, and update check
 jarvis-research update      # transactional, database-safe upgrade to the latest release
 ```
 
-Full command reference → **[docs/manual/cli.md](docs/manual/cli.md)**.
+See the [command-line reference](docs/manual/cli.md) for updates, recovery, and
+contained uninstall options.
 
 **Non-interactive (CI / cloud-init):**
+
+`./setup.sh --non-interactive` is the supported unattended installer. It uses
+the same prerequisite, access-mode, TLS, and final verification gates as the
+interactive path.
 
 ```bash
 ./setup.sh --non-interactive --profile=dev  # local dev / CI smoke test
 
+umask 077
+printf '%s' "$MY_SMTP_PASS" > ./smtp-password.txt
 ./setup.sh --non-interactive --domain=jarvis.example.com \
   --admin-email=ops@example.com --profile=letsencrypt \
   --smtp-host=smtp.resend.com --smtp-user=resend \
-  --smtp-pass-file=/run/secrets/smtp_pass
+  --smtp-pass-file=./smtp-password.txt
+rm ./smtp-password.txt
 ```
 
-See `./setup.sh --help` for all flags (including `--profile=local-https`, which starts a local Caddy edge at `https://localhost:3443` using an mkcert-issued certificate — run `make certs` first). After the first admin exists, invite teammates at **Admin → User Management**.
+See `./setup.sh --help` for unattended and advanced flags. Interactive setup is
+the supported path for a first install.
 
 ## What it does
 
@@ -95,7 +134,7 @@ Runs on your own hardware with Ollama, with optional cloud-model access through 
 - **Learning Engine** — flashcard generation from paper findings, FSRS spaced-repetition scheduling, retention analytics.
 - **Project Manager** — tasks, milestones, paper-linking, deadline warnings, optional Zotero push.
 - **My Day** — triage dashboard: daily counters, top-3 Pulse preview, Pomodoro timer, overdue action items, Learning/Project summaries.
-- **Discovery** — overnight scoring of candidates via embedding similarity + LLM relevance ranking; 👍/👎/💾 feedback shapes tomorrow's deck.
+- **Discovery** — overnight scoring of candidates via embedding similarity and LLM relevance ranking; save and rating feedback shapes tomorrow's deck.
 
 ### Design choices
 
@@ -122,37 +161,51 @@ flowchart TD
 
 ## Deployment
 
-Solo install: the **Quickstart** above is all you need. For team/multi-user setup, SMTP configuration, reverse-proxy / TLS (Caddy + Let's Encrypt or Cloudflare Tunnel), backups, upgrades, rollback, and remote access → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. End-user help (joining an existing instance) → **[User Guide](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/)**.
+The Quickstart above is the normal install path. The [deployment
+guide](docs/DEPLOYMENT.md) covers supported access choices and troubleshooting;
+the [User Guide](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/)
+covers first sign-in, family invitations, passkeys, and everyday use.
 
 ## Updating JARVIS
 
 ```bash
-git pull
-./update.sh
+jarvis-research update
 ```
 
-`update.sh` diffs your running containers against the versions pinned in `versions.env`, prompts before pulling or rebuilding anything, and waits for each updated service to report healthy. On failure it prints the exact rollback command. Details, including per-release breaking-change notes → **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#update-workflow)**.
+This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
+
+If the lifecycle command itself cannot run, the lower-level fallback is:
+
+```bash
+git pull --ff-only
+./update.sh --yes
+```
+
+`update.sh` does not provide the lifecycle command's migration classification,
+signed-restore-point requirement, or deterministic resume. See the [command-line
+reference](docs/manual/cli.md#how-update-works) before using the fallback.
 
 ## Uninstalling JARVIS
 
-`jarvis-research uninstall` tears the install down in four escalating tiers, each of which lists the exact resources it will touch and confirms before acting. Always preview first:
+`jarvis-research uninstall` lists the exact resources selected by each teardown
+tier and confirms before acting. Preview the full plan first:
 
 ```bash
 jarvis-research uninstall --dry-run --all   # enumerate a full teardown, change nothing
 ```
 
-| Tier | Removes | Reversible? |
-| --- | --- | --- |
-| `1` stop | Containers and the network | Yes — `jarvis-research start` |
-| `2` app | Tier 1 + the JARVIS application images | Yes — reinstall pulls them again |
-| `3` data | Tier 2 + the named data volumes (database, vector store, caches) | **No** — back up first |
-| `4` purge | Tier 3 + third-party images (each confirmed), `.env`, `secrets/`, `shared/`, and the clone directory | **No** |
-
-Tier 3 requires typing the compose project name, and tier 4 requires exporting (or explicitly forgoing) the backup encryption key, because that key is excluded from backup archives — deleting `secrets/` without it makes every encrypted off-host backup unrecoverable. These destructive gates require typed confirmation from stdin; `--yes`/`--all` skip only the ordinary prompts, never the typed gates, so a run with closed stdin cannot complete tier 3 or 4. Full details → **[docs/manual/cli.md](docs/manual/cli.md#uninstalling)**.
+Data and purge tiers are irreversible. Their typed confirmations cannot be
+bypassed by `--yes`, and a purge offers to export the backup encryption key
+first. Read [Uninstalling](docs/manual/cli.md#uninstalling) before selecting one.
 
 ## Security
 
-JARVIS applies user scoping at the application and query layers. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.
+JARVIS applies user scoping at the application and query layers. The operations
+API key can bootstrap a session only for the configured instance owner; it is
+not a shared credential for other users. Application administrators do not
+receive a research-data browsing interface for another user's private work.
+Infrastructure operators with database, filesystem, backup, or model-provider
+access remain inside the trust boundary.
 
 See [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
 
@@ -193,8 +246,8 @@ The canonical pre-push gate is **`make check`** — the same set CI runs. The `d
 | `POSTGRES_PASSWORD` | Database password |
 | `JARVIS_API_KEY` | API key for backend auth. Must be ≥32 characters in production. Generate with `openssl rand -hex 32`. |
 | `LITELLM_MASTER_KEY` | 32-byte hex key for LiteLLM admin endpoints (generated by `init-secrets.sh`). |
-| `JARVIS_CONFIG_KEY` | Fernet key that encrypts per-user credentials (Zotero/SMTP/LLM keys) at rest in `user_config`. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` (or auto-created by `init-secrets.sh`). |
-| `ENVIRONMENT` | Set to `production` for any non-local deployment. |
+| `JARVIS_CONFIG_KEY` | Fernet key that encrypts database-backed integration settings at rest. Their scopes differ: provider, SMTP, and Telegram-bot settings are deployment-wide, while Zotero credentials are per-user. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` (or auto-created by `init-secrets.sh`). |
+| `ENVIRONMENT` | Setup selects `production` for every off-host authenticated HTTPS route: Tailscale, Cloudflare Tunnel, Let's Encrypt, or a named `--public-origin`. Loopback-only localhost/local-HTTPS and LAN diagnostics use `development`. |
 | `OLLAMA_MODELS` | Models to pull on first start (default: `qwen3:8b,qwen3:4b,qwen3-embedding:4b`; ≥24 GB VRAM can add `qwen3:14b`). |
 | `EMBEDDING_MODEL_NAME` | Human-readable embedding model stored on chunk metadata (default: `qwen3-embedding:4b`). |
 | `EMBEDDING_DIMENSION` | Must match the embedding model (default: `2560`). |
@@ -219,7 +272,7 @@ See [`.env.example`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/
 ├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql           # PostgreSQL bedrock schema
-│   └── migrations/        # Versioned schema changes (0102+; 0089–0101 folded into init.sql)
+│   └── migrations/        # Versioned changes after schema-101 baseline (0102–0106)
 ├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
 ├── docker-compose.yml     # All services
 ├── .env.example           # Configuration template
@@ -296,7 +349,8 @@ work.
 
 Ferhat Fidan remains responsible for reviewing, accepting, maintaining, and
 licensing the project. AI tools are disclosed for provenance; they are not listed
-as project copyright holders. See [AUTHORS.md](AUTHORS.md).
+as project copyright holders. See
+[AUTHORS.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/AUTHORS.md).
 
 Changes are checked with `ruff`, `pyright`, `tach` module-boundary checks,
 Python and frontend tests, database-backed contract tests, and cross-user
@@ -308,5 +362,6 @@ model-pipeline smoke tests provide additional, non-equivalent coverage.
 
 [Apache 2.0](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/LICENSE).
 The root LICENSE file is the canonical Apache-2.0 text; project copyright,
-contact, authorship, and third-party notices are recorded in [NOTICE](NOTICE)
-and [AUTHORS.md](AUTHORS.md).
+contact, authorship, and third-party notices are recorded in
+[NOTICE](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/NOTICE)
+and [AUTHORS.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/AUTHORS.md).

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type ErrorInfo } from 'react';
 
 interface State { hasError: boolean; error?: Error }
 
@@ -13,6 +13,10 @@ export class RouteErrorBoundary extends React.Component<
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('RouteErrorBoundary caught:', error, errorInfo);
   }
 
   render() {

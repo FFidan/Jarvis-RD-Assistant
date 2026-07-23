@@ -1,9 +1,7 @@
-"""Tests for SemanticScholarSource.fetch_new_since.
+"""Tests for ``SemanticScholarSource.fetch_new_since``.
 
-Covers topic-query construction and 429 empty-return behaviour.
-(The get_recommendations method and S2_RECOMMENDATIONS_URL constant were
-removed in A1-05; this file contains only tests for the still-live
-fetch_new_since path.)
+Covers topic-query construction, rate-limit diagnostics, and restore-quarantine
+propagation.
 """
 
 from __future__ import annotations
@@ -11,7 +9,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 import respx
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
 
@@ -25,6 +25,23 @@ def _make_source() -> SemanticScholarSource:
     )
     client = httpx.AsyncClient()
     return SemanticScholarSource(config, client)
+
+
+async def test_fetch_new_since_propagates_outbound_quarantine(monkeypatch):
+    """A quarantine race remains retryable instead of looking like no data."""
+    source = _make_source()
+
+    async def blocked_fetch(*_args, **_kwargs):
+        raise OutboundEgressBlockedError("outbound work is quarantined")
+
+    monkeypatch.setattr(source, "_fetch_json", blocked_fetch)
+
+    with pytest.raises(OutboundEgressBlockedError, match="quarantined"):
+        await source.fetch_new_since(
+            since=datetime(2026, 5, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="GNN", query_terms=["GNN"])],
+            limit=10,
+        )
 
 
 @respx.mock

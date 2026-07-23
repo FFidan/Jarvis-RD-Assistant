@@ -185,6 +185,12 @@ const allGreenResponse = {
       detail: '42 rows',
       remediation: '',
     },
+    {
+      name: 'owner_identity',
+      status: 'green' as const,
+      detail: 'database: valid',
+      remediation: '',
+    },
   ],
 };
 
@@ -237,8 +243,9 @@ const devModeResponse = {
     {
       name: 'smtp',
       status: 'amber' as const,
-      detail: 'not configured — magic links go to stdout',
-      remediation: 'Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM.',
+      detail: 'not configured — administrators can create manual sign-in links',
+      remediation:
+        'Configure SMTP for automatic email, or use Admin > Users to create a manual link.',
     },
     {
       name: 'https',
@@ -251,6 +258,12 @@ const devModeResponse = {
       status: 'green' as const,
       detail: '0 rows',
       remediation: '',
+    },
+    {
+      name: 'owner_identity',
+      status: 'amber' as const,
+      detail: 'none: missing',
+      remediation: 'Run jarvis-research owner status on the JARVIS host.',
     },
   ],
 };
@@ -307,6 +320,7 @@ describe('AdminSystemHealthPage', () => {
       'Email delivery (SMTP)',
       'HTTPS / TLS',
       'Audit log',
+      'Instance owner',
     ];
     for (const label of expectedLabels) {
       const matches = screen.getAllByText(label);
@@ -372,6 +386,43 @@ describe('AdminSystemHealthPage', () => {
 
     await waitFor(() => {
       const matches = screen.getAllByText(/Email delivery configuration/i);
+      expect(matches.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('describes SMTP log-only mode without claiming sign-in links are logged', async () => {
+    const user = userEvent.setup();
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => screen.getByText('SMTP log-only (dev)'));
+    const smtpLogOnlyCell = screen.getByText('SMTP log-only (dev)').closest('td')!;
+    const tooltipTrigger = smtpLogOnlyCell.querySelector('[aria-label="More info"]')!;
+    await user.hover(tooltipTrigger);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /Email delivery suppressed; logs contain only non-secret status metadata/i,
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryAllByText(/Sign-in emails printed to logs/i)).toHaveLength(0);
+    });
+  });
+
+  it('explains the instance-owner readiness check in plain language', async () => {
+    const user = userEvent.setup();
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => screen.getByText('Instance owner'));
+    const ownerCell = screen.getByText('Instance owner').closest('td')!;
+    const tooltipTrigger = ownerCell.querySelector('[aria-label="More info"]')!;
+    expect(tooltipTrigger).toBeInTheDocument();
+
+    await user.hover(tooltipTrigger);
+    await waitFor(() => {
+      const matches = screen.getAllByText(/account allowed to recover and transfer ownership/i);
       expect(matches.length).toBeGreaterThan(0);
     });
   });

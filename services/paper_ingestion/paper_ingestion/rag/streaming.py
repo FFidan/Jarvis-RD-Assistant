@@ -24,6 +24,7 @@ from jarvis_common.llm_client import (
     observe,
     strip_think_streaming,
 )
+from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
 from jarvis_common.settings import get_core_settings, get_reranker_settings
 from jarvis_common.sse import SSE_DONE, sse_event
@@ -31,6 +32,7 @@ from jarvis_common.sse import SSE_DONE, sse_event
 from paper_ingestion.ingestion.search_scope import SearchScope
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.perf_probe import probe_span
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
 
@@ -220,25 +222,38 @@ async def prepare_single_paper_rag(
 ) -> tuple[list[dict], list[dict]]:
     """Retrieve chunks for a single paper, rerank, and build LLM messages.
 
-    Returns ``(messages, sources_list)``.
-    Raises 404 if paper not found, 422 if no relevant chunks.
-
     Parameters
     ----------
-    user_id:
-        Caller user ID. Primary user-scope is enforced upstream by
-        ``assert_paper_ownership`` at the route boundary; when set, it is
-        also threaded into ``search_chunks_in_paper`` together with the
-        caller's own ``user_library`` paper ids as defense-in-depth (M7)
-        Qdrant-payload filtering.
+    embedder : Embedder
+        Vector search and reranking service.
+    db_pool : asyncpg.Pool
+        Database pool used for paper metadata and library scope.
+    paper_id : int
+        Canonical paper identifier.
+    body : AskRequest
+        Validated question, history, and retrieval limits.
+    http_client : httpx.AsyncClient
+        Shared service HTTP client.
+    user_id : int or None
+        Caller identity used to constrain vector search to visible papers.
+
+    Returns
+    -------
+    tuple[list[dict], list[dict]]
+        Prompt messages and the source excerpts returned to the caller.
+
+    Raises
+    ------
+    PaperNotFoundError
+        If ``paper_id`` does not identify a visible paper.
+    NoRelevantChunksError
+        If retrieval and reranking produce no usable excerpts.
     """
     library_paper_ids: list[int] | None = None
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
-        # M7 defense-in-depth: fetch the CALLER'S OWN library paper ids so the
-        # Qdrant search below stays scoped per-tenant while shared-corpus
-        # papers embedded by another user remain retrievable (PI-RAG-001 —
-        # mirrors prepare_cross_paper_rag).
+        # Fetch exact caller membership for private-vector filtering. Persisted
+        # public vectors remain retrievable regardless of who embedded them.
         if paper and user_id is not None:
             lib_rows = await conn.fetch(
                 "SELECT paper_id FROM user_library WHERE user_id = $1",
@@ -265,9 +280,8 @@ async def prepare_single_paper_rag(
             "Analyze this paper first to extract and embed the paper text."
         )
 
-    # Layer 2 relevance gate (reranker-enabled installs only): drop chunks the
-    # reranker scored below the backend-aware floor.  Chunks WITHOUT a
-    # rerank_score (reranker disabled/unavailable) are kept — absence ⇒ skip.
+    # Drop chunks below the backend-aware reranker floor when scores exist.
+    # Chunks without a rerank score remain eligible.
     # No relative cosine cutoff here: a single paper's chunks are topically
     # homogeneous, so a relative cutoff would discard valid context.
     _min_rerank = _rerank_score_floor()
@@ -279,7 +293,7 @@ async def prepare_single_paper_rag(
 
     # Build RAG prompt — full chunk text flows through to the prompt.
     # Wrap question and title in XML-style delimiters to prevent prompt injection.
-    # Content between XML tags is DATA — never instructions.
+    # Content between XML tags is treated as data, never as instructions.
     safe_question = safe_for_prompt(body.question, mode="escape")
     safe_title, _ = wrap_delimited("title", paper["title"])
 
@@ -328,6 +342,7 @@ async def _search_and_merge_chunks(
     allowed_paper_ids: list[int] | None,
 ) -> list[dict]:
     """Search all chunks — optionally via query decomposition — and merge."""
+    scope = _cross_paper_search_scope(user_id, library_paper_ids, allowed_paper_ids)
     if body.decompose:
         fast_model = get_fast_model()
         sub_queries = await decompose_query(body.question, model=fast_model)
@@ -339,11 +354,7 @@ async def _search_and_merge_chunks(
                     query_text=sq,
                     limit=per_query_limit,
                     score_threshold=_SEARCH_SCORE_THRESHOLD,
-                    scope=SearchScope(
-                        user_id=user_id,
-                        library_paper_ids=library_paper_ids,
-                        allowed_paper_ids=allowed_paper_ids,
-                    ),
+                    scope=scope,
                 )
                 for sq in sub_queries
             )
@@ -364,28 +375,33 @@ async def _search_and_merge_chunks(
             query_text=body.question,
             limit=body.max_chunks * 2,
             score_threshold=_SEARCH_SCORE_THRESHOLD,
-            scope=SearchScope(
-                user_id=user_id,
-                library_paper_ids=library_paper_ids,
-                allowed_paper_ids=allowed_paper_ids,
-            ),
+            scope=scope,
         )
     )
 
 
-def _allowed_cross_paper_ids(
-    requested_paper_ids: list[int] | None,
-    library_paper_ids: list[int] | None,
+def _cross_paper_search_scope(
     user_id: int | None,
-) -> list[int] | None:
-    """Return explicit cross-paper scope after user-library intersection."""
+    library_paper_ids: list[int] | None,
+    requested_paper_ids: list[int] | None,
+) -> SearchScope:
+    """Build one validated scope for a cross-paper retrieval request."""
+    if requested_paper_ids:
+        return SearchScope.explicit_papers(
+            user_id,
+            requested_paper_ids,
+            library_paper_ids or [],
+        )
+    if user_id is None:
+        return SearchScope.internal()
+    return SearchScope.caller_corpus(user_id, library_paper_ids or [])
+
+
+def _requested_cross_paper_ids(requested_paper_ids: list[int] | None) -> list[int] | None:
+    """Return unique request restrictions without treating them as grants."""
     if not requested_paper_ids:
         return None
-    requested = list(dict.fromkeys(int(paper_id) for paper_id in requested_paper_ids))
-    if user_id is None:
-        return requested
-    allowed = set(library_paper_ids or [])
-    return [paper_id for paper_id in requested if paper_id in allowed]
+    return list(dict.fromkeys(int(paper_id) for paper_id in requested_paper_ids))
 
 
 def _select_chunks_by_paper(all_chunks: list[dict], max_papers: int, max_chunks: int) -> list[dict]:
@@ -431,29 +447,26 @@ async def prepare_cross_paper_rag(
 
     Parameters
     ----------
-    user_id:
-        Caller user ID for per-tenant Qdrant scoping.  When set, every
-        ``embedder.search_chunks_global`` call receives a
-        ``Filter(should=[user_id==X, is_null(user_id), paper_id IN lib])``
-        that restricts results to chunks owned by that user, canonical chunks
-        (``user_id`` payload IS NULL), **or** chunks for any paper in the
-        caller's own ``user_library`` (PI-RAG-001 — so a secondary-library
-        owner can retrieve shared-corpus papers another user embedded).
-        Passing ``None`` disables the filter (legacy / single-tenant paths).
+    embedder : Embedder
+        Vector search and reranking service.
+    db_pool : asyncpg.Pool
+        Database pool used for library scope, paper metadata, and model context.
+    body : CrossPaperAskRequest
+        Validated question, optional paper scope, history, and retrieval limits.
+    http_client : httpx.AsyncClient
+        Shared service HTTP client.
+    user_id : int or None
+        Caller identity used to enforce current-generation persisted-public or
+        explicit caller-library visibility. ``None`` is trusted internal use.
 
-    Returns a :class:`CrossPaperRagPrep` on success, or a
-    :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are
-    found.
+    Returns
+    -------
+    CrossPaperRagPrep or CrossPaperRagNoResults
+        Prepared messages and sources, or an explicit no-results response.
     """
     with probe_span("prepare_cross_paper_rag", decompose=body.decompose):
-        # PI-RAG-001: widen the Qdrant candidate set to chunks for ANY paper in
-        # THE CALLER'S OWN library, regardless of which user embedded them.
-        # Without this, a secondary-library owner under-fetches on shared-corpus
-        # papers that another user originally processed (those chunks carry the
-        # original processor's user_id in their Qdrant payload).  The widening is
-        # keyed strictly on the caller's own user_library membership — papers not
-        # in the caller's library (e.g. another user's private upload) are never
-        # added, and the DB visibility check below stays as the backstop.
+        # Load exact private-paper memberships once. Persisted public scope is
+        # carried by vector metadata and rechecked in PostgreSQL below.
         library_paper_ids: list[int] | None = None
         if user_id is not None:
             async with db_pool.acquire() as conn:
@@ -463,14 +476,9 @@ async def prepare_cross_paper_rag(
                 )
             library_paper_ids = [row["paper_id"] for row in lib_rows]
 
-        allowed_paper_ids = _allowed_cross_paper_ids(body.paper_ids, library_paper_ids, user_id)
-        if body.paper_ids and not allowed_paper_ids:
-            return CrossPaperRagNoResults(
-                answer="No relevant information found in the paper collection.",
-                sources=[],
-            )
+        allowed_paper_ids = _requested_cross_paper_ids(body.paper_ids)
 
-        # 1. Search all chunks — optionally via query decomposition
+        # Search all chunks, optionally via query decomposition.
         all_chunks = await _search_and_merge_chunks(
             embedder, body, user_id, library_paper_ids, allowed_paper_ids
         )
@@ -486,15 +494,12 @@ async def prepare_cross_paper_rag(
                 sources=[],
             )
 
-        # 1b. Cross-encoder rerank merged results using original question
+        # Rerank merged results against the original question.
         all_chunks = await embedder.rerank_chunks(
             body.question, all_chunks, top_k=body.max_chunks * 2
         )
 
-        # Layer 2 relevance gate (reranker-enabled installs only): drop chunks
-        # the reranker scored below the backend-aware floor.  Chunks WITHOUT a
-        # rerank_score (reranker disabled/unavailable) are kept — absence ⇒
-        # the floor is skipped.
+        # Apply the backend-aware reranker floor when scores are available.
         _min_rerank = _rerank_score_floor()
         floored = [
             c
@@ -509,18 +514,12 @@ async def prepare_cross_paper_rag(
                 sources=[],
             )
 
-        # 2-3. Dedup by paper (top-2 each), trim to max_papers, flatten to max_chunks
+        # Deduplicate and trim the result set to the requested limits.
         selected_chunks = _select_chunks_by_paper(all_chunks, body.max_papers, body.max_chunks)
 
-        # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
-        # Primary isolation is Qdrant's _user_scope_filter; this secondary
-        # check ensures mis-tagged Qdrant payloads cannot surface another user's
-        # paper metadata.  `papers` is the shared canonical corpus and has NO
-        # user_id column — ownership lives in the `user_library` join table.
-        # Mirror the Qdrant user-scope filter ("payload user_id == X OR IS NULL") against the real
-        # schema: a paper is visible iff the caller is unscoped, OR owns it
-        # (user_library membership), OR it is canonical (in nobody's library →
-        # the relational equivalent of a NULL-user_id chunk).
+        # Recheck database visibility so a mistagged vector payload cannot expose
+        # another user's paper metadata. Public scope and explicit caller-library
+        # membership are the only authenticated access branches.
         unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -528,10 +527,7 @@ async def prepare_cross_paper_rag(
                 " WHERE p.id = ANY($1::int[])"
                 " AND ("
                 "   $2::int IS NULL"
-                "   OR EXISTS (SELECT 1 FROM user_library ul"
-                "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
-                "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
-                "                  WHERE ul2.paper_id = p.id)"
+                f"   OR {paper_visible_sql(2)}"
                 " )"
                 " AND ($3::int[] IS NULL OR p.id = ANY($3::int[]))",
                 unique_paper_ids,
@@ -549,7 +545,7 @@ async def prepare_cross_paper_rag(
                 sources=[],
             )
 
-        # 5. Build prompt with per-paper sections
+        # Build the prompt with one section per paper.
         safe_question = safe_for_prompt(body.question, mode="escape")
 
         def build_user_content(kept: list[dict]) -> str:
@@ -721,12 +717,38 @@ async def _stream_validated_visible_answer_parts(
     model: str,
     answer_parts: list[str],
 ) -> AsyncIterator[tuple[str, str | None]]:
-    """Yield visible deltas once their current paragraph prefix is safe to show."""
+    """Yield visible deltas once their current paragraph prefix is safe to show.
+
+    Parameters
+    ----------
+    http_client : httpx.AsyncClient
+        Shared client used for the streaming LiteLLM request.
+    messages : list[dict]
+        Prompt messages sent to the configured model.
+    model : str
+        LiteLLM model alias.
+    answer_parts : list[str]
+        Mutable accumulator for all visible answer content.
+
+    Yields
+    ------
+    tuple[str, str or None]
+        A safe visible fragment and the served model identifier, when known.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If restored credentials await review before the stream is opened.
+    VisibleAnswerHygieneError
+        If a pending visible prefix contains prohibited work-note text, or the
+        completed visible answer is empty or unsafe to show.
+    """
     litellm_config = get_litellm_config()
     pending = ""
     model_used: str | None = None
     in_think = False
     think_carry = ""
+    ensure_outbound_egress_allowed("streaming LLM completion")
     async with http_client.stream(
         "POST",
         f"{litellm_config.base_url}/v1/chat/completions",

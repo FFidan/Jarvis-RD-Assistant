@@ -97,6 +97,15 @@ describe('InstallAffordance (inside ConnectivityBanner)', () => {
     expect(screen.getByTestId('install-affordance')).toBeTruthy();
   });
 
+  it('promises only what is actually cached offline (no PDF reading)', () => {
+    _canInstall = true;
+    render(<ConnectivityBanner />);
+    const text = screen.getByTestId('install-affordance').textContent;
+    expect(text).toContain('summaries and notes offline');
+    expect(text).not.toContain('offline reading');
+    expect(text).not.toContain('review offline');
+  });
+
   it('calls promptInstall when Install button clicked', async () => {
     _canInstall = true;
     render(<ConnectivityBanner />);

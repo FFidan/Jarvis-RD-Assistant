@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # jarvis-research — the lifecycle CLI for a managed JARVIS install.
 #
-# This repo-tracked script holds ALL of the logic; the `jarvis-research` command
-# on PATH is a fixed launcher (installed by scripts/setup_lib.sh::install_cli_shim)
-# that resolves the most recently installed repo and execs this file with
-# `--repo <dir> "$@"`. Shipping the logic with the repo means an update carries
-# the newer CLI too.
+# This repository script contains the lifecycle logic. The installed
+# `jarvis-research` launcher resolves the selected installation and executes this
+# file with `--repo <dir> "$@"`, so application updates include matching CLI
+# behavior.
 #
 # Subcommands:
 #   update [--to <tag>] [--resume <tag>] [--yes]   transactional, DB-safe upgrade
 #   status | start | stop | restart | logs         day-to-day container control
+#   owner status | owner set <email>               owner inspection and recovery
+#   restore acknowledge <restore-id>               release off-host quarantine
 #   doctor                                          read-only health + preflight
 #   repair                                          bounded, non-destructive recovery
 #   register                                        record this repo as an install
@@ -17,12 +18,12 @@
 #   version | help
 #
 # Exit codes: 0 ok · 1 refused/failed · 2 usage · 3 environment (no docker).
-# The ONLY operation that advances the branch is a fast-forward merge to an
+# The only operation that advances the branch is a fast-forward merge to an
 # approved release tag; the branch is never force-rewritten.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Presentation + failure primitives (die pattern mirrored from update.sh).
+# Output and error helpers.
 # -----------------------------------------------------------------------------
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
@@ -55,7 +56,56 @@ env_die() {
 # -----------------------------------------------------------------------------
 STATE_DIR="${JARVIS_CLI_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-research}"
 INSTALLS_FILE="${STATE_DIR}/installs"
-PENDING_FILE_PATH="${STATE_DIR}/pending-update.json"
+LEGACY_PENDING_FILE_PATH="${STATE_DIR}/pending-update.json"
+PENDING_FILE_PATH=""
+
+_acquire_update_lock() {
+  local rc=0
+  claim_host_lifecycle_lock "$REPO" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) die "Another lifecycle operation is already running for this JARVIS install." \
+         "Wait for it to finish, then run: jarvis-research update" ;;
+    *) die "The per-install lifecycle lock is missing or unsafe; refusing the update." \
+         "No services were changed. Run: jarvis-research doctor" ;;
+  esac
+}
+
+_control_lifecycle_exit() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  finish_lifecycle_operation "$REPO" control
+  exit "$rc"
+}
+
+_acquire_control_lifecycle() {
+  local rc=0
+  claim_host_lifecycle_lock "$REPO" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) die "Another lifecycle operation is already running for this JARVIS install." \
+         "No services were changed. Wait for it to finish, then retry." ;;
+    *) die "The per-install lifecycle lock is unavailable or unsafe." \
+         "No services were changed. Run: jarvis-research doctor" ;;
+  esac
+  rc=0
+  claim_lifecycle_operation "$REPO" control || rc=$?
+  case "$rc" in
+    0) trap _control_lifecycle_exit EXIT ;;
+    3|4) die "Another lifecycle operation is active or needs recovery." \
+           "No services were changed. Finish it, then retry." ;;
+    *) die "The private lifecycle volume is unavailable or unsafe." \
+         "No services were changed. Run: jarvis-research doctor" ;;
+  esac
+}
+
+_finish_control_lifecycle() {
+  finish_lifecycle_operation "$REPO" control \
+    || die "The command finished, but its lifecycle state could not be cleared." \
+      "Run: jarvis-research doctor"
+  trap - EXIT
+}
 
 # -----------------------------------------------------------------------------
 # Repository resolution.
@@ -105,23 +155,264 @@ resolve_repo() {
 # -----------------------------------------------------------------------------
 # Pending-transaction file (written to the state dir before any branch advance).
 # -----------------------------------------------------------------------------
-_txn_write() {
-  local phase="$1" target="$2" version="$3" backup_id="${4:-}" from_sha from_version
-  mkdir -p "$STATE_DIR"
-  from_sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-  from_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
-  printf '{"from_sha":"%s","from_version":"%s","target":"%s","target_version":"%s","phase":"%s","started_at":"%s","backup_id":"%s"}\n' \
-    "$from_sha" "${from_version:-unknown}" "$target" "$version" "$phase" "${UPDATE_START_EPOCH:-0}" "$backup_id" \
-    > "$PENDING_FILE_PATH"
+TXN_SCHEMA_VERSION=1
+TXN_FROM_SHA=""; TXN_FROM_VERSION=""; TXN_TARGET=""; TXN_TARGET_SHA=""
+TXN_TARGET_VERSION=""; TXN_PHASE=""; TXN_STARTED_AT=""; TXN_BACKUP_ID=""
+TXN_BACKUP_RUN_ID=""; TXN_LEGACY_RECOVERY="false"
+
+_init_pending_file_path() {
+  local lock_path install_key
+  lock_path="$(host_lifecycle_lock_path "$REPO" 2>/dev/null || true)"
+  install_key="${lock_path##*/}"
+  install_key="${install_key%.lock}"
+  printf '%s' "$install_key" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  PENDING_FILE_PATH="${STATE_DIR}/pending-update-${install_key}.json"
 }
-_txn_update_phase() {
-  [ -f "$PENDING_FILE_PATH" ] || return 0
-  local tmp; tmp="$(mktemp)"
-  sed -E "s/\"phase\":\"[^\"]*\"/\"phase\":\"${1}\"/" "$PENDING_FILE_PATH" > "$tmp" && mv "$tmp" "$PENDING_FILE_PATH"
+
+_txn_file_field() {
+  local path="$1" field="$2"
+  [ -f "$path" ] || return 0
+  grep -oE "\"${field}\":\"[^\"]*\"" "$path" 2>/dev/null \
+    | head -1 | sed -E "s/\"${field}\":\"([^\"]*)\"/\1/"
 }
+
 _txn_field() {
-  [ -f "$PENDING_FILE_PATH" ] || return 0
-  grep -oE "\"${1}\":\"[^\"]*\"" "$PENDING_FILE_PATH" 2>/dev/null | head -1 | sed -E "s/\"${1}\":\"([^\"]*)\"/\1/"
+  _txn_file_field "$PENDING_FILE_PATH" "$1"
+}
+
+_txn_state_shape() {
+  local path="$1" state
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  state="$(cat "$path" 2>/dev/null || true)"
+  [ "$(wc -l < "$path" 2>/dev/null || echo 0)" -eq 1 ] 2>/dev/null || return 1
+  [ "${#state}" -le 4096 ] || return 1
+  if printf '%s' "$state" | grep -Eq '^\{"schema_version":1,"from_sha":"[0-9a-f]{40}","from_version":"(unknown|[A-Za-z0-9][A-Za-z0-9._+-]*)","target":"[A-Za-z0-9][A-Za-z0-9._/-]*","target_sha":"[0-9a-f]{40}","target_version":"[A-Za-z0-9][A-Za-z0-9._+/-]*","phase":"(merge_pending|pull|health|committed)","started_at":"[0-9]+","backup_id":"([0-9]{8}_[0-9]{6})?","backup_run_id":"([0-9a-f]{32})?","legacy_recovery":(true|false)\}$'; then
+    printf 'current'
+    return 0
+  fi
+  if printf '%s' "$state" | grep -Eq '^\{"from_sha":"[0-9a-f]{40}","from_version":"(unknown|[A-Za-z0-9][A-Za-z0-9._+-]*)","target":"[A-Za-z0-9][A-Za-z0-9._/-]*","target_version":"[A-Za-z0-9][A-Za-z0-9._+/-]*","phase":"(staging|merged)","started_at":"[0-9]+","backup_id":"([0-9]{8}_[0-9]{6})?"\}$'; then
+    printf 'legacy'
+    return 0
+  fi
+  return 1
+}
+
+_pending_state_matches_repo() {
+  local path="$1" repo="$2" shape target target_version target_sha from_sha phase
+  local head resolved
+  shape="$(_txn_state_shape "$path" 2>/dev/null || true)"
+  [ -n "$shape" ] || return 2
+  target="$(_txn_file_field "$path" target)"
+  target_version="$(_txn_file_field "$path" target_version)"
+  from_sha="$(_txn_file_field "$path" from_sha)"
+  phase="$(_txn_file_field "$path" phase)"
+  [ "$target_version" = "${target#v}" ] || return 2
+  head="$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
+  resolved="$(git -C "$repo" rev-parse "${target}^{commit}" 2>/dev/null || true)"
+  printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$' || return 3
+  printf '%s' "$resolved" | grep -Eq '^[0-9a-f]{40}$' || return 3
+
+  if [ "$shape" = current ]; then
+    target_sha="$(_txn_file_field "$path" target_sha)"
+    [ "$resolved" = "$target_sha" ] || return 1
+    case "$phase" in
+      merge_pending) [ "$head" = "$from_sha" ] || [ "$head" = "$target_sha" ] ;;
+      pull|health|committed) [ "$head" = "$target_sha" ] ;;
+      *) return 2 ;;
+    esac
+    return
+  fi
+
+  case "$phase" in staging|merged) [ "$head" = "$resolved" ] ;; *) return 2 ;; esac
+}
+
+_migrate_legacy_pending_for_repo() {
+  local selected candidate canon seen="" candidates matches=0 matched_repo="" match_rc
+  [ -e "$LEGACY_PENDING_FILE_PATH" ] || return 0
+  if [ ! -f "$LEGACY_PENDING_FILE_PATH" ] || [ -L "$LEGACY_PENDING_FILE_PATH" ]; then
+    err "The old shared update journal is not a safe regular file."
+    return 1
+  fi
+  [ ! -e "$PENDING_FILE_PATH" ] || return 0
+  mkdir -p "$STATE_DIR" || return 1
+  _txn_state_shape "$LEGACY_PENDING_FILE_PATH" >/dev/null 2>&1 || {
+    err "The old shared update journal is malformed; it was left untouched."
+    return 1
+  }
+  selected="$(canonical_path_portable "$REPO" 2>/dev/null || true)"
+  [ -n "$selected" ] || return 1
+  candidates="$selected"$'\n'
+  if [ -f "$INSTALLS_FILE" ]; then
+    candidates="${candidates}$(cat "$INSTALLS_FILE")"$'\n'
+  fi
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
+    if [ -z "$canon" ] || ! _valid_repo "$canon"; then
+      continue
+    fi
+    printf '%s\n' "$seen" | grep -qxF "$canon" && continue
+    seen="${seen}${canon}"$'\n'
+    match_rc=0
+    _pending_state_matches_repo "$LEGACY_PENDING_FILE_PATH" "$canon" || match_rc=$?
+    case "$match_rc" in
+      0)
+        matches=$((matches + 1))
+        matched_repo="$canon" ;;
+      1) : ;;
+      2)
+        err "The old shared update journal is malformed; it was left untouched."
+        return 1 ;;
+      *)
+        err "A registered install could not be checked against the old shared update journal."
+        return 1 ;;
+    esac
+  done <<< "$candidates"
+  if [ "$matches" -ne 1 ] || [ "$matched_repo" != "$selected" ]; then
+    err "The old shared update journal cannot be attributed uniquely to this install; it was left untouched."
+    return 1
+  fi
+  [ ! -e "$PENDING_FILE_PATH" ] && [ -f "$LEGACY_PENDING_FILE_PATH" ] \
+    || return 1
+  mv "$LEGACY_PENDING_FILE_PATH" "$PENDING_FILE_PATH" || return 1
+  info "Moved this install's interrupted update record to its per-install journal."
+}
+
+_txn_persist() {
+  local tmp
+  mkdir -p "$STATE_DIR"
+  tmp="$(mktemp "${STATE_DIR}/.pending-update.XXXXXX")" || return 1
+  if ! printf '{"schema_version":%s,"from_sha":"%s","from_version":"%s","target":"%s","target_sha":"%s","target_version":"%s","phase":"%s","started_at":"%s","backup_id":"%s","backup_run_id":"%s","legacy_recovery":%s}\n' \
+      "$TXN_SCHEMA_VERSION" "$TXN_FROM_SHA" "$TXN_FROM_VERSION" "$TXN_TARGET" \
+      "$TXN_TARGET_SHA" "$TXN_TARGET_VERSION" "$TXN_PHASE" "$TXN_STARTED_AT" \
+      "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" "$TXN_LEGACY_RECOVERY" > "$tmp" \
+     || ! chmod 600 "$tmp" 2>/dev/null \
+     || ! mv -f "$tmp" "$PENDING_FILE_PATH"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+_txn_write_new() {
+  local phase="$1" target="$2" version="$3" target_sha="$4"
+  local backup_id="${5:-}" backup_run_id="${6:-}" from_version
+  TXN_FROM_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+  from_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  if ! printf '%s' "${from_version:-unknown}" | grep -Eq '^(unknown|[A-Za-z0-9][A-Za-z0-9._+-]*)$'; then
+    from_version="unknown"
+  fi
+  TXN_FROM_VERSION="${from_version:-unknown}"
+  TXN_TARGET="$target"; TXN_TARGET_SHA="$target_sha"; TXN_TARGET_VERSION="$version"
+  TXN_PHASE="$phase"; TXN_STARTED_AT="${UPDATE_START_EPOCH:-0}"
+  TXN_BACKUP_ID="$backup_id"; TXN_BACKUP_RUN_ID="$backup_run_id"
+  TXN_LEGACY_RECOVERY="false"
+  if ! printf '%s' "$TXN_FROM_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+     || [ "$TXN_PHASE" != "merge_pending" ] \
+     || { [ -n "$TXN_BACKUP_ID" ] && [ -z "$TXN_BACKUP_RUN_ID" ]; } \
+     || { [ -z "$TXN_BACKUP_ID" ] && [ -n "$TXN_BACKUP_RUN_ID" ]; }; then
+    return 1
+  fi
+  _txn_persist
+}
+
+_txn_load_current_shape() {
+  local state
+  [ "$(_txn_state_shape "$PENDING_FILE_PATH" 2>/dev/null || true)" = current ] || return 1
+  state="$(cat "$PENDING_FILE_PATH" 2>/dev/null || true)"
+  TXN_SCHEMA_VERSION=1
+  TXN_FROM_SHA="$(_txn_field from_sha)"; TXN_FROM_VERSION="$(_txn_field from_version)"
+  TXN_TARGET="$(_txn_field target)"; TXN_TARGET_SHA="$(_txn_field target_sha)"
+  TXN_TARGET_VERSION="$(_txn_field target_version)"; TXN_PHASE="$(_txn_field phase)"
+  TXN_STARTED_AT="$(_txn_field started_at)"; TXN_BACKUP_ID="$(_txn_field backup_id)"
+  TXN_BACKUP_RUN_ID="$(_txn_field backup_run_id)"
+  TXN_LEGACY_RECOVERY="$(printf '%s' "$state" | grep -oE '"legacy_recovery":(true|false)' | cut -d: -f2)"
+  if [ "$TXN_LEGACY_RECOVERY" = "false" ]; then
+    if { [ -n "$TXN_BACKUP_ID" ] && [ -z "$TXN_BACKUP_RUN_ID" ]; } \
+       || { [ -z "$TXN_BACKUP_ID" ] && [ -n "$TXN_BACKUP_RUN_ID" ]; }; then
+      return 1
+    fi
+  elif [ -n "$TXN_BACKUP_RUN_ID" ]; then
+    return 1
+  fi
+  return 0
+}
+
+_txn_load_legacy_staging() {
+  local state target_sha head verified
+  [ "$(_txn_state_shape "$PENDING_FILE_PATH" 2>/dev/null || true)" = legacy ] || return 1
+  state="$(cat "$PENDING_FILE_PATH" 2>/dev/null || true)"
+  TXN_TARGET="$(_txn_field target)"; TXN_TARGET_VERSION="$(_txn_field target_version)"
+  [ "$TXN_TARGET_VERSION" = "${TXN_TARGET#v}" ] || return 1
+  target_sha="$(git rev-parse "${TXN_TARGET}^{commit}" 2>/dev/null || true)"
+  head="$(git rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$target_sha" ] && [ "$head" = "$target_sha" ] || return 1
+  TXN_SCHEMA_VERSION=1
+  TXN_FROM_SHA="$(_txn_field from_sha)"; TXN_FROM_VERSION="$(_txn_field from_version)"
+  TXN_TARGET_SHA="$target_sha"
+  TXN_PHASE="pull"; TXN_STARTED_AT="$(_txn_field started_at)"
+  TXN_BACKUP_ID="$(_txn_field backup_id)"; TXN_BACKUP_RUN_ID=""
+  if [ -n "$TXN_BACKUP_ID" ]; then
+    verified="$(_backup_volume_helper verify "$TXN_BACKUP_ID" "" legacy 2>/dev/null)" \
+      || return 1
+    [ "$verified" = "${TXN_BACKUP_ID}|" ] || return 1
+  fi
+  TXN_LEGACY_RECOVERY="true"
+  if [ -n "$TXN_BACKUP_ID" ]; then
+    _write_update_backup_pin "$TXN_BACKUP_ID" "" true || return 1
+  fi
+  _txn_persist
+}
+
+_txn_validate_context() {
+  local resolved_target head
+  resolved_target="$(git rev-parse "${TXN_TARGET}^{commit}" 2>/dev/null || true)"
+  head="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [ -z "$resolved_target" ] || [ "$resolved_target" != "$TXN_TARGET_SHA" ]; then
+    err "Pending update target '${TXN_TARGET}' no longer resolves to its recorded commit; refusing to continue."
+    return 1
+  fi
+  if [ "$TXN_TARGET_VERSION" != "${TXN_TARGET#v}" ]; then
+    err "Pending update version metadata is inconsistent; refusing to continue."
+    return 1
+  fi
+  case "$TXN_PHASE" in
+    merge_pending)
+      if [ "$head" != "$TXN_FROM_SHA" ] && [ "$head" != "$TXN_TARGET_SHA" ]; then
+        err "Checkout HEAD is unrelated to the pending update's source and target commits."
+        return 1
+      fi ;;
+    pull|health|committed)
+      if [ "$head" != "$TXN_TARGET_SHA" ]; then
+        err "Checkout HEAD does not match the pending update target '${TXN_TARGET}'."
+        return 1
+      fi ;;
+  esac
+  return 0
+}
+
+_txn_load() {
+  local shape
+  [ -f "$PENDING_FILE_PATH" ] || return 1
+  shape="$(_txn_state_shape "$PENDING_FILE_PATH" 2>/dev/null || true)"
+  case "$shape" in
+    current) _txn_load_current_shape && { _txn_validate_context; return; } ;;
+    legacy) _txn_load_legacy_staging && { _txn_validate_context; return; } ;;
+  esac
+  err "Pending update state is missing, truncated, unknown, or internally inconsistent."
+  return 1
+}
+
+_txn_load_or_die() {
+  _txn_load || die "Cannot safely resume the pending update transaction." \
+    "No services were changed. Inspect ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+}
+
+_txn_update_phase() {
+  local next="$1"
+  case "$next" in merge_pending|pull|health|committed) ;; *) return 1 ;; esac
+  _txn_load || return 1
+  TXN_PHASE="$next"
+  _txn_persist
 }
 
 # -----------------------------------------------------------------------------
@@ -198,154 +489,525 @@ _migrations_need_backup() {
   return 1
 }
 
-_backup_dir() {
-  [ -n "${JARVIS_BACKUP_DIR:-}" ] && { printf '%s' "$JARVIS_BACKUP_DIR"; return 0; }
-  _container_mount_source postgres-backup /backups
-}
-_backup_trigger_dir() {
-  [ -n "${JARVIS_BACKUP_TRIGGER_DIR:-}" ] && { printf '%s' "$JARVIS_BACKUP_TRIGGER_DIR"; return 0; }
-  _container_mount_source postgres-backup /backup-trigger
-}
-# _container_mount_source SVC DEST — the host source path of SVC's DEST mount.
-_container_mount_source() {
-  local cid src
-  cid="$(docker compose ps -q "$1" 2>/dev/null | head -1 || true)"
-  [ -n "$cid" ] || return 1
-  src="$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$2\"}}{{.Source}}{{end}}{{end}}" "$cid" 2>/dev/null || true)"
-  [ -n "$src" ] || return 1
-  printf '%s' "$src"
-}
+BACKUP_COMPOSE_INITIALIZED=0
+BACKUP_COMPOSE_VERIFIED=0
+BACKUP_COMPOSE_PROJECT=""
+BACKUP_COMPOSE_CONFIG_LABEL=""
+declare -a BACKUP_COMPOSE_FILES=()
+UPDATE_VOLUME_GUARD_ID=""
+UPDATE_VOLUME_GUARD_ACTIVE=0
 
-_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+_path_inside_install() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
 
-# _newest_fresh_manifest DIR START_EPOCH — newest manifest_*.json whose mtime is
-# at/after START_EPOCH (i.e. produced after this update began).
-_newest_fresh_manifest() {
-  local dir="$1" start="$2" f mt newest="" newest_mt=0
-  for f in "$dir"/manifest_*.json; do
-    [ -f "$f" ] || continue
-    mt="$(_mtime "$f")" || continue
-    [ -n "$mt" ] && [ "$mt" -ge "$start" ] || continue
-    if [ "$mt" -ge "$newest_mt" ]; then newest_mt="$mt"; newest="$f"; fi
+_init_backup_volume_compose() {
+  local raw item candidate canon seen="" joined="" name
+  local -a requested=()
+  [ "$BACKUP_COMPOSE_INITIALIZED" -eq 0 ] || return 0
+  name="$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2>/dev/null | head -1)"
+  case "$name" in
+    \"*\") name="${name#\"}"; name="${name%\"}" ;;
+    \'*\') name="${name#\'}"; name="${name%\'}" ;;
+  esac
+  [ -n "$name" ] || name="$(basename "$REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9_-]*$' || return 1
+  BACKUP_COMPOSE_PROJECT="$name"
+  raw="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | head -1)"
+  case "$raw" in
+    \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+    \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+  esac
+  if [ -z "$raw" ]; then
+    raw=docker-compose.yml
+    [ ! -f "$REPO/docker-compose.override.yml" ] || raw="${raw}:docker-compose.override.yml"
+  fi
+  IFS=: read -r -a requested <<< "$raw"
+  for item in "${requested[@]}"; do
+    [ -n "$item" ] || return 1
+    case "$item" in /*) candidate="$item" ;; *) candidate="$REPO/$item" ;; esac
+    canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
+    [ -n "$canon" ] && [ -f "$canon" ] && _path_inside_install "$canon" "$REPO" || return 1
+    printf '%s\n' "$seen" | grep -qxF "$canon" && return 1
+    BACKUP_COMPOSE_FILES+=("$canon")
+    seen="${seen}${canon}"$'\n'
+    joined="${joined:+${joined},}${canon}"
   done
-  [ -n "$newest" ] && printf '%s' "$newest"
+  [ "${BACKUP_COMPOSE_FILES[0]:-}" = "$REPO/docker-compose.yml" ] || return 1
+  [ -f "$REPO/scripts/backup-lifecycle.sh" ] || return 1
+  BACKUP_COMPOSE_CONFIG_LABEL="$joined"
+  BACKUP_COMPOSE_INITIALIZED=1
 }
 
-# _verify_backup_archive_set DIR MANIFEST — recompute and match every archive the
-# manifest lists. HARD-required: the jarvis DB archive, plus the secrets archive
-# when the set is encrypted. A missing/failed Qdrant archive is reported as the
-# optional loss it is; it never passes or fails the gate silently. Returns 0 only
-# when every HARD-required archive is present, non-zero, and sha256-matched.
-_verify_backup_archive_set() {
-  local dir="$1" manifest="$2" entries e fn sha size actual_sha actual_size
-  local enc_on=0 jarvis_seen=0 jarvis_ok=0 secrets_seen=0 secrets_ok=0 hard_fail=0 ok reason
-  entries="$(grep -oE '\{"filename":"[^"]*","sha256":"[^"]*","size_bytes":[0-9]+\}' "$manifest" 2>/dev/null || true)"
-  if [ -z "$entries" ]; then
-    err "Backup manifest ${manifest##*/} lists no archives; treating the backup as unverified."
+_raw_backup_volume_compose() {
+  local -a cmd=(docker compose --project-directory "$REPO" --env-file "$REPO/.env" -p "$BACKUP_COMPOSE_PROJECT")
+  local file
+  for file in "${BACKUP_COMPOSE_FILES[@]}"; do cmd+=(-f "$file"); done
+  env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
+      -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
+      "${cmd[@]}" "$@" 8>&-
+}
+
+_verify_backup_volume_compose_owner() {
+  local cid labels project workdir configs
+  [ "$BACKUP_COMPOSE_VERIFIED" -eq 0 ] || return 0
+  cid="$(_raw_backup_volume_compose ps -q postgres 2>/dev/null | head -1 || true)"
+  [ -n "$cid" ] || { err "Cannot verify this install's running Postgres container."; return 1; }
+  labels="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "com.docker.compose.project.working_dir" }}|{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$cid" 2>/dev/null || true)"
+  IFS='|' read -r project workdir configs <<< "$labels"
+  if [ "$project" != "$BACKUP_COMPOSE_PROJECT" ] \
+     || [ "$workdir" != "$REPO" ] \
+     || [ "$configs" != "$BACKUP_COMPOSE_CONFIG_LABEL" ]; then
+    err "Compose ownership does not match this managed JARVIS install."
     return 1
   fi
-  while IFS= read -r e; do
-    case "$(printf '%s' "$e" | sed -E 's/.*"filename":"([^"]*)".*/\1/')" in
-      jarvis_*.enc) enc_on=1 ;;
-    esac
-  done <<< "$entries"
-  while IFS= read -r e; do
-    [ -n "$e" ] || continue
-    fn="$(printf '%s' "$e" | sed -E 's/.*"filename":"([^"]*)".*/\1/')"
-    sha="$(printf '%s' "$e" | sed -E 's/.*"sha256":"([^"]*)".*/\1/')"
-    size="$(printf '%s' "$e" | sed -E 's/.*"size_bytes":([0-9]+).*/\1/')"
-    ok=1; reason="ok"
-    if [ ! -s "${dir}/${fn}" ]; then
-      ok=0; reason="missing or empty on disk"
-    else
-      actual_size="$(stat -c%s "${dir}/${fn}" 2>/dev/null || stat -f%z "${dir}/${fn}" 2>/dev/null || echo 0)"
-      actual_sha="$(sha256sum "${dir}/${fn}" 2>/dev/null | cut -d' ' -f1)"
-      [ "$actual_size" = "$size" ] || { ok=0; reason="size mismatch (${actual_size} vs ${size})"; }
-      [ "$actual_sha" = "$sha" ]   || { ok=0; reason="checksum mismatch"; }
-    fi
-    case "$fn" in
-      jarvis_*)
-        jarvis_seen=1
-        if [ "$ok" -eq 1 ]; then jarvis_ok=1; else err "Required jarvis DB archive ${fn}: ${reason}."; hard_fail=1; fi ;;
-      secrets_*)
-        secrets_seen=1
-        if [ "$ok" -eq 1 ]; then secrets_ok=1
-        elif [ "$enc_on" -eq 1 ]; then err "Required secrets archive ${fn}: ${reason} (an encrypted DB backup is useless without it)."; hard_fail=1
-        else warn "Secrets archive ${fn}: ${reason}."; fi ;;
-      qdrant_*)
-        [ "$ok" -eq 1 ] || warn "Optional Qdrant archive ${fn}: ${reason} — the vector store will not be restorable from this backup (DB restore is unaffected)." ;;
-      *)
-        [ "$ok" -eq 1 ] || warn "Backup archive ${fn}: ${reason}." ;;
-    esac
-  done <<< "$entries"
-  if [ "$jarvis_seen" -ne 1 ] || [ "$jarvis_ok" -ne 1 ]; then
-    err "The primary jarvis database archive is absent or unverifiable; the backup cannot be trusted."
-    hard_fail=1
-  fi
-  if [ "$enc_on" -eq 1 ] && { [ "$secrets_seen" -ne 1 ] || [ "$secrets_ok" -ne 1 ]; }; then
-    err "Backups are encrypted but the secrets archive is absent or unverifiable."
-    hard_fail=1
-  fi
-  [ "$hard_fail" -eq 0 ]
+  BACKUP_COMPOSE_VERIFIED=1
 }
 
-# _require_fresh_backup START_EPOCH — trigger an on-demand backup and poll (fail
-# closed) until a manifest produced after START_EPOCH exists AND its archive set
-# verifies. Sets VERIFIED_BACKUP_TS on success. Returns non-zero otherwise.
+_backup_volume_compose() {
+  _init_backup_volume_compose || return 1
+  _verify_backup_volume_compose_owner || return 1
+  _raw_backup_volume_compose "$@"
+}
+
+_backup_volume_helper() {
+  _backup_volume_compose run --rm --no-deps --entrypoint bash \
+    --volume "$REPO/scripts/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
+    postgres-backup /tmp/backup-lifecycle.sh "$@"
+}
+
+_release_update_volume_guard() {
+  local attempt=0 action=clear
+  [ "$UPDATE_VOLUME_GUARD_ACTIVE" -eq 1 ] || return 0
+  [ ! -f "$PENDING_FILE_PATH" ] || action=retain
+  _backup_volume_helper release-update "$UPDATE_VOLUME_GUARD_ID" "$action" >/dev/null || return 1
+  while [ "$attempt" -lt 30 ]; do
+    if ! _backup_volume_helper update-status "$UPDATE_VOLUME_GUARD_ID" >/dev/null 2>&1; then
+      UPDATE_VOLUME_GUARD_ACTIVE=0
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+_promote_update_volume_guard() {
+  [ "$UPDATE_VOLUME_GUARD_ACTIVE" -eq 1 ] || return 1
+  _backup_volume_helper promote-update "$UPDATE_VOLUME_GUARD_ID" >/dev/null
+}
+
+_update_volume_guard_exit() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  _release_update_volume_guard
+  exit "$rc"
+}
+
+_acquire_update_volume_guard() {
+  local inherited="${JARVIS_UPDATE_VOLUME_GUARD_ID:-}" existing reservation_action
+  local timeout attempts interval helper_container="" helper_state=""
+  local inspect_output="" inspect_rc=0 wait_output="" wait_output_file="" wait_warning=0
+  timeout="${JARVIS_UPDATE_GUARD_TIMEOUT:-21600}"
+  attempts="${JARVIS_UPDATE_GUARD_READY_ATTEMPTS:-100}"
+  interval="${JARVIS_UPDATE_GUARD_READY_INTERVAL:-0.1}"
+  printf '%s' "$timeout" | grep -Eq '^[1-9][0-9]{0,5}$' \
+    || die "JARVIS_UPDATE_GUARD_TIMEOUT must be a positive integer." \
+      "No restore point was changed. Run: jarvis-research doctor"
+  printf '%s' "$attempts" | grep -Eq '^[1-9][0-9]{0,5}$' \
+    || die "JARVIS_UPDATE_GUARD_READY_ATTEMPTS must be a positive integer." \
+      "No restore point was changed. Run: jarvis-research doctor"
+  printf '%s' "$interval" \
+    | grep -Eq '^(0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(\.[0-9]+)?)$' \
+    || die "JARVIS_UPDATE_GUARD_READY_INTERVAL must be a positive number." \
+      "No restore point was changed. Run: jarvis-research doctor"
+
+  if [ -n "$inherited" ]; then
+    if ! printf '%s' "$inherited" | grep -Eq '^[0-9a-f]{32}$'; then
+      die "The inherited backup lifecycle guard is missing or invalid." \
+        "No restore point was changed. Run: jarvis-research doctor"
+    fi
+    UPDATE_VOLUME_GUARD_ID="$inherited"
+    if _backup_volume_helper update-status "$inherited" >/dev/null 2>&1; then
+      UPDATE_VOLUME_GUARD_ACTIVE=1
+      trap _update_volume_guard_exit EXIT
+      return 0
+    fi
+    existing="$(_backup_volume_helper current-update-reservation 2>/dev/null || true)"
+    if [ "$existing" != "$inherited" ]; then
+      die "The inherited backup lifecycle guard is missing or invalid." \
+        "No restore point was changed. Run: jarvis-research doctor"
+    fi
+  fi
+  existing="$(_backup_volume_helper current-update 2>/dev/null || true)"
+  if printf '%s' "$existing" | grep -Eq '^[0-9a-f]{32}$'; then
+    UPDATE_VOLUME_GUARD_ID="$existing"
+    UPDATE_VOLUME_GUARD_ACTIVE=1
+    JARVIS_UPDATE_VOLUME_GUARD_ID="$existing"
+    export JARVIS_UPDATE_VOLUME_GUARD_ID
+    trap _update_volume_guard_exit EXIT
+    return 0
+  fi
+  if [ -z "$UPDATE_VOLUME_GUARD_ID" ]; then
+    existing="$(_backup_volume_helper current-update-reservation 2>/dev/null || true)"
+    if printf '%s' "$existing" | grep -Eq '^[0-9a-f]{32}$'; then
+      UPDATE_VOLUME_GUARD_ID="$existing"
+    else
+      UPDATE_VOLUME_GUARD_ID="$(openssl rand -hex 16 2>/dev/null || true)"
+    fi
+  fi
+  printf '%s' "$UPDATE_VOLUME_GUARD_ID" | grep -Eq '^[0-9a-f]{32}$' \
+    || die "Could not generate the backup lifecycle guard identity." \
+      "No restore point was changed. Run: jarvis-research doctor"
+  reservation_action="$(_backup_volume_helper reserve-update "$UPDATE_VOLUME_GUARD_ID")" \
+    || die "Could not reserve the backup lifecycle guard identity." \
+      "No restore point was changed. Run: jarvis-research doctor"
+  case "$reservation_action" in
+    adopt)
+      info "Adopting the pending backup lifecycle guard."
+      ;;
+    launch)
+      helper_container="$(_backup_volume_compose run --rm --no-deps -d --entrypoint bash \
+        --volume "$REPO/scripts/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
+        postgres-backup /tmp/backup-lifecycle.sh hold-update \
+        "$UPDATE_VOLUME_GUARD_ID" "$timeout" 8>&-)" \
+        || die "Could not start the backup lifecycle guard." \
+          "No restore point was changed. Run: jarvis-research doctor"
+      ;;
+    *)
+      die "The backup lifecycle reservation returned an unknown state." \
+        "No restore point was changed. Run: jarvis-research doctor"
+      ;;
+  esac
+
+  info "Waiting for the backup lifecycle guard (up to ${timeout} seconds)."
+  wait_output_file="$(mktemp)" \
+    || die "Could not create backup lifecycle monitor state." \
+      "No restore point was changed. Run: jarvis-research doctor"
+  while true; do
+    if _backup_volume_helper wait-update \
+        "$UPDATE_VOLUME_GUARD_ID" "$attempts" "$interval" \
+        >"$wait_output_file" 2>&1; then
+      rm -f "$wait_output_file"
+      UPDATE_VOLUME_GUARD_ACTIVE=1
+      JARVIS_UPDATE_VOLUME_GUARD_ID="$UPDATE_VOLUME_GUARD_ID"
+      export JARVIS_UPDATE_VOLUME_GUARD_ID
+      trap _update_volume_guard_exit EXIT
+      return 0
+    fi
+    wait_output="$(cat "$wait_output_file" 2>/dev/null || true)"
+    : > "$wait_output_file"
+    if printf '%s\n' "$wait_output" \
+        | grep -qF 'ERROR: update reservation owner stopped before guard activation'; then
+      rm -f "$wait_output_file"
+      die "The backup lifecycle guard timed out before activation." \
+        "No restore point was changed. Re-run: jarvis-research update"
+    fi
+    if printf '%s\n' "$wait_output" \
+        | grep -qF 'ERROR: update reservation owner was not observed before guard activation'; then
+      if [ -n "$helper_container" ] \
+         && printf '%s' "$helper_container" | grep -Eq '^[0-9a-f]{12,64}$'; then
+        inspect_rc=0
+        inspect_output="$(docker inspect --format '{{.State.Status}}' \
+          "$helper_container" 2>&1 8>&-)" || inspect_rc=$?
+        if [ "$inspect_rc" -eq 0 ]; then
+          helper_state="$inspect_output"
+          case "$helper_state" in
+            exited|dead)
+              rm -f "$wait_output_file"
+              die "The backup lifecycle guard helper stopped before activation." \
+                "No restore point was changed. Re-run: jarvis-research update"
+              ;;
+            *) sleep 1; continue ;;
+          esac
+        fi
+        if printf '%s\n' "$inspect_output" | grep -q 'No such'; then
+          rm -f "$wait_output_file"
+          die "The backup lifecycle guard helper stopped before activation." \
+            "No restore point was changed. Re-run: jarvis-research update"
+        fi
+        sleep 1
+        continue
+      fi
+      if [ "$reservation_action" = adopt ]; then
+        rm -f "$wait_output_file"
+        die "The pending backup lifecycle guard stopped before activation." \
+          "No restore point was changed. Re-run: jarvis-research update"
+      fi
+    fi
+    if [ "$wait_warning" -eq 0 ]; then
+      warn "Waiting for Docker to resume backup lifecycle monitoring..."
+      wait_warning=1
+    fi
+    sleep 1
+  done
+}
+
+_update_backup_pin_path() { printf '%s' 'postgres-backup:/backups/.lifecycle/update-backup-pin.json'; }
+
+_write_update_backup_pin() {
+  [ "$UPDATE_VOLUME_GUARD_ACTIVE" -eq 1 ] || return 1
+  _backup_volume_helper write-pin "$1" "$2" "${3:-false}" >/dev/null
+}
+
+_update_backup_pin_matches() {
+  _backup_volume_helper pin-matches "$1" "$2" "${3:-false}" >/dev/null 2>&1
+}
+
+_clear_update_backup_pin() {
+  [ -n "$TXN_BACKUP_ID" ] || return 0
+  [ "$UPDATE_VOLUME_GUARD_ACTIVE" -eq 1 ] || return 1
+  _backup_volume_helper clear-pin \
+    "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" "$TXN_LEGACY_RECOVERY" >/dev/null
+}
+
+_verify_recorded_update_backup_archives() {
+  local shape verified
+  [ -n "$TXN_BACKUP_ID" ] || return 0
+  if [ "$TXN_LEGACY_RECOVERY" = "true" ]; then
+    [ -z "$TXN_BACKUP_RUN_ID" ] || return 1
+    shape=legacy
+  else
+    [ -n "$TXN_BACKUP_RUN_ID" ] || return 1
+    shape=current
+  fi
+  verified="$(_backup_volume_helper verify \
+    "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" "$shape" 2>/dev/null)" || return 1
+  [ "$verified" = "${TXN_BACKUP_ID}|${TXN_BACKUP_RUN_ID}" ]
+}
+
+_verify_recorded_update_backup() {
+  [ -n "$TXN_BACKUP_ID" ] || return 0
+  _verify_recorded_update_backup_archives || return 1
+  if ! _update_backup_pin_matches \
+      "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" "$TXN_LEGACY_RECOVERY"; then
+    err "The pending update's rollback backup has no matching durable retention pin."
+    return 1
+  fi
+}
+
+# _require_fresh_backup — generate a per-request ID, publish it atomically in the
+# backup trigger, and accept only the signed manifest that echoes that exact ID.
+# Wall-clock mtimes are deliberately irrelevant and cannot make an old backup pass.
 _require_fresh_backup() {
-  local start_epoch="$1" trig_dir bk_dir manifest="" timeout interval waited=0
-  trig_dir="$(_backup_trigger_dir)" || { err "Cannot locate the backup trigger directory."; return 1; }
-  bk_dir="$(_backup_dir)"            || { err "Cannot locate the backup directory.";        return 1; }
-  ( umask 022; : > "${trig_dir}/.backup_now" ) 2>/dev/null || true
+  local _start_epoch="${1:-}" timeout interval request_id verified
+  request_id="$(openssl rand -hex 16 2>/dev/null || true)"
+  printf '%s' "$request_id" | grep -Eq '^[0-9a-f]{32}$' || { err "Could not create a secure backup request ID."; return 1; }
+  if ! _backup_volume_helper publish-request "$request_id" >/dev/null; then
+    err "Cannot publish the backup request."
+    return 1
+  fi
   info "Requested an on-demand backup; waiting for a fresh, verified restore point..."
   timeout="${JARVIS_BACKUP_POLL_TIMEOUT:-300}"; interval="${JARVIS_BACKUP_POLL_INTERVAL:-3}"
-  while :; do
-    manifest="$(_newest_fresh_manifest "$bk_dir" "$start_epoch")"
-    [ -n "$manifest" ] && break
-    [ "$waited" -ge "$timeout" ] && break
-    sleep "$interval"; waited=$((waited + interval))
-  done
-  [ -n "$manifest" ] || { err "No backup manifest appeared within ${timeout}s."; return 1; }
-  _verify_backup_archive_set "$bk_dir" "$manifest" || return 1
-  VERIFIED_BACKUP_TS="$(basename "$manifest" | sed -E 's/^manifest_(.*)\.json$/\1/')"
-  return 0
+  verified="$(_backup_volume_helper wait-verify "$request_id" "$timeout" "$interval")" \
+    || return 1
+  VERIFIED_BACKUP_TS="${verified%%|*}"
+  VERIFIED_BACKUP_RUN_ID="${verified#*|}"
+  printf '%s' "$VERIFIED_BACKUP_TS" | grep -Eq '^[0-9]{8}_[0-9]{6}$' \
+    && [ "$VERIFIED_BACKUP_RUN_ID" = "$request_id" ]
 }
 
 # -----------------------------------------------------------------------------
 # Stage-first pull + the fast-forward advance.
 # -----------------------------------------------------------------------------
-# _stage_target_cohort TARGET_REF TARGET_VERSION — pull the complete registry-
-# backed target cohort BEFORE the branch advances, driven by the target ref's
-# versions.env pins and the v-less target version. A failed pull aborts with the
-# checkout untouched.
+# _stage_target_cohort TARGET_REF TARGET_VERSION — render the selected topology
+# from the target ref, then pull every exact registry-backed image before the
+# branch advances. Services marked pull_policy: build are intentionally omitted:
+# their images exist only on this host and are not registry pull targets.
 _stage_target_cohort() {
-  local target_ref="$1" target_version="$2" tmp_versions rc=0
-  local -a services=("${PUBLISHED_SERVICES_BASE[@]}") profile_args=()
-  if grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env 2>/dev/null; then
-    services+=("$PUBLISHED_SERVICE_TELEGRAM"); profile_args+=(--profile telegram)
+  local target_ref="$1" target_version="$2" tmp_root raw item target_path canon
+  local seen="" config_json images_file ref rc=0 profile active_profiles line key value
+  local -a requested=() compose_args=() profile_args=()
+  tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-target-compose.XXXXXX")" \
+    || die "Could not create a temporary target-release workspace." \
+      "No branch change was made. Check temporary-directory permissions, then retry."
+  config_json="$tmp_root/compose.json"
+  images_file="$tmp_root/images"
+
+  if ! git show "${target_ref}:versions.env" > "$tmp_root/versions.env" 2>/dev/null; then
+    rm -rf -- "$tmp_root"
+    die "The target release has no readable versions.env." \
+      "No branch change was made. Check the release tag, then retry."
   fi
-  tmp_versions="$(mktemp)"
-  git show "${target_ref}:versions.env" > "$tmp_versions" 2>/dev/null || true
+
+  raw="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | head -1)"
+  case "$raw" in
+    \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+    \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+  esac
+  if [ -n "$raw" ]; then
+    IFS=: read -r -a requested <<< "$raw"
+  else
+    requested=(docker-compose.yml)
+    mkdir -p "$tmp_root/.probe"
+    if git show "${target_ref}:docker-compose.override.yml" \
+        > "$tmp_root/.probe/docker-compose.override.yml" 2>/dev/null \
+       && [ -s "$tmp_root/.probe/docker-compose.override.yml" ]; then
+      requested+=(docker-compose.override.yml)
+    fi
+  fi
+
+  [ "${requested[0]:-}" = docker-compose.yml ] || {
+    rm -rf -- "$tmp_root"
+    die "This install's Compose file list does not start with docker-compose.yml." \
+      "No branch change was made. Fix COMPOSE_FILE in .env, then retry."
+  }
+  for item in "${requested[@]}"; do
+    if ! printf '%s' "$item" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+      rm -rf -- "$tmp_root"
+      die "COMPOSE_FILE contains a path that cannot be staged safely (${item:-empty})." \
+        "No branch change was made. Use relative paths inside the managed checkout."
+    fi
+    case "$item" in /*|..|../*|*/..|*/../*)
+      rm -rf -- "$tmp_root"
+      die "COMPOSE_FILE points outside the managed checkout (${item})." \
+        "No branch change was made. Use relative paths inside the managed checkout." ;;
+    esac
+    printf '%s\n' "$seen" | grep -qxF "$item" && {
+      rm -rf -- "$tmp_root"
+      die "COMPOSE_FILE lists ${item} more than once." \
+        "No branch change was made. Remove the duplicate entry, then retry."
+    }
+    seen="${seen}${item}"$'\n'
+    target_path="$tmp_root/$item"
+    mkdir -p "$(dirname "$target_path")"
+    if [ "$item" = docker-compose.override.yml ] \
+       && [ -s "$tmp_root/.probe/docker-compose.override.yml" ]; then
+      cp "$tmp_root/.probe/docker-compose.override.yml" "$target_path"
+    elif ! git show "${target_ref}:${item}" > "$target_path" 2>/dev/null; then
+      rm -rf -- "$tmp_root"
+      die "The target release does not contain the configured Compose file ${item}." \
+        "No branch change was made. Fix COMPOSE_FILE or choose a compatible release."
+    fi
+    canon="$(canonical_path_portable "$target_path" 2>/dev/null || true)"
+    case "$canon/" in "$tmp_root"/*) : ;; *)
+      rm -rf -- "$tmp_root"
+      die "A target Compose file resolved outside its temporary workspace." \
+        "No branch change was made. Inspect ${item}, then retry." ;;
+    esac
+    compose_args+=(-f "$target_path")
+  done
+
+  active_profiles="$(_active_profiles)"
+  if grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env 2>/dev/null; then
+    case " $active_profiles " in *' telegram '*) : ;; *) active_profiles="${active_profiles:+$active_profiles }telegram" ;; esac
+  fi
+  for profile in $active_profiles; do
+    printf '%s' "$profile" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]*$' || {
+      rm -rf -- "$tmp_root"
+      die "COMPOSE_PROFILES contains an invalid profile name." \
+        "No branch change was made. Fix COMPOSE_PROFILES in .env, then retry."
+    }
+    profile_args+=(--profile "$profile")
+  done
+
   info "Staging images for ${target_ref} before advancing..."
-  (
-    set -a
-    # shellcheck disable=SC1090  # the target's pinned third-party image set
-    [ -s "$tmp_versions" ] && . "$tmp_versions"
-    # shellcheck disable=SC2034  # exported under `set -a` for docker compose to read
-    JARVIS_VERSION="$target_version"
-    set +a
-    docker compose ${profile_args[@]+"${profile_args[@]}"} pull "${services[@]}"
-  ) || rc=$?
-  rm -f "$tmp_versions"
+  if ! (
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ''|'#'*) continue ;; esac
+      key="${line%%=*}"; value="${line#*=}"
+      printf '%s' "$key" | grep -Eq '^[A-Z][A-Z0-9_]*$' || exit 1
+      export "$key=$value"
+    done < "$tmp_root/versions.env"
+    export JARVIS_VERSION="$target_version"
+    env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
+      -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
+      JARVIS_TARGET_COHORT_RENDER=1 docker compose \
+      --project-directory "$tmp_root" --env-file "$REPO/.env" \
+      ${profile_args[@]+"${profile_args[@]}"} \
+      ${compose_args[@]+"${compose_args[@]}"} config --format json > "$config_json"
+  ); then
+    rm -rf -- "$tmp_root"
+    die "The target release's active Compose topology could not be resolved." \
+      "No branch change was made. Inspect COMPOSE_FILE and COMPOSE_PROFILES, then retry."
+  fi
+
+  if ! python3 - "$config_json" > "$images_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+
+images = set()
+services = config.get("services")
+if not isinstance(services, dict):
+    raise SystemExit(1)
+for service in services.values():
+    if not isinstance(service, dict):
+        raise SystemExit(1)
+    image = service.get("image")
+    if not image or service.get("pull_policy") in {"build", "never"}:
+        continue
+    if (
+        not isinstance(image, str)
+        or not image
+        or image.startswith("-")
+        or len(image) > 512
+        or any(ch.isspace() or ord(ch) < 32 for ch in image)
+    ):
+        raise SystemExit(1)
+    images.add(image)
+if not images:
+    raise SystemExit(1)
+for image in sorted(images):
+    print(image)
+PY
+  then
+    rm -rf -- "$tmp_root"
+    die "The target release did not resolve to a safe registry image set." \
+      "No branch change was made. Inspect the target Compose files, then retry."
+  fi
+
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    if ! docker pull "$ref"; then rc=1; break; fi
+  done < "$images_file"
+  rm -rf -- "$tmp_root"
   [ "$rc" -eq 0 ] || die "Staging images for ${target_ref} failed; nothing was changed." \
-    "Check network access to ghcr.io, then re-run: jarvis-research update"
+    "Check registry access and free disk space, then re-run: jarvis-research update"
+}
+
+_resume_pending_merge() {
+  local active_profiles head
+  info "Resuming the pending update to ${TXN_TARGET} before the branch advance."
+  active_profiles="$(_active_profiles)"
+  # shellcheck disable=SC2086  # active_profiles is an intentional word list
+  if ! verify_release_manifests "$TXN_TARGET" $active_profiles >/dev/null 2>&1; then
+    die "Published images for the pending target ${TXN_TARGET} are not all available." \
+      "No branch change was made. Check the registry, then re-run: jarvis-research update"
+  fi
+  if [ -n "$TXN_BACKUP_ID" ]; then
+    if ! _verify_recorded_update_backup_archives; then
+      die "The pending update's recovery backup is no longer authenticated and complete." \
+        "No branch change was made. Repair or replace that restore point, then start a new update."
+    fi
+    if ! _update_backup_pin_matches "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" false; then
+      head="$(git rev-parse HEAD 2>/dev/null || true)"
+      if [ "$head" != "$TXN_FROM_SHA" ] \
+         || ! _write_update_backup_pin "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" false; then
+        die "The pending update's recovery backup has no valid retention pin." \
+          "No branch change was made. Repair the pin or start a new update."
+      fi
+    fi
+  fi
+  _stage_target_cohort "$TXN_TARGET" "$TXN_TARGET_VERSION"
+  info "Advancing the checkout to ${TXN_TARGET} (fast-forward only)..."
+  if ! git merge --ff-only "$TXN_TARGET"; then
+    die "Fast-forward to ${TXN_TARGET} failed; the checkout was not advanced." \
+      "Reconcile by hand, then run: jarvis-research doctor"
+  fi
+  head="$(git rev-parse HEAD 2>/dev/null || true)"
+  [ "$head" = "$TXN_TARGET_SHA" ] || die "Git returned success but HEAD is not the recorded update target." \
+    "Stop here and run: jarvis-research doctor"
+  _txn_update_phase pull
+  exec bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$TXN_TARGET" --yes
 }
 
 # -----------------------------------------------------------------------------
 # Update — the transactional entry point.
 # -----------------------------------------------------------------------------
 cmd_update() {
-  local to_ref="" resume_ref="" p_phase p_target
+  local to_ref="" resume_ref="" head
   while [ $# -gt 0 ]; do
     case "$1" in
       --to)       to_ref="${2:-}"; shift 2 ;;
@@ -357,45 +1019,91 @@ cmd_update() {
     esac
   done
 
-  # Explicit resume (the phase-8 re-exec): run post-merge steps only. A resume ref
-  # that disagrees with the pending transaction's recorded target is refused — a
-  # mistyped tag would otherwise re-pin .env to the wrong version.
+  _init_pending_file_path \
+    || die "Could not derive this install's update journal path." \
+      "No services were changed. Run: jarvis-research doctor"
+  _acquire_update_lock
+  _require_managed_install
+  _require_docker_daemon
+  _require_clean_main_checkout
+  _migrate_legacy_pending_for_repo \
+    || die "Cannot safely assign the old shared update journal to this install." \
+      "No services were changed. Keep ${LEGACY_PENDING_FILE_PATH} and run: jarvis-research doctor"
+  _acquire_update_volume_guard
+
+  # Explicit resume is valid only for a schema-checked durable transaction whose
+  # recorded target is the current HEAD. It can never invent recovery state.
   if [ -n "$resume_ref" ]; then
-    if [ -f "$PENDING_FILE_PATH" ]; then
-      p_target="$(_txn_field target)"
-      if [ -n "$p_target" ] && [ "$p_target" != "$resume_ref" ]; then
-        die "--resume ${resume_ref} does not match the pending update target (${p_target})." \
-            "Re-run: jarvis-research update --resume ${p_target}   (or remove ${PENDING_FILE_PATH} to abandon it)"
-      fi
+    [ -f "$PENDING_FILE_PATH" ] || die "--resume requires a pending update transaction, but none exists." \
+      "Run: jarvis-research update   (or jarvis-research doctor)"
+    _txn_load_or_die
+    if [ "$TXN_TARGET" != "$resume_ref" ]; then
+      die "--resume ${resume_ref} does not match the pending update target (${TXN_TARGET})." \
+        "Re-run: jarvis-research update --resume ${TXN_TARGET}"
     fi
-    _resume_transaction "$resume_ref"
+    _promote_update_volume_guard \
+      || die "A restore took priority before this update began changing the installation." \
+        "No update changes were applied. Let the restore finish, then re-run: jarvis-research update"
+    case "$TXN_PHASE" in
+      committed)
+        _clear_update_backup_pin || die "The update completed, but its retention pin could not be cleared safely." \
+          "Inspect $(_update_backup_pin_path 2>/dev/null || printf '<backups>/.lifecycle/update-backup-pin.json'), then run: jarvis-research update"
+        rm -f "$PENDING_FILE_PATH"
+        ok "Update to ${TXN_TARGET} was already completed and health-verified."
+        return 0 ;;
+      merge_pending)
+        head="$(git rev-parse HEAD 2>/dev/null || true)"
+        if [ "$head" = "$TXN_TARGET_SHA" ]; then
+          _txn_update_phase pull
+        else
+          die "The pending update has not advanced to ${TXN_TARGET} yet; explicit post-merge resume is unsafe." \
+            "Run without --resume: jarvis-research update"
+        fi ;;
+      pull|health) : ;;
+    esac
+    _resume_transaction "$TXN_TARGET"
     return
   fi
 
-  # A pending transaction from a prior interrupted run resumes deterministically
-  # at its recorded phase instead of reporting "up to date".
+  # A pending transaction takes precedence over tag discovery and the ordinary
+  # up-to-date shortcut. It either resumes from its exact source/target pair or
+  # fails closed; no newly published tag can silently replace it.
   if [ -f "$PENDING_FILE_PATH" ]; then
-    p_phase="$(_txn_field phase)"; p_target="$(_txn_field target)"
-    case "$p_phase" in
-      committed|"") : ;;
-      staging)      info "A previous update stopped before advancing the branch; restarting it." ;;
-      *)            info "Resuming an interrupted update at phase '${p_phase}'."
-                    _resume_transaction "$p_target"; return ;;
+    _txn_load_or_die
+    _promote_update_volume_guard \
+      || die "The retained update cannot reacquire exclusive lifecycle ownership." \
+        "No new update changes were applied. Finish the active recovery, then re-run: jarvis-research update"
+    case "$TXN_PHASE" in
+      committed)
+        _clear_update_backup_pin || die "The update completed, but its retention pin could not be cleared safely." \
+          "Inspect $(_update_backup_pin_path 2>/dev/null || printf '<backups>/.lifecycle/update-backup-pin.json'), then run: jarvis-research update"
+        rm -f "$PENDING_FILE_PATH"
+        ok "Update to ${TXN_TARGET} was already completed and health-verified."
+        return 0 ;;
+      merge_pending)
+        head="$(git rev-parse HEAD 2>/dev/null || true)"
+        if [ "$head" = "$TXN_TARGET_SHA" ]; then
+          info "The checkout reached ${TXN_TARGET}; resuming its pending service update."
+          _txn_update_phase pull
+          _resume_transaction "$TXN_TARGET"
+          return
+        fi
+        _resume_pending_merge ;;
+      pull|health)
+        info "Resuming an interrupted update at phase '${TXN_PHASE}'."
+        _resume_transaction "$TXN_TARGET"
+        return ;;
     esac
   fi
 
   UPDATE_START_EPOCH="$(date +%s)"
   MIGRATIONS_RAN=0
 
-  _require_managed_install                                      # (1)
-  _require_docker_daemon                                        # (2)
-  _require_clean_main_checkout
-
   info "Fetching tags from origin..."                          # (3)
   git fetch --tags origin >/dev/null 2>&1 \
     || env_die "Could not fetch from origin." "Check network access, then re-run: jarvis-research update"
 
-  local target_ref target_version
+  local target_ref target_version target_sha
   if [ -n "$to_ref" ]; then
     target_ref="$to_ref"
   else
@@ -403,12 +1111,21 @@ cmd_update() {
     [ -n "$target_ref" ] || die "No stable release tag found on origin." "Run: jarvis-research doctor"
   fi
   target_version="${target_ref#v}"
+  target_sha="$(git rev-parse "${target_ref}^{commit}" 2>/dev/null || true)"
+  if ! printf '%s' "$target_ref" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+     || ! printf '%s' "$target_version" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._+/-]*$' \
+     || ! printf '%s' "$target_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+    die "The selected release tag does not resolve to a safe, immutable commit identity." \
+      "Run: jarvis-research doctor"
+  fi
 
   if ! git merge-base --is-ancestor HEAD "$target_ref" 2>/dev/null; then
     die "Your checkout has diverged from ${target_ref}; a fast-forward update is not possible." \
         "Reconcile by hand (git pull --ff-only) or reinstall; then run: jarvis-research doctor"
   fi
-  if [ "$(git rev-parse HEAD)" = "$(git rev-parse "$target_ref")" ]; then
+  # Release tags are annotated, so the tag name resolves to the tag object, not
+  # the commit it points at; peel it or this never matches.
+  if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${target_ref}^{commit}")" ]; then
     ok "Already up to date (${target_ref})."
     return 0
   fi
@@ -421,13 +1138,14 @@ cmd_update() {
         "Wait for the release to finish publishing, then re-run: jarvis-research update"
   fi
 
-  local backup_id=""                                            # (5)
+  local backup_id="" backup_run_id=""                           # (5)
   local migrations; migrations="$(_new_migrations "$target_ref")"
   if [ -n "$migrations" ]; then
     if _migrations_need_backup "$target_ref" "$migrations"; then
       warn "${target_ref} includes a data-changing migration; a fresh verified backup is required."
       if _require_fresh_backup "$UPDATE_START_EPOCH"; then
         backup_id="${VERIFIED_BACKUP_TS:-}"
+        backup_run_id="${VERIFIED_BACKUP_RUN_ID:-}"
         MIGRATIONS_RAN=1
         ok "Verified backup ${backup_id} present; continuing."
       else
@@ -441,7 +1159,19 @@ cmd_update() {
     fi
   fi
 
-  _txn_write staging "$target_ref" "$target_version" "$backup_id"           # (6)
+  _promote_update_volume_guard \
+    || die "A restore took priority before this update began changing the installation." \
+      "No update changes were applied. Let the restore finish, then re-run: jarvis-research update"
+  if ! _txn_write_new merge_pending "$target_ref" "$target_version" "$target_sha" \
+      "$backup_id" "$backup_run_id"; then                                  # (6)
+    die "Could not write a valid pending-update transaction; refusing to advance the checkout." \
+      "No branch change was made. Check ${STATE_DIR}, then run: jarvis-research doctor"
+  fi
+  if [ -n "$backup_id" ] \
+     && ! _write_update_backup_pin "$backup_id" "$backup_run_id" false; then
+    die "Could not persist the recovery backup's retention pin; refusing to advance the checkout." \
+      "No branch change was made. Check the backup-trigger volume, then run: jarvis-research update"
+  fi
   _stage_target_cohort "$target_ref" "$target_version"                      # (7)
 
   info "Advancing the checkout to ${target_ref} (fast-forward only)..."     # (8)
@@ -450,7 +1180,10 @@ cmd_update() {
     printf '        %s%s%s\n' "$C_YELLOW" "Reconcile by hand, then run: jarvis-research doctor" "$C_RESET" >&2
     exit 1
   fi
-  _txn_update_phase merged
+  head="$(git rev-parse HEAD 2>/dev/null || true)"
+  [ "$head" = "$target_sha" ] || die "Git returned success but HEAD is not the recorded update target." \
+    "Stop here and run: jarvis-research doctor"
+  _txn_update_phase pull
   local -a resume_cmd=(bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$target_ref" --yes)
   exec "${resume_cmd[@]}"
 }
@@ -458,18 +1191,20 @@ cmd_update() {
 # _resume_transaction TARGET_REF — the post-merge half (phases 9-12). Never
 # fetches, guards-mutates, merges, or re-execs.
 _resume_transaction() {
-  local target_ref="$1" target_version="${1#v}"
+  local target_ref="$1"
   MIGRATIONS_RAN="${MIGRATIONS_RAN:-0}"
   if [ -f "$PENDING_FILE_PATH" ] && [ -n "$(_txn_field backup_id)" ]; then
     MIGRATIONS_RAN=1
   fi
 
   install_cli_shim "$REPO" >/dev/null 2>&1 || true             # (9)
-  upsert_env_var JARVIS_VERSION "$target_version" \
-    || die "Could not pin JARVIS_VERSION in .env." "Run: jarvis-research doctor"
   _txn_update_phase pull
 
   info "Applying ${target_ref} — pulling images and recreating services..."  # (10)
+  if ! _verify_recorded_update_backup; then
+    die "The pending update's recovery backup is no longer authenticated, complete, and pinned." \
+      "No services were recreated. Repair the recorded restore point, then re-run: jarvis-research update --resume ${target_ref}"
+  fi
   if ! _run_update_sh; then
     _txn_update_phase health
     _failure_epilogue "$target_ref"
@@ -477,6 +1212,10 @@ _resume_transaction() {
   fi
 
   _txn_update_phase committed                                  # (11)
+  if ! _clear_update_backup_pin; then
+    die "The update completed, but its recovery-backup retention pin could not be cleared safely." \
+      "The transaction remains recorded as committed. Inspect the backup-trigger volume, then re-run: jarvis-research update"
+  fi
   rm -f "$PENDING_FILE_PATH"
   ok "Update to ${target_ref} complete and health-verified."
   _success_epilogue "$target_ref"                              # (12)
@@ -485,58 +1224,399 @@ _resume_transaction() {
 # _run_update_sh — hand off to update.sh (warm pulls become no-ops) and let it
 # own the recreate + health wait; its exit code is the health verdict.
 _run_update_sh() {
-  ( cd "$REPO" && bash "${REPO}/update.sh" --yes )
+  ( cd "$REPO" && JARVIS_TRANSACTIONAL_UPDATE=1 bash "${REPO}/update.sh" --yes )
 }
 
-# _rollback_pin_lines FROM_VERSION — the image-pin rollback commands.
+# _rollback_pin_lines FROM_VERSION — bounded application-image recovery commands
+# for the exact recorded version and the install's active Compose profiles.
 _rollback_pin_lines() {
-  local fv="$1" svcs; svcs="$(printf '%s ' "${PUBLISHED_SERVICES_BASE[@]}")"
-  printf '    JARVIS_VERSION=%s docker compose pull %s\n' "$fv" "$svcs"
-  printf '    JARVIS_VERSION=%s docker compose up -d --no-build %s\n' "$fv" "$svcs"
+  local fv="$1" active_profiles profile
+  local -a svcs=("${PUBLISHED_SERVICES_BASE[@]}") profile_args=()
+  [ "$fv" != unknown ] \
+    && printf '%s' "$fv" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._+-]*$' \
+    || return 1
+
+  active_profiles="$(_active_profiles)"
+  if grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env 2>/dev/null; then
+    case " $active_profiles " in
+      *' telegram '*) : ;;
+      *) active_profiles="${active_profiles:+$active_profiles }telegram" ;;
+    esac
+  fi
+  for profile in $active_profiles; do
+    printf '%s' "$profile" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]*$' || return 1
+    profile_args+=(--profile "$profile")
+    if [ "$profile" = telegram ] \
+       && ! _env_key_in_list "$PUBLISHED_SERVICE_TELEGRAM" "${svcs[*]}"; then
+      svcs+=("$PUBLISHED_SERVICE_TELEGRAM")
+    fi
+  done
+
+  printf '    cd %q\n' "$REPO"
+  printf '    JARVIS_VERSION=%q docker compose' "$fv"
+  if [ "${#profile_args[@]}" -gt 0 ]; then
+    printf ' %q' "${profile_args[@]}"
+  fi
+  printf ' pull'
+  printf ' %q' "${svcs[@]}"
+  printf '\n'
+  printf '    JARVIS_VERSION=%q docker compose' "$fv"
+  if [ "${#profile_args[@]}" -gt 0 ]; then
+    printf ' %q' "${profile_args[@]}"
+  fi
+  printf ' up -d --no-build'
+  printf ' %q' "${svcs[@]}"
+  printf '\n'
 }
-# _schema_not_safe_notice — the honest warning that image rollback is not enough
-# once a migration has run, plus the restore-from-backup pointer.
+# _schema_not_safe_notice — a backup means a data-changing migration was in the
+# update cohort, not proof that it completed. Put data recovery before images.
 _schema_not_safe_notice() {
-  printf '\n%sImage rollback alone is NOT schema-safe:%s a database migration already ran, so the new\n' "$C_YELLOW" "$C_RESET"
-  printf '  schema stays in place. To return to the pre-update state, restore the backup taken before this\n'
-  printf '  update (WebUI Backup panel -> Restore, or scripts/restore.sh) — it rolls the database back\n'
-  printf '  together with the images.\n'
+  printf '\n%sA data-changing migration may have run.%s Restore data before recovering images:\n' "$C_YELLOW" "$C_RESET"
+  printf '  1. If the dashboard is reachable, open Admin > Backups and restore the pre-update backup.\n'
+  printf '  2. Wait for that data restore to finish, then use the application-image recovery below.\n'
 }
 
 _failure_epilogue() {
-  local target_ref="$1" fv; fv="$(_txn_field from_version)"; [ -n "$fv" ] || fv="<previous-version>"
+  local target_ref="$1" fv="${TXN_FROM_VERSION:-}"
   printf '\n'
   err "Update to ${target_ref} did not finish; the transaction remains pending."
-  printf '%sRoll the application images back to the previous version:%s\n' "$C_BOLD" "$C_RESET"
-  _rollback_pin_lines "$fv"
+  printf 'Repository: %s\n' "$REPO"
   [ "${MIGRATIONS_RAN:-0}" -eq 1 ] && _schema_not_safe_notice
-  printf '\nDiagnose: jarvis-research doctor\n'
-  printf 'Resume once fixed: jarvis-research update --resume %s\n' "$target_ref"
+  printf '\n%sApplication-image recovery (not a full release rollback):%s\n' "$C_BOLD" "$C_RESET"
+  printf '  These commands replace application containers only; they do not move the Git checkout or restore stored data.\n'
+  if ! _rollback_pin_lines "$fv"; then
+    printf '  The recorded previous application version or active profile list is unsafe; no image command was printed.\n'
+  fi
+  printf '\nDiagnose first: cd %q && jarvis-research doctor\n' "$REPO"
+  printf 'Resume pending update: cd %q && jarvis-research update --resume %q\n' "$REPO" "$target_ref"
 }
 
 _success_epilogue() {
   local target_ref="$1" fv; fv="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
   printf '\n'
   cmd_doctor || true
-  printf '\n%sIf you need to roll back to the previous release:%s\n' "$C_BOLD" "$C_RESET"
-  _rollback_pin_lines "<previous-version>"
-  [ "${MIGRATIONS_RAN:-0}" -eq 1 ] && _schema_not_safe_notice
   printf '\nNow running %s (JARVIS_VERSION=%s).\n' "$target_ref" "${fv:-unknown}"
+}
+
+# -----------------------------------------------------------------------------
+# Instance-owner inspection and on-host recovery.
+# -----------------------------------------------------------------------------
+_owner_require_services() {
+  local service container_id
+  for service in paper_ingestion postgres; do
+    container_id="$(docker compose ps -q "$service" 2>/dev/null | head -1 || true)"
+    [ -n "$container_id" ] \
+      || die "The ${service} service is not running; owner state cannot be verified." \
+        "Start JARVIS, then run: jarvis-research owner status"
+  done
+}
+
+_owner_effective_environment() {
+  docker compose exec -T paper_ingestion \
+    sh -c 'printf "%s" "${OWNER_USER_ID-}"'
+}
+
+_owner_status_sql() {
+  cat <<'SQL'
+-- jarvis-owner-status
+WITH raw_owner AS (
+    SELECT
+        CASE
+            WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN 'environment'
+            WHEN EXISTS (
+                SELECT 1 FROM user_config
+                WHERE user_id IS NULL AND key = 'owner.user_id'
+            ) THEN 'database'
+            ELSE 'none'
+        END AS source,
+        CASE
+            WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN btrim(:'owner_env')
+            ELSE (
+                SELECT value #>> '{}'
+                FROM user_config
+                WHERE user_id IS NULL AND key = 'owner.user_id'
+                LIMIT 1
+            )
+        END AS raw_value
+), parsed_owner AS (
+    SELECT
+        source,
+        CASE
+            WHEN raw_value ~ '^[1-9][0-9]{0,17}$' THEN raw_value::bigint
+            ELSE NULL
+        END AS user_id
+    FROM raw_owner
+), resolved_owner AS (
+    SELECT parsed_owner.source, parsed_owner.user_id,
+           users.email, users.role, users.deleted_at
+    FROM parsed_owner
+    LEFT JOIN users ON users.id = parsed_owner.user_id
+)
+SELECT
+    source,
+    CASE
+        WHEN source = 'none' THEN 'missing'
+        WHEN user_id IS NULL THEN 'invalid_value'
+        WHEN email IS NULL OR deleted_at IS NOT NULL THEN 'missing_or_deleted_user'
+        WHEN role <> 'admin' THEN 'non_admin_user'
+        ELSE 'valid'
+    END,
+    COALESCE(user_id::text, ''),
+    COALESCE(email, '')
+FROM resolved_owner;
+SQL
+}
+
+_owner_set_sql() {
+  cat <<'SQL'
+-- jarvis-owner-set
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'));
+SELECT
+    set_config('jarvis.owner_target_email', :'target_email', true) AS target_setting,
+    set_config('jarvis.owner_env', :'owner_env', true) AS environment_setting
+\gset
+DO $owner$
+DECLARE
+    target_email text := current_setting('jarvis.owner_target_email');
+    effective_environment text := NULLIF(
+        btrim(current_setting('jarvis.owner_env', true)), ''
+    );
+    target_count bigint;
+    target_user_id bigint;
+    owner_row_exists boolean;
+    current_raw text;
+    current_user_id bigint;
+    current_owner_is_valid boolean := false;
+    previous_state text;
+BEGIN
+    IF effective_environment IS NOT NULL THEN
+        RAISE EXCEPTION 'environment_owner_is_authoritative';
+    END IF;
+
+    SELECT count(*), min(id)
+    INTO target_count, target_user_id
+    FROM users
+    WHERE lower(email) = lower(target_email)
+      AND role = 'admin'
+      AND deleted_at IS NULL;
+
+    IF target_count <> 1 THEN
+        RAISE EXCEPTION 'target_must_be_one_live_admin';
+    END IF;
+
+    SELECT
+        EXISTS (
+            SELECT 1 FROM user_config
+            WHERE user_id IS NULL AND key = 'owner.user_id'
+        ),
+        (
+            SELECT value #>> '{}'
+            FROM user_config
+            WHERE user_id IS NULL AND key = 'owner.user_id'
+            LIMIT 1
+        )
+    INTO owner_row_exists, current_raw;
+
+    IF current_raw ~ '^[1-9][0-9]{0,17}$' THEN
+        current_user_id := current_raw::bigint;
+        SELECT EXISTS (
+            SELECT 1 FROM users
+            WHERE id = current_user_id
+              AND role = 'admin'
+              AND deleted_at IS NULL
+        ) INTO current_owner_is_valid;
+    END IF;
+
+    IF current_owner_is_valid THEN
+        RAISE EXCEPTION 'current_owner_is_valid_use_admin_users_transfer';
+    END IF;
+
+    previous_state := CASE
+        WHEN NOT owner_row_exists THEN 'missing'
+        WHEN current_user_id IS NULL THEN 'invalid_value'
+        ELSE 'missing_deleted_or_non_admin_user'
+    END;
+
+    IF owner_row_exists THEN
+        UPDATE user_config
+        SET value = to_jsonb(target_user_id), updated_at = NOW()
+        WHERE user_id IS NULL AND key = 'owner.user_id';
+    ELSE
+        INSERT INTO user_config (user_id, key, value)
+        VALUES (NULL, 'owner.user_id', to_jsonb(target_user_id));
+    END IF;
+
+    INSERT INTO audit_log (user_id, action, resource, metadata)
+    VALUES (
+        NULL,
+        'admin.owner.repair',
+        'owner.user_id',
+        jsonb_build_object(
+            'source', 'host_cli',
+            'previous_state', previous_state,
+            'new_owner_user_id', target_user_id
+        )
+    );
+END
+$owner$;
+COMMIT;
+SQL
+}
+
+_owner_read_environment_or_die() {
+  local environment_value
+  if ! environment_value="$(_owner_effective_environment)"; then
+    die "The running service environment could not be inspected safely." \
+      "No owner state was changed. Run: jarvis-research doctor"
+  fi
+  printf '%s' "$environment_value"
+}
+
+cmd_owner_status() {
+  local environment_value row source state user_id email
+  _require_docker_daemon
+  _owner_require_services
+  environment_value="$(_owner_read_environment_or_die)"
+  if ! row="$(_owner_status_sql | docker compose exec -T postgres sh -c \
+      'exec psql --no-psqlrc -v ON_ERROR_STOP=1 -At -F "|" --username="${POSTGRES_USER:-jarvis}" --dbname="${POSTGRES_DB:-jarvis}" -v owner_env="$1"' \
+      sh "$environment_value")"; then
+    die "The instance-owner record could not be read safely." \
+      "No owner state was changed. Run: jarvis-research doctor"
+  fi
+
+  IFS='|' read -r source state user_id email <<< "$row"
+  case "$source:$state" in
+    environment:valid|database:valid|none:missing|database:missing|\
+    environment:invalid_value|environment:missing_or_deleted_user|\
+    environment:non_admin_user|database:invalid_value|\
+    database:missing_or_deleted_user|database:non_admin_user) ;;
+    *) die "The instance-owner query returned an unexpected result." \
+         "No owner state was changed. Run: jarvis-research doctor" ;;
+  esac
+
+  printf 'Instance owner\n'
+  printf '  Source: %s\n' "$source"
+  printf '  State: %s\n' "$state"
+  if [ "$state" = valid ]; then
+    printf '  User: %s (id %s)\n' "$email" "$user_id"
+  elif [ "$source" = environment ]; then
+    printf '  Next: correct OWNER_USER_ID on the host, then restart JARVIS.\n'
+  else
+    printf '  Next: run jarvis-research owner set <admin-email> on this host.\n'
+  fi
+}
+
+cmd_owner_set() {
+  [ "$#" -eq 1 ] \
+    || usage_error "Usage: jarvis-research owner set <email>"
+  local email="$1" environment_value confirmation
+  if [ "${#email}" -gt 320 ] \
+     || ! printf '%s' "$email" | grep -Eq '^[^[:space:]@]+@[^[:space:]@]+$'; then
+    usage_error "owner set requires one ordinary email address"
+  fi
+
+  _require_docker_daemon
+  _owner_require_services
+  environment_value="$(_owner_read_environment_or_die)"
+  if [ -n "${environment_value//[[:space:]]/}" ]; then
+    die "Ownership is managed by OWNER_USER_ID in the running service." \
+      "Change OWNER_USER_ID on the host and restart JARVIS; the database was not changed."
+  fi
+
+  printf 'Type %s to confirm the new instance owner: ' "$email"
+  if ! IFS= read -r confirmation; then
+    die "No confirmation was received; owner repair was cancelled." \
+      "No owner state was changed. Run: jarvis-research owner status"
+  fi
+  [ "$confirmation" = "$email" ] \
+    || die "Confirmation did not match; owner repair was cancelled." \
+      "No owner state was changed. Run: jarvis-research owner status"
+
+  _acquire_control_lifecycle
+  if ! _owner_set_sql | docker compose exec -T postgres sh -c \
+      'exec psql --no-psqlrc --quiet -v ON_ERROR_STOP=1 --username="${POSTGRES_USER:-jarvis}" --dbname="${POSTGRES_DB:-jarvis}" -v target_email="$1" -v owner_env="$2"' \
+      sh "$email" "$environment_value"; then
+    die "Owner repair was refused or could not be committed." \
+      "No partial change was kept. Run: jarvis-research owner status"
+  fi
+  _finish_control_lifecycle
+  ok "Instance owner repaired for ${email}."
+}
+
+cmd_owner() {
+  local owner_command="${1:-}"
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  case "$owner_command" in
+    status)
+      [ "$#" -eq 0 ] || usage_error "Usage: jarvis-research owner status"
+      cmd_owner_status ;;
+    set) cmd_owner_set "$@" ;;
+    *) usage_error "Usage: jarvis-research owner status | owner set <email>" ;;
+  esac
+}
+
+# -----------------------------------------------------------------------------
+# Off-host restore acknowledgement on this installation.
+# -----------------------------------------------------------------------------
+cmd_restore_acknowledge() {
+  [ "$#" -eq 1 ] \
+    || usage_error "Usage: jarvis-research restore acknowledge <restore-id>"
+  local restore_id="$1" confirmation
+  printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$' \
+    || usage_error "restore acknowledge requires one lowercase 32-hex restore ID"
+
+  _require_docker_daemon
+  if ! _backup_volume_helper inspect-quarantine "$restore_id" >/dev/null 2>&1; then
+    die "Restore review state is unavailable or does not match ${restore_id}." \
+      "Quarantine remains active. Check the exact restore ID, then retry."
+  fi
+
+  printf 'Type %s to confirm credential review and release outbound access: ' "$restore_id"
+  if ! IFS= read -r confirmation; then
+    die "No confirmation was received; restore acknowledgement was cancelled." \
+      "Quarantine remains active. Re-run with the exact restore ID when review is complete."
+  fi
+  [ "$confirmation" = "$restore_id" ] \
+    || die "Confirmation did not match; restore acknowledgement was cancelled." \
+      "Quarantine remains active. Re-run with the exact restore ID when review is complete."
+
+  _acquire_control_lifecycle
+  if ! _backup_volume_helper acknowledge-quarantine "$restore_id" >/dev/null 2>&1; then
+    die "Restore review state changed before acknowledgement; quarantine remains active." \
+      "Re-check the current restore ID, then retry: jarvis-research restore acknowledge ${restore_id}"
+  fi
+  _finish_control_lifecycle
+  ok "Acknowledged off-host restore ${restore_id}; outbound access is released."
+}
+
+cmd_restore() {
+  local restore_command="${1:-}"
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
+  case "$restore_command" in
+    acknowledge) cmd_restore_acknowledge "$@" ;;
+    *) usage_error "Usage: jarvis-research restore acknowledge <restore-id>" ;;
+  esac
 }
 
 # -----------------------------------------------------------------------------
 # Day-to-day container control (start/repair are always --no-build).
 # -----------------------------------------------------------------------------
 cmd_status()  { _require_docker_daemon; docker compose ps "$@"; }
-cmd_start()   { _require_docker_daemon; info "Starting services (no build)..."; docker compose up -d --no-build; }
-cmd_stop()    { _require_docker_daemon; info "Stopping services..."; docker compose stop; }
-cmd_restart() { _require_docker_daemon; info "Restarting services..."; docker compose restart; }
+cmd_start()   { _require_docker_daemon; _acquire_control_lifecycle; info "Starting services (no build)..."; docker compose up -d --no-build; _finish_control_lifecycle; }
+cmd_stop()    { _require_docker_daemon; _acquire_control_lifecycle; info "Stopping services..."; docker compose stop; _finish_control_lifecycle; }
+cmd_restart() { _require_docker_daemon; _acquire_control_lifecycle; info "Restarting services..."; docker compose restart; _finish_control_lifecycle; }
 cmd_logs()    { _require_docker_daemon; docker compose logs "$@"; }
 
 # repair — bounded, never destructive: recreate stopped containers (no build/pull),
 # restart any unhealthy mandatory service, wait, then summarise via doctor.
 cmd_repair() {
   _require_docker_daemon
+  _acquire_control_lifecycle
   info "Repairing: recreating stopped containers (no build, no pull)..."
   docker compose up -d --no-build || warn "Some services did not come up cleanly."
   local svc cid h
@@ -551,6 +1631,7 @@ cmd_repair() {
   done
   info "Repair finished; running a doctor summary."
   cmd_doctor || true
+  _finish_control_lifecycle
 }
 
 # -----------------------------------------------------------------------------
@@ -642,6 +1723,14 @@ Commands:
   logs [args]        Tail service logs (passes args through to docker compose logs).
   doctor             Read-only health, disk, registration, and update check.
   repair             Bounded, non-destructive recovery (recreate + restart unhealthy).
+  owner status       Show the effective instance-owner source and validity.
+  owner set <email>  Repair a missing or invalid database owner on this host.
+                     A valid owner transfers in Admin Users; OWNER_USER_ID stays
+                     host-managed. The email must be typed again to confirm.
+  restore acknowledge <restore-id>
+                     After reviewing restored credentials, release outbound
+                     quarantine for that exact off-host restore. The restore ID
+                     must be typed again to confirm.
   register           Record this checkout as a managed install.
   uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]
                      Tiered, contained teardown: stop (1), remove app images (2),
@@ -666,13 +1755,18 @@ while [ $# -gt 0 ]; do
 done
 
 SUBCMD="${1:-help}"
-[ $# -gt 0 ] && shift || true
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 
 REPO="$(resolve_repo)"
 cd "$REPO"
 # shellcheck source=scripts/setup_lib.sh
 # shellcheck disable=SC1091  # resolved at runtime relative to the repo root
 . scripts/setup_lib.sh
+# The managed repo, not the caller's shell, owns Compose file/project/profile
+# selection. Compose reloads the install's persisted selectors from its .env.
+sanitize_compose_environment
 
 case "$SUBCMD" in
   update)                cmd_update "$@" ;;
@@ -683,6 +1777,8 @@ case "$SUBCMD" in
   logs)                  cmd_logs "$@" ;;
   doctor)                cmd_doctor ;;
   repair)                cmd_repair ;;
+  owner)                 cmd_owner "$@" ;;
+  restore)               cmd_restore "$@" ;;
   register)              cmd_register ;;
   uninstall)             cmd_uninstall "$@" ;;
   version|--version|-v)  cmd_version ;;

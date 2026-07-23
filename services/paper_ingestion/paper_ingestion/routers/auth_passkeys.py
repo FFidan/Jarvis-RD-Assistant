@@ -18,9 +18,9 @@ via :func:`current_user_id_strict`, taking ``user_id`` from the session cookie a
 NEVER from the request body (registering a credential is account-scoped).
 
 Origin/rp_id are matched against a server-side allowlist rather than derived from
-proxy headers: Caddy rewrites Host→localhost and does not forward a trustworthy
-X-Forwarded-Host, so request.url/Host would be attacker-influenceable. See
-:func:`_match_origin`.
+proxy headers. The local Caddy preserves the browser Host and port, while the
+public Caddy rewrites Host to localhost; neither makes arbitrary client proxy
+headers a trustworthy WebAuthn origin. See :func:`_match_origin`.
 """
 
 from __future__ import annotations
@@ -65,9 +65,9 @@ from paper_ingestion.routers.auth import UserResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth/passkeys", tags=["auth-passkeys"])
-# Exempt from the global verify_api_key dep — enforced by the /api/auth/ path
-# check in verify_api_key. Marker attribute so future linters can audit.
-router.auth_exempt = True  # type: ignore[attr-defined]
+# Exempt from the app-level verify_api_key by the `/api/auth/` path check inside
+# it. login/* and capability are unauthenticated; register/list/delete enforce
+# the session in-handler via current_user_id_strict.
 
 RP_NAME = "JARVIS"
 _CHALLENGE_TTL_SQL = "now() + INTERVAL '5 minutes'"
