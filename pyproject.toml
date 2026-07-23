@@ -84,7 +84,7 @@ paper-ingestion = [
 # matches the 2.11.0+cpu wheels. Exported to constraints-cpu.txt.
 paper-ingestion-cpu = [
     { include-group = "paper-ingestion-base" },
-    "torch==2.11.0",
+    "torch==2.13.0",
 ]
 # Shared optional (reranker) set for both flavors. Kept in its own group for the
 # same reason as paper-ingestion-base: a group must not include-group its
@@ -102,7 +102,7 @@ paper-ingestion-optional = [
 # the cpu image exists to exclude. Exported to constraints-optional-cpu.txt.
 paper-ingestion-optional-cpu = [
     { include-group = "paper-ingestion-optional-base" },
-    "torch==2.11.0",
+    "torch==2.13.0",
 ]
 learning-engine = [
     { include-group = "jarvis-common" },
