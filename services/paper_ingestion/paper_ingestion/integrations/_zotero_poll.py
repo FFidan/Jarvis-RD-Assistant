@@ -20,6 +20,7 @@ from paper_ingestion.integrations._zotero_config import (
     _resolve_zotero_user_id,
 )
 from paper_ingestion.models.papers import PaperCreate, SourceType
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
@@ -267,6 +268,17 @@ async def _link_existing_by_doi(
     on an item that simply matches a paper already in the library would otherwise
     raise and abort the whole poll.
 
+    The de-dup match is visibility-scoped to the syncing user: only rows the
+    poller may already read (persisted-public OR present in their own
+    ``user_library``) are eligible. A private row owned by another tenant that
+    merely shares this DOI is intentionally NOT matched; the caller then falls
+    through to ``_ingest_new_item``, which ingests the poller's own
+    namespace-qualified copy. This stops a caller-controlled DOI that collides
+    with a foreign private row from granting ``user_library`` membership — and
+    thus raw-PDF + private-metadata read access — on that row. When the polling
+    user is ambiguous (``resolved_polling_user_id`` is ``None``) the membership
+    branch matches nothing, so only public rows can link — private never leaks.
+
     Returns ``"linked"`` when an existing paper was found and linked (the
     caller skips ingestion); ``None`` when no match was found or the lookup
     failed (the caller falls through to ingest a new paper).
@@ -278,7 +290,7 @@ async def _link_existing_by_doi(
                 "SELECT p.id, l.zotero_item_key, p.discovered_by FROM papers p"
                 " LEFT JOIN paper_user_zotero_links l"
                 "   ON l.paper_id = p.id AND l.user_id = $2"
-                " WHERE p.metadata->>'doi' = $1",
+                f" WHERE p.metadata->>'doi' = $1 AND {paper_visible_sql(2)}",
                 doi,
                 resolved_polling_user_id,
             )
