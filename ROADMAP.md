@@ -8,9 +8,15 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current stable release: **v1.1.3**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current stable release: **v1.2.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
+- **Source-aware visibility and library operations (v1.2.0).** A persisted
+  source-aware paper-visibility model that every read path shares, whole-library
+  processing, incremental discovery with optional automatic summaries, per-paper
+  Markdown knowledge export, visible Pulse ranking-model status, repair for stale
+  or missing embeddings, complete PDF-aware restore sets, and explicit instance
+  ownership.
 - **Safer install and maintenance (v1.1.3).** Setup re-runs preserve local
   configuration and data, access-mode output matches the route that is actually
   served, and the `jarvis-research` command provides checked updates, health
@@ -54,13 +60,6 @@ change list since the v1.0.0 public baseline.
 
 ## In progress
 
-- **v1.2.0 candidate.** The candidate adds whole-library processing, incremental
-  discovery with optional automatic summaries, per-paper Markdown knowledge
-  export, visible Pulse ranking-model status, repair for stale or missing
-  embeddings, complete PDF-aware restore sets, explicit instance ownership, and
-  persisted source-aware paper visibility. Release review is still in progress;
-  none of this is listed as shipped until the stable tag and images are
-  published from `main`.
 - **First-hour local-first polish.** Tighten the early experience so a fresh
   install is more honest and immediately useful: first-party assets only, clearer
   library-preparation actions, current public version wording, and an onboarding
