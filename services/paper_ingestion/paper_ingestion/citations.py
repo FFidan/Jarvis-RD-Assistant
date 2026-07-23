@@ -46,8 +46,9 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
     be nested under ``citingPaper``, ``citedPaper``, or at the top level.
 
     This function is called only with responses obtained by the configured
-    Semantic Scholar adapter, so a valid stub is explicitly promoted to public
-    visibility. The historical `citation_batch` origin remains descriptive.
+    Semantic Scholar adapter, so a NEW stub row inserts with public visibility.
+    An existing row (any scope) is never promoted or content-overwritten; only
+    its ``citation_count`` — a trusted scholarly signal — is refreshed.
 
     Returns ``None`` (without raising) when the S2 payload lacks a valid
     ``paperId`` or a non-empty ``title``, so callers can safely skip the entry.
@@ -93,9 +94,7 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
            VALUES ($1, 'semantic_scholar', $2, $3, '', $4, $5, $6, $7::jsonb,
                    'citation_batch', $8)
            ON CONFLICT (external_id) DO UPDATE SET
-               citation_count = EXCLUDED.citation_count,
-               source_type = EXCLUDED.source_type,
-               visibility_scope = EXCLUDED.visibility_scope
+               citation_count = EXCLUDED.citation_count
            RETURNING id""",
         external_id,
         title,
