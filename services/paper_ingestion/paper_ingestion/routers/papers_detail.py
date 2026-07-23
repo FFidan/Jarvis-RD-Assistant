@@ -11,7 +11,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import get_current_user_id
-from jarvis_common.library import add_to_library
+from jarvis_common.library import add_to_library, is_in_library
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 from paper_ingestion import papers_service
 from paper_ingestion.citation_format import (
@@ -330,6 +331,20 @@ async def batch_save_papers(
                 paper.discovery_origin = "citation_batch"
                 row = await upsert_paper(conn, paper, discovered_by=user_id)
                 if user_id is not None:
+                    # Attach + echo only when the caller has a legitimate claim
+                    # on the canonical row. A colliding external_id returns
+                    # another tenant's existing private row unchanged (attach-only
+                    # upsert); attaching it would grant that user's raw-PDF access
+                    # and leak the private metadata through the echoed response,
+                    # so such collisions are skipped (no attach, no echo, and
+                    # therefore no analyze-enqueue below).
+                    attachable = (
+                        row["is_insert"]
+                        or row["visibility_scope"] == PUBLIC_VISIBILITY_SCOPE
+                        or await is_in_library(conn, user_id=user_id, paper_id=row["id"])
+                    )
+                    if not attachable:
+                        continue
                     await add_to_library(
                         conn,
                         user_id=user_id,
