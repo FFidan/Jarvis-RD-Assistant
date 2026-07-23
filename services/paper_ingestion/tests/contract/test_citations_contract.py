@@ -67,6 +67,43 @@ async def test_get_or_create_stub_paper_idempotent_and_refreshes_citation_count(
     )
 
 
+async def test_stub_conflict_does_not_promote_or_overwrite_existing_row(contract_conn):
+    """Citation sync must not promote or content-overwrite an EXISTING paper.
+
+    A pre-existing non-stub private row (e.g. a user's own arxiv paper) that
+    happens to share an S2 external_id must keep its scope, source, title, and
+    metadata when a later citation batch touches it; only ``citation_count`` —
+    a trusted scholarly signal — may be refreshed. Exercised at the contract
+    layer because the invariant lives in the ON CONFLICT ... DO UPDATE path.
+    Verified: citations.py get_or_create_stub_paper.
+    """
+    from paper_ingestion.citations import get_or_create_stub_paper
+
+    seeded_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               visibility_scope, citation_count, metadata)
+           VALUES ('s2:X', 'arxiv', 'owner', ARRAY['Owner'],
+                   'https://example.test/owner', 'private', 0, '{}'::jsonb)
+           RETURNING id""",
+    )
+
+    returned_id = await get_or_create_stub_paper(
+        contract_conn, {"paperId": "X", "title": "attacker", "citationCount": 5}
+    )
+    assert returned_id == seeded_id, "conflict must match the existing row, not insert a new one"
+
+    row = await contract_conn.fetchrow(
+        """SELECT visibility_scope, source_type, title, citation_count,
+                  metadata->>'stub' AS stub_flag
+           FROM papers WHERE external_id = 's2:X'""",
+    )
+    assert row["visibility_scope"] == "private", "existing scope must not be promoted"
+    assert row["source_type"] == "arxiv", "existing source must not be overwritten"
+    assert row["title"] == "owner", "existing content must not be overwritten"
+    assert row["stub_flag"] is None, "an existing non-stub row must not be re-tagged as a stub"
+    assert row["citation_count"] == 5, "only citation_count may be refreshed on conflict"
+
+
 # ---------------------------------------------------------------------------
 # A25: GET /api/citations/graph — citation graph scoped to owner's papers
 # ---------------------------------------------------------------------------
