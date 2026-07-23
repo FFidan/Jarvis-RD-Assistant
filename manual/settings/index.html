@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1513,7 +1541,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1541,7 +1569,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1628,7 +1656,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1656,7 +1684,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1684,7 +1712,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -2423,7 +2451,7 @@
   
 
 
-<!-- verified-against-UI: 2026-07-05 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-07-20 | routes: /settings, /settings?section=&item= -->
 
 <h1 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h1>
 <p>The <strong>Settings</strong> page at <code>/settings</code> is a two-pane interface: a <strong>SettingsRail</strong> on the left lists the sections and items, and the right panel shows the detail form for the currently selected item. The active section and item are reflected in the URL query parameters (<code>?section=&amp;item=</code>).</p>
@@ -2437,7 +2465,7 @@
 <h3 id="profile-email">Profile &amp; Email<a class="headerlink" href="#profile-email" title="Permanent link">&para;</a></h3>
 <p>Edit your display name and email address. Changing your email triggers a verification flow to confirm the new address before it takes effect.</p>
 <h3 id="account-data-export">Account data export<a class="headerlink" href="#account-data-export" title="Permanent link">&para;</a></h3>
-<p>Download a ZIP of your own account data from the Account section. The export is scoped to the signed-in user and includes structured account records; it is not a shared corpus export or a PDF backup.</p>
+<p>Download a ZIP of your own account data from the Account section. This is the GDPR/account export: it is scoped to the signed-in user and includes structured account records, not an instance-wide paper export or a PDF backup.</p>
 <h3 id="appearance">Appearance<a class="headerlink" href="#appearance" title="Permanent link">&para;</a></h3>
 <p>Toggle between <strong>light mode</strong>, <strong>dark mode</strong>, and <strong>system</strong> (follows your OS preference).</p>
 <h3 id="passkeys">Passkeys<a class="headerlink" href="#passkeys" title="Permanent link">&para;</a></h3>
@@ -2466,7 +2494,7 @@
 <p>If a model card shows a <strong>pending — applying automatically</strong> badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.</p>
 <h3 id="providers-routing">Providers &amp; Routing<a class="headerlink" href="#providers-routing" title="Permanent link">&para;</a></h3>
 <p>Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses <strong>Add cloud provider</strong> for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.</p>
-<p>Provider settings are admin-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
+<p>Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
 <p>Adding a key does not make cloud the default. It only makes matching cloud models assignable in the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> controls above. Leave all provider keys blank to keep the deployment local-only.</p>
 <h3 id="advanced-backend-hardware-diagnostics">Advanced: backend &amp; hardware diagnostics<a class="headerlink" href="#advanced-backend-hardware-diagnostics" title="Permanent link">&para;</a></h3>
 <p>The <strong>AI models</strong> page is the authoritative place to assign the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> roles. The advanced diagnostics panel below those role cards is read-only for routing: it explains the current hardware/runtime state and points you back to the role cards when a model assignment should change.</p>
@@ -2482,11 +2510,16 @@
 <h2 id="iv-system">§IV — System<a class="headerlink" href="#iv-system" title="Permanent link">&para;</a></h2>
 <p><strong>ADMIN only.</strong></p>
 <h3 id="automation">Automation<a class="headerlink" href="#automation" title="Permanent link">&para;</a></h3>
-<p>Configure the schedule for automatic background jobs: when to fetch new papers from sources, when to run Pulse deck generation, and when to run other scheduled maintenance tasks.</p>
+<p>Configure the schedule for automatic background jobs: when to fetch new papers from sources, when to run Pulse deck generation, and when to run other scheduled maintenance tasks. <code>automation.auto_summarize_discovered</code> controls whether newly discovered papers are summarized automatically; it is off by default. This is a deployment-wide setting managed by an administrator, while the library papers and their resulting work remain scoped to the relevant library holder.</p>
 <h3 id="extraction-templates">Extraction Templates<a class="headerlink" href="#extraction-templates" title="Permanent link">&para;</a></h3>
 <p>Create and manage templates used on the <a href="../extraction-table/">Extraction Table</a> page. Each template defines a set of fields to extract from papers. Templates can be named, edited, and deleted here.</p>
 <h3 id="email-smtp">Email / SMTP<a class="headerlink" href="#email-smtp" title="Permanent link">&para;</a></h3>
-<p>Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP host, port, username, password, and sender (From) address. Two optional fields are also available:</p>
+<p>Configure the outbound email relay for magic-link sign-in emails. SMTP settings
+are deployment-wide. Settings and the first-run wizard persist system-level
+database rows; the password is encrypted under <code>JARVIS_CONFIG_KEY</code>, is never
+returned to the browser, and takes effect without a service restart. Fields:
+SMTP host, port, username, password, and sender (From) address. Two optional
+fields are also available:</p>
 <ul>
 <li><strong>Reply-To address</strong> — when set, email clients route replies here instead of the From address. Leave blank to clear.</li>
 <li><strong>Sender display name</strong> — when set, the From header shows a friendly name, e.g. <code>JARVIS RD &lt;login@your-domain.dev&gt;</code>. Leave blank to clear.</li>
@@ -2494,13 +2527,20 @@
 <p><strong>Misconfiguration warning.</strong> If the saved SMTP configuration is not deliverable — for example, a host is set but the From address is missing, a required field was saved as an empty string, or no relay is configured at all — the card displays an amber warning banner describing the issue. The form remains editable so you can correct the problem in place without navigating away.</p>
 <p><strong>Save &amp; send test email.</strong> In addition to the <strong>Save</strong> button, a <strong>Save &amp; send test email</strong> button saves the settings and immediately attempts a test delivery. An optional <strong>Test recipient</strong> field (defaults to the From address) lets you direct the test message to a specific address. The result — success or the exact SMTP error — is shown inline. This matches the test-send available during the onboarding wizard.</p>
 <p><strong>When SMTP isn't configured or delivery fails.</strong> No magic link is ever printed to server stdout. A request that can't be delivered — no relay configured, a <code>DEV_SMTP_LOG_ONLY</code> dev instance, an SMTP error, or a link that would point at a non-loopback private host — logs only a hashed, PII-free event to Logs Live; the link and its token are never logged anywhere. To hand a user a working link when email isn't an option, use <strong>Admin → Users → Send link</strong> — that returns the actual sign-in URL to you (never delivers a bearer link automatically to a route that failed) so you can pass it along by hand.</p>
-<p><strong>The SMTP password is a Docker Secret</strong>, not a plaintext <code>.env</code> value: <code>setup.sh --smtp-pass-file &lt;path&gt;</code> (or the wizard/Settings save) writes it to <code>secrets/smtp_pass.txt</code>, mounted read-only into the app containers via <code>SMTP_PASS_FILE</code>. It never appears in <code>docker inspect</code> output or shell history.</p>
+<p>There are two supported configuration layers. The normal UI layer is the
+encrypted deployment-wide database configuration above. For unattended host
+setup, <code>setup.sh --smtp-pass-file &lt;host-path&gt;</code> copies the supplied value into
+the <code>secrets/smtp_pass.txt</code> Docker secret; it is a fallback when a database
+field is absent. The installer path must name a file on the host, not
+<code>/run/secrets/...</code> inside a future container. Neither layer places the password
+in <code>.env</code> or <code>docker inspect</code> output.</p>
 <h3 id="pulse">Pulse<a class="headerlink" href="#pulse" title="Permanent link">&para;</a></h3>
 <p>Configure Pulse-specific settings. The panel is divided into two cards:</p>
 <ul>
 <li><strong>Schedule card</strong> — toggle Pulse on/off, set the daily run time, and adjust the <strong>deck size</strong> (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.</li>
 <li><strong>Advanced tuning card</strong> (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations. Includes a <strong>Recommendations enabled</strong> toggle that controls whether personalised paper recommendations are computed at all.</li>
 </ul>
+<p>Repeated negative feedback for a topic dampens its positive similarity contribution to future recommendations. It never increases a negative-similarity score.</p>
 <h3 id="timer">Timer<a class="headerlink" href="#timer" title="Permanent link">&para;</a></h3>
 <p>Configure the Pomodoro-style session timer available in the TopBar: work interval, break interval, and long-break interval.</p>
 <h3 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h3>
@@ -2515,11 +2555,21 @@
 <hr />
 <h2 id="v-integrations">§V — Integrations<a class="headerlink" href="#v-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="telegram">Telegram<a class="headerlink" href="#telegram" title="Permanent link">&para;</a></h3>
-<p>Available to <strong>all users</strong>. Pair your personal account with the configured Telegram bot to receive Pulse digests and interact with your library from Telegram. See <a href="../telegram/">Telegram</a> for the full pairing flow.</p>
+<p>Available to <strong>all users</strong>. Telegram pairing is personal: pair your own account
+with the configured bot to receive Pulse digests and interact with your library.
+See <a href="../telegram/">Telegram</a> for the full pairing flow.</p>
 <h3 id="bot-token">Bot Token<a class="headerlink" href="#bot-token" title="Permanent link">&para;</a></h3>
-<p><strong>ADMIN only.</strong> Configure the Telegram bot token that the system uses to send messages. This is a server-level setting; each user pairs to the bot configured here. See <a href="../telegram/">Telegram</a> for more context.</p>
+<p><strong>ADMIN only.</strong> The bot token is deployment-wide and encrypted in the database;
+each user's pairing remains separate. The <code>telegram</code> Compose profile must be
+enabled for the bot service to run, and a saved replacement token takes effect
+after that service is restarted. See <a href="../telegram/">Telegram</a> for more context.</p>
 <h3 id="zotero">Zotero<a class="headerlink" href="#zotero" title="Permanent link">&para;</a></h3>
-<p>Available to <strong>all users</strong>. Connect your Zotero account to push papers and copy citation keys from the <a href="../paper-detail/">Paper Detail</a> page.</p>
+<p>Available to <strong>all users</strong>. Zotero credentials are per-user and encrypted. Connect
+your own personal or group library to push papers and copy citation keys from
+the <a href="../paper-detail/">Paper Detail</a> page. Zotero-imported papers remain private
+to the connecting user's JARVIS library; a Zotero group does not make them
+public to every JARVIS account. See <a href="../../SECURITY/#source-aware-paper-visibility">Source-aware paper
+visibility</a>.</p>
 <p>Fill in:</p>
 <ul>
 <li><strong>API Key</strong> and <strong>User ID</strong> — both are on <a href="https://www.zotero.org/settings/keys">zotero.org/settings/keys</a>. Create the key with read/write library access.</li>

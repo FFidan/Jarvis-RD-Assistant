@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1220,7 +1248,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1248,7 +1276,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1276,7 +1304,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1980,7 +2008,8 @@
 <h1 id="technical-requirements">Technical Requirements<a class="headerlink" href="#technical-requirements" title="Permanent link">&para;</a></h1>
 <h2 id="runtime-environment">Runtime Environment<a class="headerlink" href="#runtime-environment" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Docker Engine</strong> 24+ with Docker Compose v2</li>
+<li><strong>Docker Engine</strong> 24+ with Docker Compose v2.24.4+</li>
+<li><strong>Host tools</strong>: Python 3, <code>openssl</code>, <code>curl</code>, and <code>git</code></li>
 <li><strong>RAM</strong>: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)</li>
 <li><strong>Disk</strong>: a cold install has a one-time peak of roughly <strong>25–53 GB</strong> depending on your hardware tier — see <a href="#disk-budget">Disk budget</a> below. The durable footprint afterward is much smaller, plus PDFs and page snapshots that accumulate over time.</li>
 <li><strong>GPU</strong>: NVIDIA GPU optional (faster Ollama inference). On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported but slower. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop. GPU acceleration is enabled via the <code>docker-compose.gpu.yml</code> overlay; <code>setup.sh</code> adds it automatically when it detects the Docker nvidia runtime.</li>
@@ -2046,7 +2075,14 @@
 </tbody>
 </table>
 <p><strong>Cold-install peak = application images + 14 GB of infrastructure images + your tier's model set.</strong> Worst case (CUDA build, top tier): 17 + 14 + 22 ≈ <strong>53 GB</strong>. Smallest case (GHCR pull, bottom tier): 6 + 14 + 5 ≈ <strong>25 GB</strong>. <code>setup.sh</code> builds/pulls the application images first, then downloads the model set, so this is a one-time additive peak, not a steady-state requirement.</p>
-<p>After a successful install, <code>docker builder prune -af</code> reclaims the local build cache. The durable footprint settles at the per-service image sizes (<code>paper_ingestion</code> ≈2.35 GB CPU / ≈6.31 GB CUDA; <code>learning_engine</code>, <code>telegram_bot</code>, and <code>dashboard</code> well under 1 GB combined) plus your model set and a PDF/page-snapshot library that grows with use.</p>
+<p>After a successful local build, Docker may retain builder cache. Running
+<code>docker builder prune -af</code> is optional and host-wide: it removes unused build
+cache for every project that uses the same Docker daemon, not only JARVIS. Check
+<code>docker builder du</code> first and skip the command on a shared host unless that
+broader cleanup is intended. The durable JARVIS footprint settles at the
+per-service image sizes (<code>paper_ingestion</code> ≈2.35 GB CPU / ≈6.31 GB CUDA;
+<code>learning_engine</code>, <code>telegram_bot</code>, and <code>dashboard</code> well under 1 GB combined)
+plus your model set and a PDF/page-snapshot library that grows with use.</p>
 <h2 id="python-dependencies">Python Dependencies<a class="headerlink" href="#python-dependencies" title="Permanent link">&para;</a></h2>
 <p><code>pyproject.toml</code> dependency groups are the canonical source; per-service
 <code>requirements.txt</code> and <code>constraints.txt</code> files are generated — do not edit by hand.</p>
@@ -2134,7 +2170,7 @@ Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 <tr>
 <td><code>OPENALEX_API_KEY</code></td>
 <td>OpenAlex</td>
-<td>Optional; improves rate limits, not required</td>
+<td>Required free API key; create one at <a href="https://openalex.org/settings/api">openalex.org/settings/api</a></td>
 </tr>
 <tr>
 <td><code>PUBMED_API_KEY</code></td>
@@ -2158,11 +2194,11 @@ Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 <tbody>
 <tr>
 <td>OpenAI</td>
-<td>Per-user encrypted key in Settings (preferred) or <code>OPENAI_API_KEY</code> in <code>.env</code></td>
+<td>Deployment-wide encrypted key in admin Settings</td>
 </tr>
 <tr>
 <td>Anthropic</td>
-<td>Per-user encrypted key in Settings (preferred) or <code>ANTHROPIC_API_KEY</code> in <code>.env</code></td>
+<td>Deployment-wide encrypted key in admin Settings</td>
 </tr>
 <tr>
 <td>Local Ollama</td>
@@ -2224,17 +2260,12 @@ Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 <tr>
 <td><code>OPENALEX_API_KEY</code></td>
 <td>—</td>
-<td>Optional; improves OpenAlex rate limits, not required</td>
+<td>Required free API key; create one at <a href="https://openalex.org/settings/api">openalex.org/settings/api</a></td>
 </tr>
 <tr>
 <td><code>PUBMED_API_KEY</code></td>
 <td>—</td>
 <td>Optional NCBI key; upgrades PubMed rate limit</td>
-</tr>
-<tr>
-<td><code>OPENALEX_EMAIL</code></td>
-<td>—</td>
-<td>Optional; included in OpenAlex requests for the polite pool (blank = anonymous tier)</td>
 </tr>
 </tbody>
 </table>
@@ -2259,6 +2290,11 @@ Observability variables (Langfuse): <a href="https://github.com/limitcycle-oss/j
 <td>PubMed XML parsing + hardened XML in <code>cached_transport.py</code></td>
 </tr>
 <tr>
+<td><code>qdrant-client&gt;=1.14.3,&lt;1.15.0</code></td>
+<td>paper_ingestion</td>
+<td>Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance</td>
+</tr>
+<tr>
 <td><code>scikit-learn&gt;=1.6.0</code></td>
 <td>paper_ingestion (optional)</td>
 <td>Per-user logistic regression on recommendation feedback</td>
@@ -2266,8 +2302,10 @@ Observability variables (Langfuse): <a href="https://github.com/limitcycle-oss/j
 </tbody>
 </table>
 <h2 id="secrets-database">Secrets &amp; Database<a class="headerlink" href="#secrets-database" title="Permanent link">&para;</a></h2>
-<p>Secrets use Docker Secrets. Initialise locally with <code>bash scripts/init-secrets.sh</code>
-(or <code>scripts/jarvis-setup.sh</code>). Full table: <a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a>.</p>
+<p>Host credentials use Docker Secrets; database-backed integration credentials
+are encrypted under <code>JARVIS_CONFIG_KEY</code>. Initialise host secrets with
+<code>bash scripts/init-secrets.sh</code> (or <code>scripts/jarvis-setup.sh</code>). Full table:
+<a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a>.</p>
 <p>Fresh installs: <code>db/init.sql</code>. Migration history: <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md"><code>db/migrations/README.md</code></a>.</p>
 <h2 id="optional-reranker">Optional Reranker<a class="headerlink" href="#optional-reranker" title="Permanent link">&para;</a></h2>
 <p>How to enable it depends on which image you installed:</p>

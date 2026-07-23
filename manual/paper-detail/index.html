@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1417,7 +1445,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1445,7 +1473,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1532,7 +1560,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1560,7 +1588,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1588,7 +1616,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -2231,7 +2259,7 @@
   
 
 
-<!-- verified-against-UI: 2026-05-18 | routes: /paper/:paperId -->
+<!-- verified-against-UI: 2026-07-20 | routes: /paper/:paperId -->
 
 <h1 id="paper-detail">Paper Detail<a class="headerlink" href="#paper-detail" title="Permanent link">&para;</a></h1>
 <p>Clicking any paper in the <a href="../research-feed/">Research Feed</a>, <a href="../research-feed/">Library</a>, or elsewhere in the application opens its <strong>Paper Detail</strong> view at <code>/paper/:paperId</code>. This is the primary research workspace for a single paper.</p>
@@ -2373,17 +2401,26 @@
 <td>Zotero push</td>
 <td>Push this paper's metadata to your configured Zotero library</td>
 </tr>
+<tr>
+<td>Export Markdown</td>
+<td>Download a Markdown export containing the paper's summaries, personal notes, cards, extractions, and BibTeX citation metadata</td>
+</tr>
+<tr>
+<td>Copy BibTeX / Copy RIS</td>
+<td>Copy a citation in BibTeX or RIS format</td>
+</tr>
 </tbody>
 </table>
 <blockquote>
 <p><strong>Offline:</strong> All pipeline action buttons are disabled offline.</p>
 </blockquote>
+<p>Spatial PDF highlights are not included in the Markdown export because their positions only make sense inside the rendered PDF canvas and are not portable to a text document.</p>
 <h3 id="library-actions">Library actions<a class="headerlink" href="#library-actions" title="Permanent link">&para;</a></h3>
 <p>Controls for managing this paper within your library:</p>
 <ul>
 <li><strong>Star</strong> — toggle a star on the paper for quick filtering in the Library.</li>
 <li><strong>State transitions</strong> — move the paper through its reading workflow: Inbox → To Read → Reading → Done. Papers can be moved to <strong>Trash</strong> at any state (except trash itself); trashed papers can be restored or permanently deleted.</li>
-<li><strong>Hard-delete</strong> — permanently delete the paper and all associated data after confirmation (available from the Trash state).</li>
+<li><strong>Hard-delete</strong> — permanently remove the paper from your library, including your private notes, summaries, highlights, and activity (available from the Trash state). This cannot be undone. The shared paper record and processed search content may remain; the web action is not a system-wide delete.</li>
 </ul>
 <p>The five lifecycle states are:</p>
 <table>

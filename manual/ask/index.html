@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1235,7 +1263,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1263,7 +1291,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1350,7 +1378,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1378,7 +1406,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1406,7 +1434,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1870,7 +1898,10 @@
 <!-- verified-against-UI: 2026-06-12 | routes: /ask -->
 
 <h1 id="ask-cross-paper-rag">Ask — Cross-paper RAG<a class="headerlink" href="#ask-cross-paper-rag" title="Permanent link">&para;</a></h1>
-<p>The <strong>Ask</strong> workspace at <code>/ask</code> lets you pose questions that are answered from your entire library at once, rather than from a single paper. It uses a retrieval-augmented generation (RAG) pipeline that searches across all your embedded paper chunks, re-ranks results, and streams a grounded answer with citations.</p>
+<p>The <strong>Ask</strong> workspace at <code>/ask</code> lets you pose questions across papers visible to
+you, rather than one paper at a time. It uses a retrieval-augmented generation
+(RAG) pipeline that searches eligible embedded chunks, re-ranks results, and
+streams a grounded answer with citations.</p>
 <!-- screenshot: /ask — chat interface with a question, a streaming answer containing a ConfidenceBadge, and an open SourcesAccordion showing three chunk citations -->
 
 <hr />
@@ -1927,7 +1958,13 @@
 <p>Conversation messages persist across navigation within the same session using the <strong>chat store</strong>. If you navigate away to another page and return to <code>/ask</code>, your previous messages are still visible. The history is cleared when you sign out or start a new session.</p>
 <hr />
 <h2 id="differences-from-single-paper-ask">Differences from single-paper Ask<a class="headerlink" href="#differences-from-single-paper-ask" title="Permanent link">&para;</a></h2>
-<p>The Ask workspace at <code>/ask</code> searches across <strong>all embedded papers</strong> in your library. The in-paper Ask section on the <a href="../paper-detail/">Paper Detail</a> page is scoped to a single paper's chunks. Use the cross-paper Ask workspace when you want an answer synthesised from multiple sources.</p>
+<p>The Ask workspace at <code>/ask</code> searches embedded papers that are visible to the
+signed-in user: verified public papers plus private papers in that user's
+library. The database rechecks vector candidates before they can appear in an
+answer. The in-paper Ask section on the <a href="../paper-detail/">Paper Detail</a> page is
+scoped to one visible paper's chunks. See <a href="../../SECURITY/#source-aware-paper-visibility">Source-aware paper
+visibility</a> for the canonical
+boundary.</p>
 <hr />
 <h2 id="offline-behaviour">Offline behaviour<a class="headerlink" href="#offline-behaviour" title="Permanent link">&para;</a></h2>
 <p>The Ask workspace requires a live connection to the LLM backend. It is <strong>not available offline</strong>. If you are offline, the input is disabled and a notice explains that cross-paper RAG is unavailable.</p>

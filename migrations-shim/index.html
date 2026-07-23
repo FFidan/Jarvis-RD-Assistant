@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1215,7 +1243,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1243,7 +1271,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1271,7 +1299,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1663,12 +1691,53 @@
 
 <h1 id="migrations">Migrations<a class="headerlink" href="#migrations" title="Permanent link">&para;</a></h1>
 <p>This directory is the ledger for incremental schema migrations applied on top of <code>db/init.sql</code>.</p>
-<p>The repo's pre-launch schema is fully captured in <code>db/init.sql</code>. The schema is
-created on first boot from <code>init.sql</code> alone — there are no pre-launch migrations
-on disk and no manual migration steps to run.</p>
+<p>The repository's squashed baseline schema version is <code>101</code>; it is fully captured
+in <code>db/init.sql</code>. A fresh database starts at that baseline and then applies the
+incremental files below. The current schema version is <code>106</code>, also recorded in
+<code>db/SCHEMA_VERSION</code>.</p>
 <p>New migrations land here numbered sequentially (<code>0102_&lt;descriptive&gt;.sql</code> and up)
 and are applied via <code>run_migrations</code>
 (libs/jarvis_common/jarvis_common/migrations.py) on top of <code>init.sql</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Migration</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0102</code></td>
+<td><code>0102_webauthn_credentials.sql</code></td>
+<td>Add passkey credentials and single-use WebAuthn challenges.</td>
+</tr>
+<tr>
+<td><code>0103</code></td>
+<td><code>0103_purge_group_chat_pairings.sql</code></td>
+<td>Remove Telegram pairings that were created outside private chats.</td>
+</tr>
+<tr>
+<td><code>0104</code></td>
+<td><code>0104_drop_paper_chunks_user_ownership.sql</code></td>
+<td>Remove obsolete chunk-level ownership; paper visibility is enforced at the paper boundary.</td>
+</tr>
+<tr>
+<td><code>0105</code></td>
+<td><code>0105_backfill_owner_user_id.sql</code></td>
+<td>Assign an unambiguous sole administrator as instance owner and leave ambiguous upgrades for explicit host repair.</td>
+</tr>
+<tr>
+<td><code>0106</code></td>
+<td><code>0106_paper_visibility_scope.sql</code></td>
+<td>Persist source-aware public/private paper scope, defaulting unknown and client-driven material to private.</td>
+</tr>
+</tbody>
+</table>
+<p>The migration runner serializes application with PostgreSQL advisory lock 42,
+records each applied version in <code>schema_migrations</code>, and refuses files newer
+than the running code during restore. Operators should not execute individual
+SQL files by hand.</p>
 
 
 

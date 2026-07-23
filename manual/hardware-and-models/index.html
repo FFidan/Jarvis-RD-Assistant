@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1085,10 +1113,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#two-tier-systems-not-the-same-scale" class="md-nav__link">
+  <a href="#two-tier-systems" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two tier systems — not the same scale
+        Two tier systems
       
     </span>
   </a>
@@ -1224,7 +1252,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1252,7 +1280,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1339,7 +1367,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1367,7 +1395,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1395,7 +1423,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1793,10 +1821,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#two-tier-systems-not-the-same-scale" class="md-nav__link">
+  <a href="#two-tier-systems" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two tier systems — not the same scale
+        Two tier systems
       
     </span>
   </a>
@@ -1848,14 +1876,16 @@
 <!-- verified-against-UI: 2026-06-13 | routes: /settings?section=models -->
 
 <h1 id="what-your-hardware-gets-you">What your hardware gets you<a class="headerlink" href="#what-your-hardware-gets-you" title="Permanent link">&para;</a></h1>
-<p>JARVIS runs its AI models locally on your GPU. This page explains which models are
-selected for your machine, what quality and speed to expect, and when it makes sense
-to add a cloud model instead.</p>
+<p>JARVIS runs its default AI models locally through Ollama, on CPU or a configured
+GPU. This page explains the model recommendation, expected speed, and when an
+optional cloud model may help.</p>
 <hr />
 <h2 id="hardware-tiers-and-default-models">Hardware tiers and default models<a class="headerlink" href="#hardware-tiers-and-default-models" title="Permanent link">&para;</a></h2>
-<p>At first boot, JARVIS probes your GPU's VRAM and automatically selects models suited
-to your hardware. The recommendation is advisory — you can change any assignment at
-any time in <strong>Settings → Models → AI models</strong>.</p>
+<p>At first boot, JARVIS probes the available hardware and selects a model set that
+fits its estimated memory. This model recommendation is separate from accelerator
+selection: an AMD or Intel device can be detected while setup still chooses the
+safe CPU path. You can change model assignments later in <strong>Settings → Models → AI
+models</strong>.</p>
 <table>
 <thead>
 <tr>
@@ -1910,23 +1940,27 @@ any time in <strong>Settings → Models → AI models</strong>.</p>
 your Qdrant collection and changing it requires re-indexing your library.</p>
 <h3 id="what-to-expect">What to expect<a class="headerlink" href="#what-to-expect" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>CPU / &lt; 4 GB:</strong> Everything works, but first-paper analysis can take many minutes —
-  tens of minutes for a long paper. This tier is supported for offline or resource-constrained
-  setups, not for comfortable daily use.</li>
-<li><strong>10–19 GB (mid GPU):</strong> A ~60 000-character paper summarises in roughly 45 seconds on
-  a mid-range GPU. This is the reference tier (validated on a 16 GB card).</li>
-<li><strong>20–39 GB (mid-high GPU):</strong> <code>qwen3:14b</code> fits alongside the embedder, giving noticeably
-  richer summaries at similar latency.</li>
-<li><strong>≥ 40 GB (large GPU):</strong> <code>qwen3:30b-a3b</code> — a 30B mixture-of-experts model — fits with
-  ample headroom. Validated on a 48 GB deployment at a 16k context window.</li>
+<li><strong>CPU / &lt; 4 GB:</strong> This tier is supported, but first-paper analysis can take
+  tens of minutes for a long paper.</li>
+<li><strong>10–19 GB:</strong> A roughly 60,000-character paper took about 45 seconds on the
+  16 GB reference card. Results vary with model, context, and driver.</li>
+<li><strong>20–39 GB:</strong> Setup recommends <code>qwen3:14b</code> while retaining the smaller quick
+  model and embedder.</li>
+<li><strong>≥ 40 GB:</strong> Setup recommends <code>qwen3:30b-a3b</code>. The reference validation used
+  a 48 GB card and a 16k context window.</li>
 </ul>
 <hr />
 <h2 id="gpu-vendor-support">GPU vendor support<a class="headerlink" href="#gpu-vendor-support" title="Permanent link">&para;</a></h2>
-<p>The tiers and models above apply regardless of GPU vendor — JARVIS auto-detects your GPU and VRAM at first boot. NVIDIA (CUDA) is the fully <strong>supported</strong> path. AMD (ROCm or Vulkan) and Intel (Vulkan) acceleration for Ollama are also auto-detected and available, labeled <strong>[Experimental]</strong>: same tier-based model selection, lower validation confidence. See the <a href="../hardware-support-matrix/">hardware support matrix</a> for what "Experimental" means, known caveats, and how to report your results.</p>
+<p>NVIDIA CUDA is the supported accelerated path and is selected when the Docker
+runtime is ready. AMD ROCm is experimental and is selected only when <code>/dev/kfd</code>
+is available. AMD without that device and Intel default to CPU; Vulkan is an
+explicit experimental choice (<code>./setup.sh --gpu vulkan</code>). See the <a href="../hardware-support-matrix/">hardware
+support matrix</a> for the exact selection table and
+known caveats.</p>
 <p><strong>Windows + AMD GPU currently falls back to CPU</strong> — Docker on WSL2 does not expose the AMD kernel driver the ROCm overlay needs. NVIDIA GPUs are unaffected under WSL2.</p>
 <p><code>paper_ingestion</code> (PDF parsing, reranking) stays CPU-only on AMD and Intel hosts regardless of which overlay Ollama uses — only Ollama inference is GPU-accelerated on those vendors today.</p>
 <hr />
-<h2 id="two-tier-systems-not-the-same-scale">Two tier systems — not the same scale<a class="headerlink" href="#two-tier-systems-not-the-same-scale" title="Permanent link">&para;</a></h2>
+<h2 id="two-tier-systems">Two tier systems<a class="headerlink" href="#two-tier-systems" title="Permanent link">&para;</a></h2>
 <p>You may notice two different ways JARVIS numbers hardware tiers. They are two views
 of the same hardware, measured differently:</p>
 <ul>
@@ -1941,10 +1975,9 @@ of the same hardware, measured differently:</p>
   first-time setup.</p>
 </li>
 </ul>
-<p>Both describe the same hardware; they use different names because the installer script
-and the backend were written independently. A <code>16-24</code> bucket corresponds to backend Tier 3;
-<code>ge-48</code> corresponds to Tier 4. Neither scale has more tiers than the other — they just
-carve the VRAM range at slightly different boundary points.[^tiers]</p>
+<p>Both describe detected memory, but their boundaries overlap rather than mapping
+one to one. The setup bucket in terminal output can therefore differ from the
+tier number shown in Settings.[^tiers]</p>
 <p>[^tiers]: The setup-script boundaries are <code>&lt; 8 GB</code>, <code>8–16 GB</code>, <code>16–24 GB</code>, <code>24–48 GB</code>, <code>≥ 48 GB</code>.
     The backend boundaries (used for model assignment and the Settings page) are
     <code>&lt; 4 GB</code>, <code>4–10 GB</code>, <code>10–20 GB</code>, <code>20–40 GB</code>, <code>≥ 40 GB</code>. The bucket names you see in
@@ -1965,12 +1998,12 @@ installed.</p>
 <p>The advanced backend and hardware panel on the same page is diagnostics only. It shows hardware fit, observed runtime traffic, and Ollama/vLLM guidance, but active role assignment stays in the Main, Quick, and Embedding model cards.</p>
 <hr />
 <h2 id="when-to-use-a-cloud-model-instead">When to use a cloud model instead<a class="headerlink" href="#when-to-use-a-cloud-model-instead" title="Permanent link">&para;</a></h2>
-<p>Optional cloud providers are a good fit when:</p>
+<p>Consider an optional cloud provider when:</p>
 <ul>
 <li>Your local GPU is too small for the summary quality you want, and you do not want
   to upgrade hardware.</li>
-<li>You need a frontier model for a specific task and are comfortable with the data
-  leaving your machine.</li>
+<li>You need a model that is not practical on the local host and accept that the
+  relevant data leaves the machine.</li>
 <li>You want to experiment with a larger model before committing to pulling it locally.</li>
 </ul>
 <p>To add cloud capacity, use <strong>Settings → Models → Providers &amp; Routing</strong>. JARVIS supports OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint. Provider settings are admin-wide and keys are stored encrypted at rest. Once a provider key is active, matching cloud models can be assigned to the <code>smart</code> or <code>fast</code> role alongside local Ollama models.</p>

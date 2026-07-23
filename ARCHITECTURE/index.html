@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1215,7 +1243,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1243,7 +1271,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1271,7 +1299,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1645,10 +1673,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#canonical-corpus-and-user_library" class="md-nav__link">
+  <a href="#paper-visibility-and-user_library" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Canonical Corpus And user_library
+        Paper visibility and user_library
       
     </span>
   </a>
@@ -1965,10 +1993,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#canonical-corpus-and-user_library" class="md-nav__link">
+  <a href="#paper-visibility-and-user_library" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Canonical Corpus And user_library
+        Paper visibility and user_library
       
     </span>
   </a>
@@ -2137,7 +2165,7 @@ HTTP client.</p>
 <h2 id="authentication-and-ownership">Authentication And Ownership<a class="headerlink" href="#authentication-and-ownership" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Magic-link + passkey auth</strong> — magic-link sign-in uses the <code>users</code>,
-  <code>magic_link_tokens</code>, and <code>user_sessions</code> tables (see <code>db/init.sql</code>); optional
+  <code>magic_link_tokens</code>, and <code>sessions</code> tables (see <code>db/init.sql</code>); optional
   WebAuthn passkeys are stored in <code>webauthn_credentials</code> (migration 0102), bound
   to the exact <code>APP_BASE_URL</code> origin with user verification required.
   <code>jarvis_common.auth</code> resolves the caller user from a session cookie; sessions
@@ -2157,9 +2185,10 @@ HTTP client.</p>
 <li><strong>IDOR guards</strong> — router endpoints that read by PK assert ownership before
   returning data. The defensive <code>_resolve_request_user_id</code> helper tolerates
   mocked requests for test harnesses.</li>
-<li><strong>Per-user secrets</strong> — Zotero, SMTP, and other per-user credentials are stored
-  encrypted via <code>jarvis_common.crypto</code> (MultiFernet, <code>JARVIS_CONFIG_KEY</code>); user
-  config lives in <code>user_config</code> with JSONB values.</li>
+<li><strong>Encrypted settings</strong> — Zotero credentials are per-user. SMTP, Telegram bot,
+  and cloud-provider settings are deployment-wide administrator settings. Their
+  secret values are encrypted via <code>jarvis_common.crypto</code> under
+  <code>JARVIS_CONFIG_KEY</code>; scope is enforced by the <code>user_config</code> key registry.</li>
 <li><strong>Admin bootstrap</strong> — the onboarding wizard creates the admin account mid-flow
   (the admin-create step establishes the session, after which the remaining
   post-auth steps complete); the admin can invite additional users via the
@@ -2194,28 +2223,35 @@ flow — the token is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
 <code>/pair</code>. The legacy dashboard-code pairing path is no longer active.
-The <code>TELEGRAM_CHAT_ID</code> env var remains a supported optional outbound override
-(used when set; the DB pairing flow is the fallback) — see
-<code>telegram_bot/config.py</code>.</p>
-<h3 id="canonical-corpus-and-user_library">Canonical Corpus And user_library<a class="headerlink" href="#canonical-corpus-and-user_library" title="Permanent link">&para;</a></h3>
-<p>The canonical corpus schema (see <code>db/init.sql</code>):</p>
+The legacy <code>TELEGRAM_CHAT_ID</code> environment variable is not an authorization or
+delivery fallback. Pairing records are the only user-to-chat identity source.</p>
+<h3 id="paper-visibility-and-user_library">Paper visibility and <code>user_library</code><a class="headerlink" href="#paper-visibility-and-user_library" title="Permanent link">&para;</a></h3>
+<p>The paper schema (see <code>db/init.sql</code>) separates provenance from authorization:</p>
 <ul>
-<li><code>papers.discovered_by</code> records who first introduced a canonical paper.</li>
+<li><code>papers.visibility_scope</code> is the persisted <code>public</code> or <code>private</code>
+  authorization scope. Only trusted server-owned arXiv, Semantic Scholar,
+  OpenAlex, and PubMed adapters may promote a row to public.</li>
+<li><code>papers.discovered_by</code>, <code>source_type</code>, and <code>discovery_origin</code> are descriptive
+  provenance and audit fields; they never grant access.</li>
 <li><code>user_library(user_id, paper_id, added_via)</code> records personal library
   membership.</li>
-<li>Feed queries default to <code>user_library</code> membership for "My library" and expose
-  a deliberate <code>scope=corpus</code> mode for "All discovered" while keeping
-  <code>paper_user_state</code> overlays scoped to the caller.</li>
-<li>User-initiated uploads and manual project links add the paper to the caller's
-  <code>user_library</code> in the same transaction. API-key-only single-user calls keep
-  the legacy <code>user_id=NULL</code> behavior.</li>
-<li>In corpus scope, the Library surface maps to the <code>all_non_trash</code> predicate:
-  it means "all canonical papers except trash", not caller library membership.</li>
+<li>The central policy admits a paper when it is public or is present in the
+  caller's <code>user_library</code>. Feed, direct reads, graph queries, summaries,
+  citations, and RAG reuse that policy.</li>
+<li>The Library UI calls this broader view <strong>Public + mine</strong>. Its internal
+  <code>scope=corpus</code> request name is retained for API compatibility; it does not
+  include another user's private imports.</li>
+<li>Local uploads, unverified citation batches, personal or group Zotero imports,
+  unknown provenance, and ambiguous legacy Zotero identities stay private.</li>
+<li>Authenticated vector retrieval additionally requires the current visibility
+  generation and a relational policy recheck, so stale or missing vector
+  metadata fails closed by under-fetching.</li>
 </ul>
+<p>The canonical source matrix is <a href="../SECURITY/#source-aware-paper-visibility">Source-aware paper
+visibility</a>.</p>
 <h3 id="residual-risks">Residual Risks<a class="headerlink" href="#residual-risks" title="Permanent link">&para;</a></h3>
-<p>See <a href="../known-residual-risks/">known-residual-risks.md</a> for the full register of
-accepted deferrals, including IDOR regression coverage scope and RAG/search path
-isolation.</p>
+<p>See <a href="../known-residual-risks/">known-residual-risks.md</a> for the current register
+of accepted deferrals and their explicit reopen criteria.</p>
 <h2 id="persistence">Persistence<a class="headerlink" href="#persistence" title="Permanent link">&para;</a></h2>
 <p>Fresh schema is defined in <code>db/init.sql</code>; existing installs advance through
 <code>db/migrations/</code>. The migration runner applies migrations on

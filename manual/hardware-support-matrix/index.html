@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1085,6 +1113,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-setup-selects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What setup selects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#validation-tiers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1218,7 +1257,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1246,7 +1285,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1333,7 +1372,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1361,7 +1400,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1389,7 +1428,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1759,6 +1798,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-setup-selects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What setup selects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#validation-tiers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1836,9 +1886,10 @@
 <!-- verified-against-UI: 2026-07-11 | routes: /settings?section=models -->
 
 <h1 id="hardware-support-matrix">Hardware support matrix<a class="headerlink" href="#hardware-support-matrix" title="Permanent link">&para;</a></h1>
-<p>JARVIS auto-detects your GPU vendor at first boot and engages the matching acceleration
-overlay. Not every combination gets the same level of support — this page is the honest
-picture, including what "Experimental" means and what to expect on Windows.</p>
+<p>JARVIS always has a supported CPU path. Setup enables NVIDIA CUDA when the
+Docker runtime is ready and enables AMD ROCm only when the host exposes the
+required <code>/dev/kfd</code> device. Other AMD and Intel hosts stay on CPU unless you
+select the experimental Vulkan path.</p>
 <hr />
 <h2 id="backend-accelerator">Backend × accelerator<a class="headerlink" href="#backend-accelerator" title="Permanent link">&para;</a></h2>
 <table>
@@ -1855,8 +1906,8 @@ picture, including what "Experimental" means and what to expect on Windows.</p>
 <tr>
 <td><strong>Ollama</strong> (default backend)</td>
 <td>Supported</td>
-<td>[Experimental]</td>
-<td>[Experimental]</td>
+<td>Experimental</td>
+<td>Experimental</td>
 <td>Supported</td>
 </tr>
 <tr>
@@ -1873,16 +1924,64 @@ picture, including what "Experimental" means and what to expect on Windows.</p>
 <li><strong>vLLM</strong> is an opt-in overlay for advanced throughput comparisons (<code>docker-compose.vllm.yml</code>, <code>--profile vllm</code>); it currently ships an NVIDIA-only image. AMD ROCm images exist upstream but are not wired into JARVIS yet.</li>
 <li><strong>CPU</strong> is always available as the fallback tier and needs no overlay.</li>
 </ul>
+<h2 id="what-setup-selects">What setup selects<a class="headerlink" href="#what-setup-selects" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Host</th>
+<th>Default selection</th>
+<th>Optional selection</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVIDIA with Container Toolkit</td>
+<td>CUDA</td>
+<td>CPU with <code>./setup.sh --gpu cpu</code></td>
+</tr>
+<tr>
+<td>NVIDIA without a ready runtime</td>
+<td>CPU, with setup guidance</td>
+<td>CUDA after installing the toolkit</td>
+</tr>
+<tr>
+<td>AMD with <code>/dev/kfd</code></td>
+<td>ROCm</td>
+<td>CPU or Vulkan</td>
+</tr>
+<tr>
+<td>AMD without <code>/dev/kfd</code></td>
+<td>CPU</td>
+<td>Vulkan with <code>./setup.sh --gpu vulkan</code></td>
+</tr>
+<tr>
+<td>Intel</td>
+<td>CPU</td>
+<td>Vulkan with <code>./setup.sh --gpu vulkan</code></td>
+</tr>
+<tr>
+<td>macOS</td>
+<td>CPU inside Docker</td>
+<td>None</td>
+</tr>
+</tbody>
+</table>
+<p>Setup records the selected Compose overlay so normal starts and updates keep the
+same choice. A failed experimental overlay offers a CPU retry instead of leaving
+the install unusable.</p>
 <hr />
 <h2 id="validation-tiers">Validation tiers<a class="headerlink" href="#validation-tiers" title="Permanent link">&para;</a></h2>
-<p>We label each cell above using three honest tiers instead of a single "works/doesn't":</p>
+<p>The table uses these validation labels:</p>
 <ul>
 <li><strong>Supported</strong> — the default, actively used path; validated on real hardware.</li>
-<li><strong>[Experimental]</strong> — the overlay and vendor-detection logic exist and are exercised by automated CI (compose config validation and a no-GPU boot-fallback smoke test on every release). This proves the plumbing is correct; it does not prove inference is fast or correct on your specific card — no CI runner has a real AMD or Intel GPU attached.</li>
+<li><strong>Experimental</strong> — the overlay and vendor-detection logic pass Compose and
+  no-GPU fallback checks, but CI has no physical AMD or Intel GPU runner.</li>
 <li><strong>Community-reported</strong> — a JARVIS user with matching hardware confirmed it works, via a <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml">hardware compatibility report</a>.</li>
 <li><strong>Untested</strong> — neither CI wiring nor a community report exists yet for that specific card.</li>
 </ul>
-<p>We do not run paid cloud-GPU validation for AMD or Intel hardware. CI-wiring validation plus community reports are the honest, sustainable alternative — please <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml">file a report</a> if you run JARVIS on AMD or Intel silicon; it directly improves this page for the next person.</p>
+<p>We do not run cloud-GPU validation for AMD or Intel hardware. If you use one,
+<a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/issues/new?template=hardware-report.yml">file a hardware report</a>
+with the model, driver, selected overlay, and result.</p>
 <hr />
 <h2 id="known-caveats">Known caveats<a class="headerlink" href="#known-caveats" title="Permanent link">&para;</a></h2>
 <ul>

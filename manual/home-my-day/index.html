@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/home-my-day/">
       
       
-        <link rel="prev" href="../passkeys/">
+        <link rel="prev" href="../install-and-offline/">
       
       
         <link rel="next" href="../navigation/">
@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1373,7 +1401,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1401,7 +1429,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1488,7 +1516,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1516,7 +1544,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1544,7 +1572,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -2143,7 +2171,7 @@
   
 
 
-<!-- verified-against-UI: 2026-07-05 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-07-20 | routes: /, /my-day -->
 
 <h1 id="my-day-home">My Day &amp; Home<a class="headerlink" href="#my-day-home" title="Permanent link">&para;</a></h1>
 <hr />
@@ -2168,6 +2196,10 @@
 </thead>
 <tbody>
 <tr>
+<td>Process whole library</td>
+<td>Queues eligible library papers for PDF download and processing, explicitly including summary generation, without requiring you to run each stage separately</td>
+</tr>
+<tr>
 <td>Process PDFs</td>
 <td>Run text extraction and chunking for papers that have a local PDF but have not yet been processed</td>
 </tr>
@@ -2177,7 +2209,7 @@
 </tr>
 </tbody>
 </table>
-<p>Each queued operation appears in the Jobs panel while it runs. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.</p>
+<p>Each queued operation appears in the Jobs panel while it runs, with progress and completed, failed, or blocked counts. You can cancel a running job; completed work remains, and it is safe to run the relevant operation again for papers that were skipped or did not finish. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.</p>
 <p>Entity extraction is an administrator action and is shown only to admins after the advanced controls are opened.</p>
 <hr />
 <h2 id="my-day-my-day">My Day — <code>/my-day</code><a class="headerlink" href="#my-day-my-day" title="Permanent link">&para;</a></h2>

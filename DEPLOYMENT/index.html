@@ -27,7 +27,7 @@
     
     
       
-        <title>Deployment - JARVIS RD Assistant</title>
+        <title>Deployment and troubleshooting - JARVIS RD Assistant</title>
       
     
     
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deployment
+              Deployment and troubleshooting
             
           </span>
         </div>
@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1220,7 +1248,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1257,7 +1285,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1275,7 +1303,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1413,6 +1441,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#changing-access-routes-safely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing access routes safely
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#example-tailscale" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1441,10 +1480,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#per-adapter-trust-contract" class="md-nav__link">
+  <a href="#ingress-and-adapter-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-adapter trust contract
+        Ingress and adapter contract
       
     </span>
   </a>
@@ -1508,10 +1547,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#hardening-checklist-before-lan-exposure" class="md-nav__link">
+  <a href="#network-precautions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hardening checklist before LAN exposure
+        Network precautions
       
     </span>
   </a>
@@ -1568,10 +1607,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mode-3-cloudflare-tunnel" class="md-nav__link">
+  <a href="#choice-4-cloudflare-tunnel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mode 3 — Cloudflare Tunnel
+        Choice 4 — Cloudflare Tunnel
       
     </span>
   </a>
@@ -1579,10 +1618,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mode-4-tailscale-funnel-vpn" class="md-nav__link">
+  <a href="#other-private-network-adapters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mode 4 — Tailscale Funnel / VPN
+        Other private-network adapters
       
     </span>
   </a>
@@ -1741,102 +1780,13 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#backup" class="md-nav__link">
+  <a href="#restore-capability-boundaries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup
+        Restore capability boundaries
       
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#restore" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restore
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Restore">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#one-click-restore-admin-ui" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        One-click restore (admin UI)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#manual-restore-last-resort" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Manual restore (last resort)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#off-host-total-host-loss-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Off-host / total-host-loss recovery
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Off-host / total-host-loss recovery">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-based-recovery-recommended" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web-based recovery (recommended)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#command-line-fallback-constrained-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Command-line fallback (constrained environments)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sentinel-cleanup-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sentinel cleanup reference
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -1923,7 +1873,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -2394,6 +2344,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#changing-access-routes-safely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing access routes safely
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#example-tailscale" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2422,10 +2383,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#per-adapter-trust-contract" class="md-nav__link">
+  <a href="#ingress-and-adapter-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Per-adapter trust contract
+        Ingress and adapter contract
       
     </span>
   </a>
@@ -2489,10 +2450,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#hardening-checklist-before-lan-exposure" class="md-nav__link">
+  <a href="#network-precautions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hardening checklist before LAN exposure
+        Network precautions
       
     </span>
   </a>
@@ -2549,10 +2510,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mode-3-cloudflare-tunnel" class="md-nav__link">
+  <a href="#choice-4-cloudflare-tunnel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mode 3 — Cloudflare Tunnel
+        Choice 4 — Cloudflare Tunnel
       
     </span>
   </a>
@@ -2560,10 +2521,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#mode-4-tailscale-funnel-vpn" class="md-nav__link">
+  <a href="#other-private-network-adapters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mode 4 — Tailscale Funnel / VPN
+        Other private-network adapters
       
     </span>
   </a>
@@ -2722,102 +2683,13 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#backup" class="md-nav__link">
+  <a href="#restore-capability-boundaries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup
+        Restore capability boundaries
       
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#restore" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restore
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Restore">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#one-click-restore-admin-ui" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        One-click restore (admin UI)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#manual-restore-last-resort" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Manual restore (last resort)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#off-host-total-host-loss-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Off-host / total-host-loss recovery
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Off-host / total-host-loss recovery">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-based-recovery-recommended" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web-based recovery (recommended)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#command-line-fallback-constrained-environments" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Command-line fallback (constrained environments)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sentinel-cleanup-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sentinel cleanup reference
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -2902,12 +2774,14 @@
 
 
 <h1 id="deployment-guide">Deployment Guide<a class="headerlink" href="#deployment-guide" title="Permanent link">&para;</a></h1>
-<p>JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.</p>
+<p>JARVIS is a self-hosted research assistant. This document covers installation,
+remote access, TLS, service configuration, and troubleshooting.</p>
 <p>For first-time setup, start with <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/README.md">README.md</a> Quickstart. If the two conflict, this file is canonical.</p>
 <hr />
 <h2 id="solo-deployment-recommended-for-single-user">Solo deployment (recommended for single-user)<a class="headerlink" href="#solo-deployment-recommended-for-single-user" title="Permanent link">&para;</a></h2>
 <p>Use the installer for first-time setup. It generates secrets, asks how you will
-access JARVIS (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), selects
+access JARVIS (localhost, LAN diagnostics, Tailscale, Cloudflare Tunnel, or
+Let's Encrypt), selects
 single-user or multi-user mode, detects GPU support, pulls the prebuilt
 application images, starts the stack, and opens the first-run wizard.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./setup.sh<span class="w"> </span>--check<span class="w">   </span><span class="c1"># read-only preflight</span>
@@ -2931,7 +2805,7 @@ overlay so later compose starts keep using it. See <a href="#gpu-acceleration-op
 </tr>
 <tr>
 <td><code>JARVIS_CONFIG_KEY</code></td>
-<td>Fernet key; encrypts user_config secrets at rest</td>
+<td>Fernet key; encrypts database-backed integration settings at rest</td>
 </tr>
 <tr>
 <td><code>LITELLM_MASTER_KEY</code></td>
@@ -2943,7 +2817,6 @@ overlay so later compose starts keep using it. See <a href="#gpu-acceleration-op
 </tr>
 </tbody>
 </table>
-<p>Optional: <code>JARVIS_CONFIG_KEY_OLD</code> — enables zero-downtime crypto rotation via MultiFernet.</p>
 <p>Health checks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>http://127.0.0.1:8010/health<span class="w">   </span><span class="c1"># paper_ingestion</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>http://127.0.0.1:8011/health<span class="w">   </span><span class="c1"># learning_engine</span>
@@ -2986,7 +2859,7 @@ the first-run wizard or Settings after the stack starts.</p>
 <p>A service restart is required when changing these.</p>
 <h3 id="pulse-source-caveats">Pulse source caveats<a class="headerlink" href="#pulse-source-caveats" title="Permanent link">&para;</a></h3>
 <p>arXiv rate-limits to ~1 req/3 s; repeated manual Pulse runs can return HTTP 429. A zero-card run with <code>degraded_reason</code> means the job completed but every source was empty, rate-limited, or misconfigured. If arXiv returns 429, wait the <code>Retry-After</code> window (≥30 s) before retrying. Use Settings → Pulse → Diagnostics for production troubleshooting; <code>/api/pulse/debug</code> is dev-mode only (<code>DEV_MODE=true</code>).</p>
-<p>OpenAlex requires <code>OPENALEX_EMAIL</code> or <code>OPENALEX_API_KEY</code>. PubMed works without a key but an NCBI key raises the rate limit.</p>
+<p>OpenAlex requires the free <code>OPENALEX_API_KEY</code>; create one at <a href="https://openalex.org/settings/api">openalex.org/settings/api</a>. PubMed works without a key but an NCBI key raises the rate limit.</p>
 <hr />
 <h2 id="gpu-acceleration-optional">GPU acceleration (optional)<a class="headerlink" href="#gpu-acceleration-optional" title="Permanent link">&para;</a></h2>
 <p>The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also downloads the Ollama model set for your hardware tier — roughly 5–22 GB depending on tier, after the application images are pulled; see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</p>
@@ -3020,60 +2893,59 @@ the first-run wizard or Settings after the stack starts.</p>
 (<code>http://localhost:3001</code>): it binds to loopback (<code>DASHBOARD_BIND_HOST</code>) and nginx
 answers only to a <code>Host</code> allowlist (<code>DASHBOARD_SERVER_NAME</code>, below). <strong>If you only
 use JARVIS on that one machine, skip this section</strong> — nothing needs to be exposed.</p>
-<p>To reach it from another device — your phone, or a laptop away from home —
-without putting it on the open internet, common options are:</p>
+<p>To reach it from another device, re-run <code>./setup.sh</code>, accept the <strong>Overwrite</strong>
+prompt, and select the access route you want. An unattended reconfiguration must
+include <code>--overwrite-env</code>; without either confirmation, setup starts the existing
+configuration unchanged. Setup configures the JARVIS settings, service profiles,
+and health checks for the new choice:</p>
 <ul>
-<li><strong>A named private HTTPS origin</strong> — <code>./setup.sh --public-origin https://&lt;host&gt;</code> layers on top of your existing localhost/LAN setup and wires <code>APP_BASE_URL</code>/CORS/the Host allowlist automatically. The Tailscale walkthrough below is the reference implementation of this.</li>
+<li><strong>Guided private HTTPS</strong> uses Tailscale Serve on the same host and keeps the
+  dashboard bound to loopback. Setup uses an existing client or offers an
+  explicit-consent package install on supported Linux hosts, can ask before
+  <code>sudo tailscale up</code>, configures Serve, and verifies the final endpoint.</li>
 <li><strong>A reverse proxy with TLS</strong> on your own public domain — the Caddy <code>letsencrypt</code> profile (see <em>Deployment Modes</em> below). Note <code>local-https</code> (mkcert) is <strong>not</strong> a remote-access option — it is loopback-only, for a locally-trusted <code>https://localhost:3443</code> on the JARVIS machine itself.</li>
 <li><strong>A Cloudflare Tunnel</strong> — outbound-only, no open ports.</li>
-<li><strong>A mesh VPN</strong> — your devices share one private encrypted network.</li>
+<li><strong>A mesh VPN with your own proxy</strong> is a manual adapter; provide a named HTTPS
+  origin and satisfy the trust contract below.</li>
 </ul>
-<p>These are alternatives; pick whichever suits you. The walkthrough below is <strong>one
-example</strong> (Tailscale, a mesh VPN), not a requirement — and shows what <code>--public-origin</code> automates under the hood.</p>
+<h3 id="changing-access-routes-safely">Changing access routes safely<a class="headerlink" href="#changing-access-routes-safely" title="Permanent link">&para;</a></h3>
+<p>Setup treats an access change as one operation and accepts the replacement only
+after its exact endpoint passes the health and production-readiness checks. If
+a later step fails, setup restores and verifies the last working dashboard and
+owned access route. Running setup again resumes that recovery after an
+interruption. If recovery cannot be verified automatically, setup stops and
+prints exact commands rather than reporting success; follow those commands from
+the same checkout, then rerun setup to complete verification. Do not delete the
+retained recovery data or edit generated configuration while recovery is
+pending.</p>
+<p>A proxy supplied with <code>--public-origin</code> remains operator-owned. Setup can
+restore the dashboard settings and verify that address, but it does not
+reconfigure the proxy itself.</p>
 <h3 id="example-tailscale">Example: Tailscale<a class="headerlink" href="#example-tailscale" title="Permanent link">&para;</a></h3>
-<p>Tailscale is a zero-config mesh VPN (WireGuard) that is free for personal use. Install it on the JARVIS host and on your phone, sign both into the same account, and the dashboard becomes reachable over the private tailnet with <strong>zero open inbound ports</strong> — reached by a stable MagicDNS name (e.g. <code>my-host.my-tailnet.ts.net</code>). See <a href="https://tailscale.com">https://tailscale.com</a>.</p>
-<blockquote>
-<p><strong>Scope of the steps below:</strong> they assume the <strong>default single-host setup</strong> —
-dashboard on plain-HTTP loopback <code>:3001</code>, Tailscale running on the <strong>same host</strong>
-(on WSL2: inside the same distro as Docker, not the Windows host). If you front
-the app with Caddy (<code>local-https</code>/<code>letsencrypt</code>), use Caddy's domain for remote
-access instead. Adjust the port if you changed <code>DASHBOARD_HOST_PORT</code>.</p>
-</blockquote>
-<p><strong>1. Install Tailscale and join the tailnet</strong> on both the host and the client:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://tailscale.com/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh<span class="w">   </span><span class="c1"># on the host (Linux/WSL2)</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sudo<span class="w"> </span>tailscale<span class="w"> </span>up
-</code></pre></div>
-<p>Install the Tailscale app on the phone and sign in to the same account.</p>
-<p><strong>2. Allow the host's tailnet name.</strong> The dashboard nginx rejects (<code>444</code>) any
-<code>Host</code> it doesn't recognise (<code>localhost</code>/<code>127.0.0.1</code> by default; the Caddy
-profiles rewrite <code>Host</code>→<code>localhost</code>). Add your MagicDNS name so access isn't
-refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;DASHBOARD_SERVER_NAME=&lt;host&gt;.&lt;tailnet&gt;.ts.net&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>.env
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
-</code></pre></div>
-<p><strong>3. Expose the dashboard on the tailnet</strong> — two ways:</p>
-<ul>
-<li><strong><code>tailscale serve</code></strong> (clean HTTPS URL, keeps the loopback bind):</li>
-</ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>tailscale<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--operator<span class="o">=</span><span class="k">$(</span>whoami<span class="k">)</span><span class="w">   </span><span class="c1"># one-time: run `serve` without sudo</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>tailscale<span class="w"> </span>serve<span class="w"> </span>--bg<span class="w"> </span>--https<span class="o">=</span><span class="m">443</span><span class="w"> </span>http://127.0.0.1:3001
-</code></pre></div>
-<p>Then open <code>https://&lt;host&gt;.&lt;tailnet&gt;.ts.net</code> (no port). Requires HTTPS enabled
-  in the Tailscale admin console (Settings → Features → HTTPS Certificates).</p>
-<ul>
-<li><strong>Direct port</strong> (simpler): also set <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, run
-  <code>docker compose up -d dashboard</code>, and open
-  <code>http://&lt;host&gt;.&lt;tailnet&gt;.ts.net:3001</code>. Binds the port on all interfaces —
-  fine on a private tailnet, looser than <code>serve</code>.</li>
-</ul>
-<p>Telegram needs no change for any of this — the bot only makes outbound calls.</p>
+<p>Install Tailscale on family devices, then choose the guided private-HTTPS option
+in <code>./setup.sh</code>. If the host client is missing on Debian, Ubuntu, Linux Mint,
+Pop!_OS, or Fedora with systemd, setup prints the official package-repository
+commands and asks before running them. Non-interactive installation requires
+<code>--install-prereqs</code>. macOS, unsupported distributions, and WSL without systemd
+receive manual installation guidance instead.</p>
+<p>If the client is signed out, interactive setup asks before <code>sudo tailscale up</code>;
+Tailscale handles the browser sign-in. JARVIS never handles those credentials.</p>
+<p>After authentication, setup sends Tailscale Serve to the host-only listener at
+<code>127.0.0.1:3003</code> (or the persisted <code>DASHBOARD_TRUSTED_HOST_PORT</code>) and probes the
+named HTTPS address for JARVIS's exact health marker. A missing client,
+cancelled sign-in, or failed Serve command leaves localhost working but exits
+nonzero so an unfinished private route is not reported as complete.</p>
+<p><code>--public-origin https://&lt;host&gt;</code> remains the non-interactive/manual adapter for
+an HTTPS proxy that the operator already configured. Setup does not install or
+configure that proxy, but it verifies the exact JARVIS health marker and exits
+nonzero until the address reaches this installation.</p>
 <hr />
 <h2 id="deployment-modes">Deployment Modes<a class="headerlink" href="#deployment-modes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Mode</th>
-<th>Setup time</th>
+<th>Additional route work</th>
 <th>Inbound ports</th>
 <th>Transport</th>
 </tr>
@@ -3081,45 +2953,57 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <tbody>
 <tr>
 <td><strong>Localhost</strong></td>
-<td>~5 min</td>
+<td>None after the base install</td>
 <td>none</td>
 <td>Plain HTTP on loopback (<code>:3001</code>)</td>
 </tr>
 <tr>
-<td><strong>LAN</strong></td>
-<td>~10 min</td>
+<td><strong>LAN diagnostics</strong></td>
+<td>Firewall or VM-network check when needed</td>
 <td><code>3001/tcp</code> on LAN iface</td>
-<td>Plain HTTP on every interface — viewing only, see <a href="#mode-2-lan">Mode 2</a></td>
+<td>Plain HTTP; remote clients can request only <code>/health/jarvis</code></td>
 </tr>
 <tr>
-<td><strong>Named private HTTPS</strong> (<code>--public-origin</code>, e.g. Tailscale Serve)</td>
-<td>~10 min on top of localhost/LAN</td>
-<td><em>none</em> on your host</td>
-<td>Real HTTPS at your chosen hostname; edge owns the cert</td>
+<td><strong>Guided private HTTPS</strong> (Tailscale Serve)</td>
+<td>Depends on account sign-in</td>
+<td>none on your host</td>
+<td>Real HTTPS at the tailnet hostname; Tailscale owns the certificate</td>
 </tr>
 <tr>
 <td><strong>Local HTTPS</strong> (<code>--profile=local-https</code>)</td>
-<td>~5 min (<code>make certs</code> first)</td>
+<td>Setup creates and trusts a local certificate</td>
 <td><code>3443/tcp</code> on loopback</td>
-<td>mkcert-issued HTTPS, trusted only on this machine</td>
+<td>mkcert-issued HTTPS, trusted only by browsers in the same OS trust stores</td>
 </tr>
 <tr>
 <td><strong>Cloudflare Tunnel</strong></td>
-<td>~30 min</td>
+<td>Depends on account, hostname, and policy setup</td>
 <td><em>none</em> (outbound-only)</td>
 <td>HTTPS; Cloudflare edge owns the cert</td>
 </tr>
 <tr>
 <td><strong>Let's Encrypt / Caddy</strong></td>
-<td>~15 min after DNS</td>
+<td>Starts after DNS and inbound ports are ready</td>
 <td><code>80/tcp</code>, <code>443/tcp</code></td>
 <td>HTTPS; Caddy ACME edge owns the cert</td>
 </tr>
 </tbody>
 </table>
-<p><code>./setup.sh</code> runs localhost mode by default. LAN, Cloudflare Tunnel, and Let's Encrypt are prompts in the same script (access-mode options 2–4); a named private HTTPS origin layers onto localhost/LAN via <code>--public-origin</code>. The chosen mode sets <code>APP_BASE_URL</code> and <code>JARVIS_ACCESS_MODE</code> in <code>.env</code>. See <a href="../manual/access-modes/">Choosing how you access JARVIS</a>.</p>
-<h3 id="per-adapter-trust-contract">Per-adapter trust contract<a class="headerlink" href="#per-adapter-trust-contract" title="Permanent link">&para;</a></h3>
-<p>Every non-localhost adapter must agree with JARVIS on five things: which hostname reaches the app, who owns the edge certificate, whether the adapter rewrites the <code>Host</code> header (which changes what <code>DASHBOARD_SERVER_NAME</code> must allowlist), and how the setup-token bootstrap and passkey ceremony behave at that origin. <code>setup.sh</code> wires the first four adapters below automatically; a custom proxy is on you to match this contract.</p>
+<p>The first base install normally spends 20–60 minutes downloading container
+images and AI models. Route setup is additional; later starts reuse those files.</p>
+<p><code>./setup.sh</code> defaults to localhost. The interactive chooser also offers guided
+private HTTPS, LAN diagnostics, Cloudflare Tunnel, and Let's Encrypt. The
+selected route sets <code>APP_BASE_URL</code>, the host allowlist, and
+<code>JARVIS_ACCESS_MODE</code>; no hand-edited environment file is required. See <a href="../manual/access-modes/">Access
+from other devices</a>.</p>
+<h3 id="ingress-and-adapter-contract">Ingress and adapter contract<a class="headerlink" href="#ingress-and-adapter-contract" title="Permanent link">&para;</a></h3>
+<p>The dashboard container has two listeners. Container port <code>3000</code>, normally
+published as host port <code>3001</code>, serves the full app only to localhost; remote LAN
+clients get only <code>/health/jarvis</code>. Trusted HTTPS edges use container port <code>3002</code>.
+Tailscale reaches that listener through host loopback port <code>3003</code>.</p>
+<p>Each remote adapter must also agree with JARVIS on the public hostname,
+certificate owner, <code>Host</code> handling, setup-token handoff, and passkey origin.
+Setup configures the listed adapters; a custom proxy must meet the same rules.</p>
 <table>
 <thead>
 <tr>
@@ -3137,106 +3021,146 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <tbody>
 <tr>
 <td>Cloudflare Tunnel</td>
-<td><code>TUNNEL_HOSTNAME</code> you configured in Zero Trust</td>
+<td><code>TUNNEL_HOSTNAME</code> configured in Zero Trust</td>
 <td>Cloudflare</td>
 <td>No — original Host forwarded</td>
-<td>Set automatically by <code>setup.sh</code> option 3</td>
-<td>In-network (bridge subnet); set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> to key rate limits on <code>CF-Connecting-IP</code></td>
+<td>Set automatically by <code>setup.sh</code> option 4</td>
+<td>Pinned <code>cloudflared</code> container reaches the trusted ingress</td>
 <td>Secure</td>
-<td>URL fragment, once the origin probes healthy</td>
+<td>URL fragment only after active-tunnel and exact-app checks pass</td>
 <td><code>TUNNEL_HOSTNAME</code></td>
 </tr>
 <tr>
-<td>Named private HTTPS (Tailscale Serve)</td>
-<td>Hostname you pass to <code>--public-origin</code></td>
-<td>The proxy (e.g. Tailscale)</td>
+<td>Tailscale Serve</td>
+<td>Tailnet hostname detected after <code>tailscale up</code></td>
+<td>Tailscale</td>
 <td>No — original Host forwarded</td>
-<td>Set automatically by <code>--public-origin</code></td>
-<td>Host loopback (<code>127.0.0.1</code>) — already trusted by default</td>
+<td>Set automatically by <code>setup.sh</code> option 3 or <code>--tailscale</code></td>
+<td>Host loopback reaches the trusted ingress on <code>${DASHBOARD_TRUSTED_HOST_PORT:-3003}</code></td>
 <td>Secure</td>
-<td>URL fragment, once the edge probe (best-effort, 3 retries) succeeds; loopback until then</td>
-<td>Exact <code>--public-origin</code> origin</td>
+<td>URL fragment only after the exact-app check passes</td>
+<td>Exact tailnet hostname</td>
 </tr>
 <tr>
 <td>Let's Encrypt (Caddy)</td>
 <td><code>LETSENCRYPT_DOMAIN</code></td>
 <td>Caddy ACME</td>
 <td>Yes — rewritten to <code>localhost</code></td>
-<td>Set automatically by <code>setup.sh</code> option 4</td>
-<td>In-network (bridge subnet), pinned Caddy IP</td>
+<td>Set automatically by <code>setup.sh</code> option 5</td>
+<td>Pinned Caddy container reaches the trusted ingress</td>
 <td>Secure</td>
-<td>URL fragment, after the ACME cert-issuance gate passes (production: fatal on timeout)</td>
+<td>URL fragment after the certificate and exact-app gates pass</td>
 <td><code>LETSENCRYPT_DOMAIN</code></td>
 </tr>
 <tr>
 <td>Local HTTPS (<code>caddy_local</code>)</td>
-<td><code>localhost:3443</code></td>
+<td><code>https://localhost:3443</code></td>
 <td>mkcert (local trust store only)</td>
-<td>Yes — rewritten to <code>localhost</code></td>
+<td>Preserved as <code>localhost:3443</code></td>
 <td><code>CORS_ORIGINS</code> gains <code>https://localhost:3443</code> automatically with <code>--profile=local-https</code></td>
-<td>In-network (bridge subnet), pinned Caddy IP</td>
+<td>Pinned local Caddy container reaches the trusted ingress</td>
 <td>Secure</td>
 <td>URL fragment</td>
-<td><code>localhost</code></td>
+<td>Exact <code>https://localhost:3443</code> origin</td>
 </tr>
 <tr>
 <td>Custom reverse proxy</td>
 <td>Whatever you configure</td>
 <td>You</td>
 <td>Your choice — must match what you allowlist</td>
-<td>You must set <code>APP_BASE_URL</code>, <code>CORS_ORIGINS</code>, and <code>DASHBOARD_SERVER_NAME</code> by hand</td>
-<td>Add your proxy's CIDR to <code>TRUSTED_PROXY_CIDRS</code> (and, if it sits outside the default bridge subnet, <code>TRUSTED_PROXY_HOSTS</code>)</td>
-<td>Secure (requires HTTPS or <code>DEV_MODE=true</code>)</td>
-<td>Manual — no <code>setup.sh</code> automation for this path</td>
+<td>Pass its existing HTTPS origin with <code>--public-origin</code>; you own the proxy configuration</td>
+<td>Forward only through a trusted ingress you have explicitly constrained</td>
+<td>Secure (requires HTTPS)</td>
+<td>Manual; setup does not install or authenticate the proxy</td>
 <td>Exact origin in <code>APP_BASE_URL</code>; never a raw IP</td>
 </tr>
 </tbody>
 </table>
-<p>Raw-IP LAN browsing is deliberately absent from this table — it carries no cookie or passkey contract at all (see <a href="../manual/access-modes/#about-lan-mode">access-modes.md</a>).</p>
+<p>Raw-IP LAN browsing is absent because it is not an app route. It exposes only
+<code>/health/jarvis</code>; all other remote requests return HTTP 403. See <a href="../manual/access-modes/#choice-2-lan-diagnostics">LAN
+diagnostics</a>.</p>
 <hr />
 <h2 id="mode-1-localhost">Mode 1 — Localhost<a class="headerlink" href="#mode-1-localhost" title="Permanent link">&para;</a></h2>
 <p>The default mode — see <a href="#solo-deployment-recommended-for-single-user">Solo deployment</a> above for the commands, or run <code>./setup.sh</code> and pick option 1 at the access-mode prompt.</p>
-<p>The dashboard is at <code>http://localhost:3001</code> (default <code>DASHBOARD_HOST_PORT=3001</code>) — plain HTTP; loopback traffic never leaves the machine. Enable the <code>caddy-local</code> profile (<code>--profile=local-https</code>, needs <code>make certs</code> first) only when you want a locally-trusted <code>https://localhost:3443</code>.</p>
+<p>The dashboard is at <code>http://localhost:3001</code> (default
+<code>DASHBOARD_HOST_PORT=3001</code>). Loopback traffic never leaves the machine, and
+browsers treat localhost as a secure context for passkeys. Choose
+<code>--profile=local-https</code> only when you also want a locally trusted
+<code>https://localhost:3443</code>; setup installs the supported tools with your consent
+and prepares the certificate before starting the edge.</p>
 <h3 id="bootstrapping-the-first-admin-the-setup-token">Bootstrapping the first admin (the setup token)<a class="headerlink" href="#bootstrapping-the-first-admin-the-setup-token" title="Permanent link">&para;</a></h3>
 <p><code>scripts/init-secrets.sh</code> generates <code>JARVIS_SETUP_TOKEN</code> (a Docker Secret, <code>secrets/jarvis_setup_token.txt</code>) on first run. It gates the unauthenticated first-admin bootstrap endpoints via an <code>X-Setup-Token</code> header — a second factor on top of "no admin exists yet", closing the window where anyone who reaches the instance before you could create the first account. <code>setup.sh</code> prints the click-to-finish link with the token embedded in a URL <strong>fragment</strong> (<code>.../setup#setup_token=…</code>), never a query string — a fragment is never sent to the server, so it never lands in access logs, the <code>Referer</code> header, or a reverse proxy's request line. Links printed before this fragment migration used a <code>?setup_token=</code> query string; the wizard still accepts those for compatibility, but new links are always fragments.</p>
-<p>If the browser never received the printed link (a second device, an incognito window) the admin-creation step offers a <strong>paste field</strong> — enter just the token value from the end of the line <code>./setup.sh</code> printed (<code>.../setup#setup_token=&lt;this part&gt;</code>).</p>
+<p>If the browser never received the printed link, the admin-creation step can
+accept the token value from the end of the line
+<code>.../setup#setup_token=&lt;this part&gt;</code>. Use that field only on localhost or a
+verified named HTTPS route. Setup and authentication writes are refused over
+non-loopback plain HTTP.</p>
 <p>In production, an unset <code>JARVIS_SETUP_TOKEN</code> fails closed: the bootstrap endpoint refuses every write until the secret exists. Outside production it warns and allows the request, for local/dev convenience.</p>
 <hr />
 <h2 id="mode-2-lan">Mode 2 — LAN<a class="headerlink" href="#mode-2-lan" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./setup.sh<span class="w">   </span><span class="c1"># pick option 2</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>./setup.sh<span class="w">   </span><span class="c1"># pick option 2</span>
 </code></pre></div>
-<p><code>setup.sh</code> sets <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, detects your LAN IPv4 (<code>--address &lt;ipv4&gt;</code> to override), and adds it to <code>CORS_ORIGINS</code> and the <code>DASHBOARD_SERVER_NAME</code> Host allowlist. This is plain HTTP — there is no certificate involved in LAN mode; see <a href="../manual/access-modes/#about-lan-mode">access-modes.md → About LAN mode</a> for what raw-IP LAN access does and does not give you (viewing yes, a persisted signed-in session no).</p>
+<p><code>setup.sh</code> sets <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, detects the LAN IPv4
+(<code>--address &lt;ipv4&gt;</code> overrides it), and adds it to the dashboard allowlist. This
+is plain HTTP with no certificate. From another device, only <code>/health/jarvis</code>
+is available; the dashboard and every setup, sign-in, cookie, and passkey path
+return HTTP 403. Use guided private HTTPS for family access.</p>
 <h3 id="when-your-lan-ip-changes">When your LAN IP changes<a class="headerlink" href="#when-your-lan-ip-changes" title="Permanent link">&para;</a></h3>
-<p>DHCP can re-lease a different IP after a reboot (symptom: dashboard works on <code>localhost</code> but other devices get a CORS or <code>444</code>/Host-rejection error).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Re-run setup.sh — it re-detects the LAN IP and rewrites CORS_ORIGINS /</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="c1"># DASHBOARD_SERVER_NAME for the new address. No cert to regenerate.</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>./setup.sh
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># only needed if setup.sh did not restart it for you</span>
+<p>DHCP can assign a different IP after a reboot. The localhost app may still work
+while the old LAN health address stops responding.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Re-run setup.sh, accept Overwrite, and choose LAN diagnostics again.</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>./setup.sh
 </code></pre></div>
-<h3 id="hardening-checklist-before-lan-exposure">Hardening checklist before LAN exposure<a class="headerlink" href="#hardening-checklist-before-lan-exposure" title="Permanent link">&para;</a></h3>
-<p>Set in <code>.env</code> (<code>setup.sh</code> enforces the first two for option 2; verify the rest):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>ENVIRONMENT=production
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>DEV_MODE=false
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>JARVIS_API_KEY=&lt;at least 32 chars: openssl rand -hex 32&gt;
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>JARVIS_CONFIG_KEY=&lt;Fernet key: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;&gt;
-</code></pre></div>
-<p><code>DEV_MODE=true</code> is a meta-flag that promotes granular dev flags (<code>DEV_AUTH_BYPASS</code>, <code>DEV_ERROR_DETAIL</code>, <code>DEV_CORS_OPEN</code>, <code>DEV_SMTP_LOG_ONLY</code>, <code>DEV_CRYPTO_RELAXED</code>) to <code>true</code> unless explicitly overridden. None are permitted when <code>ENVIRONMENT=production</code> — startup will crash if any is <code>true</code>.</p>
+<h3 id="network-precautions">Network precautions<a class="headerlink" href="#network-precautions" title="Permanent link">&para;</a></h3>
+<p>Use LAN diagnostics only on a trusted network. This mode intentionally keeps
+<code>ENVIRONMENT=development</code> because authenticated routes remain blocked; it writes
+the generated API key, encryption key, CORS origins, and host allowlist needed
+for the diagnostic endpoint. Setup does not change the host firewall; allow port
+3001 only on the intended private interface if a firewall blocks it.</p>
 <h3 id="rate-limit-client-ip-trust-automatic">Rate-limit client-IP trust (automatic)<a class="headerlink" href="#rate-limit-client-ip-trust-automatic" title="Permanent link">&para;</a></h3>
-<p>JARVIS pins the internal Docker network to <code>10.137.241.0/24</code> and assigns Caddy fixed IPs within it. nginx trusts only those IPs plus <code>127.0.0.1</code> — no operator step required.</p>
-<p><strong>Subnet collision:</strong> if <code>10.137.241.0/24</code> conflicts with your LAN, <code>setup.sh --check</code> warns. Set <code>JARVIS_NET_SUBNET=&lt;a free /24&gt;</code> and update <code>frontend/nginx.conf</code>'s two <code>set_real_ip_from</code> literals.</p>
-<p><strong><code>TRUSTED_PROXY_CIDRS</code></strong> — Python-layer variable for the XFF walk. Add load-balancer CIDRs only if you place an additional external proxy in front of the stack. RFC-1918 and <code>127.0.0.0/8</code> are always trusted.</p>
+<p>JARVIS pins the internal Docker network to <code>10.137.241.0/24</code> and derives the
+trusted dashboard and edge peers from that subnet. Browser-supplied forwarding
+headers are discarded at the direct ingress; only the separate trusted edge may
+assert HTTPS.</p>
+<p><strong>Subnet collision:</strong> if the default conflicts with another local network,
+<code>setup.sh --check</code> warns. Set <code>JARVIS_NET_SUBNET</code> to a free IPv4 <code>/27</code> or larger
+network and re-run setup. Setup and update derive the gateway and the highest
+four usable addresses; do not edit Compose or nginx.</p>
+<p><strong><code>TRUSTED_PROXY_CIDRS</code></strong> — Python-layer variable for the XFF walk. The standard
+stack trusts loopback and the derived dashboard <code>/32</code>. Add another CIDR only
+when an external proxy with that exact source address reaches the services.</p>
 <h3 id="encrypted-config-key-rotation">Encrypted config key rotation<a class="headerlink" href="#encrypted-config-key-rotation" title="Permanent link">&para;</a></h3>
-<p>Provider keys stored through Settings are encrypted with <code>JARVIS_CONFIG_KEY</code>. Dry-run first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">DATABASE_URL</span><span class="o">=</span>postgresql://jarvis:&lt;password&gt;@localhost:5432/jarvis<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nv">OLD_JARVIS_CONFIG_KEY</span><span class="o">=</span>&lt;old-fernet-key&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nv">NEW_JARVIS_CONFIG_KEY</span><span class="o">=</span>&lt;new-fernet-key&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>python<span class="w"> </span>scripts/rotate_config_key.py
+<p>Database-backed integration settings stored through Settings are encrypted with
+<code>JARVIS_CONFIG_KEY</code>. Provider, SMTP, and Telegram-bot settings are
+deployment-wide; Zotero credentials are per-user. Host Docker secrets are a
+separate configuration layer.
+Rotation is a maintenance task, not part of a routine update. Before starting,
+open <strong>Admin → Backups</strong>, run a backup, and wait until it is marked <strong>Complete</strong>
+and <strong>Encrypted</strong>. Keep the matching backup encryption key somewhere off the
+server.</p>
+<p>From the repository root, run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>bash<span class="w"> </span>scripts/rotate-config-key.sh
 </code></pre></div>
-<p>Add <code>--apply</code> after the dry run validates every row. The script runs in a transaction and never logs plaintext or ciphertext.</p>
+<p>The script validates every encrypted Settings row before it asks for
+confirmation. It then opens a short maintenance window, rotates all rows in one
+database transaction, updates both <code>.env</code> and the Docker secret file, restarts
+the affected services, and waits for them to become healthy. Key values are read
+from files rather than placed in command arguments.</p>
+<p>If the command is interrupted or reports an error, do not delete its recovery
+files and do not edit either key store by hand. Resolve the reported Docker or
+service problem, then run the same command again; it resumes from the recorded
+phase. Use <code>bash scripts/rotate-config-key.sh --yes</code> only in automation where a
+current verified backup already exists, because it skips the confirmation
+prompt.</p>
+<p>On success, the script removes its temporary recovery files. On failure, it
+keeps them and prints the safe resume command.</p>
 <h3 id="docker-secrets">Docker Secrets<a class="headerlink" href="#docker-secrets" title="Permanent link">&para;</a></h3>
 <p>JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a <code>_FILE</code>-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in <code>secrets/</code> at the repo root (gitignored); <code>setup.sh</code> creates and populates them on first run. Each file is mode <code>644</code> inside a mode <code>700</code> <code>secrets/</code> directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.</p>
 <p><strong>Operator-provisioned secrets</strong> (create manually if not using <code>setup.sh</code>):</p>
+<p>The host SMTP fallback is <code>secrets/smtp_pass.txt</code>. It is separate from the
+deployment-wide encrypted SMTP row saved through Settings; the Settings value
+takes effect without a service restart, while changing the host fallback
+requires restarting its service consumers.</p>
 <table>
 <thead>
 <tr>
@@ -3300,11 +3224,18 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 </table>
 <p><strong>Observability profile secrets</strong> (auto-provisioned by <code>make observability-up</code>; only present when the <code>observability</code> profile is active):
 <code>langfuse_init_pk</code>, <code>langfuse_init_sk</code> — Langfuse SDK keys injected into app services. <code>langfuse_pg_password</code>, <code>langfuse_nextauth_secret</code>, <code>langfuse_salt</code> — internal Langfuse service credentials.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># To rotate a secret manually:</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;new-value&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/jarvis_api_key.txt
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>secrets/jarvis_api_key.txt
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<p>To rotate the JARVIS API key without exposing it in shell history, generate a
+replacement file and then restart every running consumer:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>install<span class="w"> </span>-m<span class="w"> </span><span class="m">644</span><span class="w"> </span>/dev/null<span class="w"> </span>secrets/jarvis_api_key.txt.next
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/jarvis_api_key.txt.next
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>mv<span class="w"> </span>secrets/jarvis_api_key.txt.next<span class="w"> </span>secrets/jarvis_api_key.txt
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">if</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span>--status<span class="w"> </span>running<span class="w"> </span>--services<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-qx<span class="w"> </span>telegram_bot<span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>telegram_bot
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="k">fi</span>
 </code></pre></div>
+<p>The old API key stops working after those services restart. Update any external
+client that uses it before ending your current local session.</p>
 <h3 id="web-ui-configuration">Web UI configuration<a class="headerlink" href="#web-ui-configuration" title="Permanent link">&para;</a></h3>
 <p>All ongoing configuration goes through the web wizard and Settings — no <code>.env</code> editing needed beyond what <code>setup.sh</code> writes:</p>
 <table>
@@ -3345,112 +3276,211 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 </table>
 <p>For multi-user (team) deployment and the full trust boundary, see <a href="../SECURITY/">docs/SECURITY.md</a>.</p>
 <hr />
-<h2 id="mode-3-cloudflare-tunnel">Mode 3 — Cloudflare Tunnel<a class="headerlink" href="#mode-3-cloudflare-tunnel" title="Permanent link">&para;</a></h2>
+<h2 id="choice-4-cloudflare-tunnel">Choice 4 — Cloudflare Tunnel<a class="headerlink" href="#choice-4-cloudflare-tunnel" title="Permanent link">&para;</a></h2>
 <p>Exposes JARVIS over an outbound tunnel — no inbound port needed. Edge TLS is terminated by Cloudflare.</p>
-<p><strong>Prerequisites:</strong> A Cloudflare account with a configured tunnel (<a href="https://one.dash.cloudflare.com/">Zero Trust dashboard</a>).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;your-tunnel-token&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/cloudflare_tunnel_token.txt
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>secrets/cloudflare_tunnel_token.txt
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>tunnel<span class="w"> </span>up<span class="w"> </span>-d
+<p><strong>Prerequisites:</strong> a Cloudflare account, a tunnel and public hostname in the
+<a href="https://one.dash.cloudflare.com/">Zero Trust dashboard</a>, and these two Access
+applications:</p>
+<ol>
+<li>Protect the main hostname (for example <code>jarvis.example.com/*</code>) with your
+   normal <strong>Allow</strong> policy.</li>
+<li>Add a more-specific application for exactly
+   <code>jarvis.example.com/health/jarvis</code> with <strong>Bypass / Everyone</strong>. Cloudflare
+   evaluates the more-specific path first. Bypass disables Access enforcement
+   and Access logging for that path, so use it only here: this endpoint returns
+   the fixed text <code>jarvis-rd-assistant</code> and no account, setup-token, or health
+   details. Never bypass <code>/*</code> or any API path.</li>
+</ol>
+<p>See Cloudflare's documentation for
+<a href="https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/">path-specific applications</a>
+and the <a href="https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/">Bypass policy</a>.
+Setup cannot create or authenticate the Cloudflare account or policies.</p>
+<p>Run <code>./setup.sh</code>, accept <strong>Overwrite</strong> for an existing installation, and choose
+<strong>Cloudflare Tunnel</strong>. Setup reads the tunnel token without echoing it, stores it
+as a Docker secret, starts the profile, and verifies both an active tunnel
+connection and the public hostname.</p>
+<p>For unattended setup, put the token in an owner-readable file and pass only its
+path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>tunnel<span class="w"> </span>--tunnel-ack<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--tunnel-hostname<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--tunnel-token-file<span class="o">=</span>/secure/path/cloudflare-token
 </code></pre></div>
-<p><code>setup.sh</code> option 3 writes the token and brings the tunnel profile up automatically. The <code>cloudflared</code> container reads the token from <code>/run/secrets/cloudflare_tunnel_token</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span>cloudflared<span class="w">          </span><span class="c1"># should be &quot;healthy&quot; or &quot;running&quot;</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span><span class="w"> </span>cloudflared<span class="w">   </span><span class="c1"># look for &quot;Connection established&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span>cloudflared<span class="w">               </span><span class="c1"># should show Up</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>dashboard<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>curl<span class="w"> </span>-fsS<span class="w"> </span>http://cloudflared:2000/ready<span class="w">    </span><span class="c1"># proves an active edge connection</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span><span class="w"> </span>cloudflared<span class="w">   </span><span class="c1"># look for &quot;Connection established&quot;</span>
 </code></pre></div>
-<p>Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the public hostname to route to <code>http://dashboard:3000</code>. Set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> in <code>.env</code> only if you lock access to Cloudflare IPs.</p>
+<p>Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the
+public hostname to route to <code>http://dashboard:3002</code>. Tunnel setup enables client
+IP handling automatically. Do not hand-set <code>JARVIS_TRUST_CF_CONNECTING_IP</code> for a
+different proxy: nginx accepts Cloudflare's client header only on the trusted
+listener and only from the pinned <code>cloudflared</code> container.</p>
+<p>The external probe expects JARVIS's exact health marker. DNS or TLS failure,
+the wrong application, and a Cloudflare Access or WAF challenge are reported as
+different states. An Access page means the exact health-path application or its
+Bypass policy is missing; a WAF challenge means that exact path still needs a
+narrow challenge exception. Neither response proves that the tunnel reaches
+JARVIS, so setup keeps the token-bearing finish link on localhost and exits
+nonzero until the marker itself is returned.</p>
 <hr />
-<h2 id="mode-4-tailscale-funnel-vpn">Mode 4 — Tailscale Funnel / VPN<a class="headerlink" href="#mode-4-tailscale-funnel-vpn" title="Permanent link">&para;</a></h2>
-<p><strong>Tailscale Funnel</strong> — outbound-only, edge TLS terminated by Tailscale. Not wired into <code>setup.sh</code>. See <a href="https://tailscale.com/kb/1223/funnel/">Tailscale Funnel docs</a>.</p>
-<p><strong>VPN (Tailscale / WireGuard)</strong> — mesh your devices onto one network and keep JARVIS in localhost mode. Simplest and most secure option for a small set of trusted devices.</p>
+<h2 id="other-private-network-adapters">Other private-network adapters<a class="headerlink" href="#other-private-network-adapters" title="Permanent link">&para;</a></h2>
+<p><strong>Tailscale Funnel</strong> is an internet-facing adapter distinct from the guided
+private Serve route. It is not configured by JARVIS. See the <a href="https://tailscale.com/kb/1223/funnel/">Tailscale Funnel
+documentation</a> and satisfy the custom
+proxy contract below.</p>
+<p><strong>Another VPN or reverse proxy</strong> can work if it provides a named HTTPS origin
+and forwards only to the trusted loopback ingress. A VPN that merely exposes
+plain <code>http://&lt;ip&gt;:3001</code> provides diagnostics, not JARVIS authentication.</p>
 <hr />
 <h2 id="tls-certificates">TLS / Certificates<a class="headerlink" href="#tls-certificates" title="Permanent link">&para;</a></h2>
-<p>The <code>dashboard</code> container itself never terminates TLS — it serves plain HTTP on <code>:3000</code> internally (published as <code>:3001</code> by default). TLS only exists at an edge in front of it: mkcert for local HTTPS, Caddy for Let's Encrypt, or an external provider (Cloudflare, Tailscale). <code>JARVIS_SKIP_SELFSIGNED_GEN</code> and <code>JARVIS_CERT_SAN</code> are legacy environment variables from an earlier self-signed-in-container design; the container's self-signed generation path is skipped by default and its <code>./certs/</code> mount is read-only, so neither variable has any effect on a current install.</p>
+<p>The <code>dashboard</code> container does not terminate TLS. It serves plain HTTP on two
+internal listeners: <code>:3000</code> for localhost and the health-only LAN route, and
+<code>:3002</code> for trusted HTTPS edges. Host port <code>3001</code> maps to <code>:3000</code>; Tailscale
+Serve reaches <code>:3002</code> through host loopback port <code>3003</code>. Caddy, Cloudflare, or
+Tailscale owns the certificate before forwarding to the trusted listener.</p>
+<p><code>JARVIS_SKIP_SELFSIGNED_GEN</code> and <code>JARVIS_CERT_SAN</code> belong to an older design.
+Current dashboard containers skip self-signed generation and mount <code>./certs/</code>
+read-only, so those variables do not enable HTTPS.</p>
 <h3 id="local-https-mkcert">Local HTTPS (mkcert)<a class="headerlink" href="#local-https-mkcert" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>make<span class="w"> </span>certs<span class="w">         </span><span class="c1"># installs the mkcert root CA + writes ./certs/cert.pem, ./certs/key.pem</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>make<span class="w"> </span>up-https<span class="w">       </span><span class="c1"># or: docker compose --profile caddy-local up -d</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>./setup.sh<span class="w"> </span>--profile<span class="o">=</span>local-https
 </code></pre></div>
-<p><code>scripts/init-mkcert.sh</code> (what <code>make certs</code> runs) issues a certificate for <code>jarvis.localhost</code>, <code>localhost</code>, <code>127.0.0.1</code>, and <code>::1</code> only — this is a loopback-only certificate, not usable for LAN or public access. It auto-regenerates when the existing certificate expires within 30 days; to force regeneration sooner, delete the files and re-run:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>make<span class="w"> </span>certs
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy_local
+<p>Setup shows the package plan and asks before installing mkcert and its browser
+trust dependency. For a non-interactive cold install, add
+<code>--non-interactive --install-prereqs</code>. It then runs <code>scripts/init-mkcert.sh</code>,
+which idempotently installs the local CA trust and issues a certificate for <code>jarvis.localhost</code>,
+<code>localhost</code>, <code>127.0.0.1</code>, and <code>::1</code> only. This is a loopback-only certificate,
+not usable for LAN or public access. Setup advertises <code>https://localhost:3443</code>
+only after the exact JARVIS marker validates both against that mkcert CA and the
+host's normal trust store; otherwise it exits nonzero with the localhost HTTP
+fallback. The script auto-regenerates when the existing certificate expires
+within 30 days.</p>
+<p>Trust stays inside the operating system where setup ran. A CA created in WSL
+does not trust a Windows browser, and a CA created inside a VM does not trust a
+browser outside the VM; mkcert trust does not cross that boundary. Use the
+default <code>http://localhost:3001</code> inside the same OS, or guided private HTTPS for
+family devices.</p>
+<p>For setup through SSH or on a headless VM, the installer prints an HTTP
+localhost finish link for the outside browser and the exact SSH command that
+forwards it to the dashboard's loopback HTTP port. HTTP stays inside the
+encrypted SSH connection; it is not exposed on the LAN. Keep the address as
+printed instead of importing the VM's local CA into another computer.</p>
+<p>The local HTTPS edge sends <code>Strict-Transport-Security: max-age=0</code>, which clears
+any earlier policy instead of enabling HSTS. Browsers apply HSTS to a hostname
+across ports, so a positive policy received from <code>https://localhost:3443</code> would
+also rewrite the supported <code>http://localhost:3001</code> fallback and send it to the
+wrong TLS port.</p>
+<p><code>make certs</code> remains the advanced repair command. To force early regeneration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>make<span class="w"> </span>certs
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy_local
 </code></pre></div>
 <h3 id="lets-encrypt-caddy-profile">Let's Encrypt (Caddy profile)<a class="headerlink" href="#lets-encrypt-caddy-profile" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># .env</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="nv">LETSENCRYPT_DOMAIN</span><span class="o">=</span>jarvis.example.com
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="nv">LETSENCRYPT_EMAIL</span><span class="o">=</span>you@example.com
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="nv">CORS_ORIGINS</span><span class="o">=</span>https://jarvis.example.com,http://localhost:3001
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>letsencrypt<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># .env</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nv">LETSENCRYPT_DOMAIN</span><span class="o">=</span>jarvis.example.com
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nv">LETSENCRYPT_EMAIL</span><span class="o">=</span>you@example.com
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="nv">CORS_ORIGINS</span><span class="o">=</span>https://jarvis.example.com,http://localhost:3001
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>letsencrypt<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy
 </code></pre></div>
 <p>Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network, rewriting <code>Host</code> to <code>localhost</code>. The ACME certificate lives in the <code>caddy_data</code>/<code>caddy_config</code> named volumes, managed entirely by Caddy — there is nothing under <code>./certs/</code> to hand-edit or import for this path. <code>setup.sh</code> waits for the certificate to be issued (up to 120s) before reporting success or printing the setup link.</p>
+<p>The public Caddy edge sends a one-year HSTS policy for the configured hostname
+only. JARVIS does not enable <code>includeSubDomains</code> or browser preload: either choice
+belongs to the domain owner and is safe only after every affected hostname
+already supports HTTPS. Preload submission is a separate browser-vendor process,
+not a Caddy setting.</p>
 <h3 id="importing-your-own-certificate">Importing your own certificate<a class="headerlink" href="#importing-your-own-certificate" title="Permanent link">&para;</a></h3>
 <p>There is no supported "drop in a certificate" path for the dashboard container. Two options:</p>
 <ul>
 <li><strong>Local HTTPS edge (loopback only):</strong> overwrite <code>./certs/cert.pem</code> and <code>./certs/key.pem</code> with your own cert/key pair, then restart the edge that reads them: <code>docker compose up -d caddy_local</code>. This only affects <code>https://localhost:3443</code>.</li>
-<li><strong>A public certificate:</strong> use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the <a href="#per-adapter-trust-contract">custom-proxy trust contract</a> — the certificate then belongs to that proxy, not to JARVIS.</li>
+<li><strong>A public certificate:</strong> use the Let's Encrypt profile above (fully automatic), or front JARVIS with your own reverse proxy under the <a href="#ingress-and-adapter-contract">custom-proxy trust contract</a> — the certificate then belongs to that proxy, not to JARVIS.</li>
 </ul>
 <hr />
 <h2 id="non-interactive-automated-installer">Non-interactive / Automated Installer<a class="headerlink" href="#non-interactive-automated-installer" title="Permanent link">&para;</a></h2>
 <p><code>setup.sh</code> supports <code>--non-interactive</code> for CI pipelines and cloud-init scripts. Run <code>./setup.sh --help</code> for the full flag reference.</p>
+<p>Use <code>./setup.sh --non-interactive</code> for a complete unattended installation: it
+owns access-mode selection, prerequisites, TLS profiles, and route verification.
+<code>scripts/jarvis-setup.sh</code> is a local-only compatibility bootstrap for older CI
+jobs. It serves plain HTTP on localhost, does not configure remote access or TLS,
+and expects host prerequisites to be present.</p>
 <h3 id="pre-flight-check">Pre-flight check<a class="headerlink" href="#pre-flight-check" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>./setup.sh<span class="w"> </span>--check
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>./setup.sh<span class="w"> </span>--check
 </code></pre></div>
-<p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, <code>openssl</code>, GPU toolkit (informational), and <code>.env</code> presence. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs packages, writes <code>.env</code>, or starts services, even if <code>--install-prereqs</code> is also present.</p>
+<p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2.24.4 or
+newer, <code>openssl</code>, <code>curl</code>, Python 3, GPU toolkit (informational), and <code>.env</code>
+presence. With <code>--profile=local-https</code>, it also checks mkcert and browser trust
+tooling. Exit 0 = PASS, exit 1 = FAIL. The pre-flight path never installs
+packages, writes <code>.env</code>, or starts services, even if <code>--install-prereqs</code> is also
+present.</p>
 <p><code>setup.sh</code> verifies the Docker <em>daemon</em> is reachable (<code>docker info</code>), not just that the <code>docker</code> binary is installed — both in <code>./setup.sh --check</code> and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, <code>DOCKER_HOST</code> misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.</p>
 <h3 id="guided-prerequisite-installation">Guided prerequisite installation<a class="headerlink" href="#guided-prerequisite-installation" title="Permanent link">&para;</a></h3>
-<p>If Docker, the Docker Compose v2 plugin, or <code>openssl</code> are missing, normal interactive setup prints the exact package-manager commands it can run and asks for consent before touching the host. Automated installs never prompt: use <code>--install-prereqs</code> only after reviewing the printed commands, or install the prerequisites manually and re-run <code>./setup.sh --check</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Preflight only; never installs packages</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>./setup.sh<span class="w"> </span>--check
-<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
-<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1"># Review the guided install plan without running it</span>
-<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
-<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
-<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># Interactive setup; prompts before running supported apt/Homebrew commands</span>
-<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>./setup.sh
-<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
-<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="c1"># Unattended setup that is allowed to run the reviewed prerequisite plan</span>
-<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--install-prereqs<span class="w"> </span>--profile<span class="o">=</span>dev
+<p>If Docker Engine, Docker Compose v2.24.4 or newer, <code>openssl</code>, <code>curl</code>, Python 3,
+or the selected route's host tools are missing, setup prints the package-manager
+commands it can run before changing the host. Local HTTPS adds mkcert and the
+OS browser-trust package. After showing the plan, setup can install the missing
+packages on supported hosts. Interactive setup asks for consent. Non-interactive
+setup runs the plan only with <code>--install-prereqs</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Preflight only; never installs packages</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>./setup.sh<span class="w"> </span>--check
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Non-interactive install; writes configuration, downloads files, and starts JARVIS</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="c1"># Interactive setup; prompts before running supported apt/Homebrew commands</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>./setup.sh
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="c1"># Unattended setup that is allowed to run the reviewed prerequisite plan</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--install-prereqs<span class="w"> </span>--profile<span class="o">=</span>dev
 </code></pre></div>
-<p>The guided installer supports common Debian/Ubuntu-style <code>apt-get</code> hosts and macOS Homebrew. Unsupported distributions, hosts without the needed package manager, and Docker Desktop/daemon startup issues receive manual guidance instead of automatic package changes. Docker may still need to be started manually, and Linux users may need to log out and back in after Docker group changes.</p>
+<p><code>--check</code> is the only read-only setup mode. A non-interactive run without
+<code>--install-prereqs</code> refuses missing host packages, but otherwise performs the
+installation.</p>
+<p>General prerequisites support Debian/Ubuntu-style <code>apt-get</code>, Fedora <code>dnf</code>, and
+macOS Homebrew where applicable. For an unsupported host or package, setup
+stops with manual installation guidance instead of guessing. Tailscale
+installation is limited to supported apt/dnf Linux hosts with systemd. macOS,
+unsupported distributions, and WSL without systemd receive manual Tailscale
+guidance. A non-interactive install still cannot complete account sign-in: run
+<code>sudo tailscale up</code>, then rerun setup with <code>--tailscale</code>.</p>
 <p>Re-runs: running <code>./setup.sh</code> with an existing <code>.env</code> and declining the overwrite prompt no longer exits with services stopped — it keeps your <code>.env</code> (secrets, database, and model selection untouched) and starts the stack with it via <code>docker compose up -d</code>, honouring the <code>COMPOSE_FILE</code> and <code>COMPOSE_PROFILES</code> values persisted in <code>.env</code>. New installs write <code>COMPOSE_PROFILES=&lt;selection&gt;</code> (for example <code>telegram</code>, <code>tunnel</code>) into <code>.env</code>; for older <code>.env</code> files without it, setup derives the telegram profile from a non-empty <code>TELEGRAM_BOT_TOKEN</code> and prints a notice.</p>
-<p>Key flags: <code>--mode &lt;single|multi&gt;</code>, <code>--domain &lt;host&gt;</code>, <code>--admin-email &lt;email&gt;</code>, <code>--profile &lt;dev|local-https|letsencrypt&gt;</code> (default <code>dev</code>; <code>letsencrypt</code> requires <code>--domain</code> + <code>--admin-email</code>), <code>--smtp-host/--smtp-user/--smtp-pass-file</code>. Run <code>./setup.sh --help</code> for the full reference. <code>TELEGRAM_BOT_TOKEN</code> in the environment enables Telegram automatically.</p>
+<p>Key flags include <code>--mode &lt;single|multi&gt;</code>, <code>--tailscale</code>,
+<code>--install-prereqs</code>, <code>--domain &lt;host&gt;</code>, <code>--admin-email &lt;email&gt;</code>, and
+<code>--profile &lt;dev|local-https|tunnel|letsencrypt&gt;</code>. Run <code>./setup.sh --help</code> for the full
+reference. <code>TELEGRAM_BOT_TOKEN</code> in the environment enables Telegram
+automatically.</p>
 <h3 id="single-user-vs-multi-user-mode">Single-user vs multi-user mode<a class="headerlink" href="#single-user-vs-multi-user-mode" title="Permanent link">&para;</a></h3>
-<p><code>single</code> (default) makes the sign-in screen offer API-key login first and does not require SMTP. <code>multi</code> makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay before inviting other users. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization. In either mode, signed-in users can additionally register <strong>passkeys</strong> (WebAuthn) for future sign-ins; passkeys are bound to the exact origin in <code>APP_BASE_URL</code> and require HTTPS for a public origin — see the <a href="../manual/passkeys/">User Guide → Passkeys</a>.</p>
+<p><code>single</code> (default) makes the sign-in screen offer API-key login first and does not require SMTP. <code>multi</code> makes the sign-in screen offer email magic-link login first; configure and test an SMTP relay to have JARVIS email magic links directly, or leave it unset and the Admin → Invite dialog returns a manual sign-in link to hand to each new user instead. The mode is a login-method preference, not a tenancy switch: user/library scoping and admin invite capability remain governed by sessions, roles, and route-level authorization. In either mode, signed-in users can additionally register <strong>passkeys</strong> (WebAuthn) for future sign-ins; passkeys are bound to the exact origin in <code>APP_BASE_URL</code> and require HTTPS for a public origin — see the <a href="../manual/passkeys/">User Guide → Passkeys</a>.</p>
 <h3 id="copy-paste-examples">Copy-paste examples<a class="headerlink" href="#copy-paste-examples" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Local development / CI smoke test:</span>
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Local mkcert HTTPS (loopback only — run `make certs` first):</span>
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>local-https
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>/run/secrets/smtp_pass<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/run/secrets/smtp_pass
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="w">  </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Local development / CI smoke test:</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Local mkcert HTTPS (loopback only; installs reviewed prerequisites if needed):</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--install-prereqs<span class="w"> </span>--profile<span class="o">=</span>local-https
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="nb">umask</span><span class="w"> </span><span class="m">077</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>./smtp-password.txt
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a><span class="w">  </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a><span class="w">  </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>./smtp-password.txt
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>rm<span class="w"> </span>./smtp-password.txt
 </code></pre></div>
-<p>After setup, open the dashboard and create the initial admin in the onboarding wizard. Once signed in as an admin, invite additional users at <code>https://jarvis.example.com/admin/users</code>.</p>
+<p>After setup, open the exact <strong>Finish setup</strong> link printed by the installer. It
+carries the one-time token needed to create the initial admin; opening the bare
+dashboard URL does not. Once signed in as an admin, invite additional users at
+<code>https://jarvis.example.com/admin/users</code>.</p>
 <hr />
 <h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
-<p>The recommended path is the lifecycle command, which upgrades transactionally
-and refuses unsafe states:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>jarvis-research<span class="w"> </span>update
+<p>Use the lifecycle command:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>jarvis-research<span class="w"> </span>update
 </code></pre></div>
-<p>It verifies that every image for the target release is already published,
-requires a fresh, checksum-verified backup before any data-changing migration,
-stages the new images before advancing your checkout by fast-forward only, and
-waits for the stack to report healthy — resuming automatically if a run is
-interrupted, and never rolling back on its own. See
-<a href="../manual/cli/">Command line (jarvis-research)</a> for resume and rollback details.</p>
-<p>You can also update by hand:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>git<span class="w"> </span>pull
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>./update.sh
-</code></pre></div>
-<p><code>update.sh</code> loads pinned versions from <code>versions.env</code>, diffs running vs pinned images, and refreshes the services (application images are pulled prebuilt from GHCR; pass <code>./update.sh --build-local</code> to rebuild them from source), waiting up to 180 s per service. On failure it prints recovery commands for both image sets: <code>git checkout HEAD~1 -- versions.env &amp;&amp; ./update.sh</code> rolls back the third-party pins, while the application images roll back by pinning <code>JARVIS_VERSION</code> to a previously published tag and pulling it.</p>
-<p>From v1.1.0, <code>update.sh</code> pulls the prebuilt application images from GitHub Container Registry by default — smaller than a local rebuild (see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>). <code>--build-local</code> (the same flag exists on <code>./setup.sh</code>) rebuilds from source instead — for contributors, forks, or when a GHCR pull is unavailable. It is <strong>not</strong> an offline/air-gapped path: a local build still needs network access for base images, Python/OS wheels, the third-party images (postgres, ollama, caddy, …), and the Ollama model downloads.</p>
+<p>It verifies the target release, protects data-changing migrations with a signed
+restore point, and can resume an interrupted run. The <a href="../manual/cli/#how-update-works">command-line
+guide</a> is the canonical update runbook, including
+the constrained manual fallback and rollback rules.</p>
 <h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram pairing (breaking change).</strong> The Telegram bot now identifies chats
 exclusively via the <code>/pair</code> token flow. To pair: open the dashboard → Settings
@@ -3471,268 +3501,63 @@ does <em>not</em> cover the jarvis bridge — the compose stack overrides it.)</
 re-assigns any pre-existing product rows with a NULL owner to the single admin
 account. This is automatic and non-destructive; it only runs when exactly one
 admin user exists (the normal single-tenant state).</p>
+<p><strong>Instance-owner migration (0105).</strong> An upgraded instance with exactly one live
+administrator assigns that account as the owner automatically. An instance with
+two or more live administrators remains deliberately unresolved. After startup,
+run <code>jarvis-research owner status</code>; if repair is required, choose the account
+explicitly with <code>jarvis-research owner set &lt;admin-email&gt;</code>. The Admin → Users page
+then marks the owner, protects it from demotion or removal, and permits a
+database-managed owner to transfer to another live administrator after exact
+email confirmation.</p>
 <p>Makefile shortcuts for development:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
-<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
-<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
 </code></pre></div>
 <hr />
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
-<h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
-<p><code>scripts/backup.sh</code> runs by default in the <code>postgres-backup</code> sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated <code>backup_encrypt_key</code>; if you back up externally, opt out with <code>docker compose stop postgres-backup</code>.</p>
-<p>Admins can list, download, trigger an on-demand backup, and restore from any listed backup point in the WebUI at <strong>Admin → Backups</strong>. The on-demand backup button signals the sidecar to run immediately. Restore can be performed either from the admin UI (one-click) or from the host command line (manual, for situations where the app itself cannot run).</p>
-<p>JARVIS state lives in more than one place, so each run captures <strong>all four</strong> of the durable stores (per-store files are timestamped together so a single run is internally consistent):</p>
+<p>The default stack takes encrypted restore points daily. Administrators can run,
+download, retain, and restore them under <strong>Admin → Backups</strong>. Keep a copy of
+<code>secrets/backup_encrypt_key.txt</code> off the server and separate from downloaded
+archives; the key is not included in the archive it unlocks.</p>
+<p>The <a href="../manual/backup-and-restore/">backup and restore guide</a> is the canonical
+runbook for backup contents, same-host restore, fresh-host browser recovery,
+headless recovery, and failure handling.</p>
+<h3 id="restore-capability-boundaries">Restore capability boundaries<a class="headerlink" href="#restore-capability-boundaries" title="Permanent link">&para;</a></h3>
+<p>The standard stack separates request handling from destructive restore work:</p>
 <table>
 <thead>
 <tr>
-<th>Store</th>
-<th>Output (in <code>/backups</code>)</th>
-<th>Notes</th>
+<th>Service</th>
+<th>Restore-related access</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>jarvis</code> Postgres DB</td>
-<td><code>jarvis_&lt;ts&gt;.sql.gz[.enc]</code></td>
-<td>Papers, users, config, jobs</td>
+<td><code>paper_ingestion</code></td>
+<td>Reads backup archives, writes the small request/status trigger volume, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket.</td>
 </tr>
 <tr>
-<td><code>litellm</code> Postgres DB</td>
-<td><code>litellm_&lt;ts&gt;.sql.gz[.enc]</code></td>
-<td>API keys, virtual keys, spend ledger</td>
+<td><code>postgres-backup</code></td>
+<td>The backup sidecar owns database reloads, PDF swaps, Qdrant snapshot staging, and the narrow writable host-secret mount used for the three restored data keys.</td>
 </tr>
 <tr>
-<td>Qdrant vectors</td>
-<td><code>qdrant_&lt;collection&gt;_&lt;ts&gt;.snapshot[.enc]</code></td>
-<td>One per collection via Qdrant's snapshot REST API; <strong>best-effort</strong> — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed</td>
-</tr>
-<tr>
-<td><code>secrets/</code> directory</td>
-<td><code>secrets_&lt;ts&gt;.tar.gz[.enc]</code></td>
-<td>The Docker-secret source files — without these an encrypted DB backup cannot be decrypted</td>
+<td><code>restore-uploader</code></td>
+<td>Writes only allowlisted uploads to the restore inbox and reads a hashed, expiring upload grant from the trigger volume. It has no database credentials, application secrets, or Docker socket.</td>
 </tr>
 </tbody>
 </table>
-<table>
-<thead>
-<tr>
-<th>Env var</th>
-<th>Default</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>BACKUP_DIR</code></td>
-<td><code>/backups</code></td>
-<td>Where archives are written inside the container</td>
-</tr>
-<tr>
-<td><code>BACKUP_RETENTION_DAYS</code></td>
-<td><code>7</code></td>
-<td>Prune interval (applies to every store above)</td>
-</tr>
-<tr>
-<td><code>BACKUP_S3_BUCKET</code></td>
-<td>empty</td>
-<td>Optional S3 destination (skipped if unset; uploads every archive)</td>
-</tr>
-<tr>
-<td><code>BACKUP_INTERVAL_SECONDS</code></td>
-<td><code>86400</code></td>
-<td>Sleep between backup runs</td>
-</tr>
-<tr>
-<td><code>BACKUP_ENCRYPT_KEYFILE</code></td>
-<td><code>/run/secrets/backup_encrypt_key</code></td>
-<td>When the file is non-empty, DB dumps, Qdrant snapshots, and the secrets archive are encrypted at rest (<code>.enc</code> suffix)</td>
-</tr>
-<tr>
-<td><code>LITELLM_DATABASE</code></td>
-<td><code>litellm</code></td>
-<td>Name of the LiteLLM DB to dump</td>
-</tr>
-<tr>
-<td><code>QDRANT_URL</code></td>
-<td><code>http://qdrant:6333</code></td>
-<td>Qdrant base URL for the snapshot API</td>
-</tr>
-<tr>
-<td><code>QDRANT_API_KEYFILE</code></td>
-<td><code>/run/secrets/qdrant_api_key</code></td>
-<td>Qdrant API key (sent as the <code>api-key</code> header)</td>
-</tr>
-<tr>
-<td><code>SECRETS_DIR</code></td>
-<td><code>/secrets</code></td>
-<td>Read-only mount of the host <code>./secrets</code> dir to archive</td>
-</tr>
-</tbody>
-</table>
-<p>The <code>litellm</code> DB is owned by the same superuser (<code>POSTGRES_USER</code>) that created it, so the same credentials dump both DBs. A failed <code>pg_dump</code> aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and <code>./secrets</code> source are already wired into the <code>postgres-backup</code> sidecar in <code>docker-compose.yml</code>. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
-<blockquote>
-<p><strong>In production (<code>ENVIRONMENT=production</code>) the backup hard-fails if <code>BACKUP_ENCRYPT_KEYFILE</code> is unset</strong> — the script exits immediately and no secrets archive is written. In non-production the secrets archive is skipped (not written in the clear) and the script logs a warning. Set <code>BACKUP_ENCRYPT_KEYFILE</code> (the default already points at the <code>backup_encrypt_key</code> Docker Secret) before running in production.</p>
-<p><strong>Store the backup encryption key OFF-SITE, separately from the <code>.enc</code>
-archives.</strong> The secrets archive is encrypted with <code>backup_encrypt_key</code> and
-that key is <strong>excluded</strong> from the archive (it is not packed inside the file
-it unlocks). After total host loss you can only decrypt the off-site <code>.enc</code>
-backups if you also kept a copy of <code>backup_encrypt_key</code> somewhere else
-(a password manager, a sealed envelope, a separate cloud secret). Losing the
-key makes every encrypted backup permanently unrecoverable.</p>
-</blockquote>
-<h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h3>
-<h4 id="one-click-restore-admin-ui">One-click restore (admin UI)<a class="headerlink" href="#one-click-restore-admin-ui" title="Permanent link">&para;</a></h4>
-<p>From <strong>Admin → Backups</strong>, choose a backup set from the archive table and click <strong>Restore</strong>. Type <strong>RESTORE</strong> in the confirmation dialog to proceed. The sidecar:</p>
-<ol>
-<li>Takes a <strong>safety pre-backup</strong> of the current live data before making any destructive change.</li>
-<li>Checks the backup against the running app version. A <strong>newer</strong> backup is refused (update the app first with <code>./update.sh</code>); an <strong>older</strong> backup is accepted and migrated forward automatically after it is swapped in.</li>
-<li>Loads each database into a <strong>staging database behind a maintenance gate</strong> (the app returns "restore in progress" to all users while this runs) and <strong>swaps it in atomically</strong> once it verifies. If anything fails before the swap, the original database is left untouched and served again automatically — the restore self-heals rather than leaving a half-restored database. The previous database is dropped only after the swap succeeds.</li>
-<li>Recovers the Qdrant search index best-effort — if the Qdrant step fails, the database restore still completes. The search index re-embeds automatically from the restored data on next use; no paper data is lost.</li>
-</ol>
-<p>After a clean restore the maintenance gate lifts automatically. All users are signed out (the session store was replaced) and will need to sign in again.</p>
-<p><strong>Security posture:</strong> the app container holds no new privilege — it only writes a small JSON sentinel file to the <code>backup_trigger</code> volume. All database work (the staged reload, the atomic swap, and Qdrant recovery) runs exclusively inside the already-privileged <code>postgres-backup</code> sidecar. The <code>/backups</code> volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.</p>
-<p><strong>Residual risk:</strong> a compromised admin browser session can trigger a restore, replacing live data with the chosen backup point (a safety pre-backup is always taken first, so the prior state remains recoverable). See <a href="../SECURITY/">SECURITY.md</a> and <code>docs/known-residual-risks.md</code> for the full residual-risk register.</p>
-<hr />
-<h4 id="manual-restore-last-resort">Manual restore (last resort)<a class="headerlink" href="#manual-restore-last-resort" title="Permanent link">&para;</a></h4>
-<blockquote>
-<p><strong>Prefer the sidecar-driven restore.</strong> The <code>postgres-backup</code> sidecar runs independently of the app, so even when the app cannot start you can trigger a restore by writing <code>/backup-trigger/.restore_request.json</code> (a <code>local</code> source for same-host archives already in <code>/backups</code>, or an <code>inbox</code> source for an off-site set — see <a href="#off-host-total-host-loss-recovery">Off-host recovery</a>). That path keeps the safety pre-backup, the staged atomic swap, and the automatic forward-migration of older backups. The raw steps below <strong>bypass all of those protections</strong> — use them only if the sidecar itself is unavailable.</p>
-</blockquote>
-<p>Use the steps below as a last resort — for example, after a total host failure where you are starting fresh on a new machine and cannot run the sidecar. This procedure does the database work by hand from the host.</p>
-<p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
-</code></pre></div>
-<p>The decryption flags match what <code>scripts/backup.sh</code> uses (<code>-aes-256-cbc -pbkdf2 -iter 600000</code>). Repeat for each <code>.enc</code> archive before using it.</p>
-<blockquote>
-<p><strong>Key dependency warning:</strong> the <code>jarvis</code> DB stores provider/model credentials encrypted with <code>JARVIS_CONFIG_KEY</code>; the LiteLLM DB stores its model keys encrypted with <code>LITELLM_SALT_KEY</code>. Restoring a DB dump without the <strong>same key that encrypted it</strong> leaves those secrets undecryptable. Always restore the matching <code>secrets/</code> archive (or confirm the keys are already in place) before starting the stack.</p>
-</blockquote>
-<p><strong>Step 1 — <code>secrets/</code></strong> (restore before starting the stack, so the right keys are in place):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
-</code></pre></div>
-<p><strong>Step 2 — Postgres (<code>jarvis</code> and <code>litellm</code>)</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
-<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
-<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
-<a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
-<a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
-</code></pre></div>
-<p><strong>Step 3 — Qdrant</strong> — stop the container first so the snapshot restore doesn't race an active index write:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
-<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
-<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
-<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
-<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
-<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>
-<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
-<a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
-<a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
-<a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a>
-<a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
-<a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
-<a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
-</code></pre></div>
-<hr />
-<h4 id="off-host-total-host-loss-recovery">Off-host / total-host-loss recovery<a class="headerlink" href="#off-host-total-host-loss-recovery" title="Permanent link">&para;</a></h4>
-<p>Use this when you are recovering on a <strong>fresh host</strong> from an off-site copy of the backups — the original machine (and its <code>./secrets</code>) is gone. Both paths below drive the same hardened <code>restore.sh</code> in the <code>postgres-backup</code> sidecar, which — for an off-host restore — takes a safety pre-backup, runs the compat + decrypt-probe gates, restores each database via the staged swap, recovers Qdrant, <strong>rebinds the <code>jarvis</code> role password</strong> to the restored secret (<code>ALTER ROLE … WITH PASSWORD</code>, single-quote-safe), <strong>materializes the restored <code>./secrets</code> on the host</strong> (except the keys the new host is authoritative for — <code>qdrant_api_key</code>, <code>langfuse_pg_password</code>, <code>backup_encrypt_key</code>), writes a <code>.secrets_rotated</code> marker so the app services <strong>self-restart</strong> onto the rotated secrets, and <strong>shreds the one-time operator key and the plaintext staging on exit</strong>. On a clean restore the maintenance gate then lifts automatically — <strong>there are no terminal steps after you start the restore</strong>.</p>
-<p><strong>Prerequisites (either path):</strong> the off-site <strong>archive set</strong> for one timestamp (<code>jarvis_&lt;ts&gt;.sql.gz.enc</code>, <code>litellm_&lt;ts&gt;.sql.gz.enc</code>, <code>secrets_&lt;ts&gt;.tar.gz.enc</code>, any <code>qdrant_*_&lt;ts&gt;.snapshot.enc</code>, and <code>manifest_&lt;ts&gt;.json</code>), plus the <strong>backup encryption key</strong> you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above). A wrong or corrupt key fails safe: <code>restore.sh</code> proves the key decrypts the database archives before any <code>DROP</code>, so nothing is destroyed.</p>
-<h5 id="web-based-recovery-recommended">Web-based recovery (recommended)<a class="headerlink" href="#web-based-recovery-recommended" title="Permanent link">&para;</a></h5>
-<ol>
-<li><strong>Bring up a fresh stack</strong> on the new host (<code>./setup.sh</code>) and complete first-admin sign-in.</li>
-<li>From the <strong>Backups</strong> panel, generate a <strong>one-time upload grant</strong> and, in the browser, upload the archive set and the backup encryption key, then trigger the inbox restore from the UI. Uploads go to the dedicated <code>restore-uploader</code> ingress (grant-gated, inbox-only); the operator key and the archive bytes never transit the application. See <a href="../manual/backup-and-restore/">Backup &amp; restore</a> for the click-through.</li>
-<li>Watch progress in the guided restore view. When it completes, the stack has reconciled its secrets, database role, and services and returned to service — no shell access required.</li>
-</ol>
-<h5 id="command-line-fallback-constrained-environments">Command-line fallback (constrained environments)<a class="headerlink" href="#command-line-fallback-constrained-environments" title="Permanent link">&para;</a></h5>
-<p>For a headless host with no browser access, write the request yourself. The drop zone is the <strong><code>restore_inbox</code></strong> Docker volume, mounted <strong>read-write</strong> into the sidecar at <code>/restore-inbox</code> (never under the read-only <code>/secrets</code> mount).</p>
-<ol>
-<li><strong>Bring up a fresh stack</strong> on the new host (<code>./setup.sh</code> / <code>docker compose up -d</code>).</li>
-<li><strong>Place the archive set into the inbox</strong> — copy it from your off-site store, or pull one timestamp's set from S3 with the built-in helper (aws-guarded; a no-op with a notice if <code>aws</code>/<code>BACKUP_S3_BUCKET</code> are absent):</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
-<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
-<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>
-<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
-<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
-</code></pre></div>
-<ol>
-<li><strong>Place the one-time backup key</strong> into the inbox as the file <strong><code>operator_key</code></strong> (fixed name), then write the restore trigger:</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
-<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
-</code></pre></div>
-<p>The sidecar's poll loop runs <code>restore.sh</code> within a few seconds. Watch progress in <code>/backup-trigger/.restore_status.json</code> (or the sidecar logs). On a clean restore it rebinds the role, materializes <code>./secrets</code>, self-restarts the app services, and lifts the maintenance gate on its own — nothing further to run. Do <strong>not</strong> wipe the Postgres data volume afterward, or the role rebind is lost.</p>
-<ol>
-<li><strong>Only if the restore fails after the destructive step</strong> does the stack stay at HTTP 503, holding the durable <code>.destructive</code> sentinel (which — unlike the soft <code>.maintenance</code> sentinel — never auto-expires). Recover from the safety backup the sidecar took first, then clear both sentinels explicitly:</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
-</code></pre></div>
-<p>Once recovery is confirmed, remove the archive set from the inbox. The operator key is one-time — <code>restore.sh</code> shreds <code>/restore-inbox/operator_key</code> (and the plaintext staging) on every clean or recorded-failure exit.</p>
-<hr />
-<h4 id="sentinel-cleanup-reference">Sentinel cleanup reference<a class="headerlink" href="#sentinel-cleanup-reference" title="Permanent link">&para;</a></h4>
-<p>The app returns HTTP 503 during and after a restore via two sentinel files in the <code>backup_trigger</code> volume:</p>
-<table>
-<thead>
-<tr>
-<th>Sentinel</th>
-<th>Env var</th>
-<th>Default path</th>
-<th>Expiry</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Soft</td>
-<td><code>MAINTENANCE_SENTINEL</code></td>
-<td><code>/backup-trigger/.maintenance</code></td>
-<td>Auto-expires after <code>MAINTENANCE_MAX_AGE_S</code> (default 1800 s)</td>
-</tr>
-<tr>
-<td>Durable</td>
-<td><code>MAINTENANCE_DESTRUCTIVE_SENTINEL</code></td>
-<td><code>/backup-trigger/.destructive</code></td>
-<td>Never auto-expires; written at the DROP boundary</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Any clean restore clears both sentinels automatically</strong> — same-host one-click, off-host inbox, and older-than-code restores alike. An off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the maintenance gate lifts. No operator action is needed in the success case.</p>
-<p><strong>Only a restore that fails after the destructive step</strong> leaves the stack at HTTP 503, holding the durable <code>.destructive</code> sentinel:</p>
-<table>
-<thead>
-<tr>
-<th>Situation</th>
-<th>Required step before clearing</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Crash/failure after the DROP boundary</td>
-<td>Restore from the safety backup the sidecar took before the destructive step, then clear both sentinels</td>
-</tr>
-</tbody>
-</table>
-<p>Once the required step is done, clear both sentinels:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
-</code></pre></div>
+<p>Learning Engine and Telegram receive the maintenance trigger read-only. None of
+the three restore roles above mounts the Docker socket; the optional Vector log
+collector's separate read-only Docker socket is unrelated to restore authority.</p>
+<p>Do not restore with raw database drops, archive extraction, or volume deletion.
+Those paths bypass the signed manifest, safety backup, staged swap, and secret
+reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <hr />
 <h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
 </code></pre></div>
 <p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
 <hr />
@@ -3748,28 +3573,28 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <tbody>
 <tr>
 <td><code>NET::ERR_CERT_AUTHORITY_INVALID</code> on <code>https://localhost:3443</code></td>
-<td>mkcert root CA not installed in this browser's trust store, or the cert expired</td>
-<td><code>make certs</code> (re-)installs the root CA and regenerates the cert if needed, then <code>docker compose up -d caddy_local</code>.</td>
+<td>The browser is outside the VM/WSL environment, or trust is missing on the JARVIS host</td>
+<td>Outside the VM, use setup's SSH command and exact HTTP localhost finish link. On the JARVIS host itself, re-run <code>./setup.sh --profile=local-https</code>; for manual repair, run <code>make certs</code>, then <code>docker compose up -d caddy_local</code>.</td>
 </tr>
 <tr>
 <td><code>SSL_ERROR_RX_RECORD_TOO_LONG</code> opening a LAN address</td>
-<td>Browsing <code>https://&lt;lan-ip&gt;:...</code> — LAN mode is plain HTTP, not HTTPS</td>
-<td>Use <code>http://&lt;lan-ip&gt;:3001</code>, not <code>https://</code>. For a real HTTPS family route, add <code>--public-origin</code> (see <a href="../manual/access-modes/#about-lan-mode">access-modes.md</a>).</td>
+<td>The browser is trying HTTPS against the plain-HTTP diagnostic port</td>
+<td>Check <code>http://&lt;lan-ip&gt;:3001/health/jarvis</code>. Use guided private HTTPS for the app.</td>
 </tr>
 <tr>
-<td>API calls work from host but CORS-blocked from other devices</td>
-<td><code>CORS_ORIGINS</code> missing the calling origin</td>
-<td>Add origin to <code>CORS_ORIGINS</code> in <code>.env</code>, then <code>docker compose up -d paper_ingestion learning_engine</code>.</td>
+<td>A LAN health check works but the dashboard returns 403</td>
+<td>This is the intended raw-LAN boundary</td>
+<td>Open <code>http://localhost:3001</code> on the host or the named HTTPS address printed by setup.</td>
 </tr>
 <tr>
 <td>Tunnel works but dashboard 404s at <code>/</code></td>
 <td>Tunnel routes to wrong port</td>
-<td>In Cloudflare Zero Trust, confirm the public hostname routes to <code>http://dashboard:3000</code>.</td>
+<td>In Cloudflare Zero Trust, confirm the public hostname routes to <code>http://dashboard:3002</code>.</td>
 </tr>
 <tr>
-<td>Rate limiter 429s every request as "Cloudflare"</td>
-<td>Behind CF but <code>JARVIS_TRUST_CF_CONNECTING_IP</code> not enabled</td>
-<td>Set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> and restart <code>paper_ingestion</code>/<code>learning_engine</code>.</td>
+<td>Tunnel traffic is rate-limited as one proxy client</td>
+<td>The current installation was not completed with the Cloudflare Tunnel choice, or its pinned ingress settings are stale</td>
+<td>Re-run <code>./setup.sh</code>, accept <strong>Overwrite</strong>, and choose Cloudflare Tunnel again. Do not hand-edit <code>JARVIS_TRUST_CF_CONNECTING_IP</code>.</td>
 </tr>
 <tr>
 <td>Rate limiter buckets by proxy IP instead of client</td>
@@ -3779,17 +3604,17 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <tr>
 <td>Pinned subnet <code>10.137.241.0/24</code> collides with LAN</td>
 <td><code>setup.sh --check</code> warns</td>
-<td>Set <code>JARVIS_NET_SUBNET=&lt;free /24&gt;</code> and update <code>frontend/nginx.conf</code> <code>set_real_ip_from</code> literals.</td>
+<td>Set <code>JARVIS_NET_SUBNET</code> to a free IPv4 <code>/27</code> or larger network, re-run setup, and accept <strong>Overwrite</strong>; setup derives the addresses.</td>
 </tr>
 <tr>
-<td>LAN device pings host but <code>curl -k https://&lt;IP&gt;:3001</code> hangs</td>
-<td><code>DASHBOARD_BIND_HOST=127.0.0.1</code></td>
-<td>Run <code>setup.sh</code> mode 2, or set <code>DASHBOARD_BIND_HOST=0.0.0.0</code> and restart dashboard.</td>
+<td>LAN device pings host but <code>curl http://&lt;IP&gt;:3001/health/jarvis</code> fails</td>
+<td>The dashboard remains loopback-bound or a firewall blocks port 3001</td>
+<td>Re-run setup, accept <strong>Overwrite</strong>, and choose LAN diagnostics; if it still fails, allow port 3001 only on the trusted LAN interface.</td>
 </tr>
 <tr>
 <td><code>setup.sh</code> Cloudflare Tunnel mode stops at the Zero-Trust warning</td>
 <td>You have not acknowledged that a tunnel exposes the instance</td>
-<td>Configure your Cloudflare Zero-Trust access policy first, then type <code>I understand</code> at the prompt (or pass <code>--tunnel-ack</code> for a non-interactive install). The old <code>JARVIS_TUNNEL_ACK_ZT_CONFIGURED</code> env hand-edit has been removed.</td>
+<td>Configure your Cloudflare Zero-Trust access policy first, then type <code>I understand</code>. For unattended setup, use <code>--profile=tunnel</code> with <code>--tunnel-ack</code>, <code>--tunnel-hostname</code>, and <code>--tunnel-token-file</code>. The old environment hand-edit is no longer used.</td>
 </tr>
 <tr>
 <td>Settings → "Models &amp; Preferences" shows "No config entries"</td>
@@ -3804,7 +3629,7 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <tr>
 <td>Pulse generates 0 cards but job shows "done"</td>
 <td>All enabled sources returned zero candidates, were rate-limited, or are unconfigured</td>
-<td>Open Settings → Pulse → Diagnostics. For OpenAlex set <code>OPENALEX_EMAIL</code>; for arXiv wait <code>Retry-After</code> (≥30 s).</td>
+<td>Open Settings → Pulse → Diagnostics. For OpenAlex set <code>OPENALEX_API_KEY</code>; for arXiv wait <code>Retry-After</code> (≥30 s).</td>
 </tr>
 <tr>
 <td>Embedding dimension mismatch on startup</td>
@@ -3818,13 +3643,13 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </tr>
 <tr>
 <td><code>password authentication failed for user "jarvis"</code> after changing <code>POSTGRES_PASSWORD</code></td>
-<td>Postgres bakes the password into its data volume on first init; a later <code>.env</code> change is not applied to an existing volume</td>
-<td>Reset the volume: <code>docker compose down &amp;&amp; docker volume rm &lt;project&gt;_postgres_data &amp;&amp; docker compose up -d</code> — this destroys local DB data. The <code>&lt;project&gt;</code> prefix is your compose project name (the repo directory name by default; visible in <code>docker compose ps</code>). Run <code>setup.sh</code> afterwards if you need the GPU overlay re-engaged.</td>
+<td>An existing database still uses the original password</td>
+<td>Do not delete the database volume. Restore the matching secret from your backup or revert the accidental change, then run <code>jarvis-research doctor</code>. Use the guided restore if the original secret is unavailable.</td>
 </tr>
 <tr>
 <td><code>docker compose build</code>/<code>up</code> fails with "no space left on device" during install</td>
-<td>Docker's data root ran out of space — the cold-install peak can reach several tens of GB depending on hardware tier; see <a href="../REQUIREMENTS/#disk-budget">Disk budget</a></td>
-<td>Check free space on the data root (not <code>/</code>): <code>df -h $(docker info -f '{{ .DockerRootDir }}')</code>. Reclaim the local build cache: <code>docker builder prune -af</code>. If the data root lives on an LVM volume with spare space in the volume group, grow it: <code>sudo lvextend -r -L +20G &lt;lv-path&gt;</code>. Re-run <code>./setup.sh</code> — cached images are kept, so a re-run only needs the remaining gap.</td>
+<td>Docker's data root ran out of space</td>
+<td>Check the path printed by <code>docker info -f '{{ .DockerRootDir }}'</code> and free or add space through the host's Docker storage controls. Then re-run <code>./setup.sh</code>; already downloaded layers are reused.</td>
 </tr>
 <tr>
 <td><code>docker compose build</code> prints <code>pull access denied for jarvis/paper_ingestion</code> (or a sibling service) before building</td>
@@ -3835,10 +3660,14 @@ key makes every encrypted backup permanently unrecoverable.</p>
 </table>
 <hr />
 <h2 id="api-reference">API reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
-<p>JARVIS exposes a REST API on <code>paper_ingestion</code> (:8010) and <code>learning_engine</code> (:8011). All routes (except <code>/health</code> and <code>/health/live</code>) require an <code>X-API-Key</code> header. Full interactive documentation is at <code>/docs</code> on each service.</p>
+<p>JARVIS exposes REST APIs on <code>paper_ingestion</code> (:8010) and <code>learning_engine</code>
+(:8011). Product routes use a browser session; internal operations routes use
+the API key; setup and health endpoints have narrower route-specific gates.
+Interactive OpenAPI documentation is available at <code>/docs</code> on each service to a
+local operator.</p>
 <hr />
 <h2 id="other-access-options">Other access options<a class="headerlink" href="#other-access-options" title="Permanent link">&para;</a></h2>
-<p>Both of these are the <strong>custom reverse proxy</strong> row of the <a href="#per-adapter-trust-contract">trust contract table</a> — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:</p>
+<p>Both of these are the <strong>custom reverse proxy</strong> row of the <a href="#ingress-and-adapter-contract">trust contract table</a> — JARVIS does not configure or verify either, so you own the hostname/CORS/allowlist agreement:</p>
 <ul>
 <li><strong>ngrok</strong> — set <code>CORS_ORIGINS=https://&lt;subdomain&gt;.ngrok.io</code>, add the ngrok hostname to <code>DASHBOARD_SERVER_NAME</code>, and set <code>APP_BASE_URL</code> to the ngrok URL.</li>
 <li><strong>Traefik</strong> — add a label-based override next to <code>docker-compose.yml</code>. Refer to Traefik's documentation.</li>

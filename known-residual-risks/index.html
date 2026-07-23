@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1220,7 +1248,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1248,7 +1276,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1276,7 +1304,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1413,6 +1441,100 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#v120-accepted-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v1.2.0 accepted boundaries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v1.2.0 accepted boundaries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sanitized-katex-still-needs-url-and-image-guards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sanitized KaTeX still needs URL and image guards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dns-can-change-after-ssrf-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DNS can change after SSRF validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-login-gate-cache-is-process-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API-key login gate cache is process-local
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#telegram-pairing-tokens-are-stored-in-plaintext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram pairing tokens are stored in plaintext
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup-status-endpoint-exposes-a-deployment-fingerprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup-status endpoint exposes a deployment fingerprint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expired-sessions-have-a-24-hour-offline-review-grace-period" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expired sessions have a 24-hour offline-review grace period
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup-manifest-hmac-trust-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup-manifest HMAC trust boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#v113-access-mode-and-setup-entries" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1436,10 +1558,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#raw-ip-lan-access-carries-no-authentication-contract" class="md-nav__link">
+  <a href="#raw-ip-lan-access-is-health-check-only" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Raw-IP LAN access carries no authentication contract
+        Raw-IP LAN access is health-check only
       
     </span>
   </a>
@@ -1451,17 +1573,6 @@
     <span class="md-ellipsis">
       
         Pre-1.1.3 setup links used a query string, not a fragment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom JARVIS_NET_SUBNET with a Caddy TLS profile is refused, not supported
       
     </span>
   </a>
@@ -1503,34 +1614,6 @@
       
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#auth-hardening-deferrals" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Auth hardening deferrals
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Auth hardening deferrals">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#migration-live-fixture-test-deferred" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Migration live-fixture test deferred
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1641,17 +1724,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cross-user isolation gate excludes RAG/search paths
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1674,10 +1746,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#minor-un-hoisted-duplications-low-priority" class="md-nav__link">
+  <a href="#unused-router-factory-parameter-low-priority" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Minor un-hoisted duplications (low priority)
+        Unused router-factory parameter (low priority)
       
     </span>
   </a>
@@ -1711,17 +1783,6 @@
     <span class="md-ellipsis">
       
         Context-coupling check — live-model leg skipped in CI
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#partial-chunk-papers-not-re-embedded-by-migration-0096" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Partial-chunk papers not re-embedded by migration 0096
       
     </span>
   </a>
@@ -1767,10 +1828,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deferred-multi-admin-attribution-item" class="md-nav__link">
+  <a href="#ambiguous-legacy-derived-output-ownership" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deferred multi-admin attribution item
+        Ambiguous legacy derived-output ownership
       
     </span>
   </a>
@@ -2047,6 +2108,100 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#v120-accepted-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v1.2.0 accepted boundaries
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="v1.2.0 accepted boundaries">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sanitized-katex-still-needs-url-and-image-guards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sanitized KaTeX still needs URL and image guards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dns-can-change-after-ssrf-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DNS can change after SSRF validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-key-login-gate-cache-is-process-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API-key login gate cache is process-local
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#telegram-pairing-tokens-are-stored-in-plaintext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram pairing tokens are stored in plaintext
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup-status-endpoint-exposes-a-deployment-fingerprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup-status endpoint exposes a deployment fingerprint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expired-sessions-have-a-24-hour-offline-review-grace-period" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expired sessions have a 24-hour offline-review grace period
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup-manifest-hmac-trust-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup-manifest HMAC trust boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#v113-access-mode-and-setup-entries" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2070,10 +2225,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#raw-ip-lan-access-carries-no-authentication-contract" class="md-nav__link">
+  <a href="#raw-ip-lan-access-is-health-check-only" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Raw-IP LAN access carries no authentication contract
+        Raw-IP LAN access is health-check only
       
     </span>
   </a>
@@ -2085,17 +2240,6 @@
     <span class="md-ellipsis">
       
         Pre-1.1.3 setup links used a query string, not a fragment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom JARVIS_NET_SUBNET with a Caddy TLS profile is refused, not supported
       
     </span>
   </a>
@@ -2137,34 +2281,6 @@
       
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#auth-hardening-deferrals" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Auth hardening deferrals
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Auth hardening deferrals">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#migration-live-fixture-test-deferred" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Migration live-fixture test deferred
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2275,17 +2391,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cross-user isolation gate excludes RAG/search paths
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2308,10 +2413,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#minor-un-hoisted-duplications-low-priority" class="md-nav__link">
+  <a href="#unused-router-factory-parameter-low-priority" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Minor un-hoisted duplications (low priority)
+        Unused router-factory parameter (low priority)
       
     </span>
   </a>
@@ -2345,17 +2450,6 @@
     <span class="md-ellipsis">
       
         Context-coupling check — live-model leg skipped in CI
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#partial-chunk-papers-not-re-embedded-by-migration-0096" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Partial-chunk papers not re-embedded by migration 0096
       
     </span>
   </a>
@@ -2401,10 +2495,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deferred-multi-admin-attribution-item" class="md-nav__link">
+  <a href="#ambiguous-legacy-derived-output-ownership" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deferred multi-admin attribution item
+        Ambiguous legacy derived-output ownership
       
     </span>
   </a>
@@ -2432,7 +2526,7 @@
 
 
 <h1 id="risk-register">Risk Register<a class="headerlink" href="#risk-register" title="Permanent link">&para;</a></h1>
-<p><em>Last updated: 2026-07-19</em></p>
+<p><em>Last updated: 2026-07-22</em></p>
 <p><em>Known residual risks and accepted operational/code-quality deferrals.</em></p>
 <p>This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.</p>
 <p>Related docs:</p>
@@ -2441,24 +2535,48 @@
 <li><a href="../SECURITY/">SECURITY.md</a> — threat model and hardening checklist.</li>
 </ul>
 <hr />
+<h2 id="v120-accepted-boundaries">v1.2.0 accepted boundaries<a class="headerlink" href="#v120-accepted-boundaries" title="Permanent link">&para;</a></h2>
+<h3 id="sanitized-katex-still-needs-url-and-image-guards">Sanitized KaTeX still needs URL and image guards<a class="headerlink" href="#sanitized-katex-still-needs-url-and-image-guards" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> Markdown is sanitized before KaTeX rendering, so the HTML produced by KaTeX is not passed through the sanitizer a second time. Separate URL and image guards reduce the exposed surface.</p>
+<p><strong>Reopen criteria:</strong> a sanitizer or KaTeX change bypasses either guard, or a rendered document demonstrates an unsafe URL or image load.</p>
+<h3 id="dns-can-change-after-ssrf-validation">DNS can change after SSRF validation<a class="headerlink" href="#dns-can-change-after-ssrf-validation" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> PDF URLs are validated before fetching, but DNS rebinding can change a hostname's destination between validation and the later HTTP request.</p>
+<p><strong>Reopen criteria:</strong> a supported deployment needs stronger protection against that time-of-check/time-of-use window.</p>
+<h3 id="api-key-login-gate-cache-is-process-local">API-key login gate cache is process-local<a class="headerlink" href="#api-key-login-gate-cache-is-process-local" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> the supported deployment runs a single application worker, so its gate cache is local to that process.</p>
+<p><strong>Reopen criteria:</strong> multi-worker application deployment becomes supported or the gate needs shared invalidation.</p>
+<h3 id="telegram-pairing-tokens-are-stored-in-plaintext">Telegram pairing tokens are stored in plaintext<a class="headerlink" href="#telegram-pairing-tokens-are-stored-in-plaintext" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> pairing tokens are 128-bit, single-use, and expire after 15 minutes; plaintext storage keeps the one-time pairing check simple.</p>
+<p><strong>Reopen criteria:</strong> token exposure, a longer-lived pairing flow, or a threat model that requires hashed-at-rest pairing secrets.</p>
+<h3 id="setup-status-endpoint-exposes-a-deployment-fingerprint">Setup-status endpoint exposes a deployment fingerprint<a class="headerlink" href="#setup-status-endpoint-exposes-a-deployment-fingerprint" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> unauthenticated <code>/api/setup/status</code> reports first-run state, setup mode, hardware tier and vendor, access mode, model-backend state, and SMTP presence and reachability. The sign-in and setup screens need these fields before authentication, but together they reveal a deployment fingerprint.</p>
+<p><strong>Reopen criteria:</strong> the response gains fields beyond that minimal wizard-required state.</p>
+<h3 id="expired-sessions-have-a-24-hour-offline-review-grace-period">Expired sessions have a 24-hour offline-review grace period<a class="headerlink" href="#expired-sessions-have-a-24-hour-offline-review-grace-period" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> the grace period is intentional so an interrupted offline review session can be completed.</p>
+<p><strong>Reopen criteria:</strong> the product no longer supports offline review, or the grace period becomes incompatible with the session threat model.</p>
+<h3 id="backup-manifest-hmac-trust-boundary">Backup-manifest HMAC trust boundary<a class="headerlink" href="#backup-manifest-hmac-trust-boundary" title="Permanent link">&para;</a></h3>
+<p><strong>Why accepted (2026-07-20):</strong> after upgrade, signed manifest sidecars authenticate a complete archive set. This does not authenticate pre-upgrade legacy local sets, and cannot protect against an attacker who can replace both the archives and the backup secrets or signing key.</p>
+<p><strong>Reopen criteria:</strong> the backup format, key custody model, or legacy-restore policy changes.</p>
+<hr />
 <h2 id="v113-access-mode-and-setup-entries">v1.1.3 access-mode and setup entries<a class="headerlink" href="#v113-access-mode-and-setup-entries" title="Permanent link">&para;</a></h2>
 <h3 id="amdintel-vulkan-acceleration-experimental-not-supported">AMD/Intel Vulkan acceleration — Experimental, not Supported<a class="headerlink" href="#amdintel-vulkan-acceleration-experimental-not-supported" title="Permanent link">&para;</a></h3>
-<p><strong>Finding:</strong> <code>--gpu vulkan</code> (and the AMD no-<code>/dev/kfd</code> fallback) passes <code>/dev/dri</code> and <code>OLLAMA_VULKAN=1</code> into the Ollama container, joining the host's <code>video</code>/<code>render</code> groups by numeric GID (<code>JARVIS_VIDEO_GID</code>/<code>JARVIS_RENDER_GID</code>, resolved from the host at install time — a group <em>name</em> would resolve against the container image's own <code>/etc/group</code>, not the host's).</p>
+<p><strong>Finding:</strong> the opt-in <code>--gpu vulkan</code> path passes <code>/dev/dri</code> and <code>OLLAMA_VULKAN=1</code> into the Ollama container, joining the host's <code>video</code>/<code>render</code> groups by numeric GID (<code>JARVIS_VIDEO_GID</code>/<code>JARVIS_RENDER_GID</code>, resolved from the host at install time — a group <em>name</em> would resolve against the container image's own <code>/etc/group</code>, not the host's).</p>
 <p><strong>Current state:</strong> the device passthrough and env wiring are real and exercised in <code>docker-compose.vulkan.yml</code>, but validation confidence is lower than the CUDA/ROCm paths — reach and actual acceleration depend on the host's Vulkan ICD, which JARVIS does not inventory. Classified Experimental, never Supported.</p>
 <p><strong>Reopen criteria:</strong> when enough field reports (<code>docs/manual/hardware-support-matrix.md#reporting-your-hardware</code>) accumulate to promote the tier, or an upstream regression is found.</p>
-<h3 id="raw-ip-lan-access-carries-no-authentication-contract">Raw-IP LAN access carries no authentication contract<a class="headerlink" href="#raw-ip-lan-access-carries-no-authentication-contract" title="Permanent link">&para;</a></h3>
-<p><strong>Finding:</strong> the <code>raw-ip-lan</code> route (<code>route_claims</code> in <code>scripts/setup_lib.sh</code>) has <code>cookie_policy=none</code> and <code>passkey_origin=none</code> — a signed-in session cannot persist over plain <code>http://&lt;lan-ip&gt;</code>, and WebAuthn refuses a raw IP as an origin outright. The route is real and serves pages (<code>tier=supported</code>), but it is not, and cannot become, an authenticated route.</p>
-<p><strong>Why accepted:</strong> this is a browser/WebAuthn constraint (an IP literal is never a valid relying-party ID) and a deliberate application choice (<code>Secure</code> cookies), not a gap to close. The supported path to an authenticated family route is a named private HTTPS origin (<code>--public-origin</code>) layered on top of LAN mode.</p>
-<p><strong>Reopen criteria:</strong> none expected — re-open only if a browser vendor changes WebAuthn's origin rules, which JARVIS does not control.</p>
+<h3 id="raw-ip-lan-access-is-health-check-only">Raw-IP LAN access is health-check only<a class="headerlink" href="#raw-ip-lan-access-is-health-check-only" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> the <code>raw-ip-lan</code> route (<code>route_claims</code> in <code>scripts/setup_lib.sh</code>)
+has no setup-token, cookie, or passkey contract. Nginx serves only the static
+<code>/health/jarvis</code> marker to remote LAN clients and returns HTTP 403 for every
+other path.</p>
+<p><strong>Why accepted:</strong> this gives operators a narrow reachability check without
+turning plain LAN HTTP into an application origin. Family access uses a named
+private HTTPS route configured by setup.</p>
+<p><strong>Reopen criteria:</strong> only if the raw-LAN route is proposed for application use;
+that would require a new transport and authentication design.</p>
 <h3 id="pre-113-setup-links-used-a-query-string-not-a-fragment">Pre-1.1.3 setup links used a query string, not a fragment<a class="headerlink" href="#pre-113-setup-links-used-a-query-string-not-a-fragment" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> before this release, <code>print_setup_link</code> (<code>scripts/setup_lib.sh</code>) built the click-to-finish link as <code>/setup?setup_token=…</code> — a query string rides the request line and can land in access logs and <code>Referer</code> headers. It now builds <code>/setup#setup_token=…</code>, a URL fragment the browser never sends to the server.</p>
 <p><strong>Current state:</strong> the fix is forward-only. Links already printed to a pre-1.1.3 terminal's scrollback keep the old query-string form and still work — the onboarding wizard (<code>frontend/src/pages/OnboardingWizard.tsx</code>) accepts both forms for backward compatibility — but a query-string link that was ever pasted somewhere logged (chat history, a ticket) should be treated as exposed; regenerate the token via <code>scripts/init-secrets.sh</code> if that's a concern on an instance that hasn't finished first-admin bootstrap yet.</p>
 <p><strong>Reopen criteria:</strong> none — this is a completed, one-way fix; documented here for operators auditing old scrollback/logs.</p>
-<h3 id="custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported">Custom <code>JARVIS_NET_SUBNET</code> with a Caddy TLS profile is refused, not supported<a class="headerlink" href="#custom-jarvis_net_subnet-with-a-caddy-tls-profile-is-refused-not-supported" title="Permanent link">&para;</a></h3>
-<p><strong>Finding:</strong> <code>local-https</code> and <code>letsencrypt</code> pin Caddy's container IP inside the default <code>10.137.241.0/24</code> bridge subnet, and nginx's <code>set_real_ip_from</code> (<code>frontend/nginx.conf</code>) trusts exactly that range. <code>setup.sh</code> refuses to start either Caddy profile under a non-default <code>JARVIS_NET_SUBNET</code> rather than silently starting with a broken client-IP trust boundary.</p>
-<p><strong>Why deferred:</strong> making the two hard-coded literals (the Caddy <code>ipv4_address</code> and the nginx <code>set_real_ip_from</code> values) subnet-derived is a small, contained change, but no operator has hit the collision in practice yet (the guidance path — edit both literals to the custom subnet, or keep the default — is a documented one-time step).</p>
-<p><strong>Reopen criteria:</strong> if subnet collisions with a Caddy profile become a recurring support question, template the two literals from <code>JARVIS_NET_SUBNET</code> instead of refusing.</p>
-<hr />
 <h2 id="ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor">OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR<a class="headerlink" href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" title="Permanent link">&para;</a></h2>
 <p>Current posture is documented in <code>docs/REQUIREMENTS.md</code>: the tested image pin is <code>ollama/ollama:0.31.2</code> via <code>versions.env</code>, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the <code>jarvis</code> network can reach <code>http://ollama:11434</code>, so untrusted peers must not join that network.</p>
 <p>Reopen if <code>OLLAMA_IMAGE</code> is downgraded below the patched tested pin, the host publish changes away from <code>127.0.0.1</code>, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.</p>
@@ -2475,13 +2593,6 @@
 <p><strong>Why deferred:</strong> wall-clock budgeting adds complexity (cancellation, partial-result semantics); sequential LLM calls are predictable. No observed timeout on current library sizes.</p>
 <p><strong>Reopen criteria:</strong> when a contradiction scan exceeds 60 seconds on real data, measured by adding a timer log in <code>scan_contradictions</code>.</p>
 <hr />
-<h2 id="auth-hardening-deferrals">Auth hardening deferrals<a class="headerlink" href="#auth-hardening-deferrals" title="Permanent link">&para;</a></h2>
-<h3 id="migration-live-fixture-test-deferred">Migration live-fixture test deferred<a class="headerlink" href="#migration-live-fixture-test-deferred" title="Permanent link">&para;</a></h3>
-<p>One schema migration uses a defensive PL/pgSQL constraint-name lookup. The
-live-fixture migration test covering this path is deferred to a future hardening
-pass with proper ephemeral-Postgres test infra.</p>
-<p><strong>Reopen criteria:</strong> when a migration test harness with a real ephemeral Postgres instance is available.</p>
-<hr />
 <h2 id="telegram-security-hardening-deferrals">Telegram / security hardening deferrals<a class="headerlink" href="#telegram-security-hardening-deferrals" title="Permanent link">&para;</a></h2>
 <h3 id="in-memory-bot-rate-limits">In-memory bot rate limits<a class="headerlink" href="#in-memory-bot-rate-limits" title="Permanent link">&para;</a></h3>
 <p>Accepted for single-user, single-bot LAN deployment. Distributed rate limiting (Redis-backed) is deferred until multi-bot or LAN-exposed scenarios materialize.</p>
@@ -2497,8 +2608,10 @@ pass with proper ephemeral-Postgres test infra.</p>
 <code>SecretsSettings</code>, and the settings UI surfaces incomplete SMTP configuration
 with an amber warning plus an in-place test-send action.</p>
 <p><strong>Residual surface:</strong> An instance with SMTP intentionally unset cannot deliver
-magic-link email. Single-user installs can still use API-key login; multi-user
-operators should configure and test SMTP before inviting users.</p>
+magic-link email. A signed-in administrator can still create a 24-hour invite
+link or a 15-minute sign-in link and share it through a private channel.
+Multi-user access therefore remains usable, but account recovery depends on an
+active administrator or the owner recovery key until SMTP is configured.</p>
 <p><strong>Bootstrap-window note:</strong> During the first-run wizard, before any admin account
 exists, the SMTP test-send endpoint is unauthenticated; the test recipient is
 forced to the From address so an operator can only mail themselves. Once an
@@ -2531,12 +2644,6 @@ toolchain is updated to a version with a known CVE.</p>
 </ul>
 <hr />
 <h2 id="further-known-residual-risks">Further known residual risks<a class="headerlink" href="#further-known-residual-risks" title="Permanent link">&para;</a></h2>
-<h3 id="cross-user-isolation-gate-excludes-ragsearch-paths">Cross-user isolation gate excludes RAG/search paths<a class="headerlink" href="#cross-user-isolation-gate-excludes-ragsearch-paths" title="Permanent link">&para;</a></h3>
-<p><strong>Finding:</strong> the 52-scenario cross-user isolation release gate covers the core task/project/paper/user data paths but excludes the RAG and search endpoints (<code>/api/ask*</code>, <code>/api/search*</code>, <code>/api/similar</code>, and the generation pipeline) because those require a live Ollama and Qdrant instance.</p>
-<p><strong>Current coverage:</strong> <code>test_rag_contract.py</code> exercises these paths at unit/contract granularity with mocked backends. Ownership isolation at the HTTP boundary (auth headers, user-scoped Qdrant collections) is enforced by the same middleware that the gate exercises on the covered paths, giving reasonable indirect assurance.</p>
-<p><strong>Why deferred:</strong> a full live two-user RAG-path isolation test needs both inference and vector services healthy in CI, which adds significant environment complexity.</p>
-<p><strong>Reopen criteria:</strong> when a multi-user deployment scenario is targeted, or when the Qdrant collection-isolation logic changes.</p>
-<hr />
 <h3 id="apipapersprocess_batch-uses-an-underscore-in-the-path"><code>/api/papers/process_batch</code> uses an underscore in the path<a class="headerlink" href="#apipapersprocess_batch-uses-an-underscore-in-the-path" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> <code>/api/papers/process_batch</code> uses an underscore separator while peer routes use hyphens.</p>
 <p><strong>Why deferred:</strong> renaming would be a breaking change for existing clients. The frontend API client (<code>api.ts</code>) is deliberately frozen, so no functional benefit justifies the churn.</p>
@@ -2547,13 +2654,12 @@ toolchain is updated to a version with a known CVE.</p>
 <p><strong>Why deferred:</strong> the shapes are stable and internally consistent; tightening requires adding new typed models with no user-visible change.</p>
 <p><strong>Reopen criteria:</strong> when the response shapes are consumed by a typed client or documentation that benefits from a precise schema.</p>
 <hr />
-<h3 id="minor-un-hoisted-duplications-low-priority">Minor un-hoisted duplications (low priority)<a class="headerlink" href="#minor-un-hoisted-duplications-low-priority" title="Permanent link">&para;</a></h3>
-<p>Two small consolidation items accepted as low-priority code-quality debt:</p>
+<h3 id="unused-router-factory-parameter-low-priority">Unused router-factory parameter (low priority)<a class="headerlink" href="#unused-router-factory-parameter-low-priority" title="Permanent link">&para;</a></h3>
+<p>One consolidation item remains as low-priority code-quality debt:</p>
 <ul>
 <li><code>build_jobs_router(service_name=…)</code> accepts a <code>service_name</code> parameter that no code path currently uses. Retained to avoid touching every call-site; remove when the router is next refactored.</li>
-<li>One inline copy of the paper-visibility SQL predicate remains at <code>paper_ingestion/services/summarization.py</code>; the other copies were hoisted to a shared <code>paper_visible_sql()</code> helper. Hoist this last copy when that file is next edited.</li>
 </ul>
-<p><strong>Reopen criteria:</strong> any of the above files are touched in a refactor — opportunistic cleanup at that point.</p>
+<p><strong>Reopen criteria:</strong> the router factory or its call sites are refactored.</p>
 <hr />
 <h3 id="job-task-registry-uses-module-level-globals-as-test-injection-points">Job task-registry uses module-level globals as test injection points<a class="headerlink" href="#job-task-registry-uses-module-level-globals-as-test-injection-points" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> <code>jarvis_common</code>'s job task registry exposes <code>_pool</code> and <code>_http_client</code> as module-level globals. Tests rely on these globals as injection points to substitute test doubles.</p>
@@ -2569,39 +2675,45 @@ toolchain is updated to a version with a known CVE.</p>
 <p>The context-coupling contract test (<code>services/paper_ingestion/tests/contract/test_ctx_coupling_contract.py</code>) calls <code>pytest.skip</code> when a live LiteLLM instance is not reachable, so the leg that verifies end-to-end <code>num_ctx</code> delivery to a running LiteLLM container does not run in CI. The fail-closed path (delivery failure must not advance the budget) and the write-path validator (out-of-bounds values rejected with HTTP 400) do not require a live LiteLLM and are covered unconditionally by the same test file.</p>
 <p><strong>Reopen criteria:</strong> when a CI environment with a live LiteLLM instance is available, remove the skip guard and promote the delivery test to a required gate.</p>
 <hr />
-<h3 id="partial-chunk-papers-not-re-embedded-by-migration-0096">Partial-chunk papers not re-embedded by migration 0096<a class="headerlink" href="#partial-chunk-papers-not-re-embedded-by-migration-0096" title="Permanent link">&para;</a></h3>
-<p>Migration 0096 set <code>chunked_at = NOW()</code> on any paper that already had at least one chunk row, marking it as fully processed. Papers that had only a partial chunk set (for example, due to an interrupted embedding run) were silently promoted to "done" by this one-time stamp. The migration was a deliberate tradeoff to avoid a full re-embed storm at upgrade time.</p>
-<p><strong>Current behavior (HEAD):</strong> the auto-pipeline and pdf-processing path pick up papers where <code>chunked_at IS NULL</code> (see <code>services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py:186</code> and <code>services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:289</code>), so any future partial-chunk paper (for example from a new interrupted run) will be reprocessed on the next pipeline cycle.</p>
-<p><strong>Remaining gap from migration 0096:</strong> pre-existing partial-chunk papers that migration 0096 promoted to "done" have a non-NULL <code>chunked_at</code> and will not be automatically re-embedded. An optional post-release operator reconcile can identify them (heuristic: non-contiguous chunk index sequences) and reset <code>chunked_at = NULL</code> to trigger reprocessing. No migration is needed — this is a manual operational step.</p>
-<p><strong>Reopen criteria:</strong> if a significant number of degraded search results are traced to partial embeddings, run the reconcile.</p>
-<hr />
 <h3 id="restore-destructive-sentinel-sigkill-mitigation-and-operator-clear-requirement">Restore destructive-sentinel: SIGKILL mitigation and operator-clear requirement<a class="headerlink" href="#restore-destructive-sentinel-sigkill-mitigation-and-operator-clear-requirement" title="Permanent link">&para;</a></h3>
-<p><code>scripts/restore.sh</code> writes a durable <code>.destructive</code> sentinel at the DB DROP boundary (line 178: <code>touch "$MAINTENANCE_DESTRUCTIVE"</code>), before any DROP or data modification. While this sentinel is present, the app returns HTTP 503 on all non-exempt routes regardless of sentinel age (see <code>libs/jarvis_common/jarvis_common/maintenance.py:11–16</code>). This means a SIGKILL mid-restore no longer leaves the stack silently serving a half-restored database.</p>
-<p><strong>Operator action required to resume:</strong> on any <strong>clean</strong> restore — same-host one-click, off-host inbox, or older-than-code — <code>restore.sh</code> clears both the <code>.maintenance</code> and <code>.destructive</code> sentinels automatically (an off-host restore reconciles its own secrets and role and self-restarts the app; an older-than-code restore is migrated forward by the app-factory watcher when the gate lifts). Only a restore that <strong>fails after the destructive drop</strong> exits still in maintenance, holding the durable <code>.destructive</code> sentinel; the operator recovers from the safety pre-backup and then clears both sentinels manually — see DEPLOYMENT.md for the runbook.</p>
+<p><code>scripts/restore.sh</code> writes a durable <code>.destructive</code> sentinel before the first
+database drop. While this sentinel is present, the app returns HTTP 503 on all
+non-exempt routes regardless of sentinel age. A <code>SIGKILL</code> mid-restore therefore
+cannot leave the stack serving a partly restored database.</p>
+<p><strong>Operator action required to resume:</strong> a clean same-host, inbox, or older-version
+restore clears both maintenance markers automatically. A failure after the
+first drop keeps <code>.destructive</code> in place. For a same-host restore, recover from
+the safety restore point. For an inbox restore on a fresh host, correct the
+reported cause and retry the signed off-site set. Do not clear the marker until
+the databases and services have been checked; a successful retry clears it
+automatically. See the <a href="../manual/backup-and-restore/">backup and restore guide</a>.</p>
 <hr />
 <h2 id="deferred-low-value-high-churn-cleanups">Deferred low-value / high-churn cleanups<a class="headerlink" href="#deferred-low-value-high-churn-cleanups" title="Permanent link">&para;</a></h2>
 <p>The following items were deliberately deferred as low-value or high-churn. Each is behavior-neutral debt, not a correctness or security risk.</p>
 <ul>
-<li><strong><code>services_client</code> full migration (Telegram bot).</strong> The bot routes most product-data calls through the typed <code>services_client</code>, but some call sites still query the shared Postgres directly. The module docstring was corrected ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.</li>
 <li><strong><code>_owner_headers</code> promotion.</strong> The Telegram <code>_owner_headers</code> helper stays at its current call-site location (pinned by tests); promoting it to a shared module is not worth the churn.</li>
 <li><strong>Service-layer <code>HTTPException</code> coupling.</strong> A few service functions raise FastAPI <code>HTTPException</code> directly rather than a domain error the router translates. Left as-is; decoupling is a broad refactor.</li>
 <li><strong><code>db_helpers</code> split.</strong> <code>paper_ingestion</code>'s <code>db_helpers</code> mixes a few concerns; splitting it touches many importers for marginal gain.</li>
 <li><strong><code>JOB_HANDLER_OWNER</code> / <code>noop.test</code> queue.</strong> The job-handler-owner <code>Literal</code> typing and the <code>noop.test</code> queue entry are retained as-is; tightening them is cosmetic.</li>
 <li><strong>Redundant My-Day journal fetch.</strong> <code>GET /api/my-day/journal</code> overlaps the nullable <code>journal</code> field already returned by the my-day-bundle; the separate fetch is kept to avoid a frontend refactor.</li>
 <li><strong><code>jarvis_common</code> test-code wheel exclusion.</strong> The <code>jarvis_common</code> wheel ships its <code>testing_*.py</code> modules (~25 KB). A <code>packages.find</code> exclude is ineffective for top-level modules (only a <code>testing_sidecars/</code> subpackage would drop); a correct fix means relocating six modules into a <code>jarvis_common/testing/</code> subpackage plus updating 100+ test imports — not worth the gain. Runtime-safe regardless (zero non-test runtime imports of <code>jarvis_common.testing*</code>).</li>
-<li><strong><code>jobs.py</code> 503-vs-404 caller mapping.</strong> The broad job-row-lookup failure now logs a WARNING; mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.</li>
 </ul>
 <p><strong>Intended behavior note — auth-first ordering (auth-idiom migration).</strong> <code>paper_ingestion</code> route handlers now resolve identity via <code>Depends(current_user_id_strict)</code> (previously an imperative in-body call). Consequence: an <em>unauthenticated</em> request to a migrated endpoint now fails authentication (401) <em>before</em> request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route <code>analyze._analyze_stream</code> generator retains an imperative resolve (it is not a route and has no rate-limiter).</p>
 <hr />
 <h2 id="deferred-theming-test-hygiene-items">Deferred theming / test-hygiene items<a class="headerlink" href="#deferred-theming-test-hygiene-items" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Pytest non-fatal warnings.</strong> Pytest emits non-fatal warnings (unawaited-coroutine in async mocks, <code>@pytest.mark.asyncio</code> on sync tests, <code>ORJSONResponse</code> deprecation). Cosmetic test-hygiene; full suite passes. Deferred.</li>
 <li><strong>Dark-mode destructive text contrast.</strong> Dark-mode contrast of destructive error text (<code>text-destructive</code>) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.</li>
 </ul>
-<h2 id="deferred-multi-admin-attribution-item">Deferred multi-admin attribution item<a class="headerlink" href="#deferred-multi-admin-attribution-item" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Multi-admin legacy-data attribution (single-admin deployments unaffected).</strong> Migration 0094 re-owns NULL-<code>user_id</code> rows on <code>paper_extractions</code>/<code>paper_entities</code>/zotero <code>paper_notes</code> to the single admin ONLY on single-tenant boxes (mirrors 0092). On a multi-admin box with pre-existing data: (a) historical Zotero notes keep their original <code>discovered_by</code> attribution (only forward syncs are attributed to the syncing user); (b) the entity batch-backfill (<code>knowledge_graph.py</code>) attributes to <code>papers.discovered_by</code>, which for system papers (<code>discovered_by IS NULL</code>) writes read-invisible NULL-user entity rows — the user-triggered single-paper extract correctly stamps the requesting user. Acceptable for the single-operator deployment norm; revisit if a true multi-admin instance with legacy data is targeted.</li>
-</ul>
+<h2 id="ambiguous-legacy-derived-output-ownership">Ambiguous legacy derived-output ownership<a class="headerlink" href="#ambiguous-legacy-derived-output-ownership" title="Permanent link">&para;</a></h2>
+<p>Migration 0094 can assign historical NULL-owned notes and structured
+extractions only when an upgraded instance has exactly one administrator. On a
+pre-baseline installation with multiple administrators, ambiguous legacy rows
+remain unassigned and therefore inaccessible instead of being guessed into one
+user's workspace. New writes always carry the initiating user's identity, and
+paper visibility no longer depends on <code>discovered_by</code>.</p>
+<p><strong>Reopen criteria:</strong> an operator needs to recover ambiguous pre-baseline output
+from a multi-administrator installation; attribution then requires a deliberate
+data-specific migration rather than a global default.</p>
 
 
 

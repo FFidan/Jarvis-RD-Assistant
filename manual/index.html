@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#jarvis-rd-assistant-user-manual" class="md-skip">
+        <a href="#user-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -574,17 +574,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#how-this-manual-is-maintained" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How this manual is maintained
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -608,7 +597,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -636,7 +625,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -664,7 +653,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1196,7 +1213,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1224,7 +1241,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1311,7 +1328,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1339,7 +1356,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1367,7 +1384,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1758,17 +1775,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#how-this-manual-is-maintained" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How this manual is maintained
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1791,25 +1797,28 @@
 
 <!-- verified-against-UI: 2026-05-18 | routes: app-wide -->
 
-<h1 id="jarvis-rd-assistant-user-manual">JARVIS RD Assistant — User Manual<a class="headerlink" href="#jarvis-rd-assistant-user-manual" title="Permanent link">&para;</a></h1>
-<p>JARVIS RD Assistant is a <strong>self-hosted AI research assistant</strong> designed for individuals and small teams who want to own their research workflow without relying on external SaaS platforms.</p>
+<h1 id="user-guide">User guide<a class="headerlink" href="#user-guide" title="Permanent link">&para;</a></h1>
+<p>This guide covers the web application after an operator has installed JARVIS.
+It is written for individual researchers, families, and small teams sharing one
+self-hosted instance.</p>
 <h2 id="what-it-does">What it does<a class="headerlink" href="#what-it-does" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Ingest papers</strong> from arXiv, Semantic Scholar, Zotero, and other configured sources into your private library.</li>
-<li><strong>Hybrid RAG chat</strong> — ask questions across your entire library using a retrieval-augmented generation pipeline that combines BM25 keyword search, vector semantic search, and cross-encoder reranking.</li>
-<li><strong>Citation and knowledge graphs</strong> — explore how papers cite each other and how concepts connect across your corpus.</li>
-<li><strong>Contradiction detection</strong> — surface papers that make conflicting claims about the same topic.</li>
-<li><strong>Pulse recommendations</strong> — a daily deck of paper recommendations generated from your active research topics on a configurable schedule.</li>
-<li><strong>FSRS spaced-repetition cards</strong> — review key facts extracted from papers on a scientifically-spaced schedule.</li>
-<li><strong>Notes and projects</strong> — annotate papers and organise related work into named projects.</li>
-<li><strong>Telegram integration</strong> — receive Pulse digests and interact with your library from a Telegram bot.</li>
-<li><strong>Multi-user</strong> — the system supports multiple accounts with role-based access (regular users and admins).</li>
+<li>Add papers from configured sources or by URL, DOI, title, or upload.</li>
+<li>Search and ask questions across analyzed papers with linked citations.</li>
+<li>Review citation and knowledge graphs and possible contradictions.</li>
+<li>Receive scheduled Pulse recommendations for research topics.</li>
+<li>Create and review spaced-repetition cards, notes, and projects.</li>
+<li>Optionally connect a Telegram bot.</li>
+<li>Use separate user and administrator accounts on a shared instance.</li>
 </ul>
 <h2 id="who-this-manual-is-for">Who this manual is for<a class="headerlink" href="#who-this-manual-is-for" title="Permanent link">&para;</a></h2>
-<p>This manual is for <strong>end users</strong> — researchers and readers who use the web application. It covers every page in the UI, the sign-in flow, and the day-to-day research workflows.</p>
+<p>This guide is for researchers, family members, and small teams using an existing
+JARVIS instance. Operators should start with the <a href="../readme-shim/">installation
+guide</a>, then return here for first sign-in and account setup.</p>
 <p><strong>Operators</strong> (people who install and maintain the system) should also read:</p>
 <ul>
-<li><a href="../DEPLOYMENT/"><code>DEPLOYMENT.md</code></a> — installation (prebuilt images by default), the access-mode chooser (localhost / LAN / Cloudflare Tunnel / Let's Encrypt), Docker Compose configuration, and operations.</li>
+<li><a href="../DEPLOYMENT/"><code>DEPLOYMENT.md</code></a> — installation, the five access choices,
+  Docker Compose configuration, and operations.</li>
 <li><a href="../SECURITY/"><code>SECURITY.md</code></a> — hardening checklist, secret management, and known residual risks.</li>
 </ul>
 <p>These documents are part of the repository and are available in the <strong>Get Started</strong> and <strong>Operate</strong> sections of this site.</p>
@@ -1823,20 +1832,20 @@
 </thead>
 <tbody>
 <tr>
-<td><a href="getting-started/">Getting Started</a></td>
-<td>First-run operator bootstrap, signing in, post-login setup wizard, and the onboarding tour</td>
+<td><a href="getting-started/">First sign-in and setup</a></td>
+<td>Create the first administrator, invite family, and add the first paper</td>
 </tr>
 <tr>
-<td><a href="access-modes/">Choosing how you access JARVIS</a></td>
-<td>The localhost, LAN, Cloudflare Tunnel, and Let's Encrypt access modes and how to switch</td>
+<td><a href="access-modes/">Access from other devices</a></td>
+<td>Choose localhost, private HTTPS, LAN diagnostics, Cloudflare, or your own domain</td>
 </tr>
 <tr>
 <td><a href="passkeys/">Passkeys</a></td>
-<td>Password-less sign-in with passkeys: registration, revocation, and magic-link recovery</td>
+<td>Add, remove, use, and recover from passkeys with or without email</td>
 </tr>
 <tr>
 <td><a href="navigation/">Navigation</a></td>
-<td>AppShell layout, sidebar nav groups, TopBar controls (⌘K, Jobs, Pomodoro, theme)</td>
+<td>Sidebar, search, jobs, Pomodoro timer, and appearance controls</td>
 </tr>
 <tr>
 <td><a href="home-my-day/">Home &amp; My Day</a></td>
@@ -1899,24 +1908,15 @@
 <td>Pairing your Telegram account and (admin) bot-token configuration</td>
 </tr>
 <tr>
-<td><a href="backup-and-restore/">Backup &amp; Restore</a></td>
-<td>One-click restore, retention, and web-first disaster recovery (admin)</td>
+<td><a href="backup-and-restore/">Backup and restore</a></td>
+<td>Keep off-site restore points and recover the instance (admin)</td>
 </tr>
 <tr>
-<td><a href="admin/">Admin Pages</a></td>
-<td>User management, system health, audit log, backups, system logs (admin role only)</td>
+<td><a href="admin/">Admin and multi-user operation</a></td>
+<td>Invite users, manage access, health, backups, and logs (admin only)</td>
 </tr>
 </tbody>
 </table>
-<h2 id="how-this-manual-is-maintained">How this manual is maintained<a class="headerlink" href="#how-this-manual-is-maintained" title="Permanent link">&para;</a></h2>
-<p>Each page in this manual begins with an HTML comment of the form:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>&lt;!-- verified-against-UI: YYYY-MM-DD | routes: /path1, /path2 --&gt;
-</code></pre></div>
-<p>This records which routes the page was last verified against and when. When the UI changes, the per-page date is bumped and any inaccurate content is corrected. If a date is more than a few months old, treat the page as a starting point and check the live UI for details.</p>
-<p>Where a screenshot would be helpful, pages contain placeholder comments of the form:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>&lt;!-- screenshot: &lt;brief description of what to capture&gt; --&gt;
-</code></pre></div>
-<p>These placeholders make it cheap to add real screenshots later without leaving broken image references in the meantime.</p>
 
 
 

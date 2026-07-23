@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1246,7 +1274,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1274,7 +1302,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1361,7 +1389,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1389,7 +1417,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1417,7 +1445,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1909,8 +1937,13 @@
 <p><strong>Scope selector</strong> at the top of the list toggles between:</p>
 <ul>
 <li><strong>My library</strong> — papers you have personally saved or interacted with.</li>
-<li><strong>All discovered</strong> — every paper the system has seen, including those saved by other users on your instance.</li>
+<li><strong>Public + mine</strong> — papers verified through the server's public scholarly
+  sources, together with private papers in your own library. It never includes
+  another user's private upload or personal integration merely because it
+  exists on the same instance.</li>
 </ul>
+<p>See <a href="../../SECURITY/#source-aware-paper-visibility">Source-aware paper visibility</a>
+for the canonical source matrix.</p>
 <p><strong>State filter chips</strong> allow you to narrow by reading state:</p>
 <table>
 <thead>
@@ -1951,7 +1984,7 @@
 <hr />
 <h3 id="trash-surfacetrash">Trash — <code>?surface=trash</code><a class="headerlink" href="#trash-surfacetrash" title="Permanent link">&para;</a></h3>
 <p>The Trash surface lists papers you have soft-deleted. Each paper has a <strong>Restore</strong> button that returns it to the Library. Papers in the Trash are not shown in any other surface.</p>
-<p><strong>Hard-delete</strong> — a confirmation modal lets you permanently delete individual papers from the Trash. This action is irreversible: all associated chunks, embeddings, and user state are removed.</p>
+<p><strong>Hard-delete</strong> — a confirmation modal permanently removes a paper from your library, including your notes, summaries, highlights, and other private activity. This cannot be undone. A public paper record and its processed search content may remain; the web action is not a system-wide delete.</p>
 <hr />
 <h2 id="bulk-selection">Bulk selection<a class="headerlink" href="#bulk-selection" title="Permanent link">&para;</a></h2>
 <p>In all surfaces except Trash, you can select multiple papers using the checkbox that appears on hover for each list item. Once one or more papers are selected:</p>

@@ -16,7 +16,7 @@
         <link rel="prev" href="../access-modes/">
       
       
-        <link rel="next" href="../home-my-day/">
+        <link rel="next" href="../install-and-offline/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Passkeys - JARVIS RD Assistant</title>
+        <title>Sign in with passkeys - JARVIS RD Assistant</title>
       
     
     
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Passkeys
+              Sign in with passkeys
             
           </span>
         </div>
@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -582,7 +582,7 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
   
 
     
@@ -600,7 +600,7 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
   
 
     
@@ -624,17 +624,6 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#what-is-a-passkey-and-why-use-one" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is a passkey, and why use one?
-      
-    </span>
-  </a>
-  
-</li>
       
         <li class="md-nav__item">
   <a href="#where-passkeys-are-available" class="md-nav__link">
@@ -681,10 +670,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#if-you-lose-a-device" class="md-nav__link">
+  <a href="#after-a-restore-or-hostname-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        If you lose a device
+        After a restore or hostname change
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery
       
     </span>
   </a>
@@ -706,6 +706,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1229,7 +1257,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1257,7 +1285,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1344,7 +1372,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1372,7 +1400,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1400,7 +1428,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1759,17 +1787,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-is-a-passkey-and-why-use-one" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What is a passkey, and why use one?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#where-passkeys-are-available" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1814,10 +1831,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#if-you-lose-a-device" class="md-nav__link">
+  <a href="#after-a-restore-or-hostname-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        If you lose a device
+        After a restore or hostname change
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery
       
     </span>
   </a>
@@ -1855,44 +1883,45 @@
   
 
 
-<!-- verified-against-UI: 2026-07-13 | routes: /login, /settings?section=account&item=passkeys -->
+<!-- verified-against-UI: 2026-07-20 | routes: /login, /settings?section=account&item=passkeys, /admin/users -->
 
 <h1 id="passkeys">Passkeys<a class="headerlink" href="#passkeys" title="Permanent link">&para;</a></h1>
-<p>A <strong>passkey</strong> lets you sign in to JARVIS with your fingerprint, face, or device PIN instead of waiting for an email link. Once you have added a passkey on a device, signing in from that device takes one tap.</p>
-<hr />
-<h2 id="what-is-a-passkey-and-why-use-one">What is a passkey, and why use one?<a class="headerlink" href="#what-is-a-passkey-and-why-use-one" title="Permanent link">&para;</a></h2>
-<p>A passkey is a sign-in credential that lives on your device — your laptop, phone, or a hardware security key. When you sign in, your device asks you to confirm with your fingerprint, face, or PIN, and that's it: no email to open, no link to click, nothing to type or remember.</p>
-<p>Passkeys are worth setting up because they are:</p>
-<ul>
-<li><strong>Faster</strong> — one confirmation on your device replaces the request-email-open-link round trip of a magic link.</li>
-<li><strong>Safer</strong> — a passkey only works on your JARVIS address. There is no password or link that could be intercepted or entered on a look-alike site.</li>
-<li><strong>Per-device</strong> — each passkey belongs to one device. Add one on every device you regularly use; removing one never affects the others.</li>
-</ul>
-<p>Passkeys are optional. Magic-link (and, where enabled, API-key) sign-in always remains available, whether or not you use passkeys.</p>
+<p>A passkey lets you sign in with the fingerprint, face, device PIN, password
+manager, or security key offered by your browser. It is optional and has no
+JARVIS password to remember.</p>
 <hr />
 <h2 id="where-passkeys-are-available">Where passkeys are available<a class="headerlink" href="#where-passkeys-are-available" title="Permanent link">&para;</a></h2>
 <p>Passkeys need a web address the browser can trust, so they are offered only where they can actually work:</p>
 <ul>
-<li><strong>On the JARVIS computer itself</strong> (a <code>localhost</code> install) — passkeys work.</li>
-<li><strong>Through a configured domain</strong> — a secure (HTTPS) address set up by your operator, such as the "From anywhere" tunnel option or your own domain — passkeys work from any device.</li>
-<li><strong>On a LAN install reached by a raw IP address</strong> — passkeys are <strong>not</strong> available. The sign-in page keeps magic links and shows a short note instead: <em>"Passkeys work on the JARVIS computer itself, or from everywhere once you enable the 'From anywhere' access option."</em></li>
+<li><strong>On the JARVIS computer itself:</strong> use <code>http://localhost:3001</code>.</li>
+<li><strong>Through a configured domain:</strong> use the exact named HTTPS address selected
+  during setup.</li>
+<li><strong>At a numeric LAN address:</strong> the app is not available. An address such as
+  <code>http://192.168.1.20:3001</code> serves only <code>/health/jarvis</code>; all other paths return
+  HTTP 403.</li>
 </ul>
-<p>Your browser must also support passkeys (all current mainstream browsers do). Where passkeys cannot work, JARVIS never shows a broken button — the passkey controls simply don't appear, or a one-line note explains why.</p>
+<p>Where a passkey cannot work, JARVIS hides the control and explains which address
+to use. Configure a named private HTTPS route, Cloudflare Tunnel, or your own
+HTTPS domain for family devices.</p>
 <hr />
 <h2 id="adding-a-passkey-to-your-account">Adding a passkey to your account<a class="headerlink" href="#adding-a-passkey-to-your-account" title="Permanent link">&para;</a></h2>
 <!-- screenshot: Settings → Account → Passkeys, showing the "Add a passkey" button and a list entry "Chrome on macOS — Added 2 days ago · Last used 3 hours ago" -->
 
 <ol>
-<li>Sign in as usual (magic link or API key).</li>
+<li>Sign in through the finish-setup link, an invitation, an administrator-shared
+   link, delivered email, or the owner's API-key recovery path.</li>
 <li>Open <strong>Settings → Account → Passkeys</strong>.</li>
 <li>Click <strong>Add a passkey</strong>.</li>
 <li>Optionally edit the <strong>Name</strong> — it is pre-filled with something recognisable like "Chrome on macOS" so you can tell your devices apart later.</li>
 <li>Click <strong>Create passkey</strong>. Your device asks for your fingerprint, face, or PIN to create it.</li>
 <li>A "Passkey added." confirmation appears, and the new passkey shows up in the list.</li>
 </ol>
-<p>Repeat on each device you use — one passkey per device.</p>
+<p>Add another passkey from each browser or authenticator you need. Some operating
+systems and password managers sync passkeys between your own devices; that is
+controlled by the provider, not by JARVIS.</p>
 <blockquote>
-<p><strong>Tip:</strong> after you request a magic link on a device where passkeys work, the sign-in page shows a one-time suggestion — <em>"Make sign-in easier on this device"</em> — reminding you to add a passkey from Settings. You can dismiss it, and it won't come back.</p>
+<p><strong>Tip:</strong> after magic-link sign-in on a supported device, JARVIS offers a
+one-time reminder to add a passkey. Dismissing it hides it on that device.</p>
 </blockquote>
 <p>If you see <em>"This device already has a passkey for your account"</em>, there is nothing to do — this device is already set up.</p>
 <hr />
@@ -1901,37 +1930,61 @@
 
 <ol>
 <li>Open the sign-in page. Below the usual sign-in form, after an "or" divider, you'll find <strong>Sign in with a passkey</strong>. (The button only appears where passkeys work — see <a href="#where-passkeys-are-available">Where passkeys are available</a>.)</li>
-<li>Click it and confirm with your fingerprint, face, or device PIN. JARVIS always asks for this confirmation — simply having the device unlocked is not enough.</li>
-<li>You're in.</li>
+<li>Click it and confirm with your fingerprint, face, or device PIN. An unlocked
+   device alone does not complete the confirmation.</li>
+<li>JARVIS opens your account.</li>
 </ol>
-<p>If you cancel or the prompt times out, you'll see <em>"Sign-in was cancelled or timed out. You can try again."</em> with a <strong>Try again</strong> link — nothing is lost. If a prompt sat open too long and expired, just start again from the button. And if a passkey won't work on this device at all, use the magic-link form on the same page instead.</p>
+<p>If you cancel or the prompt expires, use <strong>Try again</strong>. If the passkey does not
+work on that device, request an emailed sign-in link when email is configured.
+Otherwise ask an administrator for a private 15-minute sign-in link.</p>
 <hr />
 <h2 id="managing-your-passkeys">Managing your passkeys<a class="headerlink" href="#managing-your-passkeys" title="Permanent link">&para;</a></h2>
 <p><strong>Settings → Account → Passkeys</strong> lists every passkey on your account with its name, when it was added, and when it was last used.</p>
 <p>To remove one, click the trash icon next to it and confirm:</p>
 <ul>
 <li>Removing a passkey means you can no longer sign in with that device's passkey. <strong>Your other passkeys keep working.</strong></li>
-<li>If it is your <strong>only</strong> passkey, the confirmation says so explicitly: after removing it you'll sign in with a magic link or API key until you add a new one.</li>
+<li>If it is your <strong>only</strong> passkey, the confirmation says so explicitly. Before
+  removing it, confirm that one of the recovery paths below works.</li>
 </ul>
-<p>Remove a passkey whenever you retire a device, hand it to someone else, or simply no longer recognise an entry in the list.</p>
+<p>Remove a passkey when you retire or transfer a device, or when you no longer
+recognise an entry in the list.</p>
 <hr />
-<h2 id="if-you-lose-a-device">If you lose a device<a class="headerlink" href="#if-you-lose-a-device" title="Permanent link">&para;</a></h2>
-<p>You are never locked out: <strong>magic-link sign-in always works</strong>, even if the lost device held your only passkey.</p>
-<ol>
-<li>On any other device, sign in with a magic link as usual.</li>
-<li>Go to <strong>Settings → Account → Passkeys</strong> and remove the lost device's passkey so it can no longer be used.</li>
-<li>Add a fresh passkey on your replacement device when you're ready.</li>
-</ol>
-<p>If you'd rather have everything cleared at once — for example after a stolen device — an administrator can remove <strong>all</strong> passkeys from your account from the admin user-management page; you then sign in with a magic link and re-register.</p>
-<blockquote>
-<p><strong>Automatic protection:</strong> if JARVIS ever detects that one of your passkeys has been copied onto another device, it removes that passkey automatically and ends any sessions it started. If that happens, sign in with a magic link and add a new passkey.</p>
-</blockquote>
+<h2 id="after-a-restore-or-hostname-change">After a restore or hostname change<a class="headerlink" href="#after-a-restore-or-hostname-change" title="Permanent link">&para;</a></h2>
+<p>A data restore preserves accounts and registered passkeys, but WebAuthn still
+binds each credential to its original <strong>RP ID</strong>, which is the hostname used when
+the passkey was created. Keep the same hostname and configure the matching
+<code>APP_BASE_URL</code> on a replacement host if existing passkeys must continue to
+work.</p>
+<p>If the hostname changes, an old passkey cannot authenticate to the new RP ID.
+Recover with email, a private administrator link, or the owner-only operations
+key, then re-register a passkey at the new named HTTPS address. Changing only
+the server data does not retarget an existing credential.</p>
+<hr />
+<h2 id="recovery">Recovery<a class="headerlink" href="#recovery" title="Permanent link">&para;</a></h2>
+<p>Recovery depends on how the instance is operated:</p>
+<ul>
+<li><strong>Email is working:</strong> request a magic link from the sign-in page.</li>
+<li><strong>Email is not configured:</strong> a signed-in administrator opens <strong>Admin → User
+  Management</strong>, uses <strong>Send sign-in link</strong> on the user's row, and shares the
+  returned 15-minute link privately.</li>
+<li><strong>Instance owner:</strong> the operations API key can recover the configured owner on
+  localhost or the final HTTPS origin. Keep it available only to the host
+  operator. It is not a shared login for other users; do not send it with an
+  invitation.</li>
+</ul>
+<p>If the only administrator has no working session, no passkey, and no email
+delivery, other users cannot generate that administrator's recovery link.
+Avoid that state: keep a second administrator or a second owner passkey, and
+keep the API key available to the operator.</p>
+<p>After a device is lost, sign in through a recovery path and remove its passkey.
+An administrator can also revoke all passkeys on a user's account. The user must
+then recover the account and register a new passkey.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../getting-started/">Getting Started</a> — the sign-in flow and magic links.</li>
+<li><a href="../getting-started/">First sign-in and setup</a> — the sign-in and invitation flow.</li>
 <li><a href="../settings/">Settings</a> — the Account section, where the Passkeys page lives.</li>
-<li><a href="../admin/">Admin &amp; Multi-tenant</a> — user management, where admins can revoke a user's passkeys.</li>
+<li><a href="../admin/">Admin and multi-user operation</a> — manual sign-in links and passkey revocation.</li>
 </ul>
 
 

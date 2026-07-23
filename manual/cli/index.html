@@ -27,7 +27,7 @@
     
     
       
-        <title>Command line (jarvis-research) - JARVIS RD Assistant</title>
+        <title>Command-line maintenance - JARVIS RD Assistant</title>
       
     
     
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Command line (jarvis-research)
+              Command-line maintenance
             
           </span>
         </div>
@@ -512,7 +512,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -568,7 +568,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1100,7 +1128,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1128,7 +1156,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1220,7 +1248,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1248,7 +1276,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1285,7 +1313,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1303,7 +1331,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1336,6 +1364,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ownership-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore-acknowledgement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore acknowledgement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1823,6 +1879,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ownership-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore-acknowledgement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore acknowledgement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2019,6 +2103,18 @@ on your PATH, or run <code>./setup.sh</code> again from your checkout.</p>
 <td>Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service.</td>
 </tr>
 <tr>
+<td><code>owner status</code></td>
+<td>Show whether instance ownership comes from the host environment or database and whether it resolves to a live administrator.</td>
+</tr>
+<tr>
+<td><code>owner set &lt;email&gt;</code></td>
+<td>Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again.</td>
+</tr>
+<tr>
+<td><code>restore acknowledge &lt;restore-id&gt;</code></td>
+<td>After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again.</td>
+</tr>
+<tr>
 <td><code>register</code></td>
 <td>Record the current checkout as the managed install and refresh the launcher.</td>
 </tr>
@@ -2038,6 +2134,23 @@ on your PATH, or run <code>./setup.sh</code> again from your checkout.</p>
 </table>
 <p>Run <code>jarvis-research help</code> for the built-in summary. A command can be pointed at
 a specific checkout with <code>jarvis-research --repo &lt;dir&gt; &lt;command&gt;</code>.</p>
+<h3 id="ownership-recovery">Ownership recovery<a class="headerlink" href="#ownership-recovery" title="Permanent link">&para;</a></h3>
+<p>Run <code>jarvis-research owner status</code> after upgrading an installation that already
+had multiple administrators. Migration 0105 assigns the sole live
+administrator automatically, but deliberately leaves a multi-admin choice to
+the operator. If the database owner is missing or invalid, use
+<code>jarvis-research owner set &lt;admin-email&gt;</code> and type the same email to confirm.
+The command accepts only a live administrator and commits the repair atomically.
+When <code>OWNER_USER_ID</code> manages ownership, change that host setting and restart
+JARVIS instead. A valid database-managed owner transfers ownership in <strong>Admin →
+User Management</strong>, not through the repair command.</p>
+<h3 id="restore-acknowledgement">Restore acknowledgement<a class="headerlink" href="#restore-acknowledgement" title="Permanent link">&para;</a></h3>
+<p>An off-host restore quarantines restored outbound integrations until their
+credentials have been reviewed. Use the browser progress view or run
+<code>jarvis-research restore acknowledge &lt;restore-id&gt;</code> with the exact current
+32-character restore ID, then type it again. A missing, stale, or changed review
+state is refused and leaves quarantine active. See <a href="../backup-and-restore/#identity-and-credential-boundaries">Backup &amp;
+Restore</a>.</p>
 <h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2081,30 +2194,38 @@ your branch.</p>
 <li><strong>Requires a fast-forward.</strong> If your checkout has diverged from the target so
    that a fast-forward is impossible, the update is refused rather than forced.
    If you are already on the target, it reports "already up to date".</li>
-<li><strong>Verifies the release is fully published.</strong> Every image the target needs must
-   already exist in the registry; a visible tag whose images are still uploading
-   is refused, so you never advance onto a half-published release.</li>
-<li><strong>Enforces a backup before a data-changing migration.</strong> New migrations between
-   your version and the target are inspected. If any one changes data, the update
-   requires a <em>fresh, checksum-verified</em> backup before it will proceed: it
-   triggers an on-demand backup, waits for it, and confirms the database archive
-   (and the secrets archive, when backups are encrypted) is present and intact.
-   Without one it refuses. Additive-only migrations apply on restart and only
-   suggest taking a restore point first.</li>
-<li><strong>Stages images, then advances.</strong> The full target image set is pulled <em>before</em>
-   the branch moves; a failed pull aborts with the checkout untouched. Only then
-   does the checkout fast-forward to the target tag.</li>
+<li><strong>Verifies the release is fully published.</strong> Every registry-backed image the
+   target needs must already exist; a visible tag whose images are still
+   uploading is refused, so you never advance onto a half-published release.</li>
+<li><strong>Enforces a restore point before a data-changing migration.</strong> New migrations
+   between your version and the target are inspected. If any one changes data,
+   the command triggers a backup and accepts it only when its signed manifest
+   names the exact main-database, model-router, and secrets archives for that
+   run and their sizes and checksums match. A missing, unsigned, incomplete, or
+   mismatched point is refused. Additive-only migrations apply on restart and
+   only suggest taking a restore point first.</li>
+<li><strong>Stages images, then advances.</strong> The target's Compose files are resolved with
+   this install's active profiles. Every exact registry image in that result,
+   including profile dependencies and target-added services, is pulled <em>before</em>
+   the branch moves. Services explicitly marked for local builds are not sent to
+   a registry. A failed pull leaves the checkout untouched.</li>
 <li><strong>Applies and verifies health.</strong> It pins <code>JARVIS_VERSION</code>, recreates the
    services (via <code>update.sh</code>), and waits for them to report healthy. On success
    it clears the pending-transaction record and prints a <code>doctor</code> summary.</li>
 </ol>
 <h3 id="resuming-an-interrupted-update">Resuming an interrupted update<a class="headerlink" href="#resuming-an-interrupted-update" title="Permanent link">&para;</a></h3>
-<p>Each update writes a small pending-transaction file that records the phase it
-reached. If a run is interrupted, simply run <code>jarvis-research update</code> again — it
+<p>Each install writes its own small pending-transaction file, so interrupted
+updates in two clones cannot overwrite each other. On the first update after
+upgrading from an older command, JARVIS moves the former shared record only when
+its recorded commits identify this install unambiguously; otherwise it stops and
+keeps the record untouched. If a run is interrupted, run
+<code>jarvis-research update</code> again — it
 resumes deterministically from the recorded phase instead of reporting "up to
-date". A run that stopped before advancing the branch restarts cleanly. If you
-need to drive the post-advance half explicitly, <code>jarvis-research update --resume
-&lt;tag&gt;</code> runs only those remaining steps.</p>
+date", even when the checkout already points at the target commit. A run that
+stopped before advancing the branch restarts cleanly. If you need to drive the
+post-advance half explicitly, <code>jarvis-research update --resume &lt;tag&gt;</code> runs only
+those remaining steps. The command refuses to resume if the checkout moved to
+an unexpected commit.</p>
 <h3 id="rolling-back">Rolling back<a class="headerlink" href="#rolling-back" title="Permanent link">&para;</a></h3>
 <p><code>update</code> never rolls back on its own. When an update fails after the images
 changed, it prints the exact commands to pin <code>JARVIS_VERSION</code> back to your
@@ -2123,13 +2244,14 @@ stable tag — the diverged-checkout refusal in step 3 fires by design. A normal
 <code>vX.Y.Z</code> releases. To run a stable release after trying a candidate, do a fresh
 install rather than trying to update the rc checkout in place.</p>
 <h2 id="updating-by-hand">Updating by hand<a class="headerlink" href="#updating-by-hand" title="Permanent link">&para;</a></h2>
-<p><code>jarvis-research update</code> is the recommended path, but a checkout can always be
-updated manually:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>pull
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./update.sh
+<p><code>jarvis-research update</code> is the supported path. Use the lower-level fallback
+only when the lifecycle command itself cannot run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>pull<span class="w"> </span>--ff-only
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./update.sh<span class="w"> </span>--yes
 </code></pre></div>
-<p>See <a href="../../DEPLOYMENT/#update-workflow">Deployment → Update Workflow</a> for the
-details of the manual path.</p>
+<p>The fallback does not classify migrations, require a signed restore point, or
+resume a recorded transaction. Take a current restore point first, and use this
+path only to repair a lifecycle command that cannot run.</p>
 <h2 id="uninstalling">Uninstalling<a class="headerlink" href="#uninstalling" title="Permanent link">&para;</a></h2>
 <p><code>jarvis-research uninstall</code> removes an install in four escalating tiers. Each tier
 enumerates the exact containers, images, volumes, and files it will remove and
@@ -2203,7 +2325,11 @@ teardown first, which mutates nothing:</p>
 <p><code>--yes</code> and <code>--all</code> skip only the ordinary confirmation. They can never satisfy the
 destructive gates, each of which reads a typed confirmation from stdin:</p>
 <ul>
-<li><strong>Tier 3</strong> requires typing the compose project name before any volume is deleted.</li>
+<li><strong>Tier 3</strong> requires typing the compose project name before any volume is deleted.
+  When the stack is running, an interactive run first offers to take a backup
+  inside the backup service, where the required credentials and storage are
+  available. If you accept and that backup fails or another backup is still in
+  progress, uninstall stops before the typed deletion gate.</li>
 <li><strong>Tier 4</strong> first offers to copy the backup encryption key
   (<code>secrets/backup_encrypt_key.txt</code>) to a path <strong>outside</strong> the clone. That key is
   deliberately excluded from backup archives, so deleting <code>secrets/</code> without it

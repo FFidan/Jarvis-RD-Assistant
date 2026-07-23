@@ -517,7 +517,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First sign-in and setup
   
 
     
@@ -545,7 +545,7 @@
   <span class="md-ellipsis">
     
   
-    Choosing how you access JARVIS
+    Access from other devices
   
 
     
@@ -573,7 +573,35 @@
   <span class="md-ellipsis">
     
   
-    Passkeys
+    Sign in with passkeys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install-and-offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install the web app and use it offline
   
 
     
@@ -1224,7 +1252,7 @@
   <span class="md-ellipsis">
     
   
-    Backup & Restore
+    Backup and restore
   
 
     
@@ -1252,7 +1280,7 @@
   <span class="md-ellipsis">
     
   
-    Admin & Multi-tenant
+    Admin and multi-user operation
   
 
     
@@ -1339,7 +1367,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Install JARVIS
   
 
     
@@ -1367,7 +1395,7 @@
   <span class="md-ellipsis">
     
   
-    Deployment
+    Deployment and troubleshooting
   
 
     
@@ -1395,7 +1423,7 @@
   <span class="md-ellipsis">
     
   
-    Command line (jarvis-research)
+    Command-line maintenance
   
 
     
@@ -1849,6 +1877,9 @@
 
 <h1 id="telegram">Telegram<a class="headerlink" href="#telegram" title="Permanent link">&para;</a></h1>
 <p>JARVIS RD Assistant integrates with Telegram so you can receive Pulse digests and stay connected to your library from a mobile device. Each user pairs their personal Telegram account individually; the Telegram bot itself is configured by an admin.</p>
+<p>The bot is optional and runs only when the <code>telegram</code> Compose profile is
+enabled. Saving a token does not start a profile that was omitted during setup;
+an operator must enable the profile and start the service on the JARVIS host.</p>
 <hr />
 <h2 id="who-can-do-what">Who can do what<a class="headerlink" href="#who-can-do-what" title="Permanent link">&para;</a></h2>
 <table>
@@ -1897,9 +1928,15 @@
 <ol>
 <li>Navigate to <strong>Settings → Integrations → Bot Token</strong> (admin only).</li>
 <li>Enter the new bot token from the Telegram BotFather.</li>
-<li>Save. The change takes effect immediately; a service restart is not required.</li>
+<li>Save. The value is encrypted in the deployment database and is never shown
+   again.</li>
+<li>Restart the <code>telegram_bot</code> service. The bot reads its token when the
+   container starts, so a replacement is not active before that restart.</li>
 </ol>
 <p>All users on the instance share a single bot configured with this token. Each user's account is linked to the bot individually via the pairing flow above.</p>
+<p>If the <code>telegram</code> Compose profile is disabled, the bot service does not start
+and pairing codes cannot be consumed. Re-run setup with Telegram selected, or
+enable the persisted profile on the host, before asking users to pair.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
 <ul>
