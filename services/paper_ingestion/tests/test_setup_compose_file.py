@@ -267,7 +267,7 @@ def test_prereq_manual_guidance_is_actionable() -> None:
     )
     assert "Install Docker Engine" in proc.stdout
     assert "https://docs.docker.com/engine/install/" in proc.stdout
-    assert "https://get.docker.com" in proc.stdout
+    assert "convenience script from https://get.docker.com" in proc.stdout
     assert "Docker Compose v2 plugin" in proc.stdout
     assert "https://docs.docker.com/compose/install/linux/" in proc.stdout
     assert "Install openssl" in proc.stdout

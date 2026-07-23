@@ -8,12 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 POSTGRES_CI_IMAGE = (
-    "postgres:16.8@sha256:"
-    "301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae"
+    "postgres:16.8@sha256:301bcb60b8a3ee4ab7e147932723e3abd1cef53516ce5210b39fd9fe5e3602ae"
 )
 QDRANT_CI_IMAGE = (
-    "qdrant/qdrant:v1.13.2@sha256:"
-    "81bdf0a9deedbeec68eed207145ade0b9d5db15e2f84069180711aa9698445b1"
+    "qdrant/qdrant:v1.13.2@sha256:81bdf0a9deedbeec68eed207145ade0b9d5db15e2f84069180711aa9698445b1"
 )
 
 
@@ -21,33 +19,29 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_changelog_records_stable_and_candidate_releases() -> None:
+def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
-    unreleased = changelog.split("## Unreleased", 1)[1].split("\n## ", 1)[0]
 
-    assert "v1.2.0" in unreleased
-    assert "candidate" in unreleased.lower()
-    assert "_No unreleased changes yet._" not in unreleased
+    assert "## v1.2.0 (2026-07-23)" in changelog
     assert "## v1.1.3 (2026-07-19)" in changelog
+    assert changelog.index("## v1.2.0") < changelog.index("## v1.1.3")
     assert changelog.index("## v1.1.3") < changelog.index("## v1.1.2")
 
 
-def test_roadmap_names_stable_release_and_candidate_separately() -> None:
+def test_roadmap_names_the_current_stable_release() -> None:
     roadmap = _read("ROADMAP.md")
 
-    assert "Current stable release: **v1.1.3**" in roadmap
-    assert "v1.2.0" in roadmap
-    assert "candidate" in roadmap.lower()
-    assert "Current release: **v1.2.0**" not in roadmap
+    assert "Current stable release: **v1.2.0**" in roadmap
+    assert "Current stable release: **v1.1.3**" not in roadmap
 
 
-def test_roadmap_lists_the_candidate_export_slice_only_once() -> None:
+def test_roadmap_lists_the_export_slice_only_once() -> None:
     roadmap = _read("ROADMAP.md")
-    in_progress = roadmap.split("## In progress", 1)[1].split("## Planned", 1)[0]
+    shipped = roadmap.split("## Shipped", 1)[1].split("## In progress", 1)[0]
     planned = roadmap.split("## Planned", 1)[1]
-    in_progress_words = " ".join(in_progress.split())
+    shipped_words = " ".join(shipped.split())
 
-    assert "per-paper Markdown knowledge export" in in_progress_words
+    assert "per-paper Markdown knowledge export" in shipped_words
     assert "per-paper Markdown" not in planned
     assert "answers and project-centred" in planned
 
@@ -158,7 +152,7 @@ def test_nightly_qdrant_gate_is_isolated_hosted_and_non_skipping() -> None:
     assert "self-hosted" not in job
     assert f"image: {POSTGRES_CI_IMAGE}" in job
     assert "--tmpfs /var/lib/postgresql/data" in job
-    assert "JARVIS_RUN_LIVE_PG: \"1\"" in job
+    assert 'JARVIS_RUN_LIVE_PG: "1"' in job
     assert "job.services.postgres.ports['5432']" in job
     assert "bash scripts/tests/test_corpus_visibility_qdrant.sh" in job
 
@@ -166,9 +160,9 @@ def test_nightly_qdrant_gate_is_isolated_hosted_and_non_skipping() -> None:
     assert QDRANT_CI_IMAGE in runner
     assert "--publish 127.0.0.1::6333" in runner
     assert "scripts/check-pytest-junit.py" in runner
-    assert "--junitxml=\"$JUNIT_REPORT\"" in runner
+    assert '--junitxml="$JUNIT_REPORT"' in runner
     assert "contract and live_qdrant" in runner
-    assert "docker rm -f \"$FIXTURE_NAME\"" in runner
+    assert 'docker rm -f "$FIXTURE_NAME"' in runner
     assert "JARVIS_RUN_LIVE_PG=1 is required; this release gate never skips" in runner
 
     assert "not live_qdrant" in root_config
@@ -237,10 +231,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     assert overrides["brace-expansion@^5"] == "5.0.7"
     assert overrides["js-yaml"] == "^4.3.0"
     assert "runs-on: ubuntu-latest" in security_workflow
-    assert (
-        "npm ls --prefix frontend js-yaml brace-expansion eslint --all"
-        in security_workflow
-    )
+    assert "npm ls --prefix frontend js-yaml brace-expansion eslint --all" in security_workflow
     assert "npm audit --prefix frontend --audit-level=high" in security_workflow
 
 
@@ -250,13 +241,9 @@ def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None
 
     assert "`make check`" in release_guide
     assert "Security / npm-audit" in release_guide
+    assert "gh workflow run nightly-llm-smoke.yml --ref <candidate-branch>" in release_guide
     assert (
-        "gh workflow run nightly-llm-smoke.yml --ref <candidate-branch>"
-        in release_guide
-    )
-    assert (
-        "gh workflow run lifecycle-smoke.yml --ref <candidate-branch> -f leg=all"
-        in release_guide
+        "gh workflow run lifecycle-smoke.yml --ref <candidate-branch> -f leg=all" in release_guide
     )
     assert "no skips, failures, or errors" in release_guide
     assert "public-repository workflow" in release_guide

@@ -10,10 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## Unreleased
-
-The v1.2.0 candidate is under review. These notes describe the current source
-tree, not a published release.
+## v1.2.0 (2026-07-23)
 
 ### Added
 - **Whole-library processing.** An admin can queue eligible papers for download,
