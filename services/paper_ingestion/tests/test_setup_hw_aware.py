@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -625,7 +626,14 @@ def test_setup_install_prereqs_runs_reviewed_plan_only_when_flagged(tmp_path):
         f"signing key must be fetched straight to the root-owned keyring: {plan}"
     )
     assert any(
-        f"signed-by={keyring}" in line and "https://download.docker.com/" in line for line in plan
+        f"signed-by={keyring}" in line
+        and "download.docker.com"
+        in {
+            urllib.parse.urlparse(token).netloc
+            for token in line.split()
+            if token.startswith("https://")
+        }
+        for line in plan
     ), f"apt repo must be pinned to the fetched key at download.docker.com: {plan}"
     for line in plan:
         # No root-consumed file may be staged at a predictable /tmp path (CWE-377):
