@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 _DISCOVERY_LOOKBACK_DAYS = 7
 _AUTO_PROCESS_PAGE_SIZE = 20
 _AUTO_PROCESS_CONCURRENCY = 3
+# Non-persistent placeholder id for the topic-less default query pair
+# ((None, "machine learning") from _resolve_topic_pairs). TopicRef.id stays
+# strict `int` (shared with pulse scoring's dampened-topic matching), so this
+# fills the field for a query that has no real topic. Safe because Postgres
+# serial ids start at 1 (never collides with a real row) and this value is
+# only read by PaperSource.fetch_new_since()/_parts_for_topic() (name/
+# query_terms only) — never persisted, fanned out, or scored.
+_DEFAULT_QUERY_TOPIC_ID = 0
 
 
 def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
@@ -68,6 +76,9 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
 
     Returns the number of newly-inserted canonical papers. Each saved paper
     is fanned out (idempotently) to users subscribed to the matching topic.
+    A topic-less pair (topic_id is None — the zero-configured-topics default)
+    still fetches and saves papers (landing PUBLIC, visible to all) but is
+    never fanned out: there is no subscribed topic to target.
     """
     papers_added = 0
     since = datetime.now(UTC) - timedelta(days=_DISCOVERY_LOOKBACK_DAYS)
@@ -86,11 +97,16 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
             )
             source = source_class(config, app.state.http_client, db_pool=db_pool)
             for topic_id, topic_name in topic_pairs:
-                if topic_id is None:
-                    continue
                 try:
                     results = await source.fetch_new_since(
-                        since, [TopicRef(id=topic_id, name=topic_name)], limit=20
+                        since,
+                        [
+                            TopicRef(
+                                id=topic_id if topic_id is not None else _DEFAULT_QUERY_TOPIC_ID,
+                                name=topic_name,
+                            )
+                        ],
+                        limit=20,
                     )
                     if results:
                         # batch save via internal function (bypasses HTTP rate limiter)
@@ -104,8 +120,10 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                                         papers_added += 1
                                     # Fan out to every user subscribed to
                                     # this topic. Idempotent via
-                                    # ON CONFLICT DO NOTHING.
-                                    if row:
+                                    # ON CONFLICT DO NOTHING. Skipped for the
+                                    # topic-less fallback (topic_id is None):
+                                    # there is no subscribed topic to target.
+                                    if row and topic_id is not None:
                                         try:
                                             await fan_out_to_topic_users(
                                                 conn,
