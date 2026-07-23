@@ -289,9 +289,7 @@ async def test_embed_and_store_reports_each_persisted_or_resumed_batch_once():
 
     embedder = _make_embedder()
     chunks = _make_chunks(n=4)
-    embedder.embed_texts = AsyncMock(
-        return_value=[[0.0] * EMBEDDING_DIMENSION for _ in range(2)]
-    )
+    embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION for _ in range(2)])
     embedder.qdrant.upsert = AsyncMock()
     completed_batches: list[tuple[int, int]] = []
 
@@ -321,9 +319,7 @@ async def test_progress_callback_failure_preserves_persisted_batch_for_resume():
 
     embedder = _make_embedder()
     chunks = _make_chunks(n=2)
-    embedder.embed_texts = AsyncMock(
-        return_value=[[0.0] * EMBEDDING_DIMENSION for _ in chunks]
-    )
+    embedder.embed_texts = AsyncMock(return_value=[[0.0] * EMBEDDING_DIMENSION for _ in chunks])
     embedder.qdrant.upsert = AsyncMock()
 
     async def _fail_progress(_completed: int, _total: int) -> None:

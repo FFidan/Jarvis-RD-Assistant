@@ -400,8 +400,11 @@ def test_rotation_timeout_returns_only_after_helper_cannot_activate(
     time.sleep(0.3)
     assert not (root / "backups/.lifecycle/rotation.guard").exists()
     guard_id = (
-        root / "secrets/jarvis_config_key_rotation_state.txt"
-    ).read_text(encoding="utf-8").split("guard_id=", 1)[1].splitlines()[0]
+        (root / "secrets/jarvis_config_key_rotation_state.txt")
+        .read_text(encoding="utf-8")
+        .split("guard_id=", 1)[1]
+        .splitlines()[0]
+    )
     owner = subprocess.run(
         [
             "bash",
@@ -729,9 +732,7 @@ def test_duplicate_lifecycle_holder_cannot_reactivate_after_release(
     reserve_command = f"reserve-{kind}"
     hold_command = f"hold-{kind}"
     guard_name = "update.guard" if kind == "update" else "rotation.guard"
-    reservation_name = (
-        "update.reservation" if kind == "update" else "rotation.reservation"
-    )
+    reservation_name = "update.reservation" if kind == "update" else "rotation.reservation"
     reserve = subprocess.run(
         ["bash", str(LIFECYCLE_HELPER), reserve_command, guard_id],
         env=helper_env,
@@ -863,9 +864,7 @@ def test_lifecycle_operations_refuse_cross_operation_overlap_and_retry(
         assert not guard_paths[second_kind].exists()
         second_reservation_path = root / "backups/.lifecycle" / f"{second_kind}.reservation"
         if second_kind == "rotation":
-            second_reservation_path = (
-                root / "backups/.lifecycle/rotation.reservation"
-            )
+            second_reservation_path = root / "backups/.lifecycle/rotation.reservation"
         assert not second_reservation_path.exists()
         time.sleep(0.3)
         assert not guard_paths[second_kind].exists()
@@ -1090,9 +1089,7 @@ def _stage_finalizing_rotation(
     (root / "secrets/jarvis_config_key_next.txt").write_text(next_key)
     (root / "secrets/jarvis_config_key_previous.txt").write_text(old_key)
     (root / "secrets/jarvis_config_key_rotation_state.txt").write_text(
-        "finalizing\n"
-        "backup_service_was_running=1\n"
-        f"guard_id={guard_id}\n",
+        f"finalizing\nbackup_service_was_running=1\nguard_id={guard_id}\n",
         encoding="utf-8",
     )
     (root / "db-state").write_text("new\n", encoding="utf-8")
@@ -1120,10 +1117,7 @@ def _stage_cancelling_rotation(
         encoding="utf-8",
     )
     (root / "secrets/jarvis_config_key_rotation_state.txt").write_text(
-        "cancelling\n"
-        "backup_service_was_running=1\n"
-        "guard_id=\n"
-        "cancel_restart_services=0\n",
+        "cancelling\nbackup_service_was_running=1\nguard_id=\ncancel_restart_services=0\n",
         encoding="utf-8",
     )
     paths = {
@@ -1345,7 +1339,7 @@ def test_prepared_rerun_adopts_the_guard_left_by_a_crash_before_service_stop(
         encoding="utf-8",
     )
     (root / "secrets/jarvis_config_key_rotation_state.txt").write_text(
-        "prepared\nbackup_service_was_running=1\n" f"guard_id={guard_id}\n",
+        f"prepared\nbackup_service_was_running=1\nguard_id={guard_id}\n",
         encoding="utf-8",
     )
     helper_env = _lifecycle_env(root)
@@ -1441,9 +1435,7 @@ def test_second_rotation_fails_before_it_can_touch_staging_or_docker(
         assert "lifecycle operation is already running" in second.stderr
         assert not (root / "docker-second.log").exists()
         assert (root / "secrets/jarvis_config_key_next.txt").read_bytes() == next_before
-        assert (
-            root / "secrets/jarvis_config_key_rotation_state.txt"
-        ).read_bytes() == state_before
+        assert (root / "secrets/jarvis_config_key_rotation_state.txt").read_bytes() == state_before
         (pause_dir / "release").touch()
         stdout, stderr = first.communicate(timeout=10)
         assert first.returncode == 0, stdout + stderr

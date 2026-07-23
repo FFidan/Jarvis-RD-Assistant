@@ -352,9 +352,7 @@ async def _configured_namespace_for_user(
     values = {str(row["key"]): row["value"] for row in rows}
     library_type = values.get("zotero.library_type", "user")
     remote_id = (
-        values.get("zotero.group_id")
-        if library_type == "group"
-        else values.get("zotero.user_id")
+        values.get("zotero.group_id") if library_type == "group" else values.get("zotero.user_id")
     )
     if library_type not in {"user", "group"} or remote_id is None:
         return None

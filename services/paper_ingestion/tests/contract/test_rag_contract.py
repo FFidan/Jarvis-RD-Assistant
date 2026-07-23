@@ -60,8 +60,7 @@ async def pi_test_client(contract_conn):
 async def _add_to_library(conn, user_id: int, paper_id: int) -> None:
     """Make a private paper visible through explicit caller membership."""
     await conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) "
-        "VALUES ($1, $2, 'manual_save')",
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
         user_id,
         paper_id,
     )

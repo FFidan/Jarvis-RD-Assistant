@@ -443,9 +443,7 @@ async def _resolve_validated_pdf_url(
 ) -> str:
     """Follow the bounded HEAD redirect chain, validating every target."""
     current_url = pdf_url
-    response = await http_client.request(
-        "HEAD", current_url, timeout=30.0, follow_redirects=False
-    )
+    response = await http_client.request("HEAD", current_url, timeout=30.0, follow_redirects=False)
     for _ in range(4):
         if response.status_code not in (301, 302, 303, 307, 308):
             break
@@ -568,9 +566,7 @@ class PDFProcessor:
             # successful publish the path no longer exists, so this is a no-op.
             await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
 
-        logger.info(
-            "Downloaded PDF for paper %d to %s", paper_id, pdf_path
-        )
+        logger.info("Downloaded PDF for paper %d to %s", paper_id, pdf_path)
         return pdf_path
 
     # pypdfium2 used for page snapshot generation only; text extraction uses Docling

@@ -599,9 +599,7 @@ async def _find_cross_references(
     if scope_user_id is not None and sorted_results:
         candidate_ids = [r["paper_id"] for r in sorted_results]
         visible_rows = await conn.fetch(
-            "SELECT p.id FROM papers p"
-            " WHERE p.id = ANY($1::int[])"
-            f" AND {paper_visible_sql(2)}",
+            f"SELECT p.id FROM papers p WHERE p.id = ANY($1::int[]) AND {paper_visible_sql(2)}",
             candidate_ids,
             scope_user_id,
         )

@@ -2634,9 +2634,7 @@ async def test_push_highlights_job_allows_persisted_public_paper():
     """
     from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
 
-    visible_conn = _make_conn(
-        fetchrow=FakeRecord({"source_type": "arxiv"})
-    )
+    visible_conn = _make_conn(fetchrow=FakeRecord({"source_type": "arxiv"}))
     pool = _make_pool(visible_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     ctx = AsyncMock()
@@ -2792,12 +2790,7 @@ def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin()
     namespace = _ZoteroLibraryNamespace("user", "123456")
 
     # jarvis-origin skip uses data["extra"]
-    assert (
-        _parse_zotero_item(
-            {"extra": "jarvis_paper_id=42", "key": "ABC"}, {}, namespace
-        )
-        is None
-    )
+    assert _parse_zotero_item({"extra": "jarvis_paper_id=42", "key": "ABC"}, {}, namespace) is None
 
     # key resolved from data first; fallback to outer_item["key"]
     parsed_with_data_key = _parse_zotero_item(

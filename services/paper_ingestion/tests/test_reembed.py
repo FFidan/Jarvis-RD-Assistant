@@ -688,9 +688,7 @@ async def test_find_candidates_ignores_legacy_vector_owner():
     )
 
     assert (
-        await reembed_mod.find_papers_needing_reembed(
-            pool, qdrant, _TEST_VISIBILITY_GENERATION
-        )
+        await reembed_mod.find_papers_needing_reembed(pool, qdrant, _TEST_VISIBILITY_GENERATION)
         == []
     )
 
@@ -977,9 +975,7 @@ async def test_verify_postconditions_requires_db_target_count_and_qdrant_count_p
     qdrant.count = AsyncMock(return_value=SimpleNamespace(count=8))
 
     with pytest.raises(reembed_mod.ScriptError, match="Postcondition failed"):
-        await reembed_mod.verify_postconditions(
-            pool, qdrant, _TEST_VISIBILITY_GENERATION
-        )
+        await reembed_mod.verify_postconditions(pool, qdrant, _TEST_VISIBILITY_GENERATION)
 
 
 async def test_verify_postconditions_rejects_equal_counts_with_wrong_visibility():

@@ -125,9 +125,7 @@ async def test_download_pdf_releases_conn_before_http(tmp_path: Path):
     )
 
     assert result.pdf_downloaded is True
-    processor.stage_pdf_download.assert_awaited_once_with(
-        "https://arxiv.org/pdf/1234.pdf", 1
-    )
+    processor.stage_pdf_download.assert_awaited_once_with("https://arxiv.org/pdf/1234.pdf", 1)
 
 
 @pytest.mark.asyncio
@@ -137,9 +135,7 @@ async def test_download_pdf_catches_http_error():
     pool = _make_pool_multi_conn(phase1_conn)
 
     processor = MagicMock()
-    processor.stage_pdf_download = AsyncMock(
-        side_effect=httpx.ConnectError("Connection refused")
-    )
+    processor.stage_pdf_download = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
     with pytest.raises(HTTPException) as exc_info:
         await pdf.download_pdf.__wrapped__(

@@ -61,8 +61,7 @@ def test_email_confirmation_link_targets_the_account_settings_route_without_quer
     link = _build_email_confirm_link(request, "tok123")
 
     assert link == (
-        "https://jarvis.example/settings?section=account&item=profile"
-        "#confirm_email_token=tok123"
+        "https://jarvis.example/settings?section=account&item=profile#confirm_email_token=tok123"
     )
     assert "?token=" not in link
 

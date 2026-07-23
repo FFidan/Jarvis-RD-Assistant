@@ -16,10 +16,7 @@ def test_windows_launcher_never_falls_back_to_native_bash() -> None:
     assert "falling back to Git Bash" not in launcher
     assert "where bash" not in launcher
     assert "\nbash ./setup.sh" not in launcher
-    assert (
-        'wsl --cd "%~dp0.." env JARVIS_WINDOWS_LAUNCHER=1 bash ./setup.sh'
-        in launcher
-    )
+    assert 'wsl --cd "%~dp0.." env JARVIS_WINDOWS_LAUNCHER=1 bash ./setup.sh' in launcher
 
 
 def test_windows_launcher_explains_missing_wsl_without_reporting_success() -> None:
