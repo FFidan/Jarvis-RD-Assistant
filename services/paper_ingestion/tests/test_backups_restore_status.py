@@ -913,6 +913,45 @@ def test_write_upload_grant_persists_only_hash_0644(tmp_path, monkeypatch) -> No
     assert timedelta(minutes=25) < expires - datetime.now(UTC) <= timedelta(minutes=30)
 
 
+def test_write_upload_grant_replaces_preexisting_symlink(tmp_path, monkeypatch) -> None:
+    # A pre-existing symlink at the grant path must be replaced, not followed:
+    # _atomic_write_private_json stages a random O_EXCL|O_NOFOLLOW temporary and
+    # os.replaces it over the destination, so the symlink's referent is left
+    # untouched and the grant path becomes a regular file holding the record.
+    grant = tmp_path / ".upload_grant.json"
+    referent = tmp_path / "referent.txt"
+    referent.write_text("original-referent-content")
+    grant.symlink_to(referent)
+    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant)
+    token = "upload-grant-token-value"
+
+    assert bk._write_upload_grant(token) is True
+
+    # The grant path is now a regular file, not the symlink it was.
+    assert os.path.islink(grant) is False
+    assert grant.is_file()
+    # The symlink's former referent is untouched — the write never followed it.
+    assert referent.read_text() == "original-referent-content"
+    persisted = json.loads(grant.read_text())
+    assert set(persisted) == {"sha256", "expires_at"}
+    assert persisted["sha256"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert (grant.stat().st_mode & 0o777) == 0o644
+
+
+def test_write_upload_grant_forces_0644_under_restrictive_umask(tmp_path, monkeypatch) -> None:
+    # os.open's mode is umask-subject; the hardened writer fchmods the exact
+    # bits, so a hardened host umask cannot narrow the grant below the 0o644 the
+    # co-mounted uploader needs to read through its read-only mount.
+    grant = tmp_path / ".upload_grant.json"
+    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant)
+    old_umask = os.umask(0o077)
+    try:
+        assert bk._write_upload_grant("upload-grant-token-value") is True
+    finally:
+        os.umask(old_umask)
+    assert (grant.stat().st_mode & 0o777) == 0o644
+
+
 @pytest.mark.asyncio
 async def test_upload_grant_endpoint_returns_token_once_and_audits(tmp_path, monkeypatch) -> None:
     from jarvis_common.auth import require_admin, verify_api_key

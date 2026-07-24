@@ -3261,6 +3261,52 @@ expect_eq "external host mutex survives clone replacement" "$rc" "3"
 kill "$_split_holder" 2>/dev/null || true
 wait "$_split_holder" 2>/dev/null || true
 
+# === upsert_env_var (atomic in-place .env write) ============================
+# The colocated-temp writer fills an empty placeholder IN PLACE (no duplicate),
+# rewrites an existing value in place, appends an absent key, and leaves the
+# surrounding lines untouched. It rewrites ./.env in the current directory, so
+# each case runs inside a private fixture dir.
+UPSERT_DIR="$(mktemp -d "${FIXTURES}/upsert.XXXXXX")"
+cat > "${UPSERT_DIR}/.env" <<'ENV'
+KEEP_BEFORE=1
+JARVIS_API_KEY=
+KEEP_AFTER=2
+ENV
+got="$(cd "$UPSERT_DIR"; upsert_env_var JARVIS_API_KEY deadbeef; upsert_env_var NEW_KEY added; cat .env)"
+want="$(printf '%s\n' 'KEEP_BEFORE=1' 'JARVIS_API_KEY=deadbeef' 'KEEP_AFTER=2' 'NEW_KEY=added')"
+expect_eq "upsert_env_var fills the placeholder in place and appends absent keys" "$got" "$want"
+# Re-upserting an existing key rewrites the value without adding a duplicate line.
+got="$(cd "$UPSERT_DIR"; upsert_env_var JARVIS_API_KEY feedface; grep -c '^JARVIS_API_KEY=' .env)"
+expect_eq "upsert_env_var never duplicates an existing key" "$got" "1"
+got="$(cd "$UPSERT_DIR"; grep '^JARVIS_API_KEY=' .env)"
+expect_eq "upsert_env_var rewrites the existing value in place" "$got" "JARVIS_API_KEY=feedface"
+
+# === _lifecycle_path_inside_repo (shared path-containment helper) ============
+# Literal prefix containment on a trailing-slash-normalized path: a true subpath
+# is inside; a sibling that only shares a string prefix (/a/bc vs /a/b) is NOT;
+# and the repo root equals itself (inside).
+_lifecycle_path_inside_repo /a/b/c /a/b && rc=0 || rc=$?
+expect_eq "_lifecycle_path_inside_repo: a subpath is inside (rc 0)" "$rc" "0"
+_lifecycle_path_inside_repo /a/bc /a/b && rc=0 || rc=$?
+expect_eq "_lifecycle_path_inside_repo: a sibling-prefix path is NOT inside (rc 1)" "$rc" "1"
+_lifecycle_path_inside_repo /a/b /a/b && rc=0 || rc=$?
+expect_eq "_lifecycle_path_inside_repo: the repo root equals itself (inside, rc 0)" "$rc" "0"
+
+# === jarvis-setup ingress-IP derivation ordering (wrapper-leg fix) ============
+# jarvis-setup must derive the ingress IP peers into .env before Compose reads
+# it, so the wrapper install (which never runs setup.sh's inline
+# allocate_ingress_ips) writes the JARVIS_*_IP proxy pins the pull/up consumes.
+jarvis_ingress_line="$(grep -nE '^sync_ingress_ips_from_env' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
+jarvis_compose_line="$(grep -nE '\$\{COMPOSE\}[[:space:]]+(pull|up)' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1)"
+if [ -n "$jarvis_ingress_line" ] && [ -n "$jarvis_compose_line" ] \
+   && [ "$jarvis_ingress_line" -lt "$jarvis_compose_line" ]; then
+  pass "jarvis-setup derives ingress IPs before the first Compose pull/up"
+else
+  printf 'FAIL: jarvis-setup ingress-IP sync (%s) does not precede the first Compose pull/up (%s)\n' \
+    "$jarvis_ingress_line" "$jarvis_compose_line" >&2
+  fail=1
+fi
+
 # =============================================================================
 
 if [ "$fail" -ne 0 ]; then

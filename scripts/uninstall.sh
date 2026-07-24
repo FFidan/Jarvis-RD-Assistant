@@ -206,8 +206,6 @@ _compose_project_name() {
   printf '%s' "$name"
 }
 
-_path_inside() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
-
 # Resolve the Compose target exclusively from the managed install. Caller-owned
 # COMPOSE_* selectors must never be able to redirect an uninstall to a sibling
 # project. Repository-configured hardware overlays remain supported, but every
@@ -240,7 +238,7 @@ _init_compose_target() {
       *) candidate="${REPO}/${item}" ;;
     esac
     canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
-    if [ -z "$canon" ] || [ ! -f "$canon" ] || ! _path_inside "$canon" "$REPO"; then
+    if [ -z "$canon" ] || [ ! -f "$canon" ] || ! _lifecycle_path_inside_repo "$canon" "$REPO"; then
       die "Compose file '${item}' is missing or outside the managed install." "Fix COMPOSE_FILE in ${REPO}/.env, then re-run."
     fi
     if printf '%s\n' "$seen" | grep -qxF "$canon"; then
@@ -501,7 +499,7 @@ _purge_key_gate() {
     [ -n "$canon" ] \
       || die "Cannot resolve the backup-key export path safely." \
         "Choose another path and re-run; no changes were made."
-    if _path_inside "$canon" "$REPO"; then
+    if _lifecycle_path_inside_repo "$canon" "$REPO"; then
       warn "Export path ${canon} is inside the clone; it would be deleted with it. Choose a path elsewhere."
       attempts=$((attempts + 1))
       [ "$attempts" -ge 3 ] && die "Too many in-clone export paths; refusing to purge." "No changes were made."
@@ -585,7 +583,7 @@ _export_backup_key() {
   local dst="$1" src="$REPO/secrets/backup_encrypt_key.txt" canon parent tmp
   if [ -f "$src" ]; then
     canon="$(canonical_path_portable "$dst" 2>/dev/null || true)"
-    if [ -z "$canon" ] || _path_inside "$canon" "$REPO" || [ -d "$canon" ]; then
+    if [ -z "$canon" ] || _lifecycle_path_inside_repo "$canon" "$REPO" || [ -d "$canon" ]; then
       die "The backup-key export target is unavailable or inside the clone." \
         "Choose a file path outside ${REPO}, then re-run."
     fi
@@ -594,7 +592,7 @@ _export_backup_key() {
       || die "Could not create the backup-key export directory ${parent}." \
         "Choose a writable path and re-run."
     parent="$(canonical_path_portable "$parent" 2>/dev/null || true)"
-    if [ -z "$parent" ] || _path_inside "$parent" "$REPO"; then
+    if [ -z "$parent" ] || _lifecycle_path_inside_repo "$parent" "$REPO"; then
       die "The backup-key export directory resolves inside the clone." \
         "Choose a path elsewhere and re-run."
     fi
@@ -611,10 +609,12 @@ _export_backup_key() {
 }
 _remove_registry_line() {
   [ -f "$INSTALLS_FILE" ] || return 0
-  local tmp; tmp="$(mktemp)"
+  # Colocate the temporaries in STATE_DIR so every mv below is an atomic
+  # same-filesystem rename over the registry file.
+  local tmp; tmp="$(mktemp "${INSTALLS_FILE}.XXXXXX")"
   grep -vxF "$REPO" "$INSTALLS_FILE" 2>/dev/null > "$tmp" || true
   if [ "$RAW" != "$REPO" ]; then
-    local tmp2; tmp2="$(mktemp)"
+    local tmp2; tmp2="$(mktemp "${INSTALLS_FILE}.XXXXXX")"
     grep -vxF "$RAW" "$tmp" 2>/dev/null > "$tmp2" || true
     mv "$tmp2" "$tmp"
   fi
