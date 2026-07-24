@@ -626,7 +626,14 @@ async def _load_paper_for_summary(
     """Load the paper inputs under an advisory lock, or the early result when idempotent."""
     async with db_pool.acquire() as conn:
         async with advisory_lock(conn, 2, paper_id):
-            paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+            if user_id is None:
+                paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+            else:
+                paper_row = await conn.fetchrow(
+                    f"SELECT * FROM papers p WHERE p.id = $1 AND {paper_visible_sql(2)}",
+                    paper_id,
+                    user_id,
+                )
             if not paper_row:
                 raise PaperNotFoundError(f"Paper {paper_id} not found")
 
