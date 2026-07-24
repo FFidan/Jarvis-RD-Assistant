@@ -13,6 +13,12 @@ from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
+
+# _MAX_RETRY_AFTER_SECONDS is re-exported (canonical value lives in
+# jarvis_common.net); the redundant alias marks it as an intentional
+# re-export so call sites can keep doing
+# `from paper_ingestion.integrations.zotero_client import _MAX_RETRY_AFTER_SECONDS`.
+from jarvis_common.net import _MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS
 from jarvis_common.net import parse_retry_after
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -31,11 +37,6 @@ def __getattr__(name: str) -> str:
 
 # Hostnames that are intentionally private/docker-internal and explicitly allowed.
 _BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
-
-# Maximum wait for a Retry-After header before giving up. Zotero rarely returns
-# values above 60s; capping protects against a malicious or buggy upstream
-# returning "Retry-After: 86400" which would block the worker for a day.
-_MAX_RETRY_AFTER_SECONDS = 60.0
 
 # Defensive cap on the number of items fetched by any paginator.  A Zotero
 # library with more than 10 000 items in a single list is almost certainly a
