@@ -2343,7 +2343,7 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
 
 
 # ---------------------------------------------------------------------------
-# batch-save attach claim check (TEN-7): naming an existing external_id must
+# batch-save attach claim check: naming an existing external_id must
 # not grant the caller access to another tenant's private canonical row.
 #
 # batch_save_papers attaches the upserted row to the caller's library and

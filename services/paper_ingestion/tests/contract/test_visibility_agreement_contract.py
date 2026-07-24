@@ -179,7 +179,7 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     shared row (neither content nor scope). The server-owned adapter path
     (``upsert_verified_public_paper``) inserts public and, on conflict, re-owns
     EVERY client-provided descriptive column and forces public scope — so
-    promotion fully sanitizes a pre-seeded private row (TEN-2b) while preserving
+    promotion fully sanitizes a pre-seeded private row while preserving
     the insert-only audit provenance (``discovered_by``/``discovery_origin``).
     """
     from datetime import date
@@ -252,7 +252,7 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
         assert attached[column] == owner[column], f"attach-only mutated {column}"
     assert attached["visibility_scope"] == "private"
 
-    # --- TEN-2b: trusted promotion re-owns EVERY client column + forces public ---
+    # --- trusted promotion re-owns EVERY client column + forces public ---
     audit_user = await _seed_user(contract_conn, "ten2b-discoverer@contract.example.com")
     seeded = await upsert_paper(
         contract_conn,
@@ -1029,7 +1029,7 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
 async def test_trusted_refresh_purges_seeded_content_when_adapter_value_is_null(
     contract_conn,
 ) -> None:
-    """TEN-2b no-COALESCE: a NULL from the trusted adapter PURGES attacker-seeded content.
+    """No-COALESCE: a NULL from the trusted adapter PURGES attacker-seeded content.
 
     ``_TRUSTED_REFRESH_CONFLICT`` overwrites descriptive columns unconditionally,
     never ``COALESCE(EXCLUDED.x, papers.x)``. A COALESCE would let an attacker's
