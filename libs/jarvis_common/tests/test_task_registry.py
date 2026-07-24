@@ -135,6 +135,44 @@ async def test_registered_task_retries_without_running_handler_during_restore(mo
 
 
 # ---------------------------------------------------------------------------
+# Shared service-registration guard (register_service_tasks)
+# ---------------------------------------------------------------------------
+
+
+def test_register_service_tasks_raises_on_multiple_owner_queues() -> None:
+    """A mapping spanning two owner queues fails fast, labelled by service_label."""
+    import procrastinate
+    from jarvis_common.task_registry import register_service_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy(pool, http_client, payload, ctx):
+        return {}
+
+    # paper.process -> paper_ingestion queue; card.generate -> learning_engine queue.
+    mapping = {"paper.process": _dummy, "card.generate": _dummy}
+    with pytest.raises(RuntimeError, match="svc.demo: KIND_TO_HANDLER spans multiple"):
+        register_service_tasks(fresh_app, mapping, service_label="svc.demo")
+
+
+def test_register_service_tasks_missing_kind_uses_service_label(monkeypatch) -> None:
+    """When registration is a no-op, the missing-kind guard raises with service_label."""
+    import jarvis_common.task_registry as tr
+    import procrastinate
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy(pool, http_client, payload, ctx):
+        return {}
+
+    monkeypatch.setattr(tr, "register_tasks", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="svc.demo: failed to register kinds"):
+        tr.register_service_tasks(fresh_app, {"card.generate": _dummy}, service_label="svc.demo")
+
+
+# ---------------------------------------------------------------------------
 # Importing the registry does not add service tasks
 # ---------------------------------------------------------------------------
 

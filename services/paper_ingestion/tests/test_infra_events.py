@@ -311,14 +311,16 @@ def test_load_ingest_key_logs_on_oserror(monkeypatch, caplog):
         Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("permission denied"))
     )
 
-    with caplog.at_level(logging.ERROR, logger="paper_ingestion.routers.infra_events"):
+    # The shared secret-file reader (jarvis_common.secrets_files) fails safe:
+    # an OSError is logged at WARNING level and resolves to None.
+    with caplog.at_level(logging.WARNING):
         result = m._load_ingest_key()
 
     assert result is None
     assert any(
-        "/run/secrets/infra_ingest_key" in r.message
+        "/run/secrets/infra_ingest_key" in r.getMessage()
         for r in caplog.records
-        if r.levelno == logging.ERROR
+        if r.levelno == logging.WARNING
     )
 
 

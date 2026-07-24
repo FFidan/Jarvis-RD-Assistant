@@ -11,9 +11,8 @@ imported by paper_ingestion's lifespan, so there is no cross-service cycle risk.
 from __future__ import annotations
 
 import procrastinate
-from jarvis_common.jobs import queue_for_kind
 from jarvis_common.settings import get_jobs_settings
-from jarvis_common.task_registry import register_tasks
+from jarvis_common.task_registry import register_service_tasks
 
 from paper_ingestion.citations_jobs import _citations_batch_fetch_job
 from paper_ingestion.contradiction_jobs import _contradictions_scan_job
@@ -77,19 +76,11 @@ def register_paper_ingestion_tasks(procrastinate_app: procrastinate.App) -> None
     kind is missing from ``app.tasks`` after registration (fail-fast at startup,
     -O-proof — a bare assert would be stripped under ``python -O``).
     """
-    queues = {queue_for_kind(kind) for kind in KIND_TO_HANDLER}
-    if len(queues) != 1:
-        raise RuntimeError(
-            f"register_paper_ingestion_tasks: KIND_TO_HANDLER spans multiple "
-            f"owner queues {sorted(queues)}; each kind must map to one service"
-        )
-    (queue,) = queues
-    register_tasks(procrastinate_app, mapping=KIND_TO_HANDLER, queue=queue)  # type: ignore[arg-type]
-
-    # Startup-hook guard: every registered kind must appear in app.tasks.
-    missing = [kind for kind in KIND_TO_HANDLER if kind not in procrastinate_app.tasks]
-    if missing:
-        raise RuntimeError(f"register_paper_ingestion_tasks: failed to register kinds: {missing}")
+    register_service_tasks(
+        procrastinate_app,
+        KIND_TO_HANDLER,  # type: ignore[arg-type]
+        service_label="register_paper_ingestion_tasks",
+    )
 
     # noop.test is registered directly on the app in task_registry (always);
     # wire it into the internal task map when test jobs are enabled.

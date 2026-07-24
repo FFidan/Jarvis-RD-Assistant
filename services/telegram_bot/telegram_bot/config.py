@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 from urllib.parse import urlparse
 
 import asyncpg
@@ -13,6 +12,7 @@ from jarvis_common import init_pg_connection
 from jarvis_common.app_factory import build_database_url
 from jarvis_common.config import JarvisCommonSettings
 from jarvis_common.crypto import resolve_secret_row
+from jarvis_common.secrets_files import read_secret_with_file_fallback
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import SettingsConfigDict
 
@@ -159,19 +159,14 @@ class BotConfig(JarvisCommonSettings):
         # (user_config.telegram.bot_token) wins over the env/Docker-secret
         # value, so changing it is a UI save + container restart, never an
         # .env edit. Falls back to the env token when the DB has none.
-        token = cfg.telegram_token.get_secret_value()
-        if not token:
-            # BotConfig (JarvisCommonSettings) does not apply the `_FILE` secret
-            # indirection, so the bare TELEGRAM_BOT_TOKEN env is empty when only
-            # the Docker secret (TELEGRAM_BOT_TOKEN_FILE) is mounted — which is the
-            # documented convention. Read that secret file directly so a preserved
-            # .env/secret token works without requiring the first-run wizard.
-            token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE", "")
-            if token_file:
-                try:
-                    token = Path(token_file).read_text().strip()
-                except OSError:
-                    logger.warning("TELEGRAM_BOT_TOKEN_FILE=%r could not be read", token_file)
+        # BotConfig (JarvisCommonSettings) does not apply the `_FILE` secret
+        # indirection, so when only the Docker secret (TELEGRAM_BOT_TOKEN_FILE) is
+        # mounted the bare TELEGRAM_BOT_TOKEN env is empty. Fall back to that secret
+        # file so a preserved .env/secret token works without the first-run wizard.
+        token = read_secret_with_file_fallback(
+            cfg.telegram_token.get_secret_value() or None,
+            os.environ.get("TELEGRAM_BOT_TOKEN_FILE", ""),
+        )
         db_token = asyncio.run(_read_db_bot_token(resolved_url))
         if db_token:
             token = db_token
@@ -186,17 +181,14 @@ class BotConfig(JarvisCommonSettings):
                 "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
             )
 
-        # Resolve JARVIS_API_KEY from Docker secret file when the bare env is empty.
+        # Resolve JARVIS_API_KEY from a Docker secret file when the bare env is empty.
         api_key = cfg.jarvis_api_key
         if not api_key:
-            api_key_file = os.environ.get("JARVIS_API_KEY_FILE", "")
-            if api_key_file:
-                try:
-                    raw_key = Path(api_key_file).read_text().strip()
-                    if raw_key:
-                        api_key = SecretStr(raw_key)
-                except OSError:
-                    logger.warning("JARVIS_API_KEY_FILE=%r could not be read", api_key_file)
+            raw_key = read_secret_with_file_fallback(
+                None, os.environ.get("JARVIS_API_KEY_FILE", "")
+            )
+            if raw_key:
+                api_key = SecretStr(raw_key)
 
         if not api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")

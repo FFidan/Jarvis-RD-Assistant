@@ -104,6 +104,22 @@ def test_config_reads_token_from_secret_file_when_env_unset(tmp_path):
     assert config.telegram_token.get_secret_value() == "123456:secret-token-from-file"
 
 
+def test_config_token_secret_file_oserror_falls_through_to_systemexit(tmp_path):
+    """A TELEGRAM_BOT_TOKEN_FILE that cannot be read must fail safe, not raise OSError.
+
+    read_text() on a directory raises IsADirectoryError (OSError subclass). The
+    shared secret-file reader swallows it and yields None, so with no bare token
+    and no DB row the token resolves empty and from_env exits cleanly.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN_FILE": str(tmp_path),  # a directory → IsADirectoryError
+        "DATABASE_URL": "postgres://localhost/test",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(SystemExit):
+            BotConfig.from_env()
+
+
 def test_config_reads_jarvis_api_key_from_secret_file(tmp_path):
     """Docker-secret convention: when only JARVIS_API_KEY_FILE is set (the bare
     JARVIS_API_KEY env is absent), the key is read from that secret file.
