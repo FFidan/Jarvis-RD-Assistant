@@ -19,6 +19,12 @@ from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
+
+# _MAX_RETRY_AFTER_SECONDS is re-exported (canonical value lives in
+# jarvis_common.net); the redundant alias marks it as an intentional
+# re-export so call sites can keep doing
+# `from paper_ingestion.sources.arxiv_source import _MAX_RETRY_AFTER_SECONDS`.
+from jarvis_common.net import _MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS
 from jarvis_common.net import parse_retry_after
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
@@ -38,9 +44,6 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 RATE_LIMIT_DELAY = 3.0
 _MAX_FETCH_ATTEMPTS = 3
 _ARXIV_FIELD_PREFIX = re.compile(r"\b(ti|au|abs|co|jr|cat|rn|id|all):")
-# Cap Retry-After waits so a misbehaving upstream cannot block the worker for
-# more than one minute (matches zotero_client._MAX_RETRY_AFTER_SECONDS policy).
-_MAX_RETRY_AFTER_SECONDS = 60.0
 # Module-level lock ensures all ArxivSource instances share one connection slot,
 # matching arXiv's "one connection at a time" policy across the whole process.
 _ARXIV_REQUEST_LOCK: asyncio.Lock = asyncio.Lock()

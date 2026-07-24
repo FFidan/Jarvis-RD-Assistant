@@ -20,6 +20,14 @@ __all__ = ["_reject_non_public_host", "parse_retry_after"]
 # arXiv passes ``max_seconds=None`` and applies its own cap downstream.
 _MAX_RETRY_AFTER_S: int = 3600
 
+# Shared 60 s ceiling for sources that want a tighter cap than the 3600 s
+# default above. Distinct from ``_MAX_RETRY_AFTER_S`` (NOT a merge) — both
+# Zotero and arXiv rarely see delays above 60 s, so they apply this cap
+# instead of the generic one-hour ceiling. Re-exported by
+# ``paper_ingestion.integrations.zotero_client`` and
+# ``paper_ingestion.sources.arxiv_source``.
+_MAX_RETRY_AFTER_SECONDS: float = 60.0
+
 
 def parse_retry_after(
     value: str | None,

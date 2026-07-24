@@ -479,11 +479,11 @@ async def test_baseline_jsonb_columns_are_jsonb_and_roundtrip_object(
 # the explicit non-cascade exception because it stores audit attribution.
 # Re-homed from: test_migration_080.py:37-71 (mock-only today — UPGRADED to a
 # real schema test).
-# Re-home form: schema-introspection (FK delete_rule == CASCADE × 17 + papers
+# Re-home form: schema-introspection (FK delete_rule == CASCADE × 16 + papers
 # exclusion is SET NULL, not CASCADE).
 # ---------------------------------------------------------------------------
 
-# The 17 owned-data tables with ON DELETE CASCADE — papers is NOT here.
+# The 16 owned-data tables with ON DELETE CASCADE — papers is NOT here.
 # paper_entities was SET NULL until migration 0095 (DB-01 fix); added here then.
 # paper_chunks was removed by migration 0104: canonical paper data, no longer
 # user-owned — a user deletion must never cascade into chunks retained by
@@ -528,7 +528,7 @@ async def _fk_delete_rule(conn: asyncpg.Connection, table: str, constraint: str)
 async def test_baseline_owned_data_cascades_on_user_delete(
     baseline_conn: asyncpg.Connection,
 ) -> None:
-    """All 17 owned-data tables FK users(id) ON DELETE CASCADE; papers'
+    """All 16 owned-data tables FK users(id) ON DELETE CASCADE; papers'
     discovered_by FK is explicitly SET NULL (shared/system papers survive a
     user deletion under the canonical-corpus model). author_alert_log was
     removed from this set when its user_id FK was flipped to SET NULL by

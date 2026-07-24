@@ -37,6 +37,7 @@ from jarvis_common.owner import (
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
+from paper_ingestion.models.account import MAX_EMAIL_LEN
 from paper_ingestion.routers._auth_shared import build_verify_link
 from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
 
@@ -47,8 +48,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # Invite tokens get a longer TTL than normal 15-min magic links because the
 # recipient may not check email immediately.
 INVITE_TOKEN_TTL = timedelta(hours=24)
-
-MAX_EMAIL_LEN = 320  # RFC 5321
 
 
 # ---------------------------------------------------------------------------
