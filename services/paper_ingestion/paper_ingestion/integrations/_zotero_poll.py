@@ -20,6 +20,7 @@ from paper_ingestion.integrations._zotero_config import (
     _resolve_zotero_user_id,
 )
 from paper_ingestion.models.papers import PaperCreate, SourceType
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
@@ -267,6 +268,17 @@ async def _link_existing_by_doi(
     on an item that simply matches a paper already in the library would otherwise
     raise and abort the whole poll.
 
+    The de-dup match is visibility-scoped to the syncing user: only rows the
+    poller may already read (persisted-public OR present in their own
+    ``user_library``) are eligible. A private row owned by another tenant that
+    merely shares this DOI is intentionally NOT matched; the caller then falls
+    through to ``_ingest_new_item``, which ingests the poller's own
+    namespace-qualified copy. This stops a caller-controlled DOI that collides
+    with a foreign private row from granting ``user_library`` membership — and
+    thus raw-PDF + private-metadata read access — on that row. When the polling
+    user is ambiguous (``resolved_polling_user_id`` is ``None``) the membership
+    branch matches nothing, so only public rows can link — private never leaks.
+
     Returns ``"linked"`` when an existing paper was found and linked (the
     caller skips ingestion); ``None`` when no match was found or the lookup
     failed (the caller falls through to ingest a new paper).
@@ -278,7 +290,7 @@ async def _link_existing_by_doi(
                 "SELECT p.id, l.zotero_item_key, p.discovered_by FROM papers p"
                 " LEFT JOIN paper_user_zotero_links l"
                 "   ON l.paper_id = p.id AND l.user_id = $2"
-                " WHERE p.metadata->>'doi' = $1",
+                f" WHERE p.metadata->>'doi' = $1 AND {paper_visible_sql(2)}",
                 doi,
                 resolved_polling_user_id,
             )
@@ -352,9 +364,7 @@ async def _configured_namespace_for_user(
     values = {str(row["key"]): row["value"] for row in rows}
     library_type = values.get("zotero.library_type", "user")
     remote_id = (
-        values.get("zotero.group_id")
-        if library_type == "group"
-        else values.get("zotero.user_id")
+        values.get("zotero.group_id") if library_type == "group" else values.get("zotero.user_id")
     )
     if library_type not in {"user", "group"} or remote_id is None:
         return None
@@ -531,8 +541,15 @@ async def _ingest_new_item(
 
 async def _persist_poll_cursor(
     db_pool: asyncpg.Pool, polling_user_id: int | None, new_version: int
-) -> None:
-    """Persist the updated last-library-version cursor."""
+) -> bool:
+    """Persist the updated last-library-version cursor.
+
+    Returns ``True`` when the cursor was written, ``False`` when the write
+    failed (already logged). The poll itself still succeeded — items were
+    processed idempotently and the next poll simply re-reads from the old
+    cursor — but the caller must report the cursor as unpersisted rather than
+    imply the advance was durable.
+    """
     # polling_user_id may be None (single-tenant / system poll). The
     # user_config unique index is NULLS NOT DISTINCT, so the NULL-user row
     # upserts correctly — persist the cursor instead of skipping (skipping
@@ -548,19 +565,27 @@ async def _persist_poll_cursor(
                 new_version,
                 polling_user_id,
             )
+        return True
     except Exception:
         logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
+        return False
 
 
 @dataclass(frozen=True, slots=True)
 class _PollBatch:
-    """Per-cycle counters produced by processing a fetched batch of Zotero items."""
+    """Per-cycle counters produced by processing a fetched batch of Zotero items.
+
+    ``parse_failed_keys`` (permanently malformed — will never succeed on retry)
+    and ``ingest_failed_keys`` (transient — may succeed on retry) are tracked
+    separately so the cursor-pin decision can distinguish them.
+    """
 
     new_count: int
     linked_count: int
     enqueued_count: int
     capped: bool
-    failed_keys: list[str]
+    parse_failed_keys: list[str]
+    ingest_failed_keys: list[str]
 
 
 async def _process_poll_batch(
@@ -574,7 +599,8 @@ async def _process_poll_batch(
     linked_count = 0
     enqueued_count = 0
     capped = False  # True when we hit MAX_ENQUEUE_PER_SYNC mid-batch.
-    failed_keys: list[str] = []
+    parse_failed_keys: list[str] = []
+    ingest_failed_keys: list[str] = []
 
     for outer_item in items:
         if enqueued_count >= MAX_ENQUEUE_PER_SYNC:
@@ -599,10 +625,11 @@ async def _process_poll_batch(
             continue
 
         # Not linked → project into ingestion inputs.  Malformed items return
-        # None from the safe helper (parse failure logged there).
+        # None from the safe helper (parse failure logged there) — permanent,
+        # so they must not pin the cursor (see poll_zotero_library).
         parsed = _safe_parse_zotero_item(data, outer_item, item_key, namespace)
         if parsed is None:
-            failed_keys.append(item_key)
+            parse_failed_keys.append(item_key)
             continue
 
         try:
@@ -620,9 +647,11 @@ async def _process_poll_batch(
                 parsed.item_key,
                 exc_info=True,
             )
-            failed_keys.append(parsed.item_key)
+            ingest_failed_keys.append(parsed.item_key)
 
-    return _PollBatch(new_count, linked_count, enqueued_count, capped, failed_keys)
+    return _PollBatch(
+        new_count, linked_count, enqueued_count, capped, parse_failed_keys, ingest_failed_keys
+    )
 
 
 async def poll_zotero_library(
@@ -667,15 +696,23 @@ async def poll_zotero_library(
 
     batch = await _process_poll_batch(db_pool, items, polling_user_id, namespace)
 
-    # If any items failed, log a summary error and pin the cursor so the next
-    # poll retries the entire batch from the same starting version.
-    if batch.failed_keys:
+    # Ingest (transient) failures pin the cursor so the next poll retries
+    # them from the same starting version. Parse (permanent) failures never
+    # succeed on retry, so — when no ingest failure also occurred — they must
+    # not poison the cursor forever: log and let it advance past them.
+    if batch.ingest_failed_keys:
         logger.error(
-            "Zotero poll: %d items failed; first 5: %s",
-            len(batch.failed_keys),
-            batch.failed_keys[:5],
+            "Zotero poll: %d item(s) failed to ingest; first 5: %s",
+            len(batch.ingest_failed_keys),
+            batch.ingest_failed_keys[:5],
         )
         new_version = last_version
+    elif batch.parse_failed_keys:
+        logger.warning(
+            "Zotero poll: skipping %d permanently-malformed item(s): %s",
+            len(batch.parse_failed_keys),
+            batch.parse_failed_keys[:5],
+        )
 
     # Persist updated library version.
     # If the enqueue cap was hit, do NOT advance the cursor — the next sync
@@ -686,16 +723,18 @@ async def poll_zotero_library(
             "Zotero poll: enqueue cap (%d) reached — deferring version advance to next sync",
             MAX_ENQUEUE_PER_SYNC,
         )
+    cursor_persisted = True
     if new_version != last_version:
-        await _persist_poll_cursor(db_pool, polling_user_id, new_version)
+        cursor_persisted = await _persist_poll_cursor(db_pool, polling_user_id, new_version)
 
     logger.info(
-        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",
+        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d persisted=%s",
         batch.new_count,
         batch.linked_count,
         batch.enqueued_count,
         last_version,
         new_version,
+        cursor_persisted,
     )
     return {
         "status": "ok",
@@ -704,4 +743,5 @@ async def poll_zotero_library(
         "enqueued": batch.enqueued_count,
         "version_from": last_version,
         "version_to": new_version,
+        "cursor_persisted": cursor_persisted,
     }

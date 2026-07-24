@@ -47,9 +47,16 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
+    "POSTGRES_PASSWORD_SECRET_PATH",
     "JarvisCommonSettings",
     "get_jarvis_common_settings",
 ]
+
+#: Docker Secret mount path for the PostgreSQL password.  Preferred over the
+#: ``DATABASE_URL`` env var because it avoids leaking the password via
+#: ``/proc/<pid>/environ`` or ``docker inspect``.  Shared by app_factory (DSN
+#: construction) and auth (production secret-strength gate).
+POSTGRES_PASSWORD_SECRET_PATH = "/run/secrets/postgres_password"
 
 # Read from real process env only — services run in Docker and receive config
 # via docker-compose env blocks.  No .env file loading.

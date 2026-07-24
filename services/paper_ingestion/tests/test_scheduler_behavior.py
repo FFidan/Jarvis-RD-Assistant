@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,14 +14,14 @@ import pytest
 # but NOT installed into sys.modules here (that would pollute collection).
 # ---------------------------------------------------------------------------
 
-# Import the real path-traversal guard so the stubbed pdf_processor module
+# Import the real path-resolution guard so the stubbed pdf_processor module
 # exposes genuine traversal semantics (a bare MagicMock attribute would always
 # be truthy and silently disable the guard).
-from paper_ingestion.pdf_processor import check_pdf_path_safe as _real_check_pdf_path_safe
+from paper_ingestion.pdf_processor import resolve_safe_pdf_path as _real_resolve_safe_pdf_path
 
 _pdf_proc_stub = MagicMock()
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
-_pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
+_pdf_proc_stub.resolve_safe_pdf_path = _real_resolve_safe_pdf_path
 
 _main_stub = MagicMock()
 _workflow_stub = MagicMock()
@@ -40,7 +41,7 @@ def _install_stubs(monkeypatch):
     # Reset shared stubs so mutations from previous tests don't bleed through.
     _pdf_proc_stub.reset_mock()
     _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
-    _pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
+    _pdf_proc_stub.resolve_safe_pdf_path = _real_resolve_safe_pdf_path
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
     _workflow_stub.upsert_paper = AsyncMock()
@@ -261,6 +262,36 @@ async def test_scheduler_always_starts() -> None:
         # auto_pipeline job must be registered (self-gated, not absent)
         job = scheduler.get_job("auto_pipeline")
         assert job is not None, "auto_pipeline job must be registered even when interval=0"
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_scheduler_honors_fractional_auto_fetch_interval() -> None:
+    """start_scheduler must not truncate a fractional interval_hours to an int.
+
+    Previously ``max(int(interval_hours), 1)`` truncated e.g. 1.5h to 1h,
+    silently doubling the effective poll frequency. IntervalTrigger accepts a
+    float, so the fix drops the ``int()`` cast entirely.
+    """
+    from paper_ingestion.scheduler import start_scheduler  # noqa: PLC0415
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"value": '"0 2 * * *"'})
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    fake_app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch("paper_ingestion.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
+        scheduler = await start_scheduler(fake_app, interval_hours=1.5)
+
+    try:
+        job = scheduler.get_job("auto_pipeline")
+        assert job is not None
+        assert job.trigger.interval == timedelta(hours=1.5), (
+            f"Expected a 1.5h interval, got {job.trigger.interval}"
+        )
     finally:
         scheduler.shutdown(wait=False)
 

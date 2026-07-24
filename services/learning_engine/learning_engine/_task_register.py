@@ -8,8 +8,7 @@ lifespan startup *before* ``app.run_worker_async()`` is started.
 from __future__ import annotations
 
 import procrastinate
-from jarvis_common.jobs import queue_for_kind
-from jarvis_common.task_registry import register_tasks
+from jarvis_common.task_registry import register_service_tasks
 
 from learning_engine.generation_service import _card_generate_batch_job, _card_generate_job
 
@@ -33,15 +32,8 @@ def register_learning_engine_tasks(procrastinate_app: procrastinate.App) -> None
     kind is missing from ``app.tasks`` after registration (fail-fast at startup,
     -O-proof).
     """
-    queues = {queue_for_kind(kind) for kind in KIND_TO_HANDLER}
-    if len(queues) != 1:
-        raise RuntimeError(
-            f"register_learning_engine_tasks: KIND_TO_HANDLER spans multiple "
-            f"owner queues {sorted(queues)}; each kind must map to one service"
-        )
-    (queue,) = queues
-    register_tasks(procrastinate_app, mapping=KIND_TO_HANDLER, queue=queue)  # type: ignore[arg-type]
-
-    missing = [kind for kind in KIND_TO_HANDLER if kind not in procrastinate_app.tasks]
-    if missing:
-        raise RuntimeError(f"register_learning_engine_tasks: failed to register kinds: {missing}")
+    register_service_tasks(
+        procrastinate_app,
+        KIND_TO_HANDLER,  # type: ignore[arg-type]
+        service_label="register_learning_engine_tasks",
+    )

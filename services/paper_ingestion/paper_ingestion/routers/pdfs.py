@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/pdfs", tags=["pdfs"])
 
 PDF_STORAGE_PATH = get_paper_ingestion_settings().pdf_storage_path
 
+
 async def assert_paper_pdf_visible(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     paper_id: int,
@@ -49,8 +50,7 @@ async def assert_paper_pdf_visible(
     """
     visibility_sql = paper_visibility_sql(2, alias="p")
     row = await conn.fetchrow(
-        f"SELECT p.source_type FROM papers p "
-        f"WHERE p.id = $1 AND {visibility_sql}",
+        f"SELECT p.source_type FROM papers p WHERE p.id = $1 AND {visibility_sql}",
         paper_id,
         user_id,
     )

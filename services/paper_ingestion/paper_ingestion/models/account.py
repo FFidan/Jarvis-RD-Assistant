@@ -15,7 +15,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, EmailStr, Field
 
-# RFC 5321 cap, matching ``paper_ingestion.routers.auth.MAX_EMAIL_LEN``.
+# RFC 5321 cap. Single source for the email-length limit; routers import
+# this rather than redefining it locally.
 MAX_EMAIL_LEN = 320
 MAX_DISPLAY_NAME_LEN = 120
 

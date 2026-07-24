@@ -1303,11 +1303,12 @@ def test_register_paper_ingestion_tasks_raises_when_kind_unregistered(monkeypatc
     import pytest
     from procrastinate.contrib.aiopg import AiopgConnector
 
+    import jarvis_common.task_registry as tr
     import paper_ingestion._task_register as reg
 
     app = procrastinate.App(connector=AiopgConnector())
-    # Stub register_tasks so NO kinds get added → every kind is "missing".
-    monkeypatch.setattr(reg, "register_tasks", lambda *a, **k: None)
+    # Stub the shared register_tasks so NO kinds get added → every kind is "missing".
+    monkeypatch.setattr(tr, "register_tasks", lambda *a, **k: None)
     with pytest.raises(RuntimeError, match="failed to register kinds"):
         reg.register_paper_ingestion_tasks(app)
 

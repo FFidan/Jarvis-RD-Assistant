@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "1.2.0"
+version = "1.2.1"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
@@ -215,7 +215,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # findings). scripts/check-complexity-budget.py fails only when a count GROWS;
 # lower a cap whenever a refactor reduces the real number. Tests are excluded
 # from the scan (see _EXCLUDE there) so the budget tracks production only.
-max = { C901 = 57, PLR0911 = 8, PLR0912 = 28, PLR0913 = 86, PLR0915 = 22 }
+max = { C901 = 55, PLR0911 = 8, PLR0912 = 29, PLR0913 = 86, PLR0915 = 21 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

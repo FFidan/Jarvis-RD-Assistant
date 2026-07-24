@@ -20,6 +20,7 @@ from typing import Any
 from apscheduler.triggers.cron import CronTrigger
 from jarvis_common.audit import log_audit
 from jarvis_common.maintenance import skip_for_maintenance
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 logger = logging.getLogger(__name__)
 
@@ -207,9 +208,9 @@ async def data_purge_task(app: Any) -> None:
             # Public papers and papers held by a surviving user's library keep
             # their vectors even when the audit-attributed user is purged.
             protected_rows = await conn.fetch(
-                """SELECT p.id AS paper_id
+                f"""SELECT p.id AS paper_id
                    FROM papers p
-                   WHERE p.visibility_scope = 'public'
+                   WHERE p.visibility_scope = '{PUBLIC_VISIBILITY_SCOPE}'
                       OR EXISTS (
                           SELECT 1 FROM user_library ul
                           WHERE ul.paper_id = p.id

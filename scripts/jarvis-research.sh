@@ -497,8 +497,6 @@ declare -a BACKUP_COMPOSE_FILES=()
 UPDATE_VOLUME_GUARD_ID=""
 UPDATE_VOLUME_GUARD_ACTIVE=0
 
-_path_inside_install() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
-
 _init_backup_volume_compose() {
   local raw item candidate canon seen="" joined="" name
   local -a requested=()
@@ -525,7 +523,7 @@ _init_backup_volume_compose() {
     [ -n "$item" ] || return 1
     case "$item" in /*) candidate="$item" ;; *) candidate="$REPO/$item" ;; esac
     canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
-    [ -n "$canon" ] && [ -f "$canon" ] && _path_inside_install "$canon" "$REPO" || return 1
+    [ -n "$canon" ] && [ -f "$canon" ] && _lifecycle_path_inside_repo "$canon" "$REPO" || return 1
     printf '%s\n' "$seen" | grep -qxF "$canon" && return 1
     BACKUP_COMPOSE_FILES+=("$canon")
     seen="${seen}${canon}"$'\n'

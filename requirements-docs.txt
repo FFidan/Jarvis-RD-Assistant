@@ -13,5 +13,5 @@
 #     This is the ONLY plugin needed for the hybrid no-file-move approach.
 #
 # Pin minor versions so CI is reproducible; bump deliberately.
-mkdocs-material==9.7.6
+mkdocs-material==9.7.7
 mkdocs-include-markdown-plugin==7.3.0

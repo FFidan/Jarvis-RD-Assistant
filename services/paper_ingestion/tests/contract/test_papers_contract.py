@@ -2342,6 +2342,297 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
     )
 
 
+# ---------------------------------------------------------------------------
+# batch-save attach claim check: naming an existing external_id must
+# not grant the caller access to another tenant's private canonical row.
+#
+# batch_save_papers attaches the upserted row to the caller's library and
+# echoes it only when the caller has a legitimate claim: is_insert (created it),
+# the row is public (shared literature), or the caller is already a member
+# (idempotent re-save). A collision with another tenant's private row is
+# skipped — no attach (no PDF grant), no echo (no metadata leak), no enqueue.
+#
+# NOTE: the "A's row content unchanged" assertion below relies on the
+# attach-only upsert (Lane 1A) that returns the victim's private row
+# unmodified; both lanes are verified together under live-PG at GATE 1.
+#
+# Verified identifiers:
+#   routers/papers_detail.py:batch_save_papers — claim check gates attach + echo
+#   routers/pdfs.py:get_pdf — private paper requires user_library membership (404 otherwise)
+# ---------------------------------------------------------------------------
+
+
+async def test_batch_save_private_collision_denies_attach_echo_and_pdf(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """User B naming user A's private external_id gets no membership, no echo, 404 PDF.
+
+    A saves external_id=X (lands private, A attached). B batch-saves the same X
+    with distinct attacker title/abstract/metadata. Asserts (i) A's canonical row
+    content + visibility_scope are unchanged (relies on Lane 1A attach-only upsert),
+    (ii) B is not added to user_library for X, (iii) B's response omits X (no echo),
+    (iv) GET /api/pdfs/{X} as B returns 404 (private, non-member).
+    """
+    external_id = "ten7-private-collision-ext"
+    a_title = "Owner Private Paper A"
+    a_payload = [
+        {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": a_title,
+            "authors": ["Owner Author"],
+            "abstract": "Owner abstract that must not leak.",
+            "url": "https://ten7.contract.test/owner",
+            "metadata": {"owner": True},
+        }
+    ]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_a = await c.post("/api/papers/batch-save", json=a_payload)
+    assert resp_a.status_code == 200, f"A save failed: {resp_a.status_code}: {resp_a.text[:300]}"
+    paper_x_id = resp_a.json()[0]["id"]
+
+    # B attempts to collide on the same external_id with attacker content.
+    b_payload = [
+        {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": "ATTACKER TITLE",
+            "authors": ["Attacker"],
+            "abstract": "attacker abstract",
+            "url": "https://ten7.contract.test/attacker",
+            "metadata": {"attacker": True},
+        }
+    ]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.post("/api/papers/batch-save", json=b_payload)
+        # (iv) B cannot read the private PDF: non-member on a private row => 404.
+        pdf_resp = await c.get(f"/api/pdfs/{paper_x_id}")
+
+    assert resp_b.status_code == 200, f"B save errored: {resp_b.status_code}: {resp_b.text[:300]}"
+    # (iii) No metadata echo — the skipped collision yields an empty result list.
+    assert resp_b.json() == [], f"B's response must not echo A's private row; got {resp_b.json()!r}"
+
+    # (i) A's canonical row content + scope unchanged (Lane 1A attach-only upsert).
+    row = await contract_conn.fetchrow(
+        "SELECT title, abstract, visibility_scope, metadata FROM papers WHERE id = $1",
+        paper_x_id,
+    )
+    assert row is not None
+    assert row["title"] == a_title, f"A's title was overwritten by B: {row['title']!r}"
+    assert row["visibility_scope"] == "private", (
+        f"A's row must stay private; got {row['visibility_scope']!r}"
+    )
+
+    # (ii) B is NOT a member of A's paper.
+    membership = await contract_conn.fetchrow(
+        "SELECT 1 FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        contract_two_users.user_b_id,
+        paper_x_id,
+    )
+    assert membership is None, "B must not be added to user_library for A's private paper"
+
+    assert pdf_resp.status_code == 404, (
+        f"B (non-member) must get 404 on A's private PDF; got {pdf_resp.status_code}"
+    )
+
+
+async def test_batch_save_public_collision_attaches_and_echoes(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A public canonical row is shared: B batch-saving it is attached and echoed."""
+    external_id = "ten7-public-shared-ext"
+    paper_y_id = await contract_conn.fetchval(
+        """INSERT INTO papers
+               (external_id, source_type, title, authors, url, discovery_origin,
+                visibility_scope)
+           VALUES ($1, 'arxiv', 'Shared Public Paper Y', ARRAY['Public Author'],
+                   'https://ten7.contract.test/public', 'pulse', 'public')
+           RETURNING id""",
+        external_id,
+    )
+
+    b_payload = [
+        {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": "Shared Public Paper Y",
+            "authors": ["Public Author"],
+            "url": "https://ten7.contract.test/public",
+        }
+    ]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.post("/api/papers/batch-save", json=b_payload)
+
+    assert resp_b.status_code == 200, f"B save failed: {resp_b.status_code}: {resp_b.text[:300]}"
+    body = resp_b.json()
+    assert [p["id"] for p in body] == [paper_y_id], (
+        f"Public row must be echoed back to B; got {body!r}"
+    )
+    membership = await contract_conn.fetchrow(
+        "SELECT 1 FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        contract_two_users.user_b_id,
+        paper_y_id,
+    )
+    assert membership is not None, "B must be attached to the shared public paper"
+
+
+async def test_batch_save_own_resave_is_idempotent(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Re-saving one's own private paper still returns it and preserves membership."""
+    external_id = "ten7-own-resave-ext"
+    payload = [
+        {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": "Own Resave Paper",
+            "authors": ["Owner"],
+            "url": "https://ten7.contract.test/resave",
+        }
+    ]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        first = await c.post("/api/papers/batch-save", json=payload)
+        assert first.status_code == 200, f"first save failed: {first.text[:300]}"
+        paper_id = first.json()[0]["id"]
+        second = await c.post("/api/papers/batch-save", json=payload)
+
+    assert second.status_code == 200, f"resave failed: {second.status_code}: {second.text[:300]}"
+    assert [p["id"] for p in second.json()] == [paper_id], (
+        f"Own re-save must still echo the paper; got {second.json()!r}"
+    )
+    membership = await contract_conn.fetchrow(
+        "SELECT 1 FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        contract_two_users.user_a_id,
+        paper_id,
+    )
+    assert membership is not None, "Owner must remain a member after re-save"
+
+
+async def test_batch_save_duplicate_external_id_in_one_payload(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """One payload naming the same external_id twice saves once and attaches once.
+
+    The first entry inserts the canonical row and writes the caller's
+    user_library membership inside the batch transaction. The second entry is
+    not an insert and the row lands private, so its claim rests on the
+    membership row written moments earlier on the same connection: it must be
+    seen there, echoed back, and re-attached idempotently — neither silently
+    dropped nor doubled into a second membership or canonical row.
+    """
+    entry = {
+        "external_id": "batch-dup-one-payload-ext",
+        "source_type": "arxiv",
+        "title": "Duplicate Entry Paper",
+        "authors": ["Owner"],
+        "url": "https://batchdup.contract.test/one",
+    }
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/papers/batch-save", json=[entry, dict(entry)])
+
+    assert resp.status_code == 200, f"batch save failed: {resp.status_code}: {resp.text[:300]}"
+    ids = [p["id"] for p in resp.json()]
+    assert len(ids) == 2 and len(set(ids)) == 1, (
+        f"Both duplicate entries must be echoed with one canonical id; got {resp.json()!r}"
+    )
+    memberships = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        contract_two_users.user_a_id,
+        ids[0],
+    )
+    assert memberships == 1, f"Expected exactly one membership row, got {memberships}"
+    canonical_rows = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = $1",
+        entry["external_id"],
+    )
+    assert canonical_rows == 1, (
+        f"Expected one canonical row for the duplicated external_id, got {canonical_rows}"
+    )
+
+
+async def test_batch_save_rejects_reserved_namespace_external_id(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A batch-save entry whose external_id squats a first-party ingestion namespace is rejected.
+
+    external_ids prefixed ``local:`` or ``zotero:`` are minted server-side by
+    real PDF ingestion and Zotero sync; a client planting one via batch-save
+    could hijack a row a later genuine ingest would trust. The whole request
+    fails 400 and nothing is persisted, while a legitimate adapter id (arxiv:)
+    still saves.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:324
+    reserved_ids = ["local:deadbeefdeadbeef", "zotero:user:123:ABCD1234"]
+
+    def _entry(external_id: str) -> dict:
+        return {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": "Reserved Namespace Squat Attempt",
+            "authors": ["Attacker"],
+            "url": "https://reserved.contract.test/squat",
+        }
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        local_resp = await c.post("/api/papers/batch-save", json=[_entry(reserved_ids[0])])
+        zotero_resp = await c.post("/api/papers/batch-save", json=[_entry(reserved_ids[1])])
+        # Control: a legitimate adapter id must still save (guard does not over-reject).
+        arxiv_resp = await c.post("/api/papers/batch-save", json=[_entry("arxiv:2401.00001")])
+
+    assert local_resp.status_code == 400, (
+        f"local: external_id must be rejected; got {local_resp.status_code}: {local_resp.text[:300]}"
+    )
+    assert zotero_resp.status_code == 400, (
+        f"zotero: external_id must be rejected; got {zotero_resp.status_code}: "
+        f"{zotero_resp.text[:300]}"
+    )
+
+    planted = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = ANY($1)",
+        reserved_ids,
+    )
+    assert planted == 0, f"Rejected reserved-namespace ids must plant no row; got {planted}"
+
+    membership = await contract_conn.fetchval(
+        """SELECT COUNT(*)
+           FROM user_library ul
+           JOIN papers p ON p.id = ul.paper_id
+           WHERE ul.user_id = $1 AND p.external_id = ANY($2)""",
+        contract_two_users.user_a_id,
+        reserved_ids,
+    )
+    assert membership == 0, (
+        f"Rejected reserved-namespace ids must grant no membership; got {membership}"
+    )
+
+    assert arxiv_resp.status_code == 200, (
+        f"Legitimate arxiv: id must save; got {arxiv_resp.status_code}: {arxiv_resp.text[:300]}"
+    )
+    assert [p["external_id"] for p in arxiv_resp.json()] == ["arxiv:2401.00001"], (
+        f"Adapter id must be echoed back; got {arxiv_resp.json()!r}"
+    )
+    saved = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = $1",
+        "arxiv:2401.00001",
+    )
+    assert saved == 1, f"Legitimate adapter id must be persisted once; got {saved}"
+
+
 async def test_list_papers_bm25_uses_websearch_to_tsquery(
     contract_two_users,
     _pi_app_with_pool,

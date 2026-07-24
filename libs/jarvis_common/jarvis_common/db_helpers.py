@@ -455,8 +455,7 @@ async def assert_papers_ownership(
     unique_ids = sorted(set(paper_ids))
     visibility_sql = paper_visibility_sql(2, alias="p")
     rows = await conn.fetch(
-        f"SELECT p.id, {visibility_sql} AS is_visible "
-        "FROM papers p WHERE p.id = ANY($1::int[])",
+        f"SELECT p.id, {visibility_sql} AS is_visible FROM papers p WHERE p.id = ANY($1::int[])",
         unique_ids,
         user_id,
     )

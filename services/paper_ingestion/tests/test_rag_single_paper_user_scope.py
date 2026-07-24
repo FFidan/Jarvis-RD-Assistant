@@ -336,3 +336,133 @@ async def test_prepare_single_paper_rag_threads_user_scope_to_search() -> None:
     # The library lookup must be keyed on the CALLER's id (real-SQL coverage of
     # the user_library query lives in the sidecar contract test).
     assert conn.fetch.await_args.args[-1] == 7
+
+
+# ---------------------------------------------------------------------------
+# Persisted visibility for the single-paper loaders, exercised against real
+# Postgres so the predicate itself is evaluated. A mock pool would return rows
+# regardless of the SQL and prove nothing.
+#
+# A private paper reaches its owner (library membership) past the visibility
+# gate but degrades to "not found" for a non-owner — the same persisted
+# public-or-library policy cross-paper RAG enforces.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_paper(
+    conn,
+    external_id: str,
+    *,
+    visibility_scope: str,
+    discovered_by: int | None = None,
+) -> int:
+    return await conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url,
+               discovered_by, visibility_scope
+           )
+           VALUES ($1, 'arxiv', 'Shared Corpus Paper', ARRAY['Author'],
+                   'https://shared.test/paper', $2, $3)
+           RETURNING id""",
+        external_id,
+        discovered_by,
+        visibility_scope,
+    )
+
+
+async def _shelve(conn, user_id: int, paper_id: int) -> None:
+    await conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_prepare_single_paper_rag_scopes_paper_to_caller(
+    contract_two_users,
+    contract_conn,
+):
+    """A non-owner's single-paper request degrades to PaperNotFoundError.
+
+    The owner (who shelved the private paper) passes the visibility gate, so
+    the empty-chunk branch — not PaperNotFoundError — surfaces. The owner
+    control proves the predicate is discriminating, not a blanket deny.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
+
+    user_a = contract_two_users.user_a_id
+    user_b = contract_two_users.user_b_id
+    private_id = await _seed_paper(
+        contract_conn,
+        "single-private",
+        visibility_scope="private",
+        discovered_by=user_a,
+    )
+    await _shelve(contract_conn, user_a, private_id)
+
+    pool = SharedConnPool(contract_conn)
+    body = AskRequest(question="How does attention work?", max_chunks=3)
+
+    with pytest.raises(PaperNotFoundError):
+        await prepare_single_paper_rag(
+            AsyncMock(),
+            pool,
+            paper_id=private_id,
+            body=body,
+            http_client=AsyncMock(),
+            user_id=user_b,
+        )
+
+    owner_embedder = AsyncMock()
+    owner_embedder.search_chunks_in_paper = AsyncMock(return_value=[])
+    owner_embedder.rerank_chunks = AsyncMock(return_value=[])
+    with pytest.raises(NoRelevantChunksError):
+        await prepare_single_paper_rag(
+            owner_embedder,
+            pool,
+            paper_id=private_id,
+            body=body,
+            http_client=AsyncMock(),
+            user_id=user_a,
+        )
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_load_paper_for_summary_scopes_paper_to_caller(
+    contract_two_users,
+    contract_conn,
+):
+    """_load_paper_for_summary gates the paper load by caller visibility.
+
+    A non-owner degrades to PaperNotFoundError; the owner passes the gate and
+    surfaces the downstream empty-chunks condition, proving the predicate admits
+    the owner rather than denying everyone.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.exceptions import EmptyChunksError, PaperNotFoundError
+    from paper_ingestion.services.summarization import _load_paper_for_summary
+
+    user_a = contract_two_users.user_a_id
+    user_b = contract_two_users.user_b_id
+    private_id = await _seed_paper(
+        contract_conn,
+        "summary-private",
+        visibility_scope="private",
+        discovered_by=user_a,
+    )
+    await _shelve(contract_conn, user_a, private_id)
+
+    pool = SharedConnPool(contract_conn)
+
+    with pytest.raises(PaperNotFoundError):
+        await _load_paper_for_summary(pool, paper_id=private_id, user_id=user_b, force=True)
+
+    with pytest.raises(EmptyChunksError):
+        await _load_paper_for_summary(pool, paper_id=private_id, user_id=user_a, force=True)

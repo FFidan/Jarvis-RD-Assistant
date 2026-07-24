@@ -11,7 +11,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import get_current_user_id
-from jarvis_common.library import add_to_library
+from jarvis_common.library import add_to_library, is_in_library
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 from paper_ingestion import papers_service
 from paper_ingestion.citation_format import (
@@ -34,6 +35,7 @@ from paper_ingestion.models import (
     PaperDetailResponse,
     PaperResponse,
     RecentFeedback,
+    SourceType,
     UserStateResponse,
 )
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
@@ -50,6 +52,11 @@ router = APIRouter(
         500: {"model": ErrorResponse},
     },
 )
+
+# external_ids in these namespaces are minted server-side by first-party
+# ingestion (local PDF uploads, Zotero sync). A client batch-save entry claiming
+# one could squat a row that a later genuine ingest would trust as its own.
+_RESERVED_EXTERNAL_ID_PREFIXES = (f"{SourceType.LOCAL.value}:", f"{SourceType.ZOTERO.value}:")
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +321,8 @@ async def batch_save_papers(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for paper in papers:
+                if paper.external_id.startswith(_RESERVED_EXTERNAL_ID_PREFIXES):
+                    raise HTTPException(400, "external_id uses a reserved namespace")
                 # Validate pdf_url against ALLOWED_PDF_DOMAINS; clear non-allowlisted URLs.
                 if paper.pdf_url is not None:
                     try:
@@ -330,6 +339,20 @@ async def batch_save_papers(
                 paper.discovery_origin = "citation_batch"
                 row = await upsert_paper(conn, paper, discovered_by=user_id)
                 if user_id is not None:
+                    # Attach + echo only when the caller has a legitimate claim
+                    # on the canonical row. A colliding external_id returns
+                    # another tenant's existing private row unchanged (attach-only
+                    # upsert); attaching it would grant that user's raw-PDF access
+                    # and leak the private metadata through the echoed response,
+                    # so such collisions are skipped (no attach, no echo, and
+                    # therefore no analyze-enqueue below).
+                    attachable = (
+                        row["is_insert"]
+                        or row["visibility_scope"] == PUBLIC_VISIBILITY_SCOPE
+                        or await is_in_library(conn, user_id=user_id, paper_id=row["id"])
+                    )
+                    if not attachable:
+                        continue
                     await add_to_library(
                         conn,
                         user_id=user_id,
@@ -339,22 +362,24 @@ async def batch_save_papers(
                 results.append(row_to_paper_response(row))
     if not results:
         return results
-    saved_ids = [saved.id for saved in results]
+    # A payload may name the same external_id more than once; duplicates
+    # resolve to one canonical row, which must be analyzed only once.
+    saved_ids = list(dict.fromkeys(saved.id for saved in results))
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)",
             saved_ids,
         )
     chunked_ids: set[int] = {r["paper_id"] for r in rows}
-    for saved in results:
-        if saved.id in chunked_ids:
+    for paper_id in saved_ids:
+        if paper_id in chunked_ids:
             continue
         try:
             from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
             await KIND_TO_TASK["paper.analyze"].defer_async(
-                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=saved.id
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=paper_id
             )
         except Exception:
-            logger.exception("paper.analyze enqueue failed for paper %d", saved.id)
+            logger.exception("paper.analyze enqueue failed for paper %d", paper_id)
     return results

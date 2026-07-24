@@ -99,6 +99,46 @@ async def add_to_library(
     )
 
 
+async def is_in_library(
+    db: DbLike,
+    *,
+    user_id: int,
+    paper_id: int,
+) -> bool:
+    """Report whether ``paper_id`` is present in ``user_id``'s library.
+
+    Parameters
+    ----------
+    db:
+        An asyncpg ``Pool`` or ``Connection``-like object. Passing the
+        in-flight transaction's connection reads the membership state the
+        caller has already written within that same transaction.
+    user_id:
+        The library owner to check.
+    paper_id:
+        The canonical paper to look for.
+
+    Returns
+    -------
+    bool
+        ``True`` when a ``user_library`` row exists for the pair, else
+        ``False``.
+
+    Notes
+    -----
+    Existence-only probe — the row's ``added_via``/``added_at`` are not read.
+    Intended as a claim check before attaching a caller-supplied paper so a
+    collision with another tenant's private row is not silently granted.
+    """
+    rows = await _fetch(
+        db,
+        "SELECT 1 FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        user_id,
+        paper_id,
+    )
+    return bool(rows)
+
+
 async def list_users_with_topic(
     db: DbLike,
     *,

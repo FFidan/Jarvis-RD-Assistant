@@ -192,6 +192,17 @@ if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; th
   info "Recorded this host's torch image variant in .env: ${_bf_variant}"
 fi
 
+# Derive and persist the trusted ingress peer addresses (the subnet plus the
+# gateway, Caddy, local Caddy, dashboard, and cloudflared IPs) from the
+# effective JARVIS_NET_SUBNET before Compose reads .env. setup.sh does this
+# inline via allocate_ingress_ips; this wrapper leg never runs that path, so a
+# fresh .env would otherwise reach `compose up` missing the JARVIS_*_IP pins the
+# proxy ACLs bind to. A plain run defaults the subnet to Compose's static
+# 10.137.241.0/24; a custom subnet is honoured.
+sync_ingress_ips_from_env \
+  || die "Could not derive the ingress proxy addresses from JARVIS_NET_SUBNET." \
+    "Set JARVIS_NET_SUBNET to an IPv4 CIDR (prefix <= /27) in ${REPO_ROOT}/.env, then re-run."
+
 # ---------------------------------------------------------------------------
 # init-dirs (volume mount preconditions)
 # ---------------------------------------------------------------------------

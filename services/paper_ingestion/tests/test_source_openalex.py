@@ -430,8 +430,8 @@ async def test_http_error_never_exposes_query_key_in_logs_or_diagnostics(
                 )
 
         assert attempted_urls and secret in attempted_urls[0]
-        emitted = caplog.text + repr(source.last_poll_diagnostic) + repr(
-            record_outcome.await_args_list
+        emitted = (
+            caplog.text + repr(source.last_poll_diagnostic) + repr(record_outcome.await_args_list)
         )
         assert secret not in emitted
         if operation == "fetch_new_since":

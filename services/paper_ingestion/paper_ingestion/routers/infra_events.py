@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from jarvis_common.auth import _client_ip, _raw_socket_ip
+from jarvis_common.secrets_files import read_secret_with_file_fallback
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, Field
 
@@ -82,7 +83,7 @@ class InfraEvent(BaseModel):
 
 
 def _load_ingest_key() -> str | None:
-    """Load INFRA_INGEST_KEY from env or _FILE convention. Cached on first call."""
+    """Load INFRA_INGEST_KEY from the env value or the ``_FILE`` convention."""
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     _cfg = get_paper_ingestion_settings()
@@ -90,11 +91,7 @@ def _load_ingest_key() -> str | None:
         return _cfg.infra_ingest_key.get_secret_value().strip() or None
     file_path = _cfg.infra_ingest_key_file
     if file_path and Path(file_path).is_file():
-        try:
-            return Path(file_path).read_text().strip() or None
-        except OSError as exc:
-            logger.error("infra-ingest: could not read key file %r: %s", file_path, exc)
-            return None
+        return read_secret_with_file_fallback(None, file_path)
     return None
 
 

@@ -16,6 +16,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
 from jarvis_common.audit import log_audit
+from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH
 from jarvis_common.event_log import log_event
 from jarvis_common.paths import read_regular_json_file
 from jarvis_common.settings import get_core_settings
@@ -43,7 +44,6 @@ _AUTH_MISSING_AUDIT_SKIP_PATHS = frozenset(
 # and the readiness script agree.
 _LITELLM_MASTER_KEY_MIN_LEN = 16
 _POSTGRES_PASSWORD_MIN_LEN = 16
-_POSTGRES_PASSWORD_SECRET_PATH = "/run/secrets/postgres_password"
 
 # Known placeholder / known-weak secret values rejected in production. This is a
 # verbatim port of the `_is_weak_secret` shell helper in
@@ -1051,7 +1051,7 @@ def validate_production_config() -> None:
         postgres_password = _os.environ.get("POSTGRES_PASSWORD", "")
         if not postgres_password:
             try:
-                postgres_password = Path(_POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
+                postgres_password = Path(POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
             except OSError:
                 postgres_password = ""
         if not postgres_password:

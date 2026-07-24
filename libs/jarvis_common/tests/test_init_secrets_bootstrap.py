@@ -49,9 +49,7 @@ def _stage(tmp: Path, env_body: str) -> None:
     (tmp / ".env").write_text(env_body)
 
 
-def _run(
-    tmp: Path, *, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run(tmp: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "scripts/init-secrets.sh"],
         cwd=str(tmp),

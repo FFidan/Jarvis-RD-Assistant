@@ -22,8 +22,10 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
+    assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
     assert "## v1.1.3 (2026-07-19)" in changelog
+    assert changelog.index("## v1.2.1") < changelog.index("## v1.2.0")
     assert changelog.index("## v1.2.0") < changelog.index("## v1.1.3")
     assert changelog.index("## v1.1.3") < changelog.index("## v1.1.2")
 
@@ -31,8 +33,8 @@ def test_changelog_records_the_latest_releases() -> None:
 def test_roadmap_names_the_current_stable_release() -> None:
     roadmap = _read("ROADMAP.md")
 
-    assert "Current stable release: **v1.2.0**" in roadmap
-    assert "Current stable release: **v1.1.3**" not in roadmap
+    assert "Current stable release: **v1.2.1**" in roadmap
+    assert "Current stable release: **v1.2.0**" not in roadmap
 
 
 def test_roadmap_lists_the_export_slice_only_once() -> None:

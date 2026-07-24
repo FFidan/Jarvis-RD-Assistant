@@ -21,7 +21,7 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -771,7 +771,9 @@ def _write_all(fd: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _atomic_write_private_json(path: Path, payload: dict[str, object]) -> None:
+def _atomic_write_private_json(
+    path: Path, payload: Mapping[str, object], *, mode: int = 0o600
+) -> None:
     """Durably replace one private JSON record in the trusted trigger volume.
 
     A random ``O_EXCL|O_NOFOLLOW`` temporary file is written and fsynced before
@@ -779,6 +781,21 @@ def _atomic_write_private_json(path: Path, payload: dict[str, object]) -> None:
     return means both content and directory entry reached the filesystem. Callers
     use the restore-state lock when replacement must be ordered with another
     sentinel. Any failure removes only the uncommitted random temporary name.
+
+    Parameters
+    ----------
+    path : Path
+        Destination record. A pre-existing symlink here is replaced, not
+        followed: the temporary is created ``O_NOFOLLOW`` and published with
+        ``os.replace``, so only the directory entry at ``path`` changes.
+    payload : Mapping[str, object]
+        JSON-serializable record written compactly.
+    mode : int, optional
+        Permission bits of the published record, set exactly via ``fchmod``
+        (umask-independent) so a wider mode is not silently narrowed on a
+        hardened host. Defaults to ``0o600`` (owner-only). Callers that must
+        expose a non-secret record to a co-mounted reader pass a wider mode such
+        as ``0o644``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
@@ -786,8 +803,13 @@ def _atomic_write_private_json(path: Path, payload: dict[str, object]) -> None:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        fd = os.open(tmp, flags, 0o600)
+        fd = os.open(tmp, flags, mode)
         try:
+            # os.open's mode is umask-subject; force the exact bits so a wider
+            # mode (e.g. the 0o644 upload grant a co-mounted reader must read)
+            # survives a hardened host umask. Safe: the temp is a fresh
+            # O_EXCL|O_NOFOLLOW file in a directory this service owns.
+            os.fchmod(fd, mode)
             _write_all(fd, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
             os.fsync(fd)
         finally:
@@ -916,22 +938,20 @@ def _write_upload_grant(token: str) -> bool:
     The raw token is returned once and never stored. The uploader authorizes a
     presented ``X-Upload-Grant`` by hashing it and matching this record. Mode
     ``0644`` permits the separate uploader container to read the non-secret hash
-    and expiry through its read-only trigger mount. Atomic replacement prevents
-    partial reads; an I/O failure logs and returns ``False``.
+    and expiry through its read-only trigger mount. The hardened writer stages a
+    random ``O_EXCL|O_NOFOLLOW`` temporary and ``os.replace``s it over the
+    destination, so a pre-existing symlink at the grant path is replaced rather
+    than followed and partial reads are impossible; an I/O failure logs and
+    returns ``False``.
     """
     payload = {
         "sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
         "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
     }
-    tmp = _UPLOAD_GRANT.parent / f"{_UPLOAD_GRANT.name}.tmp"
     try:
-        _UPLOAD_GRANT.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload))
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, _UPLOAD_GRANT)
+        _atomic_write_private_json(_UPLOAD_GRANT, payload, mode=0o644)
     except OSError as exc:
         logger.error("upload grant write failed: %r", exc)
-        tmp.unlink(missing_ok=True)
         return False
     return True
 

@@ -13,9 +13,7 @@ PUBLIC_VISIBILITY_SCOPE = "public"
 PRIVATE_VISIBILITY_SCOPE = "private"
 VisibilityScope = Literal["public", "private"]
 
-VERIFIED_PUBLIC_SOURCE_TYPES = frozenset(
-    {"arxiv", "semantic_scholar", "openalex", "pubmed"}
-)
+VERIFIED_PUBLIC_SOURCE_TYPES = frozenset({"arxiv", "semantic_scholar", "openalex", "pubmed"})
 
 
 def require_verified_public_source(source_type: str) -> None:
@@ -34,9 +32,7 @@ def require_verified_public_source(source_type: str) -> None:
         scholarly adapter set.
     """
     if source_type not in VERIFIED_PUBLIC_SOURCE_TYPES:
-        raise ValueError(
-            f"source type {source_type!r} is not eligible for public visibility"
-        )
+        raise ValueError(f"source type {source_type!r} is not eligible for public visibility")
 
 
 def paper_visibility_sql(user_param: int, *, alias: str = "p") -> str:

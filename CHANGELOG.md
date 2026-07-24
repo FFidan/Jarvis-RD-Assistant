@@ -10,6 +10,37 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.1 (2026-07-24)
+
+### Fixed
+- **Access-control hardening.** Saving a paper by identifier, and de-duplicating
+  a synced Zotero item by DOI, no longer attach another user's private paper, and
+  citation and metadata refreshes no longer promote or overwrite an existing
+  paper. A batch save can no longer claim an identifier in a namespace reserved
+  for local uploads or Zotero sync, so it cannot pre-seed a row that a later
+  genuine import would attach. Single-paper question-answering, summary
+  generation, tracked-author updates, and the knowledge-graph views now
+  consistently scope to the requesting user.
+- **Scheduled discovery on a fresh install.** Automatic paper discovery again
+  runs on an install that has no configured topics.
+- **Background job reliability.** Batch jobs report a sanitized error code
+  instead of a raw exception message, Zotero sync advances past a permanently
+  malformed item instead of stalling, a fractional auto-fetch interval is
+  honored, and a users-table read failure is reported distinctly from a
+  genuinely empty active-user set. A Zotero sync whose cursor fails to persist
+  now reports that instead of implying a durable advance.
+- **Installer and lifecycle scripts.** Secret and registry writes are atomic
+  across filesystems, the off-host upload grant is written with race-safe
+  permissions, and the wrapper install derives its per-service network
+  addresses.
+
+### Changed
+- Consolidated shared configuration loading, secret-file resolution, safe-path
+  handling, and background-task registration across services, with no change in
+  behavior.
+- Updated bundled frontend and documentation dependencies to their latest
+  available minor and patch releases.
+
 ## v1.2.0 (2026-07-23)
 
 ### Added

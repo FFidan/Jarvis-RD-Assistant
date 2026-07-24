@@ -40,6 +40,7 @@ from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
 from paper_ingestion.deps import limiter
+from paper_ingestion.models.account import MAX_EMAIL_LEN
 from paper_ingestion.routers._auth_shared import build_verify_link, magic_link_on_cooldown
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # single-use semantics.
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
-MAX_EMAIL_LEN = 320  # RFC 5321 cap
 
 
 class RequestLinkBody(BaseModel):

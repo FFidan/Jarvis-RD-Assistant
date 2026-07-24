@@ -417,3 +417,45 @@ async def test_batch_save_enqueues_analyze_for_unchunked_papers(
             f"defer_async must receive correct user_id={user_a_id}; got {call.kwargs}"
         )
         assert "job_id" in call.kwargs, f"defer_async must receive job_id kwarg; got {call.kwargs}"
+
+
+async def test_batch_save_duplicate_entries_enqueue_analyze_once(
+    contract_two_users,
+    _autoenqueue_app,
+    _configure_api_key,
+    contract_conn,
+):
+    """POST /api/papers/batch-save: duplicate external_id entries defer one analyze.
+
+    A payload naming the same external_id twice resolves to one canonical
+    paper, so the enqueue loop must defer exactly one paper.analyze job for
+    it — not one per duplicate entry.
+
+    Verified: papers_detail.py:355-377 — saved_ids deduped before the defer loop.
+    """
+    entry = {
+        "external_id": "autoenqueue-contract-dup-ext",
+        "source_type": "arxiv",
+        "title": "AutoEnqueue Duplicate Entry Paper",
+        "authors": ["Test Author"],
+        "url": "https://autoenqueue.contract.test/dup",
+    }
+    mock_task, mock_defer = _mock_analyze_task()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
+        async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/papers/batch-save", json=[entry, dict(entry)])
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from POST /api/papers/batch-save; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert isinstance(body, list) and len(body) == 2, (
+        f"Both duplicate entries must still be echoed; got: {body!r}"
+    )
+    assert mock_defer.await_count == 1, (
+        f"Expected exactly one defer_async for the duplicated paper; got {mock_defer.await_count}"
+    )
+    deferred_paper_ids = [call.kwargs.get("paper_id") for call in mock_defer.await_args_list]
+    assert deferred_paper_ids == [body[0]["id"]], (
+        f"The single deferred job must target the canonical paper; got {deferred_paper_ids}"
+    )

@@ -32,9 +32,7 @@ def _environment(root: Path, destructive_log: Path) -> dict[str, str]:
     for command in ("psql", "pg_restore", "curl", "docker"):
         target = fake_bin / command
         target.write_text(
-            "#!/usr/bin/env bash\n"
-            f"printf '%s\\n' {command} >> {destructive_log!s}\n"
-            "exit 97\n",
+            f"#!/usr/bin/env bash\nprintf '%s\\n' {command} >> {destructive_log!s}\nexit 97\n",
             encoding="utf-8",
         )
         target.chmod(0o755)
@@ -281,9 +279,7 @@ def test_restore_yield_cannot_be_overwritten_by_promotion_or_release(tmp_path: P
         assert promoted.returncode != 0
         assert control.read_text(encoding="utf-8").strip() == f"{guard_id}:yield-restore"
 
-        released = _run_lifecycle(
-            tmp_path, destructive_log, "release-update", guard_id, "retain"
-        )
+        released = _run_lifecycle(tmp_path, destructive_log, "release-update", guard_id, "retain")
         assert released.returncode == 0, released.stderr
         assert control.read_text(encoding="utf-8").strip() == f"{guard_id}:yield-restore"
 
@@ -750,10 +746,10 @@ def test_lifecycle_protocol_never_uses_bind_secrets_or_app_writable_trigger() ->
     restore = RESTORE.read_text(encoding="utf-8")
     forbidden = (
         ".jarvis-lifecycle-operation",
-        '${TRIGGER_DIR}/.update-lifecycle',
-        '${TRIGGER_DIR}/.config-key-rotation',
-        '${TRIGGER_DIR}/.restore_timeout',
-        '${TRIGGER_DIR}/.restore_swap_state',
+        "${TRIGGER_DIR}/.update-lifecycle",
+        "${TRIGGER_DIR}/.config-key-rotation",
+        "${TRIGGER_DIR}/.restore_timeout",
+        "${TRIGGER_DIR}/.restore_swap_state",
     )
     for needle in forbidden:
         assert needle not in helper

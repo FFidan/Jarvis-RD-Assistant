@@ -730,6 +730,41 @@ async def test_poll_library_updates_version():
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
     assert result["version_to"] == 42
+    assert result["cursor_persisted"] is True
+
+
+async def test_poll_library_reports_cursor_unpersisted_on_write_failure():
+    """A swallowed cursor-persist failure is surfaced, not masked as a durable advance.
+
+    The poll still returns ``status='ok'`` — items were processed idempotently and
+    the next poll simply re-reads from the old cursor — but the return must report
+    ``cursor_persisted=False`` so a monitor can tell a durable advance from a
+    swallowed one.
+    """
+    item = _zotero_item(key="VERFAIL1", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 57, "is_insert": True}))
+    version_conn = _make_conn()
+    version_conn.execute = AsyncMock(side_effect=RuntimeError("cursor write failed"))
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+
+    version_conn.execute.assert_called_once()
+    assert result["status"] == "ok"
+    assert result["version_to"] == 42
+    assert result["cursor_persisted"] is False, (
+        f"a swallowed cursor-write must be reported as unpersisted; got {result}"
+    )
 
 
 async def test_poll_library_updates_version_for_null_user():
@@ -1118,10 +1153,11 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
     """A non-DOI item whose url fails PaperCreate validation must not escape the poll loop.
 
     Without a guard, _parse_zotero_item raises ValidationError which exits
-    poll_zotero_library before the failed_keys / cursor-pin logic, permanently
-    wedging every subsequent sync. With the guard, the bad item is skipped
-    (cursor stays at last_version so the batch retries), while a valid item in
-    the same batch is still passed to _ingest_new_item.
+    poll_zotero_library before the parse/ingest-failure split, permanently
+    wedging every subsequent sync. With the guard, the bad item is skipped and
+    -- being a permanent parse failure with no accompanying ingest failure --
+    the cursor still advances past it, while a valid item in the same batch is
+    still passed to _ingest_new_item.
     """
     from paper_ingestion.integrations import _zotero_poll
 
@@ -1133,8 +1169,9 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
 
     monkeypatch.setattr(_zotero_poll, "_ingest_new_item", _spy_ingest)
 
-    # Config conn only — _persist_poll_cursor is not called when cursor is pinned.
-    pool = _make_poll_pool()
+    # Config conn + a persist-target conn (the cursor now advances, so
+    # _persist_poll_cursor performs a second acquire()).
+    pool = _make_poll_pool(_make_conn())
     http = AsyncMock(spec=httpx.AsyncClient)
 
     bad_item = _zotero_item(key="BADURL99", doi="", url="ftp://not-http")
@@ -1148,9 +1185,10 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
         result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
 
     assert result["status"] == "ok", result
-    # Cursor must be pinned because the bad item landed in failed_keys.
-    assert result["version_from"] == result["version_to"], (
-        f"Cursor must not advance when a parse failure occurs: {result}"
+    # A pure parse failure (no ingest failure) must not pin the cursor —
+    # otherwise a single permanently-malformed item wedges the sync forever.
+    assert result["version_to"] != result["version_from"], (
+        f"Cursor must advance past a permanently-malformed item: {result}"
     )
     # The valid item must still be enqueued despite the bad item.
     assert "GOODITEM" in enqueued_keys, f"Valid item was not enqueued: {enqueued_keys}"
@@ -2634,9 +2672,7 @@ async def test_push_highlights_job_allows_persisted_public_paper():
     """
     from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
 
-    visible_conn = _make_conn(
-        fetchrow=FakeRecord({"source_type": "arxiv"})
-    )
+    visible_conn = _make_conn(fetchrow=FakeRecord({"source_type": "arxiv"}))
     pool = _make_pool(visible_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     ctx = AsyncMock()
@@ -2792,12 +2828,7 @@ def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin()
     namespace = _ZoteroLibraryNamespace("user", "123456")
 
     # jarvis-origin skip uses data["extra"]
-    assert (
-        _parse_zotero_item(
-            {"extra": "jarvis_paper_id=42", "key": "ABC"}, {}, namespace
-        )
-        is None
-    )
+    assert _parse_zotero_item({"extra": "jarvis_paper_id=42", "key": "ABC"}, {}, namespace) is None
 
     # key resolved from data first; fallback to outer_item["key"]
     parsed_with_data_key = _parse_zotero_item(

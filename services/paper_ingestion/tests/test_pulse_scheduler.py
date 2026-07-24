@@ -371,6 +371,88 @@ async def test_run_pulse_wrapper_all_locked_skips_entirely(scheduler_module, cap
 
 
 @pytest.mark.asyncio
+async def test_run_pulse_wrapper_zero_active_users_uses_distinct_log(scheduler_module, caplog):
+    """run_pulse_wrapper must not call _defer_per_user when there are zero active users,
+    and the skip log must be distinguishable from the all-locked message."""
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, patch
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": True})  # pulse enabled
+    conn.fetch.return_value = []  # zero active users
+
+    app = __import__("types").SimpleNamespace(
+        state=__import__("types").SimpleNamespace(db_pool=pool)
+    )
+
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
+        with caplog.at_level(logging.INFO, logger="paper_ingestion.scheduler"):
+            await scheduler_module.run_pulse_wrapper(app)
+
+    mock_pulse_defer.assert_not_awaited()
+    assert not any("in-flight run" in r.message for r in caplog.records), (
+        "zero active users must not be reported as an in-flight-run skip"
+    )
+    assert any("no active users" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_wrapper_read_error_logs_distinct_warning(scheduler_module, caplog):
+    """A users-table read failure is reported distinctly from a genuine zero-users skip.
+
+    When _list_active_users returns None (the read itself failed), run_pulse_wrapper
+    must warn and skip rather than silently treat it as a no-active-users skip.
+    """
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, patch
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": True})  # pulse enabled
+    conn.fetch.side_effect = RuntimeError("users table unreadable")  # read failure -> None
+
+    app = __import__("types").SimpleNamespace(
+        state=__import__("types").SimpleNamespace(db_pool=pool)
+    )
+
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
+        with caplog.at_level(logging.WARNING, logger="paper_ingestion.scheduler"):
+            await scheduler_module.run_pulse_wrapper(app)
+
+    mock_pulse_defer.assert_not_awaited()
+    assert any("could not read active users" in r.message for r in caplog.records)
+    assert not any("no active users" in r.message for r in caplog.records), (
+        "a read failure must not be reported as a genuine zero-users skip"
+    )
+
+
+@pytest.mark.asyncio
+async def test_defer_per_user_read_error_warns_and_skips(scheduler_module, caplog):
+    """_defer_per_user itself distinguishes a read failure (None) from zero users ([]).
+
+    The other cron wrappers call _defer_per_user without a pre-fetched user list, so
+    the read-error distinction must hold there too, not only in run_pulse_wrapper.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = RuntimeError("users table unreadable")  # -> _list_active_users None
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.scheduler"):
+        deferred = await scheduler_module._defer_per_user(
+            task_kind="pulse.generate", db_pool=pool, log_label="pulse"
+        )
+
+    assert deferred == 0
+    assert any("could not read active users" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_apply_pulse_cron_rollback_also_fails_still_raises_http_400(caplog):
     """Outer HTTPException must fire even if the inner rollback raises.
 

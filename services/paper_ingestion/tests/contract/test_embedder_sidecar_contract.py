@@ -353,21 +353,22 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
 # ---------------------------------------------------------------------------
 # prepare_single_paper_rag end-to-end: caller fetches library + threads scope
 #
-# Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:124-137
-#   (prepare_single_paper_rag queries user_library for the caller, threads
-#    user_id + library_paper_ids into search_chunks_in_paper)
+# Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:254-271
+#   (prepare_single_paper_rag resolves the paper through the caller-visibility
+#    predicate, then threads user_id + library_paper_ids into
+#    search_chunks_in_paper for the vector-layer filter)
 # ---------------------------------------------------------------------------
 
 
 async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
     contract_conn, monkeypatch
 ):
-    """B can ask about joint-library P but receives no chunks from A-only Q."""
+    """B can ask about joint-library P; A-only Q fails closed at the paper lookup."""
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
     from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
     from paper_ingestion.models import AskRequest, ChunkForEmbedding
-    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+    from paper_ingestion.rag.exceptions import PaperNotFoundError
     from paper_ingestion.rag.streaming import prepare_single_paper_rag
 
     user_a = await contract_conn.fetchval(
@@ -450,9 +451,11 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
                 http_client=http_client,
                 user_id=user_b,
             )
-            # EXCLUSION — Q is private to A; defense-in-depth fails closed for B
-            # even though this call bypassed the route-level ownership check.
-            with pytest.raises(NoRelevantChunksError):
+            # EXCLUSION — Q is private to A; the visibility-scoped paper lookup
+            # fails closed for B before any retrieval, indistinguishable from a
+            # nonexistent paper, even though this call bypassed the route-level
+            # ownership check.
+            with pytest.raises(PaperNotFoundError):
                 await prepare_single_paper_rag(
                     embedder,
                     pool,

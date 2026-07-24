@@ -203,9 +203,7 @@ class FauxQdrantClient:
         ids = _selector_ids(points)
         if ids is not None:
             selected = (
-                collection.points[point_id]
-                for point_id in ids
-                if point_id in collection.points
+                collection.points[point_id] for point_id in ids if point_id in collection.points
             )
         else:
             selector_filter = _selector_filter(points)

@@ -117,6 +117,7 @@ async def update_tracked_author(
             author_id,
             updates,
             _AUTHOR_ALLOWED_COLUMNS,
+            extra_where=("user_id", user_id),
         )
     return TrackedAuthorResponse(**dict(row))
 

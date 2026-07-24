@@ -52,7 +52,7 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
     return await read_global_config_flag(db_pool, "pulse.enabled", log_label="pulse")
 
 
-async def _list_active_users(db_pool: Any) -> list[int]:
+async def _list_active_users(db_pool: Any) -> list[int] | None:
     """List active (non-deleted) user IDs for per-user cron fan-out.
 
     Schedulers iterate users-with-feature-enabled. ``user_config`` is
@@ -60,9 +60,10 @@ async def _list_active_users(db_pool: Any) -> list[int]:
     returns all active users; once ``user_config`` becomes per-user the
     callers should narrow on ``key=feature.enabled AND value=true``.
 
-    Returns an empty list when the ``users`` table is missing (single-tenant
-    pre-migration-069 deployments) so callers fall back to the legacy
-    system-shared single defer.
+    Returns ``None`` -- distinct from an empty list -- when the ``users``
+    table could not be read (e.g. missing on single-tenant
+    pre-migration-069 deployments, or a transient DB error), so callers can
+    tell "genuinely zero active users" apart from "the read itself failed".
     """
     try:
         async with db_pool.acquire() as conn:
@@ -70,7 +71,7 @@ async def _list_active_users(db_pool: Any) -> list[int]:
         return [int(r["id"]) for r in rows]
     except Exception:
         logger.debug("scheduler: users table unreadable; falling back to system run", exc_info=True)
-        return []
+        return None
 
 
 async def _users_without_active_pulse_lock(db_pool: Any, user_ids: list[int]) -> list[int]:
@@ -263,7 +264,15 @@ async def _defer_per_user(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    user_ids = user_ids if user_ids is not None else await _list_active_users(db_pool)
+    if user_ids is None:
+        user_ids = await _list_active_users(db_pool)
+        if user_ids is None:
+            logger.warning(
+                "%s: could not read active users — skipping %s deferral",
+                log_label,
+                task_kind,
+            )
+            return 0
     if not user_ids:
         logger.info(
             "%s: no active users — skipping %s deferral",
@@ -325,9 +334,14 @@ async def run_pulse_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping nightly run")
         return
     try:
-        user_ids = await _users_without_active_pulse_lock(
-            db_pool, await _list_active_users(db_pool)
-        )
+        active_users = await _list_active_users(db_pool)
+        if active_users is None:
+            logger.warning("pulse: could not read active users — skipping nightly run")
+            return
+        if not active_users:
+            logger.info("pulse: no active users — skipping nightly run")
+            return
+        user_ids = await _users_without_active_pulse_lock(db_pool, active_users)
         if not user_ids:
             logger.info("pulse: all active users have an in-flight run — skipping")
             return
@@ -487,10 +501,10 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     # Register auto_pipeline unconditionally — the job self-gates when interval_hours <= 0.
     # This allows live-enabling via the Settings UI without restarting the service.
-    _effective_interval = max(int(interval_hours), 1) if interval_hours > 0 else 24
+    _effective_interval = max(interval_hours, 1.0) if interval_hours > 0 else 24
     scheduler.add_job(
         run_auto_pipeline,
-        trigger=IntervalTrigger(hours=_effective_interval),
+        trigger=IntervalTrigger(hours=_effective_interval),  # type: ignore[arg-type]
         args=[app],
         id="auto_pipeline",
         name="Auto fetch->process pipeline",

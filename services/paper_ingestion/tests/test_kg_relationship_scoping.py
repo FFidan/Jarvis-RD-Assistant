@@ -25,6 +25,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
+
 # ---------------------------------------------------------------------------
 # Fake connection that actually evaluates the visibility rule.
 #
@@ -265,3 +269,89 @@ async def test_get_entity_detail_relationships_scoped_to_caller():
     assert "visibility_scope" in rel_sql
     assert "discovered_by" not in rel_sql
     assert 2 in rel_params, "caller user_id not threaded into the predicate"
+
+
+# ---------------------------------------------------------------------------
+# list_entities endpoint — both outer branches exclude a non-visible entity
+#
+# user_id is resolved from the session (never None), so the removed unscoped
+# else branches were dead code. The surviving scoped branches must still hide
+# a private-paper entity the caller cannot see — in both the unfiltered read
+# and the entity_type-filtered read.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_list_entities_scopes_both_branches_to_caller(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """GET /api/knowledge-graph/entities hides another user's private-paper entity
+    in both the unfiltered and the entity_type-filtered branch, while a public
+    entity stays visible.
+
+    # Verified: knowledge_graph.py:188 list_entities
+    """
+    # Private paper owned by A and not in B's library → its method entity is
+    # invisible to B in either branch.
+    private_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               discovered_by, visibility_scope)
+           VALUES ('kg-list-private-a', 'arxiv', 'Private A entity paper', ARRAY['Author'],
+                   'https://kg-list-a.test/paper', $1, 'private')
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    private_entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-list-private-only', 'kg-list-private-only', 'method', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        private_paper_id,
+        private_entity_id,
+        contract_two_users.user_a_id,
+    )
+
+    # Public paper → its method entity is visible to every caller (positive
+    # control proving the branches are not vacuously empty).
+    public_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               discovered_by, visibility_scope)
+           VALUES ('kg-list-public', 'arxiv', 'Public entity paper', ARRAY['Author'],
+                   'https://kg-list-pub.test/paper', $1, 'public')
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    public_entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-list-public-shared', 'kg-list-public-shared', 'method', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        public_paper_id,
+        public_entity_id,
+        contract_two_users.user_a_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        unfiltered = await c.get("/api/knowledge-graph/entities?limit=500")
+        filtered = await c.get("/api/knowledge-graph/entities?entity_type=method&limit=500")
+
+    for label, resp in (("unfiltered", unfiltered), ("entity_type=method", filtered)):
+        assert resp.status_code == 200, f"{label}: got {resp.status_code}: {resp.text[:200]}"
+        names = [e["name"] for e in resp.json()]
+        assert "kg-list-public-shared" in names, (
+            f"{label}: public entity must be visible to user B; got {names}"
+        )
+        assert "kg-list-private-only" not in names, (
+            f"{label}: user B must not see user A's private-paper entity; got {names}"
+        )

@@ -308,7 +308,9 @@ def test_user_scope_filter_is_generation_and_persisted_scope_authority():
     private_library = access.should[1]
     assert isinstance(private_library, Filter)
     private_conditions = {
-        condition.key: condition for condition in private_library.must if isinstance(condition, FieldCondition)
+        condition.key: condition
+        for condition in private_library.must
+        if isinstance(condition, FieldCondition)
     }
     assert private_conditions["visibility_scope"].match.value == "private"
     assert isinstance(private_conditions["paper_id"].match, MatchAny)

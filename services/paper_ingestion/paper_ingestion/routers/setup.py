@@ -63,6 +63,7 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
+from paper_ingestion.models.account import MAX_EMAIL_LEN
 from paper_ingestion.routers.auth import _hash_email, _require_local_or_https
 from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
 
@@ -70,7 +71,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
-MAX_EMAIL_LEN = 320  # RFC 5321
 SMTP_TEST_TIMEOUT_SECONDS = 10.0
 
 # Encrypted user_config keys this router writes. Must be a subset of the
