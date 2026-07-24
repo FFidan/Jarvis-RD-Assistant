@@ -2027,7 +2027,9 @@ backfill_torch_variant_from_env() {
 # Mirrors scripts/init-secrets.sh::upsert_env_var (bash 3.2-portable awk).
 upsert_env_var() {
   local k="$1" v="$2" tmp
-  tmp="$(mktemp)" || { printf 'upsert_env_var: mktemp failed\n' >&2; return 1; }
+  # Colocate the temp with .env so the final mv is an atomic same-filesystem
+  # rename rather than a cross-filesystem copy a concurrent reader could observe.
+  tmp="$(mktemp .env.XXXXXX)" || { printf 'upsert_env_var: mktemp failed\n' >&2; return 1; }
   awk -v k="$k" -v v="$v" '
     index($0, k "=") == 1 { if (!seen) { print k "=" v; seen = 1 } ; next }
     { print }

@@ -48,13 +48,16 @@ FAILED=0
 # ---------------------------------------------------------------------------
 upsert_env_var() {
   local k="$1" v="$2" tmp
-  tmp="$(mktemp)"
+  # Colocate the temp with .env so the final mv is an atomic same-filesystem
+  # rename (a $TMPDIR temp can land on a different filesystem, degrading mv to a
+  # non-atomic copy that a concurrent reader could observe half-written).
+  tmp="$(mktemp .env.XXXXXX)" || { printf 'upsert_env_var: mktemp failed\n' >&2; return 1; }
   awk -v k="$k" -v v="$v" '
     index($0, k "=") == 1 { if (!seen) { print k "=" v; seen = 1 } ; next }
     { print }
     END { if (!seen) print k "=" v }
-  ' .env > "$tmp"
-  mv "$tmp" .env
+  ' .env > "$tmp" || { rm -f "$tmp"; printf 'upsert_env_var: awk rewrite of .env failed\n' >&2; return 1; }
+  mv "$tmp" .env || { rm -f "$tmp"; printf 'upsert_env_var: mv to .env failed\n' >&2; return 1; }
 }
 
 # ---------------------------------------------------------------------------

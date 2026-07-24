@@ -54,8 +54,6 @@ case "$host_lock_rc" in
   3) fail "another JARVIS lifecycle operation is already running"; exit 1 ;;
   *) fail "the per-install lifecycle lock is unavailable or unsafe"; exit 1 ;;
 esac
-path_inside_repo() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
-
 # Resolve Compose only from this install's recorded .env. Explicit CLI selectors
 # outrank .env and the caller's ambient COMPOSE_* variables are removed, so a
 # maintenance command cannot be redirected to a sibling project.
@@ -87,7 +85,7 @@ init_compose_target() {
     [ -n "$item" ] || fail "COMPOSE_FILE contains an empty entry"
     case "$item" in /*) candidate="$item" ;; *) candidate="$REPO_ROOT/$item" ;; esac
     canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
-    if [ -z "$canon" ] || [ ! -f "$canon" ] || ! path_inside_repo "$canon" "$REPO_ROOT"; then
+    if [ -z "$canon" ] || [ ! -f "$canon" ] || ! _lifecycle_path_inside_repo "$canon" "$REPO_ROOT"; then
       fail "Compose file '${item}' is missing or outside this install"
     fi
     if printf '%s\n' "$seen" | grep -qxF "$canon"; then
