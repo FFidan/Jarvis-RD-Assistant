@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current stable release: **v1.2.0**. See [CHANGELOG.md](CHANGELOG.md) for the full
+Current stable release: **v1.2.1**. See [CHANGELOG.md](CHANGELOG.md) for the full
 change list since the v1.0.0 public baseline.
 
 - **Source-aware visibility and library operations (v1.2.0).** A persisted

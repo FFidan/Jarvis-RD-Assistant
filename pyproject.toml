@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "1.2.0"
+version = "1.2.1"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
