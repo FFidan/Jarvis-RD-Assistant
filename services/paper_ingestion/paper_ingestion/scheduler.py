@@ -264,7 +264,15 @@ async def _defer_per_user(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    user_ids = user_ids if user_ids is not None else await _list_active_users(db_pool)
+    if user_ids is None:
+        user_ids = await _list_active_users(db_pool)
+        if user_ids is None:
+            logger.warning(
+                "%s: could not read active users — skipping %s deferral",
+                log_label,
+                task_kind,
+            )
+            return 0
     if not user_ids:
         logger.info(
             "%s: no active users — skipping %s deferral",

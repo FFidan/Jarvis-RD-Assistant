@@ -1,10 +1,10 @@
 """Tracked-author updates are scoped to the owning user.
 
-The update statement carries the caller's user_id in its WHERE clause, so a
-non-owner's write cannot mutate another user's row even if the ownership
-pre-check were bypassed by a race. Proven behaviorally against real Postgres:
-user B's update of user A's tracked author is rejected and leaves A's row
-untouched, while user A's identical update succeeds.
+A non-owner's update of another user's tracked author is rejected and leaves
+the owner's row untouched, while the owner's identical update succeeds, proven
+behaviorally against real Postgres. The update statement additionally carries
+the caller's user_id in its WHERE clause as defense-in-depth over the ownership
+pre-check; that race-hardening is not exercised by this normal-path test.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ async def test_non_owner_cannot_update_another_users_tracked_author(
 ):
     """User B's PUT on user A's tracked author is rejected and A's row is unchanged.
 
-    The same write that user A can apply is a no-op for user B, proving the
-    update is scoped to the owner rather than merely gated by the pre-check.
+    User A can then apply the identical write successfully, proving the
+    rejection was an ownership decision rather than a broken route.
 
     # Verified: authors.py:90 update_tracked_author
     """
