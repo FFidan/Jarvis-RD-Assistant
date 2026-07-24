@@ -2517,6 +2517,51 @@ async def test_batch_save_own_resave_is_idempotent(
     assert membership is not None, "Owner must remain a member after re-save"
 
 
+async def test_batch_save_duplicate_external_id_in_one_payload(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """One payload naming the same external_id twice saves once and attaches once.
+
+    The first entry inserts the canonical row and writes the caller's
+    user_library membership inside the batch transaction. The second entry is
+    not an insert and the row lands private, so its claim rests on the
+    membership row written moments earlier on the same connection: it must be
+    seen there, echoed back, and re-attached idempotently — neither silently
+    dropped nor doubled into a second membership or canonical row.
+    """
+    entry = {
+        "external_id": "batch-dup-one-payload-ext",
+        "source_type": "arxiv",
+        "title": "Duplicate Entry Paper",
+        "authors": ["Owner"],
+        "url": "https://batchdup.contract.test/one",
+    }
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/papers/batch-save", json=[entry, dict(entry)])
+
+    assert resp.status_code == 200, f"batch save failed: {resp.status_code}: {resp.text[:300]}"
+    ids = [p["id"] for p in resp.json()]
+    assert len(ids) == 2 and len(set(ids)) == 1, (
+        f"Both duplicate entries must be echoed with one canonical id; got {resp.json()!r}"
+    )
+    memberships = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM user_library WHERE user_id = $1 AND paper_id = $2",
+        contract_two_users.user_a_id,
+        ids[0],
+    )
+    assert memberships == 1, f"Expected exactly one membership row, got {memberships}"
+    canonical_rows = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = $1",
+        entry["external_id"],
+    )
+    assert canonical_rows == 1, (
+        f"Expected one canonical row for the duplicated external_id, got {canonical_rows}"
+    )
+
+
 async def test_list_papers_bm25_uses_websearch_to_tsquery(
     contract_two_users,
     _pi_app_with_pool,
