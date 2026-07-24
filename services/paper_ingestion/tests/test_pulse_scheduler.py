@@ -371,6 +371,36 @@ async def test_run_pulse_wrapper_all_locked_skips_entirely(scheduler_module, cap
 
 
 @pytest.mark.asyncio
+async def test_run_pulse_wrapper_zero_active_users_uses_distinct_log(scheduler_module, caplog):
+    """run_pulse_wrapper must not call _defer_per_user when there are zero active users,
+    and the skip log must be distinguishable from the all-locked message."""
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, patch
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": True})  # pulse enabled
+    conn.fetch.return_value = []  # zero active users
+
+    app = __import__("types").SimpleNamespace(
+        state=__import__("types").SimpleNamespace(db_pool=pool)
+    )
+
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
+        with caplog.at_level(logging.INFO, logger="paper_ingestion.scheduler"):
+            await scheduler_module.run_pulse_wrapper(app)
+
+    mock_pulse_defer.assert_not_awaited()
+    assert not any("in-flight run" in r.message for r in caplog.records), (
+        "zero active users must not be reported as an in-flight-run skip"
+    )
+    assert any("no active users" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_apply_pulse_cron_rollback_also_fails_still_raises_http_400(caplog):
     """Outer HTTPException must fire even if the inner rollback raises.
 

@@ -18,7 +18,7 @@ from jarvis_common.serialization import read_global_config_flag
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME
 from paper_ingestion.models import PaperSourceConfig, TopicRef
-from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
+from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, resolve_safe_pdf_path
 from paper_ingestion.services.pdf_workflow import (
     download_and_store_pdf,
     run_process_pdf,
@@ -296,8 +296,13 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
 
     process_tasks = []
     for row in to_process:
-        pdf_path = Path(row["pdf_local_path"])
-        if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
+        # require_exists=False: this site historically only guarded against
+        # path traversal, not disk presence -- a missing file surfaces later
+        # via _extract_and_embed_paper's own try/except instead.
+        pdf_path = resolve_safe_pdf_path(
+            row["pdf_local_path"], PDF_STORAGE_PATH, require_exists=False
+        )
+        if pdf_path is None:
             logger.warning(
                 "Skipping paper %d: pdf_local_path outside storage dir",
                 row["id"],
