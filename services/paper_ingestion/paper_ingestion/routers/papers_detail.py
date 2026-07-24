@@ -35,6 +35,7 @@ from paper_ingestion.models import (
     PaperDetailResponse,
     PaperResponse,
     RecentFeedback,
+    SourceType,
     UserStateResponse,
 )
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
@@ -51,6 +52,11 @@ router = APIRouter(
         500: {"model": ErrorResponse},
     },
 )
+
+# external_ids in these namespaces are minted server-side by first-party
+# ingestion (local PDF uploads, Zotero sync). A client batch-save entry claiming
+# one could squat a row that a later genuine ingest would trust as its own.
+_RESERVED_EXTERNAL_ID_PREFIXES = (f"{SourceType.LOCAL.value}:", f"{SourceType.ZOTERO.value}:")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +321,8 @@ async def batch_save_papers(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for paper in papers:
+                if paper.external_id.startswith(_RESERVED_EXTERNAL_ID_PREFIXES):
+                    raise HTTPException(400, "external_id uses a reserved namespace")
                 # Validate pdf_url against ALLOWED_PDF_DOMAINS; clear non-allowlisted URLs.
                 if paper.pdf_url is not None:
                     try:

@@ -2562,6 +2562,77 @@ async def test_batch_save_duplicate_external_id_in_one_payload(
     )
 
 
+async def test_batch_save_rejects_reserved_namespace_external_id(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A batch-save entry whose external_id squats a first-party ingestion namespace is rejected.
+
+    external_ids prefixed ``local:`` or ``zotero:`` are minted server-side by
+    real PDF ingestion and Zotero sync; a client planting one via batch-save
+    could hijack a row a later genuine ingest would trust. The whole request
+    fails 400 and nothing is persisted, while a legitimate adapter id (arxiv:)
+    still saves.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:324
+    reserved_ids = ["local:deadbeefdeadbeef", "zotero:user:123:ABCD1234"]
+
+    def _entry(external_id: str) -> dict:
+        return {
+            "external_id": external_id,
+            "source_type": "arxiv",
+            "title": "Reserved Namespace Squat Attempt",
+            "authors": ["Attacker"],
+            "url": "https://reserved.contract.test/squat",
+        }
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        local_resp = await c.post("/api/papers/batch-save", json=[_entry(reserved_ids[0])])
+        zotero_resp = await c.post("/api/papers/batch-save", json=[_entry(reserved_ids[1])])
+        # Control: a legitimate adapter id must still save (guard does not over-reject).
+        arxiv_resp = await c.post("/api/papers/batch-save", json=[_entry("arxiv:2401.00001")])
+
+    assert local_resp.status_code == 400, (
+        f"local: external_id must be rejected; got {local_resp.status_code}: {local_resp.text[:300]}"
+    )
+    assert zotero_resp.status_code == 400, (
+        f"zotero: external_id must be rejected; got {zotero_resp.status_code}: "
+        f"{zotero_resp.text[:300]}"
+    )
+
+    planted = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = ANY($1)",
+        reserved_ids,
+    )
+    assert planted == 0, f"Rejected reserved-namespace ids must plant no row; got {planted}"
+
+    membership = await contract_conn.fetchval(
+        """SELECT COUNT(*)
+           FROM user_library ul
+           JOIN papers p ON p.id = ul.paper_id
+           WHERE ul.user_id = $1 AND p.external_id = ANY($2)""",
+        contract_two_users.user_a_id,
+        reserved_ids,
+    )
+    assert membership == 0, (
+        f"Rejected reserved-namespace ids must grant no membership; got {membership}"
+    )
+
+    assert arxiv_resp.status_code == 200, (
+        f"Legitimate arxiv: id must save; got {arxiv_resp.status_code}: {arxiv_resp.text[:300]}"
+    )
+    assert [p["external_id"] for p in arxiv_resp.json()] == ["arxiv:2401.00001"], (
+        f"Adapter id must be echoed back; got {arxiv_resp.json()!r}"
+    )
+    saved = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = $1",
+        "arxiv:2401.00001",
+    )
+    assert saved == 1, f"Legitimate adapter id must be persisted once; got {saved}"
+
+
 async def test_list_papers_bm25_uses_websearch_to_tsquery(
     contract_two_users,
     _pi_app_with_pool,
