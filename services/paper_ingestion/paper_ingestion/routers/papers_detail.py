@@ -354,22 +354,24 @@ async def batch_save_papers(
                 results.append(row_to_paper_response(row))
     if not results:
         return results
-    saved_ids = [saved.id for saved in results]
+    # A payload may name the same external_id more than once; duplicates
+    # resolve to one canonical row, which must be analyzed only once.
+    saved_ids = list(dict.fromkeys(saved.id for saved in results))
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)",
             saved_ids,
         )
     chunked_ids: set[int] = {r["paper_id"] for r in rows}
-    for saved in results:
-        if saved.id in chunked_ids:
+    for paper_id in saved_ids:
+        if paper_id in chunked_ids:
             continue
         try:
             from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
             await KIND_TO_TASK["paper.analyze"].defer_async(
-                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=saved.id
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=paper_id
             )
         except Exception:
-            logger.exception("paper.analyze enqueue failed for paper %d", saved.id)
+            logger.exception("paper.analyze enqueue failed for paper %d", paper_id)
     return results
