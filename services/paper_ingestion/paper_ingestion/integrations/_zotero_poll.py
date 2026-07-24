@@ -541,8 +541,15 @@ async def _ingest_new_item(
 
 async def _persist_poll_cursor(
     db_pool: asyncpg.Pool, polling_user_id: int | None, new_version: int
-) -> None:
-    """Persist the updated last-library-version cursor."""
+) -> bool:
+    """Persist the updated last-library-version cursor.
+
+    Returns ``True`` when the cursor was written, ``False`` when the write
+    failed (already logged). The poll itself still succeeded — items were
+    processed idempotently and the next poll simply re-reads from the old
+    cursor — but the caller must report the cursor as unpersisted rather than
+    imply the advance was durable.
+    """
     # polling_user_id may be None (single-tenant / system poll). The
     # user_config unique index is NULLS NOT DISTINCT, so the NULL-user row
     # upserts correctly — persist the cursor instead of skipping (skipping
@@ -558,8 +565,10 @@ async def _persist_poll_cursor(
                 new_version,
                 polling_user_id,
             )
+        return True
     except Exception:
         logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,16 +723,18 @@ async def poll_zotero_library(
             "Zotero poll: enqueue cap (%d) reached — deferring version advance to next sync",
             MAX_ENQUEUE_PER_SYNC,
         )
+    cursor_persisted = True
     if new_version != last_version:
-        await _persist_poll_cursor(db_pool, polling_user_id, new_version)
+        cursor_persisted = await _persist_poll_cursor(db_pool, polling_user_id, new_version)
 
     logger.info(
-        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",
+        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d persisted=%s",
         batch.new_count,
         batch.linked_count,
         batch.enqueued_count,
         last_version,
         new_version,
+        cursor_persisted,
     )
     return {
         "status": "ok",
@@ -732,4 +743,5 @@ async def poll_zotero_library(
         "enqueued": batch.enqueued_count,
         "version_from": last_version,
         "version_to": new_version,
+        "cursor_persisted": cursor_persisted,
     }

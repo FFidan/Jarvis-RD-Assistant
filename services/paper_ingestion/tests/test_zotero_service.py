@@ -730,6 +730,41 @@ async def test_poll_library_updates_version():
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
     assert result["version_to"] == 42
+    assert result["cursor_persisted"] is True
+
+
+async def test_poll_library_reports_cursor_unpersisted_on_write_failure():
+    """A swallowed cursor-persist failure is surfaced, not masked as a durable advance.
+
+    The poll still returns ``status='ok'`` — items were processed idempotently and
+    the next poll simply re-reads from the old cursor — but the return must report
+    ``cursor_persisted=False`` so a monitor can tell a durable advance from a
+    swallowed one.
+    """
+    item = _zotero_item(key="VERFAIL1", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 57, "is_insert": True}))
+    version_conn = _make_conn()
+    version_conn.execute = AsyncMock(side_effect=RuntimeError("cursor write failed"))
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+
+    version_conn.execute.assert_called_once()
+    assert result["status"] == "ok"
+    assert result["version_to"] == 42
+    assert result["cursor_persisted"] is False, (
+        f"a swallowed cursor-write must be reported as unpersisted; got {result}"
+    )
 
 
 async def test_poll_library_updates_version_for_null_user():
