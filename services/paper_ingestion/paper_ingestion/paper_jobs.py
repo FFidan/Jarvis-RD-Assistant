@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
@@ -19,7 +18,8 @@ from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_owner
 from jarvis_common.jobs import JobError, ProgressContext
 
 from paper_ingestion._state import get_services
-from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
+from paper_ingestion.job_errors import classify_bulk_error
+from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, resolve_safe_pdf_path
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -116,11 +116,9 @@ async def _paper_process_job(
     if not row["pdf_downloaded"] or not row["pdf_local_path"]:
         raise JobError(f"PDF not yet downloaded for paper {paper_id}")
 
-    pdf_path = Path(row["pdf_local_path"])
-    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-        raise JobError(f"Invalid PDF path for paper {paper_id}")
-    if not pdf_path.exists():
-        raise JobError(f"PDF file missing from disk for paper {paper_id}")
+    pdf_path = resolve_safe_pdf_path(row["pdf_local_path"], PDF_STORAGE_PATH)
+    if pdf_path is None:
+        raise JobError(f"Invalid or missing PDF for paper {paper_id}")
 
     await ctx.update_progress(0.1, "Downloaded")
 
@@ -221,15 +219,9 @@ async def _paper_analyze_job(
     # ---- Step 2: Process PDF ----
     await ctx.update_progress(0.2, "Processing PDF")
 
-    pdf_local_path = row["pdf_local_path"]
-    if not pdf_local_path:
-        raise JobError(f"PDF path not set for paper {paper_id}")
-
-    pdf_path = Path(pdf_local_path)
-    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-        raise JobError(f"Invalid PDF path for paper {paper_id}")
-    if not pdf_path.exists():
-        raise JobError(f"PDF file missing from disk for paper {paper_id}")
+    pdf_path = resolve_safe_pdf_path(row["pdf_local_path"], PDF_STORAGE_PATH)
+    if pdf_path is None:
+        raise JobError(f"Invalid or missing PDF for paper {paper_id}")
 
     sub_ctx = _SubCtx(ctx, 0.2, 0.7)
     result = await run_process_pdf(
@@ -363,11 +355,8 @@ async def _papers_batch_process_job(
             if not row or not row["pdf_downloaded"] or not row["pdf_local_path"]:
                 skipped += 1
                 continue
-            pdf_path = Path(row["pdf_local_path"])
-            if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-                skipped += 1
-                continue
-            if not pdf_path.exists():
+            pdf_path = resolve_safe_pdf_path(row["pdf_local_path"], PDF_STORAGE_PATH)
+            if pdf_path is None:
                 skipped += 1
                 continue
             sub_ctx = _SubCtx(ctx, inner_start, inner_end)
@@ -383,7 +372,7 @@ async def _papers_batch_process_job(
             processed += 1
         except Exception as exc:  # noqa: BLE001
             logger.exception("Batch process failed for paper %s", paper_id)
-            errors.append(f"Paper {paper_id}: {exc}")
+            errors.append(f"Paper {paper_id}: {classify_bulk_error(exc)}")
 
     await ctx.update_progress(1.0, f"Done: {processed} processed, {skipped} skipped")
     return {"processed": processed, "skipped": skipped, "errors": errors}
@@ -567,13 +556,9 @@ async def _library_process_stage(
     sub_ctx: _SubCtx,
 ) -> None:
     """Extract, chunk and embed one paper's already-downloaded PDF."""
-    if not pdf_local_path:
-        raise JobError(f"PDF path not set for paper {paper_id}")
-    pdf_path = Path(pdf_local_path)
-    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-        raise JobError(f"Invalid PDF path for paper {paper_id}")
-    if not pdf_path.exists():
-        raise JobError(f"PDF file missing from disk for paper {paper_id}")
+    pdf_path = resolve_safe_pdf_path(pdf_local_path, PDF_STORAGE_PATH)
+    if pdf_path is None:
+        raise JobError(f"Invalid or missing PDF for paper {paper_id}")
     await run.process_pdf(paper_id, pdf_path, ctx=sub_ctx)
 
 
@@ -640,7 +625,7 @@ async def _run_library_paper_stages(row: Any, run: _LibraryRun, sub_ctx: _SubCtx
             downloaded=downloaded,
             processed=processed,
             summarized=summarized,
-            error={"paper_id": paper_id, "stage": stage, "error": str(exc)},
+            error={"paper_id": paper_id, "stage": stage, "error": classify_bulk_error(exc)},
         )
     return _PaperOutcome(
         downloaded=downloaded, processed=processed, summarized=summarized, blocked=blocked
@@ -833,7 +818,7 @@ async def _papers_batch_summarize_job(
             summarized += 1
         except Exception as exc:  # noqa: BLE001
             failed += 1
-            errors.append(f"Paper {paper_id}: {exc}")
+            errors.append(f"Paper {paper_id}: {classify_bulk_error(exc)}")
             logger.exception("Batch summarize failed for paper %s", paper_id)
 
     await ctx.update_progress(1.0, f"Done: {summarized} ok, {failed} failed")

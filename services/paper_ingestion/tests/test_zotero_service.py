@@ -1118,10 +1118,11 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
     """A non-DOI item whose url fails PaperCreate validation must not escape the poll loop.
 
     Without a guard, _parse_zotero_item raises ValidationError which exits
-    poll_zotero_library before the failed_keys / cursor-pin logic, permanently
-    wedging every subsequent sync. With the guard, the bad item is skipped
-    (cursor stays at last_version so the batch retries), while a valid item in
-    the same batch is still passed to _ingest_new_item.
+    poll_zotero_library before the parse/ingest-failure split, permanently
+    wedging every subsequent sync. With the guard, the bad item is skipped and
+    -- being a permanent parse failure with no accompanying ingest failure --
+    the cursor still advances past it, while a valid item in the same batch is
+    still passed to _ingest_new_item.
     """
     from paper_ingestion.integrations import _zotero_poll
 
@@ -1133,8 +1134,9 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
 
     monkeypatch.setattr(_zotero_poll, "_ingest_new_item", _spy_ingest)
 
-    # Config conn only — _persist_poll_cursor is not called when cursor is pinned.
-    pool = _make_poll_pool()
+    # Config conn + a persist-target conn (the cursor now advances, so
+    # _persist_poll_cursor performs a second acquire()).
+    pool = _make_poll_pool(_make_conn())
     http = AsyncMock(spec=httpx.AsyncClient)
 
     bad_item = _zotero_item(key="BADURL99", doi="", url="ftp://not-http")
@@ -1148,9 +1150,10 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
         result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
 
     assert result["status"] == "ok", result
-    # Cursor must be pinned because the bad item landed in failed_keys.
-    assert result["version_from"] == result["version_to"], (
-        f"Cursor must not advance when a parse failure occurs: {result}"
+    # A pure parse failure (no ingest failure) must not pin the cursor —
+    # otherwise a single permanently-malformed item wedges the sync forever.
+    assert result["version_to"] != result["version_from"], (
+        f"Cursor must advance past a permanently-malformed item: {result}"
     )
     # The valid item must still be enqueued despite the bad item.
     assert "GOODITEM" in enqueued_keys, f"Valid item was not enqueued: {enqueued_keys}"

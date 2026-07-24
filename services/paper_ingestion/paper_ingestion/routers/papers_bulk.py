@@ -4,12 +4,13 @@ import logging
 import uuid
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, assert_papers_ownership
 from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion import papers_service
 from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.job_errors import classify_bulk_error
 from paper_ingestion.models import (
     BulkActionRequest,
     BulkActionResponse,
@@ -26,33 +27,6 @@ router = APIRouter(
         500: {"model": ErrorResponse},
     },
 )
-
-
-def _classify_bulk_error(exc: Exception) -> str:
-    """Map exceptions to safe, operator-diagnostic response codes.
-
-    Raw exception messages (asyncpg constraint names, SQL text) are never
-    forwarded to the caller — only the code string is returned.
-    """
-    if isinstance(exc, HTTPException):
-        if exc.status_code == 404:
-            return "not_found"
-        if exc.status_code == 403:
-            return "forbidden"
-        if exc.status_code == 409:
-            return "conflict"
-        return "http_error"
-    if isinstance(exc, asyncpg.UniqueViolationError):
-        return "already_in_state"
-    if isinstance(exc, asyncpg.ForeignKeyViolationError):
-        return "not_found"
-    if isinstance(exc, asyncpg.NotNullViolationError | asyncpg.CheckViolationError):
-        return "constraint_error"
-    if isinstance(exc, asyncpg.PostgresError):
-        return "db_error"
-    if isinstance(exc, ValueError):
-        return "invalid_action"
-    return "unknown_error"
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +72,7 @@ async def bulk_action_papers(
                         paper_id,
                         body.action,
                     )
-                    failed.append({"paper_id": paper_id, "error": _classify_bulk_error(exc)})
+                    failed.append({"paper_id": paper_id, "error": classify_bulk_error(exc)})
 
     for pid in hard_deleted_ids:
         try:

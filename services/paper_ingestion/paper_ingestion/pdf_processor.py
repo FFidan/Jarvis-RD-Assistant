@@ -84,6 +84,51 @@ def check_pdf_path_safe(pdf_path: Path, storage: Path | str = _STORAGE_DEFAULT) 
     return True
 
 
+def resolve_safe_pdf_path(
+    local_path: str | None,
+    storage: Path | str = _STORAGE_DEFAULT,  # type: ignore[assignment]
+    *,
+    require_exists: bool = True,
+) -> Path | None:
+    """Resolve and validate a paper's stored PDF path in one call.
+
+    Consolidates the repeated ``Path(local_path)`` + `check_pdf_path_safe`
+    + ``.exists()`` triplet duplicated across every job/pipeline call site
+    that reads a paper's persisted ``pdf_local_path``.
+
+    Parameters
+    ----------
+    local_path : str | None
+        The paper's stored ``pdf_local_path`` value, or ``None``/empty when unset.
+    storage : Path | str, optional
+        The storage root the resolved path must not escape. Passed through to
+        `check_pdf_path_safe`; when omitted the live module-level
+        `PDF_STORAGE_PATH` is used. Callers that hold their own (possibly
+        monkeypatched, e.g. in tests) copy of ``PDF_STORAGE_PATH`` should
+        pass it explicitly, exactly as they previously did with
+        `check_pdf_path_safe`.
+    require_exists : bool, default True
+        When ``True``, also require the resolved path to exist on disk. Pass
+        ``False`` for callers that intentionally defer existence checking to
+        a later processing stage.
+
+    Returns
+    -------
+    Path | None
+        The resolved, validated path, or ``None`` when `local_path` is
+        unset, escapes `storage`, or (when `require_exists`) is absent
+        from disk.
+    """
+    if not local_path:
+        return None
+    pdf_path = Path(local_path)
+    if not check_pdf_path_safe(pdf_path, storage):
+        return None
+    if require_exists and not pdf_path.exists():
+        return None
+    return pdf_path
+
+
 def _lock_path_matches_fd(directory_fd: int, lock_fd: int) -> bool:
     """Return whether the stable-root lock path still names ``lock_fd``."""
     opened = os.fstat(lock_fd)

@@ -564,13 +564,19 @@ async def _persist_poll_cursor(
 
 @dataclass(frozen=True, slots=True)
 class _PollBatch:
-    """Per-cycle counters produced by processing a fetched batch of Zotero items."""
+    """Per-cycle counters produced by processing a fetched batch of Zotero items.
+
+    ``parse_failed_keys`` (permanently malformed — will never succeed on retry)
+    and ``ingest_failed_keys`` (transient — may succeed on retry) are tracked
+    separately so the cursor-pin decision can distinguish them.
+    """
 
     new_count: int
     linked_count: int
     enqueued_count: int
     capped: bool
-    failed_keys: list[str]
+    parse_failed_keys: list[str]
+    ingest_failed_keys: list[str]
 
 
 async def _process_poll_batch(
@@ -584,7 +590,8 @@ async def _process_poll_batch(
     linked_count = 0
     enqueued_count = 0
     capped = False  # True when we hit MAX_ENQUEUE_PER_SYNC mid-batch.
-    failed_keys: list[str] = []
+    parse_failed_keys: list[str] = []
+    ingest_failed_keys: list[str] = []
 
     for outer_item in items:
         if enqueued_count >= MAX_ENQUEUE_PER_SYNC:
@@ -609,10 +616,11 @@ async def _process_poll_batch(
             continue
 
         # Not linked → project into ingestion inputs.  Malformed items return
-        # None from the safe helper (parse failure logged there).
+        # None from the safe helper (parse failure logged there) — permanent,
+        # so they must not pin the cursor (see poll_zotero_library).
         parsed = _safe_parse_zotero_item(data, outer_item, item_key, namespace)
         if parsed is None:
-            failed_keys.append(item_key)
+            parse_failed_keys.append(item_key)
             continue
 
         try:
@@ -630,9 +638,11 @@ async def _process_poll_batch(
                 parsed.item_key,
                 exc_info=True,
             )
-            failed_keys.append(parsed.item_key)
+            ingest_failed_keys.append(parsed.item_key)
 
-    return _PollBatch(new_count, linked_count, enqueued_count, capped, failed_keys)
+    return _PollBatch(
+        new_count, linked_count, enqueued_count, capped, parse_failed_keys, ingest_failed_keys
+    )
 
 
 async def poll_zotero_library(
@@ -677,15 +687,23 @@ async def poll_zotero_library(
 
     batch = await _process_poll_batch(db_pool, items, polling_user_id, namespace)
 
-    # If any items failed, log a summary error and pin the cursor so the next
-    # poll retries the entire batch from the same starting version.
-    if batch.failed_keys:
+    # Ingest (transient) failures pin the cursor so the next poll retries
+    # them from the same starting version. Parse (permanent) failures never
+    # succeed on retry, so — when no ingest failure also occurred — they must
+    # not poison the cursor forever: log and let it advance past them.
+    if batch.ingest_failed_keys:
         logger.error(
-            "Zotero poll: %d items failed; first 5: %s",
-            len(batch.failed_keys),
-            batch.failed_keys[:5],
+            "Zotero poll: %d item(s) failed to ingest; first 5: %s",
+            len(batch.ingest_failed_keys),
+            batch.ingest_failed_keys[:5],
         )
         new_version = last_version
+    elif batch.parse_failed_keys:
+        logger.warning(
+            "Zotero poll: skipping %d permanently-malformed item(s): %s",
+            len(batch.parse_failed_keys),
+            batch.parse_failed_keys[:5],
+        )
 
     # Persist updated library version.
     # If the enqueue cap was hit, do NOT advance the cursor — the next sync

@@ -17,17 +17,17 @@ import pytest
 # but NOT installed into sys.modules here (that would pollute collection).
 # ---------------------------------------------------------------------------
 
-# Import the real path-traversal guard so the stubbed pdf_processor module
+# Import the real path-resolution guard so the stubbed pdf_processor module
 # exposes genuine traversal semantics (a bare MagicMock attribute would always
 # be truthy and silently disable the guard).
-from paper_ingestion.pdf_processor import check_pdf_path_safe as _real_check_pdf_path_safe
+from paper_ingestion.pdf_processor import resolve_safe_pdf_path as _real_resolve_safe_pdf_path
 from paper_ingestion.services.pdf_workflow import (
     PDFRecordMissingError as _RealPDFRecordMissingError,
 )
 
 _pdf_proc_stub = MagicMock()
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
-_pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
+_pdf_proc_stub.resolve_safe_pdf_path = _real_resolve_safe_pdf_path
 
 _main_stub = MagicMock()
 _workflow_stub = MagicMock()
@@ -48,7 +48,7 @@ def _install_stubs(monkeypatch):
     # Reset shared stubs so mutations from previous tests don't bleed through.
     _pdf_proc_stub.reset_mock()
     _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
-    _pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
+    _pdf_proc_stub.resolve_safe_pdf_path = _real_resolve_safe_pdf_path
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
     _workflow_stub.PDFRecordMissingError = _RealPDFRecordMissingError
@@ -939,9 +939,40 @@ async def test_process_library_reports_reconciliation_probe_failure_as_retryable
     )
 
     assert result["status"] == "partial"
-    assert result["errors"] == [
-        {"paper_id": 72, "stage": "reconcile", "error": "qdrant unavailable"}
-    ]
+    # The raw exception message ("qdrant unavailable") must never reach the
+    # caller — only the classified code crosses the job boundary.
+    assert result["errors"] == [{"paper_id": 72, "stage": "reconcile", "error": "unknown_error"}]
+
+
+@pytest.mark.asyncio
+async def test_process_library_classifies_asyncpg_errors_not_raw_message(tmp_path, monkeypatch):
+    """A DB constraint violation during a paper stage is reported as its classified
+    code (sanitization applies to library-stage errors, not just bulk actions)."""
+    import asyncpg  # noqa: PLC0415
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _papers_process_library_job  # noqa: PLC0415
+
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    reconcile = AsyncMock(
+        side_effect=asyncpg.UniqueViolationError("duplicate key value violates unique constraint")
+    )
+    _install_library_service_stubs(
+        monkeypatch,
+        run_process_pdf=AsyncMock(),
+        reconcile_embeddings=reconcile,
+    )
+    rows = [_lib_row(73, needs_process=False, needs_reconcile=True)]
+    pool = _make_library_pool(rows, update_rows=[], user_id=4)
+
+    result = await _papers_process_library_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"user_id": 4, "summarize": False},
+        ctx=_make_ctx(),
+    )
+
+    assert result["status"] == "partial"
+    assert result["errors"] == [{"paper_id": 73, "stage": "reconcile", "error": "already_in_state"}]
 
 
 @pytest.mark.asyncio

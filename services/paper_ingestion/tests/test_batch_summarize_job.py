@@ -122,7 +122,10 @@ async def test_batch_summarize_partial_failure(monkeypatch):
     assert result["failed"] == 1
     assert len(result["errors"]) == 1
     assert "Paper 2" in result["errors"][0]
-    assert "boom" in result["errors"][0]
+    # The raw exception message ("boom") must never reach the caller — only
+    # the classified code crosses the job boundary.
+    assert "unknown_error" in result["errors"][0]
+    assert "boom" not in result["errors"][0]
 
 
 @pytest.mark.asyncio
