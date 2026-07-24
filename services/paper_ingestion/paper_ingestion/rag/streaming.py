@@ -251,7 +251,14 @@ async def prepare_single_paper_rag(
     """
     library_paper_ids: list[int] | None = None
     async with db_pool.acquire() as conn:
-        paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
+        if user_id is None:
+            paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
+        else:
+            paper = await conn.fetchrow(
+                f"SELECT p.id, p.title FROM papers p WHERE p.id = $1 AND {paper_visible_sql(2)}",
+                paper_id,
+                user_id,
+            )
         # Fetch exact caller membership for private-vector filtering. Persisted
         # public vectors remain retrievable regardless of who embedded them.
         if paper and user_id is not None:

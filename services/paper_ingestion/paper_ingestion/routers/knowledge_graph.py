@@ -205,49 +205,33 @@ async def list_entities(
 
     async with db_pool.acquire() as conn:
         if entity_type:
-            if user_id is not None:
-                rows = await conn.fetch(
-                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
-                              e.description, e.metadata, e.embedding_id,
-                              {visible_entity_paper_count_sql("e.id", 4)} AS paper_count,
-                              e.created_at
-                       FROM entities e
-                       WHERE e.entity_type = $1
-                         AND {visible_entity_paper_count_sql("e.id", 4)} > 0
-                       ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
-                    entity_type,
-                    limit,
-                    offset,
-                    user_id,
-                )
-            else:
-                rows = await conn.fetch(
-                    """SELECT * FROM entities WHERE entity_type = $1
-                       ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
-                    entity_type,
-                    limit,
-                    offset,
-                )
+            rows = await conn.fetch(
+                f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                          e.description, e.metadata, e.embedding_id,
+                          {visible_entity_paper_count_sql("e.id", 4)} AS paper_count,
+                          e.created_at
+                   FROM entities e
+                   WHERE e.entity_type = $1
+                     AND {visible_entity_paper_count_sql("e.id", 4)} > 0
+                   ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
+                entity_type,
+                limit,
+                offset,
+                user_id,
+            )
         else:
-            if user_id is not None:
-                rows = await conn.fetch(
-                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
-                              e.description, e.metadata, e.embedding_id,
-                              {visible_entity_paper_count_sql("e.id", 3)} AS paper_count,
-                              e.created_at
-                       FROM entities e
-                       WHERE {visible_entity_paper_count_sql("e.id", 3)} > 0
-                       ORDER BY paper_count DESC LIMIT $1 OFFSET $2""",
-                    limit,
-                    offset,
-                    user_id,
-                )
-            else:
-                rows = await conn.fetch(
-                    "SELECT * FROM entities ORDER BY paper_count DESC LIMIT $1 OFFSET $2",
-                    limit,
-                    offset,
-                )
+            rows = await conn.fetch(
+                f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                          e.description, e.metadata, e.embedding_id,
+                          {visible_entity_paper_count_sql("e.id", 3)} AS paper_count,
+                          e.created_at
+                   FROM entities e
+                   WHERE {visible_entity_paper_count_sql("e.id", 3)} > 0
+                   ORDER BY paper_count DESC LIMIT $1 OFFSET $2""",
+                limit,
+                offset,
+                user_id,
+            )
 
     return [
         EntityResponse(
@@ -274,69 +258,48 @@ async def get_entity_detail(
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
     async with db_pool.acquire() as conn:
-        if user_id is not None:
-            entity = await conn.fetchrow(
-                f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
-                           e.description, e.metadata, e.embedding_id,
-                           {visible_entity_paper_count_sql("e.id", 2)} AS paper_count,
-                           e.created_at
-                    FROM entities e
-                    WHERE e.id = $1
-                      AND {visible_entity_paper_count_sql("e.id", 2)} > 0""",
-                entity_id,
-                user_id,
-            )
-        else:
-            entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
+        entity = await conn.fetchrow(
+            f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                       e.description, e.metadata, e.embedding_id,
+                       {visible_entity_paper_count_sql("e.id", 2)} AS paper_count,
+                       e.created_at
+                FROM entities e
+                WHERE e.id = $1
+                  AND {visible_entity_paper_count_sql("e.id", 2)} > 0""",
+            entity_id,
+            user_id,
+        )
         if not entity:
             raise HTTPException(404, f"Entity {entity_id} not found")
 
         # Authenticated edges require a surviving caller-visible source paper.
-        if user_id is not None:
-            rels = await conn.fetch(
-                f"""SELECT * FROM entity_relationships er
-                   WHERE (source_entity_id = $1 OR target_entity_id = $1)
-                     AND EXISTS (
-                         SELECT 1 FROM papers p
-                         WHERE p.id = er.paper_id
-                           AND {paper_visible_sql(2)}
-                     )
-                   ORDER BY confidence DESC""",
-                entity_id,
-                user_id,
-            )
-        else:
-            rels = await conn.fetch(
-                """SELECT * FROM entity_relationships
-                   WHERE source_entity_id = $1 OR target_entity_id = $1
-                   ORDER BY confidence DESC""",
-                entity_id,
-            )
+        rels = await conn.fetch(
+            f"""SELECT * FROM entity_relationships er
+               WHERE (source_entity_id = $1 OR target_entity_id = $1)
+                 AND EXISTS (
+                     SELECT 1 FROM papers p
+                     WHERE p.id = er.paper_id
+                       AND {paper_visible_sql(2)}
+                 )
+               ORDER BY confidence DESC""",
+            entity_id,
+            user_id,
+        )
 
         # Mention rows are extraction attribution. Scope their papers through
         # the same persisted public-or-library policy and coalesce duplicate
         # extraction rows per paper.
-        if user_id is not None:
-            papers = await conn.fetch(
-                f"""SELECT p.id, p.title, MAX(pe.mention_count) AS mention_count
-                   FROM paper_entities pe
-                   JOIN papers p ON p.id = pe.paper_id
-                   WHERE pe.entity_id = $1
-                     AND {paper_visible_sql(2)}
-                   GROUP BY p.id, p.title
-                   ORDER BY mention_count DESC""",
-                entity_id,
-                user_id,
-            )
-        else:
-            papers = await conn.fetch(
-                """SELECT p.id, p.title, pe.mention_count
-                   FROM paper_entities pe
-                   JOIN papers p ON p.id = pe.paper_id
-                   WHERE pe.entity_id = $1
-                   ORDER BY pe.mention_count DESC""",
-                entity_id,
-            )
+        papers = await conn.fetch(
+            f"""SELECT p.id, p.title, MAX(pe.mention_count) AS mention_count
+               FROM paper_entities pe
+               JOIN papers p ON p.id = pe.paper_id
+               WHERE pe.entity_id = $1
+                 AND {paper_visible_sql(2)}
+               GROUP BY p.id, p.title
+               ORDER BY mention_count DESC""",
+            entity_id,
+            user_id,
+        )
 
     return EntityDetailResponse(
         entity=EntityResponse(
