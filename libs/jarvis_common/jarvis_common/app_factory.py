@@ -51,7 +51,7 @@ from jarvis_common.auth import (
     refresh_api_key_cache,
     validate_production_config,
 )
-from jarvis_common.config import get_jarvis_common_settings
+from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH, get_jarvis_common_settings
 from jarvis_common.correlation_middleware import CorrelationIdMiddleware
 from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
 from jarvis_common.db_helpers import init_pg_connection, invalidate_effective_num_ctx_cache
@@ -71,8 +71,6 @@ from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
-
-_POSTGRES_SECRET_PATH = "/run/secrets/postgres_password"
 
 # instructor.Mode member that emits grammar-constrained decoding
 STRUCTURED_DECODING_MODE = "JSON_SCHEMA"
@@ -98,12 +96,12 @@ def build_database_url() -> str:
     """
     from pathlib import Path  # noqa: PLC0415
 
-    secret_file = Path(_POSTGRES_SECRET_PATH)
+    secret_file = Path(POSTGRES_PASSWORD_SECRET_PATH)
     if secret_file.is_file():
         password = secret_file.read_text().strip()
         if not password:
             raise RuntimeError(
-                f"FATAL: {_POSTGRES_SECRET_PATH} exists but is empty — "
+                f"FATAL: {POSTGRES_PASSWORD_SECRET_PATH} exists but is empty — "
                 "cannot construct DATABASE_URL"
             )
         settings = get_jarvis_common_settings()
@@ -117,7 +115,7 @@ def build_database_url() -> str:
         return url
 
     raise RuntimeError(
-        f"Cannot build DATABASE_URL: {_POSTGRES_SECRET_PATH} is absent and "
+        f"Cannot build DATABASE_URL: {POSTGRES_PASSWORD_SECRET_PATH} is absent and "
         "DATABASE_URL is not set. "
         "In Docker, ensure the postgres_password secret is mounted. "
         "In tests, set the DATABASE_URL env var."

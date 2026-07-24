@@ -20,7 +20,7 @@ from procrastinate.contrib.aiopg import AiopgConnector
 
 from jarvis_common._ctx_shim import make_ctx_shim
 from jarvis_common.event_log import log_event
-from jarvis_common.jobs import JobError
+from jarvis_common.jobs import JobError, queue_for_kind
 from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.maintenance import OutboundEgressBlockedError, skip_for_maintenance
 from jarvis_common.settings import get_jobs_settings
@@ -343,6 +343,50 @@ def register_tasks(
     registry.register_tasks(mapping, queue)
 
 
+def register_service_tasks(
+    procrastinate_app: procrastinate.App,
+    mapping: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
+    *,
+    service_label: str,
+) -> None:
+    """Register one service's kind→handler mapping with fail-fast startup guards.
+
+    Shared entrypoint for each service's ``register_<service>_tasks``. Derives the
+    single consume-queue from the handled kinds (via :func:`queue_for_kind`),
+    registers the handlers, then verifies every kind landed in ``app.tasks``.
+
+    Parameters
+    ----------
+    procrastinate_app : procrastinate.App
+        Application the tasks are registered on. Must be called during lifespan
+        startup, before the worker starts.
+    mapping : dict[str, Callable]
+        Task kind to async handler mapping for a single service.
+    service_label : str
+        Caller name threaded into both guard errors (e.g.
+        ``"register_paper_ingestion_tasks"``).
+
+    Raises
+    ------
+    RuntimeError
+        If the handled kinds span more than one owner queue, or if any kind is
+        missing from ``app.tasks`` after registration (fail-fast at startup,
+        ``-O``-proof — a bare assert would be stripped under ``python -O``).
+    """
+    queues = {queue_for_kind(kind) for kind in mapping}
+    if len(queues) != 1:
+        raise RuntimeError(
+            f"{service_label}: KIND_TO_HANDLER spans multiple "
+            f"owner queues {sorted(queues)}; each kind must map to one service"
+        )
+    (queue,) = queues
+    register_tasks(procrastinate_app, mapping=mapping, queue=queue)
+
+    missing = [kind for kind in mapping if kind not in procrastinate_app.tasks]
+    if missing:
+        raise RuntimeError(f"{service_label}: failed to register kinds: {missing}")
+
+
 # ---------------------------------------------------------------------------
 # Test-only: noop.test
 # ---------------------------------------------------------------------------
@@ -392,5 +436,6 @@ __all__ = [
     "TaskRegistry",
     "set_dependencies",
     "register_tasks",
+    "register_service_tasks",
     "KIND_TO_TASK",
 ]

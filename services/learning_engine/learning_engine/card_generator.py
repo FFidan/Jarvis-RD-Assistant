@@ -27,6 +27,7 @@ from jarvis_common.llm_client import (
     call_llm_structured,
     observe,
 )
+from jarvis_common.paths import secure_path
 from jarvis_common.prompt_safety import max_input_chars, wrap_delimited
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import DictChunk, QuoteVerifier
@@ -198,11 +199,18 @@ class CardGenerator:
                 if matched_chunk and matched_chunk.get("page_number"):
                     page_num = matched_chunk["page_number"]
 
-            # Rule 7: Link to PDF page snapshot
+            # Rule 7: Link to PDF page snapshot. secure_path rejects any resolved
+            # path escaping the (already-resolved) storage root; the join stays
+            # under it for trusted int paper_id/page_num.
             snapshot_path = None
             if paper_id and isinstance(page_num, int) and page_num > 0:
-                candidate = snapshot_base_path / str(paper_id) / f"page_{page_num}.png"
-                if candidate.resolve().is_relative_to(snapshot_base_path) and candidate.exists():
+                try:
+                    candidate = secure_path(
+                        snapshot_base_path, str(paper_id), f"page_{page_num}.png"
+                    )
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate.exists():
                     snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
             # card_type is a Literal — Pydantic validated it at the LLM boundary
