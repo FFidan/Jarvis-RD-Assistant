@@ -877,17 +877,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#sourcetimeline" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SourceTimeline
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -1892,17 +1881,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#sourcetimeline" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SourceTimeline
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -1983,11 +1961,11 @@
   
 
 
-<!-- verified-against-UI: 2026-07-20 | routes: /pulse -->
+<!-- verified-against-UI: 2026-07-25 | routes: /pulse -->
 
 <h1 id="pulse">Pulse<a class="headerlink" href="#pulse" title="Permanent link">&para;</a></h1>
 <p>The <strong>Pulse</strong> page at <code>/pulse</code> shows your daily recommendation deck — a curated set of papers selected by the Pulse engine based on your configured research topics, reading history, and ratings.</p>
-<!-- screenshot: /pulse — PulseDeck showing three PulseCards with WhyPopover open on one card and a StaleBadge on another -->
+<!-- screenshot: /pulse — PulseDeck showing three PulseCards with WhyPopover open on one card, and a StaleBadge in the deck header -->
 
 <hr />
 <h2 id="the-pulse-deck">The Pulse deck<a class="headerlink" href="#the-pulse-deck" title="Permanent link">&para;</a></h2>
@@ -1998,16 +1976,13 @@
 <ul>
 <li>Paper title and authors</li>
 <li>A short relevance excerpt</li>
-<li>The <strong>StaleBadge</strong> (see below)</li>
 <li>Action buttons for rating and opening the paper</li>
 </ul>
 <p>When JARVIS has not yet learned from enough of your feedback, the deck labels its ordering as <strong>Basic ranking (learning from your feedback)</strong>. Once a learned model is available, that caption is no longer shown; the rest of the deck remains usable in either state.</p>
 <h3 id="whypopover">WhyPopover<a class="headerlink" href="#whypopover" title="Permanent link">&para;</a></h3>
 <p>Clicking the <strong>Why?</strong> indicator on a card opens the <strong>WhyPopover</strong>, which explains the relevance score for that card — which of your research topics matched, what signals drove the recommendation (e.g. topic keyword overlap, citation proximity, past ratings), and the numerical relevance score.</p>
 <h3 id="stalebadge">StaleBadge<a class="headerlink" href="#stalebadge" title="Permanent link">&para;</a></h3>
-<p>If a card was generated more than a configurable number of days ago, a <strong>StaleBadge</strong> appears on it to signal that the recommendation may not reflect your most recent reading activity or topic configuration.</p>
-<h3 id="sourcetimeline">SourceTimeline<a class="headerlink" href="#sourcetimeline" title="Permanent link">&para;</a></h3>
-<p>Below or alongside the deck, the <strong>SourceTimeline</strong> shows a chronological breakdown of when the papers in the current deck were published, giving you a sense of the recency distribution of your recommendations.</p>
+<p>If today's deck has not been regenerated and the one shown is from an earlier day, a <strong>StaleBadge</strong> appears in the deck header (not on individual cards) to signal that the recommendations may not reflect your most recent reading activity or topic configuration. Clicking it opens a sheet with per-source diagnostics and a <strong>Generate now</strong> button to request a fresh deck.</p>
 <hr />
 <h2 id="generating-a-new-deck">Generating a new deck<a class="headerlink" href="#generating-a-new-deck" title="Permanent link">&para;</a></h2>
 <p>Click the <strong>Generate new deck</strong> button to request a fresh Pulse deck. Generation runs as a <strong>background job</strong>; the page shows a progress indicator while the job is running. Depending on the number of papers in your library and the complexity of your topics, generation may take a few seconds to a minute.</p>
@@ -2017,8 +1992,8 @@
 <h2 id="rating-cards">Rating cards<a class="headerlink" href="#rating-cards" title="Permanent link">&para;</a></h2>
 <p>Each card has <strong>thumbs-up</strong> and <strong>thumbs-down</strong> rating buttons:</p>
 <ul>
-<li><strong>Thumbs up</strong> — marks the paper as relevant. It is added to your Library and the rating feeds back into the Pulse recommendation model to surface similar papers in future decks.</li>
-<li><strong>Thumbs down</strong> — marks the paper as not relevant. It is hidden from future decks. A topic that collects repeated thumbs-down (5 or more within 90 days) is dampened: its positive similarity signal is halved — never boosted — when scoring future candidates, so a topic you keep rejecting quietly stops dominating your deck.</li>
+<li><strong>Thumbs up</strong> — marks the paper as relevant. The rating feeds back into the Pulse recommendation model to surface similar papers in future decks; it does not add the paper to your Library.</li>
+<li><strong>Thumbs down</strong> — marks the paper as not relevant. It is hidden from future decks for 60 days. A topic that collects repeated thumbs-down (5 or more within 90 days) is dampened: its positive similarity signal is halved — never boosted — when scoring future candidates, so a topic you keep rejecting quietly stops dominating your deck.</li>
 <li><strong>Save</strong> — saves the paper to your Library without a quality rating.</li>
 </ul>
 <hr />

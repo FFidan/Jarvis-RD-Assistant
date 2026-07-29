@@ -1939,10 +1939,10 @@
   
 
 
-<!-- verified-against-UI: 2026-06-06 | routes: /knowledge -->
+<!-- verified-against-UI: 2026-07-25 | routes: /knowledge -->
 
 <h1 id="knowledge-graph">Knowledge Graph<a class="headerlink" href="#knowledge-graph" title="Permanent link">&para;</a></h1>
-<p>The <strong>Knowledge Graph</strong> page at <code>/knowledge</code> displays an interactive concept-level graph of entities extracted from papers in your library, rendered using Cytoscape.js.</p>
+<p>The <strong>Knowledge Graph</strong> page at <code>/knowledge</code> displays an interactive concept-level graph of entities extracted from papers visible to you — public papers plus any papers in your own library — rendered using Cytoscape.js.</p>
 <!-- screenshot: /knowledge — Cytoscape graph with EntityTypeFilter chips visible, coloured nodes, and GraphStats panel -->
 
 <hr />
@@ -1987,24 +1987,19 @@
 <h3 id="entitytypefilter">EntityTypeFilter<a class="headerlink" href="#entitytypefilter" title="Permanent link">&para;</a></h3>
 <p>A row of filter chips along the top of the graph panel lets you show or hide entity types. Selecting <strong>All</strong> resets the filter to show every type. Deselecting a type removes those nodes (and their edges) from the visible graph.</p>
 <h3 id="min-paper-count-slider">Min-paper-count slider<a class="headerlink" href="#min-paper-count-slider" title="Permanent link">&para;</a></h3>
-<p>A slider with a range of <strong>1–10</strong> filters nodes by how many papers they appear in. Dragging the slider to the right hides entities that appear in fewer papers, reducing clutter and surfacing the most widely-attested concepts in your library.</p>
+<p>A slider with a range of <strong>1–10</strong> filters nodes by how many papers they appear in. Dragging the slider to the right hides entities that appear in fewer papers, reducing clutter and surfacing the most widely-attested concepts across the papers visible to you.</p>
 <h3 id="graphcontrols">GraphControls<a class="headerlink" href="#graphcontrols" title="Permanent link">&para;</a></h3>
-<p>Standard graph interaction controls:</p>
-<ul>
-<li><strong>Fit</strong> — re-centres and re-scales the graph to fit all visible nodes in the viewport.</li>
-<li><strong>Reset</strong> — resets the layout to the default.</li>
-<li><strong>Zoom in / Zoom out</strong> — step-zoom buttons.</li>
-</ul>
-<p>Pan and zoom are also available via mouse or trackpad gestures directly on the graph canvas.</p>
+<p>A <strong>Layout</strong> dropdown selects one of four layout algorithms: <strong>Force-directed</strong> (cose), <strong>Breadth-first</strong>, <strong>Circle</strong>, or <strong>Concentric</strong>.</p>
+<p>Pan and zoom are available via mouse or trackpad gestures directly on the graph canvas.</p>
 <h3 id="kgqueryinput">KGQueryInput<a class="headerlink" href="#kgqueryinput" title="Permanent link">&para;</a></h3>
-<p>A text input that filters the graph to nodes whose label contains the query string. Matched nodes are highlighted; unmatched nodes are dimmed. Clear the input to return to the full (filtered) graph.</p>
+<p>A natural-language query box. Type a question such as "What methods are used on ImageNet?" and submit it to search the knowledge graph; matching relationships, comparisons, or entities come back as a list of result cards below the input, rather than as a filter or highlight applied to the graph itself. If nothing matches, a "No results found for this query" message is shown instead.</p>
 <hr />
 <h2 id="graph-statistics">Graph statistics<a class="headerlink" href="#graph-statistics" title="Permanent link">&para;</a></h2>
 <p><strong>GraphStats</strong> — a summary panel showing the total number of nodes and edges currently visible, broken down by entity type.</p>
 <p><strong>EntityBreakdown</strong> — a list or chart showing how many entities of each type exist in the full (unfiltered) graph, helping you understand the composition of your knowledge graph.</p>
 <hr />
 <h2 id="batch-extraction">Batch extraction<a class="headerlink" href="#batch-extraction" title="Permanent link">&para;</a></h2>
-<p>If your library contains papers that have not yet had entities extracted, a <strong>batch-extract prompt</strong> appears on an otherwise empty graph. Clicking it triggers the entity extraction pipeline for all unprocessed papers. The graph populates as extraction jobs complete.</p>
+<p>If unprocessed papers exist, an admin-only <strong>Batch Extract Entities</strong> button appears on an otherwise empty graph. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities. The graph populates as extraction jobs complete.</p>
 <p>You can also trigger extraction for individual papers from the <a href="../paper-detail/">Paper Detail</a> page (the Actions rail → Extract Entities).</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>

@@ -1961,7 +1961,7 @@
   
 
 
-<!-- verified-against-UI: 2026-05-18 | routes: /analytics -->
+<!-- verified-against-UI: 2026-07-25 | routes: /analytics -->
 
 <h1 id="analytics">Analytics<a class="headerlink" href="#analytics" title="Permanent link">&para;</a></h1>
 <p>The <strong>Analytics</strong> page at <code>/analytics</code> provides charts and statistics about your reading activity, library growth, and system usage over time.</p>
@@ -1983,10 +1983,6 @@
 <td>Last 7 days</td>
 </tr>
 <tr>
-<td>14d</td>
-<td>Last 14 days</td>
-</tr>
-<tr>
 <td>30d</td>
 <td>Last 30 days</td>
 </tr>
@@ -1996,15 +1992,16 @@
 </tr>
 </tbody>
 </table>
+<p>A <strong>custom</strong> field next to the presets accepts any whole number of days from 1 to 365.</p>
 <p>Changing the date range updates all charts and the KPI band simultaneously.</p>
 <hr />
 <h2 id="kpi-band">KPI band<a class="headerlink" href="#kpi-band" title="Permanent link">&para;</a></h2>
-<p>The <strong>KpiBand</strong> shows a row of key-performance-indicator tiles summarising the selected period at a glance. Typical tiles include papers added, cards reviewed, and Pulse decks generated.</p>
+<p>The <strong>KpiBand</strong> shows three key-performance-indicator tiles summarising the selected period at a glance: <strong>Papers Read</strong>, <strong>Focus Hours</strong>, and <strong>Cards Reviewed</strong>. Papers Read and Focus Hours each carry a trend indicator comparing the tile to the previous period. Cards Reviewed shows your current review streak while one is running, and falls back to the same period-on-period trend when it is not.</p>
 <hr />
 <h2 id="charts">Charts<a class="headerlink" href="#charts" title="Permanent link">&para;</a></h2>
 <p>All charts use <strong>Recharts</strong>. Each chart is scoped to the selected date range.</p>
 <h3 id="activitychart">ActivityChart<a class="headerlink" href="#activitychart" title="Permanent link">&para;</a></h3>
-<p>A time-series chart showing your daily activity — papers saved, notes added, reviews completed — over the selected window. Use this to spot gaps in your research cadence or identify productive periods.</p>
+<p>A time-series chart showing your daily activity across three series — <strong>Papers Read</strong>, <strong>Cards Reviewed</strong>, and <strong>Tasks Completed</strong> — over the selected window. Use this to spot gaps in your research cadence or identify productive periods.</p>
 <h3 id="retentionchart-fsrs">RetentionChart (FSRS)<a class="headerlink" href="#retentionchart-fsrs" title="Permanent link">&para;</a></h3>
 <p>A chart showing your spaced-repetition retention rate over time, derived from FSRS review ratings. A higher retention rate indicates that the review schedule is keeping facts accessible.</p>
 <h3 id="papersbysourcechart">PapersBySourceChart<a class="headerlink" href="#papersbysourcechart" title="Permanent link">&para;</a></h3>
@@ -2020,7 +2017,6 @@
 <ul>
 <li><a href="../learning-cards/">Learning Cards</a> — the FSRS review system whose ratings feed the RetentionChart and ReviewsByRatingChart.</li>
 <li><a href="../research-feed/">Research Feed &amp; Library</a> — the library whose growth is reflected in the PapersBySourceChart and PapersByStatusChart.</li>
-<li><a href="../pulse/">Pulse</a> — Pulse decks generated per period appear in the KPI band.</li>
 <li><a href="../settings/">Settings</a> — configure LLM providers whose cost is tracked in LlmCostChart.</li>
 </ul>
 

@@ -3497,10 +3497,9 @@ you override <code>JARVIS_NET_SUBNET</code>, the allowlist follows it</strong> �
 <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> explicitly if the bot reaches the services from
 some other network. (The bare code default <code>127.0.0.0/8</code> is loopback-only and
 does <em>not</em> cover the jarvis bridge — the compose stack overrides it.)</p>
-<p><strong>Ownership migration (0092).</strong> On first startup after upgrade, migration 0092
-re-assigns any pre-existing product rows with a NULL owner to the single admin
-account. This is automatic and non-destructive; it only runs when exactly one
-admin user exists (the normal single-tenant state).</p>
+<p><strong>Ownership backfill.</strong> The NULL-owner backfill for pre-existing product rows
+is part of the schema-101 baseline in <code>db/init.sql</code>, not a startup migration.
+The only startup ownership migration is 0105, described next.</p>
 <p><strong>Instance-owner migration (0105).</strong> An upgraded instance with exactly one live
 administrator assigns that account as the owner automatically. An instance with
 two or more live administrators remains deliberately unresolved. After startup,
@@ -3619,12 +3618,12 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <tr>
 <td>Settings → "Models &amp; Preferences" shows "No config entries"</td>
 <td>DB initialized before default config rows were seeded</td>
-<td><code>docker compose restart paper_ingestion</code>, then verify: <code>docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"</code> — expect 3 rows.</td>
+<td><code>docker compose restart paper_ingestion</code>, then verify: <code>docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"</code> — expect at least the model rows <code>llm.smart_model</code> and <code>llm.fast_model</code>. Ollama-backed roles add context-size rows alongside them, both deployment-wide (<code>llm.smart_num_ctx</code>) and per-machine (<code>llm.&lt;machine_id&gt;.smart_num_ctx</code>), so the exact number of keys varies with the deployment. An empty result means the seed did not run.</td>
 </tr>
 <tr>
 <td>Selecting a model returns HTTP 400 "LiteLLM config is read-only"</td>
 <td>Model not pulled or config read-only</td>
-<td>Pull the model from Settings → Models first. The default smart model is <code>qwen3:8b</code> (16 GB VRAM tier).</td>
+<td>Pull the model from Settings → Models first. Setup selects the smart model for the detected <a href="../manual/hardware-and-models/#hardware-tiers-and-default-models">hardware tier</a>; a manually copied <code>.env.example</code> uses <code>qwen3:8b</code> only as its template fallback.</td>
 </tr>
 <tr>
 <td>Pulse generates 0 cards but job shows "done"</td>
@@ -3649,7 +3648,7 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <tr>
 <td><code>docker compose build</code>/<code>up</code> fails with "no space left on device" during install</td>
 <td>Docker's data root ran out of space</td>
-<td>Check the path printed by <code>docker info -f '{{ .DockerRootDir }}'</code> and free or add space through the host's Docker storage controls. Then re-run <code>./setup.sh</code>; already downloaded layers are reused.</td>
+<td>Default installs require about <strong>27–54 GB</strong> for images and tier-selected models; custom models may require more. Run <code>./setup.sh --check</code>, inspect the data-root path it reports, and free or add space through the host's Docker storage controls. Then re-run setup; already downloaded layers are reused.</td>
 </tr>
 <tr>
 <td><code>docker compose build</code> prints <code>pull access denied for jarvis/paper_ingestion</code> (or a sibling service) before building</td>

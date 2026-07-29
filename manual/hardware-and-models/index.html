@@ -1889,8 +1889,8 @@ models</strong>.</p>
 <table>
 <thead>
 <tr>
-<th>VRAM</th>
-<th>Example hardware</th>
+<th>Setup bucket</th>
+<th>Detected VRAM</th>
 <th>Main model (smart)</th>
 <th>Quick model (fast)</th>
 <th>Embedding model (embed)</th>
@@ -1898,56 +1898,68 @@ models</strong>.</p>
 </thead>
 <tbody>
 <tr>
-<td>CPU / &lt; 4 GB</td>
-<td>No GPU, or very small GPU</td>
-<td><code>qwen3:4b</code></td>
-<td><code>qwen3:4b</code></td>
-<td><code>qwen3-embedding:4b</code></td>
-</tr>
-<tr>
-<td>4–9 GB</td>
-<td>GTX 1060 8 GB</td>
-<td><code>qwen3:4b</code></td>
+<td><code>cpu</code></td>
+<td>No usable GPU</td>
+<td><code>qwen3:1.7b</code></td>
 <td><code>qwen3:4b</code></td>
 <td><code>qwen3-embedding:4b</code></td>
 </tr>
 <tr>
-<td>10–19 GB</td>
-<td>RTX 3080 10 GB · RTX 4070 · 16 GB workstation</td>
-<td><code>qwen3:8b</code></td>
+<td><code>lt-8</code></td>
+<td>&lt; 8 GB</td>
+<td><code>qwen3:1.7b</code></td>
 <td><code>qwen3:4b</code></td>
 <td><code>qwen3-embedding:4b</code></td>
 </tr>
 <tr>
-<td>20–39 GB</td>
-<td>RTX 3090 · A10 24 GB</td>
+<td><code>8-16</code></td>
+<td>8 to &lt; 16 GB</td>
+<td><code>qwen2.5:7b-instruct</code></td>
+<td><code>qwen3:4b</code></td>
+<td><code>qwen3-embedding:4b</code></td>
+</tr>
+<tr>
+<td><code>16-24</code></td>
+<td>16 to &lt; 24 GB</td>
+<td><code>qwen2.5:7b-instruct</code></td>
+<td><code>qwen3:4b</code></td>
+<td><code>qwen3-embedding:4b</code></td>
+</tr>
+<tr>
+<td><code>24-48</code></td>
+<td>24 to &lt; 48 GB</td>
 <td><code>qwen3:14b</code></td>
 <td><code>qwen3:4b</code></td>
 <td><code>qwen3-embedding:4b</code></td>
 </tr>
 <tr>
-<td>≥ 40 GB</td>
-<td>A40 · 48 GB-class GPU</td>
+<td><code>ge-48</code></td>
+<td>≥ 48 GB</td>
 <td><code>qwen3:30b-a3b</code></td>
 <td><code>qwen3:4b</code></td>
 <td><code>qwen3-embedding:4b</code></td>
 </tr>
 </tbody>
 </table>
+<p>The default cold-install requirement across these tier-selected sets and the
+supported pull/build paths is <strong>27–54 GB</strong>. Run <code>./setup.sh --check</code> for the
+selected host and image path; custom models may require more.</p>
 <p><strong>Main model (smart)</strong> — writes summaries, cards, and Ask answers.<br />
 <strong>Quick model (fast)</strong> — scores and triages incoming papers.<br />
 <strong>Embedding model (embed)</strong> — powers semantic search; it is fixed to the dimension of
 your Qdrant collection and changing it requires re-indexing your library.</p>
 <h3 id="what-to-expect">What to expect<a class="headerlink" href="#what-to-expect" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>CPU / &lt; 4 GB:</strong> This tier is supported, but first-paper analysis can take
+<li><strong>CPU / &lt; 8 GB:</strong> This tier is supported, but first-paper analysis can take
   tens of minutes for a long paper.</li>
-<li><strong>10–19 GB:</strong> A roughly 60,000-character paper took about 45 seconds on the
-  16 GB reference card. Results vary with model, context, and driver.</li>
-<li><strong>20–39 GB:</strong> Setup recommends <code>qwen3:14b</code> while retaining the smaller quick
+<li><strong>8–24 GB:</strong> Setup selects <code>qwen2.5:7b-instruct</code>; observed speed depends on
+  the device, context, and driver.</li>
+<li><strong>24–47 GB:</strong> Setup recommends <code>qwen3:14b</code> while retaining the smaller quick
   model and embedder.</li>
-<li><strong>≥ 40 GB:</strong> Setup recommends <code>qwen3:30b-a3b</code>. The reference validation used
+<li><strong>≥ 48 GB:</strong> Setup recommends <code>qwen3:30b-a3b</code>. The reference validation used
   a 48 GB card and a 16k context window.</li>
+<li>A roughly 60,000-character paper took about 45 seconds on the
+  16 GB reference card. Results vary with model, context, and driver.</li>
 </ul>
 <hr />
 <h2 id="gpu-vendor-support">GPU vendor support<a class="headerlink" href="#gpu-vendor-support" title="Permanent link">&para;</a></h2>

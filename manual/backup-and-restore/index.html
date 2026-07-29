@@ -2296,9 +2296,15 @@ format.</p>
 </ol>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>postgres-backup:/restore-inbox/operator_key
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;timestamp&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">RESTORE_ID</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">16</span><span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nv">REQUESTED_AT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y-%m-%dT%H:%M:%SZ<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="s2">&quot;printf &#39;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;timestamp&gt;\&quot;,\&quot;restore_id\&quot;:\&quot;</span><span class="si">${</span><span class="nv">RESTORE_ID</span><span class="si">}</span><span class="s2">\&quot;,\&quot;requested_at\&quot;:\&quot;</span><span class="si">${</span><span class="nv">REQUESTED_AT</span><span class="si">}</span><span class="s2">\&quot;}&#39; &gt; /backup-trigger/.restore_request.json&quot;</span>
 </code></pre></div>
+<p>The request is rejected before anything is touched unless it carries both
+   <code>restore_id</code> (32 lowercase hex characters) and <code>requested_at</code> (an
+   ISO-8601 timestamp with a timezone). Keep the <code>RESTORE_ID</code> value — it is
+   the same id you type back in step 5 to acknowledge the restore.</p>
 <ol>
 <li>Follow <code>docker compose logs -f postgres-backup</code>, or run:</li>
 </ol>

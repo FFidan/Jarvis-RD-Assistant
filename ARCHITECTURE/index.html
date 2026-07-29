@@ -2177,11 +2177,11 @@ HTTP client.</p>
   <code>user_id</code>. Single-tenant deployments are multi-tenant with exactly one user;
   there is no NULL-owned <em>product</em> data — though system-scoped configuration
   rows (e.g. <code>user_config</code> keys such as <code>telegram.bot_token</code>) are deliberately
-  NULL-owned by design. Migration 0092 re-owns legacy NULL
-  <code>user_id</code> rows for most tables; migration 0094 extends the same backfill and
-  per-user uniqueness constraints to <code>paper_extractions</code>, <code>paper_entities</code>, and
-  Zotero <code>paper_notes</code> (both run only when exactly one admin exists). All
-  read/write paths in routers thread <code>user_id</code> from <code>get_current_user</code>.</li>
+  NULL-owned by design. The former NULL-owner backfill for most tables, and
+  the follow-on backfill and per-user uniqueness constraints for
+  <code>paper_extractions</code>, <code>paper_entities</code>, and Zotero <code>paper_notes</code>, are folded
+  into the schema-101 baseline in <code>db/init.sql</code>. All read/write paths in
+  routers thread <code>user_id</code> from <code>get_current_user</code>.</li>
 <li><strong>IDOR guards</strong> — router endpoints that read by PK assert ownership before
   returning data. The defensive <code>_resolve_request_user_id</code> helper tolerates
   mocked requests for test harnesses.</li>
