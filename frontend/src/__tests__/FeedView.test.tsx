@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Minimal FeedPaper fixture used across all surface tests (test-body only — not used inside vi.mock factory)
 const mockPaper: FeedPaper = {
@@ -109,18 +109,15 @@ vi.mock('sonner', () => ({
 }));
 
 function makeQueryClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderFeedView(surface: Parameters<typeof FeedView>[0]['surface']) {
-  return render(
-    <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter>
-        <FeedView surface={surface} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter>
+      <FeedView surface={surface} />
+    </MemoryRouter>,
+    { queryClient: makeQueryClient() },
   );
 }
 
@@ -159,12 +156,11 @@ describe('FeedView — state-switch button rendering', () => {
 
 describe('FeedView — Untagged facet', () => {
   function renderUntagged(untagged: boolean) {
-    return render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <MemoryRouter>
-          <FeedView surface="inbox" untagged={untagged} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    return renderWithProviders(
+      <MemoryRouter>
+        <FeedView surface="inbox" untagged={untagged} />
+      </MemoryRouter>,
+      { queryClient: makeQueryClient() },
     );
   }
 
@@ -228,29 +224,26 @@ describe('FeedView — shortcut callback freshness', () => {
 
   function renderWithNav() {
     let capturedPath = '/';
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/']}>
-          <Routes>
-            <Route
-              path="/"
-              element={
-                <>
-                  <FeedView surface="inbox" />
-                  <NavigationCapture onNavigate={(p) => { capturedPath = p; }} />
-                </>
-              }
-            />
-            <Route
-              path="/paper/:id"
-              element={<NavigationCapture onNavigate={(p) => { capturedPath = p; }} />}
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <>
+                <FeedView surface="inbox" />
+                <NavigationCapture onNavigate={(p) => { capturedPath = p; }} />
+              </>
+            }
+          />
+          <Route
+            path="/paper/:id"
+            element={<NavigationCapture onNavigate={(p) => { capturedPath = p; }} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     return { getPath: () => capturedPath };
   }
@@ -346,12 +339,11 @@ describe('FeedView — server-side search debounce', () => {
   });
 
   function renderWithFilter(surface: Parameters<typeof FeedView>[0]['surface'], listFilter: string) {
-    return render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <MemoryRouter>
-          <FeedView surface={surface} listFilter={listFilter} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    return renderWithProviders(
+      <MemoryRouter>
+        <FeedView surface={surface} listFilter={listFilter} />
+      </MemoryRouter>,
+      { queryClient: makeQueryClient() },
     );
   }
 

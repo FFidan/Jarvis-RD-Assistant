@@ -9,13 +9,19 @@
 #              volumes and images it would remove without changing the fixture.
 #   restore    Runs the isolated encrypted backup and destructive restore contract.
 #
-# Each cold-install leg owns an ephemeral Compose project. The restore contract
-# generates, validates, and cleans up its own project independently.
+# Each cold-install leg owns and releases an ephemeral Compose project before
+# the next leg starts. The restore contract generates, validates, and cleans up
+# its own project independently.
 #
 # Usage:
-#   bash scripts/lifecycle-smoke.sh [--leg tls|update|uninstall|restore]... [--timeout N]
+#   bash scripts/lifecycle-smoke.sh [--leg tls|update|uninstall|restore]...
+#     [--update-from vX.Y.Z --update-to <40-hex-commit>] [--timeout N]
 #
 #   --leg NAME       Run only this leg. Repeatable. Default: all four.
+#   --update-from TAG Stable source release for an exact upgrade receipt.
+#   --update-to SHA   Lowercase 40-hex target commit with published SHA images.
+#                    Both update arguments are required together. Without them,
+#                    the update leg compares the two newest stable tags.
 #   --timeout N      Per-install budget in seconds (default 3600). A cold install
 #                    pulls several GB, so a clean machine legitimately needs
 #                    20-60 minutes.
@@ -45,17 +51,46 @@ show_help() {
 # -----------------------------------------------------------------------------
 LEGS=()
 TIMEOUT_SECONDS=3600
+UPDATE_FROM=""
+UPDATE_TO=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --leg)     LEGS+=("$2"); shift 2 ;;
+    --leg)
+      [ $# -ge 2 ] || { err "--leg requires a value."; exit 2; }
+      LEGS+=("$2"); shift 2 ;;
     --leg=*)   LEGS+=("${1#*=}"); shift ;;
-    --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --update-from)
+      [ $# -ge 2 ] || { err "--update-from requires a value."; exit 2; }
+      UPDATE_FROM="$2"; shift 2 ;;
+    --update-from=*) UPDATE_FROM="${1#*=}"; shift ;;
+    --update-to)
+      [ $# -ge 2 ] || { err "--update-to requires a value."; exit 2; }
+      UPDATE_TO="$2"; shift 2 ;;
+    --update-to=*) UPDATE_TO="${1#*=}"; shift ;;
+    --timeout)
+      [ $# -ge 2 ] || { err "--timeout requires a value."; exit 2; }
+      TIMEOUT_SECONDS="$2"; shift 2 ;;
     --timeout=*) TIMEOUT_SECONDS="${1#*=}"; shift ;;
     -h|--help) show_help; exit 0 ;;
     *) err "Unknown argument: $1"; echo; show_help; exit 2 ;;
   esac
 done
 [ "${#LEGS[@]}" -eq 0 ] && LEGS=(tls update uninstall restore)
+if { [ -n "$UPDATE_FROM" ] && [ -z "$UPDATE_TO" ]; } \
+   || { [ -z "$UPDATE_FROM" ] && [ -n "$UPDATE_TO" ]; }; then
+  err "--update-from and --update-to must be supplied together."
+  exit 2
+fi
+if [ -n "$UPDATE_FROM" ]; then
+  if ! [[ "$UPDATE_FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    err "--update-from must be a stable vX.Y.Z tag (got: ${UPDATE_FROM})."
+    exit 2
+  fi
+  if ! [[ "$UPDATE_TO" =~ ^[0-9a-f]{40}$ ]]; then
+    err "--update-to must be a lowercase 40-hex commit SHA (got: ${UPDATE_TO})."
+    exit 2
+  fi
+fi
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
@@ -96,6 +131,125 @@ SCRATCH=""
 TLS_ARTIFACTS_ACTIVE=0
 TLS_CERTS_PREEXISTING=0
 
+# project_resource_ids PROJECT KIND — exact Compose-labeled resource IDs.
+project_resource_ids() {
+  local project="$1" kind="$2"
+  case "$kind" in
+    containers)
+      "$REAL_DOCKER" ps -aq \
+        --filter "label=com.docker.compose.project=${project}" 2>/dev/null ;;
+    volumes)
+      "$REAL_DOCKER" volume ls -q \
+        --filter "label=com.docker.compose.project=${project}" 2>/dev/null ;;
+    networks)
+      "$REAL_DOCKER" network ls -q \
+        --filter "label=com.docker.compose.project=${project}" 2>/dev/null ;;
+    *) return 2 ;;
+  esac
+}
+
+project_resource_label() {
+  local kind="$1" resource="$2"
+  case "$kind" in
+    containers)
+      "$REAL_DOCKER" inspect --format \
+        '{{ index .Config.Labels "com.docker.compose.project" }}' "$resource" ;;
+    volumes|networks)
+      "$REAL_DOCKER" inspect --format \
+        '{{ index .Labels "com.docker.compose.project" }}' "$resource" ;;
+    *) return 2 ;;
+  esac
+}
+
+assert_project_absent() {
+  local project="$1" kind ids clean=1
+  for kind in containers volumes networks; do
+    if ! ids="$(project_resource_ids "$project" "$kind")"; then
+      err "Could not inspect ${kind} for project '${project}'."
+      clean=0
+      continue
+    fi
+    if [ -n "$ids" ]; then
+      err "Project '${project}' still owns ${kind}: $(printf '%s' "$ids" | tr '\n' ' ')"
+      clean=0
+    fi
+  done
+  [ "$clean" -eq 1 ]
+}
+
+assert_project_resources_owned() {
+  local project="$1" kind ids resource label seen=0
+  for kind in containers volumes networks; do
+    if ! ids="$(project_resource_ids "$project" "$kind")"; then
+      err "Could not inspect ${kind} for project '${project}'."
+      return 1
+    fi
+    for resource in $ids; do
+      seen=1
+      label="$(project_resource_label "$kind" "$resource" 2>/dev/null || true)"
+      if [ -z "$label" ] || [ "$label" != "$project" ]; then
+        err "${kind%?} '${resource}' has project label '${label:-missing}', expected '${project}'."
+        return 1
+      fi
+    done
+  done
+  if [ "$seen" -ne 1 ]; then
+    err "Setup created no resources labeled for project '${project}'."
+    return 1
+  fi
+  ok "Every lifecycle resource is labeled for project '${project}'."
+}
+
+remove_project_resources() {
+  local project="$1" ids
+  ids="$(project_resource_ids "$project" containers)" || return 1
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086  # Docker IDs are newline-delimited opaque tokens.
+    "$REAL_DOCKER" rm -f $ids >/dev/null 2>&1 || return 1
+  fi
+  ids="$(project_resource_ids "$project" volumes)" || return 1
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086  # Docker IDs are newline-delimited opaque tokens.
+    "$REAL_DOCKER" volume rm $ids >/dev/null 2>&1 || return 1
+  fi
+  ids="$(project_resource_ids "$project" networks)" || return 1
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086  # Docker IDs are newline-delimited opaque tokens.
+    "$REAL_DOCKER" network rm $ids >/dev/null 2>&1 || return 1
+  fi
+  return 0
+}
+
+# unregister_project PROJECT — remove a verified-absent project from fallback cleanup.
+unregister_project() {
+  local target="$1" project
+  local -a remaining=()
+  for project in ${CREATED_PROJECTS[@]+"${CREATED_PROJECTS[@]}"}; do
+    [ "$project" = "$target" ] || remaining+=("$project")
+  done
+  CREATED_PROJECTS=("${remaining[@]}")
+}
+
+# cleanup_project PROJECT — remove exact owned resources and verify their absence.
+cleanup_project() {
+  local project="$1" clean=1
+  info "Removing project '${project}' (containers, volumes, and networks)..."
+  "$REAL_DOCKER" compose -p "$project" down -v --remove-orphans >/dev/null 2>&1 || true
+  if ! remove_project_resources "$project"; then
+    err "Exact cleanup failed for registered project '${project}'."
+    clean=0
+  fi
+  if ! assert_project_absent "$project"; then
+    err "Cleanup left resources in registered project '${project}'."
+    clean=0
+  fi
+  if [ "$clean" -eq 1 ]; then
+    unregister_project "$project"
+    return 0
+  fi
+  return 1
+}
+
 _tls_cleanup() {
   [ "$TLS_ARTIFACTS_ACTIVE" -eq 1 ] || return 0
   TLS_ARTIFACTS_ACTIVE=0
@@ -108,8 +262,7 @@ teardown() {
   printf '\n'
   _tls_cleanup
   for project in ${CREATED_PROJECTS[@]+"${CREATED_PROJECTS[@]}"}; do
-    info "Teardown: removing project '${project}' (containers + volumes)..."
-    "$REAL_DOCKER" compose -p "$project" down -v --remove-orphans >/dev/null 2>&1 || true
+    cleanup_project "$project" || rc=1
   done
   for dir in ${SCRATCH_DIRS[@]+"${SCRATCH_DIRS[@]}"}; do
     rm -rf "$dir" 2>/dev/null || true
@@ -128,7 +281,12 @@ trap teardown EXIT
 # teardown. Both helpers ASSIGN rather than echo: a `$(...)` reader would run the
 # registration in a subshell, losing it, and nothing would ever be torn down.
 new_project() {
-  PROJECT="jarvis-lifecycle-${1}-$$"
+  local candidate="jarvis-lifecycle-${1}-$$"
+  if ! assert_project_absent "$candidate"; then
+    err "Refusing to register colliding project '${candidate}' for teardown."
+    return 1
+  fi
+  PROJECT="$candidate"
   CREATED_PROJECTS+=("$PROJECT")
 }
 
@@ -150,7 +308,8 @@ run_leg_tls() {
 
 _run_leg_tls_body() {
   local project caroot rc=0
-  new_project tls; project="$PROJECT"
+  new_project tls || return 1
+  project="$PROJECT"
 
   command -v mkcert >/dev/null 2>&1 || {
     err "tls leg needs mkcert (https://github.com/FiloSottile/mkcert#installation)."
@@ -177,13 +336,14 @@ _run_leg_tls_body() {
   [ -r "$caroot" ] || { err "mkcert root CA not readable at ${caroot}."; return 1; }
 
   info "Installing the TLS profile (project: ${project})..."
-  COMPOSE_PROJECT_NAME="$project" \
-    timeout "$TIMEOUT_SECONDS" ./setup.sh --non-interactive --profile=local-https || rc=$?
+  timeout "$TIMEOUT_SECONDS" ./setup.sh --non-interactive --profile=local-https \
+    --compose-project-name "$project" --build-local || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "TLS-profile install exited non-zero (rc=${rc})."
     "$REAL_DOCKER" compose -p "$project" logs --tail 80 caddy_local >&2 || true
     return 1
   fi
+  assert_project_resources_owned "$project" || return 1
 
   # Verify a backend route through the TLS edge against the mkcert root CA.
   # --cacert checks the certificate chain, and the service health route avoids
@@ -220,15 +380,18 @@ stable_tags() {
 }
 
 
-# install_pull_failure_shim DIR — a `docker` that fails every `compose ... pull`
-# and delegates everything else to the real binary. This is the fault injection:
-# it lands inside _stage_target_cohort (the phase AFTER the pending transaction
-# is written) without touching the host's network, so the leg stays hermetic and
-# the failure point is exact rather than incidental.
+# install_pull_failure_shim DIR — a `docker` that fails direct and Compose image
+# pulls, and delegates everything else to the real binary. This lands inside
+# _stage_target_cohort after the pending transaction is written without changing
+# host networking, so the failure point is exact rather than incidental.
 install_pull_failure_shim() {
   local dir="$1"
   cat > "${dir}/docker" <<SHIM
 #!/usr/bin/env bash
+if [ "\${1:-}" = "pull" ]; then
+  printf 'lifecycle-smoke: image pull blocked by fault injection\n' >&2
+  exit 1
+fi
 if [ "\${1:-}" = "compose" ]; then
   for arg in "\$@"; do
     if [ "\$arg" = "pull" ]; then
@@ -244,15 +407,25 @@ SHIM
 
 run_leg_update() {
   local project scratch clone state shim previous latest rc=0
-  new_project update; project="$PROJECT"
+  local from_commit to_commit head_before pending journal_shape
+  local -a pending_candidates=()
+  new_project update || return 1
+  project="$PROJECT"
   new_scratch; scratch="$SCRATCH"
-  clone="${scratch}/install"
+  clone="${scratch}/${project}"
   state="${scratch}/cli-state"
   shim="${scratch}/shim"
   mkdir -p "$state" "$shim"
 
-  latest="$(stable_tags | tail -n 1)"
-  previous="$(stable_tags | tail -n 2 | head -n 1)"
+  if [ -n "$UPDATE_FROM" ]; then
+    previous="$UPDATE_FROM"
+    latest="$UPDATE_TO"
+  else
+    local fallback_tags
+    fallback_tags="$(stable_tags | tail -n 2)"
+    previous="$(printf '%s\n' "$fallback_tags" | head -n 1)"
+    latest="$(printf '%s\n' "$fallback_tags" | tail -n 1)"
+  fi
   if [ -z "$previous" ] || [ -z "$latest" ] || [ "$previous" = "$latest" ]; then
     err "update leg needs two published stable tags on origin (found previous='${previous}' latest='${latest}')."
     return 1
@@ -264,18 +437,33 @@ run_leg_update() {
     || { err "Could not clone the managed repository."; return 1; }
   git -C "$clone" checkout --quiet -B main "$previous" \
     || { err "Could not place the clone on ${previous}."; return 1; }
-  ( cd "$clone" && COMPOSE_PROJECT_NAME="$project" \
-      timeout "$TIMEOUT_SECONDS" ./setup.sh --non-interactive --profile=dev ) || rc=$?
+  from_commit="$(git -C "$clone" rev-parse "${previous}^{commit}" 2>/dev/null || true)"
+  to_commit="$(git -C "$clone" rev-parse "${latest}^{commit}" 2>/dev/null || true)"
+  if ! [[ "$from_commit" =~ ^[0-9a-f]{40}$ ]] \
+     || ! [[ "$to_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    err "Could not resolve the update endpoints to commits."
+    return 1
+  fi
+  if [ -n "$UPDATE_TO" ] && [ "$to_commit" != "$UPDATE_TO" ]; then
+    err "The requested update target no longer resolves to ${UPDATE_TO}."
+    return 1
+  fi
+  ( cd "$clone" && timeout "$TIMEOUT_SECONDS" \
+      ./setup.sh --non-interactive --profile=dev ) || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "Cold install at ${previous} exited non-zero (rc=${rc})."
     return 1
   fi
+  assert_project_resources_owned "$project" || return 1
 
   local cli="${clone}/scripts/jarvis-research.sh"
-  local pending="${state}/pending-update.json"
   printf '%s\n' "$clone" > "${state}/installs"
 
-  local head_before; head_before="$(git -C "$clone" rev-parse HEAD)"
+  head_before="$(git -C "$clone" rev-parse HEAD)"
+  if [ "$head_before" != "$from_commit" ]; then
+    err "The installed checkout does not equal ${previous}^{commit}."
+    return 1
+  fi
 
   info "Running the update with image pulls failing..."
   install_pull_failure_shim "$shim"
@@ -288,9 +476,9 @@ run_leg_update() {
     err "The update succeeded despite the injected pull failure — the fault was not injected."
     return 1
   fi
-  # Require the injected staging failure rather than accepting an unrelated
-  # prerequisite or safety-backup failure.
-  if ! grep -q "Staging images for ${latest} failed" "$injected_log"; then
+  # Require the unique shim marker rather than accepting an unrelated
+  # prerequisite, backup, or registry failure.
+  if ! grep -q "lifecycle-smoke: image pull blocked by fault injection" "$injected_log"; then
     err "The update did not fail at the injected staging phase (rc=${rc}):"
     tail -n 40 "$injected_log" >&2
     return 1
@@ -299,19 +487,41 @@ run_leg_update() {
 
   # The contract: an interrupted update leaves a resumable record and an
   # unadvanced checkout. Both halves, or the transaction is not a transaction.
-  if [ ! -f "$pending" ]; then
-    err "No pending transaction at ${pending} — the interrupted update left nothing to resume."
+  shopt -s nullglob
+  pending_candidates=("$state"/pending-update*.json)
+  shopt -u nullglob
+  if [ "${#pending_candidates[@]}" -ne 1 ]; then
+    err "Expected one isolated pending-update journal, found ${#pending_candidates[@]}."
     return 1
   fi
-  if ! grep -q '"phase":"staging"' "$pending"; then
-    err "Pending transaction is not at the staging phase: $(cat "$pending")"
+  pending="${pending_candidates[0]}"
+  if grep -q '"phase":"staging"' "$pending" \
+     && ! grep -q '"schema_version":1' "$pending"; then
+    journal_shape=legacy-staging
+  elif grep -q '"phase":"merge_pending"' "$pending" \
+       && grep -q '"schema_version":1' "$pending"; then
+    journal_shape=current-merge-pending
+  else
+    err "Pending transaction has an unsupported shape: $(cat "$pending")"
     return 1
   fi
+  case "$previous" in
+    v1.1.3)
+      [ "$journal_shape" = legacy-staging ] || {
+        err "v1.1.3 did not leave the expected legacy staging journal."
+        return 1
+      } ;;
+    v1.2.1)
+      [ "$journal_shape" = current-merge-pending ] || {
+        err "v1.2.1 did not leave the expected merge_pending journal."
+        return 1
+      } ;;
+  esac
   if [ "$(git -C "$clone" rev-parse HEAD)" != "$head_before" ]; then
     err "The checkout advanced despite the failed staging phase."
     return 1
   fi
-  ok "Pending transaction survived at phase 'staging' with the checkout unadvanced."
+  ok "Pending transaction survived as ${journal_shape} with the checkout unadvanced."
 
   info "Retrying the update with pulls restored..."
   local resume_log="${scratch}/update-resumed.log"
@@ -323,14 +533,18 @@ run_leg_update() {
     tail -n 40 "$resume_log" >&2
     return 1
   fi
-  if [ -f "$pending" ]; then
-    err "The completed update left its pending transaction behind: $(cat "$pending")"
+  pending_candidates=()
+  shopt -s nullglob
+  pending_candidates=("$state"/pending-update*.json)
+  shopt -u nullglob
+  if [ "${#pending_candidates[@]}" -ne 0 ]; then
+    err "The completed update left a pending transaction behind: ${pending_candidates[*]}"
     return 1
   fi
   # Release tags here are ANNOTATED, so a bare `rev-parse <tag>` yields the tag
   # OBJECT sha and never equals a commit sha. ^{commit} is what makes this compare
   # the checkout against the release it claims to have landed on.
-  if [ "$(git -C "$clone" rev-parse HEAD)" != "$(git -C "$clone" rev-parse "${latest}^{commit}")" ]; then
+  if [ "$(git -C "$clone" rev-parse HEAD)" != "$to_commit" ]; then
     err "The resumed update did not advance the checkout to ${latest}."
     return 1
   fi
@@ -394,21 +608,24 @@ assert_tier3_plan() {
 
 run_leg_uninstall() {
   local project scratch clone before after rc=0
-  new_project uninstall; project="$PROJECT"
+  new_project uninstall || return 1
+  project="$PROJECT"
   new_scratch; scratch="$SCRATCH"
-  clone="${scratch}/install"
+  clone="${scratch}/${project}"
   before="${scratch}/state.before"
   after="${scratch}/state.after"
 
   info "Installing a stack for the dry run to enumerate (project: ${project})..."
   git clone --quiet --no-hardlinks "$REPO_ROOT" "$clone" \
     || { err "Could not clone the working tree."; return 1; }
-  ( cd "$clone" && COMPOSE_PROJECT_NAME="$project" \
-      timeout "$TIMEOUT_SECONDS" ./setup.sh --non-interactive --profile=dev ) || rc=$?
+  ( cd "$clone" && timeout "$TIMEOUT_SECONDS" ./setup.sh \
+      --non-interactive --profile=dev --compose-project-name "$project" \
+      --build-local ) || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "Install for the uninstall leg exited non-zero (rc=${rc})."
     return 1
   fi
+  assert_project_resources_owned "$project" || return 1
 
   project_state "$project" > "$before"
   if [ ! -s "$before" ]; then
@@ -474,18 +691,31 @@ run_leg_restore() {
 }
 
 # -----------------------------------------------------------------------------
-# Drive the requested legs. Every leg runs even if an earlier one fails, so one
-# dispatch reports the whole lifecycle picture instead of only its first break.
+# Drive the requested legs. Ordinary leg failures do not stop later checks, but
+# a cleanup failure halts before another project can inherit contaminated state.
 # -----------------------------------------------------------------------------
 for leg in "${LEGS[@]}"; do
   printf '\n%s===== lifecycle leg: %s =====%s\n' "$C_BLUE" "$leg" "$C_RESET"
+  PROJECT=""
   leg_rc=0
+  cleanup_rc=0
   "run_leg_${leg}" || leg_rc=$?
+  if [ -n "$PROJECT" ]; then
+    cleanup_project "$PROJECT" || cleanup_rc=$?
+    PROJECT=""
+  fi
+  if [ "$cleanup_rc" -ne 0 ]; then
+    leg_rc=1
+  fi
   if [ "$leg_rc" -eq 0 ]; then
     ok "Leg '${leg}' passed."
   else
     err "Leg '${leg}' FAILED (rc=${leg_rc})."
     FAILED_LEGS+=("$leg")
+  fi
+  if [ "$cleanup_rc" -ne 0 ]; then
+    err "Lifecycle isolation could not be restored; refusing to start another leg."
+    break
   fi
 done
 

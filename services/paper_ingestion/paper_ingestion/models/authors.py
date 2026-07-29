@@ -9,14 +9,14 @@ class TrackedAuthorCreate(BaseModel):
     """Request body for creating a tracked author."""
 
     author_name: str = Field(..., min_length=1, max_length=500)
-    s2_author_id: str | None = None
+    s2_author_id: str | None = Field(default=None, max_length=50)
 
 
 class TrackedAuthorUpdate(BaseModel):
     """Request body for updating a tracked author."""
 
     enabled: bool | None = None
-    s2_author_id: str | None = None
+    s2_author_id: str | None = Field(default=None, max_length=50)
 
 
 class TrackedAuthorResponse(BaseModel):

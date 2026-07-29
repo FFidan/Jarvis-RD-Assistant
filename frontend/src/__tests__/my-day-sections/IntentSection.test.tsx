@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter } from 'react-router-dom';
 import { IntentSection } from '@/components/my-day/sections/IntentSection';
 import type { MyDayResponse } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -66,16 +66,13 @@ const COMPLETED_TASK = {
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <IntentSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <IntentSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -96,7 +93,7 @@ describe('IntentSection', () => {
         tasks: [COMPLETED_TASK],
       });
 
-      renderWithProviders();
+      renderSubject();
 
       // The toggle shows "1 done today" when showCompleted is false (ChevronRight state)
       expect(await screen.findByText(/1 done today/)).toBeInTheDocument();
@@ -120,7 +117,7 @@ describe('IntentSection', () => {
         ],
       });
 
-      renderWithProviders();
+      renderSubject();
 
       // Wait for data to load
       expect(await screen.findByText('Pending task')).toBeInTheDocument();
@@ -141,7 +138,7 @@ describe('IntentSection', () => {
         tasks: [COMPLETED_TASK],
       });
 
-      renderWithProviders();
+      renderSubject();
 
       // First expand the completed section
       const toggleBtn = await screen.findByText(/1 done today/);
@@ -164,7 +161,7 @@ describe('IntentSection', () => {
         tasks: [COMPLETED_TASK],
       });
 
-      renderWithProviders();
+      renderSubject();
 
       // Expand the completed section
       const toggleBtn = await screen.findByText(/1 done today/);
@@ -185,7 +182,7 @@ describe('IntentSection', () => {
       });
       vi.mocked(updateTask).mockResolvedValue(undefined as any);
 
-      renderWithProviders();
+      renderSubject();
 
       // Expand the completed section
       const toggleBtn = await screen.findByText(/1 done today/);
@@ -210,7 +207,7 @@ describe('IntentSection', () => {
       });
       vi.mocked(updateTask).mockRejectedValue(new Error('Network error'));
 
-      renderWithProviders();
+      renderSubject();
 
       // Expand the completed section
       const toggleBtn = await screen.findByText(/1 done today/);
@@ -237,15 +234,12 @@ describe('IntentSection', () => {
         tasks: [COMPLETED_TASK],
       });
 
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
-      const { rerender } = render(
-        <QueryClientProvider client={queryClient}>
-          <MemoryRouter>
-            <IntentSection />
-          </MemoryRouter>
-        </QueryClientProvider>,
+      const queryClient = createTestQueryClient();
+      const { rerender } = renderWithProviders(
+        <MemoryRouter>
+          <IntentSection />
+        </MemoryRouter>,
+        { queryClient },
       );
 
       // Expand the completed section

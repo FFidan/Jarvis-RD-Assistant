@@ -9,12 +9,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AskPage } from '@/pages/AskPage';
 import { fetchDashboardMetrics } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -53,19 +53,16 @@ vi.mock('@/stores/auth-store', () => ({
 // ---------------------------------------------------------------------------
 
 function renderAskPage(chunkedPapers: number = 1) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   queryClient.setQueryData(QUERY_KEYS.dashboard.metrics(), {
     chunked_papers: chunkedPapers,
   });
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <AskPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter>
+      <AskPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -161,16 +158,13 @@ describe('AskPage', () => {
     // misleading empty-state. With no cached metrics and a rejecting query, the
     // page must NOT claim "Nothing to ask yet".
     vi.mocked(fetchDashboardMetrics).mockRejectedValue(new Error('metrics down'));
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    const queryClient = createTestQueryClient();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <AskPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <AskPage />
+      </MemoryRouter>,
+      { queryClient },
     );
 
     await waitFor(() => {
@@ -184,16 +178,13 @@ describe('AskPage', () => {
     // Degraded, not dead: a failed/pending metrics query must never disable the
     // workspace or claim a prerequisite ("Analyze at least one paper first").
     vi.mocked(fetchDashboardMetrics).mockRejectedValue(new Error('metrics down'));
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    const queryClient = createTestQueryClient();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <AskPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <AskPage />
+      </MemoryRouter>,
+      { queryClient },
     );
 
     await waitFor(() => {

@@ -14,6 +14,55 @@ from paper_ingestion.services.contradictions_extract import ContradictionCandida
 
 SCANNER_VERSION = "paper_contradictions_v1"
 
+_QUOTE_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_quote_whitespace(quote: str) -> str:
+    """Collapse internal whitespace runs to a single space and trim ends.
+
+    Two verbatim quotes that differ only by incidental whitespace (a double
+    space, a tab, a line-wrap) must store and hash identically, or they create
+    separate ``paper_contradictions`` rows that inflate the caller's own
+    supports/opposes tallies instead of deduping against the unique index.
+    """
+    return _QUOTE_WHITESPACE_RE.sub(" ", quote).strip()
+
+
+async def _find_existing_contradiction_id(
+    conn: ConnLike,
+    *,
+    paper_ids: tuple[int, int],
+    quotes: tuple[str, str],
+    content_generations: tuple[int, int],
+    user_id: int,
+) -> int | None:
+    """Find the canonical row, including quotes stored before normalization."""
+    paper_a_id, paper_b_id = paper_ids
+    quote_a, quote_b = quotes
+    paper_a_generation, paper_b_generation = content_generations
+    row = await conn.fetchrow(
+        """
+        SELECT id FROM paper_contradictions
+        WHERE LEAST(paper_a_id, paper_b_id) = LEAST($1::integer, $2::integer)
+          AND GREATEST(paper_a_id, paper_b_id) = GREATEST($1::integer, $2::integer)
+          AND regexp_replace(btrim(quote_a), '[[:space:]]+', ' ', 'g') = $3
+          AND regexp_replace(btrim(quote_b), '[[:space:]]+', ' ', 'g') = $4
+          AND user_id = $5
+          AND paper_a_content_generation = $6
+          AND paper_b_content_generation = $7
+        ORDER BY id
+        LIMIT 1
+        """,
+        paper_a_id,
+        paper_b_id,
+        quote_a,
+        quote_b,
+        user_id,
+        paper_a_generation,
+        paper_b_generation,
+    )
+    return row["id"] if row else None
+
 
 async def _persist_contradiction(
     conn: ConnLike,
@@ -23,12 +72,12 @@ async def _persist_contradiction(
     page_a: int | None,
     page_b: int | None,
     model: str,
-    user_id: int | None = None,
+    user_id: int,
 ) -> int | None:
     paper_a = candidate.a
     paper_b = candidate.b
-    quote_a = parsed.quote_a.strip()
-    quote_b = parsed.quote_b.strip()
+    quote_a = _normalize_quote_whitespace(parsed.quote_a)
+    quote_b = _normalize_quote_whitespace(parsed.quote_b)
     contradiction_type = parsed.contradiction_type
     confidence = parsed.confidence
     explanation = parsed.explanation.strip()
@@ -45,17 +94,28 @@ async def _persist_contradiction(
         quote_a, quote_b = quote_b, quote_a
         page_a, page_b = page_b, page_a
 
+    existing_id = await _find_existing_contradiction_id(
+        conn,
+        paper_ids=(paper_a.paper_id, paper_b.paper_id),
+        quotes=(quote_a, quote_b),
+        content_generations=(paper_a.content_generation, paper_b.content_generation),
+        user_id=user_id,
+    )
+    if existing_id is not None:
+        return existing_id
+
     try:
         row = await conn.fetchrow(
             """
             INSERT INTO paper_contradictions (
                 paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
                 page_a, page_b, contradiction_type, explanation, confidence, status,
-                scanner_metadata, updated_at, user_id, stance, claim_topic
+                scanner_metadata, updated_at, user_id, stance, claim_topic,
+                paper_a_content_generation, paper_b_content_generation
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'verified',
-                $12::jsonb, NOW(), $13, $14, $15
+                $12::jsonb, NOW(), $13, $14, $15, $16, $17
             )
             RETURNING id
             """,
@@ -79,27 +139,65 @@ async def _persist_contradiction(
             user_id,
             stance,
             claim_topic,
+            paper_a.content_generation,
+            paper_b.content_generation,
         )
         if row is not None:
             return row["id"]
     except asyncpg.UniqueViolationError:
         pass
 
-    row = await conn.fetchrow(
-        """
-        SELECT id FROM paper_contradictions
-        WHERE LEAST(paper_a_id, paper_b_id) = LEAST($1::integer, $2::integer)
-          AND GREATEST(paper_a_id, paper_b_id) = GREATEST($1::integer, $2::integer)
-          AND quote_a = $3
-          AND quote_b = $4
-        LIMIT 1
-        """,
-        paper_a.paper_id,
-        paper_b.paper_id,
-        quote_a,
-        quote_b,
+    return await _find_existing_contradiction_id(
+        conn,
+        paper_ids=(paper_a.paper_id, paper_b.paper_id),
+        quotes=(quote_a, quote_b),
+        content_generations=(paper_a.content_generation, paper_b.content_generation),
+        user_id=user_id,
     )
-    return row["id"] if row else None
+
+
+_CURRENT_CONTRADICTIONS_CTE = """
+        WITH ranked_current_contradictions AS (
+            SELECT pc.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY
+                           LEAST(pc.paper_a_id, pc.paper_b_id),
+                           GREATEST(pc.paper_a_id, pc.paper_b_id),
+                           CASE WHEN pc.paper_a_id <= pc.paper_b_id
+                               THEN regexp_replace(
+                                   btrim(pc.quote_a), '[[:space:]]+', ' ', 'g')
+                               ELSE regexp_replace(
+                                   btrim(pc.quote_b), '[[:space:]]+', ' ', 'g')
+                           END,
+                           CASE WHEN pc.paper_a_id <= pc.paper_b_id
+                               THEN regexp_replace(
+                                   btrim(pc.quote_b), '[[:space:]]+', ' ', 'g')
+                               ELSE regexp_replace(
+                                   btrim(pc.quote_a), '[[:space:]]+', ' ', 'g')
+                           END,
+                           pc.user_id,
+                           CASE WHEN pc.paper_a_id <= pc.paper_b_id
+                               THEN pc.paper_a_content_generation
+                               ELSE pc.paper_b_content_generation
+                           END,
+                           CASE WHEN pc.paper_a_id <= pc.paper_b_id
+                               THEN pc.paper_b_content_generation
+                               ELSE pc.paper_a_content_generation
+                           END
+                       ORDER BY pc.id
+                   ) AS evidence_rank
+            FROM paper_contradictions pc
+            JOIN papers current_a ON current_a.id = pc.paper_a_id
+            JOIN papers current_b ON current_b.id = pc.paper_b_id
+            WHERE pc.paper_a_content_generation = current_a.content_generation
+              AND pc.paper_b_content_generation = current_b.content_generation
+        ),
+        current_contradictions AS (
+            SELECT *
+            FROM ranked_current_contradictions
+            WHERE evidence_rank = 1
+        )
+"""
 
 
 async def list_contradictions(
@@ -122,6 +220,10 @@ async def list_contradictions(
         f" WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = ${idx})"
         f")"
     )
+    # Holding both papers grants access to the papers, not to another user's
+    # assessment of them. The findings and explanation stored here are the
+    # scanning user's own derived work.
+    conditions.append(f"pc.user_id IS NOT DISTINCT FROM ${idx}")
     params.append(user_id)
     idx += 1
     # 'supports' rows belong to the consensus view, not the contradiction list;
@@ -139,9 +241,10 @@ async def list_contradictions(
     params.append(limit)
     rows = await conn.fetch(
         f"""
+        {_CURRENT_CONTRADICTIONS_CTE}
         SELECT pc.*, pa.title AS paper_a_title, pb.title AS paper_b_title,
                COUNT(*) OVER() AS total_count
-        FROM paper_contradictions pc
+        FROM current_contradictions pc
         JOIN papers pa ON pa.id = pc.paper_a_id
         JOIN papers pb ON pb.id = pc.paper_b_id
         {where}
@@ -177,15 +280,22 @@ async def list_contradictions(
     )
 
 
-_CLAIM_TOPIC_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+_CLAIM_TOPIC_PUNCT_RE = re.compile(r"[_\W]+")
 
 
 def _normalize_claim_topic(topic: str) -> str:
-    """Lowercase, collapse punctuation/whitespace runs to single spaces, trim.
+    """Casefold, collapse punctuation/whitespace runs to single spaces, trim.
 
-    So "Effect of X, on Y!" and "effect of x on y" cluster together.
+    Unicode-aware: ``\\w`` matches letters of any script, so "Effect of X, on Y!"
+    and "effect of x on y" cluster together, and so do two phrasings of the same
+    non-Latin topic, e.g. "Эффект X, на Y!" and "эффект x на y" both normalize to
+    "эффект x на y" -- while an unrelated non-Latin topic keeps its own distinct
+    key instead of every script outside a-z0-9 collapsing to the empty string.
     """
-    return _CLAIM_TOPIC_PUNCT_RE.sub(" ", topic.lower()).strip()
+    return _CLAIM_TOPIC_PUNCT_RE.sub(" ", topic.casefold()).strip()
+
+
+_CONSENSUS_ROW_CAP = 1000
 
 
 async def aggregate_consensus(
@@ -194,19 +304,28 @@ async def aggregate_consensus(
     user_id: int,
     limit: int = 50,
     evidence_per_claim: int = 5,
-) -> list[ConsensusClaim]:
+) -> tuple[list[ConsensusClaim], bool]:
     """Aggregate supports/opposes whose full evidence pair is in the caller's library.
 
-    Topics are grouped on a normalized form (lowercased, punctuation collapsed)
+    Topics are grouped on a normalized form (casefolded, punctuation collapsed)
     so near-duplicate phrasings cluster together. Each cluster carries up to
     ``evidence_per_claim`` verified assessments for evidence drill-down.
+
+    Returns
+    -------
+    tuple[list[ConsensusClaim], bool]
+        The claim clusters (already capped to ``limit``) and a ``truncated``
+        flag that is ``True`` when the underlying set of verified stance rows
+        exceeds ``_CONSENSUS_ROW_CAP`` -- i.e. some evidence was excluded
+        before clustering even began, independent of the ``limit`` param.
     """
     rows = await conn.fetch(
-        """
+        f"""
+        {_CURRENT_CONTRADICTIONS_CTE}
         SELECT pc.stance, pc.claim_topic, pc.paper_a_id, pc.paper_b_id,
                pc.quote_a, pc.quote_b, pc.page_a, pc.page_b,
                pa.title AS paper_a_title, pb.title AS paper_b_title
-        FROM paper_contradictions pc
+        FROM current_contradictions pc
         JOIN papers pa ON pa.id = pc.paper_a_id
         JOIN papers pb ON pb.id = pc.paper_b_id
         WHERE pc.status = 'verified'
@@ -217,11 +336,15 @@ async def aggregate_consensus(
                       WHERE ul.paper_id = pc.paper_a_id AND ul.user_id = $1)
           AND EXISTS (SELECT 1 FROM user_library ul
                       WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = $1)
+          AND pc.user_id IS NOT DISTINCT FROM $1
         ORDER BY pc.created_at DESC
-        LIMIT 1000
+        LIMIT $2
         """,
         user_id,
+        _CONSENSUS_ROW_CAP + 1,
     )
+    truncated = len(rows) > _CONSENSUS_ROW_CAP
+    rows = rows[:_CONSENSUS_ROW_CAP]
 
     clusters: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -268,4 +391,4 @@ async def aggregate_consensus(
         for cluster in clusters.values()
     ]
     claims.sort(key=lambda claim: claim.supports + claim.opposes, reverse=True)
-    return claims[:limit]
+    return claims[:limit], truncated

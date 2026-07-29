@@ -53,7 +53,7 @@ cmd_doctor() { :; }
 out="$(_failure_epilogue v1.1.3 2>&1)"
 data_line="$(printf '%s\n' "$out" | grep -nF 'Admin > Backups' | cut -d: -f1)"
 image_line="$(printf '%s\n' "$out" | grep -nF 'Application-image recovery (not a full release rollback)' | cut -d: -f1)"
-if has "$out" 'JARVIS_VERSION=1.1.2 docker compose --profile tunnel --profile telegram pull' \
+if has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
    && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'Repository: /srv/jarvis-family' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
@@ -81,6 +81,15 @@ ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 STUB="$ROOT/stub"
 mkdir -p "$STUB"
+FAST_SLEEP_BIN="$ROOT/fast-sleep-bin"
+REAL_SLEEP_BIN="$(command -v sleep)"
+mkdir -p "$FAST_SLEEP_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [ "${1:-}" = 3 ]; then exit 0; fi' \
+  'exec "$JARVIS_TEST_REAL_SLEEP" "$@"' \
+  > "$FAST_SLEEP_BIN/sleep"
+chmod +x "$FAST_SLEEP_BIN/sleep"
 SOURCE_SHA="1111111111111111111111111111111111111111"
 TARGET_SHA="2222222222222222222222222222222222222222"
 OTHER_SHA="3333333333333333333333333333333333333333"
@@ -185,6 +194,23 @@ chmod +x "$STUB/git"
 cat > "$STUB/docker" <<'DOCKER'
 #!/usr/bin/env bash
 log() { [ -n "${STUB_LOG:-}" ] && printf 'docker %s\n' "$*" >> "$STUB_LOG"; }
+health_sample() {
+  local sample="" version image_tag
+  if [ -n "${STUB_HEALTH_SEQUENCE:-}" ] && [ -f "$STUB_HEALTH_SEQUENCE" ]; then
+    sample="$(sed -n '1p' "$STUB_HEALTH_SEQUENCE")"
+    if [ -n "$sample" ]; then
+      sed '1d' "$STUB_HEALTH_SEQUENCE" > "${STUB_HEALTH_SEQUENCE}.next"
+      mv "${STUB_HEALTH_SEQUENCE}.next" "$STUB_HEALTH_SEQUENCE"
+    fi
+  fi
+  if [ -z "$sample" ]; then
+    sample="${STUB_HEALTH-healthy}|${STUB_RUN_STATE-running}"
+  fi
+  version="$(sed -n 's/^JARVIS_VERSION=//p' "$STUB_REPO/.env" 2>/dev/null | head -1)"
+  image_tag="$(sed -n 's/^JARVIS_IMAGE_TAG=//p' "$STUB_REPO/.env" 2>/dev/null | head -1)"
+  log "health sample=${sample} version=${version:-missing} image=${image_tag:-missing}"
+  printf '%s\n' "$sample"
+}
 running_svc() {
   case "$1" in
     postgres|ollama|qdrant|litellm|cloudflared|postgres-backup) return 0 ;;
@@ -250,6 +276,7 @@ case "${1:-}" in
     shift; fmt=""
     while [ $# -gt 0 ]; do case "$1" in --format) fmt="$2"; shift 2 ;; *) shift ;; esac; done
     case "$fmt" in
+      *State.Health*State.Status*) health_sample ;;
       *com.docker.compose.project.working_dir*)
         project="${STUB_COMPOSE_LABEL_PROJECT:-$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
         printf '%s|%s|%s/docker-compose.yml\n' "$project" "$STUB_REPO" "$STUB_REPO"
@@ -313,7 +340,7 @@ case "${1:-}" in
             printf '%s\n' "$STUB_TARGET_CONFIG_JSON"
           else
             printf '{"services":{"dashboard":{"image":"ghcr.io/limitcycle-oss/jarvis-dashboard:%s","pull_policy":"missing","build":{"context":"frontend"}},"target_worker":{"image":"ghcr.io/limitcycle-oss/jarvis-target-worker:%s","pull_policy":"missing"},"target_edge":{"image":"%s"},"langfuse":{"image":"jarvis/langfuse-hardened:%s","pull_policy":"build","build":{"context":"langfuse"}}}}\n' \
-              "${JARVIS_VERSION:-missing}" "${JARVIS_VERSION:-missing}" \
+              "${JARVIS_IMAGE_TAG:-missing}" "${JARVIS_IMAGE_TAG:-missing}" \
               "${TARGET_EDGE_IMAGE:-registry.example/current-edge:1.0}" \
               "${JARVIS_VERSION:-missing}"
           fi
@@ -354,14 +381,14 @@ case "${1:-}" in
         printf 'jarvis-dashboard-1   Up 3 minutes (healthy)\n'
         exit 0 ;;
       pull)
-        log "compose pull ${*:2}"
+        log "compose pull ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"
         if [ -n "${STUB_BACKUP_DIR:-}" ] && [ -s "$STUB_BACKUP_DIR/.lifecycle/update.guard" ]; then
           printf 'LIFECYCLE_GUARD_AT_PULL=%s\n' "$(cat "$STUB_BACKUP_DIR/.lifecycle/update.guard")" >> "$STUB_LOG"
         fi
         [ "${STUB_FAIL_STAGE_PULL:-0}" = 1 ] && exit 1
         exit 0 ;;
-      up)    log "compose up ${*:2}"; exit 0 ;;
-      build) log "compose build ${*:2}"; exit 0 ;;
+      up)    log "compose up ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"; exit 0 ;;
+      build) log "compose build ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"; exit 0 ;;
       stop|restart|logs) log "compose $*"; exit 0 ;;
       *) exit 0 ;;
     esac ;;
@@ -399,7 +426,7 @@ CLOUDFLARED_IMAGE=cloudflare/cloudflared:2025.1.0
 CADDY_IMAGE=caddy:2.9-alpine
 VE
   printf 'services:\n  dashboard:\n    image: x\n' > "$dir/docker-compose.yml"
-  printf 'JARVIS_VERSION=1.1.2\nTORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\n' > "$dir/.env"
+  printf 'JARVIS_VERSION=1.1.2\nJARVIS_IMAGE_TAG=1.1.2\nTORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\n' > "$dir/.env"
   mkdir -p "$dir/secrets"
   printf 'FIXTURE-BACKUP-KEY\n' > "$dir/secrets/backup_encrypt_key.txt"
   # A setup.sh that doctor can shell for `--check`.
@@ -419,6 +446,7 @@ new_env() {
   unset STUB_MIGRATIONS STUB_MIG_CONTENT MANIFEST_MISS STUB_ANCESTOR STUB_MERGE_RC \
         STUB_DIRTY STUB_BRANCH STUB_REMOTE STUB_HEALTH STUB_FAIL_STAGE_PULL \
         STUB_NO_DAEMON STUB_TAGS STUB_RUN_STATE STUB_EXACT_TAG STUB_MERGE_CRASH \
+        STUB_HEALTH_SEQUENCE STUB_FAST_SLEEP \
         STUB_TARGET_SHA STUB_COMPOSE_LABEL_PROJECT STUB_UPDATE_WAIT_FAIL_ONCE_FILE \
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK CLI_STDIN_FILE \
@@ -448,7 +476,10 @@ new_env() {
 run_cli() {
   local norepo=0
   if [ "${1:-}" = "--norepo" ]; then norepo=1; shift; fi
-  local -a pre=(env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" "PENDING_FILE=$PENDING_FILE"
+  local stub_path="$STUB:$PATH"
+  [ "${STUB_FAST_SLEEP:-0}" != 1 ] || stub_path="$FAST_SLEEP_BIN:$stub_path"
+  local -a pre=(env "PATH=$stub_path" "STUB_LOG=$STUB_LOG" "PENDING_FILE=$PENDING_FILE"
+    "JARVIS_TEST_REAL_SLEEP=$REAL_SLEEP_BIN"
     "UPDATE_PIN_FILE=$UPDATE_PIN_FILE"
     "STUB_TRIGGER_DIR=$TRIG" "STUB_BACKUP_DIR=$BK"
     "STUB_BACKUP_KEY_FILE=$REPO/secrets/backup_encrypt_key.txt"
@@ -466,6 +497,8 @@ run_cli() {
     "STUB_ANCESTOR=${STUB_ANCESTOR:-0}" "STUB_MERGE_RC=${STUB_MERGE_RC:-0}"
     "STUB_MIGRATIONS=${STUB_MIGRATIONS:-}" "STUB_MIG_CONTENT=${STUB_MIG_CONTENT:-}"
     "MANIFEST_MISS=${MANIFEST_MISS:-}" "STUB_HEALTH=${STUB_HEALTH-healthy}"
+    "STUB_RUN_STATE=${STUB_RUN_STATE-running}"
+    "STUB_HEALTH_SEQUENCE=${STUB_HEALTH_SEQUENCE:-}"
     "STUB_FAIL_STAGE_PULL=${STUB_FAIL_STAGE_PULL:-0}" "STUB_TAGS=${STUB_TAGS:-v1.1.3}"
     "STUB_TARGET_CONFIG_JSON=${STUB_TARGET_CONFIG_JSON:-}"
     "STUB_NO_DAEMON=${STUB_NO_DAEMON:-0}" "STUB_EXACT_TAG=${STUB_EXACT_TAG:-}"
@@ -516,8 +549,9 @@ seed_restore_review() {
 
 write_pending() {
   local phase="$1" from_sha="${2:-$SOURCE_SHA}" target_sha="${3:-$TARGET_SHA}"
-  printf '{"schema_version":1,"from_sha":"%s","from_version":"1.1.2","target":"v1.1.3","target_sha":"%s","target_version":"1.1.3","phase":"%s","started_at":"1","backup_id":"","backup_run_id":"","legacy_recovery":false}\n' \
-    "$from_sha" "$target_sha" "$phase" > "$PENDING_FILE"
+  local target="${4:-v1.1.3}" target_version="${5:-1.1.3}"
+  printf '{"schema_version":1,"from_sha":"%s","from_version":"1.1.2","target":"%s","target_sha":"%s","target_version":"%s","phase":"%s","started_at":"1","backup_id":"","backup_run_id":"","legacy_recovery":false}\n' \
+    "$from_sha" "$target" "$target_sha" "$target_version" "$phase" > "$PENDING_FILE"
 }
 
 write_pending_backup() {
@@ -862,7 +896,7 @@ fi
 
 # A failed post-merge update keeps both its transaction and exact backup pin so
 # scheduled retention cannot prune the only schema rollback point.
-new_env; register_repo; STUB_HEALTH="unhealthy"
+new_env; register_repo; STUB_HEALTH="unhealthy"; STUB_FAST_SLEEP=1
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
 STUB_MIG_CONTENT="DROP TABLE old_stuff;"
 respond_to_backup good
@@ -961,24 +995,61 @@ fi
 # pins the UNPREFIXED version + v-less image refs.
 new_env; register_repo
 out="$(run_cli update --yes)"; rc=$?
-if grep -q '^JARVIS_VERSION=1.1.3$' "$REPO/.env"; then
-  pass "update_pins_unprefixed_version: .env JARVIS_VERSION=1.1.3 (no v-prefix)"
+if grep -qx 'JARVIS_VERSION=1.1.3' "$REPO/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$REPO/.env"; then
+  pass "update_pins_semantic_version_and_release_image_tag_without_v_prefix"
 else
-  check_fail "update_pins_unprefixed_version: .env=$(grep JARVIS_VERSION "$REPO/.env")"
+  check_fail "update release identities: env=$(grep -E '^JARVIS_(VERSION|IMAGE_TAG)=' "$REPO/.env")"
 fi
-if ! grep -q ':v1\.1\.3' "$STUB_LOG" && ! grep -q 'JARVIS_VERSION=v1.1.3' "$STUB_LOG"; then
-  pass "update_pins_unprefixed_version: no v-prefixed image ref or pin in the stub log"
+if ! grep -q ':v1\.1\.3' "$STUB_LOG" \
+   && ! grep -qE 'JARVIS_(VERSION|IMAGE_TAG)=v1\.1\.3' "$STUB_LOG"; then
+  pass "update_release_identities_do_not_gain_a_v_prefix"
 else
-  check_fail "update_pins_unprefixed_version: v-prefix leaked: $(grep -E ':v1|=v1' "$STUB_LOG")"
+  check_fail "v-prefix leaked into release identity: $(grep -E ':v1|=v1' "$STUB_LOG")"
+fi
+
+# A commit-addressed verification update keeps the checkout's semantic
+# application version while selecting the exact commit-tagged image cohort.
+new_env; register_repo
+out="$(run_cli update --to "$TARGET_SHA" --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q "git merge --ff-only $TARGET_SHA" "$STUB_LOG" \
+   && grep -q "image pull ghcr.io/limitcycle-oss/jarvis-target-worker:$TARGET_SHA" "$STUB_LOG" \
+   && grep -q "compose pull .*version=1.1.3 image=$TARGET_SHA" "$STUB_LOG" \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$REPO/.env" \
+   && grep -qx "JARVIS_IMAGE_TAG=$TARGET_SHA" "$REPO/.env"; then
+  pass "commit_addressed_update_keeps_semantic_version_and_exact_image_identity"
+else
+  check_fail "commit-addressed update identity: rc=$rc env=$(grep -E '^JARVIS_(VERSION|IMAGE_TAG)=' "$REPO/.env") log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# A managed update must keep its journal pending through a recoverable
+# unhealthy sample, then commit only after the shared state machine observes
+# health. The no-op sleep keeps production's 180/3 arithmetic intact.
+new_env; register_repo
+HEALTH_SEQUENCE="$CFG/health-sequence"
+printf '%s\n' 'unhealthy|running' 'healthy|running' > "$HEALTH_SEQUENCE"
+STUB_HEALTH_SEQUENCE="$HEALTH_SEQUENCE"
+STUB_FAST_SLEEP=1
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$PENDING_FILE" ] \
+   && grep -q '^docker health sample=unhealthy|running version=1.1.2 image=1.1.2$' "$STUB_LOG" \
+   && grep -q '^docker health sample=healthy|running version=1.1.2 image=1.1.2$' "$STUB_LOG" \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$REPO/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$REPO/.env"; then
+  pass "managed_transient_unhealthy_commits_only_after_later_health"
+else
+  check_fail "managed transient health: rc=$rc pending=$(cat "$PENDING_FILE" 2>/dev/null) env=$(grep JARVIS_VERSION "$REPO/.env") log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # commits only after health: failed health -> transaction stays pending.
-new_env; register_repo; STUB_HEALTH="unhealthy"
+new_env; register_repo; STUB_HEALTH="unhealthy"; STUB_FAST_SLEEP=1
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_HEALTH
 if [ "$rc" -ne 0 ] && [ -f "$PENDING_FILE" ] \
    && ! grep -q '"committed"' "$PENDING_FILE" 2>/dev/null \
-   && grep -qx 'JARVIS_VERSION=1.1.2' "$REPO/.env"; then
+   && grep -qx 'JARVIS_VERSION=1.1.2' "$REPO/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.2' "$REPO/.env"; then
   pass "update_commits_txn_only_after_health: failed health leaves txn pending and old pin intact"
 else
   check_fail "update_commits_txn_only_after_health: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE") env=$(grep JARVIS_VERSION "$REPO/.env")"
@@ -988,10 +1059,12 @@ fi
 new_env; register_repo
 STUB_EXACT_TAG="v1.1.4-rc.1"
 out="$(run_cli update --to v1.1.4-rc.1 --yes)"; rc=$?
-if grep -q 'git merge --ff-only v1.1.4-rc.1' "$STUB_LOG" && grep -q '^JARVIS_VERSION=1.1.4-rc.1$' "$REPO/.env"; then
+if grep -q 'git merge --ff-only v1.1.4-rc.1' "$STUB_LOG" \
+   && grep -qx 'JARVIS_VERSION=1.1.4-rc.1' "$REPO/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.4-rc.1' "$REPO/.env"; then
   pass "update_to_flag_targets_rc_with_same_gates: rc tag merged + pinned v-less"
 else
-  check_fail "update_to_flag_targets_rc_with_same_gates: log=$(grep merge "$STUB_LOG") env=$(grep JARVIS_VERSION "$REPO/.env")"
+  check_fail "update_to_flag_targets_rc_with_same_gates: log=$(grep merge "$STUB_LOG") env=$(grep -E '^JARVIS_(VERSION|IMAGE_TAG)=' "$REPO/.env")"
 fi
 
 # resume re-enters recorded phase: a pending file at phase=pull resumes pulls, never re-merges.
@@ -1014,6 +1087,22 @@ if ! grep -q 'merge --ff-only' "$STUB_LOG"; then
   pass "update_resume_skips_merge_and_does_not_reexec: --resume performs no merge"
 else
   check_fail "update_resume_skips_merge_and_does_not_reexec: log=$(cat "$STUB_LOG")"
+fi
+
+# A resumed commit-addressed transaction must reuse its recorded image identity,
+# not derive the image tag from the checkout's semantic application version.
+new_env; register_repo
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+write_pending pull "$SOURCE_SHA" "$TARGET_SHA" "$TARGET_SHA" "$TARGET_SHA"
+out="$(run_cli update --resume "$TARGET_SHA" --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -q 'merge --ff-only' "$STUB_LOG" \
+   && grep -q "compose pull .*version=1.1.3 image=$TARGET_SHA" "$STUB_LOG" \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$REPO/.env" \
+   && grep -qx "JARVIS_IMAGE_TAG=$TARGET_SHA" "$REPO/.env"; then
+  pass "commit_addressed_resume_reuses_recorded_image_identity"
+else
+  check_fail "commit-addressed resume identity: rc=$rc env=$(grep -E '^JARVIS_(VERSION|IMAGE_TAG)=' "$REPO/.env") log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # Backup-bearing resumes re-authenticate the recorded archive set immediately
@@ -1544,7 +1633,7 @@ done
 
 # doctor warns on a GPU overlay with no DRI render node, exit unchanged.
 new_env; register_repo
-printf 'JARVIS_VERSION=1.1.2\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.vulkan.yml\n' > "$REPO/.env"
+printf 'JARVIS_VERSION=1.1.2\nJARVIS_IMAGE_TAG=1.1.2\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.vulkan.yml\n' > "$REPO/.env"
 EMPTY_DRI="$ROOT/dri.$RANDOM"; mkdir -p "$EMPTY_DRI"
 out="$( run_cli_dri() { env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" \
   "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin" \
@@ -1560,7 +1649,7 @@ fi
 # exact recorded application pin and repository, preserves its configured
 # profiles and services, puts data restoration before image recovery, and never
 # presents that bounded action as a full release rollback.
-new_env; register_repo; STUB_HEALTH="unhealthy"
+new_env; register_repo; STUB_HEALTH="unhealthy"; STUB_FAST_SLEEP=1
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
 STUB_MIG_CONTENT="DELETE FROM telegram_user_pairings WHERE chat_id < 0;"
 printf 'COMPOSE_PROFILES=tunnel\nTELEGRAM_BOT_TOKEN=configured\n' >> "$REPO/.env"
@@ -1573,7 +1662,7 @@ recovery_count="$(printf '%s\n' "$out" | grep -cF 'Application-image recovery (n
 if [ "$rc" -ne 0 ] \
    && grep -q '"from_version":"1.1.2"' "$PENDING_FILE" \
    && has "$out" 'Repository:' && has "$out" "$REPO" \
-   && has "$out" 'JARVIS_VERSION=1.1.2 docker compose --profile tunnel --profile telegram pull' \
+   && has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
    && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
    && has "$out" 'A data-changing migration may have run' \

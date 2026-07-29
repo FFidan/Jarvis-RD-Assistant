@@ -6,11 +6,11 @@
  * - Clicking the toggle calls setMut.mutate with { key: 'recommendation.enabled', value: <negated> }
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PulseAdvancedTuningCard } from '@/components/settings/pulse/PulseAdvancedTuningCard';
 import type { ConfigEntry } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -71,13 +71,12 @@ function makeConfigs(extra: ConfigEntry[] = []): ConfigEntry[] {
 function renderCard(
   props: Parameters<typeof PulseAdvancedTuningCard>[0],
 ) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <PulseAdvancedTuningCard {...props} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <PulseAdvancedTuningCard {...props} />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

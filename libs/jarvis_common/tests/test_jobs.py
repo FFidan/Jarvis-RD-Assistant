@@ -57,6 +57,26 @@ async def _drain(ait: AsyncIterator[str], max_items: int = 300) -> list[str]:
     return items
 
 
+@pytest.mark.parametrize(
+    ("cancelled", "incomplete", "expected"),
+    [
+        (False, False, "ok"),
+        (False, True, "partial"),
+        (True, False, "cancelled"),
+        (True, True, "cancelled"),
+    ],
+)
+def test_batch_terminal_status_has_one_shared_precedence(
+    cancelled: bool,
+    incomplete: bool,
+    expected: str,
+) -> None:
+    """Cancellation wins over partial work; otherwise incompleteness is partial."""
+    from jarvis_common.jobs import batch_terminal_status
+
+    assert batch_terminal_status(cancelled=cancelled, incomplete=incomplete) == expected
+
+
 def _make_prow(status: str, *, result: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a raw ``procrastinate_jobs`` row as the SELECT in jobs.py shapes it.
 

@@ -26,6 +26,7 @@ export interface Card {
   evidence: Evidence | null;
   fsrs_state: Record<string, unknown>;
   due_at: string | null;
+  stale: boolean;
   created_at: string;
   updated_at: string;
 }

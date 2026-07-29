@@ -15,10 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 from jarvis_common.testing import FakeRecord
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 def make_card_row(**overrides) -> FakeRecord:
     """Return a FakeRecord compatible with row_to_card_response.
 
@@ -42,9 +38,9 @@ def make_card_row(**overrides) -> FakeRecord:
     # Normalise None sentinels so callers never get bare None in required fields.
     values["evidence"] = values["evidence"] if values["evidence"] is not None else {}
     values["fsrs_state"] = values["fsrs_state"] if values["fsrs_state"] is not None else {}
-    values["due_at"] = values["due_at"] if values["due_at"] is not None else _now()
-    values.setdefault("created_at", _now())
-    values.setdefault("updated_at", _now())
+    values["due_at"] = values["due_at"] if values["due_at"] is not None else datetime.now(UTC)
+    values.setdefault("created_at", datetime.now(UTC))
+    values.setdefault("updated_at", datetime.now(UTC))
     return FakeRecord(**values)
 
 

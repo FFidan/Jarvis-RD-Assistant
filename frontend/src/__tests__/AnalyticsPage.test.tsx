@@ -7,10 +7,10 @@
  *  - All six existing chart cards still render (regression guard)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock the API module — includes fetchAnalyticsSummary + all existing chart fns.
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -52,15 +52,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <AnalyticsPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <AnalyticsPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

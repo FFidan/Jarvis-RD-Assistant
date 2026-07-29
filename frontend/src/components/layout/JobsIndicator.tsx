@@ -9,6 +9,7 @@ import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { kindLabel } from '@/lib/labels/jobKinds';
+import { jobOutcomeCounts } from '@/lib/job-outcome';
 
 type DisplayStatus = Job['status'] | 'partial';
 
@@ -40,27 +41,17 @@ function statusLabel(status: DisplayStatus): string {
  * A job that reached `succeeded` but reports a `partial` or `cancelled` result
  * (e.g. `papers.process_library`) left work undone. Returns a short
  * "N failed, M skipped, R not processed of T" line, or null for a plain
- * success. Older results without a trustworthy remaining count keep their
- * existing summary.
+ * success. A partial result without countable outcomes gets a neutral fallback
+ * instead of a misleading all-zero summary.
  */
 function outcomeSummary(job: Job): string | null {
   const r = (job.result ?? {}) as {
     status?: string;
-    total?: number;
-    remaining?: number;
-    errors?: unknown[];
-    blocked?: unknown[];
   };
   if (job.status !== 'succeeded') return null;
   if (r.status !== 'partial' && r.status !== 'cancelled') return null;
-  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
-  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
-  const remaining = typeof r.remaining === 'number'
-    && Number.isInteger(r.remaining)
-    && r.remaining >= 0
-    ? r.remaining
-    : 0;
-  const total = typeof r.total === 'number' ? r.total : failed + skipped;
+  const { failed, skipped, remaining, total } = jobOutcomeCounts(job.result);
+  if (failed === 0 && skipped === 0 && remaining === 0) return 'Details unavailable';
   const remainingSummary = remaining > 0 ? `, ${remaining} not processed` : '';
   return `${failed} failed, ${skipped} skipped${remainingSummary} of ${total}`;
 }

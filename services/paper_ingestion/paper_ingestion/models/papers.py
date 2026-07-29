@@ -48,7 +48,7 @@ class Confidence(str, Enum):
 class PaperBase(BaseModel):
     """Fields common to paper creation and response."""
 
-    external_id: str = Field(..., max_length=500)
+    external_id: str = Field(..., max_length=255)
     source_type: SourceType
     title: str = Field(..., max_length=1000)
     authors: list[str]
@@ -136,6 +136,7 @@ class CrossReference(BaseModel):
     relationship: str
     explanation: str
     related_quote: str | None = None
+    content_generation: int = 0
 
 
 class SummaryResponse(BaseModel):

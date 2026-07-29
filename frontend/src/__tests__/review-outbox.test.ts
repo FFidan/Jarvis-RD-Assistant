@@ -110,6 +110,21 @@ describe('drainReviewOutbox — success path', () => {
     expect(await getReviewOutbox()).toHaveLength(0);
   });
 
+  it('treats a skipped-only batch as terminal and empties the queue', async () => {
+    await enqueueReview(10, 2, 100);
+    const post = vi.fn(async (): Promise<ReviewSyncResult> => ({ synced: 0, skipped: 1 }));
+
+    const outcome = await drainReviewOutbox(post);
+
+    expect(outcome).toEqual({
+      status: 'synced',
+      synced: 0,
+      skipped: 1,
+      remaining: 0,
+    });
+    expect(await getReviewOutbox()).toHaveLength(0);
+  });
+
   it('returns status empty (no network call) when nothing is queued', async () => {
     const post = vi.fn();
     const outcome = await drainReviewOutbox(post as never);

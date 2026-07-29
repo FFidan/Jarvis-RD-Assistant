@@ -52,24 +52,6 @@ def _make_upload_file() -> object:
 
 
 # ---------------------------------------------------------------------------
-# Characterisation: CURRENT behaviour raises 409 (red before fix)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_upload_pdf_dedupe_old_behaviour_raises_409(monkeypatch):
-    """Documents the pre-fix behaviour: dedupe → 409, library untouched.
-
-    This test is EXPECTED TO FAIL once the fix is applied; it is kept as
-    a living record of the original bug for reviewers.  Skip it after the
-    fix lands if it causes noise — the two post-fix tests below are the
-    authoritative spec.
-    """
-    # Not run as part of the green suite; kept for documentation purposes.
-    pytest.skip("characterisation test — superseded by post-fix assertions below")
-
-
-# ---------------------------------------------------------------------------
 # Post-fix: dedupe adds canonical paper to caller's library (user_id set)
 # ---------------------------------------------------------------------------
 

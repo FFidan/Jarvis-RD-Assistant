@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
@@ -38,6 +37,7 @@ import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkL
 import { listEvents } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
 import { formatTimestamp, formatTime } from '@/lib/relative-time';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockListEvents = vi.mocked(listEvents);
 
@@ -60,28 +60,22 @@ function makeEvent(overrides: Partial<SystemEvent> = {}): SystemEvent {
 }
 
 function renderPage(initialPath = '/logs') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <LogsPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <LogsPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
 function renderEventsTab(initialPath = '/logs?tab=events') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <EventsTab />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <EventsTab />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -357,17 +351,16 @@ describe('CorrelationGroup — expand/collapse', () => {
   ];
 
   function renderGroup(searchText = '') {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <CorrelationGroup
-            correlationId={corrId}
-            events={events}
-            searchText={searchText}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    return renderWithProviders(
+      <MemoryRouter>
+        <CorrelationGroup
+          correlationId={corrId}
+          events={events}
+          searchText={searchText}
+        />
+      </MemoryRouter>,
+      { queryClient },
     );
   }
 
@@ -466,22 +459,20 @@ describe('EventsTab — group by correlation', () => {
 describe('ErrorSparkLine', () => {
   it('shows "no errors" message when no error events exist', () => {
     const events = [makeEvent({ level: 'info' }), makeEvent({ level: 'debug' })];
-    const queryClient = new QueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ErrorSparkLine events={events} />
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient({});
+    renderWithProviders(
+      <ErrorSparkLine events={events} />,
+      { queryClient },
     );
     expect(screen.getByText(/No errors in the last hour/i)).toBeInTheDocument();
   });
 
   it('renders spark-line chart when error events exist', () => {
     const events = [makeEvent({ level: 'error', message: 'boom' })];
-    const queryClient = new QueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ErrorSparkLine events={events} />
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient({});
+    renderWithProviders(
+      <ErrorSparkLine events={events} />,
+      { queryClient },
     );
     expect(screen.getByTestId('error-sparkline')).toBeInTheDocument();
   });

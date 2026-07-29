@@ -8,11 +8,11 @@
  *  - Inbox: remains byte-identical (sourceTypes already passed through)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // vi.mock is hoisted above module-level const — fixtures that must be referenced
 // inside the factory MUST be declared with vi.hoisted().
@@ -81,9 +81,7 @@ vi.mock('sonner', () => ({
 }));
 
 function makeQC() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 /** Renders FeedView inside a MemoryRouter; initialUrl controls URL search params. */
@@ -93,14 +91,13 @@ function renderFeedView(
   initialUrl = '/',
 ) {
   const qc = makeQC();
-  const result = render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          <Route path="/" element={<FeedView surface={surface} {...props} />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const result = renderWithProviders(
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <Routes>
+        <Route path="/" element={<FeedView surface={surface} {...props} />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: qc },
   );
   return { ...result, qc };
 }
@@ -162,17 +159,16 @@ describe('FeedView — F5: pagination reset on sourceTypes change (Library)', ()
     const initialUrl = '/?offset=30&limit=30';
 
     const qc = makeQC();
-    const { rerender } = render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={[initialUrl]}>
-          <Routes>
-            <Route
-              path="/"
-              element={<FeedView surface="library" sourceTypes={null} />}
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const { rerender } = renderWithProviders(
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route
+            path="/"
+            element={<FeedView surface="library" sourceTypes={null} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     // Wait for initial fetch at offset=30 with no sourceTypes
@@ -183,16 +179,14 @@ describe('FeedView — F5: pagination reset on sourceTypes change (Library)', ()
 
     // Re-render with sourceTypes='arxiv' — should trigger offset reset to 0
     rerender(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={[initialUrl]}>
-          <Routes>
-            <Route
-              path="/"
-              element={<FeedView surface="library" sourceTypes="arxiv" />}
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route
+            path="/"
+            element={<FeedView surface="library" sourceTypes="arxiv" />}
+          />
+        </Routes>
+      </MemoryRouter>,
     );
 
     // After reset, fetchFeed should be called with offset=0

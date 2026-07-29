@@ -36,6 +36,10 @@ Idiomatic-mock carve-out (KEEP in this file and callers):
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -46,6 +50,9 @@ from jarvis_common.testing_contract_apps import (
     DEFAULT_CONTRACT_API_KEY,
     make_contract_client as _client,
 )
+
+if TYPE_CHECKING:
+    from paper_ingestion.pulse.scoring import ScoredCandidate
 
 pytestmark = [
     pytest.mark.contract,
@@ -231,7 +238,8 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
     real schema to verify that running persist_deck twice yields exactly 1 card row —
     not 2 — proving old cards are deleted before re-insert.
 
-    Uses the single seeded paper (external_id='iso-ext-a') that contract_two_users seeds.
+    Uses the single seeded paper (external_id='iso-ext-a') that contract_two_users
+    seeds, promoted to shared scope because a card only binds to a shared paper.
     """
     from datetime import date
 
@@ -244,6 +252,11 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
     pool = SharedConnPool(contract_conn)
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 1, 1)  # far future — no collision with prod data
+
+    await contract_conn.execute(
+        "UPDATE papers SET visibility_scope = 'public' WHERE id = $1",
+        contract_two_users.paper_id_a,
+    )
 
     def _scored() -> ScoredCandidate:
         p = PaperCreate(
@@ -301,6 +314,104 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
     assert count_after_second == 1, (
         f"After second persist (idempotent upsert), expected exactly 1 card, got {count_after_second}. "
         "If count > 1, old cards were not deleted before re-insert (accumulation bug)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# persist_deck paper-scope binding — negative-feedback-filtered branch
+# Verified: pulse/deck.py _persist_deck_inner (card INSERT)
+# ---------------------------------------------------------------------------
+
+
+async def test_persist_deck_skips_unshared_paper_when_feedback_filter_applies(
+    contract_conn,
+    contract_two_users,
+):
+    """The filtered card INSERT binds shared papers only, and skips a private one.
+
+    ``_persist_deck_inner`` keeps the 60-day negative-feedback exclusion when at
+    least 20 candidates survive it, so this seeds 20 shared papers plus one
+    private paper to reach that branch.  Every shared paper must produce a card;
+    the private paper must produce none, even though its ``external_id`` is in
+    the candidate list and it carries no dismissive per-user state.
+    """
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.deck import persist_deck
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    from jarvis_common.testing import SharedConnPool
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    deck_date = date(2099, 2, 1)  # far future — no collision with prod data
+
+    shared_ids = [f"scope-shared-{n:02d}" for n in range(20)]
+    private_id = "scope-private-20"
+
+    for external_id in shared_ids:
+        await contract_conn.execute(
+            """INSERT INTO papers (external_id, source_type, title, authors, url,
+                                  discovered_by, visibility_scope)
+               VALUES ($1, 'arxiv', $2, ARRAY['Shared Author'], $3, $4, 'public')""",
+            external_id,
+            f"Shared Paper {external_id}",
+            f"https://arxiv.test/{external_id}",
+            user_id,
+        )
+    await contract_conn.execute(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', 'Unshared Paper', ARRAY['Unshared Author'],
+                   'https://arxiv.test/unshared', $2)""",
+        private_id,
+        contract_two_users.user_b_id,
+    )
+
+    def _scored(external_id: str) -> ScoredCandidate:
+        return ScoredCandidate(
+            paper=PaperCreate(
+                external_id=external_id,
+                source_type=SourceType.ARXIV,
+                title=f"Candidate {external_id}",
+                authors=["Author"],
+                abstract="Abstract",
+                url=f"https://arxiv.test/{external_id}",
+            ),
+            signals={"embedding": 0.5},
+            llm_relevance=7,
+            llm_novelty=5,
+            reasoning="relevant",
+            final_score=0.5,
+        )
+
+    successes = await persist_deck(
+        pool,
+        deck_date,
+        cards=[_scored(external_id) for external_id in [*shared_ids, private_id]],
+        stats={"candidate_count": 21},
+        user_id=user_id,
+    )
+
+    carded = {
+        row["external_id"]
+        for row in await contract_conn.fetch(
+            """SELECT p.external_id
+               FROM pulse_cards pc
+               JOIN pulse_decks pd ON pd.id = pc.deck_id
+               JOIN papers p ON p.id = pc.paper_id
+               WHERE pd.deck_date = $1 AND pd.user_id = $2""",
+            deck_date,
+            user_id,
+        )
+    }
+
+    assert carded == set(shared_ids), (
+        f"Only the 20 shared papers may be carded; got {sorted(carded)}. "
+        f"{private_id!r} is private and must not be bound to a card."
+    )
+    assert successes == len(shared_ids), (
+        f"persist_deck must report {len(shared_ids)} inserted cards; got {successes}"
     )
 
 
@@ -1199,6 +1310,77 @@ async def test_pulse_generate_endpoint_enqueues_job_and_returns_job_id_shape(
     )
 
 
+def _empty_pipeline_profile() -> object:
+    """Build the minimal profile used by pipeline-persistence contracts."""
+    from unittest.mock import MagicMock
+
+    return MagicMock(
+        topics=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 1.0},
+        deck_size=5,
+        stage2_top_k=10,
+        liked_paper_ids=[],
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+        lookback_days=7,
+    )
+
+
+def _pipeline_candidate(
+    external_id: str,
+    *,
+    title: str,
+    url: str,
+) -> ScoredCandidate:
+    """Build a scored candidate for pipeline-persistence contracts."""
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    return ScoredCandidate(
+        paper=PaperCreate(
+            external_id=external_id,
+            source_type=SourceType.ARXIV,
+            title=title,
+            authors=["Author"],
+            abstract="Abstract",
+            url=url,
+        ),
+        signals={"embedding": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.5,
+    )
+
+
+@contextmanager
+def _stub_pulse_inputs(
+    profile: object,
+    candidates: Sequence[ScoredCandidate],
+) -> Iterator[None]:
+    """Stub profile loading, discovery, and the first scoring stage."""
+    from unittest.mock import AsyncMock, patch
+
+    with (
+        patch(
+            "paper_ingestion.pulse.job.load_profile",
+            AsyncMock(return_value=profile),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.discover_candidates",
+            AsyncMock(return_value=([], {}, {})),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage1_embedding_filter",
+            AsyncMock(return_value=candidates),
+        ),
+    ):
+        yield
+
+
 # run_pulse: degraded_reason persisted when LLM returns 502
 # Verified: pulse/job.py:247-268 (stage2 exception → degraded_reason set + passed to persist_deck)
 # Verified: pulse/deck.py:73-89 (INSERT ... degraded_reason=$3)
@@ -1225,7 +1407,7 @@ async def test_pulse_run_degraded_path_persists_degraded_reason_to_db(
 
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_sidecars import FauxLiteLLMServer
-    from paper_ingestion._state import set_services
+    from paper_ingestion._state import set_services, svc
     from paper_ingestion.pulse.job import run_pulse
 
     pool = SharedConnPool(contract_conn)
@@ -1241,43 +1423,11 @@ async def test_pulse_run_degraded_path_persists_degraded_reason_to_db(
             mode=instructor.Mode.JSON,
         )
         # Wire the Instructor-patched client into the module-level services
-        original_client = None
-        try:
-            from paper_ingestion._state import svc as _svc
-
-            original_client = _svc.openai_client
-        except Exception:
-            pass
-
+        original_client = svc.openai_client
         set_services(openai_client=oc)
         try:
             with (
-                patch(
-                    "paper_ingestion.pulse.job.load_profile",
-                    AsyncMock(
-                        return_value=MagicMock(
-                            topics=[],
-                            tracked_author_names=set(),
-                            tracked_author_s2_ids=set(),
-                            library_centroid=None,
-                            weights={"embedding": 1.0},
-                            deck_size=5,
-                            stage2_top_k=10,
-                            liked_paper_ids=[],
-                            recent_positive_titles=[],
-                            recent_negative_titles=[],
-                            lookback_days=7,
-                        )
-                    ),
-                ),
-                patch(
-                    "paper_ingestion.pulse.job.discover_candidates",
-                    AsyncMock(return_value=([], {}, {})),
-                ),
-                patch(
-                    "paper_ingestion.pulse.job.stage1_embedding_filter",
-                    AsyncMock(return_value=[]),
-                ),
+                _stub_pulse_inputs(_empty_pipeline_profile(), []),
                 patch(
                     "paper_ingestion.pulse.job.stage3_combine",
                     AsyncMock(return_value=[]),
@@ -1339,32 +1489,20 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.models import PaperCreate, SourceType
     from paper_ingestion.pulse.job import run_pulse
-    from paper_ingestion.pulse.scoring import ScoredCandidate
 
     pool = SharedConnPool(contract_conn)
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 7, 1, 4, 0, tzinfo=UTC)
 
-    def _make_candidate(n: int) -> ScoredCandidate:
-        return ScoredCandidate(
-            paper=PaperCreate(
-                external_id=f"savepoint-test-{n}",
-                source_type=SourceType.ARXIV,
-                title=f"Savepoint Card {n}",
-                authors=["Author"],
-                abstract="Abstract",
-                url=f"https://arxiv.test/sv{n}",
-            ),
-            signals={"embedding": 0.5},
-            llm_relevance=None,
-            llm_novelty=None,
-            reasoning=None,
-            final_score=0.5,
+    candidates = [
+        _pipeline_candidate(
+            f"savepoint-test-{index}",
+            title=f"Savepoint Card {index}",
+            url=f"https://arxiv.test/sv{index}",
         )
-
-    candidates = [_make_candidate(i) for i in range(3)]
+        for index in range(3)
+    ]
 
     call_count = 0
 
@@ -1391,32 +1529,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
         return {"id": paper_id, "is_insert": True}
 
     with (
-        patch(
-            "paper_ingestion.pulse.job.load_profile",
-            AsyncMock(
-                return_value=MagicMock(
-                    topics=[],
-                    tracked_author_names=set(),
-                    tracked_author_s2_ids=set(),
-                    library_centroid=None,
-                    weights={"embedding": 1.0},
-                    deck_size=5,
-                    stage2_top_k=10,
-                    liked_paper_ids=[],
-                    recent_positive_titles=[],
-                    recent_negative_titles=[],
-                    lookback_days=7,
-                )
-            ),
-        ),
-        patch(
-            "paper_ingestion.pulse.job.discover_candidates",
-            AsyncMock(return_value=([], {}, {})),
-        ),
-        patch(
-            "paper_ingestion.pulse.job.stage1_embedding_filter",
-            AsyncMock(return_value=candidates),
-        ),
+        _stub_pulse_inputs(_empty_pipeline_profile(), candidates),
         patch(
             "paper_ingestion.pulse.job.stage2_llm_rerank",
             AsyncMock(side_effect=lambda batch, *a, **kw: batch),
@@ -1465,6 +1578,141 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
     assert "savepoint-isolation-trigger" in (stats.get("last_error") or ""), (
         f"last_error must reference the first-card failure; got {stats.get('last_error')!r}"
     )
+
+
+# run_pulse card binding: an incomplete promotion leaves the existing row's scope
+# Verified: pulse/deck.py _persist_deck_inner (card INSERT)
+# Verified: pulse/job.py _persist_pipeline (per-card savepoint swallows the failure)
+
+
+async def test_pulse_run_omits_card_for_paper_whose_promotion_did_not_complete(
+    contract_conn,
+    contract_two_users,
+):
+    """A candidate whose promotion fails contributes no card and no deck entry.
+
+    Another user already owns a private row under the candidate's
+    ``external_id``.  The per-card promotion raises, so that row keeps its
+    private scope, and ``_persist_pipeline`` logs the failure and continues.  The
+    persisted deck must contain only the candidate that was promoted, and the
+    loaded deck response must not carry the private row's title, authors or url.
+
+    Two candidates keep the deck below the 20-candidate negative-feedback
+    threshold, so this covers the fallback card INSERT.
+    """
+    from datetime import UTC, datetime, time
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.pulse.deck import load_today
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    unpromoted_id = "promotion-blocked-01"
+    promoted_id = "promotion-ok-01"
+    private_title = "Unshared Title"
+    private_author = "Unshared Author"
+    private_url = "https://unshared.test/blocked-01"
+
+    # load_today reads CURRENT_DATE, so take the deck date from the server.
+    today = await contract_conn.fetchval("SELECT CURRENT_DATE")
+    now = datetime.combine(today, time(4, 0), tzinfo=UTC)
+
+    await contract_conn.execute(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', $2, ARRAY[$3], $4, $5)""",
+        unpromoted_id,
+        private_title,
+        private_author,
+        private_url,
+        contract_two_users.user_b_id,
+    )
+
+    candidates = [
+        _pipeline_candidate(
+            external_id,
+            title=f"Candidate {external_id}",
+            url=f"https://arxiv.test/{external_id}",
+        )
+        for external_id in (unpromoted_id, promoted_id)
+    ]
+
+    async def selective_upsert(conn, paper, **kw):
+        if paper.external_id == unpromoted_id:
+            raise RuntimeError("promotion-blocked: candidate upsert fails")
+        # A completed promotion writes the row with shared scope.
+        paper_id = await conn.fetchval(
+            """INSERT INTO papers (external_id, source_type, title, authors, url,
+                                  discovered_by, visibility_scope)
+               VALUES ($1, 'arxiv', $2, ARRAY['Author'], $3, $4, 'public')
+               ON CONFLICT (external_id) DO UPDATE
+                   SET title = EXCLUDED.title, visibility_scope = 'public'
+               RETURNING id""",
+            paper.external_id,
+            paper.title,
+            paper.url,
+            user_id,
+        )
+        return {"id": paper_id, "is_insert": True}
+
+    with (
+        _stub_pulse_inputs(_empty_pipeline_profile(), candidates),
+        patch(
+            "paper_ingestion.pulse.job.stage2_llm_rerank",
+            AsyncMock(side_effect=lambda batch, *a, **kw: batch),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage3_combine",
+            AsyncMock(side_effect=lambda sc, weights: sc),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.assemble_deck",
+            MagicMock(return_value=candidates),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.upsert_verified_public_paper",
+            AsyncMock(side_effect=selective_upsert),
+        ),
+    ):
+        await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=now,
+            user_id=user_id,
+        )
+
+    carded = {
+        row["external_id"]
+        for row in await contract_conn.fetch(
+            """SELECT p.external_id
+               FROM pulse_cards pc
+               JOIN pulse_decks pd ON pd.id = pc.deck_id
+               JOIN papers p ON p.id = pc.paper_id
+               WHERE pd.deck_date = $1 AND pd.user_id = $2""",
+            today,
+            user_id,
+        )
+    }
+    assert carded == {promoted_id}, (
+        f"Only the promoted candidate may be carded; got {sorted(carded)}. "
+        f"{unpromoted_id!r} still resolves to another user's private row."
+    )
+
+    deck = await load_today(pool, user_id=user_id)
+    assert deck is not None, "run_pulse must persist a deck for the current date"
+    assert [card.paper_title for card in deck.cards] == [f"Candidate {promoted_id}"], (
+        f"Deck response must render only the promoted paper; got "
+        f"{[card.paper_title for card in deck.cards]!r}"
+    )
+    rendered = [
+        (card.paper_title, tuple(card.paper_authors), card.paper_url) for card in deck.cards
+    ]
+    assert all(
+        private_title != title and private_author not in authors and private_url != url
+        for title, authors, url in rendered
+    ), f"Deck response must not render the private row's metadata; got {rendered!r}"
 
 
 # advisory lock: concurrent calls to _pulse_generate_job are short-circuited
@@ -1992,12 +2240,14 @@ async def test_pulse_scoring_w2_stage3_reasoning_verification_persists(
     paper_abstract = "This paper proposes a novel method for continual learning."
     reasoning_text = "This paper proposes continual learning improvements."
 
-    # Seed the paper row so persist_deck can resolve external_id → paper.id
+    # Seed the paper row so persist_deck can resolve external_id → paper.id.
+    # Shared scope is part of the precondition: a card only binds to a shared paper.
     external_id = "w2-reasoning-persist-01"
     await contract_conn.execute(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                              discovered_by, visibility_scope)
            VALUES ($1, 'arxiv', 'Continual Learning Method', ARRAY['Author'],
-                   'https://arxiv.test/w2-persist-01', $2)
+                   'https://arxiv.test/w2-persist-01', $2, 'public')
            ON CONFLICT (external_id) DO NOTHING""",
         external_id,
         user_id,
@@ -2439,7 +2689,7 @@ async def test_pulse_run_schema_object_echo_persists_degraded_reason(
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_sidecars import FauxLiteLLMServer
     from jarvis_common.verify import QuoteVerifier
-    from paper_ingestion._state import set_services
+    from paper_ingestion._state import set_services, svc
     from paper_ingestion.pulse.job import run_pulse
     from paper_ingestion.pulse.models import PulseScoringOutput
     import paper_ingestion.pulse.scoring as _scoring
@@ -2458,21 +2708,12 @@ async def test_pulse_run_schema_object_echo_persists_degraded_reason(
             openai.AsyncOpenAI(base_url=f"{srv.url}/v1", api_key="dummy"),
             mode=instructor.Mode.JSON,
         )
+        original_client = svc.openai_client
+        original_verifier = svc.verifier
         set_services(openai_client=oc, verifier=QuoteVerifier())
         try:
             with (
-                patch(
-                    "paper_ingestion.pulse.job.load_profile",
-                    AsyncMock(return_value=_pulse_profile()),
-                ),
-                patch(
-                    "paper_ingestion.pulse.job.discover_candidates",
-                    AsyncMock(return_value=([], {}, {})),
-                ),
-                patch(
-                    "paper_ingestion.pulse.job.stage1_embedding_filter",
-                    AsyncMock(return_value=candidates),
-                ),
+                _stub_pulse_inputs(_pulse_profile(), candidates),
                 patch(
                     "paper_ingestion.pulse.job._run_optional_signals",
                     AsyncMock(side_effect=lambda _db, s2, _p, _u: (s2, None, None)),
@@ -2486,7 +2727,7 @@ async def test_pulse_run_schema_object_echo_persists_degraded_reason(
                     user_id=user_id,
                 )
         finally:
-            set_services(openai_client=None, verifier=None)
+            set_services(openai_client=original_client, verifier=original_verifier)
 
     assert stats["llm_calls"] == 0, (
         f"No candidate may be scored from the echoed schema object; got llm_calls="

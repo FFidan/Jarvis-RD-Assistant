@@ -11,26 +11,22 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.models import PaperCreate
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
+from tests._paper_fakes import make_paper_create
 from tests.conftest import FakeRecord
 
 
-# Keep local: upsert-specific paper (discovery_origin/citation_count/metadata kwargs) not in pulse_helpers.make_pulse_paper.
 def _make_paper() -> PaperCreate:
-    return PaperCreate(
+    """Build the canonical paper used by upsert assertions."""
+    return make_paper_create(
         external_id="arxiv:9999.99999",
-        source_type=SourceType.ARXIV,
         title="A canonical paper",
         authors=["Alice", "Bob"],
         abstract="Abstract.",
         published_date=datetime(2026, 1, 1, tzinfo=UTC).date(),
         url="https://example.org/p",
-        pdf_url=None,
-        citation_count=0,
-        metadata={},
-        discovery_origin="user_initiated",
     )
 
 

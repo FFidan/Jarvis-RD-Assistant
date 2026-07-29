@@ -15,13 +15,13 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminSystemHealthPage } from '@/pages/AdminSystemHealthPage';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -273,16 +273,13 @@ const devModeResponse = {
 // ---------------------------------------------------------------------------
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   return {
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <AdminSystemHealthPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <MemoryRouter>
+        <AdminSystemHealthPage />
+      </MemoryRouter>,
+      { queryClient },
     ),
     queryClient,
   };

@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from jarvis_common.auth import validate_runtime_config
-from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing import SharedConnPool, seed_user_row
 
 pytestmark = [
     pytest.mark.contract,
@@ -21,15 +21,9 @@ pytestmark = [
 ]
 
 
-async def _seed_user(conn, email: str, role: str) -> int:
-    return await conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ($1, $2) RETURNING id", email, role
-    )
-
-
 async def test_runtime_config_multi_user_without_hmac_raises(contract_conn):
-    await _seed_user(contract_conn, "owner@example.com", "admin")
-    await _seed_user(contract_conn, "member@example.com", "user")
+    await seed_user_row(contract_conn, "owner@example.com", "admin")
+    await seed_user_row(contract_conn, "member@example.com", "user")
     with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
         await validate_runtime_config(
             SharedConnPool(contract_conn),
@@ -40,7 +34,7 @@ async def test_runtime_config_multi_user_without_hmac_raises(contract_conn):
 
 
 async def test_runtime_config_single_user_without_hmac_ok(contract_conn):
-    await _seed_user(contract_conn, "solo@example.com", "admin")
+    await seed_user_row(contract_conn, "solo@example.com", "admin")
     await validate_runtime_config(
         SharedConnPool(contract_conn),
         environment="development",
@@ -50,8 +44,8 @@ async def test_runtime_config_single_user_without_hmac_ok(contract_conn):
 
 
 async def test_runtime_config_multi_user_with_hmac_ok(contract_conn):
-    await _seed_user(contract_conn, "owner@example.com", "admin")
-    await _seed_user(contract_conn, "member@example.com", "user")
+    await seed_user_row(contract_conn, "owner@example.com", "admin")
+    await seed_user_row(contract_conn, "member@example.com", "user")
     await validate_runtime_config(
         SharedConnPool(contract_conn),
         environment="development",
@@ -61,7 +55,7 @@ async def test_runtime_config_multi_user_with_hmac_ok(contract_conn):
 
 
 async def test_runtime_config_prod_no_admin_no_token_raises(contract_conn):
-    await _seed_user(contract_conn, "member@example.com", "user")
+    await seed_user_row(contract_conn, "member@example.com", "user")
     with pytest.raises(RuntimeError, match="JARVIS_SETUP_TOKEN"):
         await validate_runtime_config(
             SharedConnPool(contract_conn),

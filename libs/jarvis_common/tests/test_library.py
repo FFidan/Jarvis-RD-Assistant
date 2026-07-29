@@ -8,9 +8,9 @@ arguments to verify wire-level behaviour.
 
 from __future__ import annotations
 
+from functools import partial
 from unittest.mock import AsyncMock
 
-import asyncpg
 import pytest
 from jarvis_common.library import (
     ALLOWED_ADDED_VIA,
@@ -18,14 +18,14 @@ from jarvis_common.library import (
     fan_out_to_topic_users,
     list_users_with_topic,
 )
+from jarvis_common.testing import make_conn
 
-
-def _make_conn() -> AsyncMock:
-    """Mock connection that returns success on every execute/fetch."""
-    conn = AsyncMock(spec=asyncpg.Connection)
-    conn.execute = AsyncMock(return_value="INSERT 0 1")
-    conn.fetch = AsyncMock(return_value=[])
-    return conn
+_make_conn = partial(
+    make_conn,
+    execute_return="INSERT 0 1",
+    fetch_return=[],
+    with_transaction=False,
+)
 
 
 @pytest.mark.asyncio

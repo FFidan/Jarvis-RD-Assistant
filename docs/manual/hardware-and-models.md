@@ -16,13 +16,18 @@ selection: an AMD or Intel device can be detected while setup still chooses the
 safe CPU path. You can change model assignments later in **Settings → Models → AI
 models**.
 
-| VRAM | Example hardware | Main model (smart) | Quick model (fast) | Embedding model (embed) |
-|------|-----------------|-------------------|--------------------|------------------------|
-| CPU / < 4 GB | No GPU, or very small GPU | `qwen3:4b` | `qwen3:4b` | `qwen3-embedding:4b` |
-| 4–9 GB | GTX 1060 8 GB | `qwen3:4b` | `qwen3:4b` | `qwen3-embedding:4b` |
-| 10–19 GB | RTX 3080 10 GB · RTX 4070 · 16 GB workstation | `qwen3:8b` | `qwen3:4b` | `qwen3-embedding:4b` |
-| 20–39 GB | RTX 3090 · A10 24 GB | `qwen3:14b` | `qwen3:4b` | `qwen3-embedding:4b` |
-| ≥ 40 GB | A40 · 48 GB-class GPU | `qwen3:30b-a3b` | `qwen3:4b` | `qwen3-embedding:4b` |
+| Setup bucket | Detected VRAM | Main model (smart) | Quick model (fast) | Embedding model (embed) |
+|--------------|---------------|--------------------|--------------------|-------------------------|
+| `cpu` | No usable GPU | `qwen3:1.7b` | `qwen3:4b` | `qwen3-embedding:4b` |
+| `lt-8` | < 8 GB | `qwen3:1.7b` | `qwen3:4b` | `qwen3-embedding:4b` |
+| `8-16` | 8 to < 16 GB | `qwen2.5:7b-instruct` | `qwen3:4b` | `qwen3-embedding:4b` |
+| `16-24` | 16 to < 24 GB | `qwen2.5:7b-instruct` | `qwen3:4b` | `qwen3-embedding:4b` |
+| `24-48` | 24 to < 48 GB | `qwen3:14b` | `qwen3:4b` | `qwen3-embedding:4b` |
+| `ge-48` | ≥ 48 GB | `qwen3:30b-a3b` | `qwen3:4b` | `qwen3-embedding:4b` |
+
+The default cold-install requirement across these tier-selected sets and the
+supported pull/build paths is **27–54 GB**. Run `./setup.sh --check` for the
+selected host and image path; custom models may require more.
 
 **Main model (smart)** — writes summaries, cards, and Ask answers.  
 **Quick model (fast)** — scores and triages incoming papers.  
@@ -31,14 +36,16 @@ your Qdrant collection and changing it requires re-indexing your library.
 
 ### What to expect
 
-- **CPU / < 4 GB:** This tier is supported, but first-paper analysis can take
+- **CPU / < 8 GB:** This tier is supported, but first-paper analysis can take
   tens of minutes for a long paper.
-- **10–19 GB:** A roughly 60,000-character paper took about 45 seconds on the
-  16 GB reference card. Results vary with model, context, and driver.
-- **20–39 GB:** Setup recommends `qwen3:14b` while retaining the smaller quick
+- **8–24 GB:** Setup selects `qwen2.5:7b-instruct`; observed speed depends on
+  the device, context, and driver.
+- **24–47 GB:** Setup recommends `qwen3:14b` while retaining the smaller quick
   model and embedder.
-- **≥ 40 GB:** Setup recommends `qwen3:30b-a3b`. The reference validation used
+- **≥ 48 GB:** Setup recommends `qwen3:30b-a3b`. The reference validation used
   a 48 GB card and a 16k context window.
+- A roughly 60,000-character paper took about 45 seconds on the
+  16 GB reference card. Results vary with model, context, and driver.
 
 ---
 

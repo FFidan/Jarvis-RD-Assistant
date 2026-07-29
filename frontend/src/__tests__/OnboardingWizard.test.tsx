@@ -12,12 +12,13 @@
  *   (f) topic/automation CTAs reflect server state on mount (SETUP-STEP-STATE).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useJobStore } from '@/stores/job-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 function LocationDisplay() {
   const location = useLocation();
@@ -80,6 +81,7 @@ const pulseApi = await import('@/lib/api/pulse');
 const { ApiError } = await import('@/lib/api/core');
 const { OnboardingWizard, isRemotePlainHttp } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
+const { resetAuthState } = await import('@/__tests__/auth-test-utils');
 
 type FirstRun = {
   configured: boolean;
@@ -96,25 +98,24 @@ function renderWizard(
   initialUrl = '/?step=1',
   client?: QueryClient,
 ) {
-  const queryClient = client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialUrl]}>
-        <Routes>
-          {/* Wizard reads ?step= from the URL at any path. */}
-          <Route
-            path="/"
-            element={
-              <>
-                <LocationDisplay />
-                <OnboardingWizard firstRun={firstRun} authed={authed} />
-              </>
-            }
-          />
-          <Route path="/done-marker" element={<div>DASHBOARD</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = client ?? createTestQueryClient();
+  const utils = renderWithProviders(
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <Routes>
+        {/* Wizard reads ?step= from the URL at any path. */}
+        <Route
+          path="/"
+          element={
+            <>
+              <LocationDisplay />
+              <OnboardingWizard firstRun={firstRun} authed={authed} />
+            </>
+          }
+        />
+        <Route path="/done-marker" element={<div>DASHBOARD</div>} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
   return { ...utils, queryClient };
 }
@@ -130,7 +131,7 @@ describe('OnboardingWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     useJobStore.getState()._reset();
     vi.mocked(api.getFirstRunStatus).mockResolvedValue({ configured: false, setup_completed: false });
     vi.mocked(api.getSetupStatus).mockResolvedValue({
@@ -174,7 +175,7 @@ describe('OnboardingWizard', () => {
 
   it('Done step offers first discovery and tracks the queued pulse job', async () => {
     const user = userEvent.setup();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
@@ -193,7 +194,7 @@ describe('OnboardingWizard', () => {
   it('Done step tracks a running discovery job as running', async () => {
     const user = userEvent.setup();
     vi.mocked(pulseApi.generatePulseNow).mockResolvedValueOnce({ job_id: 'pulse-job-running', status: 'running' });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
@@ -209,7 +210,7 @@ describe('OnboardingWizard', () => {
   it('Done step keeps dashboard navigation available after discovery rate-limit errors', async () => {
     const user = userEvent.setup();
     vi.mocked(pulseApi.generatePulseNow).mockRejectedValueOnce(new Error('429 Too Many Requests'));
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
@@ -224,7 +225,7 @@ describe('OnboardingWizard', () => {
   it('Done step keeps dashboard navigation available when discovery is already running', async () => {
     const user = userEvent.setup();
     vi.mocked(pulseApi.generatePulseNow).mockRejectedValueOnce(new Error('409 Conflict'));
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
@@ -330,7 +331,7 @@ describe('OnboardingWizard', () => {
 
   // (d) finishing sets setup_completed via setQueryData (no bounce — BUG-2).
   it('Done step marks completion, writes setup_completed to the firstRun cache, and navigates home', async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     // Seed the firstRun cache the way the gate would have populated it.
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
@@ -409,7 +410,7 @@ describe('OnboardingWizard', () => {
       .mockRejectedValueOnce(new Error('503 Service Unavailable'))
       .mockResolvedValueOnce(undefined);
 
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     // Done is step 8 in the configured (admin-skipped) sequence.
@@ -653,7 +654,7 @@ describe('OnboardingWizard', () => {
   // M2 hygiene: completing setup clears the one-time token from sessionStorage.
   it('(M2) clears the setup token from sessionStorage once setup completes', async () => {
     sessionStorage.setItem('jarvis_setup_token', 'stored-tok');
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
     // Done is step 8 in the configured (admin-skipped) sequence — it marks

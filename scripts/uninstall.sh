@@ -153,12 +153,29 @@ _cleanup_uninstall_lifecycle() {
 # -----------------------------------------------------------------------------
 # Resource enumeration (pure; stub-friendly; single source for preview + action).
 # -----------------------------------------------------------------------------
+# _resolve_installed_app_version — prefer the durable install pin; installations
+# created before the pin was introduced fall back to this checkout's version.
+_resolve_installed_app_version() {
+  local version
+  version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  if [ -n "$version" ]; then
+    app_version_is_valid "$version" || return 1
+    printf '%s' "$version"
+  else
+    resolve_checkout_app_version
+  fi
+}
+
+JARVIS_APP_VERSION=""
+
 # _jarvis_image_refs — the exact GHCR application refs for this install, derived
-# from PUBLISHED_SERVICES_BASE and .env's JARVIS_VERSION / TORCH_VARIANT_SUFFIX
-# (paper_ingestion carries the torch suffix; telegram_bot only when configured).
+# from PUBLISHED_SERVICES_BASE and the resolved application version /
+# TORCH_VARIANT_SUFFIX (paper_ingestion carries the torch suffix; telegram_bot
+# only when configured).
 _jarvis_image_refs() {
   local ns="ghcr.io/limitcycle-oss/jarvis-" svc ver suffix
-  ver="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"; ver="${ver:-unknown}"
+  ver="$JARVIS_APP_VERSION"
+  [ -n "$ver" ] || return 1
   suffix="$(sed -n 's/^TORCH_VARIANT_SUFFIX=//p' .env 2>/dev/null | head -1)"
   for svc in "${PUBLISHED_SERVICES_BASE[@]}"; do
     if [ "$svc" = "paper_ingestion" ]; then
@@ -430,6 +447,13 @@ fi
 if [ "$KEEP_DATA" -eq 1 ] && [ "$TIER" -gt 2 ]; then
   warn "--keep-data caps this run at tier 2 (app); volumes and files are preserved."
   TIER=2
+fi
+
+if [ "$TIER" -ge 2 ]; then
+  if ! JARVIS_APP_VERSION="$(_resolve_installed_app_version)"; then
+    die "The installed application version is missing or invalid." \
+        "Set JARVIS_VERSION in ${REPO}/.env to a valid version, then re-run the uninstall."
+  fi
 fi
 
 # -----------------------------------------------------------------------------

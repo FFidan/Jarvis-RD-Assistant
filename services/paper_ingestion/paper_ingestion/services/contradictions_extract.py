@@ -108,6 +108,7 @@ class VerifiedFinding:
     quote: str
     page_number: int | None
     cross_reference_ids: frozenset[int]
+    content_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -185,9 +186,32 @@ def _parse_findings(row: asyncpg.Record) -> list[VerifiedFinding]:
                 if isinstance(item.get("page_number"), int)
                 else None,
                 cross_reference_ids=cross_reference_ids,
+                content_generation=int(row.get("content_generation", 0)),
             )
         )
     return parsed
+
+
+_CURRENT_CROSS_REFERENCES_SQL = """
+        COALESCE((
+            SELECT jsonb_agg(ref)
+            FROM jsonb_array_elements(
+                CASE
+                    WHEN jsonb_typeof(ps.cross_references) = 'array'
+                    THEN ps.cross_references
+                    ELSE '[]'::jsonb
+                END
+            ) AS ref
+            JOIN papers related_p
+              ON ref->>'related_paper_id' ~ '^[0-9]+$'
+             AND related_p.id = (ref->>'related_paper_id')::integer
+            WHERE CASE
+                      WHEN ref->>'content_generation' ~ '^[0-9]+$'
+                      THEN (ref->>'content_generation')::bigint
+                      ELSE 0
+                  END = related_p.content_generation
+        ), '[]'::jsonb)
+"""
 
 
 # Shared scope for scannable summary rows: non-empty key_findings, optional
@@ -202,6 +226,7 @@ _SCANNABLE_SUMMARIES_SQL = """
                   THEN jsonb_array_length(ps.key_findings)
                   ELSE 0
               END > 0
+          AND ps.content_generation = p.content_generation
           AND ($1::integer IS NULL OR p.id = $1 OR EXISTS (
               SELECT 1
               FROM jsonb_array_elements(
@@ -211,8 +236,15 @@ _SCANNABLE_SUMMARIES_SQL = """
                       ELSE '[]'::jsonb
                   END
               ) AS ref
-              WHERE ref->>'related_paper_id' ~ '^[0-9]+$'
-                AND (ref->>'related_paper_id')::integer = $1
+              JOIN papers related_p
+                ON ref->>'related_paper_id' ~ '^[0-9]+$'
+               AND related_p.id = (ref->>'related_paper_id')::integer
+              WHERE related_p.id = $1
+                AND CASE
+                        WHEN ref->>'content_generation' ~ '^[0-9]+$'
+                        THEN (ref->>'content_generation')::bigint
+                        ELSE 0
+                    END = related_p.content_generation
           ))
           AND ($2::integer IS NULL OR ps.user_id IS NULL OR ps.user_id = $2)
           AND ($2::integer IS NULL OR EXISTS (
@@ -232,7 +264,9 @@ async def _load_verified_findings(
     """Load verified findings, scoped to the caller's library when available."""
     rows = await conn.fetch(
         f"""
-        SELECT p.id AS paper_id, p.title, ps.key_findings, ps.cross_references
+        SELECT p.id AS paper_id, p.title, p.content_generation,
+               ps.key_findings,
+               {_CURRENT_CROSS_REFERENCES_SQL} AS cross_references
         {_SCANNABLE_SUMMARIES_SQL}
         ORDER BY ps.created_at DESC
         LIMIT 250

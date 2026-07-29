@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import type { ProviderMetadata } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -90,15 +90,12 @@ const PROVIDERS: ProviderMetadata[] = [
 const MASKED_CONFIG = [{ key: 'llm.anthropic.api_key', value: '****1234' }];
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ProvidersSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ProvidersSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

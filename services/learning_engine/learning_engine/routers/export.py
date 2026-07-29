@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.anki_exporter import AnkiExporter
+from learning_engine.card_store import CURRENT_CARD_SQL
 from learning_engine.deps import get_anki_exporter, get_db_pool, limiter
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -34,11 +35,12 @@ async def export_anki(
             raise HTTPException(status_code=404, detail="Deck not found")
 
         rows = await conn.fetch(
-            """
+            f"""
             SELECT c.*, p.title AS paper_title, p.authors AS paper_authors
             FROM cards c
             LEFT JOIN papers p ON p.id = c.paper_id
             WHERE c.deck_id = $1 AND c.user_id = $2
+              AND {CURRENT_CARD_SQL}
             ORDER BY c.created_at
             """,
             deck_id,

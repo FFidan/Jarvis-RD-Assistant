@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import asyncpg
 import httpx
@@ -86,7 +87,9 @@ def build_database_url() -> str:
 
     The DSN is built as ``postgresql://<user>:<pass>@postgres:5432/<db>``
     using ``POSTGRES_USER`` and ``POSTGRES_DB`` env vars (both default to
-    ``jarvis`` matching ``docker-compose.yml``).
+    ``jarvis`` matching ``docker-compose.yml``). ``<user>``, ``<pass>`` and
+    ``<db>`` are percent-encoded so values containing DSN-reserved
+    characters (``@ : / ? # %``) do not corrupt the URL.
 
     Raises
     ------
@@ -105,8 +108,9 @@ def build_database_url() -> str:
                 "cannot construct DATABASE_URL"
             )
         settings = get_jarvis_common_settings()
-        user = settings.postgres_user
-        db = settings.postgres_db
+        user = quote(settings.postgres_user, safe="")
+        password = quote(password, safe="")
+        db = quote(settings.postgres_db, safe="")
         return f"postgresql://{user}:{password}@postgres:5432/{db}"
 
     # Fallback: tests and local dev set DATABASE_URL directly.

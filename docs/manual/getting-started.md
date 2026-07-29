@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-20 | routes: /onboarding, /auth/verify, /admin/users -->
+<!-- verified-against-UI: 2026-07-25 | routes: /onboarding, /auth/verify, /admin/users -->
 
 # First sign-in and setup
 
@@ -97,8 +97,9 @@ explicitly; see [Admin Pages](admin.md#instance-ownership-and-recovery).
 
 ## Add the first paper
 
-Open **Library → Add paper** and paste an arXiv URL, DOI, or title. Saving adds
-the bibliographic record. Choose **Analyze** on the paper to download and parse
+Open **Discover** and search by title or keyword across your enabled sources,
+then choose **Save to library** on the result you want — or use **Upload PDF**
+to add a file directly. Choose **Analyze** on the paper to download and parse
 the PDF, create search embeddings, and generate the configured research
 outputs.
 

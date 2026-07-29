@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MaintenanceBanner } from '@/components/shared/MaintenanceBanner';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 
@@ -9,11 +8,15 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { fetchStackHealth } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchStackHealth = vi.mocked(fetchStackHealth);
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 describe('MaintenanceBanner', () => {

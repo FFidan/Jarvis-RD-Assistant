@@ -578,9 +578,18 @@ async def test_generate_cards_core_degrades_on_provider_500(mock_db):
     from learning_engine.generation_service import generate_cards_core
 
     pool, conn = mock_db
-    conn.fetchval.return_value = 1
-    paper = {"id": 5, "title": "Paper", "authors": ["Ada"], "abstract": "Abstract"}
-    conn.fetchrow.side_effect = [paper, None]
+    conn.fetchval.side_effect = [1, 0]
+    paper = {
+        "id": 5,
+        "title": "Paper",
+        "authors": ["Ada"],
+        "abstract": "Abstract",
+        "content_generation": 0,
+        "summary_detailed": None,
+        "methodology": None,
+        "limitations": None,
+    }
+    conn.fetchrow.return_value = paper
     conn.fetch.return_value = [{"id": 11, "content": "chunk text", "page_number": 1}]
 
     request = httpx.Request("POST", "http://litellm:4000/v1/chat/completions")
@@ -620,3 +629,72 @@ async def test_generate_cards_core_degrades_on_provider_500(mock_db):
     assert result["cards_created"] == 0
     assert result["cards"] == []
     assert result["confidence"] == "LOW"
+
+
+@pytest.mark.asyncio
+async def test_card_generate_batch_job_reports_static_error_text(mock_db):
+    """An unexpected per-paper failure is reported without the exception text.
+
+    The batch result's ``errors`` list reaches the browser, so an unhandled
+    failure must reduce to a fixed message; the detail stays in the log.
+    """
+    from learning_engine.generation_service import _card_generate_batch_job
+    from tests.le_helpers import make_job_ctx
+
+    pool, conn = mock_db
+    conn.fetch.return_value = [{"id": 7}]
+
+    # A TypeError is handled by neither the JobError branch nor the narrow
+    # handlers inside generate_cards_core, so it reaches the broad branch with
+    # its full text intact.
+    raw_detail = "unhashable type: 'ChunkRecord' in _build_prompt"
+    ctx = make_job_ctx()
+
+    with patch(
+        "learning_engine.generation_service.generate_cards_core",
+        AsyncMock(side_effect=TypeError(raw_detail)),
+    ):
+        result = await _card_generate_batch_job(
+            pool=pool,
+            http_client=AsyncMock(),
+            payload={"deck_id": 1, "user_id": 42},
+            ctx=ctx,
+        )
+
+    assert result["status"] == "partial"
+    assert result["papers_processed"] == 0
+    assert result["errors"] == ["Paper 7: card generation failed"]
+    assert raw_detail not in result["errors"][0]
+    assert ctx.update_progress.await_args_list[-1].args[1].startswith("Partial:")
+
+
+@pytest.mark.asyncio
+async def test_card_generate_batch_job_cancelled_mid_run_is_not_unqualified_success(mock_db):
+    """A batch generate run stopped by cancellation must report ``cancelled``
+    — never say ``Batch complete`` — so the papers it never reached cannot
+    read as a clean completion."""
+    from learning_engine.generation_service import _card_generate_batch_job
+    from tests.le_helpers import make_job_ctx
+
+    pool, conn = mock_db
+    conn.fetch.return_value = [{"id": 7}, {"id": 8}, {"id": 9}]
+
+    ctx = make_job_ctx()
+    ctx.is_cancelled = AsyncMock(side_effect=[False, True])
+
+    with patch(
+        "learning_engine.generation_service.generate_cards_core",
+        AsyncMock(return_value={"cards_created": 2}),
+    ):
+        result = await _card_generate_batch_job(
+            pool=pool,
+            http_client=AsyncMock(),
+            payload={"deck_id": 1, "user_id": 42},
+            ctx=ctx,
+        )
+
+    assert result["status"] == "cancelled"
+    assert result["total"] == 3
+    assert result["papers_processed"] == 1
+    terminal_message = ctx.update_progress.await_args_list[-1].args[1]
+    assert "Batch complete" not in terminal_message

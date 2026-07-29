@@ -57,7 +57,7 @@ Choose the models JARVIS uses. Each control is labelled in plain language with i
 
 Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model **Configure** disclosure so the everyday controls stay uncluttered.
 
-**First-run pick banner.** After setup completes, a green banner shows the model JARVIS selected for your GPU — for example, "We picked qwen3:8b for your 15.9 GB GPU — change anytime in Settings → Models." This is just a confirmation; use the dropdowns below to change the selection at any time.
+**First-run pick banner.** After setup completes, a green banner shows the tier-selected model JARVIS chose for your GPU — for example, "We picked qwen2.5:7b-instruct for your 15.9 GB GPU — change anytime in Settings → Models." This is just a confirmation; use the dropdowns below to change the selection at any time.
 
 **Advisory recommendation banner.** Below the first-run confirmation, an advisory banner lists the per-alias recommendations for your hardware tier. This is informational only — it does not change your active model automatically.
 

@@ -1,6 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HardDeleteModal } from '@/components/feed/HardDeleteModal';
 
 vi.mock('@/lib/api', () => ({ hardDeletePaper: vi.fn() }));
@@ -8,10 +7,14 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { hardDeletePaper } from '@/lib/api';
 import { toast } from 'sonner';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 describe('HardDeleteModal', () => {

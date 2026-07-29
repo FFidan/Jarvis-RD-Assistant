@@ -42,7 +42,7 @@ class TopicCreate(BaseModel):
 class TopicUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     query_terms: list[str] | None = Field(default=None, min_length=1)
-    category: str | None = None
+    category: str | None = Field(default=None, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
     enabled: bool | None = None
 
@@ -88,6 +88,6 @@ class NudgeResponse(BaseModel):
 
 
 class NudgeUpdate(BaseModel):
-    cron_expression: str | None = None
+    cron_expression: str | None = Field(default=None, max_length=100)
     enabled: bool | None = None
     config: dict | None = None

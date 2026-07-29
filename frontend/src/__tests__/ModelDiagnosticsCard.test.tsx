@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
 import * as api from '@/lib/api';
+import { createTestQueryClient } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api');
 
@@ -16,7 +17,7 @@ vi.mock('@/stores/auth-store', () => ({
 }));
 
 const wrap = (ui: React.ReactNode) => (
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+  <QueryClientProvider client={createTestQueryClient()}>
     {ui}
   </QueryClientProvider>
 );

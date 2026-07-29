@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import shelve_paper
 from paper_ingestion.models import CrossPaperAskRequest
 
 # D3-12 deleted: test_search_chunks_global_no_filter
@@ -13,6 +14,20 @@ from paper_ingestion.models import CrossPaperAskRequest
 # ---------------------------------------------------------------------------
 # Test: deduplication logic (max 2 chunks per paper, respects max_papers)
 # ---------------------------------------------------------------------------
+
+
+def _stored_chunk_rows(paper_ids, chunk_indexes=range(4)) -> list[dict]:
+    """Answer a paper_chunks lookup: each requested paper stores these indexes.
+
+    RAG serves an excerpt only while the owning paper stores the matching chunk
+    row, so a mock pool must model a fully processed corpus to exercise anything
+    downstream of that check.
+    """
+    return [
+        {"paper_id": paper_id, "chunk_index": index}
+        for paper_id in paper_ids
+        for index in chunk_indexes
+    ]
 
 
 async def test_dedup_max_chunks_per_paper(monkeypatch):
@@ -59,8 +74,10 @@ async def test_dedup_max_chunks_per_paper(monkeypatch):
     ]
     library_rows = [{"paper_id": 1}, {"paper_id": 2}, {"paper_id": 3}]
 
-    async def _fetch(sql, *args):  # noqa: ARG001
-        return library_rows if "user_library WHERE user_id" in sql else db_rows
+    async def _fetch(sql, *args):
+        if "user_library WHERE user_id" in sql:
+            return library_rows
+        return _stored_chunk_rows(args[0]) if "paper_chunks" in sql else db_rows
 
     conn = AsyncMock()
     conn.fetch = AsyncMock(side_effect=_fetch)
@@ -94,16 +111,73 @@ async def test_dedup_max_chunks_per_paper(monkeypatch):
         assert count <= 2, f"Paper {pid} contributed {count} chunks — dedup cap is 2"
 
 
+async def test_papers_without_stored_chunks_do_not_consume_the_paper_budget(monkeypatch):
+    """A paper whose chunk rows are gone must not spend a max_papers slot.
+
+    Selection is a hard budget, so filtering after it lets a top-scoring dead
+    candidate take a slot and then vanish, leaving the slot empty and displacing
+    a live paper that ranked below it. Here the two highest-scoring papers store
+    no chunk rows and max_papers is 2: the live pair must come back. Filtering
+    after selection instead returns no results at all.
+    """
+    monkeypatch.setenv("RAG_RELATIVE_SCORE_CUTOFF", "0")
+
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    all_chunks = [
+        {"paper_id": 1, "chunk_index": 0, "content": "dead-a", "page_number": 1, "score": 0.95},
+        {"paper_id": 2, "chunk_index": 0, "content": "dead-b", "page_number": 1, "score": 0.90},
+        {"paper_id": 3, "chunk_index": 0, "content": "live-a", "page_number": 1, "score": 0.85},
+        {"paper_id": 4, "chunk_index": 0, "content": "live-b", "page_number": 1, "score": 0.80},
+    ]
+
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(return_value=all_chunks)
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
+
+    # Every paper is visible; only papers 3 and 4 still store their chunk rows.
+    db_rows = [
+        {"id": pid, "title": f"Paper {pid}", "authors": "A", "url": f"http://p{pid}"}
+        for pid in (1, 2, 3, 4)
+    ]
+
+    async def _fetch(sql, *args):
+        if "user_library WHERE user_id" in sql:
+            return [{"paper_id": pid} for pid in (1, 2, 3, 4)]
+        if "paper_chunks" in sql:
+            return _stored_chunk_rows([pid for pid in args[0] if pid in (3, 4)])
+        return db_rows
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value.__aenter__.return_value = conn
+
+    body = CrossPaperAskRequest(question="budget test", max_chunks=4, max_papers=2, decompose=False)
+
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+
+    assert isinstance(result, CrossPaperRagPrep), (
+        f"Live papers ranked below the dead ones, so retrieval must return them; got {result!r}"
+    )
+    paper_ids = {s["paper_id"] for s in result.sources}
+    assert paper_ids == {3, 4}, (
+        f"Expected the live papers to fill the budget, got {sorted(paper_ids)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Relevance gates: Layer 1 relative cosine cutoff + Layer 2 rerank-score floor
 # ---------------------------------------------------------------------------
 
 
 def _make_cutoff_pool(db_rows: list[dict], library_rows: list[dict]):
-    """Mock pool routing user_library lookups vs paper-metadata fetches."""
+    """Mock pool routing user_library, stored-chunk, and paper-metadata fetches."""
 
-    async def _fetch(sql, *args):  # noqa: ARG001
-        return library_rows if "user_library WHERE user_id" in sql else db_rows
+    async def _fetch(sql, *args):
+        if "user_library WHERE user_id" in sql:
+            return library_rows
+        return _stored_chunk_rows(args[0]) if "paper_chunks" in sql else db_rows
 
     conn = AsyncMock()
     conn.fetch = AsyncMock(side_effect=_fetch)
@@ -369,6 +443,9 @@ def test_missing_generation_fails_closed_while_internal_scope_is_explicit():
 # ---------------------------------------------------------------------------
 
 
+_CHUNK_CONTENT = "Attention mechanisms weight token pairs."
+
+
 async def _seed_paper(
     conn,
     external_id: str,
@@ -376,7 +453,7 @@ async def _seed_paper(
     visibility_scope: str,
     discovered_by: int | None = None,
 ) -> int:
-    return await conn.fetchval(
+    paper_id = await conn.fetchval(
         """INSERT INTO papers (
                external_id, source_type, title, authors, url,
                discovered_by, visibility_scope
@@ -388,14 +465,15 @@ async def _seed_paper(
         discovered_by,
         visibility_scope,
     )
-
-
-async def _shelve(conn, user_id: int, paper_id: int) -> None:
+    # Processing stores one paper_chunks row per embedded chunk, and retrieval
+    # serves an excerpt only while its row exists. `_chunk` below returns
+    # chunk_index 0 for each seeded paper, so back exactly that.
     await conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        user_id,
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content) VALUES ($1, 0, $2)",
         paper_id,
+        _CHUNK_CONTENT,
     )
+    return paper_id
 
 
 def _embedder_returning(chunks: list[dict]):
@@ -409,7 +487,7 @@ def _chunk(paper_id: int, score: float) -> dict:
     return {
         "paper_id": paper_id,
         "chunk_index": 0,
-        "content": "Attention mechanisms weight token pairs.",
+        "content": _CHUNK_CONTENT,
         "page_number": 1,
         "score": score,
     }
@@ -437,7 +515,7 @@ async def test_public_paper_stays_visible_after_another_user_shelves_it(
         "shared-public",
         visibility_scope="public",
     )
-    await _shelve(contract_conn, contract_two_users.user_a_id, public_id)
+    await shelve_paper(contract_conn, contract_two_users.user_a_id, public_id)
 
     result = await prepare_cross_paper_rag(
         _embedder_returning([_chunk(public_id, 0.9)]),
@@ -476,7 +554,7 @@ async def test_private_papers_outside_library_stay_out_of_cross_paper_answers(
         visibility_scope="private",
         discovered_by=user_a,
     )
-    await _shelve(contract_conn, user_a, shelved_by_a)
+    await shelve_paper(contract_conn, user_a, shelved_by_a)
     unshelved = await _seed_paper(
         contract_conn,
         "private-unshelved",
@@ -510,18 +588,59 @@ async def test_private_papers_outside_library_stay_out_of_cross_paper_answers(
 # ---------------------------------------------------------------------------
 
 
-def test_xml_escaping():
-    """Content and question are XML-escaped to prevent prompt injection."""
+async def test_excerpt_and_question_reach_the_prompt_escaped(monkeypatch):
+    """Markup in a retrieved excerpt or in the question must arrive escaped.
+
+    Retrieved text is untrusted -- it is whatever the source document contained
+    -- and the prompt wraps each excerpt in tags, so unescaped markup could
+    close the wrapper and have document text read as instruction. The earlier
+    version of this test escaped two strings itself and asserted against its own
+    output, so it exercised ``str.replace`` and never the production escaper.
+    """
+    monkeypatch.setenv("RAG_RELATIVE_SCORE_CUTOFF", "0")
+
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
     raw_content = '<script>alert("xss")</script> & "quoted"'
     raw_question = "What about <b>bold</b> claims?"
 
-    safe_content = raw_content.replace("<", "&lt;").replace(">", "&gt;")
-    safe_question = raw_question.replace("<", "&lt;").replace(">", "&gt;")
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(
+        return_value=[
+            {
+                "paper_id": 1,
+                "chunk_index": 0,
+                "content": raw_content,
+                "page_number": 1,
+                "score": 0.9,
+            }
+        ]
+    )
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
 
-    assert "<script>" not in safe_content
-    assert "&lt;script&gt;" in safe_content
-    assert "<b>" not in safe_question
-    assert "&lt;b&gt;" in safe_question
+    db_rows = [{"id": 1, "title": "Paper One", "authors": "A", "url": "http://p1"}]
+
+    async def _fetch(sql, *args):
+        if "user_library WHERE user_id" in sql:
+            return [{"paper_id": 1}]
+        return _stored_chunk_rows(args[0]) if "paper_chunks" in sql else db_rows
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value.__aenter__.return_value = conn
+
+    body = CrossPaperAskRequest(question=raw_question, max_chunks=4, max_papers=2, decompose=False)
+
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+
+    assert isinstance(result, CrossPaperRagPrep), f"expected a prepared prompt, got {result!r}"
+    prompt = result.messages[-1]["content"]
+
+    assert "<script>" not in prompt, "excerpt markup reached the prompt unescaped"
+    assert "&lt;script&gt;" in prompt
+    assert "<b>" not in prompt, "question markup reached the prompt unescaped"
+    assert "&lt;b&gt;" in prompt
 
 
 # test_ask_cross_paper_endpoint_structure deleted.

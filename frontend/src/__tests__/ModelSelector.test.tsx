@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { ModelSelector } from '@/components/shared/ModelSelector';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock Radix Select with native HTML elements (portals don't work in jsdom)
 // Store the onValueChange callback so SelectItem can call it
@@ -57,18 +57,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 function renderComponent(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   const defaultProps = {
     value: '',
     onChange: vi.fn(),
     ...props,
   };
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ModelSelector {...defaultProps} />
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <ModelSelector {...defaultProps} />,
+    { queryClient },
   );
 }
 

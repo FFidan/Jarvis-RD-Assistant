@@ -9,12 +9,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs
 
 import asyncpg
 import httpx
+import pytest
 import respx
+from jarvis_common.testing import make_conn
 from paper_ingestion.integrations.zotero_service import (
     poll_zotero_library,
     push_highlight_to_zotero,
@@ -47,19 +51,17 @@ def _make_pool(*conn_returns):
     return pool
 
 
-def _make_conn(**kwargs):
-    """Build a mock asyncpg connection with configurable fetchrow/fetch/execute."""
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=kwargs.get("fetchrow"))
-    conn.fetch = AsyncMock(return_value=kwargs.get("fetch", []))
-    conn.execute = AsyncMock(return_value=None)
-    # Support `async with conn.transaction():` — transaction() must return a sync
-    # callable that itself returns an async context manager.
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=None)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    return conn
+def _make_conn(
+    *,
+    fetchrow: object | None = None,
+    fetch: list[object] | None = None,
+) -> AsyncMock:
+    """Adapt Zotero's short result names to the shared connection factory."""
+    return make_conn(
+        execute_return=None,
+        fetchrow_return=fetchrow,
+        fetch_return=fetch if fetch is not None else [],
+    )
 
 
 def _zotero_enabled_config_rows():
@@ -532,13 +534,14 @@ def _zotero_item(
     abstract: str = "Some abstract.",
     url: str = "https://example.com/paper",
     creators: list[dict] | None = None,
+    item_type: str = "journalArticle",
 ) -> dict:
     """Build a minimal Zotero item dict."""
     return {
         "key": key,
         "data": {
             "key": key,
-            "itemType": "journalArticle",
+            "itemType": item_type,
             "title": title,
             "DOI": doi,
             "extra": extra,
@@ -567,6 +570,123 @@ def _make_poll_pool(*conn_returns, config_rows=None):
         side_effect=[_cm_rv(config_conn)] + [_cm_rv(rv) for rv in conn_returns]
     )
     return pool
+
+
+def _poll_state_store() -> dict[str, object]:
+    """Initial user_config state for a poll-enabled library at version 0."""
+    return {
+        "zotero.api_key": "test_api_key",
+        "zotero.user_id": "123456",
+        "zotero.library_type": "user",
+        "zotero.poll_enabled": True,
+        "zotero.last_library_version": 0,
+    }
+
+
+def _make_stateful_poll_pool(
+    store: dict[str, object],
+    resolved: set[tuple[int, int]],
+    attempts: dict[tuple[int, int], int],
+):
+    """Pool whose user_config rows and Zotero link rows outlive a single poll.
+
+    The version cursor, each link row's scheduling marker (``resolved``) and its
+    analysis-scheduling attempt count (``attempts``) are the only ingestion
+    state that survives a cycle, so they are modelled rather than mocked away:
+    successive polls then see exactly what the previous poll wrote, which is
+    what a bound spanning several cycles has to survive. Both link collections
+    are keyed by ``(paper_id, user_id)``.
+    """
+
+    async def _fetch(statement, *args):
+        if "zotero.%" not in statement:
+            return []
+        return [
+            FakeRecord({"key": key, "value": value, "encrypted_value": None})
+            for key, value in store.items()
+        ]
+
+    async def _execute(statement, *args):
+        sql = statement.lstrip()
+        if "zotero.last_library_version" in sql:
+            store["zotero.last_library_version"] = args[0]
+        elif sql.startswith("UPDATE paper_user_zotero_links"):
+            link = (args[0], args[1])
+            if "analysis_enqueue_attempts" in sql:
+                attempts[link] = attempts.get(link, 0) + 1
+            elif "analysis_enqueued_at" in sql:
+                resolved.add(link)
+
+    async def _fetchrow(statement, *args):
+        if "analysis_enqueue_attempts" not in statement:
+            return None
+        link = (args[0], args[1])
+        return FakeRecord(
+            {
+                "scheduling_recorded": link in resolved,
+                "analysis_enqueue_attempts": attempts.get(link, 0),
+            }
+        )
+
+    conn = _make_conn()
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    conn.execute = AsyncMock(side_effect=_execute)
+    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=lambda *a, **k: _cm(conn))
+    return pool
+
+
+def _parse_with_pdf_url(real_parse):
+    """Wrap _parse_zotero_item so parsed items carry a pdf_url.
+
+    Zotero parsing sets none today, so without this the enqueue path is never
+    reached at all and every scheduling test would pass vacuously.
+    """
+
+    def _parse(data, outer_item, namespace):
+        parsed = real_parse(data, outer_item, namespace)
+        if parsed is None:
+            return None
+        return replace(
+            parsed,
+            paper_create=parsed.paper_create.model_copy(
+                update={"pdf_url": "https://example.com/paper.pdf"}
+            ),
+        )
+
+    return _parse
+
+
+def _assert_poll_terminal(
+    result: dict[str, object],
+    *,
+    status: str,
+    version_to: int,
+    parse_failed: int = 0,
+    ingest_failed: int = 0,
+    gave_up: int = 0,
+    capped: bool = False,
+    remaining: int = 0,
+    version_from: int = 0,
+    cursor_persisted: bool = True,
+) -> None:
+    """Assert the complete terminal-outcome subset without deriving its status."""
+    expected: dict[str, object] = {
+        "status": status,
+        "parse_failed": parse_failed,
+        "ingest_failed": ingest_failed,
+        "gave_up": gave_up,
+        "capped": capped,
+        "failed": parse_failed + ingest_failed + gave_up,
+        "skipped": 0,
+        "remaining": remaining,
+        "version_from": version_from,
+        "version_to": version_to,
+        "cursor_persisted": cursor_persisted,
+    }
+    assert {key: result[key] for key in expected} == expected
+    assert result["total"] == result["new_items"] + remaining
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +723,34 @@ async def test_poll_library_poll_disabled():
     assert result["status"] == "poll_disabled"
 
 
+async def test_empty_poll_reports_complete_zero_counts():
+    """An empty, current library is a complete poll rather than a partial one."""
+    pool = _make_poll_pool()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=([], 0))
+        result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    assert result == {
+        "status": "ok",
+        "new_items": 0,
+        "linked": 0,
+        "enqueued": 0,
+        "parse_failed": 0,
+        "ingest_failed": 0,
+        "gave_up": 0,
+        "capped": False,
+        "failed": 0,
+        "skipped": 0,
+        "remaining": 0,
+        "total": 0,
+        "version_from": 0,
+        "version_to": 0,
+        "cursor_persisted": True,
+    }
+
+
 async def test_poll_library_skips_jarvis_origin():
     """Items with jarvis_paper_id= in Extra are skipped (not enqueued)."""
     jarvis_item = _zotero_item(key="JARVIS01", extra="jarvis_paper_id=42")
@@ -630,11 +778,90 @@ async def test_poll_library_skips_jarvis_origin():
     assert result["enqueued"] == 0
 
 
-async def test_poll_library_enqueues_new_items():
-    """New items without jarvis origin are upserted and enqueued as paper.analyze jobs.
+async def test_poll_library_skips_non_bibliographic_items(monkeypatch, caplog):
+    """Attachments, notes and annotations are never ingested as papers.
 
-    poll now calls upsert_paper → enqueues paper.analyze with paper_id.
+    Those item types carry no bibliographic record: ingesting one would create a
+    placeholder paper titled after its Zotero key and put it in the user's
+    library. They must also consume no per-cycle slot, and each skip must name
+    the item it dropped -- a standalone attachment is a file the user really put
+    in their library, and silently discarding it leaves nothing to explain why
+    it never appeared.
     """
+    import logging
+
+    from paper_ingestion.integrations import _zotero_poll
+
+    upserted_titles: list[str] = []
+    library_paper_ids: list[int] = []
+
+    async def _spy_upsert(conn, paper_create, *, discovered_by=None):
+        upserted_titles.append(paper_create.title)
+        return FakeRecord({"id": 501, "is_insert": True})
+
+    async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
+        library_paper_ids.append(paper_id)
+
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _spy_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    items = [
+        _zotero_item(key="ARTICLE1", title="A Real Paper", doi=""),
+        _zotero_item(key="ATTACH01", title="", doi="", item_type="attachment"),
+        _zotero_item(key="NOTE0001", title="", doi="", item_type="note"),
+    ]
+    conn = _make_conn(fetch=_zotero_poll_enabled_config_rows())
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=lambda *a, **k: _cm(conn))
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=(items, 7))
+
+        with caplog.at_level(logging.INFO, logger="paper_ingestion.integrations.zotero_service"):
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
+
+    assert upserted_titles == ["A Real Paper"], (
+        f"Only the journalArticle may be ingested; got {upserted_titles}"
+    )
+    assert library_paper_ids == [501], (
+        f"Only the article may enter the library; {library_paper_ids}"
+    )
+    # The two skipped items consumed no slot, so the cycle counted one item.
+    assert result["new_items"] == 1
+    assert result["status"] == "ok"
+
+    # Every dropped item is identifiable from the log alone.
+    skipped = [
+        r.getMessage()
+        for r in caplog.records
+        if "carries no bibliographic record" in r.getMessage()
+    ]
+    assert len(skipped) == 2, f"Expected one record per skipped item; got {skipped}"
+    assert any("ATTACH01" in message and "attachment" in message for message in skipped), (
+        f"The skipped attachment must be named in the log; got {skipped}"
+    )
+    assert any("NOTE0001" in message and "note" in message for message in skipped), (
+        f"The skipped note must be named in the log; got {skipped}"
+    )
+
+
+async def test_poll_library_ingests_new_items_without_analysis_enqueue(caplog):
+    """New items are upserted, but a PDF-less import defers no paper.analyze job.
+
+    A Zotero import carries no pdf_url, so _paper_analyze_job would raise
+    "has no PDF URL" before doing any work. The poll must ingest the paper and
+    report ``enqueued == 0`` rather than count a job that cannot succeed.
+
+    The skipped enqueue must still be logged with the paper and item it applies
+    to: the failing job used to be the operator's only notice that an imported
+    paper would never be summarized.
+    """
+    import logging
+
     new_item = _zotero_item(key="NEWITEM1", title="New Paper", doi="")
     # No DOI → no DOI-lookup conn needed.
     # upsert conn: fetchrow returns the upserted paper row; execute for zotero_item_key update.
@@ -654,27 +881,37 @@ async def test_poll_library_enqueues_new_items():
         mock_analyze_defer = AsyncMock()
         mock_analyze_task.defer_async = mock_analyze_defer
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
-            result = await poll_zotero_library(db_pool=pool, http_client=http)
+            with caplog.at_level(
+                logging.INFO, logger="paper_ingestion.integrations.zotero_service"
+            ):
+                result = await poll_zotero_library(db_pool=pool, http_client=http)
 
-    mock_analyze_defer.assert_awaited_once()
-    assert mock_analyze_defer.await_args is not None
-    call_kwargs = mock_analyze_defer.await_args.kwargs
-    # Job deferred via paper_analyze task with paper_id kwarg
-    assert call_kwargs["paper_id"] == 99
-    assert call_kwargs["user_id"] is None
-    assert "job_id" in call_kwargs
-    assert result["enqueued"] == 1
+    # The paper is still ingested — only the doomed analysis job is skipped.
+    upsert_conn.fetchrow.assert_awaited()
     assert result["new_items"] == 1
+    mock_analyze_defer.assert_not_awaited()
+    assert result["enqueued"] == 0
+    # The cursor still advances: nothing failed.
+    assert result["version_to"] == 10
+
+    # The import that got no analysis is identifiable from the log alone.
+    skipped = [r.getMessage() for r in caplog.records if "no PDF URL" in r.getMessage()]
+    assert len(skipped) == 1, f"Expected one record for the unscheduled analysis; got {skipped}"
+    assert "99" in skipped[0] and "NEWITEM1" in skipped[0], (
+        f"The log must name the upserted paper and its Zotero item; got {skipped[0]}"
+    )
 
 
-async def test_poll_repoll_existing_paper_does_not_enqueue():
-    """Re-polling an already-imported item (is_insert=False) must not enqueue or count.
+async def test_poll_repoll_existing_pdfless_paper_does_not_enqueue():
+    """Re-polling an already-imported PDF-less item defers no paper.analyze job.
 
-    upsert_paper returns is_insert=False for a row that already existed.
-    The enqueue and counter must be skipped so cap slots are not wasted on re-polls.
-
-    Regression: without the ``if is_new_paper`` guard the analyze job would be
-    deferred and enqueued==1, causing this test to fail.
+    upsert_paper returns is_insert=False for a row that already existed, and the
+    item carries no pdf_url, so both halves of the enqueue gate are closed. Only
+    the enqueue is asserted here. That a re-polled item also consumes no slot in
+    the per-cycle insertion cap is owned by
+    test_poll_multi_sync_bounds_insertions_and_advances_cursor, and the is_insert
+    half of the gate on its own by
+    test_poll_enqueues_analysis_once_for_a_paper_with_a_pdf_url.
     """
     existing_item = _zotero_item(key="EXIST001", title="Existing Paper", doi="")
     upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 42, "is_insert": False}))
@@ -698,14 +935,187 @@ async def test_poll_repoll_existing_paper_does_not_enqueue():
     assert result["enqueued"] == 0
 
 
+async def test_poll_enqueues_analysis_once_for_a_paper_with_a_pdf_url(monkeypatch):
+    """A parsed item carrying a pdf_url is enqueued on insert and never again.
+
+    Zotero parsing sets no pdf_url today, so the parser is wrapped to supply one
+    and reach the enqueue path at all. Poll 1 inserts the paper and must defer
+    paper.analyze with the upserted paper_id, the polling user and a job id.
+    Poll 2 re-reads the same item, now is_insert=False, and must defer nothing:
+    without that half of the gate every re-poll would re-enqueue every already-
+    imported paper and pin the cursor.
+    """
+    from paper_ingestion.integrations import _zotero_poll
+
+    upserts = {"count": 0}
+
+    async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
+        upserts["count"] += 1
+        return FakeRecord({"id": 314, "is_insert": upserts["count"] == 1})
+
+    monkeypatch.setattr(
+        _zotero_poll, "_parse_zotero_item", _parse_with_pdf_url(_zotero_poll._parse_zotero_item)
+    )
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    item = _zotero_item(key="PDFITEM1", title="Downloadable Paper", doi="")
+    conn = _make_conn(fetch=_zotero_poll_enabled_config_rows())
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=lambda *a, **k: _cm(conn))
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=([item], 12))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            first = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+            first_calls = list(mock_analyze_defer.await_args_list)
+
+            mock_analyze_defer.reset_mock()
+            second = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+
+    # Poll 1: the insert is enqueued, carrying the full job payload.
+    assert len(first_calls) == 1, f"Expected one deferred job, got {first_calls}"
+    kwargs = first_calls[0].kwargs
+    assert kwargs["paper_id"] == 314
+    assert kwargs["user_id"] == 7
+    assert uuid.UUID(kwargs["job_id"]), "job_id must be a real identifier"
+    assert first["enqueued"] == 1
+    # Poll 2: the same paper already exists — no second analysis job.
+    mock_analyze_defer.assert_not_awaited()
+    assert second["enqueued"] == 0
+
+
+async def test_a_failed_analysis_enqueue_is_retried_on_the_next_poll(monkeypatch):
+    """The first enqueue raises; the retry must schedule the job, not skip it.
+
+    The enqueue runs after the ingest transaction commits, so a defer that
+    raises leaves a committed paper carrying no analysis job. On the retry
+    ``upsert_paper`` conflicts, which closes the brand-new-paper half of the
+    gate, and only the per-user enqueue marker can still tell "never scheduled"
+    from "already scheduled". The third poll must stay silent: re-scheduling
+    every previously imported item on each re-poll is the storm the gate exists
+    to prevent.
+
+    One transient failure must also cost the item exactly one attempt of its
+    scheduling budget, not the whole of it: a bound that spent the budget on a
+    single failure would give up on an item the very next poll would have
+    imported.
+    """
+    from paper_ingestion.integrations import _zotero_poll
+    from paper_ingestion.integrations._zotero_poll import MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+
+    upserts = {"count": 0}
+
+    async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
+        upserts["count"] += 1
+        return FakeRecord({"id": 271, "is_insert": upserts["count"] == 1})
+
+    monkeypatch.setattr(
+        _zotero_poll, "_parse_zotero_item", _parse_with_pdf_url(_zotero_poll._parse_zotero_item)
+    )
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=7))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    resolved: set[tuple[int, int]] = set()
+    attempts: dict[tuple[int, int], int] = {}
+    pool = _make_stateful_poll_pool(_poll_state_store(), resolved, attempts)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    item = _zotero_item(key="RETRY001", title="Retried Paper", doi="")
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=([item], 21))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock(
+            side_effect=[RuntimeError("job queue unavailable"), None, None]
+        )
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            first = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+            marked_after_first = (271, 7) in resolved
+            attempts_after_first = attempts.get((271, 7), 0)
+
+            second = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+            defers_after_second = mock_analyze_defer.await_count
+            marked_after_second = (271, 7) in resolved
+
+            third = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+
+    # Poll 1: the paper committed but the job did not, so nothing is marked and
+    # the cursor stays put for the retry.
+    assert first["enqueued"] == 0
+    assert first["version_to"] == first["version_from"], (
+        "a failed enqueue must pin the cursor so the item is polled again"
+    )
+    assert not marked_after_first, "the marker must only be written once defer_async has returned"
+    # The failure is durably counted — it happens inside the committed
+    # transaction — but it costs one attempt, not the whole budget.
+    assert attempts_after_first == 1, (
+        f"one failed enqueue must spend exactly one attempt; spent {attempts_after_first}"
+    )
+    assert attempts_after_first < MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+
+    # Poll 2: upsert_paper conflicts now, so only the marker can authorise the
+    # retry — and it must.
+    assert defers_after_second == 2, (
+        "the retry must re-schedule the analysis the first poll failed to queue; "
+        f"defer_async was awaited {defers_after_second} time(s)"
+    )
+    retry_kwargs = mock_analyze_defer.await_args_list[1].kwargs
+    assert retry_kwargs["paper_id"] == 271
+    assert retry_kwargs["user_id"] == 7
+    assert uuid.UUID(retry_kwargs["job_id"]), "job_id must be a real identifier"
+    assert second["enqueued"] == 1
+    assert marked_after_second, "a successful retry must record the enqueue durably"
+
+    # Poll 3: the marker is set, so the item is never scheduled again — and the
+    # closed gate spends no further attempt.
+    assert mock_analyze_defer.await_count == 2, (
+        "an item whose analysis is already scheduled must not be re-enqueued; "
+        f"defer_async was awaited {mock_analyze_defer.await_count} time(s)"
+    )
+    assert third["enqueued"] == 0
+    assert attempts[(271, 7)] == 2, (
+        f"only the two real scheduling attempts may be counted; got {attempts}"
+    )
+
+
 async def test_poll_library_updates_version():
     """zotero.last_library_version updated in user_config after poll (user-scoped row).
 
     See test_poll_library_updates_version_for_null_user for the NULL-user path.
     """
     item = _zotero_item(key="VER0001", doi="")
-    # upsert conn for the item
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 55, "is_insert": True}))
+    # upsert conn for the item. The one canned row answers both fetchrow queries
+    # on this path: the upsert and the link row's scheduling state. Reporting the
+    # decision as already resolved keeps the enqueue, which this test says
+    # nothing about, out of the cursor behaviour it does assert.
+    upsert_conn = _make_conn(
+        fetchrow=FakeRecord(
+            {
+                "id": 55,
+                "is_insert": True,
+                "scheduling_recorded": True,
+                "analysis_enqueue_attempts": 0,
+            }
+        )
+    )
     # version conn: persists new version
     version_conn = _make_conn()
     pool = _make_poll_pool(upsert_conn, version_conn)
@@ -729,20 +1139,28 @@ async def test_poll_library_updates_version():
     sql, version_arg = version_conn.execute.call_args[0][:2]
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
-    assert result["version_to"] == 42
-    assert result["cursor_persisted"] is True
+    _assert_poll_terminal(result, status="ok", version_to=42)
 
 
 async def test_poll_library_reports_cursor_unpersisted_on_write_failure():
     """A swallowed cursor-persist failure is surfaced, not masked as a durable advance.
 
-    The poll still returns ``status='ok'`` — items were processed idempotently and
-    the next poll simply re-reads from the old cursor — but the return must report
-    ``cursor_persisted=False`` so a monitor can tell a durable advance from a
-    swallowed one.
+    Items were processed idempotently and the next poll simply re-reads from the
+    old cursor, but the result is partial until the cursor advance is durable.
     """
     item = _zotero_item(key="VERFAIL1", doi="")
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 57, "is_insert": True}))
+    # One canned row answers both the upsert and the link-state query; see
+    # test_poll_library_updates_version.
+    upsert_conn = _make_conn(
+        fetchrow=FakeRecord(
+            {
+                "id": 57,
+                "is_insert": True,
+                "scheduling_recorded": True,
+                "analysis_enqueue_attempts": 0,
+            }
+        )
+    )
     version_conn = _make_conn()
     version_conn.execute = AsyncMock(side_effect=RuntimeError("cursor write failed"))
     pool = _make_poll_pool(upsert_conn, version_conn)
@@ -760,10 +1178,11 @@ async def test_poll_library_reports_cursor_unpersisted_on_write_failure():
             result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
 
     version_conn.execute.assert_called_once()
-    assert result["status"] == "ok"
-    assert result["version_to"] == 42
-    assert result["cursor_persisted"] is False, (
-        f"a swallowed cursor-write must be reported as unpersisted; got {result}"
+    _assert_poll_terminal(
+        result,
+        status="partial",
+        version_to=42,
+        cursor_persisted=False,
     )
 
 
@@ -814,6 +1233,7 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
     config_conn = _make_conn(fetch=_zotero_enabled_with_annotations_rows())
     paper_conn = _make_conn(fetchrow=FakeRecord({"id": 7, "zotero_item_key": "ITEM1234"}))
     persist_conn = _make_conn()
+    persist_conn.fetchval = AsyncMock(return_value=6)
     pool = _make_pool(config_conn, paper_conn, persist_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     annotations = [
@@ -862,6 +1282,7 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
     assert persist_conn.execute.await_args_list[1].args[5] is None
     # $7 (user_id) must be the syncing user, not the paper discoverer.
     assert persist_conn.execute.await_args_list[0].args[7] == syncing_user_id
+    assert persist_conn.execute.await_args_list[0].args[8] == 6
 
 
 async def test_sync_annotations_binds_resolved_owner_for_none_user():
@@ -874,6 +1295,7 @@ async def test_sync_annotations_binds_resolved_owner_for_none_user():
         fetch=[FakeRecord({"id": 8})],
     )
     persist_conn = _make_conn()
+    persist_conn.fetchval = AsyncMock(return_value=4)
     pool = _make_pool(config_conn, paper_conn, persist_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     annotations = [
@@ -889,6 +1311,7 @@ async def test_sync_annotations_binds_resolved_owner_for_none_user():
         )
     assert result["status"] == "ok"
     assert persist_conn.execute.await_args_list[0].args[7] == 8
+    assert persist_conn.execute.await_args_list[0].args[8] == 4
 
 
 async def test_poll_doi_link_dispatches_annotations_with_resolved_owner():
@@ -926,17 +1349,17 @@ async def test_poll_doi_link_dispatches_annotations_with_resolved_owner():
 
 
 # ---------------------------------------------------------------------------
-# Per-sync enqueue cap
+# Per-sync ingest cap
 # ---------------------------------------------------------------------------
 
 
-async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
-    """poll_zotero_library enqueues at most MAX_ENQUEUE_PER_SYNC items per cycle.
+async def test_poll_zotero_library_caps_ingest_at_max_per_sync():
+    """poll_zotero_library ingests at most MAX_INGEST_PER_SYNC items per cycle.
 
     When the cap is hit the library-version cursor must NOT advance, so the
     next sync resumes from the same starting point and processes the next batch.
     """
-    from paper_ingestion.integrations.zotero_service import MAX_ENQUEUE_PER_SYNC
+    from paper_ingestion.integrations.zotero_service import MAX_INGEST_PER_SYNC
 
     # 50 new items, none with DOI (each triggers one upsert acquire()).
     items = [_zotero_item(key=f"BULK{i:04d}", doi="") for i in range(50)]
@@ -962,11 +1385,17 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
-    # Exactly MAX_ENQUEUE_PER_SYNC jobs must have been enqueued.
-    assert mock_analyze_defer.await_count == MAX_ENQUEUE_PER_SYNC, (
-        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_analyze_defer.await_count}"
+    # Exactly MAX_INGEST_PER_SYNC items must have been ingested: one connection
+    # is acquired per ingested item, so only that many conns saw a query.
+    used_conns = [conn for conn in upsert_conns if conn.fetchrow.await_count]
+    assert len(used_conns) == MAX_INGEST_PER_SYNC, (
+        f"Expected {MAX_INGEST_PER_SYNC} ingested items, got {len(used_conns)}"
     )
-    assert result["enqueued"] == MAX_ENQUEUE_PER_SYNC
+    assert result["new_items"] == MAX_INGEST_PER_SYNC
+    # These imports carry no pdf_url, so no analysis job is deferred and the
+    # reported count says so instead of standing in for the insertion count.
+    mock_analyze_defer.assert_not_awaited()
+    assert result["enqueued"] == 0
 
     # Version cursor must NOT have advanced — upsert_conns used for version persist.
     # When capped, new_version is reset to last_version (0), so the persist branch
@@ -985,21 +1414,35 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
     assert result["version_to"] == 0, (
         f"version_to should remain at 0 when capped, got {result['version_to']}"
     )
+    _assert_poll_terminal(
+        result,
+        status="partial",
+        version_to=0,
+        capped=True,
+        remaining=len(items) - MAX_INGEST_PER_SYNC,
+    )
 
 
-async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
-    """25 items, MAX_ENQUEUE_PER_SYNC=20. Poll once → enqueue the first 20 and pin
+async def test_poll_multi_sync_bounds_insertions_and_advances_cursor(monkeypatch):
+    """25 items, MAX_INGEST_PER_SYNC=20. Poll once → insert the first 20 and pin
     the cursor (capped). Poll again on the same (re-fetched) batch → the first 20
-    are now is_insert=False and MUST NOT be re-enqueued; the poll MUST advance to
-    items 21-25 and move the cursor forward. Guards against gating the enqueue on
-    an analysis-completion marker (e.g. pdf_downloaded), which never flips for
-    pdf-url-less Zotero papers and would re-enqueue every imported item forever."""
+    are now is_insert=False and consume no slot; the poll MUST reach items 21-25
+    and move the cursor forward.
+
+    The cap counts INSERTIONS. Counting enqueued analysis jobs instead would
+    never reach the cap for pdf-url-less Zotero imports, leaving each cycle
+    unbounded. Gating the enqueue on an analysis-completion marker (e.g.
+    pdf_downloaded), which never flips for those papers, would conversely
+    re-enqueue every imported item forever and pin the cursor.
+    """
     from paper_ingestion.integrations import _zotero_poll
+    from paper_ingestion.integrations.zotero_service import MAX_INGEST_PER_SYNC
 
     items = [_zotero_item(key=f"ITEM{i:02d}", title=f"P{i}", doi="") for i in range(1, 26)]
 
     seen: dict[str, int] = {}
     counter = {"next": 1}
+    inserted_ids: list[int] = []
 
     async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
         ext = paper_create.external_id
@@ -1008,6 +1451,7 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
         pid = counter["next"]
         counter["next"] += 1
         seen[ext] = pid
+        inserted_ids.append(pid)
         return FakeRecord({"id": pid, "is_insert": True})
 
     monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
@@ -1039,21 +1483,83 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
         mock_analyze_task.defer_async = mock_analyze_defer
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             first = await poll_zotero_library(db_pool=pool, http_client=http)
-            first_ids = [c.kwargs["paper_id"] for c in mock_analyze_defer.await_args_list]
+            first_ids = list(inserted_ids)
 
-            mock_analyze_defer.reset_mock()
+            inserted_ids.clear()
             second = await poll_zotero_library(db_pool=pool, http_client=http)
-            second_ids = [c.kwargs["paper_id"] for c in mock_analyze_defer.await_args_list]
+            second_ids = list(inserted_ids)
 
-    # Poll 1: first 20 enqueued; cursor pinned (capped → version_to == version_from).
-    assert first["enqueued"] == 20
+    # Poll 1: first 20 inserted; cursor pinned (capped → version_to == version_from).
     assert first_ids == list(range(1, 21))
+    assert len(first_ids) == MAX_INGEST_PER_SYNC
     assert first["version_to"] == first["version_from"]
-    # Poll 2: only the NEW tail (21-25) enqueued; none of 1-20 re-enqueued; cursor advances.
-    assert second["enqueued"] == 5
+    # Poll 2: the 20 existing rows consume no slot, so the NEW tail (21-25) is
+    # reached and the cursor advances.
     assert second_ids == list(range(21, 26))
-    assert not (set(second_ids) & set(range(1, 21)))
     assert second["version_to"] == 99 and second["version_to"] > second["version_from"]
+    # No item carries a pdf_url, so no analysis job is ever deferred.
+    mock_analyze_defer.assert_not_awaited()
+    assert first["enqueued"] == 0
+    assert second["enqueued"] == 0
+
+
+async def test_poll_bounds_analysis_enqueues_when_every_item_resolves_to_an_existing_paper(
+    monkeypatch,
+):
+    """A cycle that inserts nothing still defers at most the cap.
+
+    A shared group library another user already imported matches every upsert,
+    so is_insert is False throughout and the insertion counter never moves. Each
+    item nevertheless gets a fresh per-user link row carrying no scheduling
+    marker, which makes every one of them eligible to defer paper.analyze. With
+    only an insertion bound, one cycle would defer one analysis job per item in
+    the library. The cursor must stay pinned so the next cycle resumes from the
+    same version and continues where this one stopped.
+    """
+    from paper_ingestion.integrations import _zotero_poll
+    from paper_ingestion.integrations.zotero_service import MAX_INGEST_PER_SYNC
+
+    paper_ids: dict[str, int] = {}
+
+    async def _already_present_upsert(conn, paper_create, *, discovered_by=None):
+        paper_id = paper_ids.setdefault(paper_create.external_id, 5000 + len(paper_ids))
+        return FakeRecord({"id": paper_id, "is_insert": False})
+
+    monkeypatch.setattr(
+        _zotero_poll, "_parse_zotero_item", _parse_with_pdf_url(_zotero_poll._parse_zotero_item)
+    )
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _already_present_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=7))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    items = [
+        _zotero_item(key=f"SHARED{i:04d}", title=f"Shared {i}", doi="")
+        for i in range(MAX_INGEST_PER_SYNC * 2 + 5)
+    ]
+    pool = _make_stateful_poll_pool(_poll_state_store(), set(), {})
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=(items, 99))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+
+    assert mock_analyze_defer.await_count == MAX_INGEST_PER_SYNC, (
+        "one cycle must defer at most the per-cycle cap; "
+        f"deferred {mock_analyze_defer.await_count} of {len(items)} linked items"
+    )
+    assert result["enqueued"] == MAX_INGEST_PER_SYNC
+    assert result["version_to"] == result["version_from"], (
+        f"a capped cycle must pin the cursor so the remainder is polled again: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1161,11 +1667,15 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
     """
     from paper_ingestion.integrations import _zotero_poll
 
-    enqueued_keys: list[str] = []
+    ingested_keys: list[str] = []
 
     async def _spy_ingest(db_pool, paper_create, item_key, polling_user_id, namespace):
-        enqueued_keys.append(item_key)
-        return True
+        ingested_keys.append(item_key)
+        return _zotero_poll._IngestOutcome(
+            inserted=True,
+            analysis_enqueued=False,
+            analysis_gave_up=False,
+        )
 
     monkeypatch.setattr(_zotero_poll, "_ingest_new_item", _spy_ingest)
 
@@ -1184,15 +1694,86 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
 
         result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
 
-    assert result["status"] == "ok", result
+    _assert_poll_terminal(result, status="partial", version_to=10, parse_failed=1)
     # A pure parse failure (no ingest failure) must not pin the cursor —
     # otherwise a single permanently-malformed item wedges the sync forever.
     assert result["version_to"] != result["version_from"], (
         f"Cursor must advance past a permanently-malformed item: {result}"
     )
-    # The valid item must still be enqueued despite the bad item.
-    assert "GOODITEM" in enqueued_keys, f"Valid item was not enqueued: {enqueued_keys}"
-    assert "BADURL99" not in enqueued_keys, f"Bad item must not reach ingest: {enqueued_keys}"
+    # The valid item must still be ingested despite the bad item.
+    assert "GOODITEM" in ingested_keys, f"Valid item was not ingested: {ingested_keys}"
+    assert "BADURL99" not in ingested_keys, f"Bad item must not reach ingest: {ingested_keys}"
+
+
+async def test_mixed_poll_preserves_disjoint_outcome_counts(monkeypatch):
+    """A mixed partial poll reports each selected item in exactly one outcome."""
+    from paper_ingestion.integrations import _zotero_poll
+
+    items = [
+        _zotero_item(key="LINKED01", doi="10.1000/linked"),
+        _zotero_item(key="PARSE01", doi=""),
+        _zotero_item(key="INGEST01", doi=""),
+        _zotero_item(key="GIVEUP1", doi=""),
+        _zotero_item(key="SUCCESS1", doi=""),
+    ]
+    real_safe_parse = _zotero_poll._safe_parse_zotero_item
+
+    async def _link_existing(db_pool, doi, item_key, polling_user_id):
+        return "linked"
+
+    def _parse(data, outer_item, item_key, namespace):
+        if item_key == "PARSE01":
+            return None
+        return real_safe_parse(data, outer_item, item_key, namespace)
+
+    async def _ingest(db_pool, paper_create, item_key, polling_user_id, namespace):
+        if item_key == "INGEST01":
+            raise RuntimeError("transient ingest failure")
+        if item_key == "GIVEUP1":
+            return _zotero_poll._IngestOutcome(
+                inserted=False,
+                analysis_enqueued=False,
+                analysis_gave_up=True,
+            )
+        return _zotero_poll._IngestOutcome(
+            inserted=False,
+            analysis_enqueued=True,
+            analysis_gave_up=False,
+        )
+
+    monkeypatch.setattr(_zotero_poll, "_link_existing_by_doi", _link_existing)
+    monkeypatch.setattr(_zotero_poll, "_safe_parse_zotero_item", _parse)
+    monkeypatch.setattr(_zotero_poll, "_ingest_new_item", _ingest)
+
+    pool = _make_poll_pool()
+    http = AsyncMock(spec=httpx.AsyncClient)
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=(items, 77))
+        result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
+
+    assert result["new_items"] == 5
+    assert result["linked"] == 1
+    assert result["enqueued"] == 1
+    _assert_poll_terminal(
+        result,
+        status="partial",
+        version_to=0,
+        parse_failed=1,
+        ingest_failed=1,
+        gave_up=1,
+    )
+    assert result["failed"] == 3
+    assert result["skipped"] == 0
+    assert result["remaining"] == 0
+    assert result["total"] == 5
+    assert (
+        result["linked"]
+        + result["enqueued"]
+        + result["parse_failed"]
+        + result["ingest_failed"]
+        + result["gave_up"]
+        == result["new_items"]
+    )
 
 
 async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
@@ -1400,6 +1981,7 @@ async def test_sync_annotations_rolls_back_on_mid_loop_failure():
 
     # persist_conn: execute succeeds twice then raises on the 3rd call.
     persist_conn = _make_conn()
+    persist_conn.fetchval = AsyncMock(return_value=2)
     execute_side_effects = [None, None, RuntimeError("DB error on 3rd upsert"), None, None]
     persist_conn.execute = AsyncMock(side_effect=execute_side_effects)
 
@@ -1509,9 +2091,212 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
     assert result["version_to"] == 0, (
         f"Expected version_to=0 (cursor pinned), got {result['version_to']}"
     )
-    assert result["status"] == "ok"
+    _assert_poll_terminal(result, status="partial", version_to=0, ingest_failed=1)
     # No jobs should have been enqueued for the failed item.
     mock_analyze_defer.assert_not_awaited()
+
+
+async def test_an_import_whose_analysis_enqueue_always_fails_stops_pinning_the_cursor(
+    monkeypatch, caplog
+):
+    """An enqueue that can never succeed is given up on within its own budget.
+
+    A failed enqueue pins the version cursor so the next poll retries the item,
+    which is what a transient failure needs. An enqueue that never succeeds
+    would pin it forever and stop every other item in the library from syncing,
+    so the attempt counter on the item's own link row bounds the retrying: once
+    it is spent, the poll resolves the scheduling decision, names the item at
+    error level, and returns normally so the cursor advances past it.
+
+    One cycle is run past that point, because an item stays in range of a
+    re-poll after it has been given up on. Naming it again on every such cycle
+    would report a fresh failure that did not happen.
+    """
+    import logging
+
+    from paper_ingestion.integrations import _zotero_poll
+    from paper_ingestion.integrations._zotero_poll import MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+
+    upserts = {"count": 0}
+
+    async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
+        upserts["count"] += 1
+        return FakeRecord({"id": 800, "is_insert": upserts["count"] == 1})
+
+    monkeypatch.setattr(
+        _zotero_poll, "_parse_zotero_item", _parse_with_pdf_url(_zotero_poll._parse_zotero_item)
+    )
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=7))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    store = _poll_state_store()
+    resolved: set[tuple[int, int]] = set()
+    attempts: dict[tuple[int, int], int] = {}
+    pool = _make_stateful_poll_pool(store, resolved, attempts)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    results = []
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(
+            return_value=([_zotero_item(key="PERMA001", title="Stuck Paper", doi="")], 999)
+        )
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock(side_effect=RuntimeError("job queue unavailable"))
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with (
+            patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}),
+            caplog.at_level(logging.ERROR, logger="paper_ingestion.integrations.zotero_service"),
+        ):
+            for _ in range(MAX_ANALYSIS_ENQUEUE_ATTEMPTS + 2):
+                results.append(
+                    await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+                )
+
+    # Every cycle that still had budget retried the item behind a pinned cursor.
+    for cycle, result in enumerate(results[:MAX_ANALYSIS_ENQUEUE_ATTEMPTS], start=1):
+        assert result["version_to"] == result["version_from"], (
+            f"cycle {cycle} still had attempts left and must pin the cursor: {result}"
+        )
+        assert result["status"] == "partial"
+        assert result["ingest_failed"] == 1
+        assert result["gave_up"] == 0
+    assert mock_analyze_defer.await_count == MAX_ANALYSIS_ENQUEUE_ATTEMPTS, (
+        "the item must be retried exactly as often as its budget allows; "
+        f"defer_async was awaited {mock_analyze_defer.await_count} time(s)"
+    )
+    assert attempts[(800, 7)] == MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+
+    # The first cycle after the budget is spent gives up on the item rather than
+    # on the rest of the library. A later re-poll sees the resolved decision.
+    gave_up_result = results[MAX_ANALYSIS_ENQUEUE_ATTEMPTS]
+    _assert_poll_terminal(
+        gave_up_result,
+        status="partial",
+        version_to=999,
+        gave_up=1,
+    )
+
+    final = results[-1]
+    _assert_poll_terminal(final, status="ok", version_from=999, version_to=999)
+    assert final["version_to"] == 999, (
+        f"a spent budget must release the cursor so the library keeps syncing: {final}"
+    )
+    assert store["zotero.last_library_version"] == 999
+    assert (800, 7) in resolved, (
+        "giving up resolves the scheduling decision, or the next poll retries forever"
+    )
+
+    # An operator must be able to identify the abandoned import from the log.
+    given_up = [
+        record.getMessage()
+        for record in caplog.records
+        if "800" in record.getMessage() and "PERMA001" in record.getMessage()
+    ]
+    assert len(given_up) == 1, (
+        "the abandoned import must be named once, on the cycle that gave up on it, "
+        f"and never again on a later re-poll of the same item; got {given_up}"
+    )
+    assert "not be retried" in given_up[0], (
+        f"the log must say plainly that no further retry is coming; got {given_up[0]}"
+    )
+
+
+async def test_items_failing_on_consecutive_cycles_each_keep_their_own_budget(monkeypatch):
+    """Three items each failing once over three cycles must all still be retried.
+
+    The library grows over the polls and every item's first enqueue fails, so
+    three consecutive cycles report a failure while no single item has failed
+    more than once. Every one of those cycles must stay pinned, and the fourth
+    must schedule the third item's analysis: an item that failed once has to
+    keep enough budget to be retried at all.
+
+    What this discriminates is a per-row budget from a shared one -- every item
+    ends on the same spent count, which one shared counter could not produce.
+    It does not exercise a bound that counts failing cycles: with a limit of
+    five, such a bound would not fire within three cycles either, so every
+    assertion below would still hold under it. Showing that mode needs one
+    cycle per unit of budget, each failing on a different item.
+    """
+    from paper_ingestion.integrations import _zotero_poll
+    from paper_ingestion.integrations._zotero_poll import MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+
+    paper_ids = {"ARRIVE01": 901, "ARRIVE02": 902, "ARRIVE03": 903}
+    inserted: set[int] = set()
+
+    async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
+        paper_id = paper_ids[paper_create.external_id.rsplit(":", 1)[-1]]
+        is_insert = paper_id not in inserted
+        inserted.add(paper_id)
+        return FakeRecord({"id": paper_id, "is_insert": is_insert})
+
+    monkeypatch.setattr(
+        _zotero_poll, "_parse_zotero_item", _parse_with_pdf_url(_zotero_poll._parse_zotero_item)
+    )
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=7))
+    monkeypatch.setattr(_zotero_poll, "_migrate_unambiguous_legacy_identity", AsyncMock())
+
+    # One more item reaches the library on each of the first three polls, and
+    # each one's first enqueue fails: one failure per cycle, always a different
+    # item. The fourth poll re-reads the same three and adds nothing new.
+    items = [_zotero_item(key=key, title=key, doi="") for key in paper_ids]
+    arrivals = [(items[:1], 999), (items[:2], 999), (items[:3], 999), (items[:3], 999)]
+    failed_once: set[int] = set()
+
+    async def _defer_failing_first_attempt(*, job_id, user_id, paper_id):
+        if paper_id not in failed_once:
+            failed_once.add(paper_id)
+            raise RuntimeError("job queue unavailable")
+
+    store = _poll_state_store()
+    resolved: set[tuple[int, int]] = set()
+    attempts: dict[tuple[int, int], int] = {}
+    pool = _make_stateful_poll_pool(store, resolved, attempts)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    results = []
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(side_effect=arrivals)
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock(side_effect=_defer_failing_first_attempt)
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            for _ in arrivals:
+                results.append(
+                    await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
+                )
+
+    for cycle, result in enumerate(results[:-1], start=1):
+        assert result["version_to"] == result["version_from"], (
+            f"cycle {cycle}'s failing item still has attempts left, so the cursor "
+            f"must stay pinned: {result}"
+        )
+
+    # The item that failed on the third cycle is the one a cycle-counting bound
+    # would have abandoned. It kept its budget, so the fourth poll retries it,
+    # schedules its analysis and only then releases the cursor.
+    assert results[-1]["enqueued"] == 1, (
+        f"the item that failed on the last pinned cycle must be retried: {results[-1]}"
+    )
+    assert results[-1]["version_to"] == 999
+    assert store["zotero.last_library_version"] == 999
+    assert resolved == {(901, 7), (902, 7), (903, 7)}, (
+        "no item may be given up on after a single failure; "
+        f"resolved={resolved} attempts={attempts}"
+    )
+    # Each item spent one attempt on its failure and one on its successful retry.
+    assert set(attempts.values()) == {2}, f"each item spends only its own attempts: {attempts}"
+    assert max(attempts.values()) < MAX_ANALYSIS_ENQUEUE_ATTEMPTS
 
 
 # ---------------------------------------------------------------------------
@@ -1953,6 +2738,7 @@ def _highlight_row(
     zotero_annotation_key: str | None = None,
     zotero_item_key: str | None = "ITEM1234",
     zotero_attachment_key: str | None = "ATTACH1",
+    content_generation: int = 3,
     rect: dict | None = None,
 ):
     """Build the joined paper_highlights + paper_user_zotero_links row push_highlight expects.
@@ -1972,6 +2758,7 @@ def _highlight_row(
             "note": note,
             "color": color,
             "quote": quote,
+            "content_generation": content_generation,
             "zotero_annotation_key": zotero_annotation_key,
             "zotero_item_key": zotero_item_key,
             "zotero_attachment_key": zotero_attachment_key,
@@ -1992,8 +2779,7 @@ async def test_push_highlight_parents_on_attachment_not_bibliographic():
     """The annotation parents on the PDF ATTACHMENT key, never the bibliographic item."""
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2023,12 +2809,12 @@ async def test_push_highlight_parents_on_attachment_not_bibliographic():
     assert item_data["annotationColor"] == "#34D399"
 
     # Load query is user-scoped (tenancy); key is persisted on the highlight row.
-    load_sql = load_conn.fetchrow.await_args.args[0]
-    assert "h.user_id = $2" in load_sql
-    # Zotero linkage is read per-user from paper_user_zotero_links ($3 = resolved owner).
-    assert "paper_user_zotero_links l" in load_sql
-    assert load_conn.fetchrow.await_args.args[1:] == (55, 42, 42)
-    assert any("ANN123" in str(c) for c in persist_conn.execute.call_args_list)
+    highlight_call, paper_call = load_conn.fetchrow.await_args_list
+    assert "h.user_id IS NOT DISTINCT FROM $2" in highlight_call.args[0]
+    assert highlight_call.args[1:] == (55, 42)
+    assert "paper_user_zotero_links l" in paper_call.args[0]
+    assert paper_call.args[1:] == (7, 42)
+    assert any("ANN123" in str(c) for c in load_conn.execute.call_args_list)
 
 
 async def test_push_highlight_emits_denormalized_position_and_sort_index():
@@ -2039,8 +2825,7 @@ async def test_push_highlight_emits_denormalized_position_and_sort_index():
     """
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2077,8 +2862,7 @@ async def test_push_highlight_default_color_when_unset():
     load_conn = _make_conn(
         fetchrow=_highlight_row(color=None, note=None, quote=None, zotero_attachment_key="ATTACH1")
     )
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2099,10 +2883,24 @@ async def test_push_highlight_default_color_when_unset():
     assert item_data["annotationComment"] == ""
 
 
-async def test_push_highlight_already_synced_is_noop():
-    """A highlight that already carries a Zotero key is a no-op (no create_item)."""
+@pytest.mark.parametrize(
+    ("row_overrides", "expected"),
+    [
+        (
+            {"zotero_annotation_key": "EXISTING"},
+            {"status": "already_synced", "zotero_annotation_key": "EXISTING"},
+        ),
+        ({"zotero_item_key": None}, {"status": "not_linked"}),
+    ],
+    ids=("already-synced", "paper-not-linked"),
+)
+async def test_push_highlight_noop(
+    row_overrides: dict[str, object],
+    expected: dict[str, str],
+) -> None:
+    """Already-synced or unlinked highlights do not create Zotero items."""
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
-    load_conn = _make_conn(fetchrow=_highlight_row(zotero_annotation_key="EXISTING"))
+    load_conn = _make_conn(fetchrow=_highlight_row(**row_overrides))
     pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -2114,27 +2912,8 @@ async def test_push_highlight_already_synced_is_noop():
             highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
         )
 
-    assert result["status"] == "already_synced"
-    assert result["zotero_annotation_key"] == "EXISTING"
-    mock_zotero.create_item.assert_not_called()
-
-
-async def test_push_highlight_not_linked_is_noop():
-    """Paper not in Zotero (zotero_item_key NULL) → not_linked no-op, no create_item."""
-    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
-    load_conn = _make_conn(fetchrow=_highlight_row(zotero_item_key=None))
-    pool = _make_pool(config_conn, load_conn)
-    http = AsyncMock(spec=httpx.AsyncClient)
-
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
-        mock_zotero = mock_client.return_value
-        mock_zotero.create_item = AsyncMock()
-
-        result = await push_highlight_to_zotero(
-            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
-        )
-
-    assert result["status"] == "not_linked"
+    for key, value in expected.items():
+        assert result[key] == value
     mock_zotero.create_item.assert_not_called()
 
 
@@ -2156,18 +2935,17 @@ async def test_push_highlight_tenancy_scoped_to_owner():
 
     assert result["status"] == "not_found"
     mock_zotero.create_item.assert_not_called()
-    load_sql = load_conn.fetchrow.await_args.args[0]
-    assert "h.user_id = $2" in load_sql
-    assert load_conn.fetchrow.await_args.args[1:] == (55, 99, 99)
+    load_call = load_conn.fetchrow.await_args
+    assert "h.user_id IS NOT DISTINCT FROM $2" in load_call.args[0]
+    assert load_call.args[1:] == (55, 99)
 
 
 async def test_push_highlight_unique_violation_treated_as_synced():
     """A concurrent double-push collides on the partial unique index → already_synced."""
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row())
-    persist_conn = _make_conn()
-    persist_conn.execute = AsyncMock(side_effect=asyncpg.UniqueViolationError("duplicate key"))
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    load_conn.execute = AsyncMock(side_effect=asyncpg.UniqueViolationError("duplicate key"))
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2210,8 +2988,7 @@ async def test_push_highlight_reuses_existing_pdf_attachment():
     """An existing imported_file PDF child is reused — no upload, parent is its key."""
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2258,8 +3035,7 @@ async def test_push_highlight_skips_fileless_orphan_attachment():
     """
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2295,8 +3071,7 @@ async def test_push_highlight_creates_and_uploads_attachment_when_absent(tmp_pat
     pdf_path.write_bytes(b"%PDF-1.7 fake")
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
-    persist_conn = _make_conn()
-    pool = _make_pool(config_conn, load_conn, persist_conn)
+    pool = _make_pool(config_conn, load_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2412,6 +3187,47 @@ async def test_push_highlight_push_failed_when_no_key_returned():
     assert result["status"] == "push_failed"
 
 
+async def test_push_highlight_rejects_stale_source_before_zotero_io():
+    """An earlier-generation highlight never reaches attachment or annotation I/O."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn()
+    load_conn.fetchrow = AsyncMock(
+        side_effect=[
+            _highlight_row(content_generation=2),
+            FakeRecord(
+                {
+                    "content_generation": 3,
+                    "zotero_item_key": "ITEM1234",
+                    "zotero_attachment_key": "ATTACH1",
+                }
+            ),
+        ]
+    )
+    pool = _make_pool(config_conn, load_conn)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        zotero = mock_client.return_value
+        zotero.get_item_children = AsyncMock()
+        zotero.create_item = AsyncMock()
+        zotero.upload_attachment = AsyncMock()
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55,
+            db_pool=pool,
+            http_client=AsyncMock(spec=httpx.AsyncClient),
+            owner_user_id=42,
+        )
+
+    assert result == {"highlight_id": 55, "status": "stale_source"}
+    zotero.get_item_children.assert_not_called()
+    zotero.create_item.assert_not_called()
+    zotero.upload_attachment.assert_not_called()
+    load_conn.execute.assert_not_called()
+    highlight_call, paper_call = load_conn.fetchrow.await_args_list
+    assert "FOR UPDATE" in highlight_call.args[0]
+    assert "FOR SHARE OF p" in paper_call.args[0]
+
+
 # ---------------------------------------------------------------------------
 # push_highlights_for_paper — per-paper batch export
 # ---------------------------------------------------------------------------
@@ -2455,10 +3271,9 @@ async def test_push_highlights_for_paper_exports_all_unsynced():
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     paper_conn = _make_conn(fetchrow=_paper_zotero_row())
     highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
-    ensure_conn = _make_conn()
-    persist0 = _make_conn()
-    persist1 = _make_conn()
-    pool = _make_pool(config_conn, paper_conn, highlights_conn, ensure_conn, persist0, persist1)
+    item0 = _make_conn(fetchrow=_highlight_row())
+    item1 = _make_conn(fetchrow=_highlight_row())
+    pool = _make_pool(config_conn, paper_conn, highlights_conn, item0, item1)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2527,6 +3342,108 @@ async def test_push_highlights_for_paper_not_linked():
 
     assert result["status"] == "not_linked"
     mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlights_for_paper_reports_all_stale_without_zotero_io():
+    """An all-stale batch is terminally skipped without touching Zotero."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row())
+    highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
+    stale_items = []
+    for _ in range(2):
+        item_conn = _make_conn()
+        item_conn.fetchrow = AsyncMock(
+            side_effect=[
+                _highlight_row(content_generation=1),
+                FakeRecord(
+                    {
+                        "content_generation": 2,
+                        "zotero_item_key": "ITEM1234",
+                        "zotero_attachment_key": "ATTACH1",
+                    }
+                ),
+            ]
+        )
+        stale_items.append(item_conn)
+    pool = _make_pool(
+        config_conn,
+        paper_conn,
+        highlights_conn,
+        *stale_items,
+    )
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        zotero = mock_client.return_value
+        zotero.get_item_children = AsyncMock()
+        zotero.create_item = AsyncMock()
+        zotero.upload_attachment = AsyncMock()
+        result = await push_highlights_for_paper(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(spec=httpx.AsyncClient),
+            owner_user_id=42,
+        )
+
+    assert result == {
+        "paper_id": 7,
+        "exported": 0,
+        "skipped": 2,
+        "failed": 0,
+        "status": "stale_source",
+    }
+    zotero.get_item_children.assert_not_called()
+    zotero.create_item.assert_not_called()
+    zotero.upload_attachment.assert_not_called()
+
+
+async def test_push_highlights_for_paper_reports_mixed_generation_as_partial():
+    """A current/stale mix exports only current coordinates and reports partial."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row())
+    highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
+    stale_conn = _make_conn()
+    stale_conn.fetchrow = AsyncMock(
+        side_effect=[
+            _highlight_row(content_generation=1),
+            FakeRecord(
+                {
+                    "content_generation": 2,
+                    "zotero_item_key": "ITEM1234",
+                    "zotero_attachment_key": "ATTACH1",
+                }
+            ),
+        ]
+    )
+    current_conn = _make_conn(fetchrow=_highlight_row(content_generation=2))
+    pool = _make_pool(
+        config_conn,
+        paper_conn,
+        highlights_conn,
+        stale_conn,
+        current_conn,
+    )
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        zotero = mock_client.return_value
+        zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN-CURRENT"}}})
+        result = await push_highlights_for_paper(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(spec=httpx.AsyncClient),
+            owner_user_id=42,
+        )
+
+    assert result == {
+        "paper_id": 7,
+        "exported": 1,
+        "skipped": 1,
+        "failed": 0,
+        "status": "partial",
+    }
+    zotero.create_item.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -2635,10 +3552,9 @@ async def test_push_highlights_for_paper_scopes_export_to_owner_user():
     # The DB returns only user 99's two unsynced highlights because the load is
     # scoped by user_id; a co-owner's rows on the same paper are filtered out.
     highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
-    ensure_conn = _make_conn()
-    persist0 = _make_conn()
-    persist1 = _make_conn()
-    pool = _make_pool(config_conn, paper_conn, highlights_conn, ensure_conn, persist0, persist1)
+    item0 = _make_conn(fetchrow=_highlight_row())
+    item1 = _make_conn(fetchrow=_highlight_row())
+    pool = _make_pool(config_conn, paper_conn, highlights_conn, item0, item1)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with (
@@ -2793,6 +3709,45 @@ async def test_zotero_resync_job_revalidates_ownership_before_resync():
     mock_assert.assert_awaited_once_with(conn, 7, 42)
     mock_resync.assert_awaited_once_with(7, pool, http, owner_user_id=42)
     assert result == {"paper_id": 7, "status": "resynced"}
+
+
+async def test_zotero_sync_from_job_passes_partial_result_through_unchanged():
+    """The job wrapper reports the poll's status without rebuilding its result."""
+    from paper_ingestion.integrations.zotero_service import _zotero_sync_from_zotero_job
+
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+    sentinel = {
+        "status": "partial",
+        "new_items": 13,
+        "linked": 2,
+        "enqueued": 7,
+        "parse_failed": 3,
+        "ingest_failed": 5,
+        "gave_up": 11,
+        "capped": True,
+        "version_from": 17,
+        "version_to": 19,
+        "cursor_persisted": False,
+        "opaque": object(),
+    }
+
+    with patch(
+        "paper_ingestion.integrations._zotero_jobs.poll_zotero_library",
+        AsyncMock(return_value=sentinel),
+    ) as mock_poll:
+        result = await _zotero_sync_from_zotero_job(
+            pool,
+            http,
+            {"user_id": 42},
+            ctx,
+        )
+
+    assert result is sentinel
+    mock_poll.assert_awaited_once_with(pool, http, polling_user_id=42)
+    assert ctx.update_progress.await_count == 2
+    assert ctx.update_progress.await_args_list[-1].args == (1.0, "Partial")
 
 
 async def test_zotero_sync_annotations_job_revalidates_ownership_before_sync():

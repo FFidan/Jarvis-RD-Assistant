@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { SourceSection } from '@/components/settings/SourceSection';
 import type { SourceConfig } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', () => ({
   updateSource: vi.fn().mockResolvedValue({}),
@@ -24,17 +24,14 @@ function source(overrides: Partial<SourceConfig> = {}): SourceConfig {
 }
 
 function renderSource(row: SourceConfig) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <DndContext>
-        <SortableContext items={[row.source_type]}>
-          <SourceSection source={row} displayIdx={1} />
-        </SortableContext>
-      </DndContext>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <DndContext>
+      <SortableContext items={[row.source_type]}>
+        <SourceSection source={row} displayIdx={1} />
+      </SortableContext>
+    </DndContext>,
+    { queryClient },
   );
 }
 

@@ -43,6 +43,7 @@ def row_to_card_response(row) -> CardResponse:
         evidence=evidence,
         fsrs_state=row["fsrs_state"] or {},
         due_at=row["due_at"],
+        stale=bool(row.get("stale", False)),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

@@ -4,11 +4,11 @@
  * optional free-note, persisted via the journal POST-upsert.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
 import type { MyDayResponse } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', () => ({
   getJournalEntry: vi.fn(),
@@ -42,13 +42,10 @@ const MY_DAY: MyDayResponse = {
 };
 
 function renderEod() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <EndOfDaySection />
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <EndOfDaySection />,
+    { queryClient: qc },
   );
 }
 

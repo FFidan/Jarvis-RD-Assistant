@@ -129,6 +129,53 @@ describe('JobsIndicator', () => {
     expect(screen.getByText('0 failed, 2 skipped of 2')).toBeInTheDocument();
   });
 
+  it('renders canonical Zotero partial counts', async () => {
+    setupStore({
+      'job-zotero': makeJob({
+        id: 'job-zotero',
+        kind: 'zotero.poll',
+        status: 'succeeded',
+        result: {
+          status: 'partial', new_items: 22, linked: 3, enqueued: 18,
+          parse_failed: 1, ingest_failed: 1, gave_up: 0, capped: true,
+          failed: 2, skipped: 0, remaining: 2, total: 24,
+          version_from: 10, version_to: 10, cursor_persisted: true,
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(
+      screen.getByRole('status', { name: 'Incomplete: 2 failed, 0 skipped, 2 not processed of 24' }),
+    ).toBeInTheDocument();
+  });
+
+  it('uses a generic message when a partial has no countable outcome', async () => {
+    setupStore({
+      'job-zotero-cursor': makeJob({
+        id: 'job-zotero-cursor',
+        kind: 'zotero.poll',
+        status: 'succeeded',
+        result: {
+          status: 'partial', new_items: 1, linked: 0, enqueued: 0,
+          parse_failed: 0, ingest_failed: 0, gave_up: 0, capped: false,
+          failed: 0, skipped: 0, remaining: 0, total: 1,
+          version_from: 10, version_to: 11, cursor_persisted: false,
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(
+      screen.getByRole('status', { name: 'Incomplete: Details unavailable' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('0 failed, 0 skipped of 1')).toBeNull();
+  });
+
   it('a cancelled whole-library result reads Cancelled, never Done', async () => {
     setupStore({
       'job-libcancel': makeJob({
@@ -190,6 +237,25 @@ describe('JobsIndicator', () => {
     await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
 
     expect(screen.getByText('0 failed, 0 skipped, 1 not processed of 3')).toBeInTheDocument();
+  });
+
+  it('shows scalar batch counts instead of re-deriving zeroes from absent arrays', async () => {
+    setupStore({
+      'job-extract-partial': makeJob({
+        id: 'job-extract-partial',
+        kind: 'extraction.batch',
+        status: 'succeeded',
+        result: {
+          status: 'partial', total: 5, extracted: 2, failed: 2, skipped: 1, remaining: 0,
+        },
+      }),
+    });
+
+    render(<JobsIndicator />);
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('2 failed, 1 skipped of 5')).toBeInTheDocument();
+    expect(screen.queryByText('0 failed, 0 skipped of 5')).toBeNull();
   });
 
   it('a cancel-requested job reads Cancelling and disables its cancel control', async () => {

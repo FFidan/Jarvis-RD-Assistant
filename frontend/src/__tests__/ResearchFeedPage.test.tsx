@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { ApiError } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -158,16 +158,15 @@ vi.mock('@/components/chat/StreamingChat', () => ({
 }));
 
 function renderPage() {
-  const renderResult = render(
-    <QueryClientProvider client={appQueryClient}>
-      <MemoryRouter initialEntries={['/feed']}>
+  const renderResult = renderWithProviders(
+    <MemoryRouter initialEntries={['/feed']}>
         <Routes>
           <Route path="/feed" element={<ResearchFeedPage />} />
           <Route path="/paper/:paperId" element={<LocationDisplay />} />
           <Route path="/projects" element={<LocationDisplay />} />
         </Routes>
-    </MemoryRouter>
-    </QueryClientProvider>,
+    </MemoryRouter>,
+    { queryClient: appQueryClient },
   );
   return { ...renderResult, queryClient: appQueryClient };
 }
@@ -280,14 +279,13 @@ describe('ResearchFeedPage', () => {
       by_source: {}, by_topic: [], untagged: 0,
     });
     // Render on library surface directly
-    const { container: _c } = render(
-      <QueryClientProvider client={appQueryClient}>
-        <MemoryRouter initialEntries={['/feed?surface=library']}>
-          <Routes>
-            <Route path="/feed" element={<ResearchFeedPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const { container: _c } = renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?surface=library']}>
+        <Routes>
+          <Route path="/feed" element={<ResearchFeedPage />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: appQueryClient },
     );
     await waitFor(() => {
       expect(screen.getByTestId('library-empty-discover')).toBeInTheDocument();
@@ -401,15 +399,14 @@ describe('ResearchFeedPage', () => {
     vi.mocked(fetchSources).mockRejectedValueOnce(new Error('sources down'));
 
     // Local client with retry:false so the single rejection surfaces deterministically.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/feed?surface=search']}>
-          <Routes>
-            <Route path="/feed" element={<ResearchFeedPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?surface=search']}>
+        <Routes>
+          <Route path="/feed" element={<ResearchFeedPage />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     // Failure is surfaced explicitly — never as "no sources"/"Select at least one source".
@@ -1993,15 +1990,14 @@ describe('ResearchFeedPage', () => {
 
   it('?tab=pulse legacy deep-link causes navigate to /my-day', async () => {
     // Render with the legacy ?tab=pulse query param
-    render(
-      <QueryClientProvider client={appQueryClient}>
-        <MemoryRouter initialEntries={['/feed?tab=pulse']}>
-          <Routes>
-            <Route path="/feed" element={<ResearchFeedPage />} />
-            <Route path="/my-day" element={<LocationDisplay />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?tab=pulse']}>
+        <Routes>
+          <Route path="/feed" element={<ResearchFeedPage />} />
+          <Route path="/my-day" element={<LocationDisplay />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: appQueryClient },
     );
     await waitFor(() => {
       expect(screen.getByTestId('location-path')).toHaveTextContent('/my-day');
@@ -2036,14 +2032,13 @@ describe('ResearchFeedPage', () => {
   // ── ?surface=garbage URL fallback ─────────────────────────────────────────
 
   it('?surface=garbage falls back to Inbox surface (VALID_SURFACES guard)', async () => {
-    render(
-      <QueryClientProvider client={appQueryClient}>
-        <MemoryRouter initialEntries={['/feed?surface=garbage']}>
-          <Routes>
-            <Route path="/feed" element={<ResearchFeedPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?surface=garbage']}>
+        <Routes>
+          <Route path="/feed" element={<ResearchFeedPage />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: appQueryClient },
     );
     // Unknown surface falls back to 'inbox' — Inbox §Status facet is active
     expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
@@ -2053,14 +2048,13 @@ describe('ResearchFeedPage', () => {
   // ── T3.1 Phase-A: VALID_SURFACES tighten — ?surface=starred is no longer a surface ──
 
   it('?surface=starred falls back to Inbox (VALID_SURFACES tightened — starred is sub-filter only)', () => {
-    render(
-      <QueryClientProvider client={appQueryClient}>
-        <MemoryRouter initialEntries={['/feed?surface=starred']}>
-          <Routes>
-            <Route path="/feed" element={<ResearchFeedPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?surface=starred']}>
+        <Routes>
+          <Route path="/feed" element={<ResearchFeedPage />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: appQueryClient },
     );
     // 'starred' is not in VALID_SURFACES — falls back to 'inbox'
     expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');

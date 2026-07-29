@@ -33,6 +33,8 @@ _BACKUP_DOC = _REPO_ROOT / "docs" / "manual" / "backup-and-restore.md"
 _PASSKEYS_DOC = _REPO_ROOT / "docs" / "manual" / "passkeys.md"
 _RESEARCH_FEED_DOC = _REPO_ROOT / "docs" / "manual" / "research-feed.md"
 _SETTINGS_DOC = _REPO_ROOT / "docs" / "manual" / "settings.md"
+_HARDWARE_MODELS_DOC = _REPO_ROOT / "docs" / "manual" / "hardware-and-models.md"
+_MODELS_CONTRACT_DOC = _REPO_ROOT / "docs" / "contracts" / "05-models-and-hardware.md"
 _TELEGRAM_DOC = _REPO_ROOT / "docs" / "manual" / "telegram.md"
 _ENV_EXAMPLE = _REPO_ROOT / ".env.example"
 _JARVIS_SETUP_SCRIPT = _REPO_ROOT / "scripts" / "jarvis-setup.sh"
@@ -62,6 +64,7 @@ _COLUMNS = (
 
 _BEGIN_MARKER = "<!-- route-claims:begin -->"
 _END_MARKER = "<!-- route-claims:end -->"
+_SETUP_TIERS = ("cpu", "lt-8", "8-16", "16-24", "24-48", "ge-48")
 
 
 def _read(path: Path) -> str:
@@ -603,14 +606,134 @@ def test_hardware_and_disk_guidance_names_the_real_diagnostics_boundary() -> Non
     assert "docker builder prune -af" in requirements
 
 
+def _leading_migration_version(path: Path) -> int | None:
+    """Return the numeric prefix of a migration filename, or None if it has none."""
+    try:
+        return int(path.name.split("_")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _installer_default_contract() -> tuple[dict[str, tuple[str, str]], int, int]:
+    """Execute the production selectors and disk calculator.
+
+    Returns
+    -------
+    tuple[dict[str, tuple[str, str]], int, int]
+        Per-tier smart model and complete pull set, followed by the smallest
+        default pull requirement and largest default local-build requirement.
+    """
+    tiers = " ".join(_SETUP_TIERS)
+    script = f"""
+set -euo pipefail
+source scripts/setup_lib.sh
+for tier in {tiers}; do
+  model="$(_default_model_for_tier "$tier" ollama)"
+  printf 'tier|%s|%s|%s\\n' "$tier" "$model" "$(compute_ollama_models "$model")"
+done
+smallest="$(_default_model_for_tier cpu ollama)"
+largest="$(_default_model_for_tier ge-48 ollama)"
+printf 'bounds|%s|%s\\n' \
+  "$(compute_required_disk_gb "$smallest" cpu-pull)" \
+  "$(compute_required_disk_gb "$largest" cuda-build)"
+"""
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    defaults: dict[str, tuple[str, str]] = {}
+    minimum = maximum = 0
+    for line in result.stdout.splitlines():
+        kind, *fields = line.split("|")
+        if kind == "tier":
+            tier, model, model_set = fields
+            defaults[tier] = (model, model_set)
+        elif kind == "bounds":
+            minimum, maximum = (int(value) for value in fields)
+
+    assert tuple(defaults) == _SETUP_TIERS
+    assert minimum > 0
+    assert maximum >= minimum
+    return defaults, minimum, maximum
+
+
+def test_current_install_docs_follow_the_executable_model_and_disk_contract() -> None:
+    """Current setup guidance must derive from production selectors."""
+    defaults, minimum, maximum = _installer_default_contract()
+    disk_range = f"{minimum}–{maximum} GB"
+
+    readme = _read(_README)
+    requirements = _read(_REQUIREMENTS_DOC)
+    deployment = _read(_DEPLOYMENT_DOC)
+    hardware = _read(_HARDWARE_MODELS_DOC)
+    settings = _read(_SETTINGS_DOC)
+    models_contract = _read(_MODELS_CONTRACT_DOC)
+    env_example = _read(_ENV_EXAMPLE)
+    setup = _read(_SETUP_SCRIPT)
+
+    for current_doc in (readme, requirements, deployment, hardware, models_contract):
+        assert disk_range in current_doc
+    assert f"~{minimum}-{maximum} GB" in setup
+    assert f"~{minimum}-{maximum} GB" in env_example
+
+    for tier, (model, model_set) in defaults.items():
+        assert tier in hardware
+        assert model in hardware
+        assert model_set in requirements
+
+    assert "custom models may require more" in readme.lower()
+    assert "custom models may require more" in requirements.lower()
+    assert "manual template fallback" in env_example.lower()
+    assert "tier-selected" in env_example.lower()
+    assert "manual template fallback" in readme.lower()
+    assert "tier-selected" in readme.lower()
+    assert "tier-selected" in settings.lower()
+    assert "tier-selected" in models_contract.lower()
+    assert "default smart model is `qwen3:8b`" not in deployment
+    assert "manual/hardware-and-models.md#hardware-tiers-and-default-models" in deployment
+
+    assert "db/migrations/README.md" in readme
+    assert re.search(r"0102\s*[–-]\s*\d{4}", readme) is None
+
+
 def test_migration_ledger_names_baseline_and_every_post_baseline_step() -> None:
-    """Migration docs must expose the exact schema floor and incremental history."""
+    """Migration docs must expose the exact schema floor and incremental history.
+
+    The current version and the expected rows are read from ``db/SCHEMA_VERSION``
+    and from the migration files themselves. Naming them literally here froze
+    this guard at one release's numbers while the version file and the migration
+    directory moved on, so it went green over exactly the drift it exists to
+    catch. Deriving them also ties the version file to the highest migration on
+    disk, which nothing else asserted.
+    """
     migrations = _read(_MIGRATIONS_DOC)
+    current = int((_REPO_ROOT / "db" / "SCHEMA_VERSION").read_text().strip())
+
+    shipped = sorted(
+        version
+        for version in (
+            _leading_migration_version(path)
+            for path in (_REPO_ROOT / "db" / "migrations").glob("*.sql")
+        )
+        if version is not None
+    )
 
     assert "baseline schema version is `101`" in migrations
-    assert "current schema version is `106`" in migrations
-    for version in range(102, 107):
-        assert f"`0{version}`" in migrations
+    assert f"current schema version is `{current}`" in migrations, (
+        f"the migration ledger must name the version in db/SCHEMA_VERSION ({current})"
+    )
+    assert shipped, "expected at least one post-baseline migration on disk"
+    assert shipped[-1] == current, (
+        f"db/SCHEMA_VERSION is {current} but the highest migration on disk is {shipped[-1]}"
+    )
+    for version in shipped:
+        assert f"`{version:04d}`" in migrations, (
+            f"migration {version:04d} ships but has no row in the ledger"
+        )
 
 
 def test_security_owns_one_source_aware_visibility_matrix_linked_by_consumers() -> None:

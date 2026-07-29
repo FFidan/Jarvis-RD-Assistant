@@ -22,8 +22,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
     make_contract_client as _make_client,
+    patch_pi_test_app,
 )
 
 pytestmark = [
@@ -35,18 +38,14 @@ pytestmark = [
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_with_pool(contract_conn):
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.main import app
-
     shared = SharedConnPool(contract_conn)
-    with (
-        patch_app_state(app, {"db_pool": shared, "embedder": None}),
-        patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            state_overrides={"embedder": None},
         ),
-    ):
+    ) as app:
         yield app
 
 

@@ -67,7 +67,13 @@ class ConsensusClaim(BaseModel):
 
 
 class ConsensusResponse(BaseModel):
-    """Consensus view: stance counts per shared claim across the library."""
+    """Consensus view: stance counts per shared claim across the library.
+
+    ``truncated`` is ``True`` when the underlying verified evidence set exceeded
+    the internal row cap before clustering began -- independent of ``total``,
+    which counts the returned clusters and keeps its existing meaning.
+    """
 
     claims: list[ConsensusClaim]
     total: int
+    truncated: bool = False

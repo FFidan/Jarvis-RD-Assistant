@@ -1,34 +1,17 @@
-"""Tests for entities.paper_count double-increment guard.
-
-Audit finding: ``_find_or_create_entity`` was incrementing ``paper_count``
-unconditionally on every call, so:
-  1. When the LLM emits the same entity name twice in one extraction run,
-     ``paper_count`` was incremented by 2 instead of 1.
-  2. Re-running extraction for the same paper would re-increment ``paper_count``
-     even though ``paper_entities`` is idempotent (ON CONFLICT DO UPDATE).
-
-Fix: ``_find_or_create_entity`` no longer touches ``paper_count``.
-``extract_entities_for_paper`` increments it exactly once per distinct entity
-id encountered in a single run (tracked via ``paper_count_incremented`` set).
-
-Grounded against:
-  services/paper_ingestion/paper_ingestion/extraction/entities.py
-  (``_find_or_create_entity`` lines 206-275, ``extract_entities_for_paper``
-  Phase-2 loop lines 376-410 after fix).
-"""
+"""Entity-count contracts for generation-aware knowledge-graph extraction."""
 
 from __future__ import annotations
-
-from unittest.mock import AsyncMock, call
 
 import pytest
 
 from jarvis_common.prompt_safety import max_input_chars
 from paper_ingestion.extraction.entities import (
     _ENTITY_OUTPUT_TOKENS,
+    _aggregate_entity_mentions,
     _find_or_create_entity,
     build_entity_prompt,
 )
+from paper_ingestion.extraction.kg_models import KGEntityCandidate
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -157,54 +140,162 @@ async def test_find_or_create_entity_new_insert_does_not_set_paper_count():
 
 
 # ---------------------------------------------------------------------------
-# Duplicate entity name within one extraction run
-# Simulates the caller loop in extract_entities_for_paper.
+# Duplicate entity names within one extraction run.
 # ---------------------------------------------------------------------------
 
 
+def test_duplicate_entities_become_one_absolute_mention_count():
+    """A retry persists the same absolute count instead of incrementing it."""
+    entities = [
+        KGEntityCandidate(name="BERT", type="method"),
+        KGEntityCandidate(name="bert", type="method"),
+        KGEntityCandidate(name="GLUE", type="dataset"),
+    ]
+
+    aggregated = _aggregate_entity_mentions(entities)
+
+    assert aggregated == [
+        {
+            "name": "BERT",
+            "type": "method",
+            "description": None,
+            "mention_count": 2,
+        },
+        {
+            "name": "GLUE",
+            "type": "dataset",
+            "description": None,
+            "mention_count": 1,
+        },
+    ]
+
+
 @pytest.mark.asyncio
-async def test_paper_count_incremented_once_for_duplicate_entity_in_run():
-    """If the LLM emits the same entity twice, paper_count must increment by 1."""
-    _, conn = _make_pool_and_conn(
-        fetchrow_return=FakeRecord(id=7),
+async def test_delayed_entity_writer_performs_no_persistence_or_vector_write() -> None:
+    """A source change after LLM work prevents every entity persistence side effect."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from paper_ingestion.exceptions import SourceGenerationChangedError
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
+    from paper_ingestion.extraction.kg_models import KGExtractionOutput
+
+    read_conn = AsyncMock()
+    read_conn.fetchrow.return_value = {
+        "id": 7,
+        "title": "Generation race",
+        "content_generation": 0,
+    }
+    read_conn.fetch.return_value = [
+        {
+            "id": 11,
+            "paper_id": 7,
+            "chunk_index": 0,
+            "content": "BERT is the central method.",
+            "page_number": 1,
+            "start_char": 0,
+            "end_char": 27,
+            "embedding_id": None,
+            "created_at": datetime.now(UTC),
+        }
+    ]
+    write_conn = AsyncMock()
+    write_conn.fetchval.return_value = 1
+    transaction = MagicMock()
+    transaction.__aenter__ = AsyncMock(return_value=transaction)
+    transaction.__aexit__ = AsyncMock(return_value=False)
+    write_conn.transaction = MagicMock(return_value=transaction)
+
+    read_context = MagicMock()
+    read_context.__aenter__ = AsyncMock(return_value=read_conn)
+    read_context.__aexit__ = AsyncMock(return_value=False)
+    write_context = MagicMock()
+    write_context.__aenter__ = AsyncMock(return_value=write_conn)
+    write_context.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.side_effect = [read_context, write_context]
+    pool.fetch = AsyncMock(return_value=[])
+
+    embedder = AsyncMock()
+    embedder.embed_texts.return_value = [[0.1, 0.2]]
+    qdrant = AsyncMock()
+    qdrant.query_points.return_value = SimpleNamespace(points=[])
+    llm_output = KGExtractionOutput(
+        entities=[KGEntityCandidate(name="BERT", type="method")],
     )
-    conn.execute = AsyncMock()
 
-    entity_id_1, _ = await _find_or_create_entity(conn, "BERT", "method", None)
-    entity_id_2, _ = await _find_or_create_entity(
-        conn,
-        "bert",
-        "method",
-        None,  # canonical-normalized duplicate
-    )
-
-    # Both calls resolve to the same entity id.
-    assert entity_id_1 == entity_id_2 == 7
-
-    # Simulate what extract_entities_for_paper does: increment paper_count only
-    # if entity_id not already in paper_count_incremented set.
-    paper_count_incremented: set[int] = set()
-    increment_calls: list[int] = []
-
-    for eid in [entity_id_1, entity_id_2]:
-        if eid not in paper_count_incremented:
-            await conn.execute(
-                "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
-                eid,
+    with (
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=llm_output),
+        ),
+        patch(
+            "paper_ingestion.extraction.entities._find_or_create_entity",
+            AsyncMock(),
+        ) as find_or_create,
+        patch(
+            "paper_ingestion.extraction.entities._store_entity_embedding",
+            AsyncMock(),
+        ) as store_embedding,
+    ):
+        with pytest.raises(SourceGenerationChangedError, match="Please retry"):
+            await extract_entities_for_paper(
+                MagicMock(),
+                pool,
+                7,
+                embedder=embedder,
+                qdrant_client=qdrant,
+                openai_client=MagicMock(),
+                user_id=42,
             )
-            paper_count_incremented.add(eid)
-            increment_calls.append(eid)
 
-    assert increment_calls == [7], (
-        "paper_count must be incremented exactly once even when entity appears twice"
-    )
-    # Verify only one UPDATE was issued.
-    update_calls = [c for c in conn.execute.await_args_list if "paper_count" in c.args[0]]
-    assert len(update_calls) == 1
-    assert update_calls[0] == call(
-        "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
-        7,
-    )
+    find_or_create.assert_not_awaited()
+    store_embedding.assert_not_awaited()
+    qdrant.create_collection.assert_not_awaited()
+    qdrant.upsert.assert_not_awaited()
+    assert write_conn.fetchval.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_entity_route_reports_source_change_as_retryable_conflict() -> None:
+    """The direct API returns a stable conflict message instead of internal state."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException
+
+    from paper_ingestion.exceptions import SourceGenerationChangedError
+    from paper_ingestion.routers.knowledge_graph import extract_entities
+
+    pool, _conn = _make_pool_and_conn()
+    handler = getattr(extract_entities, "__wrapped__", extract_entities)
+    with (
+        patch(
+            "paper_ingestion.routers.knowledge_graph.assert_paper_ownership",
+            AsyncMock(),
+        ),
+        patch(
+            "paper_ingestion.routers.knowledge_graph.extract_entities_for_paper",
+            AsyncMock(
+                side_effect=SourceGenerationChangedError("internal source-generation details")
+            ),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler(
+                request=SimpleNamespace(state=SimpleNamespace(request_id="request-1")),
+                paper_id=7,
+                db_pool=pool,
+                http_client=MagicMock(),
+                embedder=None,
+                qdrant=None,
+                user_id=42,
+            )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "The paper changed during entity extraction. Please retry."
+    assert "generation" not in str(exc_info.value.detail).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +460,7 @@ def test_visible_paper_entities_exists_fragment_shape() -> None:
         "EXISTS (SELECT 1 FROM paper_entities pe "
         "JOIN papers visible_p ON visible_p.id = pe.paper_id "
         "WHERE pe.entity_id = e.id "
+        "AND pe.content_generation = visible_p.content_generation "
         f"AND {paper_visible_sql(4, alias='visible_p')})"
     )
     assert frag == expected
@@ -378,24 +470,14 @@ def test_visible_paper_entities_exists_fragment_shape() -> None:
     assert frag2 == expected2
 
 
-@pytest.mark.asyncio
-async def test_paper_entities_upsert_returns_fresh_insert_flag():
-    """Secondary guard: the fix is the upsert RETURNING a fresh-insert flag
-    (xmax = 0) read via fetchval, replacing the per-run set. The behavioral
-    proof lives in test_kg_contract.py; this just locks the mechanism.
-    """
+def test_paper_entities_upsert_is_absolute_and_generation_monotonic():
+    """The persisted mention count is retry-safe and older generations lose."""
     import inspect
 
     from paper_ingestion.extraction.entities import extract_entities_for_paper
 
     source = inspect.getsource(extract_entities_for_paper)
-    assert "xmax" in source, "paper_entities upsert must RETURN (xmax = 0) to detect a fresh insert"
-    assert "RETURNING" in source, (
-        "paper_entities upsert must use RETURNING to surface the insert flag"
-    )
-    assert "fetchval" in source or "fetchrow" in source, (
-        "the upsert result must be captured so paper_count is gated on a fresh insert"
-    )
-    assert "paper_count_incremented" not in source, (
-        "the fresh-insert RETURNING flag replaces the per-run paper_count_incremented set"
-    )
+    assert "mention_count = EXCLUDED.mention_count" in source
+    assert "paper_entities.mention_count + 1" not in source
+    assert "paper_entities.content_generation" in source
+    assert "<= EXCLUDED.content_generation" in source

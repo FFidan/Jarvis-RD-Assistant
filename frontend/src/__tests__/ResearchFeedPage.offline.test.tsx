@@ -11,10 +11,10 @@
  *  - ONLINE rendering unchanged: no offline indicators when online
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Connectivity + persister mocks
@@ -73,21 +73,18 @@ vi.mock('@/stores/job-store', () => ({
 // ---------------------------------------------------------------------------
 
 function makeQc() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderFeed(initialPath = '/feed?surface=library') {
   const qc = makeQc();
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route path="/feed" element={<ResearchFeedPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route path="/feed" element={<ResearchFeedPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

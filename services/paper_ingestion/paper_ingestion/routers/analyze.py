@@ -20,6 +20,7 @@ from paper_ingestion.deps import (
     limiter,
 )
 from paper_ingestion.pdf_processor import check_pdf_path_safe
+from paper_ingestion.routers.pdf import _require_library_membership
 from paper_ingestion.services.pdf_workflow import download_and_store_pdf
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,13 @@ async def _analyze_stream(
         from paper_ingestion.services.pdf_workflow import run_process_pdf
 
         result = await run_process_pdf(
-            paper_id, pdf_path, db_pool, pdf_processor, embedder, force=force
+            paper_id,
+            pdf_path,
+            db_pool,
+            pdf_processor,
+            embedder,
+            force=force,
+            requester_id=user_id,
         )
         chunk_count = result.get("chunk_count", 0)
     except Exception:
@@ -231,9 +238,20 @@ async def analyze_paper(
 
     With ``?async=true``: enqueues a ``paper.analyze`` job and returns
     ``{"job_id": "...", "status": "queued"}`` immediately.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        403 when ``force`` is set and the paper is not in the caller's library,
+        on either branch: the analysis rebuilds the paper's derived content, so
+        it requires holding the paper rather than merely being able to see it.
+        The refusal happens before the stream opens, where a status code can
+        still be sent.
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
+        if force:
+            await _require_library_membership(conn, paper_id, user_id)
 
     if async_mode:
         import uuid

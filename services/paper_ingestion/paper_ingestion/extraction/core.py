@@ -24,9 +24,12 @@ from typing import TYPE_CHECKING
 import asyncpg
 import httpx
 from jarvis_common import get_smart_model
+from jarvis_common.jobs import batch_terminal_status
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured, observe
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 
+from paper_ingestion.db_types import ConnLike
+from paper_ingestion.exceptions import SourceGenerationChangedError
 from paper_ingestion.extraction.dynamic_models import (
     ExtractedFieldOutput,
     _build_extraction_response_model,
@@ -36,6 +39,7 @@ from paper_ingestion.models import (
     ExtractedField,
     ExtractionResponse,
 )
+from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 
 if TYPE_CHECKING:
     import openai
@@ -107,6 +111,28 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     )
 
 
+async def _fetch_current_extraction(
+    conn: ConnLike,
+    *,
+    paper_id: int,
+    template_id: int,
+    user_id: int | None,
+) -> asyncpg.Record | None:
+    """Return a stored extraction only when it matches the paper source."""
+    return await conn.fetchrow(
+        """SELECT pe.id, pe.paper_id, pe.template_id, pe.extractions,
+                  pe.extraction_model, pe.content_generation, pe.created_at
+           FROM paper_extractions pe
+           JOIN papers p ON p.id = pe.paper_id
+                        AND p.content_generation = pe.content_generation
+           WHERE pe.paper_id = $1 AND pe.template_id = $2
+             AND pe.user_id IS NOT DISTINCT FROM $3""",
+        paper_id,
+        template_id,
+        user_id,
+    )
+
+
 @observe()
 async def extract_fields_for_paper(
     http_client: httpx.AsyncClient,
@@ -140,9 +166,13 @@ async def extract_fields_for_paper(
 
         fields = template["fields"]  # JSONB, already parsed
 
-        paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
+        paper = await conn.fetchrow(
+            "SELECT id, title, content_generation FROM papers WHERE id = $1",
+            paper_id,
+        )
         if not paper:
             raise ValueError(f"Paper {paper_id} not found")
+        content_generation = int(paper["content_generation"])
 
         chunks = await conn.fetch(
             """SELECT id, chunk_index, content, page_number
@@ -284,27 +314,53 @@ async def extract_fields_for_paper(
 
     async with db_pool.acquire() as conn:
         try:
-            row = await conn.fetchrow(
-                """INSERT INTO paper_extractions (paper_id, template_id, extractions,
-                       extraction_model, extraction_raw, user_id)
-                   VALUES ($1, $2, $3::jsonb, $4, $5, $6)
-                   ON CONFLICT (paper_id, template_id, user_id)
-                   DO UPDATE SET extractions = EXCLUDED.extractions,
-                                 extraction_model = EXCLUDED.extraction_model,
-                                 extraction_raw = EXCLUDED.extraction_raw
-                   RETURNING id, paper_id, template_id, extractions,
-                       extraction_model, created_at""",
-                paper_id,
-                template_id,
-                extraction_json,
-                smart_model,
-                llm_result.model_dump_json(),
-                user_id,
-            )
+            async with guard_current_source_generation(conn, paper_id, content_generation):
+                row = await conn.fetchrow(
+                    """INSERT INTO paper_extractions (paper_id, template_id, extractions,
+                           extraction_model, extraction_raw, user_id, content_generation)
+                       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+                       ON CONFLICT (paper_id, template_id, user_id)
+                       DO UPDATE SET extractions = EXCLUDED.extractions,
+                                     extraction_model = EXCLUDED.extraction_model,
+                                     extraction_raw = EXCLUDED.extraction_raw,
+                                     content_generation = EXCLUDED.content_generation
+                       WHERE paper_extractions.content_generation
+                             <= EXCLUDED.content_generation
+                       RETURNING id, paper_id, template_id, extractions,
+                           extraction_model, content_generation, created_at""",
+                    paper_id,
+                    template_id,
+                    extraction_json,
+                    smart_model,
+                    llm_result.model_dump_json(),
+                    user_id,
+                    content_generation,
+                )
+                if row is None:
+                    row = await _fetch_current_extraction(
+                        conn,
+                        paper_id=paper_id,
+                        template_id=template_id,
+                        user_id=user_id,
+                    )
+                    if row is None:
+                        raise RuntimeError(
+                            "extraction persistence lost its concurrent winner "
+                            f"for paper {paper_id}"
+                        )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
                 "paper_extractions table not found (migration 011 not applied)"
             ) from None
+        except SourceGenerationChangedError:
+            row = await _fetch_current_extraction(
+                conn,
+                paper_id=paper_id,
+                template_id=template_id,
+                user_id=user_id,
+            )
+            if row is None:
+                raise
 
     stored = row["extractions"]
     parsed_extractions = {
@@ -318,6 +374,7 @@ async def extract_fields_for_paper(
         template_id=row["template_id"],
         extractions=parsed_extractions,
         extraction_model=row["extraction_model"],
+        content_generation=int(row.get("content_generation", content_generation)),
         created_at=row["created_at"],
     )
 
@@ -343,18 +400,23 @@ async def batch_extract(
     failed = 0
     skipped = 0
     total = len(paper_ids)
+    cancelled = False
 
     if ctx is not None:
         await ctx.update_progress(0.0, f"Starting: {total} papers")
 
     for i, paper_id in enumerate(paper_ids):
         if ctx is not None and await ctx.is_cancelled():
+            cancelled = True
             break
         async with db_pool.acquire() as conn:
             try:
                 existing = await conn.fetchval(
-                    "SELECT id FROM paper_extractions"
-                    " WHERE paper_id = $1 AND template_id = $2 AND user_id = $3",
+                    "SELECT pe.id FROM paper_extractions pe"
+                    " JOIN papers p ON p.id = pe.paper_id"
+                    " WHERE pe.paper_id = $1 AND pe.template_id = $2"
+                    " AND pe.user_id IS NOT DISTINCT FROM $3"
+                    " AND pe.content_generation = p.content_generation",
                     paper_id,
                     template_id,
                     user_id,
@@ -377,9 +439,22 @@ async def batch_extract(
             progress = (i + 1) / max(total, 1)
             await ctx.update_progress(progress, f"Processed {i + 1}/{total} papers")
 
+    remaining = max(total - extracted - failed - skipped, 0)
+    status = batch_terminal_status(
+        cancelled=cancelled,
+        incomplete=bool(skipped or failed or remaining),
+    )
     if ctx is not None:
+        headline = "Done" if status == "ok" else status.title()
         await ctx.update_progress(
-            1.0, f"Done: {extracted} extracted, {skipped} skipped, {failed} failed"
+            1.0, f"{headline}: {extracted} extracted, {skipped} skipped, {failed} failed"
         )
 
-    return BatchExtractionResponse(extracted=extracted, failed=failed, skipped=skipped)
+    return BatchExtractionResponse(
+        extracted=extracted,
+        failed=failed,
+        skipped=skipped,
+        total=total,
+        remaining=remaining,
+        status=status,
+    )

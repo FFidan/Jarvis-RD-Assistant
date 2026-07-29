@@ -7,8 +7,8 @@ on:
   pull_request:
     branches: [main]
   push:
-    # Release candidates fire only the GHCR publish workflow (negative pattern:
-    # `tags` and `tags-ignore` cannot be combined on one event).
+    # Unsupported RC-shaped tags are excluded from this auxiliary stable-release
+    # scan (`tags` and `tags-ignore` cannot be combined on one event).
     tags: ["v*", "!v*-rc*"]
   workflow_dispatch:
 

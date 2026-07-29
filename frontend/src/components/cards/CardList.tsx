@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Trash2, CreditCard } from 'lucide-react';
+import { AlertTriangle, CreditCard, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchCards, deleteCard } from '@/lib/api';
@@ -83,7 +83,19 @@ export function CardList({ deckId }: CardListProps) {
             {cards.map((card) => (
               <TableRow key={card.id}>
                 <TableCell className="max-w-[250px] truncate font-medium">
-                  {card.front}
+                  <div className="flex items-center gap-2">
+                    <span className="truncate">{card.front}</span>
+                    {card.stale && (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
+                        title="This card was created from an earlier version of the paper"
+                      >
+                        <AlertTriangle className="mr-1 h-3 w-3" />
+                        Earlier version
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell className="hidden md:table-cell max-w-[250px] truncate text-muted-foreground">
                   {card.back}
@@ -94,7 +106,9 @@ export function CardList({ deckId }: CardListProps) {
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {card.due_at
+                  {card.stale
+                    ? 'Not reviewable'
+                    : card.due_at
                     ? new Date(card.due_at) <= new Date()
                       ? 'Now'
                       : new Date(card.due_at).toLocaleDateString()

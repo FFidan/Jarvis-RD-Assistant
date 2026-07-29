@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock
 
 import asyncpg
 import pytest
-from jarvis_common.migrations import required_code_schema, run_migrations
+from jarvis_common.migrations import (
+    _REQUIRED_CODE_SCHEMA_FALLBACK,
+    required_code_schema,
+    run_migrations,
+)
 from jarvis_common.testing_db import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -69,19 +73,52 @@ async def test_lock_not_available_raises_runtime_error_without_compat_flag(
 
 
 @pytest.mark.asyncio
-async def test_lock_not_available_swallowed_with_compat_flag(tmp_path, monkeypatch) -> None:
-    """LockNotAvailableError (sqlstate 55P03) → silently skipped when compat flag is set."""
+async def test_lock_contention_waits_until_the_schema_reaches_the_floor(
+    tmp_path, monkeypatch
+) -> None:
+    """The compatibility path starts after the other migrator reaches the floor."""
     monkeypatch.setenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "true")
+    floor = required_code_schema()
 
-    pool, _conn = _pool_with_execute_effects(
+    pool, conn = _pool_with_execute_effects(
         [
             None,  # SET LOCAL lock_timeout = '60s'
             _make_lock_not_available(),  # SELECT pg_advisory_xact_lock(42)
         ]
     )
+    conn.fetchval = AsyncMock(side_effect=[floor - 1, floor])
+    sleep = AsyncMock()
+    monkeypatch.setattr("jarvis_common.migrations.asyncio.sleep", sleep)
 
-    # Must not raise
     await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert conn.fetchval.await_count == 2
+    sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_contention_refuses_a_schema_still_below_the_floor(
+    tmp_path, monkeypatch
+) -> None:
+    """The compatibility path fails closed when its bounded wait expires."""
+    monkeypatch.setenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "true")
+    monkeypatch.setattr(
+        "jarvis_common.migrations._SCHEMA_FLOOR_CONTENTION_TIMEOUT_SECONDS",
+        0.0,
+    )
+    floor = required_code_schema()
+    pool, conn = _pool_with_execute_effects(
+        [
+            None,
+            _make_lock_not_available(),
+        ]
+    )
+    conn.fetchval = AsyncMock(return_value=floor - 1)
+
+    with pytest.raises(RuntimeError, match="refusing to start"):
+        await run_migrations(pool, migrations_dir=tmp_path)
+
+    conn.fetchval.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -140,6 +177,44 @@ async def test_baseline_schema_passes_the_floor(tmp_path, monkeypatch) -> None:
     await run_migrations(pool, migrations_dir=tmp_path)  # must not raise
 
 
+@pytest.mark.asyncio
+async def test_absent_migrations_dir_still_refuses_under_baseline_schema(
+    tmp_path, monkeypatch
+) -> None:
+    """An absent migrations directory must not bypass the floor.
+
+    A packaging or mount glitch is exactly the case the floor exists for: with
+    no directory to apply from, an under-baseline database can only stay under
+    baseline, so startup must refuse rather than serve.
+    """
+    monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
+    floor = required_code_schema()
+    absent_dir = tmp_path / "no-such-migrations"
+    assert not absent_dir.exists()
+
+    pool = _pool_at_schema(floor - 1)
+
+    with pytest.raises(RuntimeError, match="refusing to start"):
+        await run_migrations(pool, migrations_dir=absent_dir)
+
+
+@pytest.mark.asyncio
+async def test_absent_migrations_dir_starts_when_floor_is_satisfied(tmp_path, monkeypatch) -> None:
+    """An absent migrations directory over an at-baseline database must still start.
+
+    Deployments that mount migrations elsewhere legitimately point the runner at
+    a path that is not there; they must keep booting.
+    """
+    monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
+    floor = required_code_schema()
+    absent_dir = tmp_path / "no-such-migrations"
+    assert not absent_dir.exists()
+
+    pool = _pool_at_schema(floor)
+
+    await run_migrations(pool, migrations_dir=absent_dir)  # must not raise
+
+
 def test_code_max_migration_returns_floor_on_empty_dir(tmp_path, monkeypatch) -> None:
     """An empty/absent migrations dir reports the baseline floor, not None.
 
@@ -154,7 +229,13 @@ def test_code_max_migration_returns_floor_on_empty_dir(tmp_path, monkeypatch) ->
 
 def test_required_code_schema_reads_schema_version_file() -> None:
     """required_code_schema() reads db/SCHEMA_VERSION, the single source of truth."""
-    assert required_code_schema() == 106
+    from pathlib import Path  # noqa: PLC0415
+
+    from jarvis_common import migrations as _m  # noqa: PLC0415
+
+    repo_root = Path(_m.__file__).resolve().parents[3]
+    expected = int((repo_root / "db" / "SCHEMA_VERSION").read_text().strip())
+    assert required_code_schema() == expected
 
 
 def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplog) -> None:
@@ -166,7 +247,7 @@ def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplo
     )
 
     with caplog.at_level(logging.WARNING):
-        assert required_code_schema() == 106
+        assert required_code_schema() == _REQUIRED_CODE_SCHEMA_FALLBACK
 
     assert not any("could not read" in r.getMessage() for r in caplog.records)
 
@@ -179,7 +260,7 @@ def test_required_code_schema_warns_on_corrupt_file(tmp_path, monkeypatch, caplo
     monkeypatch.setattr("jarvis_common.migrations._schema_version_path", lambda: bad)
 
     with caplog.at_level(logging.WARNING):
-        assert required_code_schema() == 106
+        assert required_code_schema() == _REQUIRED_CODE_SCHEMA_FALLBACK
 
     assert any("could not read" in r.getMessage() for r in caplog.records)
 

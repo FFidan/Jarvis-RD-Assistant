@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { TaskRow } from '@/components/my-day/sections/TaskRow';
 import type { MyDayTask } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -58,15 +58,12 @@ const MOCK_TASK: MyDayTask = {
 // ---------------------------------------------------------------------------
 
 function renderRow(task: MyDayTask = MOCK_TASK, isTimerActive = false, index = 0) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <TaskRow task={task} index={index} isTimerActive={isTimerActive} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <TaskRow task={task} index={index} isTimerActive={isTimerActive} />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

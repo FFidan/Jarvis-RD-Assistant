@@ -39,7 +39,7 @@ from paper_ingestion.integrations._zotero_jobs import (  # noqa: F401
     _zotero_sync_from_zotero_job,
 )
 from paper_ingestion.integrations._zotero_poll import (  # noqa: F401
-    MAX_ENQUEUE_PER_SYNC,
+    MAX_INGEST_PER_SYNC,
     _ingest_new_item,
     _link_existing_by_doi,
     _load_poll_config,

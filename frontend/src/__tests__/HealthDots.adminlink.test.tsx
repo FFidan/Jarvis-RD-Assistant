@@ -9,9 +9,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HealthDots } from '@/components/shared/HealthDots';
 import type { StackHealthSummary } from '@/lib/api';
@@ -48,6 +47,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 import { fetchStackHealth } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchStackHealth = vi.mocked(fetchStackHealth);
 
 function makeAllOk(): StackHealthSummary {
@@ -63,15 +63,12 @@ function makeAllOk(): StackHealthSummary {
 }
 
 function renderHealthDots({ compact = false, adminLink }: { compact?: boolean; adminLink?: string } = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <HealthDots compact={compact} adminLink={adminLink} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HealthDots compact={compact} adminLink={adminLink} />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

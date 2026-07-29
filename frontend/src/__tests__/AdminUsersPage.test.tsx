@@ -10,14 +10,14 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 import { ApiError } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -148,42 +148,36 @@ const _sampleUsers = [
 ];
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/admin/users']}>
-        <Routes>
-          <Route path="/admin/users" element={<AdminUsersPage />} />
-          <Route path="/" element={<div>HOME</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/admin/users']}>
+      <Routes>
+        <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/" element={<div>HOME</div>} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
 function renderWithGuard(role: 'user' | 'admin') {
   _mockRole = role;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/admin/users']}>
-        <Routes>
-          <Route
-            path="/admin/users"
-            element={
-              <AdminOnlyRoute>
-                <AdminUsersPage />
-              </AdminOnlyRoute>
-            }
-          />
-          <Route path="/" element={<div>HOME</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/admin/users']}>
+      <Routes>
+        <Route
+          path="/admin/users"
+          element={
+            <AdminOnlyRoute>
+              <AdminUsersPage />
+            </AdminOnlyRoute>
+          }
+        />
+        <Route path="/" element={<div>HOME</div>} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -718,19 +712,16 @@ describe('AdminUsersPage — restore soft-deleted user', () => {
   });
 
   function renderPageWithSpiedClient() {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    const queryClient = createTestQueryClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/admin/users']}>
-          <Routes>
-            <Route path="/admin/users" element={<AdminUsersPage />} />
-            <Route path="/" element={<div>HOME</div>} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/admin/users']}>
+        <Routes>
+          <Route path="/admin/users" element={<AdminUsersPage />} />
+          <Route path="/" element={<div>HOME</div>} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient },
     );
     return { invalidateSpy };
   }
@@ -794,23 +785,20 @@ describe('AdminUsersPage — restore soft-deleted user', () => {
 // ---------------------------------------------------------------------------
 
 function renderPageWithCache(smtpConfigured: boolean | undefined) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   if (smtpConfigured !== undefined) {
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), {
       smtp_configured: smtpConfigured,
     });
   }
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/admin/users']}>
-        <Routes>
-          <Route path="/admin/users" element={<AdminUsersPage />} />
-          <Route path="/" element={<div>HOME</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/admin/users']}>
+      <Routes>
+        <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/" element={<div>HOME</div>} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

@@ -67,8 +67,8 @@ async def get_consensus(
 ) -> ConsensusResponse:
     """Aggregate supports/opposes per shared claim across the caller's library."""
     async with db_pool.acquire() as conn:
-        claims = await aggregate_consensus(conn, user_id=user_id, limit=limit)
-    return ConsensusResponse(claims=claims, total=len(claims))
+        claims, truncated = await aggregate_consensus(conn, user_id=user_id, limit=limit)
+    return ConsensusResponse(claims=claims, total=len(claims), truncated=truncated)
 
 
 @router.post("/contradictions/scan", response_model=JobCreateResponse, status_code=202)

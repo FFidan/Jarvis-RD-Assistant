@@ -20,6 +20,7 @@ import { getNavigate } from '@/lib/navigate-bridge';
 import { isSafeRelativeHref } from '@/lib/safe-href';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { kindLabel } from '@/lib/labels/jobKinds';
+import { jobOutcomeCounts } from '@/lib/job-outcome';
 import { errorMessage } from '@/lib/errors';
 import type { PaperDetail } from '@/types';
 
@@ -99,30 +100,17 @@ const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
 const zoteroPushWarning = (status: string): string =>
   ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
 
-/** Failed, skipped, untouched and total counts from a process-library result. */
-const libraryCounts = (result: Job['result']) => {
-  const r = (result ?? {}) as {
-    total?: number;
-    remaining?: number;
-    errors?: unknown[];
-    blocked?: unknown[];
-  };
-  const failed = Array.isArray(r.errors) ? r.errors.length : 0;
-  const skipped = Array.isArray(r.blocked) ? r.blocked.length : 0;
-  const remaining = typeof r.remaining === 'number'
-    && Number.isInteger(r.remaining)
-    && r.remaining >= 0
-    ? r.remaining
-    : 0;
-  const total = typeof r.total === 'number' ? r.total : failed + skipped;
-  return { failed, skipped, remaining, total };
-};
-
-/** The count fragments a library warning names, omitting the zero ones. */
-const libraryOutcomeParts = (failed: number, skipped: number): string[] => {
+/** The count fragments a batch warning names, omitting the zero ones. */
+const outcomeParts = (
+  failed: number,
+  skipped: number,
+  { library }: { library: boolean },
+): string[] => {
   const parts: string[] = [];
   if (failed > 0) parts.push(`${failed} failed`);
-  if (skipped > 0) parts.push(`${skipped} skipped (no PDF source)`);
+  if (skipped > 0) {
+    parts.push(library ? `${skipped} skipped (no PDF source)` : `${skipped} skipped`);
+  }
   return parts;
 };
 
@@ -132,12 +120,17 @@ const libraryOutcomeParts = (failed: number, skipped: number): string[] => {
  * rather than raising. A green "completed" toast would misreport that, so a
  * `partial` result gets a warning naming both counts.
  */
-const libraryPartialWarning = (result: Job['result']): string => {
-  const { failed, skipped, remaining, total } = libraryCounts(result);
-  const parts = libraryOutcomeParts(failed, skipped);
+const partialWarning = (job: Job): string => {
+  const library = job.kind === 'papers.process_library';
+  const { failed, skipped, remaining, total } = jobOutcomeCounts(job.result);
+  const parts = outcomeParts(failed, skipped, { library });
   if (remaining > 0) parts.push(`${remaining} not processed`);
-  const detail = parts.length > 0 ? parts.join(', ') : 'no work completed';
-  return `Library processing finished - ${detail} of ${total}; open Jobs for details`;
+  const label = library ? 'Library processing' : kindLabel(job.kind);
+  if (parts.length === 0) {
+    return `${label} finished with incomplete results; open Jobs for details`;
+  }
+  const detail = parts.join(', ');
+  return `${label} finished - ${detail} of ${total}; open Jobs for details`;
 };
 
 /**
@@ -145,13 +138,15 @@ const libraryPartialWarning = (result: Job['result']): string => {
  * failing — so the warning names both the papers it never reached and whatever
  * had already failed or been skipped before the stop.
  */
-const libraryCancelledWarning = (result: Job['result']): string => {
-  const { failed, skipped, remaining, total } = libraryCounts(result);
+const cancelledWarning = (job: Job): string => {
+  const library = job.kind === 'papers.process_library';
+  const { failed, skipped, remaining } = jobOutcomeCounts(job.result);
   const parts = [
-    remaining > 0 ? `${remaining} not processed` : `stopped before finishing ${total} papers`,
-    ...libraryOutcomeParts(failed, skipped),
+    remaining > 0 ? `${remaining} not processed` : 'stopped before completion',
+    ...outcomeParts(failed, skipped, { library }),
   ];
-  return `Library processing was cancelled - ${parts.join(', ')}; open Jobs for details`;
+  const label = library ? 'Library processing' : kindLabel(job.kind);
+  return `${label} was cancelled - ${parts.join(', ')}; open Jobs for details`;
 };
 
 /** Terminal statuses — job will not receive more events. */
@@ -385,18 +380,18 @@ export const useJobStore = create<JobStore>()(
               job.kind === 'zotero.push_highlights'
                 ? (job.result as { status?: string } | null)?.status
                 : undefined;
-            // A whole-library run can succeed-with-failures or stop on cancel;
+            // A batch run can succeed-with-failures or stop on cancel;
             // `partial` and `cancelled` warn instead of a green success toast.
-            const libraryStatus =
-              job.kind === 'papers.process_library'
-                ? (job.result as { status?: string } | null)?.status
-                : undefined;
+            // Every handler that reports a terminal status is covered, not one
+            // kind: a cancelled run announcing itself as completed is the
+            // loudest way to tell a user the opposite of what happened.
+            const resultStatus = (job.result as { status?: string } | null)?.status;
             if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
               toast.warning(zoteroPushWarning(zoteroPushStatus));
-            } else if (libraryStatus === 'cancelled') {
-              toast.warning(libraryCancelledWarning(job.result));
-            } else if (libraryStatus === 'partial') {
-              toast.warning(libraryPartialWarning(job.result));
+            } else if (resultStatus === 'cancelled') {
+              toast.warning(cancelledWarning(job));
+            } else if (resultStatus === 'partial') {
+              toast.warning(partialWarning(job));
             } else if (!zeroCards) {
               toast.success(`${kindLabel(job.kind)} completed`);
             }

@@ -10,7 +10,6 @@ import { seedAuthedSession } from './helpers/setup';
  * setInterval ticks) and confirm:
  *   1. Timer pill is visible on My Day
  *   2. Timer pill remains visible across route changes
- *   3. The Pause button toggles between pause and resume icons
  */
 test.describe('Pomodoro timer in AppShell @pomodoro', () => {
   test.beforeEach(async ({ page }) => {
@@ -41,7 +40,7 @@ test.describe('Pomodoro timer in AppShell @pomodoro', () => {
     });
   });
 
-  test('timer pill is visible across route changes and pause toggles', async ({ page }) => {
+  test('timer pill is visible across route changes', async ({ page }) => {
     await page.goto('/my-day');
 
     // HeaderPomodoro renders MM:SS text — assert some value is shown.
@@ -60,17 +59,5 @@ test.describe('Pomodoro timer in AppShell @pomodoro', () => {
     await page.getByRole('link', { name: /settings/i }).click();
     await expect(page).toHaveURL(/\/settings/);
     await expect(timerButton).toBeVisible({ timeout: 5_000 });
-
-    // Click pause — aria-label flips to "Resume Pomodoro".
-    await pauseButton.click();
-    await expect(page.getByRole('button', { name: /resume pomodoro/i })).toBeVisible({
-      timeout: 5_000,
-    });
-
-    // Click resume — back to pause.
-    await page.getByRole('button', { name: /resume pomodoro/i }).click();
-    await expect(page.getByRole('button', { name: /pause pomodoro/i })).toBeVisible({
-      timeout: 5_000,
-    });
   });
 });

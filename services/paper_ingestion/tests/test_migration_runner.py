@@ -10,6 +10,7 @@ from unittest.mock import ANY
 import asyncpg
 import pytest
 
+from jarvis_common.migrations import required_code_schema
 from paper_ingestion.migrations_runner import _strip_outer_transaction_control
 from tests.conftest import _make_pool_and_conn
 
@@ -27,7 +28,7 @@ async def test_creates_schema_migrations_table():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files on disk; mock fetch returns empty (nothing to apply).
     conn.fetch.return_value = []
-    conn.fetchval.return_value = 106  # Current schema floor passes.
+    conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
     await run_migrations(pool)
 
@@ -44,12 +45,12 @@ async def test_skips_already_applied_migrations(tmp_path):
     pool, conn = _make_pool_and_conn()
     # Post-squash: the baseline is pre-seeded; no .sql files on disk.
     conn.fetch.return_value = [{"version": v} for v in range(1, 102)]
-    conn.fetchval.return_value = 106  # Current schema floor passes.
+    conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
-    # Only the outer wrapping transaction should have been opened (no migration transactions).
-    assert conn.transaction.call_count == 1
+    # The outer transaction and advisory-lock savepoint are always opened.
+    assert conn.transaction.call_count == 2
 
 
 # test_applies_unapplied_migration — DELETED (db/migrations squash 2026-05-19):
@@ -65,17 +66,17 @@ async def test_no_migrations_applied_when_all_fresh(tmp_path):
 
     Post-squash contract: db/migrations/ has no .sql files (0089+ era, empty until next
     migration). init.sql pre-seeds schema_migrations 1..88; the runner is a no-op when
-    files == {} ∩ applied == {}, i.e. one outer transaction only.
+    files == {} ∩ applied == {}, i.e. no per-migration savepoint.
     """
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []  # Nothing applied yet
-    conn.fetchval.return_value = 106  # Current schema floor passes.
+    conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
-    # Empty migrations_dir → only the outer wrapping transaction.
-    assert conn.transaction.call_count == 1
+    # Empty migrations_dir → outer transaction plus the advisory-lock savepoint.
+    assert conn.transaction.call_count == 2
 
 
 async def test_schema_migrations_select_called():
@@ -84,7 +85,7 @@ async def test_schema_migrations_select_called():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files → nothing to probe; mock returns empty applied list.
     conn.fetch.return_value = []
-    conn.fetchval.return_value = 106  # Current schema floor passes.
+    conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
     await run_migrations(pool)
 
@@ -101,7 +102,7 @@ async def test_migration_uses_xact_lock():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files; mock returns empty applied list.
     conn.fetch.return_value = []
-    conn.fetchval.return_value = 106  # Current schema floor passes.
+    conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
     await run_migrations(pool)
 
@@ -136,8 +137,8 @@ async def test_migration_lock_timeout_fails_closed_by_default():
     conn.fetch.assert_not_awaited()
 
 
-async def test_migration_lock_timeout_can_return_gracefully_with_env_flag(monkeypatch):
-    """Compatibility mode preserves old lock-contention behavior when requested."""
+async def test_migration_lock_timeout_rechecks_floor_with_env_flag(monkeypatch):
+    """Compatibility mode starts only after the contending migrator reaches the floor."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
 
@@ -146,10 +147,14 @@ async def test_migration_lock_timeout_can_return_gracefully_with_env_flag(monkey
             raise asyncpg.LockNotAvailableError()
 
     conn.execute.side_effect = _execute_side_effect
+    conn.fetchval.return_value = required_code_schema()
     monkeypatch.setenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "true")
 
     await run_migrations(pool)
 
+    conn.fetchval.assert_awaited_once_with(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+    )
     conn.fetch.assert_not_awaited()
 
 

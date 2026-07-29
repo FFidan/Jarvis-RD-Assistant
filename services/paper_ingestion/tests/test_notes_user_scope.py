@@ -71,12 +71,17 @@ def _teardown_app(app) -> None:
 async def test_update_note_multi_tenant_includes_user_id_in_update():
     """PUT /api/notes/{id}: multi-tenant UPDATE WHERE clause must contain AND user_id.
 
-    Three fetchrow calls: ownership SELECT, paper ownership SELECT, then the UPDATE.
-    The last fetchrow call is the dynamic_update UPDATE — its SQL must scope by user_id.
+    The dynamic UPDATE must remain owner-scoped even though the response is
+    reselected with its generation-derived stale flag.
     """
     app, conn = _setup_app(
         user_id=42,
-        fetchrow_side_effects=[_note_row(), _paper_row(), _full_note_row()],
+        fetchrow_side_effects=[
+            _note_row(),
+            _paper_row(),
+            _full_note_row(),
+            _full_note_row(),
+        ],
     )
     try:
         async with httpx.AsyncClient(
@@ -87,7 +92,12 @@ async def test_update_note_multi_tenant_includes_user_id_in_update():
         _teardown_app(app)
 
     assert resp.status_code == 200, f"Expected 200; got {resp.status_code}: {resp.text[:200]}"
-    update_params = conn.fetchrow.await_args.args[1:]
+    update_call = next(
+        call
+        for call in conn.fetchrow.await_args_list
+        if "UPDATE" in call.args[0] and "paper_notes" in call.args[0]
+    )
+    update_params = update_call.args[1:]
     # dynamic_update binds (record_id, set_value, user_id); the trailing owner id
     # is the extra_where predicate that single-tenant mode omits.
     assert update_params == (5, "updated text", 42), (

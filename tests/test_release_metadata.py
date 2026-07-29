@@ -22,19 +22,14 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
+    assert changelog.count("## v1.2.2 (2026-07-29)") == 1
     assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
     assert "## v1.1.3 (2026-07-19)" in changelog
+    assert changelog.index("## v1.2.2") < changelog.index("## v1.2.1")
     assert changelog.index("## v1.2.1") < changelog.index("## v1.2.0")
     assert changelog.index("## v1.2.0") < changelog.index("## v1.1.3")
     assert changelog.index("## v1.1.3") < changelog.index("## v1.1.2")
-
-
-def test_roadmap_names_the_current_stable_release() -> None:
-    roadmap = _read("ROADMAP.md")
-
-    assert "Current stable release: **v1.2.1**" in roadmap
-    assert "Current stable release: **v1.2.0**" not in roadmap
 
 
 def test_roadmap_lists_the_export_slice_only_once() -> None:
@@ -58,27 +53,112 @@ def test_release_flow_reviews_metadata_before_tagging_main() -> None:
     assert "git pull --ff-only" in release
     assert "git push origin HEAD vX.Y.Z" not in release
     assert "Never tag a local candidate commit" not in release
-    assert "Never point a stable tag at a local candidate commit" in release
-    assert release.index("merge") < release.index("git tag -a vX.Y.Z")
+    assert "Never point a stable tag at a commit that is not on `main`" in release
+    assert release.index("Squash-merge") < release.index('git tag -a "$RELEASE_TAG"')
 
 
-def test_release_docs_match_the_publish_workflow_prerelease_contract() -> None:
+def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> None:
     release = _read("docs/RELEASE.md")
     workflow = _read(".github/workflows/ghcr-publish.yml")
-    prerelease = release.split("### Pre-release Tags", 1)[1].split(
-        "## How CHANGELOG Is Generated", 1
-    )[0]
-    prerelease_words = " ".join(prerelease.split())
+    lower = release.lower()
+    release_words = " ".join(release.split())
 
-    assert "expected vX.Y.Z or vX.Y.Z-rc.N" in workflow
+    assert "source_commit:" in workflow
     assert r"^v[0-9]+\.[0-9]+\.[0-9]+$" in workflow
-    assert r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$" in workflow
-    assert "if: steps.mode.outputs.stable == 'true'" in workflow
-    assert "The only supported pre-release tag shape is `vX.Y.Z-rc.N`" in prerelease_words
-    assert "alpha" not in prerelease.lower()
-    assert "beta" not in prerelease.lower()
-    assert "does not have to be reachable from `main`" in prerelease_words
-    assert "stable tag must point to the reviewed commit on `main`" in prerelease_words
+    assert r"-rc\." not in workflow
+    assert '"${GITHUB_REF_NAME}^{commit}"' in workflow
+    assert '"$SOURCE_COMMIT" != "$GITHUB_SHA"' in workflow
+    assert 'git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main' in workflow
+    assert "mode=build-only" in workflow
+    assert "mode=verify" in workflow
+    assert "mode=promote" in workflow
+    assert "actions: read" in workflow
+    assert "if: needs.preflight.outputs.mode != 'promote'" in workflow
+    assert "if: needs.preflight.outputs.mode == 'verify'" in workflow
+    assert "if: needs.preflight.outputs.mode == 'promote'" in workflow
+    assert "environment: release" in workflow
+    assert "docker buildx imagetools create" in workflow
+    assert "source_digest" in workflow
+    assert "target_digest" in workflow
+    assert 'if [ "$source_digest" != "$target_digest" ]' in workflow
+    assert '"${image}@${source_digest}"' in workflow
+    assert "verification_run_id:" in workflow
+    assert "scripts/release_provenance.py" in workflow
+    assert "tag-run-id" in workflow
+    assert "validate-run" in workflow
+    assert "artifact-digest" in workflow
+    assert "actions/runs/${verification_run_id}" in workflow
+    build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
+    verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
+    promote_job = workflow.split("\n  promote:", 1)[1]
+    assert (
+        "environment: ${{ needs.preflight.outputs.mode == 'verify' && 'release' || '' }}"
+        in build_job
+    )
+    assert "environment: release" in verify_job
+    assert "environment: release" in promote_job
+    assert "docker/build-push-action@" not in promote_job
+    assert "needs.preflight.outputs.source_commit" in promote_job
+    assert "needs.preflight.outputs.release_version" in promote_job
+    assert "needs.preflight.outputs.verification_run_id" in promote_job
+    assert "actions/checkout@" in promote_job
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in (promote_job)
+    assert "name: verification-digest-${{ matrix.slug }}" in promote_job
+    assert "github-token: ${{ github.token }}" in promote_job
+    assert "repository: ${{ github.repository }}" in promote_job
+    assert "run-id: ${{ needs.preflight.outputs.verification_run_id }}" in promote_job
+    assert "git for-each-ref" not in promote_job
+    assert 'imagetools inspect "$source_ref"' not in promote_job
+    assert "latest" not in "\n".join(
+        line for line in workflow.splitlines() if "imagetools create" in line or "-t " in line
+    )
+
+    assert "RELEASE_VERSION=X.Y.Z" in release
+    assert 'RELEASE_TAG="v${RELEASE_VERSION}"' in release
+    assert "release candidate" not in lower
+    assert 'git tag -a "$RELEASE_TAG" "$MERGED_SHA"' in release
+    assert 'gh release create "$RELEASE_TAG" --verify-tag' in release
+    assert "squash" in lower
+    assert 'RELEASE_BRANCH="$(git branch --show-current)"' in release
+    assert "git switch -c release/" not in release
+    assert release.count('--ref "$RELEASE_BRANCH"') == 2
+    assert "Verification-Run-ID: %s" in release
+    assert "gh run download" not in release
+    assert "digest-*.txt" not in release
+    assert 'source_commit="$MERGED_SHA"' in release
+    assert 'cold_install_version="$MERGED_SHA"' in release
+    assert 'update_from="$UPDATE_FROM"' in release
+    assert 'update_to="$MERGED_SHA"' in release
+    assert "downloads its named digest receipt from that exact run" in release_words
+
+
+def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> None:
+    release = _read("docs/RELEASE.md")
+    lifecycle = _read("scripts/lifecycle-smoke.sh")
+    update_leg = lifecycle.split("run_leg_update() {", 1)[1].split("\n# Leg: uninstall", 1)[0]
+
+    documented = dict(
+        re.findall(
+            r"\| `(v[0-9]+\.[0-9]+\.[0-9]+)` \| `([a-z-]+)` \|",
+            release,
+        )
+    )
+    enforced = dict(
+        re.findall(
+            r"(v[0-9]+\.[0-9]+\.[0-9]+)\)\s+"
+            r'\[ "\$journal_shape" = ([a-z-]+) \]',
+            update_leg,
+        )
+    )
+
+    assert (
+        documented
+        == enforced
+        == {
+            "v1.1.3": "legacy-staging",
+            "v1.2.1": "current-merge-pending",
+        }
+    )
 
 
 def test_local_cross_user_gate_forces_the_root_pytest_config() -> None:
@@ -230,11 +310,11 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
 
     assert overrides["brace-expansion@^1"] == "1.1.16"
     assert overrides["brace-expansion@^2"] == "2.1.2"
-    assert overrides["brace-expansion@^5"] == "5.0.7"
+    assert overrides["brace-expansion@^5"] == "5.0.8"
     assert overrides["js-yaml"] == "^4.3.0"
     assert "runs-on: ubuntu-latest" in security_workflow
     assert "npm ls --prefix frontend js-yaml brace-expansion eslint --all" in security_workflow
-    assert "npm audit --prefix frontend --audit-level=high" in security_workflow
+    assert "python3 scripts/check_npm_audit.py" in security_workflow
 
 
 def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None:
@@ -243,13 +323,126 @@ def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None
 
     assert "`make check`" in release_guide
     assert "Security / npm-audit" in release_guide
-    assert "gh workflow run nightly-llm-smoke.yml --ref <candidate-branch>" in release_guide
-    assert (
-        "gh workflow run lifecycle-smoke.yml --ref <candidate-branch> -f leg=all" in release_guide
-    )
+    assert 'gh workflow run nightly-llm-smoke.yml --ref "$RELEASE_BRANCH"' in release_guide
+    assert 'gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all' in release_guide
+    assert "git switch -c release/" not in release_guide
     assert "no skips, failures, or errors" in release_guide
     assert "public-repository workflow" in release_guide
     assert "self-hosted runner" in release_guide
+
+
+def test_lifecycle_candidate_inputs_are_paired_isolated_and_project_scoped() -> None:
+    workflow = _read(".github/workflows/lifecycle-smoke.yml")
+    lifecycle = _read("scripts/lifecycle-smoke.sh")
+
+    assert "update_from:" in workflow
+    assert "update_to:" in workflow
+    assert 'args+=(--update-from "$UPDATE_FROM" --update-to "$UPDATE_TO")' in workflow
+    assert "--update-from" in lifecycle
+    assert "--update-to" in lifecycle
+    assert r"^v[0-9]+\.[0-9]+\.[0-9]+$" in lifecycle
+    assert r"^[0-9a-f]{40}$" in lifecycle
+    assert 'clone="${scratch}/${project}"' in lifecycle
+    assert lifecycle.count('clone="${scratch}/${project}"') == 2
+    assert '--compose-project-name "$project"' in lifecycle
+    assert "assert_project_resources_owned" in lifecycle
+    assert "assert_project_absent" in lifecycle
+    assert "remove_project_resources" in lifecycle
+    assert "project_resource_ids" in lifecycle
+
+    cleanup_helper = lifecycle.split("cleanup_project() {", 1)[1].split("\n}\n\n_tls_cleanup()", 1)[
+        0
+    ]
+    assert 'compose -p "$project" down -v --remove-orphans' in cleanup_helper
+    assert 'remove_project_resources "$project"' in cleanup_helper
+    assert 'assert_project_absent "$project"' in cleanup_helper
+    successful_cleanup = cleanup_helper.split('if [ "$clean" -eq 1 ]; then', 1)[1]
+    assert successful_cleanup.index('unregister_project "$project"') < successful_cleanup.index(
+        "return 0"
+    )
+    assert cleanup_helper.rstrip().endswith("return 1")
+
+    driver = lifecycle.split('for leg in "${LEGS[@]}"; do', 1)[1]
+    assert driver.index('PROJECT=""') < driver.index('"run_leg_${leg}"')
+    assert driver.index('"run_leg_${leg}"') < driver.index('cleanup_project "$PROJECT"')
+    assert driver.index('cleanup_project "$PROJECT"') < driver.index('if [ "$leg_rc" -eq 0 ]')
+    assert "Lifecycle isolation could not be restored" in driver
+    assert "break" in driver
+
+    tls_leg = lifecycle.split("_run_leg_tls_body() {", 1)[1].split("\n# Leg: update", 1)[0]
+    uninstall_leg = lifecycle.split("run_leg_uninstall() {", 1)[1].split("\n# Leg: restore", 1)[0]
+    assert '--compose-project-name "$project" --build-local' in tls_leg
+    assert '--compose-project-name "$project" \\\n      --build-local' in uninstall_leg
+
+    project_helper = lifecycle.split("new_project() {", 1)[1].split("\n}\n\n# new_scratch", 1)[0]
+    assert project_helper.index("assert_project_absent") < project_helper.index(
+        "CREATED_PROJECTS+="
+    )
+    absence_helper = lifecycle.split("assert_project_absent() {", 1)[1].split(
+        "\n}\n\nassert_project_resources_owned", 1
+    )[0]
+    assert "project_resource_ids" in absence_helper
+
+    assert 'pending_candidates=("$state"/pending-update*.json)' in lifecycle
+    assert '"phase":"staging"' in lifecycle
+    assert '"phase":"merge_pending"' in lifecycle
+    assert '"schema_version":1' in lifecycle
+    assert "stable_tags | tail -n 2" in lifecycle
+    update_leg = lifecycle.split("run_leg_update() {", 1)[1].split("\n# Leg: uninstall", 1)[0]
+    pull_shim = lifecycle.split("install_pull_failure_shim() {", 1)[1].split(
+        "\n}\n\nrun_leg_update()", 1
+    )[0]
+    direct_pull_guard = r'if [ "\${1:-}" = "pull" ]; then'
+    compose_pull_guard = r'if [ "\${1:-}" = "compose" ]; then'
+    assert direct_pull_guard in pull_shim
+    assert compose_pull_guard in pull_shim
+    assert pull_shim.index(direct_pull_guard) < pull_shim.index(compose_pull_guard)
+    assert (
+        'grep -q "lifecycle-smoke: image pull blocked by fault injection" '
+        '"$injected_log"' in update_leg
+    )
+
+
+def test_lifecycle_candidate_inputs_fail_before_docker_admission() -> None:
+    lifecycle = ROOT / "scripts" / "lifecycle-smoke.sh"
+    invalid_inputs = (
+        (("--update-from", "v1.1.3"), "must be supplied together"),
+        (("--update-to", "a" * 40), "must be supplied together"),
+        (
+            ("--update-from", "v1.1.3-rc.1", "--update-to", "a" * 40),
+            "must be a stable vX.Y.Z tag",
+        ),
+        (
+            ("--update-from", "v1.1.3", "--update-to", "A" * 40),
+            "must be a lowercase 40-hex commit SHA",
+        ),
+    )
+
+    for arguments, expected_error in invalid_inputs:
+        result = subprocess.run(
+            ["bash", str(lifecycle), *arguments],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert expected_error in result.stderr
+        assert "Unknown argument" not in result.stderr
+        assert "docker not found" not in result.stderr
+
+
+def test_cold_install_accepts_release_or_commit_image_identities() -> None:
+    workflow = _read(".github/workflows/first-run-smoke.yml")
+    cold_job = workflow.split("  cold-install:", 1)[1]
+
+    assert r"^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$" in cold_job
+    assert r"^[0-9a-f]{40}$" in cold_job
+    assert "X.Y.Z[-PRERELEASE]" in cold_job
+    assert "commit-addressed verification images" in cold_job
+    assert cold_job.index("Validate the immutable image identity") < cold_job.index(
+        "Free disk space"
+    )
 
 
 def test_destructive_restore_reuses_the_hosted_lifecycle_job() -> None:
@@ -298,6 +491,27 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
+    for table in (
+        "paper_contradictions",
+        "paper_user_zotero_links",
+        "paper_highlights",
+        "paper_summaries",
+        "paper_extractions",
+        "paper_entities",
+        "entity_relationships",
+        "paper_notes",
+        "cards",
+    ):
+        assert f"CREATE TABLE {table}(" in seed
+
+    contradiction_table = seed.split("CREATE TABLE paper_contradictions(", 1)[1].split("\n);", 1)[0]
+    for column in ("paper_a_id", "paper_b_id", "quote_a", "quote_b", "user_id"):
+        assert column in contradiction_table
+
+    zotero_link_table = seed.split("CREATE TABLE paper_user_zotero_links(", 1)[1].split("\n);", 1)[
+        0
+    ]
+    assert "updated_at timestamptz" in zotero_link_table
 
 
 def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:

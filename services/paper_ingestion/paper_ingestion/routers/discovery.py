@@ -6,6 +6,8 @@ Extracted from ``routers/search.py`` (GOD-001):
 * ``GET  /api/similar/{paper_id}`` — find papers semantically similar to one paper
 """
 
+import logging
+
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_strict
@@ -19,10 +21,21 @@ from paper_ingestion.models import (
     DiscoveryResultItem,
     SimilarPaperResult,
 )
+from paper_ingestion.queries.chunk_liveness import (
+    drop_chunks_without_stored_rows,
+    read_stored_chunk_keys,
+)
 from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
 router = APIRouter(prefix="/api", tags=["discovery"])
+
+# Candidates requested per result slot. Both endpoints resolve visibility and
+# chunk backing over the whole candidate pool and cut the page last, so the pool
+# needs headroom: without it a filtered-out candidate simply shrinks the page.
+# Note for anyone raising this: discover_from_seeds applies a further multiple of
+# its own, so the vector store sees the product, not this factor alone.
+_CANDIDATES_PER_SLOT = 3
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +91,7 @@ async def find_similar_papers(
         try:
             results = await embedder.search_similar(
                 query_text=query_text,
-                limit=limit * 3,  # extra results for dedup
+                limit=limit * _CANDIDATES_PER_SLOT,  # extra results for dedup and filtering
                 paper_id_filter=paper_id,
                 score_threshold=0.6,
                 user_id=user_id,
@@ -92,7 +105,6 @@ async def find_similar_papers(
 
         # Sort by score descending
         sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
-        sorted_results = sorted_results[:limit]
 
         # Enrich with paper metadata (batch query to avoid N+1)
         paper_ids = [r["paper_id"] for r in sorted_results]
@@ -105,11 +117,28 @@ async def find_similar_papers(
                 user_id,
             )
             meta_map = {row["id"]: row for row in meta_rows}
+            stored_keys = await read_stored_chunk_keys(conn, paper_ids)
         else:
             meta_map = {}
+            stored_keys = set()
 
+        # The snippet is the vector payload's own copy of the excerpt, so only
+        # papers still storing that chunk contribute a result. Dropping is an
+        # ordinary outcome here, so it is logged below WARNING.
+        #
+        # Visibility and chunk backing are resolved over the whole candidate
+        # pool and the page is cut afterwards. The page is a hard budget, so a
+        # candidate dropped here would otherwise have held a slot that is never
+        # given back: a visible paper ranked just below it would not be returned
+        # at all, and a lookup with enough dropped leaders would answer empty
+        # while visible results were available.
         enriched: list[dict] = []
-        for r in sorted_results:
+        for r in drop_chunks_without_stored_rows(
+            sorted_results,
+            stored_keys,
+            caller="GET /api/similar",
+            level=logging.DEBUG,
+        ):
             meta = meta_map.get(r["paper_id"])
             if meta:
                 enriched.append(
@@ -123,7 +152,7 @@ async def find_similar_papers(
                     }
                 )
 
-    return enriched
+    return enriched[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +206,7 @@ async def discover_papers(
     results = await embedder.discover_from_seeds(
         seed_paper_ids=body.paper_ids,
         db_pool=db_pool,
-        limit=body.limit,
+        limit=body.limit * _CANDIDATES_PER_SLOT,
         score_threshold=body.score_threshold,
         user_id=user_id,
     )
@@ -195,10 +224,22 @@ async def discover_papers(
             paper_ids,
             user_id,
         )
+        stored_keys = await read_stored_chunk_keys(conn, paper_ids)
     meta_map = {row["id"]: row for row in meta_rows}
 
+    # Discovery reports one best-scoring excerpt per paper; a paper whose
+    # excerpt is no longer stored drops out rather than falling back. Dropping
+    # is an ordinary outcome here, so it is logged below WARNING.
+    #
+    # As on GET /api/similar, the candidate pool is filtered whole and the page
+    # is cut afterwards, so a dropped candidate costs no result slot.
     enriched: list[dict] = []
-    for r in results:
+    for r in drop_chunks_without_stored_rows(
+        results,
+        stored_keys,
+        caller="POST /api/discover",
+        level=logging.DEBUG,
+    ):
         meta = meta_map.get(r["paper_id"])
         if meta:
             enriched.append(
@@ -212,4 +253,4 @@ async def discover_papers(
                 }
             )
 
-    return enriched
+    return enriched[: body.limit]

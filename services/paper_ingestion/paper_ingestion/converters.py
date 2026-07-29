@@ -8,6 +8,7 @@ from datetime import UTC
 
 import asyncpg
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import (
     ChunkResponse,
     CrossReference,
@@ -111,10 +112,36 @@ def row_to_chunk_response(row: asyncpg.Record) -> ChunkResponse:
     )
 
 
-def row_to_summary_response(row: asyncpg.Record) -> SummaryResponse:
+async def filter_current_cross_references(
+    conn: ConnLike,
+    cross_references: list[dict],
+) -> list[dict]:
+    """Keep references whose stored target generation is still current."""
+    if not cross_references:
+        return []
+
+    paper_ids = sorted({int(ref["related_paper_id"]) for ref in cross_references})
+    rows = await conn.fetch(
+        "SELECT id, content_generation FROM papers WHERE id = ANY($1::bigint[])",
+        paper_ids,
+    )
+    current_generations = {int(row["id"]): int(row["content_generation"]) for row in rows}
+    return [
+        ref
+        for ref in cross_references
+        if int(ref.get("content_generation", 0))
+        == current_generations.get(int(ref["related_paper_id"]))
+    ]
+
+
+def row_to_summary_response(
+    row: asyncpg.Record,
+    *,
+    cross_references: list[dict] | None = None,
+) -> SummaryResponse:
     """Convert an asyncpg Record from paper_summaries table to SummaryResponse."""
     key_findings_raw = row["key_findings"] or []
-    cross_refs_raw = row["cross_references"] or []
+    cross_refs_raw = row["cross_references"] or [] if cross_references is None else cross_references
 
     return SummaryResponse(
         id=row["id"],

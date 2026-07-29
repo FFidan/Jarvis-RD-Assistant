@@ -152,6 +152,7 @@ class CardResponse(BaseModel):
     evidence: Evidence | None = None
     fsrs_state: dict = Field(default_factory=dict)
     due_at: datetime | None = None
+    stale: bool = False
     created_at: datetime
     updated_at: datetime
 

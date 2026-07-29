@@ -16,3 +16,14 @@ def test_spin_pg_container_helper_exists() -> None:
     assert hasattr(testing_db, "_spin_pg_container"), (
         "_spin_pg_container must exist to centralize container setup"
     )
+
+
+def test_make_conn_rejects_non_connection_attributes() -> None:
+    """The shared mock must preserve the asyncpg connection interface."""
+    import pytest
+    from jarvis_common import testing_db
+
+    conn = testing_db.make_conn()
+
+    with pytest.raises(AttributeError):
+        getattr(conn, "not_an_asyncpg_connection_method")

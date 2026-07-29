@@ -17,3 +17,7 @@ class EmptyChunksError(JobError):
 
 class LLMError(JobError):
     """The LLM call failed with a non-retryable error."""
+
+
+class SourceGenerationChangedError(JobError):
+    """The paper changed after a derived-artifact run captured its inputs."""

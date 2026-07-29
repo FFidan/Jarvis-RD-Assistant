@@ -1,24 +1,30 @@
-"""L3 safeguard contract tests.
+"""Negative-feedback and topic-dampening safeguard tests.
 
 Tests:
 1. _filter_unread 60d boundary  — papers with rec_feedback at 59d (excluded),
    60d (included — strict > boundary), 61d (included).
-2. Topic dampening ≥5 in load_profile — 4 negatives → NOT dampened; 5 → dampened.
-3. Topic-dampening cap in load_profile — 4 topics all dampened → cap to 2 (50%).
-4. Min-candidate fallback in _persist_deck_inner — COUNT=19 → L3 filter skipped.
+2. Topic dampening >=5 in load_profile — 4 negatives -> NOT dampened; 5 -> dampened.
+3. Topic-dampening cap in load_profile — 4 topics all dampened -> cap to 2 (50%).
+4. Deck selection drops recently dismissed candidates before it truncates,
+   so a dismissal frees its slot instead of shortening the deck.
 5. No-negatives baseline in load_profile — all safeguard fields empty, no warnings.
+6. Live PG — a dismissed paper reaches no pulse_cards row while the deck still fills.
+7. Live PG — the deck reads carry the paper-visibility predicate.
+8. Live PG — stale fallback removes cards with current negative feedback.
 
-No live DB required; all DB interaction is mocked via AsyncMock.
+Tests 1-5 need no DB; 6-8 are DB-backed and skip without JARVIS_RUN_LIVE_PG=1.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.pulse.scoring import ScoredCandidate
 
 # ---------------------------------------------------------------------------
 # Helper: build a FakeRecord row for recommendation_feedback-counted dampened topics
@@ -27,6 +33,25 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 
 def _dampened_row(topic_id: int, neg_count: int) -> FakeRecord:
     return FakeRecord({"id": topic_id, "neg_count": neg_count})
+
+
+def _candidate(external_id: str, final_score: float) -> ScoredCandidate:
+    """Build a stage-3 candidate whose external id identifies it in assertions."""
+    return ScoredCandidate(
+        paper=PaperCreate(
+            external_id=external_id,
+            source_type=SourceType.ARXIV,
+            title=f"Candidate {external_id}",
+            authors=["Selection Author"],
+            abstract="Abstract",
+            url=f"https://arxiv.test/{external_id}",
+        ),
+        signals={"embedding": final_score},
+        llm_relevance=7,
+        llm_novelty=6,
+        reasoning="relevant",
+        final_score=final_score,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,95 +252,82 @@ async def test_topic_dampening_cap_50_percent(caplog) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — Min-candidate fallback in _persist_deck_inner (COUNT=19 → L3 skipped)
+# Test 4 — deck selection excludes dismissed candidates before it truncates
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_persist_deck_inner_l3_fallback_on_low_candidate_count(caplog) -> None:
-    """_persist_deck_inner falls back to L1+L2 when l3_pass_count < 20.
+async def test_deck_selection_drops_dismissed_candidates_before_truncating() -> None:
+    """A dismissed candidate frees its deck slot for the next eligible one.
 
-    Verify:
-    - logger.warning called with "L3 hard-exclusion would leave only %d candidates"
-    - The per-card INSERT SQL does NOT include 'NOT EXISTS recommendation_feedback'
-      (the L3 exclusion clause is absent in the fallback branch).
+    Twelve ranked candidates, a deck size of ten, and the owner rated two of
+    the top ten down.  Removing them while selecting leaves ten eligible
+    candidates, so the deck still fills; removing them after the deck was cut
+    to ten would leave eight.  Nothing here hands the pipeline a candidate
+    count — the deck is measured, and the database only reports which papers
+    carry recent negative feedback.
     """
-    from paper_ingestion.models import PaperCreate, SourceType
-    from paper_ingestion.pulse.deck import _persist_deck_inner
-    from paper_ingestion.pulse.scoring import ScoredCandidate
+    from paper_ingestion.pulse.job import _select_deck_cards
 
-    paper = PaperCreate(
-        external_id="arxiv:l3test01",
-        source_type=SourceType.ARXIV,
-        title="Test Paper",
-        authors=["A. Author"],
-        abstract="Abstract",
-        url="https://example.com",
-        pdf_url=None,
-        citation_count=0,
-        metadata={},
-    )
-    card = ScoredCandidate(
-        paper=paper,
-        signals={"embedding": 0.7},
-        llm_relevance=7,
-        llm_novelty=6,
-        reasoning="Good paper",
-        final_score=0.75,
+    candidates = [_candidate(f"arxiv:cand{n:02d}", 1.0 - n / 100) for n in range(12)]
+    dismissed_ids = {"arxiv:cand00", "arxiv:cand04"}
+    pool, _conn = _make_pool_and_conn(
+        fetch_return=[FakeRecord({"external_id": eid}) for eid in sorted(dismissed_ids)]
     )
 
-    conn = AsyncMock()
-    # fetchval calls in order:
-    #   1. pulse_decks INSERT RETURNING id → deck_id = 1
-    #   2. l3 COUNT query → 19 (below threshold of 20)
-    #   3. pulse_cards INSERT RETURNING id → card inserted
-    conn.fetchval = AsyncMock(side_effect=[1, 19, 42])
-    conn.execute = AsyncMock(return_value=None)
+    deck, dismissed_count = await _select_deck_cards(pool, candidates, size=10, user_id=7)
 
-    original_fetchval = conn.fetchval
-
-    # Track the SQL for the per-card INSERT (3rd fetchval call)
-    fetchval_calls: list[str] = []
-
-    async def _capture_fetchval(sql, *args, **kwargs):
-        fetchval_calls.append(sql)
-        return await original_fetchval(sql, *args, **kwargs)
-
-    conn.fetchval = AsyncMock(side_effect=_capture_fetchval)
-    # Reset the side_effect to values (not forwarding)
-    conn.fetchval.side_effect = [1, 19, 42]
-
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.pulse.deck"):
-        result = await _persist_deck_inner(
-            conn=conn,
-            deck_date=date.today(),
-            cards=[card],
-            stats={"test": True},
-            degraded_reason=None,
-            user_id=None,
-        )
-
-    # Logger warning must mention the fallback
-    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("L3 hard-exclusion would leave only" in m for m in warning_msgs), (
-        f"Expected fallback warning; got: {warning_msgs}"
+    assert len(deck) == 10, (
+        "the deck must still fill from the remaining eligible candidates; "
+        f"got {len(deck)} cards, which is what filtering an already-truncated deck yields"
+    )
+    assert {sc.paper.external_id for sc in deck}.isdisjoint(dismissed_ids), (
+        "a paper rated down within the last 60 days must not reach the deck; got "
+        f"{[sc.paper.external_id for sc in deck]}"
+    )
+    assert dismissed_count == 2, (
+        f"two candidates carried recent negative feedback; got {dismissed_count}"
     )
 
-    # Inspect the card-INSERT SQL: the 3rd fetchval call
-    # We check by inspecting what fetchval was called with
-    all_fetchval_calls = conn.fetchval.call_args_list
-    assert len(all_fetchval_calls) >= 3, (
-        f"Expected ≥3 fetchval calls (deck_id, l3_count, card_insert); got {len(all_fetchval_calls)}"
-    )
 
-    card_insert_sql: str = all_fetchval_calls[2].args[0]
-    assert "recommendation_feedback" not in card_insert_sql.lower(), (
-        "Fallback INSERT must NOT include 'NOT EXISTS recommendation_feedback' clause. "
-        f"Got SQL:\n{card_insert_sql}"
-    )
+@pytest.mark.asyncio
+async def test_deck_selection_keeps_a_healthy_deck_at_full_size() -> None:
+    """With no negative feedback the deck is still the plain top-N by score."""
+    from paper_ingestion.pulse.job import _select_deck_cards
 
-    # Result: 1 card inserted (the fetchval returns 42)
-    assert result == 1, f"Expected 1 card inserted, got {result}"
+    candidates = [_candidate(f"arxiv:fill{n:02d}", 1.0 - n / 100) for n in range(12)]
+    pool, _conn = _make_pool_and_conn(fetch_return=[])
+
+    deck, dismissed_count = await _select_deck_cards(pool, candidates, size=10, user_id=7)
+
+    assert [sc.paper.external_id for sc in deck] == [
+        sc.paper.external_id for sc in candidates[:10]
+    ], "the exclusion must not reorder or shrink a deck with nothing dismissed"
+    assert dismissed_count == 0
+
+
+_WIRED_SHORT_DECK_REASON = "dismissed-short-deck reason reached the diagnostics"
+
+
+def test_short_deck_reason_speaks_only_when_dismissals_cost_cards() -> None:
+    """The short-deck reason is raised only when the exclusion actually cost cards."""
+    from paper_ingestion.pulse.job import _dismissed_short_deck_reason
+
+    assert _dismissed_short_deck_reason(cards=10, size=10, dismissed=3) is None, (
+        "a deck that filled needs no explanation"
+    )
+    assert _dismissed_short_deck_reason(cards=4, size=10, dismissed=0) is None, (
+        "a deck shortened by thin discovery must not be blamed on the owner's ratings"
+    )
+    reason = _dismissed_short_deck_reason(cards=4, size=10, dismissed=6)
+    assert reason is not None and "60 days" in reason, (
+        f"a deck cut short by dismissals must say so; got {reason!r}"
+    )
+    assert "so the deck" not in reason
+    assert "The deck filled 4 of 10 card slots" in reason, (
+        "the message must report exclusions and deck fill as separate facts; "
+        f"thin discovery may also have left slots empty: {reason!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -359,3 +371,282 @@ async def test_no_negatives_baseline(caplog) -> None:
     # No warnings should be emitted
     warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert not warning_msgs, f"Expected no warnings; got: {warning_msgs}"
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — a dismissed paper reaches no card, and the deck still fills
+# Verified: services/paper_ingestion/paper_ingestion/pulse/job.py:277
+#           (job.py:85 _select_deck_cards, called at job.py:304, before the cut)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_dismissed_paper_reaches_no_card_while_the_deck_still_fills(
+    contract_conn,
+    contract_two_users,
+) -> None:
+    """A thumbs-down keeps its paper out of the deck without costing a card.
+
+    Five real candidates and a real negative rating on the highest-ranked one,
+    against a deck size of three.  The rated-down paper must own no
+    ``pulse_cards`` row, and the deck must still carry three cards drawn from
+    the four that survived — the promise ``docs/manual/pulse.md`` makes.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    deck_size = 3
+    external_ids = [f"dismissal-deck-{n:02d}" for n in range(5)]
+    dismissed_id = external_ids[0]
+
+    for external_id in external_ids:
+        await contract_conn.execute(
+            """INSERT INTO papers (external_id, source_type, title, authors, url,
+                                   discovered_by, visibility_scope)
+               VALUES ($1, 'arxiv', $2, ARRAY['Selection Author'], $3, $4, 'public')""",
+            external_id,
+            f"Candidate {external_id}",
+            f"https://arxiv.test/{external_id}",
+            user_id,
+        )
+    await contract_conn.execute(
+        """INSERT INTO recommendation_feedback (paper_id, user_id, signal, source)
+           SELECT id, $2, 'negative', 'pulse_thumbs' FROM papers WHERE external_id = $1""",
+        dismissed_id,
+        user_id,
+    )
+
+    candidates = [_candidate(eid, 1.0 - n / 100) for n, eid in enumerate(external_ids)]
+    now = datetime(2098, 11, 3, 4, 0, tzinfo=UTC)
+
+    with (
+        patch(
+            "paper_ingestion.pulse.job.load_profile",
+            AsyncMock(
+                return_value=MagicMock(
+                    topics=[],
+                    tracked_author_names=set(),
+                    tracked_author_s2_ids=set(),
+                    library_centroid=None,
+                    weights={"embedding": 1.0},
+                    deck_size=deck_size,
+                    stage2_top_k=10,
+                    liked_paper_ids=[],
+                    recent_positive_titles=[],
+                    recent_negative_titles=[],
+                    lookback_days=7,
+                )
+            ),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.discover_candidates",
+            AsyncMock(return_value=(list(candidates), {}, {})),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage1_embedding_filter",
+            AsyncMock(return_value=list(candidates)),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage2_llm_rerank",
+            AsyncMock(side_effect=lambda batch, *a, **kw: batch),
+        ),
+        patch("paper_ingestion.pulse.job.effective_num_ctx", AsyncMock(return_value=4096)),
+        patch(
+            "paper_ingestion.pulse.job.stage3_combine",
+            AsyncMock(side_effect=lambda scored, weights: scored),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.upsert_verified_public_paper",
+            AsyncMock(return_value=None),
+        ),
+        # The condition itself is a pure function covered above. What is not
+        # otherwise covered is that its answer reaches the run's diagnostics at
+        # all, so this pins the wiring by making the answer unmistakable.
+        patch(
+            "paper_ingestion.pulse.job._dismissed_short_deck_reason",
+            return_value=_WIRED_SHORT_DECK_REASON,
+        ),
+    ):
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=now,
+            user_id=user_id,
+        )
+
+    carded = [
+        row["external_id"]
+        for row in await contract_conn.fetch(
+            """SELECT p.external_id
+                 FROM pulse_cards pc
+                 JOIN pulse_decks pd ON pd.id = pc.deck_id
+                 JOIN papers p ON p.id = pc.paper_id
+                WHERE pd.deck_date = $1 AND pd.user_id = $2
+                ORDER BY pc.rank""",
+            now.date(),
+            user_id,
+        )
+    ]
+
+    assert dismissed_id not in carded, (
+        f"{dismissed_id} was rated down and must own no card; deck was {carded}"
+    )
+    assert len(carded) == deck_size, (
+        f"the deck must still fill to {deck_size} from the four surviving candidates; got {carded}"
+    )
+    assert stats["card_count"] == deck_size, (
+        f"card_count must match the persisted cards; got {stats['card_count']!r}"
+    )
+    assert stats["degraded_reason"] == _WIRED_SHORT_DECK_REASON, (
+        "a short-deck reason must reach the run's diagnostics, or the user is "
+        f"never told why their deck came up short; got {stats['degraded_reason']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — the deck reads carry the paper-visibility predicate
+# Verified: services/paper_ingestion/paper_ingestion/pulse/deck.py:340
+#           (deck.py:366, :439, :509 -- the three deck card queries)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_deck_reads_apply_the_paper_visibility_predicate(
+    contract_conn,
+    contract_two_users,
+) -> None:
+    """The three deck reads filter on paper visibility, and today that is inert.
+
+    Pulse only ever persists a card for a paper that already carries public
+    scope, and no product path downgrades a paper afterwards, so the predicate
+    is expected to change nothing: the first half asserts every read still
+    returns the card.  The second half downgrades the row directly — the only
+    way to reach that state today — to show the predicate is wired in rather
+    than merely harmless. Without it, a later scope change could leave the
+    paper readable through an already-persisted deck.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.pulse.deck import (
+        load_history,
+        load_last_nonempty_deck,
+        load_today,
+        persist_deck,
+    )
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    external_id = "visibility-deck-01"
+
+    await contract_conn.execute(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               discovered_by, visibility_scope)
+           VALUES ($1, 'arxiv', 'Visible Candidate', ARRAY['Author'],
+                   'https://arxiv.test/visibility-deck-01', $2, 'public')""",
+        external_id,
+        user_id,
+    )
+    today = await contract_conn.fetchval("SELECT CURRENT_DATE")
+    yesterday = await contract_conn.fetchval("SELECT CURRENT_DATE - 1")
+    card = _candidate(external_id, 0.9)
+    for deck_date in (today, yesterday):
+        await persist_deck(pool, deck_date, cards=[card], stats={}, user_id=user_id)
+
+    async def _card_counts() -> tuple[int, int, int | None]:
+        """Return the card counts of today's, yesterday's and fallback decks."""
+        today_deck = await load_today(pool, user_id=user_id)
+        history = await load_history(pool, days=30, user_id=user_id)
+        last_nonempty = await load_last_nonempty_deck(pool, user_id=user_id)
+        assert today_deck is not None, "today's deck row must exist"
+        yesterdays = [deck for deck in history if deck.deck_date == yesterday]
+        assert yesterdays, "yesterday's deck must appear in the history window"
+        fallback_count = len(last_nonempty.cards) if last_nonempty is not None else None
+        return len(today_deck.cards), len(yesterdays[0].cards), fallback_count
+
+    assert await _card_counts() == (1, 1, 1), (
+        "a public paper must stay readable through every deck path — the predicate "
+        "is defence in depth and must cost nothing today"
+    )
+
+    await contract_conn.execute(
+        "UPDATE papers SET visibility_scope = 'private' WHERE external_id = $1",
+        external_id,
+    )
+
+    assert await _card_counts() == (0, 0, None), (
+        "a paper that lost public scope must drop out of every deck read; a read "
+        "path without the predicate would keep serving it"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — stale fallback applies current negative feedback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_stale_fallback_excludes_a_recently_rated_down_card(
+    contract_conn,
+    contract_two_users,
+) -> None:
+    """A persisted fallback deck returns only cards still eligible today."""
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.pulse.deck import load_last_nonempty_deck, persist_deck
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    dropped_external_id = "stale-feedback-deck-dropped"
+    kept_external_id = "stale-feedback-deck-kept"
+
+    for external_id in (dropped_external_id, kept_external_id):
+        await contract_conn.execute(
+            """INSERT INTO papers (external_id, source_type, title, authors, url,
+                                   discovered_by, visibility_scope)
+               VALUES ($1, 'arxiv', $2, ARRAY['Fallback Author'], $3, $4, 'public')""",
+            external_id,
+            f"Candidate {external_id}",
+            f"https://arxiv.test/{external_id}",
+            user_id,
+        )
+
+    await contract_conn.execute("DELETE FROM pulse_decks WHERE user_id = $1", user_id)
+    yesterday = await contract_conn.fetchval("SELECT CURRENT_DATE - 1")
+    persisted = await persist_deck(
+        pool,
+        yesterday,
+        cards=[
+            _candidate(dropped_external_id, 0.9),
+            _candidate(kept_external_id, 0.8),
+        ],
+        stats={},
+        user_id=user_id,
+    )
+    assert persisted == 2
+
+    paper_ids = {
+        row["external_id"]: row["id"]
+        for row in await contract_conn.fetch(
+            "SELECT id, external_id FROM papers WHERE external_id = ANY($1::text[])",
+            [dropped_external_id, kept_external_id],
+        )
+    }
+    await contract_conn.execute(
+        """INSERT INTO recommendation_feedback (paper_id, user_id, signal, source)
+           VALUES ($1, $2, 'negative', 'pulse_thumbs')""",
+        paper_ids[dropped_external_id],
+        user_id,
+    )
+
+    deck = await load_last_nonempty_deck(pool, user_id=user_id)
+
+    assert deck is not None
+    assert deck.card_count == len(deck.cards) == 1
+    assert [card.paper_id for card in deck.cards] == [paper_ids[kept_external_id]]

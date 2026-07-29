@@ -13,22 +13,11 @@ import httpx
 import pytest
 import respx
 from jarvis_common.maintenance import OutboundEgressBlockedError
-from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
+from paper_ingestion.models import SourceType, TopicRef
+from paper_ingestion.sources.arxiv_source import ARXIV_API_URL
+from tests._source_fakes import make_arxiv_source as _make_source
 
 FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def _make_source(config_extra: dict | None = None) -> ArxivSource:
-    """Create an ArxivSource with a minimal PaperSourceConfig."""
-    config = PaperSourceConfig(
-        id=1,
-        source_type=SourceType.ARXIV,
-        enabled=True,
-        config=config_extra or {},
-    )
-    client = httpx.AsyncClient()
-    return ArxivSource(config, client)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 // Must mock before importing component
@@ -18,19 +17,17 @@ vi.mock('react-router-dom', async (importOriginal) => {
 import { HeaderPill } from '@/components/logs/HeaderPill';
 import { getSummary } from '@/lib/logs';
 import { useAuthStore } from '@/stores/auth-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockGetSummary = vi.mocked(getSummary);
 
 function renderPill(initialPath = '/') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <HeaderPill />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <HeaderPill />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

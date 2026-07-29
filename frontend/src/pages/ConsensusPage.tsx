@@ -236,6 +236,17 @@ export function ConsensusPage() {
         </CardContent>
       </Card>
 
+      {consensusQuery.data?.truncated && (
+        <div
+          role="status"
+          aria-label="Incomplete consensus view"
+          className="rounded-md border border-[var(--status-warn)]/40 bg-[var(--status-warn)]/10 p-3 text-sm text-strong"
+        >
+          This is an incomplete view: the verified evidence set exceeded the
+          processing limit, so some claim clusters may be missing.
+        </div>
+      )}
+
       {claims.length > 0 && (
         <>
           <MarkerCaption marker="EVIDENCE" />

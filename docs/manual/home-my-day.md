@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-20 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-07-25 | routes: /, /my-day -->
 
 # My Day & Home
 
@@ -12,7 +12,7 @@ The Home page (titled **Dashboard**) is the first screen you see after signing i
 
 ### MetricTileGrid
 
-A row of **KPI tiles** summarising the current state of your library: total papers, papers due for review, unread items in the Inbox, and active projects. The tiles are read-only; click any tile to navigate to the corresponding surface.
+A row of five **KPI tiles**: **Papers**, **Due Cards**, **Active Projects**, **Topics**, and **Scheduled Jobs**. The tiles are read-only; click any tile to navigate to the corresponding surface.
 
 ### SetupBanner
 

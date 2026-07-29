@@ -474,3 +474,258 @@ async def test_generation_w2_deck_create_persists_cards(
         "SELECT COUNT(*) FROM cards WHERE deck_id = $1 AND paper_id = $2", deck_id, paper_id
     )
     assert count >= 1, "Card row must exist in DB after generate_cards_core"
+
+
+# ---------------------------------------------------------------------------
+# Summary scope — generate_cards_core reads only the caller's own summary
+# ---------------------------------------------------------------------------
+
+
+async def test_generate_cards_core_ignores_another_users_summary(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """The card prompt is seeded only from the caller's own paper summary.
+
+    paper_summaries is per-user workspace content (UNIQUE NULLS NOT DISTINCT
+    (paper_id, user_id)).  When two users hold the same paper in their library
+    and only one of them has written a summary, the other must generate from
+    chunks alone rather than inherit that summary.
+
+    # Verified: services/learning_engine/learning_engine/generation_service.py:117-124
+    """
+    from learning_engine.card_generator import _empty_result
+    from learning_engine.generation_service import generate_cards_core
+
+    app, _faux = le_contract_app_with_litellm_sidecar
+
+    user_a_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('summary-scope-a@contract.test', 'user') RETURNING id"
+    )
+    user_b_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('summary-scope-b@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('summary-scope-01', 'arxiv', 'Shared Paper', ARRAY['Author S'],"
+        " 'http://shared', $1) RETURNING id",
+        user_b_id,
+    )
+    for holder_id in (user_a_id, user_b_id):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via)"
+            " VALUES ($1, $2, 'manual_save')",
+            holder_id,
+            paper_id,
+        )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'Shared chunk text every library holder can read.')",
+        paper_id,
+    )
+    user_b_summary = "User B detailed summary of the shared paper."
+    await contract_conn.execute(
+        "INSERT INTO paper_summaries"
+        " (paper_id, user_id, summary_brief, summary_detailed, methodology)"
+        " VALUES ($1, $2, 'User B brief.', $3, 'User B methodology notes.')",
+        paper_id,
+        user_b_id,
+        user_b_summary,
+    )
+    deck_id = await contract_conn.fetchval(
+        "INSERT INTO decks (user_id, name) VALUES ($1, 'Summary Scope Deck') RETURNING id",
+        user_a_id,
+    )
+
+    card_generator = AsyncMock()
+    card_generator.generate_cards.return_value = _empty_result()
+
+    await generate_cards_core(
+        pool=app.state.db_pool,
+        http_client=httpx.AsyncClient(),
+        paper_id=paper_id,
+        deck_id=deck_id,
+        max_cards=1,
+        card_generator=card_generator,
+        user_id=user_a_id,
+    )
+
+    summary_text = card_generator.generate_cards.await_args.kwargs["summary_text"]
+    assert summary_text is None, (
+        "User A holds no summary of their own, so generation must fall back to the "
+        f"chunk-only path; got {summary_text!r}"
+    )
+
+
+async def test_generate_cards_core_uses_the_callers_own_summary(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """A caller who wrote their own summary still gets it in the card prompt.
+
+    Positive control for the per-user summary scope: on the same shared-paper
+    setup, the caller's own row must be selected and joined into summary_text
+    even though a second, newer row belonging to another user exists.
+
+    # Verified: services/learning_engine/learning_engine/generation_service.py:117-124
+    # Verified: services/learning_engine/learning_engine/generation_service.py:141-153
+    """
+    from learning_engine.card_generator import _empty_result
+    from learning_engine.generation_service import generate_cards_core
+
+    app, _faux = le_contract_app_with_litellm_sidecar
+
+    user_a_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('own-summary-a@contract.test', 'user') RETURNING id"
+    )
+    user_b_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('own-summary-b@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('own-summary-01', 'arxiv', 'Shared Paper', ARRAY['Author S'],"
+        " 'http://shared-own', $1) RETURNING id",
+        user_b_id,
+    )
+    for holder_id in (user_a_id, user_b_id):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via)"
+            " VALUES ($1, $2, 'manual_save')",
+            holder_id,
+            paper_id,
+        )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'Shared chunk text every library holder can read.')",
+        paper_id,
+    )
+
+    user_a_detailed = "User A detailed summary of the shared paper."
+    user_a_methodology = "User A methodology notes."
+    user_a_limitations = "User A limitations notes."
+    await contract_conn.execute(
+        "INSERT INTO paper_summaries"
+        " (paper_id, user_id, summary_brief, summary_detailed, methodology, limitations,"
+        " created_at)"
+        " VALUES ($1, $2, 'User A brief.', $3, $4, $5, NOW() - INTERVAL '2 hours')",
+        paper_id,
+        user_a_id,
+        user_a_detailed,
+        user_a_methodology,
+        user_a_limitations,
+    )
+    # Explicitly the newer row: created_at defaults to now(), which is fixed at
+    # transaction start, so both rows would otherwise tie and the ORDER BY would
+    # not distinguish them. With an explicit timestamp an unscoped read prefers
+    # user B's summary and this test fails.
+    await contract_conn.execute(
+        "INSERT INTO paper_summaries"
+        " (paper_id, user_id, summary_brief, summary_detailed, methodology, created_at)"
+        " VALUES ($1, $2, 'User B brief.', 'User B detailed summary.',"
+        " 'User B methodology notes.', NOW())",
+        paper_id,
+        user_b_id,
+    )
+
+    deck_id = await contract_conn.fetchval(
+        "INSERT INTO decks (user_id, name) VALUES ($1, 'Own Summary Deck') RETURNING id",
+        user_a_id,
+    )
+
+    card_generator = AsyncMock()
+    card_generator.generate_cards.return_value = _empty_result()
+
+    await generate_cards_core(
+        pool=app.state.db_pool,
+        http_client=httpx.AsyncClient(),
+        paper_id=paper_id,
+        deck_id=deck_id,
+        max_cards=1,
+        card_generator=card_generator,
+        user_id=user_a_id,
+    )
+
+    summary_text = card_generator.generate_cards.await_args.kwargs["summary_text"]
+    expected = "\n\n".join([user_a_detailed, user_a_methodology, user_a_limitations])
+    assert summary_text == expected, (
+        "User A's own summary must seed the card prompt verbatim (detailed, "
+        f"methodology, limitations joined by a blank line); got {summary_text!r}"
+    )
+
+
+async def test_generation_stamps_current_source_and_retains_older_cards(
+    le_contract_app_with_litellm_sidecar,
+    contract_two_users,
+    contract_conn,
+):
+    """Generating after replacement adds current cards without rewriting history."""
+    from learning_engine.generation_service import generate_cards_core
+
+    app, _faux = le_contract_app_with_litellm_sidecar
+    paper_id = contract_two_users.paper_id_a
+    deck_id = contract_two_users.deck_id_a
+    old_card_id = contract_two_users.card_id_a
+    await contract_conn.execute(
+        """
+        UPDATE cards
+        SET content_generation = (
+            SELECT content_generation FROM papers WHERE id = $2
+        )
+        WHERE id = $1
+        """,
+        old_card_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+    await contract_conn.execute(
+        """
+        INSERT INTO paper_chunks (paper_id, chunk_index, content, page_number)
+        VALUES ($1, 0, 'Current source supports the generated answer.', 1)
+        """,
+        paper_id,
+    )
+    card_generator = AsyncMock()
+    card_generator.generate_cards.return_value = {
+        "cards": [
+            {
+                "card_type": "concept",
+                "front": "current-generation-card",
+                "back": "Current source supports the generated answer.",
+                "evidence": {},
+            }
+        ],
+        "confidence": "HIGH",
+    }
+
+    result = await generate_cards_core(
+        pool=app.state.db_pool,
+        http_client=httpx.AsyncClient(),
+        paper_id=paper_id,
+        deck_id=deck_id,
+        max_cards=1,
+        card_generator=card_generator,
+        user_id=contract_two_users.user_a_id,
+    )
+
+    assert result["cards_created"] == 1
+    rows = await contract_conn.fetch(
+        """
+        SELECT id, front, content_generation
+        FROM cards
+        WHERE deck_id = $1 AND paper_id = $2
+        ORDER BY id
+        """,
+        deck_id,
+        paper_id,
+    )
+    old = next(row for row in rows if row["id"] == old_card_id)
+    new = next(row for row in rows if row["front"] == "current-generation-card")
+    assert old["content_generation"] == 0
+    assert new["content_generation"] == 1

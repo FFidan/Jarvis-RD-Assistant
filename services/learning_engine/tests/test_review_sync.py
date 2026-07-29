@@ -283,7 +283,7 @@ async def test_sync_today_event_writes_daily_log_inside_per_event_transaction():
     # fetch -> [] (no applied keys, no fsrs config rows); fetchrow -> owned card.
     pool, conn = make_pool_and_conn(
         fetch_return=[],
-        fetchrow_return={"fsrs_state": {}},
+        fetchrow_return={"fsrs_state": {}, "paper_id": None, "content_generation": 0},
     )
     # fetchval is called twice per event: the chronology-guard MAX(reviewed_at)
     # probe (no prior review -> None) then the log INSERT RETURNING id (123 = won).
@@ -351,7 +351,7 @@ async def test_sync_replays_events_oldest_first(monkeypatch):
 
     pool, conn = make_pool_and_conn(
         fetch_return=[],
-        fetchrow_return={"fsrs_state": {}},
+        fetchrow_return={"fsrs_state": {}, "paper_id": None, "content_generation": 0},
     )
     # MAX(reviewed_at) chronology probe -> None (no prior review recorded in the
     # mock), log INSERT RETURNING id -> 123. See test_sync_today_... above.

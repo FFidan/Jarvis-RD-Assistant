@@ -32,6 +32,7 @@ from jarvis_common.library import add_to_library
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
 from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.job_errors import classify_bulk_error
 from paper_ingestion.models import (
     HybridSearchResult,
     PaperCreate,
@@ -43,6 +44,7 @@ from paper_ingestion.models import (
 from paper_ingestion.routers.search_helpers import (
     PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS,
     MultiSourceSearchResponse,
+    SearchPersistenceFailure,
     SearchPreviewLibraryMatch,
     SearchPreviewResponse,
     SearchPreviewResult,
@@ -63,7 +65,10 @@ from paper_ingestion.routers.search_helpers import (
     _store_preferred_library_match,
     _TitleYearLibraryCandidate,
 )
-from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+from paper_ingestion.services.pdf_workflow import (
+    reclaim_discarded_paper_content,
+    upsert_verified_public_paper,
+)
 from paper_ingestion.services.source_helper import get_source_for_type, get_sources_for_types
 
 logger = logging.getLogger(__name__)
@@ -79,6 +84,7 @@ __all__ = [
     # response models / sentinels
     "MultiSourceSearchResponse",
     "PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS",
+    "SearchPersistenceFailure",
     "SearchPreviewLibraryMatch",
     "SearchPreviewResponse",
     "SearchPreviewResult",
@@ -202,22 +208,51 @@ def _merge_search_results(
 
 async def _persist_search_results(
     db_pool: asyncpg.Pool, deduped: list[PaperCreate], user_id: int
-) -> list[PaperResponse]:
-    """Upsert search results into the DB and add them to the caller's library."""
+) -> tuple[list[PaperResponse], list[SearchPersistenceFailure]]:
+    """Upsert search results into the DB and add them to the caller's library.
+
+    Each paper is independent: a failed save is reported with a safe error code
+    and does not hide earlier work or prevent later results from being saved.
+    Storage for content a promotion discarded is reclaimed after the connection
+    is released, so this request's connection is not held across the Qdrant and
+    filesystem work that reclamation does on a connection of its own.
+    """
     saved_results: list[PaperResponse] = []
+    failed_results: list[SearchPersistenceFailure] = []
+    discarded_content_ids: list[int] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
-            paper.discovery_origin = "user_initiated"
-            row = await upsert_verified_public_paper(conn, paper, discovered_by=user_id)
-            if user_id is not None:
-                await add_to_library(
+            try:
+                paper.discovery_origin = "user_initiated"
+                row = await upsert_verified_public_paper(
                     conn,
-                    user_id=user_id,
-                    paper_id=row["id"],
-                    added_via="manual_save",
+                    paper,
+                    discovered_by=user_id,
+                    discarded_content_ids=discarded_content_ids,
                 )
-            saved_results.append(row_to_paper_response(row))
-    return saved_results
+                if user_id is not None:
+                    await add_to_library(
+                        conn,
+                        user_id=user_id,
+                        paper_id=row["id"],
+                        added_via="manual_save",
+                    )
+                saved_results.append(row_to_paper_response(row))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Search persistence failed for external_id=%s source_type=%s",
+                    paper.external_id,
+                    paper.source_type.value,
+                )
+                failed_results.append(
+                    SearchPersistenceFailure(
+                        external_id=paper.external_id,
+                        error=classify_bulk_error(exc),
+                    )
+                )
+    for paper_id in discarded_content_ids:
+        await reclaim_discarded_paper_content(paper_id, db_pool)
+    return saved_results, failed_results
 
 
 def _count_results_by_source(
@@ -289,7 +324,7 @@ async def search_papers(
     # Upsert into DB (per original /api/search behavior).
     # Insert canonical, then add to the caller's user_library so the
     # manually-searched paper appears in *their* feed.
-    await _persist_search_results(db_pool, deduped, user_id)
+    saved_results, failed_results = await _persist_search_results(db_pool, deduped, user_id)
 
     per_source_counts = _count_results_by_source(per_source, deduped)
 
@@ -298,6 +333,8 @@ async def search_papers(
         total=len(deduped),
         per_source_counts=per_source_counts,
         degraded_sources=degraded_sources,
+        saved=saved_results,
+        failed=failed_results,
     )
 
 

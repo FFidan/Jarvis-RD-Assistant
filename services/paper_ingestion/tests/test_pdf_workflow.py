@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import httpx
 import pytest
 import torch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
-from jarvis_common.testing import make_pool_and_conn
+from jarvis_common.testing import SharedConnPool, make_pool_and_conn
 from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.services import pdf_workflow as pdf_workflow_module
 from paper_ingestion.services.pdf_workflow import (
+    PDFRebuildNotPermittedError,
     advisory_lock,
     download_and_store_pdf,
     reconcile_paper_embeddings,
@@ -45,6 +48,25 @@ def _default_vector_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
         "_load_paper_embedding_context",
         AsyncMock(return_value=(_TEST_VECTOR_VISIBILITY, 17)),
     )
+
+
+_MOCKED_SOURCE_URL = "https://example.test/mocked-source.pdf"
+
+# A force run must name a requester who holds the paper. These mocked connections
+# answer the membership probe from the same non-empty ``fetch`` stub they already
+# use for the chunk reads, so the holder path is the one exercised.
+_HOLDER_USER_ID = 11
+
+
+def _fetchval_answers(*probes: object):
+    """Return a ``fetchval`` side effect for a paper whose source URL never moves.
+
+    ``run_process_pdf`` reads ``papers.pdf_url`` and then the download premise
+    before processing, and re-reads the URL in the commit transaction; *probes*
+    answer the chunk-count and ``chunked_at`` reads that sit between.
+    """
+    answers = iter((_MOCKED_SOURCE_URL, True, *probes))
+    return lambda *_args, **_kwargs: next(answers, _MOCKED_SOURCE_URL)
 
 
 @pytest.mark.asyncio
@@ -117,14 +139,16 @@ async def test_advisory_lock_unlocks_even_after_error():
 
 
 class _SingleSlotProbePool:
-    """One-slot pool fake that records whether a waiter retains the slot."""
+    """One-slot pool fake that models lock ownership and pool occupancy."""
 
     def __init__(self, *, lock_available: bool) -> None:
         self.lock_available = lock_available
         self.slot = asyncio.Semaphore(1)
         self.probe_released = asyncio.Event()
         self.in_use = 0
-        self.unlock_calls: list[tuple[object, ...]] = []
+        self.probe_attempts = 0
+        self.release_count = 0
+        self.lock_held = False
 
     def acquire(self):
         pool = self
@@ -142,10 +166,13 @@ class _SingleSlotProbePool:
                 return False
 
             async def fetchrow(self, _statement, *_args):
+                pool.probe_attempts += 1
+                pool.lock_held = pool.lock_available
                 return {"acquired": pool.lock_available}
 
-            async def execute(self, _statement, *args):
-                pool.unlock_calls.append(args)
+            async def execute(self, _statement, *_args):
+                pool.lock_held = False
+                pool.release_count += 1
 
         return _Acquire()
 
@@ -175,7 +202,8 @@ async def test_paper_lock_waiter_releases_single_pool_slot_between_probes():
     with pytest.raises(asyncio.CancelledError):
         await waiter
     assert pool.in_use == 0
-    assert pool.unlock_calls == []
+    assert pool.release_count == 0
+    assert not pool.lock_held
 
 
 @pytest.mark.asyncio
@@ -198,7 +226,9 @@ async def test_paper_lock_cancellation_unlocks_and_releases_connection():
     with pytest.raises(asyncio.CancelledError):
         await holder
 
-    assert pool.unlock_calls == [(1, 77)]
+    assert pool.probe_attempts == 1
+    assert pool.release_count == 1
+    assert not pool.lock_held
     assert pool.in_use == 0
     async with asyncio.timeout(0.1):
         async with pool.acquire():
@@ -245,7 +275,7 @@ async def test_run_process_pdf_returns_already_processed_without_force():
 async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
     """Force-reprocessing replaces DB chunks even if stale vector cleanup fails."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 2
+    conn.fetchval.side_effect = _fetchval_answers(2, None)
     conn.fetch.return_value = [{"embedding_id": "vec-1"}]
     conn.transaction = MagicMock(
         return_value=MagicMock(
@@ -275,6 +305,7 @@ async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
         pdf_processor=pdf_processor,
         embedder=embedder,
         force=True,
+        requester_id=_HOLDER_USER_ID,
     )
 
     assert result["paper_id"] == 5
@@ -290,11 +321,95 @@ async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
     embedder.qdrant.delete.assert_awaited_once()
 
 
+# ---------------------------------------------------------------------------
+# Holdership is required before a run may discard derived content
+# ---------------------------------------------------------------------------
+
+
+def _rebuildable_conn(*, library_rows: list) -> AsyncMock:
+    """Return a connection on which a force run would complete if it were permitted.
+
+    The paper has two persisted chunks and no ``chunked_at``, so a permitted run
+    takes the discard-and-rebuild branch. ``library_rows`` answers the holdership
+    probe, and the same ``fetch`` stub then answers the stale-vector read — so a
+    non-empty value is shaped for both, keeping the run completable once the
+    holdership refusal is out of the way.
+    """
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _fetchval_answers(2, None)
+    conn.fetch.return_value = library_rows
+    return conn
+
+
+def _rebuildable_processor() -> MagicMock:
+    """Return a PDF processor that would produce one fresh chunk for a permitted run."""
+    chunks = [SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1)]
+    processor = MagicMock()
+    processor.process = AsyncMock(return_value=("full text", chunks, ["vec-0"]))
+    return processor
+
+
+def _rebuildable_embedder() -> MagicMock:
+    """Return an embedder whose stale-vector cleanup a permitted run can await."""
+    embedder = MagicMock()
+    embedder.qdrant.delete = AsyncMock()
+    return embedder
+
+
+@pytest.mark.asyncio
+async def test_force_run_refuses_requester_who_does_not_hold_the_paper():
+    """Being able to see a public paper does not permit discarding its content."""
+    conn = _rebuildable_conn(library_rows=[])
+    pool, _ = make_pool_and_conn(conn=conn)
+    pdf_processor = _rebuildable_processor()
+
+    with pytest.raises(PDFRebuildNotPermittedError, match="library"):
+        await run_process_pdf(
+            paper_id=5,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=_rebuildable_embedder(),
+            force=True,
+            requester_id=_HOLDER_USER_ID,
+        )
+
+    pdf_processor.process.assert_not_awaited()
+    discard_chunks = call("DELETE FROM paper_chunks WHERE paper_id = $1", 5)
+    assert discard_chunks not in conn.execute.await_args_list
+
+
+@pytest.mark.asyncio
+async def test_force_run_refuses_when_no_requester_is_named():
+    """Fail-closed: an unnamed requester is refused even where a holder exists.
+
+    The library probe would answer ``True`` here, so only the missing requester
+    can produce the refusal — a caller that cannot name one is not let through.
+    """
+    conn = _rebuildable_conn(library_rows=[{"embedding_id": "vec-old"}])
+    pool, _ = make_pool_and_conn(conn=conn)
+    pdf_processor = _rebuildable_processor()
+
+    with pytest.raises(PDFRebuildNotPermittedError, match="library"):
+        await run_process_pdf(
+            paper_id=5,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=_rebuildable_embedder(),
+            force=True,
+        )
+
+    pdf_processor.process.assert_not_awaited()
+    discard_chunks = call("DELETE FROM paper_chunks WHERE paper_id = $1", 5)
+    assert discard_chunks not in conn.execute.await_args_list
+
+
 @pytest.mark.asyncio
 async def test_run_process_pdf_wraps_embedding_failures():
     """Embedding errors keep sanitized cause detail for operators."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
@@ -325,7 +440,7 @@ async def test_run_process_pdf_persists_completed_chunks_on_embedding_batch_erro
     from paper_ingestion.ingestion.embedder import EmbeddingBatchError
 
     conn = AsyncMock()
-    conn.fetchval.return_value = 0  # no existing chunks
+    conn.fetchval.side_effect = _fetchval_answers(0)  # no existing chunks
     conn.transaction = MagicMock(
         return_value=MagicMock(
             __aenter__=AsyncMock(return_value=None),
@@ -391,7 +506,7 @@ async def test_run_process_pdf_embedding_batch_error_with_no_completed_chunks_sk
     from paper_ingestion.ingestion.embedder import EmbeddingBatchError
 
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
@@ -420,7 +535,7 @@ async def test_run_process_pdf_embedding_batch_error_with_no_completed_chunks_sk
 async def test_run_process_pdf_stores_chunks_and_returns_processed():
     """Successful processing writes chunks and returns processed status."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     conn.transaction = MagicMock(
         return_value=MagicMock(
             __aenter__=AsyncMock(return_value=None),
@@ -474,7 +589,7 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
 async def test_pdf_workflow_relabels_torch_oom_as_distinct_error():
     """torch.OutOfMemoryError is re-raised with a GPU-specific actionable message."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(side_effect=torch.OutOfMemoryError("simulated OOM"))
@@ -494,7 +609,7 @@ async def test_pdf_workflow_relabels_torch_oom_as_distinct_error():
 async def test_pdf_workflow_relabels_cuda_runtime_error():
     """RuntimeError with 'CUDA out of memory' is re-raised with a GPU-specific message."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
@@ -537,7 +652,7 @@ async def test_pdf_workflow_importable_and_error_paths_safe_without_torch():
         )
 
         conn = AsyncMock()
-        conn.fetchval.return_value = 0
+        conn.fetchval.side_effect = _fetchval_answers(0)
         pool, _ = make_pool_and_conn(conn=conn)
         pdf_processor = MagicMock()
         pdf_processor.process = AsyncMock(
@@ -565,7 +680,7 @@ async def test_pdf_workflow_importable_and_error_paths_safe_without_torch():
 async def test_pdf_workflow_preserves_embedding_error_for_httpx_failures():
     """httpx.HTTPStatusError is wrapped as 'Embedding service error'."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
@@ -598,7 +713,7 @@ async def test_run_process_pdf_maps_real_events_monotonically_after_commit():
     timeline: list[str] = []
     progress_events: list[tuple[float, str | None]] = []
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]
+    conn.fetchval.side_effect = _fetchval_answers(0)
     transaction = MagicMock()
     transaction.__aenter__ = AsyncMock(return_value=None)
 
@@ -666,7 +781,7 @@ async def test_run_process_pdf_database_failure_never_reports_saved_or_done():
     """Failed PostgreSQL persistence cannot advance progress to saved or complete."""
     progress_events: list[tuple[float, str | None]] = []
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]
+    conn.fetchval.side_effect = _fetchval_answers(0)
     transaction = MagicMock()
     transaction.__aenter__ = AsyncMock(return_value=None)
     transaction.__aexit__ = AsyncMock(side_effect=RuntimeError("database commit failed"))
@@ -717,7 +832,7 @@ async def test_run_process_pdf_database_failure_never_reports_saved_or_done():
 async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: int):
     """Provider HTTP status survives PDF workflow wrapping while URLs are redacted."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 0
+    conn.fetchval.side_effect = _fetchval_answers(0)
     pool, _ = make_pool_and_conn(conn=conn)
     response = httpx.Response(
         status_code,
@@ -796,7 +911,8 @@ async def test_run_process_pdf_retry_uses_same_point_ids_after_phase3_failure():
     def _make_fresh_pool_with_transaction():
         """Pool whose connection always reports 0 existing chunks (simulates retry state)."""
         conn = AsyncMock()
-        conn.fetchval.return_value = 0  # no existing chunks (force or post-failure retry)
+        # No existing chunks (force or post-failure retry).
+        conn.fetchval.side_effect = _fetchval_answers(0)
         conn.transaction = MagicMock(
             return_value=MagicMock(
                 __aenter__=AsyncMock(return_value=None),
@@ -919,7 +1035,8 @@ async def test_force_reprocess_preserves_overlapping_vectors():
       expected delete = {vec-2}     (only the stale trailing chunk)
     """
     conn = AsyncMock()
-    conn.fetchval.return_value = 3  # existing_count > 0, triggers force path
+    # existing_count > 0 with chunked_at unset, plus force, triggers the force path.
+    conn.fetchval.side_effect = _fetchval_answers(3, None)
     conn.fetch.return_value = [
         {"embedding_id": "vec-0"},
         {"embedding_id": "vec-1"},
@@ -951,6 +1068,7 @@ async def test_force_reprocess_preserves_overlapping_vectors():
         pdf_processor=pdf_processor,
         embedder=embedder,
         force=True,
+        requester_id=_HOLDER_USER_ID,
     )
 
     assert result == {"paper_id": 99, "chunk_count": 2, "status": "processed"}
@@ -972,7 +1090,7 @@ async def test_force_reprocess_skips_qdrant_delete_when_new_fully_covers_old():
     """DA-02: when new chunk IDs fully cover all old IDs (no stale vectors),
     the Qdrant delete must not be called at all (empty difference → guarded by if)."""
     conn = AsyncMock()
-    conn.fetchval.return_value = 2
+    conn.fetchval.side_effect = _fetchval_answers(2, None)
     conn.fetch.return_value = [
         {"embedding_id": "vec-0"},
         {"embedding_id": "vec-1"},
@@ -1002,6 +1120,7 @@ async def test_force_reprocess_skips_qdrant_delete_when_new_fully_covers_old():
         pdf_processor=pdf_processor,
         embedder=embedder,
         force=True,
+        requester_id=_HOLDER_USER_ID,
     )
 
     assert result == {"paper_id": 100, "chunk_count": 2, "status": "processed"}
@@ -1019,8 +1138,8 @@ async def test_run_process_pdf_reembeds_when_chunked_at_unset():
     must NOT short-circuit: run_process_pdf must call the processor to finish
     embedding the missing chunks."""
     conn = AsyncMock()
-    # fetchval order in run_process_pdf: existing_count, chunked_at, owner_id.
-    conn.fetchval.side_effect = [3, None, None]  # 3 partial chunks, never marked complete
+    # 3 partial chunks, never marked complete.
+    conn.fetchval.side_effect = _fetchval_answers(3, None)
     conn.transaction = MagicMock(
         return_value=MagicMock(
             __aenter__=AsyncMock(return_value=None),
@@ -1055,7 +1174,7 @@ async def test_run_process_pdf_short_circuits_when_chunked_at_set():
     from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME
 
     conn = AsyncMock()
-    conn.fetchval.side_effect = [4, datetime(2026, 6, 17, tzinfo=UTC)]
+    conn.fetchval.side_effect = _fetchval_answers(4, datetime(2026, 6, 17, tzinfo=UTC))
     rows = [
         _persisted_chunk(
             5,
@@ -1767,6 +1886,10 @@ async def test_concurrent_pdf_processing_cannot_publish_stale_same_id_vector():
                 return len(rows)
             if "chunked_at" in sql:
                 return chunked_at
+            if "pdf_url" in sql:
+                return _MOCKED_SOURCE_URL
+            if "pdf_downloaded" in sql:
+                return True
             if "discovered_by" in sql:
                 return 17
             raise AssertionError(sql)
@@ -1899,7 +2022,7 @@ async def test_concurrent_pdf_processing_cannot_publish_stale_same_id_vector():
 async def test_run_process_pdf_marks_chunked_at_on_success():
     """A successful run stamps papers.chunked_at so future retries short-circuit."""
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]  # no existing chunks, owner_id None
+    conn.fetchval.side_effect = _fetchval_answers(0)
     conn.transaction = MagicMock(
         return_value=MagicMock(
             __aenter__=AsyncMock(return_value=None),
@@ -1965,7 +2088,7 @@ async def test_run_process_pdf_resume_excludes_other_model_rows():
         return fixture_rows
 
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]  # no existing chunks, owner_id None
+    conn.fetchval.side_effect = _fetchval_answers(0)
     conn.fetch = AsyncMock(side_effect=_fetch)
     conn.transaction = MagicMock(
         return_value=MagicMock(
@@ -2039,7 +2162,7 @@ async def test_run_process_pdf_resume_reembeds_when_qdrant_point_missing():
         return prior_rows
 
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]
+    conn.fetchval.side_effect = _fetchval_answers(0)
     conn.fetch = AsyncMock(side_effect=_fetch)
     conn.transaction = MagicMock(
         return_value=MagicMock(
@@ -2080,7 +2203,7 @@ async def test_run_process_pdf_resume_reembeds_when_vector_payload_is_stale():
     from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME
 
     conn = AsyncMock()
-    conn.fetchval.side_effect = [0, None]
+    conn.fetchval.side_effect = _fetchval_answers(0)
     conn.fetch = AsyncMock(
         return_value=[
             _persisted_chunk(
@@ -2158,3 +2281,1276 @@ async def test_verified_public_upsert_rejects_private_source_before_database() -
         await upsert_verified_public_paper(conn, _paper_for_upsert("local"))
 
     conn.fetchrow.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Live-PG contract: a promotion that replaces a paper's source URL must not be
+# undone by a download or a processing run that began against the previous one.
+# Both writes compare against state the enclosing transaction already owns.
+# ---------------------------------------------------------------------------
+
+_SUPERSEDED_PDF_URL = "https://example.test/superseded.pdf"
+_TRUSTED_PDF_URL = "https://arxiv.org/pdf/2401.00099.pdf"
+# The next revision the same version-stripped arXiv identifier resolves to.
+_REFRESHED_PDF_URL = "https://arxiv.org/pdf/2401.00099v2.pdf"
+
+
+def _paper_with_pdf_url(external_id: str, pdf_url: str):
+    """Return arXiv metadata carrying an explicit source URL."""
+    from paper_ingestion.models.papers import PaperCreate, SourceType
+
+    return PaperCreate(
+        external_id=external_id,
+        source_type=SourceType.ARXIV,
+        title="Source URL agreement",
+        authors=["A. Author"],
+        url="https://example.test/source-url-agreement",
+        pdf_url=pdf_url,
+    )
+
+
+def _staged_download(staged: Path, final: Path):
+    """Return a PDF processor double whose download has already been staged."""
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(return_value=(staged, final))
+    return processor
+
+
+def _extraction(label: str):
+    """Return the ``(text, chunks, point_ids)`` triple a PDF extraction yields."""
+    chunk = SimpleNamespace(
+        chunk_index=0,
+        content=f"{label} content",
+        page_number=1,
+        start_char=0,
+        end_char=len(label) + 8,
+    )
+    return (f"{label} text", [chunk], [f"vec-{label.lower()}"])
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_processing_refuses_a_file_an_earlier_promotion_left_behind(
+    contract_conn, tmp_path: Path
+) -> None:
+    """A run starting after a promotion cannot process the file it left on disk.
+
+    The promotion clears ``pdf_downloaded`` and ``pdf_local_path`` but unlinks
+    nothing, so a caller that read the row before the promotion still holds a
+    path to content derived from the previous source URL. Comparing the source
+    URL alone would not catch this: such a run captures the post-promotion URL
+    and would still agree with it at commit time.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:1191
+    from paper_ingestion.services.pdf_workflow import (
+        PDFSourceSupersededError,
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn, _paper_with_pdf_url("premise-entry", _SUPERSEDED_PDF_URL)
+    )
+    paper_id = int(seeded["id"])
+    pdf_path = tmp_path / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nsuperseded")
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $2 WHERE id = $1",
+        paper_id,
+        str(pdf_path),
+    )
+
+    await upsert_verified_public_paper(
+        contract_conn, _paper_with_pdf_url("premise-entry", _TRUSTED_PDF_URL)
+    )
+    assert pdf_path.exists(), "the promotion is not expected to remove the file"
+
+    processor = MagicMock()
+    processor.process = AsyncMock(return_value=_extraction("Superseded"))
+
+    with pytest.raises(PDFSourceSupersededError):
+        await run_process_pdf(
+            paper_id, pdf_path, SharedConnPool(contract_conn), processor, MagicMock()
+        )
+
+    processor.process.assert_not_awaited()
+    promoted = await contract_conn.fetchrow(
+        """SELECT p.visibility_scope, p.chunked_at,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["chunk_count"] == 0, "content from the left-behind file reached the public row"
+    assert promoted["chunked_at"] is None
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_download_pointer_rejected_once_the_source_url_moved_on(
+    contract_conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A download that began against a replaced source URL publishes nothing."""
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:167
+    from paper_ingestion.services.pdf_workflow import PDFRecordMissingError, upsert_paper
+
+    seeded = await upsert_paper(
+        contract_conn, _paper_with_pdf_url("fence-download", _SUPERSEDED_PDF_URL)
+    )
+    paper_id = int(seeded["id"])
+    final = tmp_path / f"{paper_id}.pdf"
+    final.write_bytes(b"%PDF-1.7\ntrusted")
+    staged = tmp_path / f"_download_{paper_id}.pdf"
+    staged.write_bytes(b"%PDF-1.7\nsuperseded")
+    monkeypatch.setattr("paper_ingestion.pdf_processor.maintenance_active", lambda: False)
+
+    # The row moves to the verified adapter's URL while this download is in flight.
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = $2 WHERE id = $1", paper_id, _TRUSTED_PDF_URL
+    )
+
+    with pytest.raises(PDFRecordMissingError):
+        await download_and_store_pdf(
+            SharedConnPool(contract_conn),
+            _staged_download(staged, final),
+            _SUPERSEDED_PDF_URL,
+            paper_id,
+        )
+
+    row = await contract_conn.fetchrow(
+        "SELECT pdf_downloaded, pdf_local_path FROM papers WHERE id = $1", paper_id
+    )
+    assert row["pdf_downloaded"] is False, "the download flag was published for a replaced URL"
+    assert row["pdf_local_path"] is None
+    assert final.read_bytes() == b"%PDF-1.7\ntrusted", "the publication was not rolled back"
+    assert not staged.exists()
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_chunk_commit_rejected_when_a_redownload_restores_the_same_local_path(
+    contract_conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restored local path does not make in-flight content current again.
+
+    The promotion clears ``pdf_downloaded`` and ``pdf_local_path``, which is
+    exactly the state the auto-fetch download selection looks for. That download
+    republishes the same deterministic ``{paper_id}.pdf`` slot, so the local path
+    the in-flight run holds is restored byte for byte before it commits.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py:171
+    from paper_ingestion.services.pdf_workflow import (
+        PDFSourceSupersededError,
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn, _paper_with_pdf_url("fence-restored-path", _SUPERSEDED_PDF_URL)
+    )
+    paper_id = int(seeded["id"])
+    pdf_path = tmp_path / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nsuperseded")
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $2 WHERE id = $1",
+        paper_id,
+        str(pdf_path),
+    )
+    monkeypatch.setattr("paper_ingestion.pdf_processor.maintenance_active", lambda: False)
+    pool = SharedConnPool(contract_conn)
+    staged = tmp_path / f"_download_{paper_id}.pdf"
+    staged.write_bytes(b"%PDF-1.7\ntrusted")
+
+    async def _promote_then_redownload(*_args, **_kwargs):
+        """Promote, then let the pending-download sweep restore the same slot."""
+        await upsert_verified_public_paper(
+            contract_conn, _paper_with_pdf_url("fence-restored-path", _TRUSTED_PDF_URL)
+        )
+        restored = await download_and_store_pdf(
+            pool, _staged_download(staged, pdf_path), _TRUSTED_PDF_URL, paper_id
+        )
+        assert restored["pdf_local_path"] == str(pdf_path), "the slot was not restored"
+        return _extraction("Superseded")
+
+    processor = MagicMock()
+    processor.process = AsyncMock(side_effect=_promote_then_redownload)
+
+    with pytest.raises(PDFSourceSupersededError):
+        await run_process_pdf(paper_id, pdf_path, pool, processor, MagicMock())
+
+    promoted = await contract_conn.fetchrow(
+        """SELECT p.visibility_scope, p.chunked_at,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["chunk_count"] == 0, "content from the replaced source reached the public row"
+    assert promoted["chunked_at"] is None, "the public row was marked processed"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_chunk_commit_rejected_after_promotion_and_one_retry_converges(
+    contract_conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chunks from a replaced file are refused, and a single retry stores the trusted ones."""
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:1179
+    from paper_ingestion.services.pdf_workflow import (
+        PDFSourceSupersededError,
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn, _paper_with_pdf_url("fence-commit", _SUPERSEDED_PDF_URL)
+    )
+    paper_id = int(seeded["id"])
+    pdf_path = tmp_path / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nsuperseded")
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $2 WHERE id = $1",
+        paper_id,
+        str(pdf_path),
+    )
+    monkeypatch.setattr("paper_ingestion.pdf_processor.maintenance_active", lambda: False)
+    pool = SharedConnPool(contract_conn)
+    embedder = MagicMock()
+    processor = MagicMock()
+
+    async def _promote_between_processing_and_commit(*_args, **_kwargs):
+        """Land the promotion in the window this run leaves between the two phases."""
+        await upsert_verified_public_paper(
+            contract_conn, _paper_with_pdf_url("fence-commit", _TRUSTED_PDF_URL)
+        )
+        return _extraction("Superseded")
+
+    processor.process = AsyncMock(side_effect=_promote_between_processing_and_commit)
+
+    with pytest.raises(PDFSourceSupersededError):
+        await run_process_pdf(paper_id, pdf_path, pool, processor, embedder)
+
+    promoted = await contract_conn.fetchrow(
+        """SELECT p.visibility_scope, p.pdf_local_path, p.chunked_at,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["chunk_count"] == 0, "content from the replaced file reached the public row"
+    assert promoted["chunked_at"] is None, "the public row was marked processed"
+    assert promoted["pdf_local_path"] is None
+
+    # Retry: re-download from the URL the row now carries, then process once more.
+    staged = tmp_path / f"_download_{paper_id}.pdf"
+    staged.write_bytes(b"%PDF-1.7\ntrusted")
+    republished = await download_and_store_pdf(
+        pool, _staged_download(staged, pdf_path), _TRUSTED_PDF_URL, paper_id
+    )
+    assert republished["pdf_downloaded"] is True
+    processor.process = AsyncMock(return_value=_extraction("Trusted"))
+
+    result = await run_process_pdf(paper_id, pdf_path, pool, processor, embedder)
+
+    assert result["status"] == "processed"
+    stored = await contract_conn.fetch(
+        "SELECT content FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
+    )
+    assert [record["content"] for record in stored] == ["Trusted content"]
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_resumable_chunks_discarded_when_promotion_precedes_the_partial_save(
+    contract_conn, tmp_path: Path
+) -> None:
+    """A partially embedded run cannot leave its chunks on a paper promoted meanwhile."""
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:1264
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn, _paper_with_pdf_url("fence-resume", _SUPERSEDED_PDF_URL)
+    )
+    paper_id = int(seeded["id"])
+    pdf_path = tmp_path / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nsuperseded")
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $2 WHERE id = $1",
+        paper_id,
+        str(pdf_path),
+    )
+
+    async def _promote_then_fail_midway(*_args, **_kwargs):
+        """Land the promotion, then fail with the batches that already embedded."""
+        await upsert_verified_public_paper(
+            contract_conn, _paper_with_pdf_url("fence-resume", _TRUSTED_PDF_URL)
+        )
+        raise EmbeddingBatchError(
+            "batch 2/4 failed: connection reset",
+            completed_chunks=[
+                ChunkForEmbedding(
+                    chunk_index=0,
+                    content="Superseded content",
+                    page_number=1,
+                    start_char=0,
+                    end_char=18,
+                )
+            ],
+            completed_point_ids=["vec-superseded"],
+        )
+
+    processor = MagicMock()
+    processor.process = AsyncMock(side_effect=_promote_then_fail_midway)
+
+    with pytest.raises(RuntimeError, match="source changed while it was being processed") as raised:
+        await run_process_pdf(
+            paper_id, pdf_path, SharedConnPool(contract_conn), processor, MagicMock()
+        )
+
+    message = str(raised.value)
+    assert "chunks saved" not in message, "the message must not claim a discarded save"
+    assert "Process the paper again" in message, "the message must name the remedy"
+    assert "Embedding service" not in message, (
+        "the source change, not the embedding service, is why this run kept nothing"
+    )
+
+    promoted = await contract_conn.fetchrow(
+        """SELECT p.visibility_scope,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["chunk_count"] == 0, "resumable content from the replaced file was saved"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_chunk_commit_rejected_when_an_already_public_row_changes_source(
+    contract_conn, tmp_path: Path
+) -> None:
+    """A public row invalidates stored content and refuses an in-flight commit.
+
+    The refresh resets content derived from the previous URL. Independently,
+    the commit-time fence rejects the in-flight run because its download premise
+    no longer matches the row. Both protections must agree that content from the
+    superseded URL is unusable.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:296
+    from paper_ingestion.services.pdf_workflow import (
+        PDFSourceSupersededError,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_verified_public_paper(
+        contract_conn, _paper_with_pdf_url("fence-public-row", _TRUSTED_PDF_URL)
+    )
+    assert seeded["visibility_scope"] == "public", "precondition: the row starts out public"
+    paper_id = int(seeded["id"])
+    pdf_path = tmp_path / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\ntrusted")
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $2 WHERE id = $1",
+        paper_id,
+        str(pdf_path),
+    )
+
+    async def _refresh_the_public_row(*_args, **_kwargs):
+        """Move the public row on to the adapter's next revision URL mid-run."""
+        await upsert_verified_public_paper(
+            contract_conn, _paper_with_pdf_url("fence-public-row", _REFRESHED_PDF_URL)
+        )
+        return _extraction("Superseded")
+
+    processor = MagicMock()
+    processor.process = AsyncMock(side_effect=_refresh_the_public_row)
+
+    with pytest.raises(PDFSourceSupersededError):
+        await run_process_pdf(
+            paper_id, pdf_path, SharedConnPool(contract_conn), processor, MagicMock()
+        )
+
+    refreshed = await contract_conn.fetchrow(
+        """SELECT p.pdf_url, p.pdf_local_path, p.chunked_at,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+    assert refreshed["pdf_url"] == _REFRESHED_PDF_URL
+    assert refreshed["chunk_count"] == 0, "content derived from the previous URL was committed"
+    assert refreshed["chunked_at"] is None
+    assert refreshed["pdf_local_path"] is None
+
+
+class _PauseAfterFetchrow:
+    """Delegate to a real connection, pausing once after a selected row read."""
+
+    def __init__(self, conn, sql_fragment: str) -> None:
+        self._conn = conn
+        self._sql_fragment = sql_fragment
+        self.paused = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def fetchrow(self, sql: str, *args):
+        row = await self._conn.fetchrow(sql, *args)
+        if not self.paused.is_set() and self._sql_fragment in sql:
+            self.paused.set()
+            await self.release.wait()
+        return row
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
+async def _wait_for_database_lock(conn, backend_pid: int) -> None:
+    """Wait until one known backend is blocked on a PostgreSQL lock."""
+    for _ in range(200):
+        wait_event_type = await conn.fetchval(
+            "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+            backend_pid,
+        )
+        if wait_event_type == "Lock":
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"backend {backend_pid} never waited on the paper row lock")
+
+
+@pytest.mark.contract
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_source_refresh_and_highlight_creation_share_the_paper_row_lock(
+    test_db_pool,
+) -> None:
+    """Concurrent refreshes and annotations keep one generation order."""
+    from paper_ingestion.models import HighlightCreate, HighlightRect, Rect
+    from paper_ingestion.routers.highlights import create_highlight
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+
+    source_id = "generation-lock-source"
+    source_v1 = _paper_with_pdf_url(source_id, _TRUSTED_PDF_URL)
+    source_v2 = _paper_with_pdf_url(source_id, _REFRESHED_PDF_URL)
+    async with test_db_pool.acquire() as setup_conn:
+        source_row = await upsert_verified_public_paper(setup_conn, source_v1)
+
+    async with test_db_pool.acquire() as stale_conn:
+        async with test_db_pool.acquire() as fresh_conn:
+            async with test_db_pool.acquire() as observer_conn:
+                paused_stale_conn = _PauseAfterFetchrow(
+                    stale_conn,
+                    "SELECT pdf_url FROM papers",
+                )
+                stale_refresh = asyncio.create_task(
+                    upsert_verified_public_paper(paused_stale_conn, source_v1)
+                )
+                await paused_stale_conn.paused.wait()
+                fresh_refresh = asyncio.create_task(
+                    upsert_verified_public_paper(fresh_conn, source_v2)
+                )
+                try:
+                    await _wait_for_database_lock(
+                        observer_conn,
+                        fresh_conn.get_server_pid(),
+                    )
+                finally:
+                    paused_stale_conn.release.set()
+                    await asyncio.gather(
+                        stale_refresh,
+                        fresh_refresh,
+                        return_exceptions=True,
+                    )
+                stale_refresh.result()
+                fresh_refresh.result()
+
+    async with test_db_pool.acquire() as check_conn:
+        refreshed = await check_conn.fetchrow(
+            "SELECT pdf_url, content_generation FROM papers WHERE id = $1",
+            source_row["id"],
+        )
+    assert refreshed["pdf_url"] == _REFRESHED_PDF_URL
+    assert refreshed["content_generation"] == 1
+
+    highlight_id = "generation-lock-highlight"
+    highlight_v1 = _paper_with_pdf_url(highlight_id, _TRUSTED_PDF_URL)
+    highlight_v2 = _paper_with_pdf_url(highlight_id, _REFRESHED_PDF_URL)
+    async with test_db_pool.acquire() as setup_conn:
+        user_id = int(
+            await setup_conn.fetchval(
+                "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+                "generation-lock@example.test",
+            )
+        )
+        highlight_paper = await upsert_verified_public_paper(setup_conn, highlight_v1)
+        await setup_conn.execute(
+            """UPDATE papers
+                  SET pdf_downloaded = TRUE, pdf_local_path = '/tmp/generation-lock.pdf'
+                WHERE id = $1""",
+            highlight_paper["id"],
+        )
+
+    rect = HighlightRect(
+        boundingRect=Rect(x0=0.1, y0=0.1, x1=0.2, y1=0.2),
+        rects=[Rect(x0=0.1, y0=0.1, x1=0.2, y1=0.2)],
+    )
+    body = HighlightCreate(page=1, rect=rect, quote="Locked document")
+    handler = getattr(create_highlight, "__wrapped__", create_highlight)
+
+    async with test_db_pool.acquire() as highlight_conn:
+        async with test_db_pool.acquire() as promotion_conn:
+            async with test_db_pool.acquire() as observer_conn:
+                paused_highlight_conn = _PauseAfterFetchrow(
+                    highlight_conn,
+                    "SELECT p.source_type FROM papers p",
+                )
+                highlight_task = asyncio.create_task(
+                    handler(
+                        MagicMock(),
+                        int(highlight_paper["id"]),
+                        body,
+                        SharedConnPool(paused_highlight_conn),
+                        user_id,
+                    )
+                )
+                await paused_highlight_conn.paused.wait()
+                promotion_task = asyncio.create_task(
+                    upsert_verified_public_paper(promotion_conn, highlight_v2)
+                )
+                try:
+                    await _wait_for_database_lock(
+                        observer_conn,
+                        promotion_conn.get_server_pid(),
+                    )
+                finally:
+                    paused_highlight_conn.release.set()
+                    await asyncio.gather(
+                        highlight_task,
+                        promotion_task,
+                        return_exceptions=True,
+                    )
+                created = highlight_task.result()
+                promotion_task.result()
+
+    assert created.stale is False
+    async with test_db_pool.acquire() as check_conn:
+        stale = await check_conn.fetchval(
+            """SELECT h.content_generation <> p.content_generation
+                 FROM paper_highlights h
+                 JOIN papers p ON p.id = h.paper_id
+                WHERE h.id = $1""",
+            created.id,
+        )
+    assert stale is True
+
+
+# ---------------------------------------------------------------------------
+# The promotion discard without a database: the delete it issues and the reset
+# state the record it returns carries.
+# ---------------------------------------------------------------------------
+
+
+_PROMOTED_PAPER_ID = 4242
+_PROMOTED_ROW = {
+    "id": _PROMOTED_PAPER_ID,
+    "external_id": "promotion-discard",
+    "pdf_url": _TRUSTED_PDF_URL,
+    "pdf_downloaded": True,
+    "pdf_local_path": f"/data/pdfs/{_PROMOTED_PAPER_ID}.pdf",
+    "chunked_at": datetime(2026, 1, 1, tzinfo=UTC),
+    "is_insert": False,
+}
+_RESET_ROW = {
+    **_PROMOTED_ROW,
+    "pdf_downloaded": False,
+    "pdf_local_path": None,
+    "chunked_at": None,
+}
+
+
+def _promoting_conn(*reads: object) -> AsyncMock:
+    """Return a connection mock answering the promotion's ``fetchrow`` reads in order.
+
+    The reads are the pre-promotion state, the upserted row, and — only when the
+    promotion discards — the row its derived-state reset returns.
+    """
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=list(reads))
+    # asyncpg reports the rows a statement removed in its command tag.
+    conn.execute = AsyncMock(return_value="DELETE 3")
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refreshing a public row to a different source URL deletes its chunk rows."""
+    from paper_ingestion.services.pdf_workflow import (
+        _DELETE_DERIVED_CHUNKS_SQL,
+        upsert_verified_public_paper,
+    )
+
+    promoted = _PROMOTED_ROW
+    conn = _promoting_conn(
+        {"visibility_scope": "public", "pdf_url": _SUPERSEDED_PDF_URL},
+        promoted,
+        _RESET_ROW,
+    )
+
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+        record = await upsert_verified_public_paper(
+            conn, _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL)
+        )
+
+    conn.execute.assert_awaited_once_with(_DELETE_DERIVED_CHUNKS_SQL, 4242)
+    assert record["pdf_downloaded"] is False
+    assert record["pdf_local_path"] is None
+    assert record["chunked_at"] is None
+
+    logged = [r for r in caplog.records if r.name == "paper_ingestion.services.pdf_workflow"]
+    assert len(logged) == 1, f"expected one discard record, got {[r.getMessage() for r in logged]}"
+    assert logged[0].levelno == logging.INFO
+    assert logged[0].args == (3, 4242, "promotion-discard"), (
+        "the record must carry the rows removed, the paper id and its external id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promotion_records_the_id_of_the_paper_it_discarded() -> None:
+    """A discarding promotion appends its paper id to the caller's collector.
+
+    The collector is the only thing that makes the storage a discard leaves
+    behind reachable: callers drain it after their transaction commits, and an
+    id that is never appended is storage nothing will ever free.
+    """
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+
+    conn = _promoting_conn(
+        {"visibility_scope": "private", "pdf_url": _SUPERSEDED_PDF_URL},
+        _PROMOTED_ROW,
+        _RESET_ROW,
+    )
+    collected: list[int] = []
+
+    await upsert_verified_public_paper(
+        conn,
+        _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL),
+        discarded_content_ids=collected,
+    )
+
+    assert collected == [_PROMOTED_PAPER_ID], (
+        f"the discarded paper's id must reach the caller's collector, got {collected}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promotion_that_discards_nothing_records_no_id() -> None:
+    """A promotion leaving the content in place hands the collector nothing.
+
+    An unchanged source URL keeps its derived content, so the reclaim pass must
+    never be handed an id whose files and vector points the paper still points
+    at.
+    """
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+
+    conn = _promoting_conn(
+        {"visibility_scope": "public", "pdf_url": _TRUSTED_PDF_URL},
+        _PROMOTED_ROW,
+    )
+    collected: list[int] = []
+
+    record = await upsert_verified_public_paper(
+        conn,
+        _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL),
+        discarded_content_ids=collected,
+    )
+
+    assert collected == [], f"nothing was discarded, so no id may be recorded: {collected}"
+    conn.execute.assert_not_awaited()
+    assert record["pdf_local_path"] == _PROMOTED_ROW["pdf_local_path"]
+
+
+# ---------------------------------------------------------------------------
+# Reclaiming the storage a discard left behind: what it removes, the premise it
+# re-reads before removing anything, and the failures it absorbs.
+# ---------------------------------------------------------------------------
+
+_RECLAIMED_PAPER_ID = 4242
+_FRESHLY_DOWNLOADED_PDF = b"%PDF-1.4 freshly downloaded"
+_FRESHLY_RENDERED_PAGE = b"freshly rendered"
+
+
+def _stored_content_for_reclaim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """Point both storage roots at *tmp_path* and fill them for the reclaimed paper.
+
+    Returns the stored PDF path and the page-image directory a completed run
+    would have left behind.
+    """
+    pdf_root = tmp_path / "pdfs"
+    snapshot_root = tmp_path / "snapshots"
+    pdf_root.mkdir()
+    pdf_path = pdf_root / f"{_RECLAIMED_PAPER_ID}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 superseded")
+    snapshot_dir = snapshot_root / str(_RECLAIMED_PAPER_ID)
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "page_1.png").write_bytes(b"")
+    monkeypatch.setattr(pdf_workflow_module, "PDF_STORAGE_PATH", str(pdf_root))
+    monkeypatch.setattr(pdf_workflow_module, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
+    return pdf_path, snapshot_dir
+
+
+def _record_reclaimed_vectors(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Replace the vector delete with a recorder and return the list it fills."""
+    deleted: list[int] = []
+
+    async def _delete(paper_id: int) -> None:
+        deleted.append(paper_id)
+
+    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    return deleted
+
+
+class _PaperMutationPool:
+    """Pool fake whose lock probes model one PostgreSQL advisory-lock session."""
+
+    def __init__(self, *, discarded: bool) -> None:
+        self.discarded = discarded
+        self.lock = asyncio.Lock()
+        self.contended = asyncio.Event()
+        self.lock_binds: list[tuple[str, tuple[object, ...]]] = []
+        self.unlock_binds: list[tuple[str, tuple[object, ...]]] = []
+
+    def acquire(self):
+        pool = self
+
+        class _Acquire:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def fetchrow(self, statement: str, *args: object):
+                pool.lock_binds.append((statement, args))
+                if pool.lock.locked():
+                    pool.contended.set()
+                    return {"acquired": False}
+                await pool.lock.acquire()
+                return {"acquired": True}
+
+            async def fetchval(self, _statement: str, *_args: object):
+                return pool.discarded
+
+            async def execute(self, statement: str, *args: object):
+                pool.unlock_binds.append((statement, args))
+                pool.lock.release()
+
+        return _Acquire()
+
+
+@pytest.mark.asyncio
+async def test_reclamation_waits_for_a_publisher_then_spares_its_fresh_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publisher that holds the lock first makes reclamation observe its new state."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    vectors = ["superseded"]
+    deleted: list[int] = []
+    pool = _PaperMutationPool(discarded=True)
+    publisher_started = asyncio.Event()
+    publisher_may_finish = asyncio.Event()
+
+    async def _delete(paper_id: int) -> None:
+        deleted.append(paper_id)
+        vectors.clear()
+
+    async def _publisher() -> None:
+        async with pdf_workflow_module._paper_mutation_connection(  # type: ignore[attr-defined]
+            pool,
+            _RECLAIMED_PAPER_ID,  # type: ignore[arg-type]
+        ):
+            publisher_started.set()
+            await publisher_may_finish.wait()
+            pool.discarded = False
+            vectors[:] = ["fresh"]
+            pdf_path.write_bytes(_FRESHLY_DOWNLOADED_PDF)
+            (snapshot_dir / "page_1.png").write_bytes(_FRESHLY_RENDERED_PAGE)
+
+    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    publisher = asyncio.create_task(_publisher())
+    await publisher_started.wait()
+    reclamation = asyncio.create_task(reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool))
+    await asyncio.wait_for(pool.contended.wait(), timeout=1)
+    publisher_may_finish.set()
+    await asyncio.gather(publisher, reclamation)
+
+    assert deleted == []
+    assert vectors == ["fresh"]
+    assert pdf_path.read_bytes() == _FRESHLY_DOWNLOADED_PDF
+    assert (snapshot_dir / "page_1.png").read_bytes() == _FRESHLY_RENDERED_PAGE
+    assert pool.lock_binds == [
+        ("SELECT pg_try_advisory_lock($1, $2) AS acquired", (1, _RECLAIMED_PAPER_ID)),
+        ("SELECT pg_try_advisory_lock($1, $2) AS acquired", (1, _RECLAIMED_PAPER_ID)),
+        ("SELECT pg_try_advisory_lock($1, $2) AS acquired", (1, _RECLAIMED_PAPER_ID)),
+    ]
+    assert pool.unlock_binds == [
+        ("SELECT pg_advisory_unlock($1, $2)", (1, _RECLAIMED_PAPER_ID)),
+        ("SELECT pg_advisory_unlock($1, $2)", (1, _RECLAIMED_PAPER_ID)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reclamation_finishes_before_a_waiting_publisher_writes_fresh_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publisher waiting on reclamation writes the generation that survives it."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    vectors = ["superseded"]
+    deleted_started = asyncio.Event()
+    delete_may_finish = asyncio.Event()
+    pool = _PaperMutationPool(discarded=True)
+
+    async def _delete(_paper_id: int) -> None:
+        deleted_started.set()
+        await delete_may_finish.wait()
+        vectors.clear()
+
+    async def _publisher() -> None:
+        async with pdf_workflow_module._paper_mutation_connection(  # type: ignore[attr-defined]
+            pool,
+            _RECLAIMED_PAPER_ID,  # type: ignore[arg-type]
+        ):
+            pool.discarded = False
+            vectors[:] = ["fresh"]
+            pdf_path.write_bytes(_FRESHLY_DOWNLOADED_PDF)
+            snapshot_dir.mkdir()
+            (snapshot_dir / "page_1.png").write_bytes(_FRESHLY_RENDERED_PAGE)
+
+    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    reclamation = asyncio.create_task(reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool))
+    await deleted_started.wait()
+    publisher = asyncio.create_task(_publisher())
+    await asyncio.wait_for(pool.contended.wait(), timeout=1)
+    delete_may_finish.set()
+    await asyncio.gather(reclamation, publisher)
+
+    assert vectors == ["fresh"]
+    assert pdf_path.read_bytes() == _FRESHLY_DOWNLOADED_PDF
+    assert (snapshot_dir / "page_1.png").read_bytes() == _FRESHLY_RENDERED_PAGE
+
+
+@pytest.mark.asyncio
+async def test_reclamation_removes_the_vectors_the_stored_pdf_and_the_page_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A paper still describing a discard gives up all three at once."""
+    from paper_ingestion.services.pdf_workflow import (
+        _DISCARDED_CONTENT_STATE_SQL,
+        reclaim_discarded_paper_content,
+    )
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    pool, conn = make_pool_and_conn(fetchval_return=True)
+
+    await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert (
+        conn.fetchval.await_args_list
+        == [call(_DISCARDED_CONTENT_STATE_SQL, _RECLAIMED_PAPER_ID)] * 2
+    ), (
+        "the premise gates the vector delete and is then re-read for the file steps, "
+        f"got {conn.fetchval.await_args_list}"
+    )
+    conn.fetchrow.assert_awaited_once_with(
+        "SELECT pg_try_advisory_lock($1, $2) AS acquired", 1, _RECLAIMED_PAPER_ID
+    )
+    conn.execute.assert_awaited_once_with(
+        "SELECT pg_advisory_unlock($1, $2)", 1, _RECLAIMED_PAPER_ID
+    )
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
+    assert not pdf_path.exists(), "the PDF stored for the superseded source URL must be removed"
+    assert not snapshot_dir.exists(), "page images must be removed whole, not page by page"
+
+
+@pytest.mark.asyncio
+async def test_reclamation_skips_a_paper_that_stores_content_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A paper re-downloaded inside the deferral window keeps every file and vector.
+
+    The discard leaves exactly the state the download sweep selects on and the
+    promotion has just written the source URL it fetches, so a fresh PDF, fresh
+    page images and fresh vectors can already be in place by the time the
+    deferred reclamation runs. The re-read of the paper's state is what stops
+    those being deleted, and it reports this cause at INFO because it is the
+    routine one.
+    """
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    pool, _conn = make_pool_and_conn(fetchval_return=False)
+
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == [], "a paper storing content again must keep its vectors"
+    assert pdf_path.exists(), "the freshly downloaded PDF must survive"
+    assert snapshot_dir.exists(), "the freshly rendered page images must survive"
+    assert [r.levelno for r in caplog.records] == [logging.INFO]
+    assert "stores derived content again" in caplog.records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_reclamation_reports_a_paper_that_no_longer_exists_as_content_left_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A deleted paper row leaves its storage behind, and the record says so.
+
+    ``IS NULL`` never evaluates to NULL, so the read answering NULL means the
+    row itself is gone rather than its columns being unset. Nothing will ask for
+    that paper's files or vector points again, so this is the one skip that
+    strands storage for good and it must not be reported as the routine cause.
+    """
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    pool, _conn = make_pool_and_conn(fetchval_return=None)
+
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == []
+    assert pdf_path.exists()
+    assert snapshot_dir.exists()
+    assert [r.levelno for r in caplog.records] == [logging.WARNING], (
+        f"a permanently stranded paper must not log as routine: {caplog.records}"
+    )
+    assert "left behind" in caplog.records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_reclamation_spares_content_stored_after_the_premise_was_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A download committing inside the vector round trip keeps its file and page images.
+
+    The state a discard leaves is exactly what the download sweep selects on,
+    and the vector-store round trip sits between the premise read and the file
+    steps. This models the download committing inside that gap: the state read
+    before the round trip is already stale by the time the files would be
+    removed, so a single read cannot decide the file steps.
+    """
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    page_image = snapshot_dir / "page_1.png"
+    pool, conn = make_pool_and_conn()
+    conn.fetchval = AsyncMock(side_effect=[True, False])
+
+    async def _download_commits_during_the_vector_delete(paper_id: int) -> None:
+        pdf_path.write_bytes(_FRESHLY_DOWNLOADED_PDF)
+        page_image.write_bytes(_FRESHLY_RENDERED_PAGE)
+
+    monkeypatch.setattr(
+        pdf_workflow_module,
+        "delete_paper_vectors",
+        _download_commits_during_the_vector_delete,
+    )
+
+    await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert pdf_path.exists() and pdf_path.read_bytes() == _FRESHLY_DOWNLOADED_PDF, (
+        "the PDF the download stored inside the window must survive"
+    )
+    assert page_image.exists() and page_image.read_bytes() == _FRESHLY_RENDERED_PAGE, (
+        "the page images rendered from it must survive with it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reclamation_skips_when_the_state_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unreadable premise leaves the content alone and never reaches the caller."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    pool, _conn = make_pool_and_conn(raise_on_acquire=RuntimeError("pool exhausted"))
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == []
+    assert pdf_path.exists()
+    assert snapshot_dir.exists()
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_reclamation_absorbs_a_vector_store_failure_and_still_frees_the_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A vector store that refuses the delete does not stop the file steps."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+
+    async def _fail(paper_id: int) -> None:
+        raise RuntimeError("vector store unavailable")
+
+    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _fail)
+    pool, _conn = make_pool_and_conn(fetchval_return=True)
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert not pdf_path.exists()
+    assert not snapshot_dir.exists()
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_reclamation_absorbs_an_unremovable_stored_pdf_and_still_frees_the_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stored PDF the filesystem refuses to unlink does not stop the image step."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    # A directory occupying the stored PDF's name: unlink refuses to remove it.
+    pdf_path.unlink()
+    pdf_path.mkdir()
+    pool, _conn = make_pool_and_conn(fetchval_return=True)
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
+    assert pdf_path.exists(), "the failing step leaves what it could not remove"
+    assert not snapshot_dir.exists(), "the step after the failing one still runs"
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_reclamation_absorbs_an_unremovable_page_image_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A page-image directory the filesystem refuses to remove never reaches the caller."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    # A plain file occupying the image directory's name: rmtree refuses it.
+    shutil.rmtree(snapshot_dir)
+    snapshot_dir.write_bytes(b"not a directory")
+    pool, _conn = make_pool_and_conn(fetchval_return=True)
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
+    assert not pdf_path.exists(), "the earlier step still ran"
+    assert snapshot_dir.exists()
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_reclamation_ignores_a_paper_that_never_had_page_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A paper with no rendered pages logs nothing: the absent directory is expected."""
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    shutil.rmtree(snapshot_dir)
+    pool, _conn = make_pool_and_conn(fetchval_return=True)
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
+
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
+    assert not pdf_path.exists()
+    assert caplog.records == []
+
+
+# ---------------------------------------------------------------------------
+# A run voided by a promotion gives up what it wrote outside PostgreSQL.
+# ---------------------------------------------------------------------------
+
+_PROMOTED_PDF_URL = "https://arxiv.org/pdf/2401.00099.pdf"
+
+
+def _promoted_mid_run_answers():
+    """Return a ``fetchval`` side effect for a run promoted between start and commit.
+
+    Answers are chosen by statement rather than by call order, so a read added
+    to the workflow cannot silently shift every later answer by one.
+    """
+    from paper_ingestion.services.pdf_workflow import (
+        _DISCARDED_CONTENT_STATE_SQL,
+        _LOCKED_PAPER_SOURCE_URL_SQL,
+        _PAPER_PDF_READY_SQL,
+        _PAPER_SOURCE_URL_SQL,
+    )
+
+    def _answer(statement: str, *_args: object) -> object:
+        if statement == _PAPER_SOURCE_URL_SQL:
+            return _MOCKED_SOURCE_URL  # the URL this run starts against
+        if statement == _PAPER_PDF_READY_SQL:
+            return True  # the row still names the file it was handed
+        if statement == _LOCKED_PAPER_SOURCE_URL_SQL:
+            return _PROMOTED_PDF_URL  # the promotion landed while it worked
+        if statement == _DISCARDED_CONTENT_STATE_SQL:
+            return True  # and cleared the columns describing derived content
+        return 0  # no chunk rows are stored yet
+
+    return _answer
+
+
+def _voided_run(pdf_path: Path, conn: AsyncMock):
+    """Return the ``run_process_pdf`` keyword arguments for a promoted paper."""
+    pool, _ = make_pool_and_conn(conn=conn)
+    processor = MagicMock()
+    processor.process = AsyncMock(return_value=_extraction("Voided"))
+    return {
+        "paper_id": _RECLAIMED_PAPER_ID,
+        "pdf_path": pdf_path,
+        "db_pool": pool,
+        "pdf_processor": processor,
+        "embedder": MagicMock(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_voided_by_a_promotion_gives_up_its_vectors_and_page_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A promotion landing mid-run leaves behind neither page images nor vector points.
+
+    The run derives content and writes its vectors before the commit fence
+    rejects it, and the rollback returns only the SQL. Point ids are
+    deterministic per paper and chunk index, so what it wrote outside
+    PostgreSQL has to be given up while the per-paper lock still excludes any
+    other run for this paper.
+    """
+    from paper_ingestion.services.pdf_workflow import PDFSourceSupersededError
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _promoted_mid_run_answers()
+
+    with pytest.raises(PDFSourceSupersededError) as raised:
+        await run_process_pdf(**_voided_run(pdf_path, conn))
+
+    assert "no longer carries the source URL this run processed" in str(raised.value)
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID], (
+        "the vector points the voided run wrote must be given up"
+    )
+    assert not snapshot_dir.exists(), "its page images must not stay servable under the paper"
+    assert not pdf_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_reclamation_failure_still_reports_the_promotion_to_the_caller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Storage the cleanup cannot free is recorded, never raised over the run's own error.
+
+    The caller retries from the paper's current source URL on this error, so an
+    incidental cleanup failure must not reach it wearing a different type.
+    """
+    from paper_ingestion.services.pdf_workflow import PDFSourceSupersededError
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    _record_reclaimed_vectors(monkeypatch)
+
+    def _refuse_publication(_storage_path: Path):
+        raise RuntimeError("publication lock unavailable")
+
+    monkeypatch.setattr(pdf_workflow_module, "pdf_publish_operation", _refuse_publication)
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _promoted_mid_run_answers()
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+        with pytest.raises(PDFSourceSupersededError):
+            await run_process_pdf(**_voided_run(pdf_path, conn))
+
+    assert snapshot_dir.exists(), "the step that failed is the one under test"
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_run_voided_while_its_embedding_batch_fails_gives_up_what_it_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A promotion landing during a failing embedding run reclaims that run's storage too.
+
+    The batches that did embed wrote their vectors and page images, and the
+    partial save meant to make them resumable is refused by the same fence. The
+    run therefore keeps nothing in PostgreSQL, so what it wrote outside has to
+    be given up as well — this exit is not a lesser one than the fully embedded
+    run's.
+    """
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
+    pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
+    deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _promoted_mid_run_answers()
+    voided = _voided_run(pdf_path, conn)
+    voided["pdf_processor"].process = AsyncMock(
+        side_effect=EmbeddingBatchError(
+            "batch 2/4 failed: connection reset",
+            completed_chunks=[
+                ChunkForEmbedding(
+                    chunk_index=0,
+                    content="Voided content",
+                    page_number=1,
+                    start_char=0,
+                    end_char=14,
+                )
+            ],
+            completed_point_ids=["vec-voided"],
+        )
+    )
+
+    from paper_ingestion.services.pdf_workflow import PDFSourceSupersededError  # noqa: PLC0415
+
+    # The type, not just the message: the message alone reads the same whether or
+    # not this exit reaches the handler that gives the storage back.
+    with pytest.raises(
+        PDFSourceSupersededError, match="source changed while it was being processed"
+    ):
+        await run_process_pdf(**voided)
+
+    assert deleted_vector_ids == [_RECLAIMED_PAPER_ID], (
+        "the vector points the completed batches wrote must be given up"
+    )
+    assert not snapshot_dir.exists(), "its page images must not stay servable under the paper"
+    assert not pdf_path.exists()

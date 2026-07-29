@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { LearningFocusSection } from '@/components/my-day/sections/LearningFocusSection';
 import type { MyDayResponse, RetentionStats } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -56,16 +56,13 @@ function makeStats(due_now: number): RetentionStats {
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <LearningFocusSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <LearningFocusSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -82,7 +79,7 @@ describe('LearningFocusSection', () => {
   it('shows "Review now →" button when due_now > 0', async () => {
     vi.mocked(getStats).mockResolvedValue(makeStats(5));
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByText('Review now →')).toBeInTheDocument();
     // The "no reviews" message should NOT appear
@@ -92,7 +89,7 @@ describe('LearningFocusSection', () => {
   it('shows "No reviews pending. ✓" text when due_now === 0', async () => {
     vi.mocked(getStats).mockResolvedValue(makeStats(0));
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByText('No reviews pending. ✓')).toBeInTheDocument();
     // The "Review now →" button should NOT appear

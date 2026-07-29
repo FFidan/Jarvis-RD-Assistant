@@ -37,8 +37,8 @@ on:
     inputs:
       cold_install_version:
         description: >-
-          Published image version to cold-install (no v prefix, e.g.
-          1.1.0-rc.1). Leave empty to run the standard smoke matrix instead.
+          Immutable published image identity: stable X.Y.Z or lowercase
+          40-hex commit SHA. Leave empty to run the standard smoke matrix.
         required: false
         default: ""
 
@@ -163,12 +163,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      JARVIS_VERSION: ${{ inputs.cold_install_version }}
+      COLD_INSTALL_IMAGE_TAG: ${{ inputs.cold_install_version }}
       # An empty Docker config = no registry credentials: proves anonymous
       # pulls of the published images work for first-time users.
       DOCKER_CONFIG: /tmp/jarvis-empty-docker-config
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Validate the immutable image identity
+        run: |
+          if [[ "$COLD_INSTALL_IMAGE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Testing release image tag ${COLD_INSTALL_IMAGE_TAG}."
+          elif [[ "$COLD_INSTALL_IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Testing commit-addressed images ${COLD_INSTALL_IMAGE_TAG}."
+            echo "This SHA selects commit-addressed verification images; it is not a Git tag, version, prerelease, or GitHub Release."
+          else
+            echo "::error::cold_install_version must be X.Y.Z[-PRERELEASE] or a lowercase 40-hex commit SHA"
+            exit 2
+          fi
 
       - name: Free disk space
         run: |
@@ -194,7 +206,8 @@ jobs:
           # tee's exit 0. This job is release-blocking; without pipefail a real
           # install failure would be swallowed and reported as a pass.
           set -o pipefail
-          bash scripts/first-run-smoke.sh 2>&1 | tee /tmp/cold-install.log
+          bash scripts/first-run-smoke.sh \
+            --image-tag "$COLD_INSTALL_IMAGE_TAG" 2>&1 | tee /tmp/cold-install.log
 
       - name: Assert the install built nothing
         run: |
@@ -210,6 +223,6 @@ jobs:
           kill "$(cat /tmp/data-root-sampler.pid)" 2>/dev/null || true
           peak="$(sort -n /tmp/data-root-usage.samples 2>/dev/null | tail -1)"
           {
-            echo "### Cold install (version ${JARVIS_VERSION})"
+            echo "### Cold install (image tag ${COLD_INSTALL_IMAGE_TAG})"
             echo "Peak Docker data-root usage: $(( ${peak:-0} / 1000000000 )) GB"
           } >> "$GITHUB_STEP_SUMMARY"

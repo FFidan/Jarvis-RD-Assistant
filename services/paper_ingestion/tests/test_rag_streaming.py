@@ -11,6 +11,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 from paper_ingestion.rag.streaming import (
     _SYSTEM_CROSS_PAPER_RAG,
@@ -72,22 +73,69 @@ def _make_cross_paper_embedder(chunks: list[dict] | None = None):
     return embedder
 
 
+_STORED_CHUNK_INDEXES = range(4)
+
+
 def _make_cross_paper_pool(paper_rows: list[dict] | None = None):
-    """Return a mock asyncpg Pool that serves paper metadata for cross-paper RAG."""
+    """Return a mock asyncpg Pool that serves paper metadata for cross-paper RAG.
+
+    The paper_chunks lookup answers that each requested paper stores its first
+    few chunk indexes, standing in for a fully processed corpus.
+    """
     rows = (
         paper_rows
         if paper_rows is not None
         else [{"id": 1, "title": "Alpha Paper", "authors": [], "url": "http://example.com/1"}]
     )
+
+    async def _fetch(sql, *args):
+        if "paper_chunks" not in sql:
+            return rows
+        return [
+            {"paper_id": paper_id, "chunk_index": index}
+            for paper_id in args[0]
+            for index in _STORED_CHUNK_INDEXES
+        ]
+
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=None)
-    conn.fetch = AsyncMock(return_value=rows)
+    conn.fetch = AsyncMock(side_effect=_fetch)
 
     pool = MagicMock()
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
     pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
     return pool
+
+
+def _pool_storing_chunk_keys(
+    stored_keys: list[tuple[int, int]],
+    *,
+    paper_row: dict | None = None,
+    paper_rows: list[dict] | None = None,
+):
+    """Return a pool whose ``paper_chunks`` lookup answers with exactly *stored_keys*.
+
+    ``paper_row`` serves the single-paper title read and ``paper_rows`` the
+    cross-paper metadata read; the caller-library read answers empty, which is
+    what a reader with no private memberships looks like.
+    """
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=paper_row)
+
+    async def _fetch(sql, *_args):
+        if "paper_chunks" in sql:
+            return [{"paper_id": pid, "chunk_index": index} for pid, index in stored_keys]
+        return paper_rows or []
+
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    pool, _ = make_pool_and_conn(conn=conn)
+    return pool
+
+
+def _echoing_rerank():
+    """Rerank double returning what it was handed, so an earlier drop stays visible."""
+    return AsyncMock(side_effect=lambda _question, candidates, top_k: candidates[:top_k])
 
 
 # ---------------------------------------------------------------------------
@@ -589,3 +637,105 @@ async def test_cross_paper_under_budget_keeps_all_chunks():
     assert {s["content"] for s in result.sources} == {c["content"] for c in chunks}
     user_content = result.messages[-1]["content"]
     assert all(f"small-{pid}" in user_content for pid in (1, 2))
+
+
+# ---------------------------------------------------------------------------
+# Excerpt liveness: an excerpt reaches the caller only while a stored
+# paper_chunks row still backs it.
+# ---------------------------------------------------------------------------
+
+_STORED_EXCERPT = "Text the paper still stores."
+_UNBACKED_EXCERPT = "Text no stored chunk row backs."
+
+
+@pytest.mark.asyncio
+async def test_single_paper_rag_drops_an_excerpt_with_no_stored_chunk_row():
+    """A retrieved excerpt the paper no longer stores reaches neither prompt nor sources."""
+    from paper_ingestion.models import AskRequest
+
+    stored = {"content": _STORED_EXCERPT, "page_number": 1, "score": 0.90, "chunk_index": 0}
+    unbacked = {"content": _UNBACKED_EXCERPT, "page_number": 2, "score": 0.95, "chunk_index": 1}
+    embedder = _make_embedder(chunks=[stored, unbacked])
+    embedder.rerank_chunks = _echoing_rerank()
+    pool = _pool_storing_chunk_keys([(1, 0)], paper_row={"id": 1, "title": "Test Paper"})
+
+    messages, sources = await prepare_single_paper_rag(
+        embedder,
+        pool,
+        paper_id=1,
+        body=AskRequest(question="What does the paper say?", max_chunks=5),
+        http_client=AsyncMock(),
+        user_id=1,
+    )
+
+    assert [s["content"] for s in sources] == [_STORED_EXCERPT]
+    assert _UNBACKED_EXCERPT not in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_cross_paper_rag_drops_an_excerpt_with_no_stored_chunk_row():
+    """One paper losing its chunk rows costs only that paper's excerpt."""
+    from paper_ingestion.models import CrossPaperAskRequest
+
+    stored = {
+        "paper_id": 1,
+        "chunk_index": 0,
+        "content": _STORED_EXCERPT,
+        "page_number": 1,
+        "score": 0.90,
+    }
+    unbacked = {
+        "paper_id": 2,
+        "chunk_index": 0,
+        "content": _UNBACKED_EXCERPT,
+        "page_number": 1,
+        "score": 0.95,
+    }
+    embedder = _make_cross_paper_embedder(chunks=[stored, unbacked])
+    embedder.rerank_chunks = _echoing_rerank()
+    pool = _pool_storing_chunk_keys(
+        [(1, 0)],
+        paper_rows=[
+            {"id": 1, "title": "Alpha Paper", "authors": [], "url": "http://example.com/1"},
+            {"id": 2, "title": "Beta Paper", "authors": [], "url": "http://example.com/2"},
+        ],
+    )
+
+    result = await prepare_cross_paper_rag(
+        embedder,
+        pool,
+        body=CrossPaperAskRequest(question="What do the papers say?", decompose=False),
+        http_client=AsyncMock(),
+    )
+
+    assert hasattr(result, "sources"), f"Expected CrossPaperRagPrep; got {result!r}"
+    assert [s["content"] for s in result.sources] == [_STORED_EXCERPT]
+    assert _UNBACKED_EXCERPT not in result.messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_single_paper_rag_drops_an_excerpt_carrying_no_chunk_index():
+    """``chunk_index`` is NOT NULL in ``paper_chunks``, so a chunk without one matches nothing."""
+    from paper_ingestion.models import AskRequest
+
+    stored = {"content": _STORED_EXCERPT, "page_number": 1, "score": 0.90, "chunk_index": 0}
+    index_missing = {"content": "Text retrieved without an index.", "page_number": 2, "score": 0.95}
+    index_null = {
+        **index_missing,
+        "content": "Text retrieved with a null index.",
+        "chunk_index": None,
+    }
+    embedder = _make_embedder(chunks=[stored, index_missing, index_null])
+    embedder.rerank_chunks = _echoing_rerank()
+    pool = _pool_storing_chunk_keys([(1, 0)], paper_row={"id": 1, "title": "Test Paper"})
+
+    _messages, sources = await prepare_single_paper_rag(
+        embedder,
+        pool,
+        paper_id=1,
+        body=AskRequest(question="What does the paper say?", max_chunks=5),
+        http_client=AsyncMock(),
+        user_id=1,
+    )
+
+    assert [s["content"] for s in sources] == [_STORED_EXCERPT]

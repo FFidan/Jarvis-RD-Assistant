@@ -14,6 +14,8 @@ __all__ = [
     "make_contract_client",
     "patch_app_state",
     "patch_dependency_overrides",
+    "PITestAppOptions",
+    "patch_pi_test_app",
     "_make_pi_contract_app_with_litellm_sidecar",
     "_make_le_contract_app_with_litellm_sidecar",
 ]
@@ -21,13 +23,28 @@ __all__ = [
 import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
+from unittest.mock import MagicMock
 
 import httpx
 
 DEFAULT_CONTRACT_API_KEY = "contract-test-key-do-not-use-in-production-2026"
 
 _MISSING = object()
+
+
+@dataclass(frozen=True, slots=True)
+class PITestAppOptions:
+    """Explicit seams for a temporary Paper Ingestion test application."""
+
+    remove_owner_override: bool
+    override_db_dependency: bool = False
+    disable_limiter: bool = False
+    mock_http_client: bool = False
+    mock_embedder: bool = False
+    state_overrides: Mapping[str, Any] = field(default_factory=dict)
+    dependency_overrides: Mapping[Any, Any] = field(default_factory=dict)
 
 
 def _refresh_auth_settings() -> None:
@@ -58,7 +75,7 @@ def configure_contract_api_key(
 
 def make_contract_client(
     app: Any,
-    session_cookie: str | None,
+    session_cookie: str | None = None,
     *,
     api_key: str = DEFAULT_CONTRACT_API_KEY,
     base_url: str = "http://test",
@@ -129,6 +146,49 @@ def patch_dependency_overrides(
                 overrides.pop(key, None)
             else:
                 overrides[key] = value
+
+
+@contextmanager
+def patch_pi_test_app(
+    pool: Any,
+    *,
+    options: PITestAppOptions,
+) -> Iterator[Any]:
+    """Wire the Paper Ingestion app for a test and restore every changed seam."""
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
+
+    from jarvis_common import current_user_id_strict_with_owner_override
+
+    state = {"db_pool": pool, **dict(options.state_overrides)}
+    if options.mock_http_client:
+        state["http_client"] = MagicMock()
+    if options.mock_embedder:
+        state["embedder"] = MagicMock()
+
+    overrides = dict(options.dependency_overrides)
+    if options.override_db_dependency:
+        overrides[get_db_pool] = lambda: pool
+    removals = (
+        {current_user_id_strict_with_owner_override} if options.remove_owner_override else set()
+    )
+
+    limiter_was_enabled = limiter.enabled
+    if options.disable_limiter:
+        limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, state),
+            patch_dependency_overrides(
+                app,
+                set_overrides=overrides,
+                remove_overrides=removals,
+            ),
+        ):
+            yield app
+    finally:
+        if options.disable_limiter:
+            limiter.enabled = limiter_was_enabled
 
 
 # === Cluster 10: LiteLLM contract-app builders ===

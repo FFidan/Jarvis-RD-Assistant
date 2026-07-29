@@ -9,24 +9,15 @@ covered by the 2-user contract test in
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
-import asyncpg
 import pytest
 from jarvis_common.library import is_in_library
-
-
-def _make_conn(fetch_return: list[object]) -> AsyncMock:
-    """Mock Connection whose ``fetch`` yields ``fetch_return``."""
-    conn = AsyncMock(spec=asyncpg.Connection)
-    conn.fetch = AsyncMock(return_value=fetch_return)
-    return conn
+from jarvis_common.testing import make_conn
 
 
 @pytest.mark.asyncio
 async def test_is_in_library_true_when_row_present():
     """A matching ``user_library`` row maps to ``True`` and probes the pair."""
-    conn = _make_conn([{"?column?": 1}])
+    conn = make_conn(fetch_return=[{"?column?": 1}])
 
     result = await is_in_library(conn, user_id=42, paper_id=7)
 
@@ -39,7 +30,7 @@ async def test_is_in_library_true_when_row_present():
 @pytest.mark.asyncio
 async def test_is_in_library_false_when_no_row():
     """An empty result set maps to ``False`` (no membership)."""
-    conn = _make_conn([])
+    conn = make_conn(fetch_return=[])
 
     result = await is_in_library(conn, user_id=1, paper_id=2)
 

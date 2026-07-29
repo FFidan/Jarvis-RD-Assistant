@@ -8,11 +8,25 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
+
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from paper_ingestion.queries.predicates import EXCLUDED_STATE_SQL, VIEW_PREDICATES
+from paper_ingestion.queries.predicates import (
+    EXCLUDED_STATE_SQL,
+    VIEW_PREDICATES,
+    paper_visible_sql,
+)
 
 logger = logging.getLogger(__name__)
+
+# A pulse card renders its paper's title, authors and url to the deck owner, so
+# it may only reference a paper that carries shared scope.  Pulse promotes each
+# candidate to public scope in a per-card savepoint before the deck is
+# persisted; when that promotion does not complete, whatever row already owns
+# the external id stays as it is.  The card INSERT therefore re-reads the
+# persisted scope rather than assuming the promotion succeeded.
+_SHARED_PAPER_SQL = f"p.visibility_scope = '{PUBLIC_VISIBILITY_SCOPE}'"
 
 
 def assemble_deck(
@@ -38,6 +52,51 @@ def assemble_deck(
     # Ensure sorted (stage3 already sorts, but be defensive)
     top = sorted(scored, key=lambda sc: sc.final_score or 0.0, reverse=True)
     return top[:size]
+
+
+async def exclude_recently_dismissed(
+    db_pool: Any,
+    scored: list[ScoredCandidate],
+    user_id: int | None = None,
+) -> list[ScoredCandidate]:
+    """Drop candidates the deck owner rated down within the last 60 days.
+
+    One round trip resolves the whole candidate pool.  A candidate with no
+    ``papers`` row yet cannot carry feedback, so it is always kept.
+
+    Parameters
+    ----------
+    db_pool:
+        asyncpg connection pool.
+    scored:
+        Candidates in rank order; survivors keep that order.
+    user_id:
+        The deck owner.  ``None`` means single-tenant mode and matches
+        ``recommendation_feedback`` rows whose ``user_id`` is NULL.
+
+    Returns
+    -------
+    list[ScoredCandidate]
+        The candidates carrying no recent negative rating.
+    """
+    if not scored:
+        return []
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT p.external_id
+            FROM papers p
+            JOIN recommendation_feedback rf ON rf.paper_id = p.id
+            WHERE p.external_id = ANY($1::text[])
+              AND rf.signal = 'negative'
+              AND rf.created_at > NOW() - INTERVAL '60 days'
+              AND rf.user_id IS NOT DISTINCT FROM $2
+            """,
+            [sc.paper.external_id for sc in scored],
+            user_id,
+        )
+    dismissed = {row["external_id"] for row in rows}
+    return [sc for sc in scored if sc.paper.external_id not in dismissed]
 
 
 async def _persist_deck_inner(
@@ -91,52 +150,16 @@ async def _persist_deck_inner(
     # Delete old cards for this deck (idempotent replace)
     await conn.execute("DELETE FROM pulse_cards WHERE deck_id = $1", deck_id)
 
-    # -------------------------------------------------------------------------
-    # L3 safeguard — two-pass min-candidate guarantee
-    #
-    # Count how many of the incoming candidates would survive the 60-day
-    # negative-feedback exclusion before committing to it.  If fewer than 20
-    # survive we fall back to L1+L2 only (skip the NOT EXISTS clause) so the
-    # deck never shrinks to a stub.
-    # -------------------------------------------------------------------------
-    external_ids = [sc.paper.external_id for sc in cards]
-
-    # Count candidates that pass the 60d negative-feedback filter
-    l3_pass_count: int = await conn.fetchval(
-        """
-        SELECT COUNT(*)
-        FROM papers p
-        WHERE p.external_id = ANY($1::text[])
-          AND NOT EXISTS (
-              SELECT 1 FROM recommendation_feedback rf
-               WHERE rf.paper_id = p.id
-                 AND rf.signal = 'negative'
-                 AND rf.created_at > NOW() - INTERVAL '60 days'
-                 AND rf.user_id IS NOT DISTINCT FROM $2
-          )
-        """,
-        external_ids,
-        user_id,
-    )
-
-    _min_l3_candidates = 20
-    apply_l3_filter = l3_pass_count >= _min_l3_candidates
-    if not apply_l3_filter:
-        logger.warning(
-            "L3 hard-exclusion would leave only %d candidates; falling back to L1+L2",
-            l3_pass_count,
-        )
-
-    # Insert new cards one by one, counting actual successes
+    # Insert new cards one by one, counting actual successes.  Candidates the
+    # owner rated down are removed while the deck is being selected, so every
+    # card arriving here has already cleared that exclusion.
     successes = 0
     for rank, sc in enumerate(cards, start=1):
         reasoning_confidence_str = (
             sc.reasoning_confidence.value if sc.reasoning_confidence is not None else None
         )
-        if apply_l3_filter:
-            # Exclude papers with 60d negative feedback for this user
-            inserted_id = await conn.fetchval(
-                f"""
+        inserted_id = await conn.fetchval(
+            f"""
             INSERT INTO pulse_cards
                 (deck_id, user_id, paper_id, rank, score, llm_relevance, llm_novelty,
                  reasoning, signals, reasoning_verified, reasoning_confidence)
@@ -146,64 +169,28 @@ async def _persist_deck_inner(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
-              AND NOT ({EXCLUDED_STATE_SQL})
-              -- Exclude papers with 60d negative feedback for this user
-              AND NOT EXISTS (
-                  SELECT 1 FROM recommendation_feedback rf
-                   WHERE rf.paper_id = p.id
-                     AND rf.signal = 'negative'
-                     AND rf.created_at > NOW() - INTERVAL '60 days'
-                     AND rf.user_id IS NOT DISTINCT FROM $11
-              )
-            ON CONFLICT (deck_id, paper_id) DO NOTHING
-            RETURNING id
-            """,
-                deck_id,
-                sc.paper.external_id,
-                rank,
-                sc.final_score or 0.0,
-                sc.llm_relevance,
-                sc.llm_novelty,
-                sc.reasoning,
-                sc.signals,
-                sc.reasoning_verified,
-                reasoning_confidence_str,
-                user_id,
-            )
-        else:
-            # L3 fallback: skip the 60d negative-feedback filter (L1+L2 only)
-            inserted_id = await conn.fetchval(
-                f"""
-            INSERT INTO pulse_cards
-                (deck_id, user_id, paper_id, rank, score, llm_relevance, llm_novelty,
-                 reasoning, signals, reasoning_verified, reasoning_confidence)
-            SELECT $1, $11, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
-            FROM papers p
-            LEFT JOIN paper_user_state pus
-                   ON pus.paper_id = p.id
-                  AND pus.user_id IS NOT DISTINCT FROM $11
-            WHERE p.external_id = $2
+              AND {_SHARED_PAPER_SQL}
               AND NOT ({EXCLUDED_STATE_SQL})
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
             """,
-                deck_id,
-                sc.paper.external_id,
-                rank,
-                sc.final_score or 0.0,
-                sc.llm_relevance,
-                sc.llm_novelty,
-                sc.reasoning,
-                sc.signals,
-                sc.reasoning_verified,
-                reasoning_confidence_str,
-                user_id,
-            )
+            deck_id,
+            sc.paper.external_id,
+            rank,
+            sc.final_score or 0.0,
+            sc.llm_relevance,
+            sc.llm_novelty,
+            sc.reasoning,
+            sc.signals,
+            sc.reasoning_verified,
+            reasoning_confidence_str,
+            user_id,
+        )
         if inserted_id is not None:
             successes += 1
         else:
             logger.warning(
-                "pulse.persist_deck: skipped %r — paper row missing",
+                "pulse.persist_deck: skipped %r — no shared paper row for this external id",
                 sc.paper.external_id,
             )
 
@@ -309,7 +296,11 @@ def _build_deck_response(
     return PulseDeckResponse(
         deck_id=deck_row["id"],
         deck_date=deck_date,
-        card_count=deck_row["card_count"],
+        # Read-time visibility and lifecycle predicates can remove cards that
+        # existed when the deck row was written. Report what this response
+        # actually carries so callers can distinguish a usable deck from an
+        # empty one and activate stale fallback honestly.
+        card_count=len(cards),
         generated_at=generated_at,
         cards=cards,
         stats=deck_row.get("stats") or {},
@@ -330,6 +321,13 @@ async def load_today(
         ``user_state`` reflects the current ``paper_user_state`` row for the
         caller (NULL ⇒ inbox-default; consumers gate the Save↔Unsave toggle on
         ``user_state == 'to_read'``).
+
+    Notes
+    -----
+    A card renders its paper's title, authors and url, so all three deck reads
+    re-check visibility rather than trusting the scope the paper held when the
+    deck was persisted.  Nothing downgrades a paper today, so the predicate is
+    inert; it keeps the reads correct if a downgrade path is ever added.
     """
     async with db_pool.acquire() as conn:
         deck_row = await conn.fetchrow(
@@ -369,6 +367,7 @@ async def load_today(
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
               AND {VIEW_PREDICATES["all_non_trash"]}
+              AND {paper_visible_sql(2)}
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],
@@ -418,7 +417,7 @@ async def load_history(
 
         # Batch-fetch all cards for all decks in a single query (avoids N+1)
         all_card_rows = await conn.fetch(
-            """
+            f"""
             SELECT
                 pc.id,
                 pc.deck_id,
@@ -441,6 +440,7 @@ async def load_history(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = ANY($1::int[])
+              AND {paper_visible_sql(2)}
             ORDER BY pc.deck_id, pc.rank ASC
             """,
             deck_ids,
@@ -470,13 +470,33 @@ async def load_last_nonempty_deck(
     """
     async with db_pool.acquire() as conn:
         deck_row = await conn.fetchrow(
-            """
-            SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
-            FROM pulse_decks
-            WHERE (user_id IS NOT DISTINCT FROM $1)
-              AND card_count > 0
-              AND deck_date >= (CURRENT_DATE - $2::int)
-            ORDER BY deck_date DESC
+            f"""
+            SELECT pd.id, pd.deck_date, pd.card_count, pd.generated_at,
+                   pd.stats, pd.degraded_reason
+            FROM pulse_decks pd
+            WHERE pd.user_id IS NOT DISTINCT FROM $1
+              AND pd.card_count > 0
+              AND pd.deck_date >= (CURRENT_DATE - $2::int)
+              AND EXISTS (
+                  SELECT 1
+                  FROM pulse_cards eligible_pc
+                  JOIN papers p ON p.id = eligible_pc.paper_id
+                  LEFT JOIN paper_user_state pus
+                         ON pus.paper_id = p.id
+                        AND pus.user_id IS NOT DISTINCT FROM $1
+                  WHERE eligible_pc.deck_id = pd.id
+                    AND {VIEW_PREDICATES["all_non_trash"]}
+                    AND {paper_visible_sql(1)}
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM recommendation_feedback rf
+                        WHERE rf.paper_id = eligible_pc.paper_id
+                          AND rf.user_id IS NOT DISTINCT FROM $1
+                          AND rf.signal = 'negative'
+                          AND rf.created_at > NOW() - INTERVAL '60 days'
+                    )
+              )
+            ORDER BY pd.deck_date DESC
             LIMIT 1
             """,
             user_id,
@@ -510,6 +530,15 @@ async def load_last_nonempty_deck(
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
               AND {VIEW_PREDICATES["all_non_trash"]}
+              AND {paper_visible_sql(2)}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recommendation_feedback rf
+                  WHERE rf.paper_id = pc.paper_id
+                    AND rf.user_id IS NOT DISTINCT FROM $2
+                    AND rf.signal = 'negative'
+                    AND rf.created_at > NOW() - INTERVAL '60 days'
+              )
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],

@@ -8,41 +8,16 @@ The feed handler declares: ``limit: int = Query(default=20, ge=1, le=100)``
 - limit > 100  → 422 (FastAPI Query validation)
 """
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_paper_record as _make_paper_record
 
 from tests.conftest import FakeRecord
 
 # ---------------------------------------------------------------------------
 # Helpers — reuse the same fake-record pattern from test_feed.py
 # ---------------------------------------------------------------------------
-
-
-def _make_paper_record(paper_id: int = 1) -> dict:
-    now = datetime.now(UTC)
-    return {
-        "id": paper_id,
-        "external_id": f"arxiv:{paper_id}",
-        "source_type": "arxiv",
-        "title": f"Paper {paper_id}",
-        "authors": ["Author A"],
-        "abstract": "Abstract text",
-        "published_date": None,
-        "url": f"https://arxiv.org/abs/{paper_id}",
-        "pdf_url": None,
-        "pdf_local_path": None,
-        "pdf_downloaded": False,
-        "citation_count": 0,
-        "metadata": {},
-        "discovered_at": now,
-        "created_at": now,
-        "summary_brief": "Brief summary",
-        "confidence": "HIGH",
-        "user_status": "new",
-        "rating": None,
-    }
 
 
 def _to_record(d: dict) -> FakeRecord:

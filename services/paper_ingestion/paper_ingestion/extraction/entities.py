@@ -32,6 +32,7 @@ from paper_ingestion.extraction.entities_sql import (  # noqa: F401
 )
 from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.models import EntityExtractionResponse
+from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,27 @@ def build_entity_prompt(title: str, text: str, *, max_chars: int = 12000) -> str
     return f"{safe_title}\n\n{safe_text}\n"
 
 
+def _aggregate_entity_mentions(entities: list[Any]) -> list[dict[str, Any]]:
+    """Collapse duplicate LLM entities into one absolute mention count."""
+    aggregated: dict[tuple[str, str], dict[str, Any]] = {}
+    for entity in entities:
+        name = entity.name.strip()
+        if not name:
+            continue
+        key = (name.lower(), entity.type)
+        existing = aggregated.get(key)
+        if existing is None:
+            aggregated[key] = {
+                "name": name,
+                "type": entity.type,
+                "description": entity.description,
+                "mention_count": 1,
+            }
+        else:
+            existing["mention_count"] += 1
+    return list(aggregated.values())
+
+
 @observe()
 async def extract_entities_for_paper(
     http_client: httpx.AsyncClient,
@@ -120,9 +142,13 @@ async def extract_entities_for_paper(
     writes a system-shared row, matching the project convention from migs 062–076.
     """
     async with db_pool.acquire() as conn:
-        paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
+        paper = await conn.fetchrow(
+            "SELECT id, title, content_generation FROM papers WHERE id = $1",
+            paper_id,
+        )
         if not paper:
             raise ValueError(f"Paper {paper_id} not found")
+        content_generation = int(paper["content_generation"])
 
         chunks = await conn.fetch(
             """SELECT id, chunk_index, content, page_number,
@@ -190,13 +216,7 @@ async def extract_entities_for_paper(
     entity_map: dict[str, int] = {}
 
     # --- Validate and pre-embed entities (no DB connection held) ---
-    valid_entities: list[dict] = []
-    for ent in entities_data:
-        name = ent.name.strip()
-        etype = ent.type  # already validated by Literal
-        if not name:
-            continue
-        valid_entities.append({"name": name, "type": etype, "description": ent.description})
+    valid_entities = _aggregate_entity_mentions(entities_data)
 
     # Pre-compute embeddings and similarity matches outside DB connection scope
     # so that long-running HTTP calls do not hold a database connection.
@@ -222,138 +242,150 @@ async def extract_entities_for_paper(
     # Instantiate verifier once for this extraction run
     quote_verifier = QuoteVerifier()
 
-    # --- DB reads + writes (connection held, no external HTTP) ---
+    # --- Guarded persistence (source row remains stable through DB/Qdrant writes) ---
     async with db_pool.acquire() as conn:
-        for ve, pc in zip(valid_entities, precomputed):
-            entity_id, was_merged = await _find_or_create_entity(
-                conn,
-                ve["name"],
-                ve["type"],
-                ve["description"],
-                embedding=pc["embedding"],
-                similar_entity_id=pc["similar_entity_id"],
-            )
-            entity_map[ve["name"].lower()] = entity_id
-
-            if not was_merged and pc["embedding"] is not None and qdrant_client is not None:
-                await _store_entity_embedding(
+        async with guard_current_source_generation(conn, paper_id, content_generation):
+            link_mentions: dict[int, dict[str, int | None]] = {}
+            for ve, pc in zip(valid_entities, precomputed):
+                entity_id, was_merged = await _find_or_create_entity(
                     conn,
-                    qdrant_client,
-                    entity_id,
                     ve["name"],
                     ve["type"],
-                    pc["embedding"],
+                    ve["description"],
+                    embedding=pc["embedding"],
+                    similar_entity_id=pc["similar_entity_id"],
                 )
+                entity_map[ve["name"].lower()] = entity_id
 
-            if was_merged:
-                entities_merged += 1
-            else:
-                entities_added += 1
+                if not was_merged and pc["embedding"] is not None and qdrant_client is not None:
+                    await _store_entity_embedding(
+                        conn,
+                        qdrant_client,
+                        entity_id,
+                        ve["name"],
+                        ve["type"],
+                        pc["embedding"],
+                    )
 
-            entity_name_lower = ve["name"].lower()
-            first_chunk_id = next(
-                (c["id"] for c in chunks if entity_name_lower in c["content"].lower()),
-                chunks[0]["id"] if chunks else None,
-            )
-            # xmax = 0 is true only for a row this statement actually INSERTed;
-            # on ON CONFLICT DO UPDATE (the entity already linked to this paper
-            # for this user) xmax != 0. This makes a re-run idempotent and
-            # collapses a duplicate entity name within one run to a single link.
-            fresh_insert = await conn.fetchval(
-                """INSERT INTO paper_entities
-                       (paper_id, entity_id, mention_count, first_chunk_id, user_id)
-                   VALUES ($1, $2, 1, $3, $4)
-                   ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
-                   SET mention_count = paper_entities.mention_count + 1
-                   RETURNING (xmax = 0)""",
-                paper_id,
-                entity_id,
-                first_chunk_id,
-                user_id,
-            )
-            # A brand-new entity is created with paper_count DEFAULT 1, which
-            # already counts this paper — so only a PRE-EXISTING entity
-            # (was_merged) gaining a genuinely fresh (paper, entity, user) link
-            # needs +1. Incrementing on a freshly-created entity would double it.
-            if fresh_insert and was_merged:
-                await conn.execute(
-                    "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
+                if was_merged:
+                    entities_merged += 1
+                else:
+                    entities_added += 1
+
+                entity_name_lower = ve["name"].lower()
+                first_chunk_id = next(
+                    (c["id"] for c in chunks if entity_name_lower in c["content"].lower()),
+                    chunks[0]["id"] if chunks else None,
+                )
+                link = link_mentions.setdefault(
                     entity_id,
+                    {"mention_count": 0, "first_chunk_id": first_chunk_id},
+                )
+                link["mention_count"] = int(link["mention_count"] or 0) + int(ve["mention_count"])
+
+            for entity_id, link in link_mentions.items():
+                await conn.fetchval(
+                    """INSERT INTO paper_entities
+                           (paper_id, entity_id, mention_count, first_chunk_id, user_id,
+                            content_generation)
+                       VALUES ($1, $2, $3, $4, $5, $6)
+                       ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
+                       SET mention_count = EXCLUDED.mention_count,
+                           first_chunk_id = EXCLUDED.first_chunk_id,
+                           content_generation = EXCLUDED.content_generation
+                       WHERE paper_entities.content_generation
+                             <= EXCLUDED.content_generation
+                       RETURNING (xmax = 0)""",
+                    paper_id,
+                    entity_id,
+                    link["mention_count"],
+                    link["first_chunk_id"],
+                    user_id,
+                    content_generation,
                 )
 
-        for rel in relationships_data:
-            source_name = rel.source.strip().lower()
-            target_name = rel.target.strip().lower()
-            rel_type = rel.type
-            evidence = rel.evidence
+            for rel in relationships_data:
+                source_name = rel.source.strip().lower()
+                target_name = rel.target.strip().lower()
+                rel_type = rel.type
+                evidence = rel.evidence
 
-            source_id = entity_map.get(source_name)
-            target_id = entity_map.get(target_name)
+                source_id = entity_map.get(source_name)
+                target_id = entity_map.get(target_name)
 
-            if not source_id or not target_id or not rel_type:
-                continue
+                if not source_id or not target_id or not rel_type:
+                    continue
 
-            confidence = rel.confidence
+                confidence = rel.confidence
 
-            # --- Anti-hallucination: verify evidence quote before persisting ---
-            vr = None
-            if evidence:
-                # Always verify against the FULL text — not the truncated llm_text —
-                # so evidence in the tail of long papers is not silently lost.
-                vr = quote_verifier.verify_quote(evidence, full_text, chunk_responses)
-                if not vr.verified:
+                # --- Anti-hallucination: verify evidence quote before persisting ---
+                vr = None
+                if evidence:
+                    # Always verify against the FULL text — not the truncated llm_text —
+                    # so evidence in the tail of long papers is not silently lost.
+                    vr = quote_verifier.verify_quote(evidence, full_text, chunk_responses)
+                    if not vr.verified:
+                        logger.info(
+                            "dropping unverified kg edge: subject=%s predicate=%s object=%s",
+                            source_name,
+                            rel_type,
+                            target_name,
+                        )
+                        dropped_count += 1
+                        continue
+                    # Track evidence that would have been lost with the old truncated verify.
+                    if vr.verified and vr.matched_text and len(llm_text) < len(full_text):
+                        # Use O(1) span_start recorded by QuoteVerifier; fall back to find().
+                        match_pos = vr.matched_span_start
+                        if match_pos is None:
+                            match_pos = full_text.find(vr.matched_text)
+                        if match_pos >= len(llm_text):
+                            saved_by_full_text_verify += 1
+                            logger.debug(
+                                "evidence saved by full-text verify (pos %d > cap %d): %s",
+                                match_pos,
+                                len(llm_text),
+                                vr.matched_text[:80],
+                            )
+                    verified_evidence: str | None = vr.matched_text
+                else:
+                    # No evidence provided — treat as unverified, drop the row.
                     logger.info(
-                        "dropping unverified kg edge: subject=%s predicate=%s object=%s",
+                        "dropping kg edge with no evidence: subject=%s predicate=%s object=%s",
                         source_name,
                         rel_type,
                         target_name,
                     )
                     dropped_count += 1
                     continue
-                # Track evidence that would have been lost with the old truncated verify.
-                if vr.verified and vr.matched_text and len(llm_text) < len(full_text):
-                    # Use O(1) span_start recorded by QuoteVerifier; fall back to find() if absent.
-                    match_pos = vr.matched_span_start
-                    if match_pos is None:
-                        match_pos = full_text.find(vr.matched_text)
-                    if match_pos >= len(llm_text):
-                        saved_by_full_text_verify += 1
-                        logger.debug(
-                            "evidence saved by full-text verify (pos %d > cap %d): %s",
-                            match_pos,
-                            len(llm_text),
-                            vr.matched_text[:80],
-                        )
-                verified_evidence: str | None = vr.matched_text
-            else:
-                # No evidence provided — treat as unverified, drop the row
-                logger.info(
-                    "dropping kg edge with no evidence: subject=%s predicate=%s object=%s",
-                    source_name,
-                    rel_type,
-                    target_name,
-                )
-                dropped_count += 1
-                continue
 
-            inserted = await conn.fetchval(
-                """INSERT INTO entity_relationships
-                       (source_entity_id, target_entity_id, relationship_type,
-                        paper_id, evidence_quote, confidence, page_number)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)
-                   ON CONFLICT (source_entity_id, target_entity_id, relationship_type, paper_id)
-                   DO NOTHING
-                   RETURNING 1""",
-                source_id,
-                target_id,
-                rel_type,
-                paper_id,
-                verified_evidence,
-                confidence,
-                vr.page_number,
-            )
-            if inserted is not None:
-                relationships_added += 1
+                inserted = await conn.fetchval(
+                    """INSERT INTO entity_relationships
+                           (source_entity_id, target_entity_id, relationship_type,
+                            paper_id, evidence_quote, confidence, page_number,
+                            content_generation)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                       ON CONFLICT (
+                           source_entity_id, target_entity_id, relationship_type, paper_id
+                       )
+                       DO UPDATE SET evidence_quote = EXCLUDED.evidence_quote,
+                                     confidence = EXCLUDED.confidence,
+                                     page_number = EXCLUDED.page_number,
+                                     content_generation = EXCLUDED.content_generation
+                       WHERE entity_relationships.content_generation
+                             <= EXCLUDED.content_generation
+                       RETURNING (xmax = 0)""",
+                    source_id,
+                    target_id,
+                    rel_type,
+                    paper_id,
+                    verified_evidence,
+                    confidence,
+                    vr.page_number,
+                    content_generation,
+                )
+                if inserted:
+                    relationships_added += 1
 
     return EntityExtractionResponse(
         entities_added=entities_added,

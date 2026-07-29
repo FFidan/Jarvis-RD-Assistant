@@ -13,11 +13,13 @@ from __future__ import annotations
 import hashlib
 import sys
 import uuid
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 # scripts/ lives at the repo root, which is not in pytest's pythonpath.
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
@@ -112,30 +114,11 @@ def _make_chunk_row(
     return rec
 
 
-def _make_mock_pool(
-    fetch_return: list | None = None,
+_make_pool_and_conn = partial(
+    make_pool_and_conn,
+    fetch_return=[],
     fetchval_return=None,
-) -> AsyncMock:
-    """Create a mock asyncpg.Pool with configurable fetch results."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=fetch_return or [])
-    conn.fetchval = AsyncMock(return_value=fetchval_return)
-    conn.execute = AsyncMock()
-    conn.executemany = AsyncMock()
-
-    # transaction context manager
-    txn = AsyncMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = AsyncMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool
+)
 
 
 def _make_sequenced_pool(
@@ -380,7 +363,7 @@ async def test_old_qdrant_points_deleted():
         for i in range(3)
     ]
 
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
@@ -465,7 +448,7 @@ async def test_old_qdrant_cleanup_keeps_existing_target_point_ids():
             embedding_model="qwen3-embedding:0.6b",
         ),
     ]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
@@ -510,7 +493,7 @@ async def test_db_embedding_model_updated():
 
     chunks = [_make_chunk_row(42, i, f"chunk {i}", embedding_model=None) for i in range(2)]
 
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
@@ -626,7 +609,7 @@ async def test_find_candidates_repairs_missing_same_model_vector():
             embedding_model=reembed_mod.EMBEDDING_MODEL_NAME,
         )
     ]
-    pool = _make_mock_pool()
+    pool, _ = _make_pool_and_conn()
     conn = await pool.acquire.return_value.__aenter__()
     conn.fetch = AsyncMock(side_effect=[rows, []])
     qdrant = AsyncMock()
@@ -663,7 +646,7 @@ async def test_find_candidates_ignores_legacy_vector_owner():
             discovered_by=17,
         )
     ]
-    pool = _make_mock_pool()
+    pool, _ = _make_pool_and_conn()
     conn = await pool.acquire.return_value.__aenter__()
     conn.fetch = AsyncMock(side_effect=[rows, []])
     qdrant = AsyncMock()
@@ -701,7 +684,7 @@ async def test_reembed_payload_preserves_paper_owner():
 
     importlib.reload(reembed_mod)
     rows = [_make_chunk_row(80, 0, "owned content", discovered_by=23)]
-    pool = _make_mock_pool(fetch_return=rows)
+    pool, _ = _make_pool_and_conn(fetch_return=rows)
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
@@ -727,7 +710,7 @@ async def test_reembed_aborts_before_qdrant_when_chunk_snapshot_changes():
     importlib.reload(reembed_mod)
     old_rows = [_make_chunk_row(78, 0, "old content", embedding_model="old-model")]
     new_rows = [_make_chunk_row(78, 0, "new content", embedding_model="old-model")]
-    pool = _make_mock_pool()
+    pool, _ = _make_pool_and_conn()
     conn = await pool.acquire.return_value.__aenter__()
     conn.fetch = AsyncMock(side_effect=[old_rows, new_rows])
     qdrant = AsyncMock()
@@ -814,7 +797,7 @@ async def test_reembed_partial_failure_preserves_old_points():
         for i in range(40)
     ]
 
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
 
     backend = _FakeEmbeddingBackend(
@@ -889,7 +872,7 @@ async def test_reembed_old_qdrant_delete_failure_is_fatal_by_default():
 
     importlib.reload(reembed_mod)
     chunks = [_make_chunk_row(1, 0, "chunk", embedding_id="old-point")]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     qdrant.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
@@ -918,7 +901,7 @@ async def test_reembed_old_qdrant_delete_failure_can_continue_with_explicit_flag
         importlib.reload(reembed_mod)
 
     chunks = [_make_chunk_row(1, 0, "chunk", embedding_id="old-point")]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     qdrant.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
@@ -944,7 +927,7 @@ async def test_reembed_qdrant_writes_wait_for_completion_before_db_update():
 
     importlib.reload(reembed_mod)
     chunks = [_make_chunk_row(1, 0, "chunk", embedding_id="old-point")]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
@@ -970,7 +953,7 @@ async def test_verify_postconditions_requires_db_target_count_and_qdrant_count_p
     import scripts.reembed as reembed_mod
 
     importlib.reload(reembed_mod)
-    pool = _make_mock_pool(fetchval_return=7)
+    pool, _ = _make_pool_and_conn(fetchval_return=7)
     qdrant = AsyncMock()
     qdrant.count = AsyncMock(return_value=SimpleNamespace(count=8))
 
@@ -1001,7 +984,7 @@ async def test_verify_postconditions_rejects_equal_counts_with_wrong_visibility(
             discovered_by=41,
         )
     ]
-    pool = _make_mock_pool(fetchval_return=1)
+    pool, _ = _make_pool_and_conn(fetchval_return=1)
     conn = await pool.acquire.return_value.__aenter__()
     conn.fetch = AsyncMock(side_effect=[rows, []])
     qdrant = AsyncMock()
@@ -1082,7 +1065,7 @@ async def test_reembed_fails_on_embedding_count_mismatch():
 
     importlib.reload(reembed_mod)
     chunks = [_make_chunk_row(1, i, f"chunk {i}") for i in range(2)]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(
         embedding_dim=reembed_mod.EMBEDDING_DIMENSION,
@@ -1110,7 +1093,7 @@ async def test_reembed_fails_on_embedding_dimension_mismatch():
 
     importlib.reload(reembed_mod)
     chunks = [_make_chunk_row(1, 0, "chunk")]
-    pool = _make_mock_pool(fetch_return=chunks)
+    pool, _ = _make_pool_and_conn(fetch_return=chunks)
     qdrant = AsyncMock()
     backend = _FakeEmbeddingBackend(
         embedding_dim=reembed_mod.EMBEDDING_DIMENSION,
@@ -1227,7 +1210,7 @@ async def test_run_benchmark_is_read_only():
 
     importlib.reload(reembed_mod)
     rows = [_make_chunk_row(1, i, f"chunk {i}") for i in range(3)]
-    pool = _make_mock_pool(fetch_return=rows)
+    pool, _ = _make_pool_and_conn(fetch_return=rows)
     backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
     await reembed_mod.run_benchmark(pool, backend)

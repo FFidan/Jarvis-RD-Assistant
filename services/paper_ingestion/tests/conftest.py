@@ -14,7 +14,11 @@ first (--import-mode=importlib + shared tests namespace invariant).
 # Pre-import apscheduler.triggers.cron so that per-file stubs in
 # test_pulse_scheduler.py cannot replace the real CronTrigger (needed by
 # the _validate_cron validator in app.routers.settings).
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
+
 import apscheduler.triggers.cron  # noqa: F401
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -22,6 +26,7 @@ import pytest_asyncio
 # files import them directly via ``from tests.conftest import …``.
 from jarvis_common.testing import (  # noqa: F401
     FakeRecord,
+    SharedConnPool,
     _make_pool_and_conn,
     make_pool_and_conn,
 )
@@ -62,10 +67,10 @@ from jarvis_common.testing import (  # noqa: E402, F401
 )
 from jarvis_common.testing import make_contract_pg_dsn as _make_contract_pg_dsn  # noqa: E402
 from jarvis_common.testing_contract_apps import (  # noqa: E402
+    PITestAppOptions,
     configure_contract_api_key,
     make_contract_client,
-    patch_app_state,
-    patch_dependency_overrides,
+    patch_pi_test_app,
 )
 
 contract_pg_dsn = _make_contract_pg_dsn("jarvis-rd-contract")
@@ -84,6 +89,37 @@ def _configure_api_key(monkeypatch):
 def _make_client(app, cookie: str):
     """Return the standard contract-test ASGI client for PI contract tests."""
     return make_contract_client(app, cookie)
+
+
+@pytest.fixture()
+def _disable_limiter() -> Iterator[None]:
+    """Temporarily disable the Paper Ingestion request limiter."""
+    from paper_ingestion.deps import limiter
+
+    original = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = original
+
+
+@pytest.fixture()
+def fernet_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Configure a fresh Fernet key and refresh the cached cipher."""
+    from cryptography.fernet import Fernet
+    from jarvis_common.crypto import refresh_fernet_cache
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", key)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
+    refresh_fernet_cache()
+    yield key
+    refresh_fernet_cache()
+
+
+@pytest.fixture()
+def http_client() -> httpx.AsyncClient:
+    """Return an async HTTP client for Zotero adapter tests."""
+    return httpx.AsyncClient()
 
 
 # Single source of truth for the adversarial-content shape taxonomy. Both the KG
@@ -135,19 +171,30 @@ def adversarial_llm_payloads(model, valid_json: str) -> dict[str, str]:
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app_with_pool(contract_conn):
+async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     """Wire the PI app to the per-test contract connection."""
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
-
     shared = SharedConnPool(contract_conn)
-    with (
-        patch_app_state(app, {"db_pool": shared}),
-        patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(remove_owner_override=True),
+    ) as app:
+        yield app
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
+    """Wire service doubles for PI endpoint contract tests."""
+    shared = SharedConnPool(contract_conn)
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            mock_http_client=True,
+            mock_embedder=True,
         ),
-    ):
+    ) as app:
         yield app
 
 

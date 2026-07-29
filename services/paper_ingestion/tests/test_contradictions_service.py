@@ -5,8 +5,9 @@ from __future__ import annotations
 import inspect
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import pytest
 from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.services.contradiction_models import ContradictionClassification
@@ -18,13 +19,35 @@ from paper_ingestion.services.contradictions import (
     _load_verified_findings,
     _persist_contradiction,
     _polarity_score,
+    aggregate_consensus,
     build_contradiction_candidates,
     list_contradictions,
     scan_contradictions,
 )
 from pydantic import ValidationError
 from paper_ingestion.services.contradictions_extract import _parse_findings
+from paper_ingestion.services.contradictions_persist import (
+    _CONSENSUS_ROW_CAP,
+    _find_existing_contradiction_id,
+    _normalize_claim_topic,
+)
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+def _stub_advisory_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    acquired: bool = True,
+) -> MagicMock:
+    """Replace the scan lock with an async context manager of known state."""
+    lock = MagicMock()
+    lock.__aenter__ = AsyncMock(return_value=acquired)
+    lock.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "paper_ingestion.services.contradictions.AdvisoryLock",
+        lambda *_args, **_kwargs: lock,
+    )
+    return lock
 
 
 def test_parse_findings_accepts_json_string_fields():
@@ -38,6 +61,7 @@ def test_parse_findings_accepts_json_string_fields():
                 [{"finding": "A finding", "quote": "A quote", "page_number": 4}]
             ),
             "cross_references": json.dumps([{"related_paper_id": 11}]),
+            "content_generation": 3,
         }
     )
 
@@ -48,6 +72,7 @@ def test_parse_findings_accepts_json_string_fields():
     assert findings[0].quote == "A quote"
     assert findings[0].page_number == 4
     assert findings[0].cross_reference_ids == frozenset({11})
+    assert findings[0].content_generation == 3
 
 
 def test_build_contradiction_candidates_prefers_cross_references():
@@ -236,15 +261,7 @@ def test_build_contradiction_candidates_downranks_same_polarity():
 @pytest.mark.asyncio
 async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeypatch):
     """LLM-positive candidates are inserted only after both quotes verify."""
-    from unittest.mock import MagicMock
-
-    _lock_cm = MagicMock()
-    _lock_cm.__aenter__ = AsyncMock(return_value=True)
-    _lock_cm.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr(
-        "paper_ingestion.services.contradictions.AdvisoryLock",
-        lambda *a, **kw: _lock_cm,
-    )
+    _stub_advisory_lock(monkeypatch)
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
@@ -309,7 +326,7 @@ async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeyp
             )
         ],
     ]
-    conn.fetchrow.return_value = FakeRecord({"id": 99})
+    conn.fetchrow.side_effect = [None, FakeRecord({"id": 99})]
 
     async def fake_classify(
         _openai_client, _http_client, candidate: ContradictionCandidate, *, model: str
@@ -333,27 +350,22 @@ async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeyp
     )
 
     result = await scan_contradictions(
-        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+        pool,
+        AsyncMock(),
+        QuoteVerifier(),
+        openai_client=AsyncMock(),
+        user_id=7,
     )
 
     assert result["contradictions_found"] == 1
     assert result["contradiction_ids"] == [99]
-    assert conn.fetchrow.await_count == 1
-    assert "INSERT INTO paper_contradictions" in conn.fetchrow.await_args.args[0]
+    assert conn.fetchrow.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_scan_contradictions_discards_unverified_llm_quotes(monkeypatch):
     """A candidate is not stored when the classifier returns unsupported quotes."""
-    from unittest.mock import MagicMock
-
-    _lock_cm = MagicMock()
-    _lock_cm.__aenter__ = AsyncMock(return_value=True)
-    _lock_cm.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr(
-        "paper_ingestion.services.contradictions.AdvisoryLock",
-        lambda *a, **kw: _lock_cm,
-    )
+    _stub_advisory_lock(monkeypatch)
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
@@ -427,7 +439,11 @@ async def test_scan_contradictions_discards_unverified_llm_quotes(monkeypatch):
     )
 
     result = await scan_contradictions(
-        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+        pool,
+        AsyncMock(),
+        QuoteVerifier(),
+        openai_client=AsyncMock(),
+        user_id=7,
     )
 
     assert result["contradictions_found"] == 0
@@ -658,21 +674,19 @@ def test_pair_construction_full_scan_when_paper_id_provided(monkeypatch):
     assert 1 in involved_paper_ids, "paper_id=1 should be in at least one candidate"
 
 
-def test_persist_contradiction_dedup_uses_direct_equality():
-    """Fallback SELECT in _persist_contradiction uses direct equality, not md5().
+def test_persist_contradiction_dedup_normalizes_legacy_rows_without_hashing():
+    """The legacy-row lookup normalizes whitespace directly, without md5().
 
-    This is a static assertion against the function source: PI-CORE-002 fix.
-    md5() wraps have no functional purpose with parameterised bindings and
-    introduce hash-binding risk for LLM-controlled inputs.
+    Hashing parameterised quote bindings has no functional purpose and adds
+    collision risk. Stored pre-normalization rows do need an explicit
+    whitespace comparison so the first normalized write reuses them.
     """
-    source = inspect.getsource(_persist_contradiction)
-    assert "md5(" not in source, (
-        "Fallback SELECT still uses md5() — PI-CORE-002 not fixed. "
-        "Replace 'md5(quote_a) = md5($3::text)' with 'quote_a = $3'."
-    )
-    # Confirm the direct equality form IS present.
-    assert "quote_a = $3" in source, "Expected 'quote_a = $3' in fallback SELECT"
-    assert "quote_b = $4" in source, "Expected 'quote_b = $4' in fallback SELECT"
+    source = inspect.getsource(_find_existing_contradiction_id)
+    assert "md5(" not in source, "The dedup lookup must compare normalized text rather than hashes."
+    assert "regexp_replace(btrim(quote_a)" in source
+    assert "regexp_replace(btrim(quote_b)" in source
+    assert "= $3" in source
+    assert "= $4" in source
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +787,7 @@ async def test_classify_candidate_keeps_supports(monkeypatch):
 async def test_persist_contradiction_writes_stance_and_claim_topic():
     """_persist_contradiction passes stance + claim_topic as INSERT bind params."""
     _, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord({"id": 55})
+    conn.fetchrow.side_effect = [None, FakeRecord({"id": 55})]
 
     classification = ContradictionClassification(
         is_contradiction=False,
@@ -795,7 +809,7 @@ async def test_persist_contradiction_writes_stance_and_claim_topic():
     )
 
     assert result == 55
-    params = conn.fetchrow.await_args_list[0].args[1:]
+    params = conn.fetchrow.await_args_list[1].args[1:]
     assert "supports" in params, f"expected stance in INSERT params, got {params}"
     assert "whether X holds" in params, f"expected claim_topic in INSERT params, got {params}"
 
@@ -837,7 +851,7 @@ async def test_persist_contradiction_writes_user_id():
     from paper_ingestion.services.contradiction_models import ContradictionClassification
 
     _, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord({"id": 77})
+    conn.fetchrow.side_effect = [None, FakeRecord({"id": 77})]
 
     candidate = ContradictionCandidate(
         a=VerifiedFinding(
@@ -847,6 +861,7 @@ async def test_persist_contradiction_writes_user_id():
             quote="Quote A",
             page_number=1,
             cross_reference_ids=frozenset(),
+            content_generation=3,
         ),
         b=VerifiedFinding(
             paper_id=2,
@@ -855,6 +870,7 @@ async def test_persist_contradiction_writes_user_id():
             quote="Quote B",
             page_number=2,
             cross_reference_ids=frozenset(),
+            content_generation=5,
         ),
         score=0.8,
         reason="cross_reference",
@@ -881,14 +897,14 @@ async def test_persist_contradiction_writes_user_id():
     )
 
     assert result == 77
-    assert conn.fetchrow.await_count >= 1
-    # Check the INSERT call (first fetchrow call is the INSERT).
-    insert_call = conn.fetchrow.await_args_list[0]
+    assert conn.fetchrow.await_count == 2
+    insert_call = conn.fetchrow.await_args_list[1]
     params = insert_call.args[1:]
 
-    # Behaviour-shape assertion: user_id reaches the INSERT as a bind parameter.
-    # SQL column-list shape is exercised by the live-PG contract test.
+    assert "paper_a_content_generation" in insert_call.args[0]
+    assert "paper_b_content_generation" in insert_call.args[0]
     assert 99 in params, f"expected user_id=99 in INSERT params, got {params}"
+    assert params[-2:] == (3, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -898,13 +914,13 @@ async def test_persist_contradiction_writes_user_id():
 
 @pytest.mark.parametrize(
     "user_id_payload, expected",
-    [("42", 42), (None, None)],
+    [("42", 42), (42, 42)],
 )
 @pytest.mark.asyncio
-async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
+async def test_contradiction_job_requires_and_converts_user_id(
     user_id_payload, expected, monkeypatch
 ):
-    """_contradictions_scan_job correctly converts str→int and None→None for user_id."""
+    """_contradictions_scan_job requires owner identity and converts it to int."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from jarvis_common.jobs import ProcrastinateJobContextShim
@@ -915,9 +931,7 @@ async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
     http_client = MagicMock()
     ctx = ProcrastinateJobContextShim(job_id="test-job", pool=AsyncMock())
 
-    payload: dict = {"paper_id": None, "limit": 10}
-    if user_id_payload is not None:
-        payload["user_id"] = user_id_payload
+    payload: dict = {"paper_id": None, "limit": 10, "user_id": user_id_payload}
 
     with (
         patch("paper_ingestion.contradiction_jobs.scan_contradictions", scan_mock),
@@ -933,6 +947,29 @@ async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
     scan_mock.assert_awaited_once()
     assert result == {"found": 0, "inserted": 0}
     assert scan_mock.call_args.kwargs["user_id"] == expected
+
+
+@pytest.mark.asyncio
+async def test_contradiction_job_rejects_a_payload_without_user_id():
+    """A malformed internal job cannot start an ownerless scan."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.jobs import ProcrastinateJobContextShim
+    from paper_ingestion.contradiction_jobs import _contradictions_scan_job
+
+    ctx = ProcrastinateJobContextShim(job_id="test-job", pool=AsyncMock())
+    with patch("paper_ingestion.contradiction_jobs.get_services") as get_svc_mock:
+        svc = MagicMock()
+        svc.verifier = MagicMock()
+        svc.openai_client = MagicMock()
+        get_svc_mock.return_value = svc
+        with pytest.raises(KeyError, match="user_id"):
+            await _contradictions_scan_job(
+                MagicMock(),
+                MagicMock(),
+                {"paper_id": None, "limit": 10},
+                ctx,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1010,25 +1047,15 @@ async def test_scan_contradictions_dedup_returns_in_progress_when_locked(monkeyp
     scan_contradictions must return immediately with scan_already_in_progress=True
     and must not call _do_scan_contradictions or touch the DB.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     pool = MagicMock()
-
-    lock_cm = MagicMock()
-    lock_cm.__aenter__ = AsyncMock(return_value=False)
-    lock_cm.__aexit__ = AsyncMock(return_value=False)
-
+    _stub_advisory_lock(monkeypatch, acquired=False)
     inner_scan = AsyncMock()
 
-    with (
-        patch(
-            "paper_ingestion.services.contradictions.AdvisoryLock",
-            return_value=lock_cm,
-        ),
-        patch(
-            "paper_ingestion.services.contradictions._do_scan_contradictions",
-            inner_scan,
-        ),
+    with patch(
+        "paper_ingestion.services.contradictions._do_scan_contradictions",
+        inner_scan,
     ):
         result = await scan_contradictions(
             pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock(), user_id=7
@@ -1045,13 +1072,10 @@ async def test_scan_contradictions_dedup_proceeds_when_lock_acquired(monkeypatch
     When AdvisoryLock returns True (no concurrent scan), the scan proceeds and
     returns the normal result dict (not the in-progress sentinel).
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     pool = MagicMock()
-
-    lock_cm = MagicMock()
-    lock_cm.__aenter__ = AsyncMock(return_value=True)
-    lock_cm.__aexit__ = AsyncMock(return_value=False)
+    _stub_advisory_lock(monkeypatch)
 
     expected = {
         "paper_id": None,
@@ -1063,15 +1087,9 @@ async def test_scan_contradictions_dedup_proceeds_when_lock_acquired(monkeypatch
     }
     inner_scan = AsyncMock(return_value=expected)
 
-    with (
-        patch(
-            "paper_ingestion.services.contradictions.AdvisoryLock",
-            return_value=lock_cm,
-        ),
-        patch(
-            "paper_ingestion.services.contradictions._do_scan_contradictions",
-            inner_scan,
-        ),
+    with patch(
+        "paper_ingestion.services.contradictions._do_scan_contradictions",
+        inner_scan,
     ):
         result = await scan_contradictions(
             pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock(), user_id=7
@@ -1121,7 +1139,13 @@ async def test_do_scan_raises_when_every_candidate_fails_llm(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="failed for all 1 candidate"):
-        await _do_scan_contradictions(pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock())
+        await _do_scan_contradictions(
+            pool,
+            AsyncMock(),
+            QuoteVerifier(),
+            openai_client=AsyncMock(),
+            user_id=7,
+        )
 
 
 @pytest.mark.asyncio
@@ -1149,7 +1173,11 @@ async def test_do_scan_partial_llm_failure_still_returns_counts(monkeypatch):
     )
 
     result = await _do_scan_contradictions(
-        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+        pool,
+        AsyncMock(),
+        QuoteVerifier(),
+        openai_client=AsyncMock(),
+        user_id=7,
     )
 
     assert result["candidate_count"] == 2
@@ -1162,9 +1190,18 @@ async def test_do_scan_partial_llm_failure_still_returns_counts(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("quote_a", "quote_b"),
+    [
+        ("", "some quote"),
+        ("some quote", ""),
+        ("   ", "  \t  "),
+    ],
+    ids=("empty-first-quote", "empty-second-quote", "whitespace-only"),
+)
 @pytest.mark.asyncio
-async def test_quotes_verify_rejects_empty_quote_a():
-    """_quotes_verify returns (False, None, None) when quote_a is empty."""
+async def test_quotes_verify_rejects_blank_quotes(quote_a: str, quote_b: str) -> None:
+    """Blank model quotes are rejected before any source text is loaded."""
     from jarvis_common.verify import QuoteVerifier
 
     from paper_ingestion.services.contradictions import (
@@ -1196,85 +1233,13 @@ async def test_quotes_verify_rejects_empty_quote_a():
         reason="test",
     )
 
-    result = await _quotes_verify(conn, verifier, candidate, quote_a="", quote_b="some quote")
-    assert result == (False, None, None)
-    conn.fetch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_quotes_verify_rejects_empty_quote_b():
-    """_quotes_verify returns (False, None, None) when quote_b is empty."""
-    from jarvis_common.verify import QuoteVerifier
-
-    from paper_ingestion.services.contradictions import (
-        ContradictionCandidate,
-        VerifiedFinding,
-        _quotes_verify,
+    result = await _quotes_verify(
+        conn,
+        verifier,
+        candidate,
+        quote_a=quote_a,
+        quote_b=quote_b,
     )
-
-    _, conn = _make_pool_and_conn()
-    verifier = QuoteVerifier()
-    candidate = ContradictionCandidate(
-        a=VerifiedFinding(
-            paper_id=1,
-            title="A",
-            finding="f",
-            quote="q",
-            page_number=1,
-            cross_reference_ids=frozenset(),
-        ),
-        b=VerifiedFinding(
-            paper_id=2,
-            title="B",
-            finding="f",
-            quote="q",
-            page_number=2,
-            cross_reference_ids=frozenset(),
-        ),
-        score=0.5,
-        reason="test",
-    )
-
-    result = await _quotes_verify(conn, verifier, candidate, quote_a="some quote", quote_b="")
-    assert result == (False, None, None)
-    conn.fetch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_quotes_verify_rejects_whitespace_only_quotes():
-    """_quotes_verify returns (False, None, None) for whitespace-only quotes."""
-    from jarvis_common.verify import QuoteVerifier
-
-    from paper_ingestion.services.contradictions import (
-        ContradictionCandidate,
-        VerifiedFinding,
-        _quotes_verify,
-    )
-
-    _, conn = _make_pool_and_conn()
-    verifier = QuoteVerifier()
-    candidate = ContradictionCandidate(
-        a=VerifiedFinding(
-            paper_id=1,
-            title="A",
-            finding="f",
-            quote="q",
-            page_number=1,
-            cross_reference_ids=frozenset(),
-        ),
-        b=VerifiedFinding(
-            paper_id=2,
-            title="B",
-            finding="f",
-            quote="q",
-            page_number=2,
-            cross_reference_ids=frozenset(),
-        ),
-        score=0.5,
-        reason="test",
-    )
-
-    result = await _quotes_verify(conn, verifier, candidate, quote_a="   ", quote_b="  \t  ")
     assert result == (False, None, None)
     conn.fetch.assert_not_awaited()
 
@@ -1334,3 +1299,207 @@ async def test_quotes_verify_logs_info_on_empty_quote(caplog) -> None:
     assert "11" in matching[0].message and "22" in matching[0].message, (
         f"Expected paper IDs in log message, got: {matching[0].message}"
     )
+
+
+# ---------------------------------------------------------------------------
+# aggregate_consensus — Unicode-aware clustering + honest truncation
+# ---------------------------------------------------------------------------
+
+
+def _consensus_row(
+    *,
+    stance: str,
+    claim_topic: str,
+    paper_a_id: int = 1,
+    paper_b_id: int = 2,
+    quote_a: str = "quote a",
+    quote_b: str = "quote b",
+) -> FakeRecord:
+    return FakeRecord(
+        {
+            "stance": stance,
+            "claim_topic": claim_topic,
+            "paper_a_id": paper_a_id,
+            "paper_b_id": paper_b_id,
+            "quote_a": quote_a,
+            "quote_b": quote_b,
+            "page_a": 1,
+            "page_b": 2,
+            "paper_a_title": "Paper A",
+            "paper_b_title": "Paper B",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_consensus_keeps_distinct_non_latin_topics_separate():
+    """Two unrelated non-Latin claim topics must cluster separately, not merge.
+
+    Before the Unicode-aware fix, `_CLAIM_TOPIC_PUNCT_RE = re.compile(r"[^a-z0-9]+")`
+    treated every character outside ASCII a-z0-9 as punctuation, so a Cyrillic,
+    CJK, Arabic, Greek, or Hebrew claim_topic collapsed to "" and merged with
+    every other non-Latin topic into a single cluster, silently summing their
+    supports/opposes counts together.
+    """
+    _, conn = _make_pool_and_conn(
+        fetch_return=[
+            _consensus_row(
+                stance="supports", claim_topic="Эффект температуры на прочность", paper_b_id=2
+            ),
+            _consensus_row(
+                stance="opposes", claim_topic="Устойчивость данных при сжатии", paper_b_id=3
+            ),
+        ]
+    )
+
+    claims, truncated = await aggregate_consensus(conn, user_id=1)
+
+    assert not truncated
+    topics = {claim.claim_topic for claim in claims}
+    assert len(claims) == 2, f"unrelated non-Latin topics must not merge: {topics}"
+    # The set above holds display topics, not cluster keys, so it cannot show a
+    # collapse on its own. Normalizing directly is what proves the key survives.
+    assert _normalize_claim_topic("Устойчивость данных при сжатии"), (
+        "a non-Latin topic must not normalize to an empty cluster key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_consensus_reports_truncated_without_changing_total():
+    """`truncated` signals a hit row cap; `total` (== len(claims)) keeps its meaning.
+
+    Regression for a truncated evidence set silently presented as complete: the
+    router computed `total` only from the returned clusters, with no signal that
+    the underlying row cap had already dropped evidence before clustering.
+    """
+    rows = [_consensus_row(stance="supports", claim_topic=f"topic {i}") for i in range(1001)]
+    _, conn = _make_pool_and_conn(fetch_return=rows)
+
+    claims, truncated = await aggregate_consensus(conn, user_id=1, limit=2000)
+
+    assert truncated, "1001 underlying rows must set truncated=True"
+    assert len(claims) == 1000, "the 1001st row must be dropped after the cap, not clustered"
+    # The connection double answers with these rows whatever it is asked for, so
+    # the flag can only ever fire if the query really requests one row beyond the
+    # cap. Without this, an off-by-one there silences truncation for good and
+    # every assertion above still passes.
+    assert conn.fetch.await_args_list[0].args[2] == _CONSENSUS_ROW_CAP + 1, (
+        "the query must fetch one row past the cap to detect truncation at all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_consensus_not_truncated_under_the_cap():
+    """`truncated` stays False when the underlying set does not hit the cap."""
+    rows = [_consensus_row(stance="supports", claim_topic=f"topic {i}") for i in range(5)]
+    _, conn = _make_pool_and_conn(fetch_return=rows)
+
+    claims, truncated = await aggregate_consensus(conn, user_id=1, limit=50)
+
+    assert not truncated
+    assert len(claims) == 5
+
+
+# ---------------------------------------------------------------------------
+# _persist_contradiction — whitespace-insensitive quote dedup
+# ---------------------------------------------------------------------------
+
+
+def _supports_classification(quote_a: str, quote_b: str) -> ContradictionClassification:
+    return ContradictionClassification(
+        is_contradiction=False,
+        stance="supports",
+        claim_topic="whether X holds",
+        explanation="Both findings affirm the claim.",
+        quote_a=quote_a,
+        quote_b=quote_b,
+        confidence=0.8,
+    )
+
+
+@pytest.mark.asyncio
+async def test_persist_contradiction_normalizes_whitespace_before_binding():
+    """Two verbatim quotes differing only in incidental whitespace must bind
+    the identical value, so they hash to the same unique-index key instead of
+    creating a second row.
+    """
+    _, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        None,
+        FakeRecord({"id": 1}),
+        None,
+        FakeRecord({"id": 2}),
+    ]
+
+    await _persist_contradiction(
+        conn,
+        _make_candidate(),
+        _supports_classification("Paper A  says   X.", "Paper B says not X."),
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=7,
+    )
+    first_quote_a = conn.fetchrow.await_args_list[1].args[5]
+
+    await _persist_contradiction(
+        conn,
+        _make_candidate(),
+        _supports_classification("Paper A says X.", "Paper B says not X."),
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=7,
+    )
+    second_quote_a = conn.fetchrow.await_args_list[3].args[5]
+
+    assert first_quote_a == second_quote_a == "Paper A says X.", (
+        f"whitespace-only variants must normalize to the same bound value: "
+        f"{first_quote_a!r} vs {second_quote_a!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_persist_contradiction_fallback_select_matches_insert_normalization():
+    """The conflict-fallback SELECT must bind the same normalized quotes as the
+    INSERT it followed. If the two disagree, the fallback stops finding the row
+    it should and creates a duplicate instead of preventing one.
+    """
+    _, conn = _make_pool_and_conn(
+        fetchrow_side_effects=[None, asyncpg.UniqueViolationError(), FakeRecord({"id": 9})]
+    )
+
+    result = await _persist_contradiction(
+        conn,
+        _make_candidate(),
+        _supports_classification("Paper A  says\tX.", "Paper B   says not   X."),
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=7,
+    )
+
+    assert result == 9
+    insert_args = conn.fetchrow.await_args_list[1].args
+    select_args = conn.fetchrow.await_args_list[2].args
+    assert insert_args[5] == select_args[3] == "Paper A says X."
+    assert insert_args[6] == select_args[4] == "Paper B says not X."
+
+
+@pytest.mark.asyncio
+async def test_persist_contradiction_reuses_legacy_whitespace_variant_before_insert():
+    """A pre-upgrade raw quote row must prevent a normalized duplicate write."""
+    _, conn = _make_pool_and_conn(fetchrow_return=FakeRecord({"id": 17}))
+
+    result = await _persist_contradiction(
+        conn,
+        _make_candidate(),
+        _supports_classification("Paper A says X.", "Paper B says not X."),
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=7,
+    )
+
+    assert result == 17
+    conn.fetchrow.assert_awaited_once()

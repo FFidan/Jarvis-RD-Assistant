@@ -19,6 +19,7 @@ from paper_ingestion.deps import (
     get_optional_qdrant,
     limiter,
 )
+from paper_ingestion.exceptions import SourceGenerationChangedError
 from paper_ingestion.extraction.entities import (
     extract_entities_for_paper,
     get_knowledge_graph,
@@ -64,7 +65,11 @@ async def batch_extract_entities(
         rows = await conn.fetch(
             """SELECT p.id, p.discovered_by FROM papers p
                JOIN paper_summaries ps ON p.id = ps.paper_id
-               WHERE p.id NOT IN (SELECT DISTINCT paper_id FROM paper_entities)
+                   AND ps.content_generation = p.content_generation
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM paper_entities pe
+                   WHERE pe.paper_id = p.id AND pe.content_generation = p.content_generation
+               )
                ORDER BY p.created_at DESC
                LIMIT 50""",
         )
@@ -113,6 +118,11 @@ async def extract_entities(
             qdrant_client=qdrant,
             user_id=attribution_user_id,
         )
+    except SourceGenerationChangedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The paper changed during entity extraction. Please retry.",
+        ) from exc
     except ValueError as e:
         msg = str(e)
         # "Paper X not found" is a genuine 404; other ValueErrors (e.g.
@@ -279,6 +289,7 @@ async def get_entity_detail(
                  AND EXISTS (
                      SELECT 1 FROM papers p
                      WHERE p.id = er.paper_id
+                       AND er.content_generation = p.content_generation
                        AND {paper_visible_sql(2)}
                  )
                ORDER BY confidence DESC""",
@@ -294,6 +305,7 @@ async def get_entity_detail(
                FROM paper_entities pe
                JOIN papers p ON p.id = pe.paper_id
                WHERE pe.entity_id = $1
+                 AND pe.content_generation = p.content_generation
                  AND {paper_visible_sql(2)}
                GROUP BY p.id, p.title
                ORDER BY mention_count DESC""",

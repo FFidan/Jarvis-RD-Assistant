@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { MyDayPage } from '@/pages/MyDayPage';
 import * as api from '@/lib/api';
 import type { MyDayResponse, RetentionStats, PulseDeck, PulseCardItem, MyDayBundle } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock the api module
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -101,16 +101,13 @@ const mockBundle: MyDayBundle = {
   journal: null,
 };
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <MyDayPage />
-      </BrowserRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <BrowserRouter>
+      <MyDayPage />
+    </BrowserRouter>,
+    { queryClient },
   );
 }
 
@@ -151,13 +148,13 @@ describe('MyDayPage', () => {
   });
 
   it('renders DateMasthead with research log header', async () => {
-    renderWithProviders();
+    renderSubject();
     // DateMasthead renders "RESEARCH LOG · ENTRY…" monospace header
     expect(await screen.findByText(/RESEARCH LOG/)).toBeInTheDocument();
   });
 
   it('renders DateMasthead counter labels', async () => {
-    renderWithProviders();
+    renderSubject();
     // DateMasthead renders lowercase counter labels: pulse, due, tasks, new
     expect(await screen.findByText('pulse')).toBeInTheDocument();
     expect(screen.getByText('due')).toBeInTheDocument();
@@ -166,7 +163,7 @@ describe('MyDayPage', () => {
   });
 
   it('hides Yesterday section when there was no recorded activity', async () => {
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/RESEARCH LOG/);
     // YesterdaySection is an on-the-fly rollup; it stays silent when
     // completed+deferred are both empty (default mock).
@@ -182,14 +179,14 @@ describe('MyDayPage', () => {
       completed: [{ id: 11, title: 'Closed the solver benchmark', status: 'done' }],
       deferred: [{ id: 12, title: 'Adjoint proof', status: 'deferred' }],
     });
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/Yesterday/i)).toBeInTheDocument();
     expect(screen.getByText('Closed the solver benchmark')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /carry over/i })).toBeInTheDocument();
   });
 
   it('renders Now section with Pulse #1 mode tab', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/Now/i)).toBeInTheDocument();
     // ModePicker uses role="tab" buttons (ARIA enhancement); Pulse #1 is always visible
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
@@ -197,46 +194,46 @@ describe('MyDayPage', () => {
   });
 
   it("renders Today's intent section marker", async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/Today's intent/i)).toBeInTheDocument();
   });
 
   it('renders tasks from my-day data in IntentSection', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText('Fix embedding pipeline')).toBeInTheDocument();
     expect(screen.getByText('Buy groceries')).toBeInTheDocument();
   });
 
   it('renders Projects section with project name', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/Projects/i)).toBeInTheDocument();
     // Wait for async data to hydrate the project list
     expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
   });
 
   it('renders Learning & focus section marker', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/Learning & focus/i)).toBeInTheDocument();
   });
 
   it('renders Learning cards sub-section', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText('Learning cards')).toBeInTheDocument();
   });
 
   it('shows Review now button when due_now > 0', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText('Review now →')).toBeInTheDocument();
   });
 
   it('shows streak days from retention stats', async () => {
-    renderWithProviders();
+    renderSubject();
     // LearningFocusSection renders "7d streak" (compact format)
     expect(await screen.findByText(/7d streak/)).toBeInTheDocument();
   });
 
   it('renders End of day shutdown ritual with the 3 structured prompts', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/End of day/i)).toBeInTheDocument();
     expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
     expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
@@ -244,14 +241,14 @@ describe('MyDayPage', () => {
   });
 
   it('does not render Triage section when no action items or foundational gaps', async () => {
-    renderWithProviders();
+    renderSubject();
     // Wait for data to load, then assert Triage is absent (it returns null when empty)
     await screen.findByText(/RESEARCH LOG/);
     expect(screen.queryByText(/Triage/i)).not.toBeInTheDocument();
   });
 
   it('renders no-pulse-yet message in HeroNow when deck is null', async () => {
-    renderWithProviders();
+    renderSubject();
     // When pulseDeck resolves to null, HeroPulse (inside HeroNow Now) shows
     // a "No Pulse for today yet" message instead of pulse card content.
     expect(
@@ -262,7 +259,7 @@ describe('MyDayPage', () => {
   it('calls getMyDayBundle once on mount (F7 bundle single round-trip)', async () => {
     // F7: one bundle call replaces ~4 per-section cold fetches. Verify the
     // bundle is fetched exactly once and the page renders correctly.
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/RESEARCH LOG/);
     await waitFor(() => {
       expect(api.getMyDayBundle).toHaveBeenCalledTimes(1);
@@ -270,7 +267,7 @@ describe('MyDayPage', () => {
   });
 
   it('FE-UIA-03: "all projects →" link uses React Router (no full-page reload)', async () => {
-    renderWithProviders();
+    renderSubject();
     // Wait for project section to render
     expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
     // The link must be a <a> element pointing to /projects but rendered via
@@ -282,7 +279,7 @@ describe('MyDayPage', () => {
   });
 
   it('FE-UIA-04: does not render the hardcoded epoch entry-number footer', async () => {
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/RESEARCH LOG/);
     // The "end of entry N" footer should no longer appear since the epoch-based
     // calculation was removed and MyDayFooter is no longer rendered.
@@ -368,7 +365,7 @@ describe('HeroPulse behaviour', () => {
     ];
     vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck(cards));
 
-    renderWithProviders();
+    renderSubject();
 
     // HeroPulse meta line: "Triage today's pulse · ~6 min · #1 of 2"
     expect(await screen.findByText(/#1 of 2/)).toBeInTheDocument();
@@ -385,7 +382,7 @@ describe('HeroPulse behaviour', () => {
     // ratePulseCard resolves immediately; onSuccess increments currentIndex
     vi.mocked(api.ratePulseCard).mockResolvedValue(undefined as any);
 
-    renderWithProviders();
+    renderSubject();
 
     // Wait for initial render
     expect(await screen.findByText(/#1 of 2/)).toBeInTheDocument();
@@ -407,7 +404,7 @@ describe('HeroPulse behaviour', () => {
     vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck(cards));
     vi.mocked(api.ratePulseCard).mockResolvedValue(undefined as any);
 
-    renderWithProviders();
+    renderSubject();
 
     // Wait for the card to appear
     expect(await screen.findByText(/#1 of 1/)).toBeInTheDocument();
@@ -467,16 +464,13 @@ describe('MyDayPage hash-scroll', () => {
     const scrollIntoViewMock = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoViewMock;
 
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    const queryClient = createTestQueryClient();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/my-day#now']}>
-          <MyDayPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/my-day#now']}>
+        <MyDayPage />
+      </MemoryRouter>,
+      { queryClient },
     );
 
     // HeroNow renders <section id="now"> — wait for it to be present in the DOM.

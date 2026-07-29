@@ -659,9 +659,38 @@ class PDFProcessor:
                     page.close()
 
             logger.info("Generated %d snapshots for paper %d", len(paths), paper_id)
+            self._prune_snapshots_beyond(snapshot_dir, len(paths), paper_id)
             return paths
         finally:
             pdf.close()
+
+    @staticmethod
+    def _prune_snapshots_beyond(snapshot_dir: Path, page_count: int, paper_id: int) -> None:
+        """Delete page images left over from a longer previous document.
+
+        The snapshot directory is keyed only by paper id, so regenerating writes
+        ``page_1``..``page_N`` over whatever was there and leaves every higher
+        page of the previous document untouched. Those files stay servable under
+        the paper's current identity as soon as its PDF pointer is restored, so
+        a replacement source shorter than the one it superseded would otherwise
+        keep serving the old document's tail with nothing left to remove it.
+        """
+        pruned = 0
+        for stale in snapshot_dir.glob("page_*.png"):
+            try:
+                index = int(stale.stem.removeprefix("page_"))
+            except ValueError:
+                continue
+            if index > page_count:
+                stale.unlink(missing_ok=True)
+                pruned += 1
+        if pruned:
+            logger.info(
+                "Removed %d page image(s) past page %d for paper %d",
+                pruned,
+                page_count,
+                paper_id,
+            )
 
     async def process(  # noqa: PLR0913 - explicit pipeline inputs
         self,

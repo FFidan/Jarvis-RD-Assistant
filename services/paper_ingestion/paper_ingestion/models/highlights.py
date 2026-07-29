@@ -55,3 +55,4 @@ class HighlightResponse(BaseModel):
     color: str | None = None
     quote: str | None = None
     created_at: datetime
+    stale: bool

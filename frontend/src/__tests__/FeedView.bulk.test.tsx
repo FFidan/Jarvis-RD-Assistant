@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { FeedView } from '@/components/feed/FeedView';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -67,18 +67,15 @@ vi.mock('sonner', () => ({
 }));
 
 function makeQueryClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderFeedView() {
-  return render(
-    <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter>
-        <FeedView surface="library" />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter>
+      <FeedView surface="library" />
+    </MemoryRouter>,
+    { queryClient: makeQueryClient() },
   );
 }
 

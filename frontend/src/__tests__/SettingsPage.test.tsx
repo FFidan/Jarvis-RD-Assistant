@@ -11,14 +11,14 @@
  *  - Default landing is research/topics (Research → Topics).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SettingsDetailPane } from '@/components/settings/SettingsDetailPane';
 import { useAuthStore } from '@/stores/auth-store';
 import * as api from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mock all api calls used by settings sections
@@ -114,15 +114,12 @@ vi.mock('@/lib/api', () => ({
 // ---------------------------------------------------------------------------
 
 function renderSettingsPage(initialSearch = '') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/settings${initialSearch}`]}>
-        <SettingsPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[`/settings${initialSearch}`]}>
+      <SettingsPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -270,15 +267,12 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   });
 
   function renderDetail(section: string, item: string) {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <SettingsDetailPane section={section} item={item} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    return renderWithProviders(
+      <MemoryRouter>
+        <SettingsDetailPane section={section} item={item} />
+      </MemoryRouter>,
+      { queryClient },
     );
   }
 
@@ -381,13 +375,12 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
       apiKey: null,
       user: { id: 1, email: 'user@example.com', role: 'user' },
     });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <SettingsDetailPane section="integrations" item="bot-token" />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <SettingsDetailPane section="integrations" item="bot-token" />
+      </MemoryRouter>,
+      { queryClient },
     );
     await waitFor(() =>
       expect(screen.getByText(/Admin access required/i)).toBeInTheDocument(),
@@ -403,13 +396,12 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
       apiKey: null,
       user: { id: 1, email: 'admin@example.com', role: 'admin' },
     });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <SettingsDetailPane section="integrations" item="bot-token" />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <SettingsDetailPane section="integrations" item="bot-token" />
+      </MemoryRouter>,
+      { queryClient },
     );
     // Access-denied must NOT appear
     expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument();

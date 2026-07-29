@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import httpx
 import pytest
-from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import make_contract_client as _client
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -27,10 +26,6 @@ def _topic_row(id: int = 1, name: str = "ML Topics") -> FakeRecord:
         enabled=True,
         created_at=datetime.now(UTC),
     )
-
-
-def _client(app: object) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 @pytest.fixture()

@@ -2,17 +2,19 @@
 
 The repo-root ``test_docker_compose_invariants.py`` covers the compose YAML;
 nothing covered the shell-script TEXT invariants that keep a re-run from
-destroying operator data. Two guards live here:
+destroying operator data. Three guards live here:
 
   1. ``docker compose down -v`` / ``down --volumes`` (deletes named volumes ->
      Postgres/Qdrant/backups) may appear ONLY in ephemeral-project scripts that
      isolate their compose project, and every such use must carry that isolation
      (``-p`` / ``--project-name`` / ``COMPOSE_PROJECT_NAME``) so it can never hit
      the operator's real deployment.
-  2. ``docker {system,image,volume,network,builder} prune`` must never be an
+  2. The clean-install smoke must pass its project into setup, verify resource
+     ownership, and prove that teardown removed all three resource classes.
+  3. ``docker {system,image,volume,network,builder} prune`` must never be an
      executed command in these scripts (printed user guidance is fine).
 
-Both are pure text checks: no docker daemon, no network.
+All are pure text checks: no docker daemon, no network.
 """
 
 import re
@@ -91,6 +93,18 @@ def _logical_commands(path: Path):
         yield start, " ".join(buf)
 
 
+def _shell_function_body(path: Path, name: str) -> str:
+    """Return one top-level shell function for focused text invariants."""
+    text = path.read_text()
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{\n(?P<body>.*?)^\}}$",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"{_rel(path)} must define {name}()"
+    return match.group("body")
+
+
 def test_down_volumes_only_in_isolated_ephemeral_scripts():
     """`down -v` must not touch the real project: banned outside the ephemeral
     scripts, and every allowed use must isolate its compose project."""
@@ -115,6 +129,56 @@ def test_down_volumes_only_in_isolated_ephemeral_scripts():
     assert not unisolated, (
         "`down -v` in an allowed script is missing project isolation "
         f"(-p / --project-name / COMPOSE_PROJECT_NAME): {unisolated}"
+    )
+
+
+def test_first_run_smoke_proves_project_ownership_and_cleanup():
+    """The primary bootstrap must scope setup itself and verify owned cleanup."""
+    path = REPO_ROOT / "scripts" / "first-run-smoke.sh"
+    text = path.read_text()
+    assert '_smoke_lock_path="$(host_lifecycle_lock_path "$REPO_ROOT")"' in text
+    assert 'readonly SMOKE_PROJECT="jarvis-firstrun-${_smoke_project_key:0:16}"' in text, (
+        "separate checkouts must not share the same disposable Compose project"
+    )
+    lock_claim = 'claim_host_lifecycle_lock "$REPO_ROOT"'
+    project_probe = 'existing_containers="$(project_resource_ids "$SMOKE_PROJECT" containers)"'
+    assert (
+        text.index(lock_claim) < text.index(project_probe) < text.index("SMOKE_OWNS_PROJECT=1")
+    ), "the smoke must hold its checkout lock before it can own teardown"
+
+    bootstrap = re.search(
+        r"^BOOTSTRAP_CMD=\((?P<body>.*?)^\)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert bootstrap, "first-run smoke must define its setup bootstrap as an array"
+    assert re.search(
+        r'--compose-project-name\s+"\$SMOKE_PROJECT"',
+        bootstrap.group("body"),
+    ), "setup.sh must receive the isolated project through its explicit option"
+
+    assert 'existing_networks="$(project_resource_ids "$SMOKE_PROJECT" networks)"' in text
+    assert 'require_project_resource_labels "$SMOKE_PROJECT" "$_kind"' in text
+    assert 'project_has_resources "$CHECKOUT_PROJECT"' in text
+    assert text.index('if [ "$ENV_PREEXISTED" -eq 1 ]') < text.index(project_probe), (
+        "an operator .env must be refused before any forced cleanup"
+    )
+    assert 'docker rm -f "$_resource"' in text
+    assert 'docker network rm "$_resource"' in text
+    assert 'docker volume rm "$_resource"' in text
+
+    teardown = _shell_function_body(path, "teardown")
+    assert 'if [ "$SMOKE_OWNS_PROJECT" -eq 1 ]' in teardown, (
+        "a refusal before project acquisition must not tear down pre-existing state"
+    )
+    assert "for kind in containers volumes networks" in teardown
+    assert 'project_resource_ids "$SMOKE_PROJECT" "$kind"' in teardown
+    assert "cleanup_ok=0" in teardown and "rc=1" in teardown, (
+        "leftover or uninspectable resources must make the smoke fail"
+    )
+    assert text.count('docker compose -p "$SMOKE_PROJECT" down -v') == 1, (
+        "broad project deletion is reserved for teardown after this run acquires "
+        "the isolated project"
     )
 
 

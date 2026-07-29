@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import PTBContextOptions, make_ptb_context, seed_user_row
 from telegram_bot.config import BotConfig
 
 pytestmark = [
@@ -86,15 +87,6 @@ class TgContractPool:
 # ---------------------------------------------------------------------------
 
 
-async def _seed_user(conn: Any, email: str) -> int:
-    """Insert a minimal users row; return user_id."""
-    user_id: int = await conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        email,
-    )
-    return user_id
-
-
 async def _seed_pairing_token(
     conn: Any,
     user_id: int,
@@ -120,17 +112,11 @@ def _make_context(pool: Any, config: Any = None, *, args: list[str] | None = Non
     """Build a minimal PTB context mock wired to the given pool."""
     from jarvis_common.testing import make_bot_config
 
-    ctx = MagicMock()
-    ctx.args = args or []
-    ctx.bot = MagicMock()
-    ctx.bot.send_message = AsyncMock()
-    ctx.application = MagicMock()
-    ctx.application.bot_data = {
-        "config": config or make_bot_config(BotConfig, telegram_chat_id=None),
-        "db_pool": pool,
-        "http_client": AsyncMock(),
-    }
-    return ctx
+    return make_ptb_context(
+        pool,
+        config or make_bot_config(BotConfig, telegram_chat_id=None),
+        options=PTBContextOptions(args=args, with_bot=True),
+    )
 
 
 def _make_update_with_text(text: str, *, chat_id: int = 42) -> MagicMock:
@@ -182,7 +168,7 @@ async def test_pair_command_persists_pairing(contract_conn):
 
     _timestamps.clear()
 
-    user_id = await _seed_user(contract_conn, "tg-contract-pair@test.local")
+    user_id = await seed_user_row(contract_conn, "tg-contract-pair@test.local")
     token = await _seed_pairing_token(contract_conn, user_id, "contract-pair-token-001")
 
     pool = TgContractPool(contract_conn)
@@ -232,7 +218,7 @@ async def test_whoami_command_reads_real_pairing(contract_conn):
 
     _timestamps.clear()
 
-    user_id = await _seed_user(contract_conn, "tg-contract-whoami@test.local")
+    user_id = await seed_user_row(contract_conn, "tg-contract-whoami@test.local")
     # Insert a pairing row directly (bypass pair_command for isolation)
     await contract_conn.execute(
         """INSERT INTO telegram_user_pairings (user_id, chat_id, telegram_username, paired_at)
@@ -287,7 +273,7 @@ async def test_unpair_command_deletes_pairing(contract_conn):
 
     _timestamps.clear()
 
-    user_id = await _seed_user(contract_conn, "tg-contract-unpair@test.local")
+    user_id = await seed_user_row(contract_conn, "tg-contract-unpair@test.local")
     await contract_conn.execute(
         """INSERT INTO telegram_user_pairings (user_id, chat_id, telegram_username, paired_at)
            VALUES ($1, $2, $3, NOW())""",
@@ -335,7 +321,7 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 
     _timestamps.clear()
 
-    user_id = await _seed_user(contract_conn, "tg-contract-expired@test.local")
+    user_id = await seed_user_row(contract_conn, "tg-contract-expired@test.local")
     # Seed an already-expired token
     token = await _seed_pairing_token(
         contract_conn,

@@ -22,10 +22,6 @@ from httpx import ASGITransport
 # ---------------------------------------------------------------------------
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 def _make_nudge_record(**kwargs) -> dict:
     defaults = {
         "id": 1,
@@ -34,7 +30,7 @@ def _make_nudge_record(**kwargs) -> dict:
         "enabled": True,
         "config": {},
         "last_fired_at": None,
-        "created_at": _now(),
+        "created_at": datetime.now(UTC),
     }
     defaults.update(kwargs)
     return defaults

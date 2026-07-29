@@ -16,6 +16,8 @@ from starlette.datastructures import Headers
 
 _SETUP_TOKEN = "test-sentinel-token"
 
+pytestmark = pytest.mark.usefixtures("_disable_limiter")
+
 
 @pytest.fixture(autouse=True)
 def _setup_token_env(monkeypatch):
@@ -28,16 +30,6 @@ def _setup_token_env(monkeypatch):
     get_secrets_settings.cache_clear()
     yield
     get_secrets_settings.cache_clear()
-
-
-@pytest.fixture(autouse=True)
-def _disable_limiter():
-    from paper_ingestion.deps import limiter
-
-    original = limiter.enabled
-    limiter.enabled = False
-    yield
-    limiter.enabled = original
 
 
 def _build_request(

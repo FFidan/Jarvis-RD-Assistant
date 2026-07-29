@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
 import type { PulseDeck as PulseDeckType, PulseStats } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockStartJob = vi.fn();
 const mockHasRunning = vi.fn().mockReturnValue(false);
@@ -94,18 +94,15 @@ function makeStats(overrides: Partial<PulseStats> = {}): PulseStats {
 }
 
 function renderDeck() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
-        <Routes>
-          <Route path="/" element={<PulseDeck />} />
-          <Route path="/paper/:paperId" element={<div data-testid="paper-detail">Paper Detail</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route path="/" element={<PulseDeck />} />
+        <Route path="/paper/:paperId" element={<div data-testid="paper-detail">Paper Detail</div>} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

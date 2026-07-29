@@ -21,10 +21,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import asyncpg
-import httpx
 import pytest
 from fastapi import HTTPException
-from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import make_contract_client as _client
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 from tests.migration_helpers import apply_fresh_init
@@ -40,10 +39,6 @@ def _template_row(id=1, name="Default Template", is_default=True):
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-
-
-def _client(app):
-    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 @pytest.fixture()

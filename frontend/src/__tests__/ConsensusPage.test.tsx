@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConsensusPage } from '@/pages/ConsensusPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const fetchConsensusMock = vi.fn();
 const scanContradictionsMock = vi.fn().mockResolvedValue({ job_id: 'x', status: 'queued' });
@@ -32,13 +32,12 @@ vi.mock('@/stores/job-store', () => ({
 }));
 
 function renderPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/consensus']}>
-        <ConsensusPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/consensus']}>
+      <ConsensusPage />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 
@@ -85,6 +84,28 @@ describe('ConsensusPage', () => {
     expect(screen.queryByText(/A supports X/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /show evidence/i }));
     expect(await screen.findByText(/A supports X/)).toBeInTheDocument();
+  });
+
+  it('labels a truncated consensus response as incomplete', async () => {
+    fetchConsensusMock.mockResolvedValue({
+      total: 1,
+      truncated: true,
+      claims: [
+        {
+          claim_topic: 'effect of X on Y',
+          supports: 1,
+          opposes: 0,
+          paper_ids: [1, 2],
+          assessments: [],
+        },
+      ],
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByRole('status', { name: /incomplete consensus view/i }),
+    ).toBeInTheDocument();
   });
 
   it('shows an honest empty state when there are no claims', async () => {

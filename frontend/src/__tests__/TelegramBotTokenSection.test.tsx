@@ -9,9 +9,8 @@
  *  5. Shows a format error when the token doesn't match the expected pattern.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // ---------------------------------------------------------------------------
 // Hoisted fixtures
@@ -43,6 +42,7 @@ vi.mock('@/stores/auth-store', () => ({
 }));
 
 import { getTelegramBotToken, saveTelegramBotToken } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGet = vi.mocked(getTelegramBotToken);
 const mockSave = vi.mocked(saveTelegramBotToken);
 
@@ -51,7 +51,7 @@ const mockSave = vi.mocked(saveTelegramBotToken);
 // ---------------------------------------------------------------------------
 
 function makeQC() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 async function renderSection() {
@@ -59,10 +59,9 @@ async function renderSection() {
     '@/components/settings/TelegramBotTokenSection'
   );
   const qc = makeQC();
-  return render(
-    <QueryClientProvider client={qc}>
-      <TelegramBotTokenSection />
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <TelegramBotTokenSection />,
+    { queryClient: qc },
   );
 }
 

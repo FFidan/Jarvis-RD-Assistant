@@ -12,6 +12,7 @@ shim.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -22,14 +23,43 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 _TXN_LINE_RE = re.compile(r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", re.IGNORECASE)
+_SCHEMA_FLOOR_CONTENTION_TIMEOUT_SECONDS = 5.0
+_SCHEMA_FLOOR_CONTENTION_POLL_SECONDS = 0.1
 
 # db/init.sql is the full schema baseline through migration 101; db/migrations/
-# holds the required post-baseline migrations through 0106.
+# holds the required post-baseline migrations. db/SCHEMA_VERSION records the
+# highest version shipped; it is not duplicated here.
 _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 106
+_REQUIRED_CODE_SCHEMA_FALLBACK = 110
+
+
+def _log_migration_notice(_connection: object, message: object) -> None:
+    """Forward PostgreSQL migration notices to the service log."""
+    logger.info("PostgreSQL migration notice: %s", message)
+
+
+async def _apply_migration_sql(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    cleaned_sql: str,
+    version: int,
+) -> None:
+    """Execute one migration and record it, forwarding server notices."""
+    forwards_notices = isinstance(
+        conn,
+        asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    )
+    if forwards_notices:
+        conn.add_log_listener(_log_migration_notice)
+    try:
+        async with conn.transaction():
+            await conn.execute(cleaned_sql)
+            await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+    finally:
+        if forwards_notices:
+            conn.remove_log_listener(_log_migration_notice)
 
 
 def _schema_version_path() -> Path:
@@ -48,11 +78,16 @@ def _schema_version_path() -> Path:
 def required_code_schema() -> int:
     """Return the minimum schema version this build requires to run.
 
-    Reads ``db/SCHEMA_VERSION`` — the single source of the baseline floor,
-    bumped only when migrations are next squashed into ``init.sql``. Falls back
-    to a module constant (with a warning) when that file is missing or
-    unparseable, so a packaging glitch degrades to the known floor rather than
-    crashing startup.
+    Reads ``db/SCHEMA_VERSION`` — the highest migration version this build
+    ships, bumped by every migration that lands rather than only at a squash.
+    The floor is asserted after the apply loop, so an older database is carried
+    up to it instead of being refused; only one that is still below it when
+    there is nothing left to apply fails to start.
+
+    Falls back to a module constant when the file is absent, silently, because
+    not every image ships it — an absent file is expected, not a
+    misconfiguration. A file that is present but unparseable does indicate a
+    packaging fault, so that case warns before degrading to the same constant.
     """
     path = _schema_version_path()
     try:
@@ -90,6 +125,31 @@ async def _assert_schema_floor(
             f"build requires at least {floor}. Apply the missing migrations or restore "
             "from a compatible backup."
         )
+
+
+async def _wait_for_schema_floor_after_contention(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+) -> None:
+    """Wait briefly for the lock holder to bring the database to this build's floor.
+
+    A plain floor assertion would reject a compatible second instance while
+    the first instance is still applying migrations. The wait remains bounded
+    so a stalled migrator cannot make startup serve an unverified schema.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _SCHEMA_FLOOR_CONTENTION_TIMEOUT_SECONDS
+    while True:
+        try:
+            await _assert_schema_floor(conn)
+            return
+        except RuntimeError:
+            delay = min(
+                _SCHEMA_FLOOR_CONTENTION_POLL_SECONDS,
+                deadline - loop.time(),
+            )
+            if delay <= 0:
+                raise
+            await asyncio.sleep(delay)
 
 
 def _strip_outer_transaction_control(sql: str) -> str:
@@ -222,7 +282,10 @@ async def run_migrations(
             # Bound the advisory-lock wait so a crashed holder never stalls startup.
             await conn.execute("SET LOCAL lock_timeout = '60s'")
             try:
-                await conn.execute("SELECT pg_advisory_xact_lock(42)")
+                # Keep a lock-timeout error inside a savepoint so the outer
+                # transaction remains usable for the compatibility recheck.
+                async with conn.transaction():
+                    await conn.execute("SELECT pg_advisory_xact_lock(42)")
             except asyncpg.PostgresError as exc:
                 if getattr(exc, "sqlstate", None) != "55P03":
                     raise  # Not a lock-timeout error — let it propagate
@@ -232,7 +295,8 @@ async def run_migrations(
                     "true",
                     "yes",
                 }:
-                    logger.warning("%s; skipping because compatibility flag is set", message)
+                    logger.warning("%s; waiting briefly for schema compatibility", message)
+                    await _wait_for_schema_floor_after_contention(conn)
                     return
                 raise RuntimeError(f"{message}; refusing to start with unverified schema") from None
             await conn.execute("""
@@ -256,6 +320,10 @@ async def run_migrations(
                     migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
             if not migrations_dir.exists():
                 logger.warning("Migrations directory not found, skipping migrations")
+                # Still inside the advisory-locked transaction: with nothing to
+                # apply from, the live schema is final for this boot, so the
+                # floor must be checked here rather than skipped.
+                await _assert_schema_floor(conn)
                 return
 
             # Detect version collisions before applying anything — fail loudly so
@@ -290,11 +358,7 @@ async def run_migrations(
                 # Skip stripping inside $$-quoted blocks (PL/pgSQL function bodies
                 # and DO blocks legitimately use `BEGIN`/`END` on their own lines).
                 cleaned_sql = _strip_outer_transaction_control(sql)
-                async with conn.transaction():
-                    await conn.execute(cleaned_sql)
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                    )
+                await _apply_migration_sql(conn, cleaned_sql, version)
                 logger.info("Migration %s applied successfully", version)
 
             # Still inside the advisory-locked transaction: refuse to serve on a

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Expose paper selection in tests without fighting the real combobox
 vi.mock('@/components/shared/PaperSearchSelect', () => ({
@@ -48,15 +48,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ExtractionTablePage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ExtractionTablePage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

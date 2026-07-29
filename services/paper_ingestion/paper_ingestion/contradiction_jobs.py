@@ -30,8 +30,7 @@ async def _contradictions_scan_job(
         raise RuntimeError("openai_client not initialized")
     paper_id = payload.get("paper_id")
     limit = int(payload.get("limit") or 25)
-    user_id_raw = payload.get("user_id")
-    user_id = int(user_id_raw) if user_id_raw is not None else None
+    user_id = int(payload["user_id"])
     await ctx.update_progress(0.1, "Collecting verified findings")
     result = await scan_contradictions(
         pool,

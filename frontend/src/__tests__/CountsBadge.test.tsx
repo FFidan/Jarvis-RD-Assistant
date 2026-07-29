@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CountsBadge } from '@/components/feed/CountsBadge';
+import type { FeedCountsResponse } from '@/types';
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
@@ -12,93 +13,85 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 
 import { useQuery } from '@tanstack/react-query';
 
-const EMPTY_COUNTS = { inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0 };
+const EMPTY_COUNTS: FeedCountsResponse = {
+  inbox: 0,
+  library: 0,
+  reading_list: 0,
+  reading: 0,
+  done: 0,
+  starred: 0,
+  trash: 0,
+  active: 0,
+  kept: 0,
+  all_non_trash: 0,
+};
+
+type CountsSurface = keyof FeedCountsResponse;
+
+type HiddenBadgeCase = readonly [
+  name: string,
+  surface: CountsSurface,
+  data: FeedCountsResponse | undefined,
+  isLoading: boolean,
+];
+
+type VisibleBadgeCase = readonly [
+  name: string,
+  surface: CountsSurface,
+  data: FeedCountsResponse,
+  expected: string,
+  unexpected?: string,
+];
+
+function counts(overrides: Partial<FeedCountsResponse>): FeedCountsResponse {
+  return { ...EMPTY_COUNTS, ...overrides };
+}
+
+const HIDDEN_BADGE_CASES = [
+  ['renders nothing while data is loading', 'inbox', undefined, true],
+  ['renders nothing when data is undefined', 'library', undefined, false],
+  ['renders nothing when the count is zero', 'inbox', EMPTY_COUNTS, false],
+] satisfies ReadonlyArray<HiddenBadgeCase>;
+
+const VISIBLE_BADGE_CASES = [
+  ['renders a positive inbox count', 'inbox', counts({ inbox: 5 }), '5', undefined],
+  ['renders the library count', 'library', counts({ library: 12 }), '12', undefined],
+  ['caps counts above 999', 'inbox', counts({ inbox: 1000 }), '999+', '1000'],
+  ['caps a count of exactly 1000', 'library', counts({ library: 1000 }), '999+', undefined],
+  ['renders exactly 999 without a suffix', 'inbox', counts({ inbox: 999 }), '999', '999+'],
+  ['renders the trash count', 'trash', counts({ trash: 3 }), '3', undefined],
+] satisfies ReadonlyArray<VisibleBadgeCase>;
+
+function mockCountsQuery(
+  data: FeedCountsResponse | undefined,
+  isLoading: boolean,
+): void {
+  vi.mocked(useQuery).mockReturnValue({
+    data,
+    isLoading,
+  } as ReturnType<typeof useQuery>);
+}
 
 describe('CountsBadge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders nothing while data is loading (isLoading=true)', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-    } as ReturnType<typeof useQuery>);
-    const { container } = render(<CountsBadge surface="inbox" />);
+  it.each(HIDDEN_BADGE_CASES)('%s', (_name, surface, data, isLoading) => {
+    mockCountsQuery(data, isLoading);
+    const { container } = render(<CountsBadge surface={surface} />);
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders nothing when data is undefined (not yet loaded)', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    const { container } = render(<CountsBadge surface="library" />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('renders nothing when count is 0 (zero is suppressed)', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: EMPTY_COUNTS,
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    const { container } = render(<CountsBadge surface="inbox" />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('renders the count when count is a positive number', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, inbox: 5, active: 5, all_non_trash: 5 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="inbox" />);
-    expect(screen.getByText('5')).toBeInTheDocument();
-  });
-
-  it('renders the library count for surface="library"', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, library: 12, all_non_trash: 12 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="library" />);
-    expect(screen.getByText('12')).toBeInTheDocument();
-  });
-
-  it('renders "999+" when count exceeds 999', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, inbox: 1000, active: 1000, all_non_trash: 1000 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="inbox" />);
-    expect(screen.getByText('999+')).toBeInTheDocument();
-    expect(screen.queryByText('1000')).not.toBeInTheDocument();
-  });
-
-  it('renders "999+" for count exactly 1000', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, library: 1000, all_non_trash: 1000 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="library" />);
-    expect(screen.getByText('999+')).toBeInTheDocument();
-  });
-
-  it('renders the count as text for count exactly 999', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, inbox: 999, active: 999, all_non_trash: 999 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="inbox" />);
-    expect(screen.getByText('999')).toBeInTheDocument();
-    expect(screen.queryByText('999+')).not.toBeInTheDocument();
-  });
-
-  it('renders the trash count for surface="trash"', () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: { ...EMPTY_COUNTS, trash: 3 },
-      isLoading: false,
-    } as ReturnType<typeof useQuery>);
-    render(<CountsBadge surface="trash" />);
-    expect(screen.getByText('3')).toBeInTheDocument();
-  });
+  it.each(VISIBLE_BADGE_CASES)(
+    '%s',
+    (_name, surface, data, expected, unexpected) => {
+      mockCountsQuery(data, false);
+      render(<CountsBadge surface={surface} />);
+      expect(screen.getByText(expected)).toBeInTheDocument();
+      if (unexpected !== undefined) {
+        expect(screen.queryByText(unexpected)).not.toBeInTheDocument();
+      }
+    },
+  );
 });

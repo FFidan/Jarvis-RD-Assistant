@@ -447,8 +447,15 @@ class _ScopedConn:
     _SCOPED = re.compile(r"user_id (?:=|IS NOT DISTINCT FROM) \$2")
 
     def _select(self, sql: str, args: tuple) -> list[FakeRecord]:
-        table = next(name for name in self._tables if name in sql)
+        table = next(
+            name
+            for name in ("paper_summaries", "paper_notes", "cards", "paper_extractions", "papers")
+            if name in sql
+        )
         rows = [r for r in self._tables[table] if r["paper_id"] == args[0]]
+        if "content_generation = (SELECT content_generation FROM papers" in sql:
+            generation = self._tables["papers"][0].get("content_generation")
+            rows = [r for r in rows if r.get("content_generation") in {None, generation}]
         if any("user_id" in r for r in rows):
             assert self._SCOPED.search(sql), f"unscoped query for {table}: {sql}"
             rows = [r for r in rows if r.get("user_id") == args[1]]
@@ -549,6 +556,44 @@ async def test_markdown_export_placeholder_when_not_summarized() -> None:
     assert NO_SUMMARY_PLACEHOLDER in export.text
     assert "not yet been summarized" in export.text
     assert "```bibtex" in export.text, "an unsummarized paper still exports its citation"
+
+
+@pytest.mark.asyncio
+async def test_markdown_export_labels_stale_user_work_and_omits_stale_extractions() -> None:
+    tables = _markdown_tables(
+        papers=[
+            dict(
+                _paper(paper_id=5, zotero_citation_key="Key2017"), paper_id=5, content_generation=2
+            )
+        ],
+        paper_notes=[
+            {
+                "paper_id": 5,
+                "user_id": 1,
+                "user_note": "Current note",
+                "highlight_text": None,
+                "page_number": None,
+                "content_generation": 2,
+            },
+            {
+                "paper_id": 5,
+                "user_id": 1,
+                "user_note": "Retained stale note",
+                "highlight_text": None,
+                "page_number": None,
+                "content_generation": 1,
+            },
+        ],
+        paper_extractions=[
+            {"paper_id": 5, "user_id": 1, "extractions": {"old": "stale"}, "content_generation": 1},
+        ],
+    )
+
+    export = await _build(tables)
+
+    assert "## Notes from a previous source version" in export.text
+    assert "Retained stale note" in export.text
+    assert "| old | stale |" not in export.text
 
 
 @pytest.mark.asyncio

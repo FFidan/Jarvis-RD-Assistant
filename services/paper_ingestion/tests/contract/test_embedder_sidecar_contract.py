@@ -6,8 +6,18 @@ Survivor-of: mock-heavy embedder/Qdrant tests that asserted calls against
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
 import httpx
 import pytest
+
+if TYPE_CHECKING:
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import Embedder
 
 pytestmark = [
     pytest.mark.contract,
@@ -30,6 +40,177 @@ def _private_visibility(source_type: str):
     return VectorVisibility(source_type, "private", _VISIBILITY_GENERATION)
 
 
+async def _store_chunk_rows(conn, *paper_ids: int) -> None:
+    """Record the chunk row that processing writes alongside each stored vector.
+
+    The RAG paths serve an excerpt only while the owning paper still stores the
+    matching ``paper_chunks`` row, so a test that embeds a chunk directly must
+    write the row the real workflow would have written. Each paper here embeds
+    exactly one chunk, at index 0.
+    """
+    await conn.executemany(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content) VALUES ($1, 0, $2)",
+        [(paper_id, "embedded chunk") for paper_id in paper_ids],
+    )
+
+
+@dataclass(slots=True)
+class _EmbeddingSidecars:
+    """HTTP and vector-store collaborators backed by local sidecars."""
+
+    http_client: httpx.AsyncClient
+    qdrant: FauxQdrantClient
+
+
+@dataclass(slots=True)
+class _EmbedderSidecars(_EmbeddingSidecars):
+    """Local sidecars plus an initialized Embedder."""
+
+    embedder: Embedder
+
+
+@dataclass(slots=True)
+class _ReembedSidecars:
+    """Resources and script metadata needed by re-embedding contracts."""
+
+    qdrant: FauxQdrantClient
+    run: Callable[[int], Awaitable[int]]
+    embedding_model_name: str
+    script_error: type[Exception]
+
+
+@asynccontextmanager
+async def _embedding_sidecars(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    qdrant: FauxQdrantClient | None = None,
+) -> AsyncIterator[_EmbeddingSidecars]:
+    """Start the local embedding transport with an isolated vector store."""
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    selected_qdrant = qdrant if qdrant is not None else FauxQdrantClient()
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        async with httpx.AsyncClient() as http_client:
+            yield _EmbeddingSidecars(http_client=http_client, qdrant=selected_qdrant)
+
+
+@asynccontextmanager
+async def _initialized_embedder_sidecars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[_EmbedderSidecars]:
+    """Start sidecars and initialize the production Embedder collection."""
+    from paper_ingestion.ingestion.embedder import Embedder
+
+    async with _embedding_sidecars(monkeypatch) as sidecars:
+        embedder = Embedder(
+            sidecars.http_client,
+            sidecars.qdrant,
+            visibility_generation_provider=_current_visibility_generation,
+        )
+        await embedder.ensure_collection()
+        yield _EmbedderSidecars(
+            http_client=sidecars.http_client,
+            qdrant=sidecars.qdrant,
+            embedder=embedder,
+        )
+
+
+@asynccontextmanager
+async def _reembed_sidecars(
+    contract_conn: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    qdrant: FauxQdrantClient | None = None,
+    continue_on_error: bool | None = None,
+) -> AsyncIterator[_ReembedSidecars]:
+    """Initialize the script boundary against local embedding sidecars."""
+    import importlib
+    import sys
+    from pathlib import Path
+
+    from jarvis_common.testing import SharedConnPool
+
+    repo_root = str(Path(__file__).resolve().parents[4])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    if continue_on_error is not None:
+        monkeypatch.setenv("REEMBED_CONTINUE_ON_ERROR", str(continue_on_error).lower())
+
+    async with _embedding_sidecars(monkeypatch, qdrant=qdrant) as sidecars:
+        import scripts.reembed as reembed_module
+
+        importlib.reload(reembed_module)
+        from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+        await sidecars.qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type(
+                "_VP",
+                (),
+                {"size": EMBEDDING_DIMENSION, "distance": "Cosine"},
+            )(),
+        )
+        shared_pool: SharedConnPool = SharedConnPool(contract_conn)
+
+        async def _run(paper_id: int) -> int:
+            return await reembed_module.reembed_paper(
+                paper_id,
+                shared_pool,
+                sidecars.qdrant,
+                sidecars.http_client,
+                visibility_generation=_VISIBILITY_GENERATION,
+            )
+
+        yield _ReembedSidecars(
+            qdrant=sidecars.qdrant,
+            run=_run,
+            embedding_model_name=reembed_module.EMBEDDING_MODEL_NAME,
+            script_error=reembed_module.ScriptError,
+        )
+
+
+async def _seed_shared_and_private_vectors(
+    embedder: Embedder,
+    *,
+    user_id: int,
+    shared_paper_id: int,
+    private_paper_id: int,
+) -> None:
+    """Store the shared-library and private-only vectors used by scope tests."""
+    from paper_ingestion.models import ChunkForEmbedding
+
+    await embedder.embed_and_store(
+        shared_paper_id,
+        [
+            ChunkForEmbedding(
+                chunk_index=0,
+                content="reproducibility methods shared across the corpus",
+                page_number=1,
+                start_char=0,
+                end_char=48,
+            )
+        ],
+        user_id=user_id,
+        visibility=_private_visibility("arxiv"),
+    )
+    await embedder.embed_and_store(
+        private_paper_id,
+        [
+            ChunkForEmbedding(
+                chunk_index=0,
+                content="reproducibility notes private to user A only",
+                page_number=1,
+                start_char=0,
+                end_char=45,
+            )
+        ],
+        user_id=user_id,
+        visibility=_private_visibility("upload"),
+    )
+
+
 async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatch):
     """Embedder uses real HTTP embeddings plus Qdrant-compatible search/storage.
 
@@ -37,70 +218,58 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
     # Verified: services/paper_ingestion/paper_ingestion/ingestion/search.py:130
     # Verified: services/paper_ingestion/paper_ingestion/ingestion/search.py:288
     """
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
     from paper_ingestion.models import ChunkForEmbedding
 
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-        async with httpx.AsyncClient() as http_client:
-            qdrant = FauxQdrantClient()
-            embedder = Embedder(
-                http_client,
-                qdrant,
-                visibility_generation_provider=_current_visibility_generation,
-            )
-            await embedder.ensure_collection()
+    async with _initialized_embedder_sidecars(monkeypatch) as sidecars:
+        await sidecars.embedder.embed_and_store(
+            10,
+            [
+                ChunkForEmbedding(
+                    chunk_index=0,
+                    content="alpha methods and reproducibility",
+                    page_number=1,
+                    start_char=0,
+                    end_char=33,
+                ),
+                ChunkForEmbedding(
+                    chunk_index=1,
+                    content="beta results and limitations",
+                    page_number=2,
+                    start_char=34,
+                    end_char=62,
+                ),
+            ],
+            user_id=7,
+            visibility=_private_visibility("arxiv"),
+        )
+        await sidecars.embedder.embed_and_store(
+            11,
+            [
+                ChunkForEmbedding(
+                    chunk_index=0,
+                    content="private paper for a different user",
+                    page_number=1,
+                    start_char=0,
+                    end_char=34,
+                )
+            ],
+            user_id=8,
+            visibility=_private_visibility("upload"),
+        )
 
-            await embedder.embed_and_store(
-                10,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="alpha methods and reproducibility",
-                        page_number=1,
-                        start_char=0,
-                        end_char=33,
-                    ),
-                    ChunkForEmbedding(
-                        chunk_index=1,
-                        content="beta results and limitations",
-                        page_number=2,
-                        start_char=34,
-                        end_char=62,
-                    ),
-                ],
-                user_id=7,
-                visibility=_private_visibility("arxiv"),
-            )
-            await embedder.embed_and_store(
-                11,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="private paper for a different user",
-                        page_number=1,
-                        start_char=0,
-                        end_char=34,
-                    )
-                ],
-                user_id=8,
-                visibility=_private_visibility("upload"),
-            )
-
-            in_paper = await embedder.search_chunks_in_paper(
-                "alpha reproducibility",
-                paper_id=10,
-                limit=5,
-                score_threshold=0.0,
-            )
-            scoped_global = await embedder.search_chunks_global(
-                "paper",
-                user_id=7,
-                library_paper_ids=[10],
-                limit=10,
-                score_threshold=0.0,
-            )
+        in_paper = await sidecars.embedder.search_chunks_in_paper(
+            "alpha reproducibility",
+            paper_id=10,
+            limit=5,
+            score_threshold=0.0,
+        )
+        scoped_global = await sidecars.embedder.search_chunks_global(
+            "paper",
+            user_id=7,
+            library_paper_ids=[10],
+            limit=10,
+            score_threshold=0.0,
+        )
 
     assert {row["chunk_index"] for row in in_paper} == {0, 1}
     assert {row["paper_id"] for row in scoped_global} == {10}
@@ -131,9 +300,7 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
 ):
     """Caller B retrieves a joint-library paper but never A-only private Q."""
     from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
-    from paper_ingestion.models import ChunkForEmbedding, CrossPaperAskRequest
+    from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
 
     user_a = await contract_conn.fetchval(
@@ -165,61 +332,34 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
         user_b,
     )
 
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-        async with httpx.AsyncClient() as http_client:
-            qdrant = FauxQdrantClient()
-            embedder = Embedder(
-                http_client,
-                qdrant,
-                visibility_generation_provider=_current_visibility_generation,
-            )
-            await embedder.ensure_collection()
+    async with _initialized_embedder_sidecars(monkeypatch) as sidecars:
+        # Both vectors retain A as legacy attribution, but authorization
+        # depends only on complete private-scope metadata plus membership.
+        await _seed_shared_and_private_vectors(
+            sidecars.embedder,
+            user_id=user_a,
+            shared_paper_id=paper_p,
+            private_paper_id=paper_q,
+        )
+        await _store_chunk_rows(contract_conn, paper_p, paper_q)
 
-            # Both vectors retain A as legacy attribution, but authorization
-            # depends only on complete private-scope metadata plus membership.
-            await embedder.embed_and_store(
-                paper_p,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility methods shared across the corpus",
-                        page_number=1,
-                        start_char=0,
-                        end_char=48,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("arxiv"),
-            )
-            await embedder.embed_and_store(
-                paper_q,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility notes private to user A only",
-                        page_number=1,
-                        start_char=0,
-                        end_char=45,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("upload"),
-            )
+        # Isolate filter behaviour: identity rerank (no reranker config / network).
+        sidecars.embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
 
-            # Isolate filter behaviour: identity rerank (no reranker config / network).
-            embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
-
-            pool = SharedConnPool(contract_conn)
-            body = CrossPaperAskRequest(
-                question="reproducibility",
-                max_chunks=10,
-                max_papers=5,
-                decompose=False,
-            )
-            result = await prepare_cross_paper_rag(
-                embedder, pool, body, http_client, user_id=user_b
-            )
+        pool = SharedConnPool(contract_conn)
+        body = CrossPaperAskRequest(
+            question="reproducibility",
+            max_chunks=10,
+            max_papers=5,
+            decompose=False,
+        )
+        result = await prepare_cross_paper_rag(
+            sidecars.embedder,
+            pool,
+            body,
+            sidecars.http_client,
+            user_id=user_b,
+        )
 
     assert isinstance(result, CrossPaperRagPrep), f"expected results, got {result!r}"
     retrieved_paper_ids = {s["paper_id"] for s in result.sources}
@@ -266,76 +406,40 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
     monkeypatch,
 ):
     """Paper search permits caller-library vectors and excludes other private vectors."""
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
-    from paper_ingestion.models import ChunkForEmbedding
-
     user_a, user_b = 7, 8
     paper_p, paper_q = 10, 11  # P: in B's library; Q: private to A
 
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-        async with httpx.AsyncClient() as http_client:
-            qdrant = FauxQdrantClient()
-            embedder = Embedder(
-                http_client,
-                qdrant,
-                visibility_generation_provider=_current_visibility_generation,
-            )
-            await embedder.ensure_collection()
+    async with _initialized_embedder_sidecars(monkeypatch) as sidecars:
+        # Both vectors retain A as legacy attribution; neither is authorized by it.
+        await _seed_shared_and_private_vectors(
+            sidecars.embedder,
+            user_id=user_a,
+            shared_paper_id=paper_p,
+            private_paper_id=paper_q,
+        )
 
-            # Both vectors retain A as legacy attribution; neither is authorized by it.
-            await embedder.embed_and_store(
-                paper_p,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility methods shared across the corpus",
-                        page_number=1,
-                        start_char=0,
-                        end_char=48,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("arxiv"),
-            )
-            await embedder.embed_and_store(
-                paper_q,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility notes private to user A only",
-                        page_number=1,
-                        start_char=0,
-                        end_char=45,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("upload"),
-            )
-
-            # POSITIVE — B's library widening retrieves A-embedded paper P.
-            shared = await embedder.search_chunks_in_paper(
-                "reproducibility",
-                paper_id=paper_p,
-                limit=5,
-                score_threshold=0.0,
-                user_id=user_b,
-                library_paper_ids=[paper_p],
-            )
-            # EXCLUSION — Q not in B's library, chunks owned by A: nothing for B.
-            excluded = await embedder.search_chunks_in_paper(
-                "reproducibility",
-                paper_id=paper_q,
-                limit=5,
-                score_threshold=0.0,
-                user_id=user_b,
-                library_paper_ids=[paper_p],
-            )
-            # DEFAULT-None — positional call shape of extraction/core.py:167.
-            unscoped = await embedder.search_chunks_in_paper(
-                "reproducibility", paper_q, limit=3, score_threshold=0.0
-            )
+        # POSITIVE — B's library widening retrieves A-embedded paper P.
+        shared = await sidecars.embedder.search_chunks_in_paper(
+            "reproducibility",
+            paper_id=paper_p,
+            limit=5,
+            score_threshold=0.0,
+            user_id=user_b,
+            library_paper_ids=[paper_p],
+        )
+        # EXCLUSION — Q not in B's library, chunks owned by A: nothing for B.
+        excluded = await sidecars.embedder.search_chunks_in_paper(
+            "reproducibility",
+            paper_id=paper_q,
+            limit=5,
+            score_threshold=0.0,
+            user_id=user_b,
+            library_paper_ids=[paper_p],
+        )
+        # DEFAULT-None — positional call shape of extraction/core.py:167.
+        unscoped = await sidecars.embedder.search_chunks_in_paper(
+            "reproducibility", paper_q, limit=3, score_threshold=0.0
+        )
 
     assert {row["chunk_index"] for row in shared} == {0}, (
         "caller B must retrieve library paper P's chunks despite A embedding them — "
@@ -365,9 +469,7 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
 ):
     """B can ask about joint-library P; A-only Q fails closed at the paper lookup."""
     from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
-    from paper_ingestion.models import AskRequest, ChunkForEmbedding
+    from paper_ingestion.models import AskRequest
     from paper_ingestion.rag.exceptions import PaperNotFoundError
     from paper_ingestion.rag.streaming import prepare_single_paper_rag
 
@@ -397,73 +499,42 @@ async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
         user_b,
     )
 
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-        async with httpx.AsyncClient() as http_client:
-            qdrant = FauxQdrantClient()
-            embedder = Embedder(
-                http_client,
-                qdrant,
-                visibility_generation_provider=_current_visibility_generation,
-            )
-            await embedder.ensure_collection()
+    async with _initialized_embedder_sidecars(monkeypatch) as sidecars:
+        # Both vectors retain A as legacy attribution; neither is authorized by it.
+        await _seed_shared_and_private_vectors(
+            sidecars.embedder,
+            user_id=user_a,
+            shared_paper_id=paper_p,
+            private_paper_id=paper_q,
+        )
+        await _store_chunk_rows(contract_conn, paper_p, paper_q)
 
-            # Both vectors retain A as legacy attribution; neither is authorized by it.
-            await embedder.embed_and_store(
-                paper_p,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility methods shared across the corpus",
-                        page_number=1,
-                        start_char=0,
-                        end_char=48,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("arxiv"),
-            )
-            await embedder.embed_and_store(
-                paper_q,
-                [
-                    ChunkForEmbedding(
-                        chunk_index=0,
-                        content="reproducibility notes private to user A only",
-                        page_number=1,
-                        start_char=0,
-                        end_char=45,
-                    )
-                ],
-                user_id=user_a,
-                visibility=_private_visibility("upload"),
-            )
+        sidecars.embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
+        pool = SharedConnPool(contract_conn)
+        body = AskRequest(question="reproducibility", max_chunks=5)
 
-            embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
-            pool = SharedConnPool(contract_conn)
-            body = AskRequest(question="reproducibility", max_chunks=5)
-
-            # POSITIVE — B retrieves joint-library P although A embedded its chunks.
-            messages, sources = await prepare_single_paper_rag(
-                embedder,
+        # POSITIVE — B retrieves joint-library P although A embedded its chunks.
+        messages, sources = await prepare_single_paper_rag(
+            sidecars.embedder,
+            pool,
+            paper_id=paper_p,
+            body=body,
+            http_client=sidecars.http_client,
+            user_id=user_b,
+        )
+        # EXCLUSION — Q is private to A; the visibility-scoped paper lookup
+        # fails closed for B before any retrieval, indistinguishable from a
+        # nonexistent paper, even though this call bypassed the route-level
+        # ownership check.
+        with pytest.raises(PaperNotFoundError):
+            await prepare_single_paper_rag(
+                sidecars.embedder,
                 pool,
-                paper_id=paper_p,
+                paper_id=paper_q,
                 body=body,
-                http_client=http_client,
+                http_client=sidecars.http_client,
                 user_id=user_b,
             )
-            # EXCLUSION — Q is private to A; the visibility-scoped paper lookup
-            # fails closed for B before any retrieval, indistinguishable from a
-            # nonexistent paper, even though this call bypassed the route-level
-            # ownership check.
-            with pytest.raises(PaperNotFoundError):
-                await prepare_single_paper_rag(
-                    embedder,
-                    pool,
-                    paper_id=paper_q,
-                    body=body,
-                    http_client=http_client,
-                    user_id=user_b,
-                )
 
     assert len(sources) >= 1, (
         "caller B must get sources for paper P in B's library — "
@@ -502,15 +573,7 @@ async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn
     # Verified: scripts/reembed.py:631-645 (stale-point delete + ScriptError raise)
     # Verified: scripts/reembed.py:648-668 (DB UPDATE in transaction — step 5)
     """
-    import sys
-    from pathlib import Path
-
-    import httpx
-    import pytest as _pytest
-
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+    from jarvis_common.testing_sidecars import FauxQdrantClient
 
     # Seed paper + chunk with a known old embedding_id (within the test txn)
     paper_id = await contract_conn.fetchval(
@@ -539,40 +602,15 @@ async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn
 
     faux_qdrant.delete = _failing_delete  # type: ignore[method-assign]
 
-    # Add repo root to sys.path so `import scripts.reembed` resolves.
-    # File is services/paper_ingestion/tests/contract/test_*.py → parents[4] is repo root.
-    _repo_root = str(Path(__file__).resolve().parents[4])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
-
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-        monkeypatch.setenv("REEMBED_CONTINUE_ON_ERROR", "false")
-
-        import importlib
-
-        import scripts.reembed as reembed_mod
-
-        importlib.reload(reembed_mod)
-        from scripts.reembed import ScriptError, reembed_paper  # noqa: PLC0415
-
-        # Ensure the faux Qdrant collection exists with the correct dimension
-        await faux_qdrant.create_collection(
-            collection_name="paper_chunks",
-            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
-        )
-
-        shared_pool = SharedConnPool(contract_conn)
-        async with httpx.AsyncClient() as http_client:
-            # Act: ScriptError must be raised because Qdrant delete fails (step 4)
-            with _pytest.raises(ScriptError, match="Failed to delete old Qdrant"):
-                await reembed_paper(
-                    paper_id,
-                    shared_pool,
-                    faux_qdrant,
-                    http_client,
-                    visibility_generation=_VISIBILITY_GENERATION,
-                )
+    async with _reembed_sidecars(
+        contract_conn,
+        monkeypatch,
+        qdrant=faux_qdrant,
+        continue_on_error=False,
+    ) as sidecars:
+        # Act: ScriptError must be raised because Qdrant delete fails (step 4)
+        with pytest.raises(sidecars.script_error, match="Failed to delete old Qdrant"):
+            await sidecars.run(paper_id)
 
     # Assert: DB embedding_id must still be the old value — step 5 was never reached
     row = await contract_conn.fetchrow(
@@ -601,19 +639,6 @@ async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn
 # Verified: scripts/reembed.py:576-668
 async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_conn, monkeypatch):
     """reembed_paper embeds via FauxOllama, stores in FauxQdrant, updates DB embedding_model."""
-    import sys
-    from pathlib import Path
-
-    import httpx
-
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
-
-    _repo_root = str(Path(__file__).resolve().parents[4])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
-
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
            VALUES ('reembed-w2-hp-01', 'arxiv', 'Happy Path Paper', '{}',
@@ -629,39 +654,17 @@ async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_c
         paper_id,
     )
 
-    faux_qdrant = FauxQdrantClient()
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-
-        import importlib
-
-        import scripts.reembed as reembed_mod
-
-        importlib.reload(reembed_mod)
-        from scripts.reembed import reembed_paper  # noqa: PLC0415
-
-        await faux_qdrant.create_collection(
-            collection_name="paper_chunks",
-            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
-        )
-        shared_pool = SharedConnPool(contract_conn)
-        async with httpx.AsyncClient() as http_client:
-            count = await reembed_paper(
-                paper_id,
-                shared_pool,
-                faux_qdrant,
-                http_client,
-                visibility_generation=_VISIBILITY_GENERATION,
-            )
+    async with _reembed_sidecars(contract_conn, monkeypatch) as sidecars:
+        count = await sidecars.run(paper_id)
 
     assert count == 1
     row = await contract_conn.fetchrow(
         "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1", chunk_id
     )
-    assert row["embedding_model"] == reembed_mod.EMBEDDING_MODEL_NAME
+    assert row["embedding_model"] == sidecars.embedding_model_name
     assert row["embedding_id"] != "old-uuid-hp", "embedding_id must be updated to new point id"
     # New point must exist in FauxQdrant
-    coll_count = await faux_qdrant.count(collection_name="paper_chunks")
+    coll_count = await sidecars.qdrant.count(collection_name="paper_chunks")
     assert coll_count.count == 1
 
 
@@ -677,19 +680,7 @@ async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_c
 # Verified: scripts/reembed.py:614-619
 async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_conn, monkeypatch):
     """reembed_paper must NOT update DB when Qdrant upsert raises mid-batch."""
-    import sys
-    from pathlib import Path
-
-    import httpx
-    import pytest as _pytest
-
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
-
-    _repo_root = str(Path(__file__).resolve().parents[4])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
+    from jarvis_common.testing_sidecars import FauxQdrantClient
 
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -715,30 +706,13 @@ async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_c
 
     faux_qdrant.upsert = _failing_upsert  # type: ignore[method-assign]
 
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-
-        import importlib
-
-        import scripts.reembed as reembed_mod
-
-        importlib.reload(reembed_mod)
-        from scripts.reembed import reembed_paper  # noqa: PLC0415
-
-        await faux_qdrant.create_collection(
-            collection_name="paper_chunks",
-            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
-        )
-        shared_pool = SharedConnPool(contract_conn)
-        async with httpx.AsyncClient() as http_client:
-            with _pytest.raises(RuntimeError, match="Qdrant upsert unavailable"):
-                await reembed_paper(
-                    paper_id,
-                    shared_pool,
-                    faux_qdrant,
-                    http_client,
-                    visibility_generation=_VISIBILITY_GENERATION,
-                )
+    async with _reembed_sidecars(
+        contract_conn,
+        monkeypatch,
+        qdrant=faux_qdrant,
+    ) as sidecars:
+        with pytest.raises(RuntimeError, match="Qdrant upsert unavailable"):
+            await sidecars.run(paper_id)
 
     row = await contract_conn.fetchrow(
         "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1", chunk_id
@@ -761,19 +735,7 @@ async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_c
 # Verified: scripts/reembed.py:671-720
 async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, monkeypatch):
     """After reembed success, FauxQdrant collection size equals paper_chunks count for model."""
-    import sys
-    from pathlib import Path
-
-    import httpx
     from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
-    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
-
-    _repo_root = str(Path(__file__).resolve().parents[4])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
 
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -793,43 +755,22 @@ async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, 
             f"old-inv-{i}",
         )
 
-    faux_qdrant = FauxQdrantClient()
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
-
-        import importlib
-
-        import scripts.reembed as reembed_mod
-
-        importlib.reload(reembed_mod)
-        from scripts.reembed import reembed_paper  # noqa: PLC0415
-
-        await faux_qdrant.create_collection(
-            collection_name="paper_chunks",
-            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
-        )
-        shared_pool = SharedConnPool(contract_conn)
-        async with httpx.AsyncClient() as http_client:
-            count = await reembed_paper(
-                paper_id,
-                shared_pool,
-                faux_qdrant,
-                http_client,
-                visibility_generation=_VISIBILITY_GENERATION,
-            )
+    async with _reembed_sidecars(contract_conn, monkeypatch) as sidecars:
+        count = await sidecars.run(paper_id)
 
     assert count == 3
     db_count = await contract_conn.fetchval(
         "SELECT count(*) FROM paper_chunks WHERE paper_id = $1 AND embedding_model = $2",
         paper_id,
-        reembed_mod.EMBEDDING_MODEL_NAME,
+        sidecars.embedding_model_name,
     )
-    qdrant_count = await faux_qdrant.count(
+    qdrant_count = await sidecars.qdrant.count(
         collection_name="paper_chunks",
         count_filter=Filter(
             must=[
                 FieldCondition(
-                    key="embedding_model", match=MatchValue(value=reembed_mod.EMBEDDING_MODEL_NAME)
+                    key="embedding_model",
+                    match=MatchValue(value=sidecars.embedding_model_name),
                 )
             ]
         ),
@@ -851,18 +792,7 @@ async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, 
 # Verified: scripts/reembed.py:594-612
 async def test_reembed_w2_chunk_shape_preserved_through_pipeline(contract_conn, monkeypatch):
     """After reembed, Qdrant point has correct vector dim, payload keys, and chunk text."""
-    import sys
-    from pathlib import Path
-
-    import httpx
-
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
     from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
-
-    _repo_root = str(Path(__file__).resolve().parents[4])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
 
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -880,32 +810,13 @@ async def test_reembed_w2_chunk_shape_preserved_through_pipeline(contract_conn, 
         content,
     )
 
-    faux_qdrant = FauxQdrantClient()
-    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
-        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+    async with _reembed_sidecars(contract_conn, monkeypatch) as sidecars:
+        await sidecars.run(paper_id)
 
-        import importlib
-
-        import scripts.reembed as reembed_mod
-
-        importlib.reload(reembed_mod)
-        from scripts.reembed import reembed_paper  # noqa: PLC0415
-
-        await faux_qdrant.create_collection(
-            collection_name="paper_chunks",
-            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
-        )
-        shared_pool = SharedConnPool(contract_conn)
-        async with httpx.AsyncClient() as http_client:
-            await reembed_paper(
-                paper_id,
-                shared_pool,
-                faux_qdrant,
-                http_client,
-                visibility_generation=_VISIBILITY_GENERATION,
-            )
-
-    points, _ = await faux_qdrant.scroll(collection_name="paper_chunks", with_vectors=True)
+    points, _ = await sidecars.qdrant.scroll(
+        collection_name="paper_chunks",
+        with_vectors=True,
+    )
     assert len(points) == 1
     pt = points[0]
     assert len(pt.vector) == EMBEDDING_DIMENSION, (

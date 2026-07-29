@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 
 vi.mock('@/lib/api', () => ({
@@ -15,10 +15,14 @@ vi.mock('sonner', () => ({
 
 import { submitFeedback, clearFeedback } from '@/lib/api';
 import { toast } from 'sonner';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient({ defaultOptions: { mutations: { retry: false } } });
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 describe('FeedbackButtons', () => {
@@ -141,7 +145,7 @@ describe('FeedbackButtons', () => {
   });
 
   it('does not violate rules-of-hooks when discoveryOrigin toggles across renders', () => {
-    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const qc = createTestQueryClient({ defaultOptions: { mutations: { retry: false } } });
     const Wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     );

@@ -42,7 +42,7 @@ wrapped in `try/except` so any one stage can degrade without crashing the run.
 | 5 | Optional citation + classifier signals | [job.py:231-294](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294) | `signals` dict augmented with `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier` | Degraded. Failures preserve LLM signals; `degraded_reason` set if no prior reason. |
 | 6 | Stage 3 — weighted combine | [job.py:301-307](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L301-L307); [scoring.py:342-380](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380) | `ScoredCandidate`s with `final_score` | Degraded. Fall back to `stage2_out`; sets `last_error`. |
 | 7 | Assemble deck | [job.py:314-320](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L314-L320); [deck.py:18-40](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L18-L40) | top-`deck_size` cards | Degraded. Empty deck; sets `last_error`. |
-| 8 | Persist deck | [job.py:327-367](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367); [deck.py:43-220](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L43-L220) | `pulse_decks` row + N `pulse_cards` rows | Degraded. Outer txn failure → `card_count=0`; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. L3 60-day negative-feedback exclusion is applied UNLESS it would leave fewer than 20 candidates (then bypassed). |
+| 8 | Persist deck | [job.py:327-367](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367); [deck.py:102-204](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L102-L204) | `pulse_decks` row + N `pulse_cards` rows | Degraded. Outer txn failure → `card_count=0`; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. The 60-day negative-feedback exclusion happens earlier, during candidate selection, so this stage persists a deck that has already survived it. |
 
 A scheduled run is invoked via APScheduler under job id `pulse_overnight`
 ([scheduler.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/scheduler.py)); on-demand via the jobs subsystem under handler `"pulse.generate"` (`_pulse_generate_job` at [job.py:555](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L555)).
@@ -178,7 +178,7 @@ The lookback/grace knobs ARE user_config keys (see [01-settings.md §2.1](01-set
 |---|---|---|---|
 | Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:70](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/llm_client.py#L70) | Single chat completion request (or single retry) cannot exceed this |
 | Stage-2 concurrency | default 4 (env var `PULSE_LLM_CONCURRENCY`) | `_llm_concurrency()` lazy getter at [scoring.py:45](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L45) → `_get_cfg().pulse_llm_concurrency` | Semaphore-bounded parallel scorers |
-| Stage-2 model alias | `fast` | `_llm_model()` at [scoring.py:49](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L49) reads `PULSE_STAGE2_MODEL` | Uses the smaller local model for Pulse scoring by default; operators can override to `smart` or another LiteLLM alias |
+| Stage-2 model alias | `smart` | `_llm_model()` at [scoring.py:49](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L49) reads `PULSE_STAGE2_MODEL` | Defaults to `smart` because Stage 2 must emit structured JSON and the `fast` alias schema-echoes instead of scoring; operators can override via `PULSE_STAGE2_MODEL` |
 | Stage-2 retry budget | 1 | `_stage2_max_retries()` at [scoring.py:59](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L59) reads `PULSE_STAGE2_MAX_RETRIES` | Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run |
 | Stage-2 orchestrator call | 1 call over all Stage-1 survivors | inner concurrency at [scoring.py:289](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L289) | `run_pulse` no longer slices candidates into outer batches; `stage2_llm_rerank` owns per-candidate concurrency |
 | Stage-2 wall-clock cap | default 900 s (env var `PULSE_STAGE2_TIMEOUT_SECONDS`) | `_stage2_timeout()` lazy getter at [job.py:55](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L55) → `_get_cfg().pulse_stage2_timeout_seconds`; applied at [job.py:333](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L333) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
@@ -195,7 +195,7 @@ With `pulse.stage2_top_k = 40` (default), `PULSE_LLM_CONCURRENCY = 4` (default),
   ceil(40 / 4) waves × 120 s/wave × up to 2 attempts = 2400 s
 ```
 
-The outer 900 s cap still wins. In practice the fast alias is expected to score
+The outer 900 s cap still wins. In practice the smart alias is expected to score
 well below the per-call timeout; if structured-output validation repeatedly
 fails, the pipeline degrades to embedding-only fallback instead of blocking the
 job indefinitely. `run_pulse` makes one Stage-2 call and lets the scorer's
@@ -291,7 +291,7 @@ invariants beyond mere row insertion.
 - **Idempotent replace.** A second `persist_deck` for the same `(date, user_id)`
   pair updates the existing row's `card_count`, `generated_at`, `stats`,
   `degraded_reason`, then DELETEs and re-inserts cards.
-- **L3 60-day exclusion** ([deck.py:104-129](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L104-L129)). Before inserting cards, the persist code counts how many candidates would survive the "no negative feedback in last 60 days for this user" filter. If fewer than 20 survive, the L3 filter is BYPASSED for this run (logged) — never produce a stub deck. Spec §7.3.1.
+- **60-day negative-feedback exclusion** ([deck.py:57-99](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L57-L99)). Applied during candidate selection, before the deck is cut to the user's deck size, so persisting inserts a deck that has already survived it. There is no candidate-count threshold and no bypass; a deck left short reports it through `degraded_reason`. Spec §7.3.1.
 - **Per-card savepoint.** [job.py:332-345](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L332-L345) wraps each card upsert in a SAVEPOINT so a single failing card doesn't poison the whole transaction.
 
 ---
@@ -315,9 +315,11 @@ The implementation MUST satisfy these. Testable.
    unrecoverable failures (Stage 1) MUST return early with `stats` populated.
 6. **Per-card isolation.** Stage 8 MUST use SAVEPOINTs for per-card upserts
    so a single bad card does not roll back the deck.
-7. **L3 minimum-candidate guarantee.** The 60-day negative-feedback filter
-   MUST be bypassed if it would leave fewer than `_min_l3_candidates = 20`
-   candidates ([deck.py:122-128](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/deck.py#L122-L128)).
+7. **Negative-feedback exclusion.** The 60-day negative-feedback filter MUST be
+   applied during candidate selection, before the deck is truncated to the
+   user's deck size, and MUST NOT be bypassed. A deck left short because too
+   many candidates were dismissed MUST report that through `degraded_reason`
+   rather than refill itself with dismissed papers.
 8. **Diagnostics completeness.** Every key listed in §7 MUST be present in
    the `stats` dict at run-end (with `null` rather than absent for keys with
    no value). The Settings UI assumes shape stability.
@@ -382,8 +384,8 @@ is to surface the choices.
 | `MIN_RATINGS = 30` | services/paper_ingestion/paper_ingestion/pulse/training.py:21 | Activation threshold for classifier |
 | Classifier sklearn-missing degrade | services/paper_ingestion/paper_ingestion/pulse/training.py:31-39 | Returns `available=False` with reason |
 | `assemble_deck` | services/paper_ingestion/paper_ingestion/pulse/deck.py:18-40 | Top-N by final_score |
-| `_persist_deck_inner` upsert + L3 filter | services/paper_ingestion/paper_ingestion/pulse/deck.py:43-220 | Composite `(deck_date, user_id)` UPSERT; L3 60-day exclusion with min-20 fallback |
-| `_min_l3_candidates = 20` | services/paper_ingestion/paper_ingestion/pulse/deck.py:122 | Minimum-candidate guard for L3 filter |
+| `_persist_deck_inner` upsert | services/paper_ingestion/paper_ingestion/pulse/deck.py:102-204 | Composite `(deck_date, user_id)` UPSERT |
+| `_select_deck_cards` | services/paper_ingestion/paper_ingestion/pulse/job.py | 60-day negative-feedback exclusion, applied before the deck is truncated |
 | `LLM_TIMEOUT_DEFAULT = 120.0` | libs/jarvis_common/jarvis_common/llm_client.py:70 | Per-call timeout default |
 | `build_scoring_prompt` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:36-136 | Two-message chat list; system + user |
 | `PULSE_SCORING_SYSTEM_PROMPT` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:18-33 | Strict-JSON instruction |

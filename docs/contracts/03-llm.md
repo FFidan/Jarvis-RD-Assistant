@@ -121,7 +121,7 @@ Nine `call_llm_structured` call sites. Each site has its own row below; details 
 
 | # | Site | File:line | Model alias | Output Pydantic | QuoteVerifier? |
 |---|---|---|---|---|---|
-| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:309](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L309) | `fast` (default; env-overridable) | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
+| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:309](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L309) | `smart` (default; env-overridable via `PULSE_STAGE2_MODEL`) | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
 | 2 | Template-driven extraction | [extraction/core.py:188](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L188) | `get_smart_model()` | dynamic via `create_model` over `ExtractedFieldOutput` | Yes (per-field `quote`) |
 | 3 | KG entity + relationship | [extraction/entities.py:146](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L146) | `get_fast_model()` | `KGExtractionOutput` | Yes (per-relationship `evidence`) |
 | 4 | Flashcard generation | [learning_engine/card_generator.py:106](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L106) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |

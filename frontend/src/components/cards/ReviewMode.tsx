@@ -18,7 +18,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { RotateCcw } from 'lucide-react';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
 import type { Card as CardType } from '@/types';
 import { getNextReview, submitReview, fetchDecks } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -126,6 +126,25 @@ export function ReviewMode({
     // Queue exhausted — signal parent to show session-complete panel.
     // Render nothing here; parent handles the transition via onSessionEnd.
     return null;
+  }
+
+  if (currentCard.stale) {
+    return (
+      <div className="mx-auto max-w-2xl rounded-md border border-amber-200 bg-amber-50 p-6 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="space-y-3">
+            <p className="font-medium">This card is from an earlier paper version</p>
+            <p className="text-sm">
+              It remains in your deck for reference, but it can’t be reviewed.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Load another card
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

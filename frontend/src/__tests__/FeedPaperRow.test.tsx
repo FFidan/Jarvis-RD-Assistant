@@ -1,20 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // FeedbackButtons uses useMutation — wrap with QueryClientProvider
 function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <FeedPaperRow {...props} />
-    </QueryClientProvider>,
+  const client = createTestQueryClient();
+  return renderWithProviders(
+    <FeedPaperRow {...props} />,
+    { queryClient: client },
   );
 }
 
@@ -258,9 +256,7 @@ describe('FeedPaperRow onHardDelete stable callback (regression)', () => {
     // which is not available for the default memo pattern; the $$typeof check + DOM
     // stability is the canonical vitest approach.)
 
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = createTestQueryClient();
 
     const stablePaper: FeedPaper = { ...paper, id: 300, title: 'Stable Memo Row', state: 'trash' };
     const stableOnHardDelete = vi.fn();
@@ -319,27 +315,22 @@ describe('FeedPaperRow memoization', () => {
     // render function again.  We achieve this by spying on the wrapped type:
     // React.memo only re-renders when props change by reference or value.
     // We confirm the component accepts a stable onSave prop without re-rendering.
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const client = createTestQueryClient();
 
     const stablePaper: FeedPaper = { ...paper, id: 200, title: 'Stable Row' };
     const stableOnSave = vi.fn();
 
     // First render — baseline.
-    const { rerender } = render(
-      <QueryClientProvider client={client}>
-        <FeedPaperRow paper={stablePaper} isSelected={false} onSave={stableOnSave} />
-      </QueryClientProvider>,
+    const { rerender } = renderWithProviders(
+      <FeedPaperRow paper={stablePaper} isSelected={false} onSave={stableOnSave} />,
+      { queryClient: client },
     );
 
     // Re-render with IDENTICAL props (same object references).
     // If FeedPaperRow is memo'd, the inner component will not re-execute.
     // We assert the DOM is still stable (title text unchanged).
     rerender(
-      <QueryClientProvider client={client}>
-        <FeedPaperRow paper={stablePaper} isSelected={false} onSave={stableOnSave} />
-      </QueryClientProvider>,
+      <FeedPaperRow paper={stablePaper} isSelected={false} onSave={stableOnSave} />,
     );
 
     // DOM should still show the paper title — confirms no crash / unexpected

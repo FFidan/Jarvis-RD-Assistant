@@ -7,9 +7,9 @@
 # the docker stub reports running.
 #
 # Coverage:
-#   * print_split_recovery prints only the half (versions.env vs JARVIS_VERSION)
+#   * print_split_recovery prints only the half (versions.env vs JARVIS_IMAGE_TAG)
 #     that matches the failed set, and never names a third-party pin in the
-#     JARVIS_VERSION rollback line;
+#     JARVIS_IMAGE_TAG rollback line;
 #   * update.sh --yes runs promptless; all image pulls complete before any
 #     container is recreated; a pull failure prints the split recovery and exits
 #     1 with nothing recreated; a no-healthcheck service is reported, not silently
@@ -61,7 +61,7 @@ eval "$psr_src"
 # Representative third-party services for split-recovery classification,
 # including the optional cloudflared edge.
 TP_SET="postgres ollama qdrant litellm cloudflared postgres-backup"
-PREVIOUS_APP_VERSION=1.1.3
+PREVIOUS_IMAGE_TAG=1.1.3
 SCRIPT_DIR=/srv/jarvis-family
 BUILD_LOCAL=0
 APP_PROFILE_ARGS=(--profile telegram --profile tunnel)
@@ -73,12 +73,12 @@ lack() { if has "$1" "$2"; then check_fail "$3 ($1)"; else pass "$3"; fi; }
 # --- app-only: FAILED=(dashboard) --------------------------------------------
 out="$(run_recovery dashboard)"
 lack "$out" 'Third-party services' "app-only: no third-party/versions.env block"
-want "$out" 'Application services'  "app-only: prints the application/JARVIS_VERSION block"
+want "$out" 'Application services'  "app-only: prints the application/JARVIS_IMAGE_TAG block"
 want "$out" 'Application-image recovery (not a full release rollback)' \
   "app-only: labels the bounded recovery honestly"
 want "$out" 'Repository: /srv/jarvis-family' \
   "app-only: names the repository where commands must run"
-want "$out" 'JARVIS_VERSION=1.1.3 docker compose --profile telegram --profile tunnel pull dashboard' \
+want "$out" 'JARVIS_IMAGE_TAG=1.1.3 docker compose --profile telegram --profile tunnel pull dashboard' \
   "app-only: exact previous pin and active profiles reach the app service"
 lack "$out" '<previous-version>' "app-only: never prints a placeholder version"
 want "$out" 'do not move the Git checkout or restore stored data' \
@@ -88,8 +88,8 @@ want "$out" 'docker compose logs --tail=200 dashboard' "app-only: trailing logs 
 # --- third-party-only: FAILED=(postgres) -------------------------------------
 out="$(run_recovery postgres)"
 want "$out" 'Third-party services' "third-party-only: prints the third-party/versions.env block"
-lack "$out" 'Application services' "third-party-only: no application/JARVIS_VERSION block"
-lack "$out" 'JARVIS_VERSION='      "third-party-only: no JARVIS_VERSION line at all"
+lack "$out" 'Application services' "third-party-only: no application/JARVIS_IMAGE_TAG block"
+lack "$out" 'JARVIS_IMAGE_TAG='    "third-party-only: no JARVIS_IMAGE_TAG line at all"
 want "$out" 'cd /srv/jarvis-family' "third-party-only: recovery command is scoped to its repository"
 
 # --- reconciled third-party (postgres-backup) classifies as third-party -------
@@ -107,25 +107,25 @@ if has "$out" 'Third-party services' && has "$out" 'Application services'; then
 else
   check_fail "mixed: missing one block ($out)"
 fi
-version_lines="$(printf '%s\n' "$out" | grep 'JARVIS_VERSION=')"
+version_lines="$(printf '%s\n' "$out" | grep 'JARVIS_IMAGE_TAG=')"
 if [ -n "$version_lines" ] && ! printf '%s\n' "$version_lines" \
     | grep -qE 'postgres|ollama|qdrant|litellm|cloudflared'; then
-  pass "mixed: JARVIS_VERSION lines never name a third-party service"
+  pass "mixed: JARVIS_IMAGE_TAG lines never name a third-party service"
 else
-  check_fail "mixed: JARVIS_VERSION line named a third-party service ($version_lines)"
+  check_fail "mixed: JARVIS_IMAGE_TAG line named a third-party service ($version_lines)"
 fi
 want "$out" 'docker compose logs --tail=200 dashboard postgres' \
   "mixed: trailing logs line lists the full (both) failed set"
 
 # If the persisted pin is unavailable, recovery must stop short of inventing an
 # executable version placeholder.
-PREVIOUS_APP_VERSION=""
+PREVIOUS_IMAGE_TAG=""
 out="$(run_recovery dashboard)"
-lack "$out" 'JARVIS_VERSION=' "missing old pin: no speculative image command"
+lack "$out" 'JARVIS_IMAGE_TAG=' "missing old pin: no speculative image command"
 lack "$out" '<previous-version>' "missing old pin: no placeholder version"
 want "$out" 'could not be read safely from .env' \
   "missing old pin: explains why no image command was printed"
-PREVIOUS_APP_VERSION=1.1.3
+PREVIOUS_IMAGE_TAG=1.1.3
 
 # --build-local does not promise that an old registry image exists. It may only
 # re-use a previous local image when that exact tag is still cached.
@@ -191,6 +191,15 @@ done
 FX="$(mktemp -d)"
 STUB="$(mktemp -d)"
 trap 'rm -rf "$FX" "$STUB"' EXIT
+FAST_SLEEP_BIN="$FX/fast-sleep-bin"
+REAL_SLEEP_BIN="$(command -v sleep)"
+mkdir -p "$FAST_SLEEP_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [ "${1:-}" = 3 ]; then exit 0; fi' \
+  'exec "$JARVIS_TEST_REAL_SLEEP" "$@"' \
+  > "$FAST_SLEEP_BIN/sleep"
+chmod +x "$FAST_SLEEP_BIN/sleep"
 
 ln -s "$UPDATE_SCRIPT" "$FX/update.sh"
 mkdir -p "$FX/scripts"
@@ -217,7 +226,7 @@ VERS
 # TORCH_VARIANT present so the backfill is a no-op; no telegram token. The stale
 # application pin models a manual git-pull upgrade from 1.1.3 to this checkout.
 reset_fixture_env() {
-  printf 'TORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\nJARVIS_VERSION=1.1.3\n' > "$FX/.env"
+  printf 'TORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\nJARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\n' > "$FX/.env"
 }
 reset_fixture_env
 
@@ -233,12 +242,29 @@ chmod +x "$STUB/git"
 
 # docker stub: logs pull/up/build to $DOCKER_LOG; reports the base third-party
 # and application services as running with a stale image. Optional ingress
-# services exist only when named in STUB_ACTIVE_INGRESS. STUB_HEALTH,
-# STUB_RUN_STATE, and STUB_FAIL_PULL tune the remaining behavior.
+# services exist only when named in STUB_ACTIVE_INGRESS. A file-backed
+# STUB_HEALTH_SEQUENCE supplies exact health|run-state samples; the scalar
+# STUB_HEALTH and STUB_RUN_STATE values are the fallback.
 cat > "$STUB/docker" <<'DOCKER'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_CALL_LOG"
 log() { printf '%s\n' "$*" >> "$DOCKER_LOG"; }
+health_sample() {
+  local sample="" pin
+  if [ -n "${STUB_HEALTH_SEQUENCE:-}" ] && [ -f "$STUB_HEALTH_SEQUENCE" ]; then
+    sample="$(sed -n '1p' "$STUB_HEALTH_SEQUENCE")"
+    if [ -n "$sample" ]; then
+      sed '1d' "$STUB_HEALTH_SEQUENCE" > "${STUB_HEALTH_SEQUENCE}.next"
+      mv "${STUB_HEALTH_SEQUENCE}.next" "$STUB_HEALTH_SEQUENCE"
+    fi
+  fi
+  if [ -z "$sample" ]; then
+    sample="${STUB_HEALTH-healthy}|${STUB_RUN_STATE-running}"
+  fi
+  pin="$(sed -n 's/^JARVIS_VERSION=//p' "$STUB_REPO/.env" 2>/dev/null | head -1)"
+  log "health sample=${sample} pin=${pin:-missing}"
+  printf '%s\n' "$sample"
+}
 running_cid() {
   case "$1" in
     postgres|ollama|qdrant|litellm|postgres-backup) printf 'cid-%s\n' "$1" ;;
@@ -280,6 +306,7 @@ if [ "${1:-}" = "inspect" ]; then
     case "$1" in --format) fmt="$2"; shift 2 ;; *) shift ;; esac
   done
   case "$fmt" in
+    *State.Health*State.Status*) health_sample ;;
     *Config.Image*) printf 'oldimage:running\n' ;;
     *State.Health*) printf '%s\n' "${STUB_HEALTH-healthy}" ;;
     *State.Status*) printf '%s\n' "${STUB_RUN_STATE-running}" ;;
@@ -307,9 +334,16 @@ if [ "${1:-}" = "compose" ]; then
       printf '{"volumes":{"postgres_backups":{"name":"%s_postgres_backups"}}}\n' "$project"
       exit 0 ;;
     ps)      running_cid "${3:-}"; exit 0 ;;
-    pull)    log "pull ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; [ "${STUB_FAIL_PULL:-0}" = 1 ] && exit 1; exit 0 ;;
-    up)      log "network-up DASHBOARD_IP=${JARVIS_DASHBOARD_IP:-<unset>}"; log "up ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
-    build)   log "build ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>}"; exit 0 ;;
+    pull)
+      log "pull ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>} JARVIS_IMAGE_TAG=${JARVIS_IMAGE_TAG:-<unset>}"
+      [ "${STUB_FAIL_PULL:-0}" = 1 ] && exit 1
+      if [ -n "${STUB_FAIL_PULL_MATCH:-}" ] \
+         && printf '%s\n' "$*" | grep -qF -- "$STUB_FAIL_PULL_MATCH"; then
+        exit 1
+      fi
+      exit 0 ;;
+    up)      log "network-up DASHBOARD_IP=${JARVIS_DASHBOARD_IP:-<unset>}"; log "up ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>} JARVIS_IMAGE_TAG=${JARVIS_IMAGE_TAG:-<unset>}"; exit 0 ;;
+    build)   log "build ${*:2} JARVIS_VERSION=${JARVIS_VERSION:-<unset>} JARVIS_IMAGE_TAG=${JARVIS_IMAGE_TAG:-<unset>}"; exit 0 ;;
     *)       exit 0 ;;
   esac
 fi
@@ -324,12 +358,16 @@ run_update() {
   mkdir -p "$FX/home"
   DOCKER_LOG="$FX/docker.log" DOCKER_CALL_LOG="$FX/docker-calls.log" \
     STUB_EXACT_TAG="${STUB_EXACT_TAG:-}" STUB_FAIL_PULL="${STUB_FAIL_PULL:-0}" \
+    STUB_FAIL_PULL_MATCH="${STUB_FAIL_PULL_MATCH:-}" \
     STUB_ACTIVE_INGRESS="${STUB_ACTIVE_INGRESS:-}" \
+    STUB_HEALTH="${STUB_HEALTH-healthy}" STUB_RUN_STATE="${STUB_RUN_STATE-running}" \
+    STUB_HEALTH_SEQUENCE="${STUB_HEALTH_SEQUENCE:-}" \
     STUB_DEAD_GUARD="${STUB_DEAD_GUARD:-0}" STUB_NO_DAEMON="${STUB_NO_DAEMON:-0}" \
     STUB_REPO="$FX" \
     JARVIS_UPDATE_VOLUME_GUARD_ID="${JARVIS_UPDATE_VOLUME_GUARD_ID:-0123456789abcdef0123456789abcdef}" \
     HOME="$FX/home" XDG_CONFIG_HOME="$FX/home/.config" \
-    PATH="$STUB:$PATH" bash "$FX/update.sh" "$@" <<<"$stdin_data" 2>&1
+    JARVIS_TEST_REAL_SLEEP="$REAL_SLEEP_BIN" \
+    PATH="$FAST_SLEEP_BIN:$STUB:$PATH" bash "$FX/update.sh" "$@" <<<"$stdin_data" 2>&1
 }
 
 # Durable update text is not proof that its detached sidecar lease is alive.
@@ -363,12 +401,74 @@ fi
 reset_fixture_env
 out="$(run_update --yes)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
-   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
-   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env"; then
-  pass "checkout_version_overrides_stale_env: app pull/up use 1.2.0 and success persists it"
+   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0 JARVIS_IMAGE_TAG=1\.2\.0$' "$FX/docker.log" \
+   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0 JARVIS_IMAGE_TAG=1\.2\.0$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.2.0' "$FX/.env"; then
+  pass "default update uses and persists the checkout version for both identities"
 else
   check_fail "checkout_version_overrides_stale_env: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# A release smoke may select commit-addressed images while the checkout still
+# reports its semantic application version.
+reset_fixture_env
+commit_image_tag=0123456789abcdef0123456789abcdef01234567
+out="$(run_update --yes --image-tag "$commit_image_tag")"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -Eq "^pull .*dashboard.*JARVIS_VERSION=1\\.2\\.0 JARVIS_IMAGE_TAG=${commit_image_tag}$" "$FX/docker.log" \
+   && grep -Eq "^up .*dashboard.*JARVIS_VERSION=1\\.2\\.0 JARVIS_IMAGE_TAG=${commit_image_tag}$" "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env" \
+   && grep -qx "JARVIS_IMAGE_TAG=${commit_image_tag}" "$FX/.env"; then
+  pass "commit image tag stays separate through pull, recreate, and persistence"
+else
+  check_fail "commit image identity: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# Invalid image selectors fail before any Docker request or persistent change.
+reset_fixture_env
+before_env="$(cat "$FX/.env")"
+out="$(run_update --yes --image-tag 0123456789abcdef)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -s "$FX/docker-calls.log" ] \
+   && [ "$(cat "$FX/.env")" = "$before_env" ] \
+   && printf '%s' "$out" | grep -q 'Invalid --image-tag'; then
+  pass "invalid image tag fails before Docker and persistence"
+else
+  check_fail "invalid image tag escaped validation: rc=$rc calls=$(cat "$FX/docker-calls.log") env=$(cat "$FX/.env") out=$out"
+fi
+
+# A recoverable unhealthy sample must consume another production poll before
+# the application pin can commit.
+reset_fixture_env
+HEALTH_SEQUENCE="$FX/health-sequence"
+printf '%s\n' 'unhealthy|running' 'healthy|running' > "$HEALTH_SEQUENCE"
+out="$(STUB_HEALTH_SEQUENCE="$HEALTH_SEQUENCE" run_update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q '^health sample=unhealthy|running pin=1.1.3$' "$FX/docker.log" \
+   && grep -q '^health sample=healthy|running pin=1.1.3$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.2.0' "$FX/.env"; then
+  pass "transient_unhealthy_converges_before_identity_commit"
+else
+  check_fail "transient health convergence: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=<<<$out>>>"
+fi
+
+# A permanently unhealthy service must exhaust all 180/3 production samples
+# without persisting the checkout's application version.
+reset_fixture_env
+: > "$HEALTH_SEQUENCE"
+for ((sample_i=0; sample_i<60; sample_i++)); do
+  printf '%s\n' 'unhealthy|running' >> "$HEALTH_SEQUENCE"
+done
+out="$(STUB_HEALTH_SEQUENCE="$HEALTH_SEQUENCE" run_update --yes)"; rc=$?
+unhealthy_samples="$(grep -c '^health sample=unhealthy|running pin=1.1.3$' "$FX/docker.log" || true)"
+if [ "$rc" -eq 1 ] && [ "$unhealthy_samples" -eq 60 ] \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$FX/.env" \
+   && printf '%s' "$out" | grep -q 'did not become healthy within 180s'; then
+  pass "permanent_unhealthy_exhausts_budget_without_pin_commit"
+else
+  check_fail "permanent unhealthy gate: rc=$rc samples=$unhealthy_samples env=$(cat "$FX/.env") out=<<<$out>>>"
 fi
 
 # Caller-exported Compose selectors must never redirect a direct update away
@@ -466,20 +566,38 @@ fi
 
 # A staging failure must not claim that the old deployment advanced.
 reset_fixture_env
-out="$(STUB_FAIL_PULL=1 run_update --yes)"; rc=$?
-if [ "$rc" -eq 1 ] && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
-  pass "staging_failure_preserves_persisted_pin: .env remains 1.1.3"
+out="$(STUB_FAIL_PULL_MATCH=dashboard run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$FX/.env"; then
+  pass "staging_failure_preserves_persisted_identities"
 else
   check_fail "staging_failure_preserves_persisted_pin: rc=$rc env=$(cat "$FX/.env") out=$out"
+fi
+
+# A pre-v1.2.2 installation has no dedicated image tag. Recovery must use its
+# semantic version as the legacy image identity without mutating the failed run.
+reset_fixture_env
+grep -v '^JARVIS_IMAGE_TAG=' "$FX/.env" > "$FX/.env.legacy"
+mv "$FX/.env.legacy" "$FX/.env"
+out="$(STUB_FAIL_PULL_MATCH=dashboard run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && printf '%s' "$out" | grep -q 'JARVIS_IMAGE_TAG=1.1.3 docker compose' \
+   && ! grep -q '^JARVIS_IMAGE_TAG=' "$FX/.env" \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+  pass "legacy application version supplies recovery image identity"
+else
+  check_fail "legacy image-tag fallback: rc=$rc env=$(cat "$FX/.env") out=$out"
 fi
 
 # An exact release tag is more specific than pyproject's stable project version.
 reset_fixture_env
 out="$(STUB_EXACT_TAG=v1.2.0-rc.1 run_update --yes)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0-rc\.1$' "$FX/docker.log" \
-   && grep -qx 'JARVIS_VERSION=1.2.0-rc.1' "$FX/.env"; then
-  pass "exact_rc_tag_wins: app images and persisted pin use 1.2.0-rc.1"
+   && grep -Eq '^pull .*dashboard.*JARVIS_VERSION=1\.2\.0-rc\.1 JARVIS_IMAGE_TAG=1\.2\.0-rc\.1$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0-rc.1' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.2.0-rc.1' "$FX/.env"; then
+  pass "exact_rc_tag_wins: semantic version and image tag use 1.2.0-rc.1"
 else
   check_fail "exact_rc_tag_wins: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
 fi
@@ -488,10 +606,11 @@ fi
 reset_fixture_env
 out="$(run_update --build-local --yes)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && grep -Eq '^build .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
-   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0$' "$FX/docker.log" \
-   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env"; then
-  pass "build_local_uses_checkout_version: build/up use 1.2.0 and success persists it"
+   && grep -Eq '^build .*dashboard.*JARVIS_VERSION=1\.2\.0 JARVIS_IMAGE_TAG=1\.2\.0$' "$FX/docker.log" \
+   && grep -Eq '^up .*dashboard.*JARVIS_VERSION=1\.2\.0 JARVIS_IMAGE_TAG=1\.2\.0$' "$FX/docker.log" \
+   && grep -qx 'JARVIS_VERSION=1.2.0' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.2.0' "$FX/.env"; then
+  pass "build_local_uses_checkout_version for both identities"
 else
   check_fail "build_local_uses_checkout_version: rc=$rc env=$(cat "$FX/.env") log=$(cat "$FX/docker.log") out=$out"
 fi
@@ -503,7 +622,8 @@ sed 's/version = "1.2.0"/version = "not valid"/' "$FX/pyproject.toml" > "$FX/pyp
 mv "$FX/pyproject.invalid" "$FX/pyproject.toml"
 out="$(run_update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] && [ ! -s "$FX/docker-calls.log" ] \
-   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$FX/.env"; then
   pass "invalid_checkout_version_fails_before_compose: no Docker call and old pin remains"
 else
   check_fail "invalid_checkout_version_fails_before_compose: rc=$rc calls=$(cat "$FX/docker-calls.log") env=$(cat "$FX/.env") out=$out"
@@ -511,7 +631,8 @@ fi
 rm -f "$FX/pyproject.toml"
 out="$(run_update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] && [ ! -s "$FX/docker-calls.log" ] \
-   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env"; then
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$FX/.env"; then
   pass "missing_checkout_version_fails_before_compose: no Docker call and old pin remains"
 else
   check_fail "missing_checkout_version_fails_before_compose: rc=$rc calls=$(cat "$FX/docker-calls.log") env=$(cat "$FX/.env") out=$out"
@@ -556,6 +677,18 @@ if [ "$rc" -eq 0 ] \
   pass "no_healthcheck_reported_not_silent: reported as running-not-verified, never healthy"
 else
   check_fail "no_healthcheck_reported_not_silent: rc=$rc out=$out"
+fi
+
+# An absent healthcheck is successful only while the container is running.
+reset_fixture_env
+out="$(STUB_HEALTH="" STUB_RUN_STATE=exited run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && printf '%s' "$out" | grep -q 'not running (state: exited)' \
+   && grep -qx 'JARVIS_VERSION=1.1.3' "$FX/.env" \
+   && grep -qx 'JARVIS_IMAGE_TAG=1.1.3' "$FX/.env"; then
+  pass "no_healthcheck_exited_fails_without_pin_commit"
+else
+  check_fail "no-healthcheck terminal state: rc=$rc env=$(cat "$FX/.env") out=<<<$out>>>"
 fi
 
 # --- update_success_installs_shim --------------------------------------------

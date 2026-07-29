@@ -1,10 +1,9 @@
 /**
  * Tests for CardList — verifies onError toast fires when deleteCard fails.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CardList } from '@/components/cards/CardList';
 import type { Card } from '@/types';
 
@@ -16,6 +15,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { fetchCards, deleteCard } from '@/lib/api';
 import { toast } from 'sonner';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockFetchCards = vi.mocked(fetchCards);
 const mockDeleteCard = vi.mocked(deleteCard);
@@ -30,15 +30,17 @@ const CARD: Card = {
   evidence: null,
   fsrs_state: {},
   due_at: null,
+  stale: false,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-  });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 describe('CardList — fetchCards failure', () => {
@@ -92,5 +94,16 @@ describe('CardList — deleteCard onError', () => {
         'Failed to delete card. Please try again.',
       );
     });
+  });
+
+  it('keeps an earlier-version card visible and labels it as not reviewable', async () => {
+    mockFetchCards.mockResolvedValue([{ ...CARD, stale: true }]);
+
+    wrap(<CardList deckId={1} />);
+
+    expect(await screen.findByText('What is entropy?')).toBeInTheDocument();
+    expect(screen.getByText('Earlier version')).toBeInTheDocument();
+    expect(screen.getByText('Not reviewable')).toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
   });
 });

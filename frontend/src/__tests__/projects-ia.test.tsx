@@ -11,9 +11,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +52,7 @@ import { QuestionsSection } from '@/components/projects/QuestionsSection';
 import { RecentActivitySection } from '@/components/projects/RecentActivitySection';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import type { Project, ProjectQuestion, ProjectActivityItem } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockFetchProjects = vi.mocked(fetchProjects);
 const mockFetchQuestions = vi.mocked(fetchProjectQuestions);
@@ -68,18 +68,17 @@ const mockDeleteQuestion = vi.mocked(deleteProjectQuestion);
 // ---------------------------------------------------------------------------
 
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 function wrap(ui: React.ReactNode, opts: { path?: string; state?: unknown } = {}) {
-  return render(
-    <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter
-        initialEntries={[{ pathname: opts.path ?? '/projects', state: opts.state ?? null }]}
-      >
-        {ui}
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter
+      initialEntries={[{ pathname: opts.path ?? '/projects', state: opts.state ?? null }]}
+    >
+      {ui}
+    </MemoryRouter>,
+    { queryClient: makeQueryClient() },
   );
 }
 

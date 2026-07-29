@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-12 | routes: /ask -->
+<!-- verified-against-UI: 2026-07-25 | routes: /ask -->
 
 # Ask — Cross-paper RAG
 
@@ -15,7 +15,7 @@ streams a grounded answer with citations.
 
 ### Composing a question
 
-Type your question in the **input box** at the bottom of the workspace and press Enter or click **Ask**. There is no limit on question length, but concise, focused questions produce better results.
+Type your question in the **input box** at the bottom of the workspace and press Enter or click **Ask**. Questions are limited to 1000 characters in this cross-paper workspace (2000 characters in the single-paper Ask on [Paper Detail](paper-detail.md)); concise, focused questions also tend to produce better results.
 
 Questions can be:
 

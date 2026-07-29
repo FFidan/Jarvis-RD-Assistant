@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jarvis_common.task_registry as task_registry
 import pytest
 from jarvis_common.paper_visibility import paper_visibility_sql
-from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing import SharedConnPool, shelve_paper
 from paper_ingestion.integrations._zotero_poll import _link_existing_by_doi
 
 
@@ -43,14 +43,6 @@ async def _seed_paper_with_doi(
         discovered_by,
         visibility_scope,
         doi,
-    )
-
-
-async def _shelve(conn, user_id: int, paper_id: int) -> None:
-    await conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        user_id,
-        paper_id,
     )
 
 
@@ -86,7 +78,7 @@ async def test_private_unowned_doi_match_is_not_linked(contract_two_users, contr
     private_id = await _seed_paper_with_doi(
         contract_conn, "zotero:priv:a", "10.1/x", visibility_scope="private", discovered_by=user_a
     )
-    await _shelve(contract_conn, user_a, private_id)
+    await shelve_paper(contract_conn, user_a, private_id)
 
     with _patched_annotation_enqueue():
         result = await _link_existing_by_doi(
@@ -139,7 +131,7 @@ async def test_own_private_doi_match_is_idempotent(contract_two_users, contract_
     own_id = await _seed_paper_with_doi(
         contract_conn, "zotero:own:a", "10.1/own", visibility_scope="private", discovered_by=user_a
     )
-    await _shelve(contract_conn, user_a, own_id)
+    await shelve_paper(contract_conn, user_a, own_id)
 
     with _patched_annotation_enqueue():
         result = await _link_existing_by_doi(

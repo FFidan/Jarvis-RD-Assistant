@@ -23,8 +23,11 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
     make_contract_client as _make_client,
+    patch_pi_test_app,
 )
 
 pytestmark = [
@@ -42,18 +45,14 @@ async def _pi_app_with_pool(contract_conn):
     that session-cookie auth works.  Forces embedder=None so list_papers takes the
     BM25 path instead of the hybrid Qdrant path.
     """
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.main import app
-
     shared = SharedConnPool(contract_conn)
-    with (
-        patch_app_state(app, {"db_pool": shared, "embedder": None}),
-        patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            state_overrides={"embedder": None},
         ),
-    ):
+    ) as app:
         yield app
 
 
@@ -575,6 +574,91 @@ async def test_a67_get_paper_detail_owner_gets_200(
     )
 
 
+async def test_paper_detail_filters_cross_reference_when_only_target_generation_changes(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """A stale related-paper reference disappears without hiding its source summary."""
+    user_id = contract_two_users.user_a_id
+    source_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
+           VALUES ('detail-xref-source', 'arxiv', 'Cross-reference source',
+                   ARRAY['Author'], 'https://example.test/xref-source', $1, 0)
+           RETURNING id""",
+        user_id,
+    )
+    related_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
+           VALUES ('detail-xref-target', 'arxiv', 'Cross-reference target',
+                   ARRAY['Author'], 'https://example.test/xref-target', $1, 0)
+           RETURNING id""",
+        user_id,
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [(user_id, source_id), (user_id, related_id)],
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (
+               paper_id, user_id, summary_brief, summary_detailed, key_findings,
+               cross_references, content_generation
+           )
+           VALUES ($1, $2, 'Current source summary', 'Current source details',
+                   '[{"finding":"still current","quote":"source evidence"}]'::jsonb,
+                   $3::jsonb, 0)""",
+        source_id,
+        user_id,
+        [
+            {
+                "related_paper_id": related_id,
+                "relationship": "supports",
+                "explanation": "Related evidence",
+                "related_quote": "target evidence",
+                "content_generation": 0,
+            }
+        ],
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        current = await client.get(f"/api/papers/{source_id}")
+        await contract_conn.execute(
+            "UPDATE papers SET content_generation = 1 WHERE id = $1",
+            related_id,
+        )
+        stale_target = await client.get(f"/api/papers/{source_id}")
+        await contract_conn.execute(
+            "UPDATE papers SET content_generation = 1 WHERE id = $1",
+            source_id,
+        )
+        stale_source = await client.get(f"/api/papers/{source_id}")
+
+    assert current.status_code == 200, current.text[:300]
+    assert current.json()["summary"]["cross_references"] == [
+        {
+            "related_paper_id": related_id,
+            "relationship": "supports",
+            "explanation": "Related evidence",
+            "related_quote": "target evidence",
+            "content_generation": 0,
+        }
+    ]
+    assert stale_target.status_code == 200, stale_target.text[:300]
+    summary = stale_target.json()["summary"]
+    assert summary["summary_brief"] == "Current source summary"
+    assert summary["key_findings"][0]["finding"] == "still current"
+    assert summary["cross_references"] == []
+    assert stale_source.status_code == 200, stale_source.text[:300]
+    assert stale_source.json()["summary"] is None
+
+
 # --- A68: POST /api/papers/batch-save — owner can save list of papers ---
 
 
@@ -1072,6 +1156,19 @@ async def _caller_private_paper_counts(conn, paper_id: int, user_id: int) -> dic
     return {name: await conn.fetchval(sql, paper_id, user_id) for name, sql in queries.items()}
 
 
+def _spy_vector_deletes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Capture paper IDs passed to the vector-deletion boundary."""
+    from paper_ingestion import papers_service
+
+    calls: list[int] = []
+
+    async def _record(paper_id: int) -> None:
+        calls.append(paper_id)
+
+    monkeypatch.setattr(papers_service, "delete_paper_vectors", _record)
+    return calls
+
+
 async def test_hard_delete_shared_paper_removes_only_callers_private_rows(
     contract_two_users,
     _pi_app_with_pool,
@@ -1084,14 +1181,7 @@ async def test_hard_delete_shared_paper_removes_only_callers_private_rows(
     Every paper-linked row that is privately owned by A is removed in the same
     transaction. B's corresponding rows and the canonical chunk remain.
     """
-    from paper_ingestion import papers_service
-
-    vector_calls: list[int] = []
-
-    async def _spy_delete_vectors(pid: int) -> None:
-        vector_calls.append(pid)
-
-    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+    vector_calls = _spy_vector_deletes(monkeypatch)
 
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
@@ -1212,14 +1302,7 @@ async def test_hard_delete_last_holder_preserves_shared_row_and_vectors(
     monkeypatch,
 ):
     """A last library holder still cannot delete shared canonical data."""
-    from paper_ingestion import papers_service
-
-    vector_calls: list[int] = []
-
-    async def _spy_delete_vectors(pid: int) -> None:
-        vector_calls.append(pid)
-
-    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+    vector_calls = _spy_vector_deletes(monkeypatch)
 
     user_a_id = contract_two_users.user_a_id
     paper_id = await contract_conn.fetchval(
@@ -1263,14 +1346,7 @@ async def test_hard_delete_sole_holder_preserves_shared_row_regardless_of_discov
     private rows are removed, but shared SQL and Qdrant data remain available
     independently of membership count or discovery attribution.
     """
-    from paper_ingestion import papers_service
-
-    vector_calls: list[int] = []
-
-    async def _spy_delete_vectors(pid: int) -> None:
-        vector_calls.append(pid)
-
-    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+    vector_calls = _spy_vector_deletes(monkeypatch)
 
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
@@ -2053,86 +2129,36 @@ async def test_pwst_01_save_transitions_user_state_to_saved(
     assert row["state"] == "to_read", f"Expected state='to_read'; got {row['state']!r}"
 
 
-async def test_pwst_02_unsave_clears_saved_state(
-    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
-):
-    """PUT /api/papers/{id}/unsave: state reverts from 'to_read' back to 'inbox'.
-
-    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:536
-    # (unsave_paper: allowed=('to_read',); _upsert_state_and_starred with state='inbox').
-    """
-    # ARRANGE — seeded paper_id_a is already in state='to_read' (from _seed_resources)
+@pytest.mark.parametrize(
+    ("endpoint", "expected_state"),
+    [
+        ("unsave", "inbox"),
+        ("reading", "reading"),
+        ("done", "done"),
+    ],
+)
+async def test_paper_state_transition_updates_state(
+    endpoint: str,
+    expected_state: str,
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+) -> None:
+    """Each state-transition endpoint persists its documented target state."""
     paper_id = contract_two_users.paper_id_a
 
-    # ACT
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp = await c.put(f"/api/papers/{paper_id}/unsave")
+        resp = await c.put(f"/api/papers/{paper_id}/{endpoint}")
 
-    # ASSERT
     assert resp.status_code in (200, 204), resp.text[:200]
     row = await contract_conn.fetchrow(
         "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
         paper_id,
         contract_two_users.user_a_id,
     )
-    assert row is not None, "paper_user_state row must exist after PUT /unsave"
-    assert row["state"] == "inbox", f"Expected state='inbox' after unsave; got {row['state']!r}"
-
-
-async def test_pwst_03_reading_transitions_to_reading(
-    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
-):
-    """PUT /api/papers/{id}/reading: state transitions to 'reading'.
-
-    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:582
-    # (reading_paper: allowed=('to_read','reading','done'); _upsert_state_and_starred
-    # with state='reading').
-    """
-    # ARRANGE — seeded paper_id_a is in state='to_read', which is in the allowed set.
-    paper_id = contract_two_users.paper_id_a
-
-    # ACT
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp = await c.put(f"/api/papers/{paper_id}/reading")
-
-    # ASSERT
-    assert resp.status_code in (200, 204), resp.text[:200]
-    row = await contract_conn.fetchrow(
-        "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
-        paper_id,
-        contract_two_users.user_a_id,
-    )
-    assert row is not None, "paper_user_state row must exist after PUT /reading"
-    assert row["state"] == "reading", (
-        f"Expected state='reading' after PUT /reading; got {row['state']!r}"
-    )
-
-
-async def test_pwst_04_done_transitions_to_done(
-    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
-):
-    """PUT /api/papers/{id}/done: state transitions to 'done' regardless of prior state.
-
-    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:604
-    # (done_paper: no _assert_paper_in_states restriction; _upsert_state_and_starred
-    # with state='done').
-    """
-    # ARRANGE — seeded paper_id_a is in state='to_read'; done has no state restriction.
-    paper_id = contract_two_users.paper_id_a
-
-    # ACT
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp = await c.put(f"/api/papers/{paper_id}/done")
-
-    # ASSERT
-    assert resp.status_code in (200, 204), resp.text[:200]
-    row = await contract_conn.fetchrow(
-        "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
-        paper_id,
-        contract_two_users.user_a_id,
-    )
-    assert row is not None, "paper_user_state row must exist after PUT /done"
-    assert row["state"] == "done", f"Expected state='done' after PUT /done; got {row['state']!r}"
+    assert row is not None, f"paper_user_state row must exist after PUT /{endpoint}"
+    assert row["state"] == expected_state
 
 
 async def test_pwst_05_unstar_clears_starred_flag(
@@ -2937,3 +2963,39 @@ async def test_f10_papers_read_scoped_to_acting_user(
         user_a_id,
     )
     assert (a_after or 0) >= 1, f"User A's papers_read must be >=1; got {a_after}"
+
+
+async def test_batch_save_rejects_external_id_over_column_width(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A batch-save entry with an external_id past the database column width is a clean 422.
+
+    external_id is capped at 255 to match papers.external_id (varchar(255));
+    a request exceeding it must fail request validation rather than reach the
+    database and abort the whole batch with a raw truncation error.
+    """
+    over_length_id = "x" * 256
+    payload = [
+        {
+            "external_id": over_length_id,
+            "source_type": "arxiv",
+            "title": "Over Length External Id",
+            "authors": ["Owner"],
+            "url": "https://ten7.contract.test/over-length",
+        }
+    ]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/papers/batch-save", json=payload)
+
+    assert resp.status_code == 422, (
+        f"Over-length external_id must be rejected with 422; got {resp.status_code}: "
+        f"{resp.text[:300]}"
+    )
+    planted = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM papers WHERE external_id = $1",
+        over_length_id,
+    )
+    assert planted == 0, f"Rejected over-length external_id must plant no row; got {planted}"

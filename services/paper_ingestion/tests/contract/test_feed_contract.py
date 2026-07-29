@@ -22,9 +22,6 @@ from __future__ import annotations
 
 import httpx
 import pytest
-import pytest_asyncio
-
-from jarvis_common.testing import SharedConnPool
 
 from jarvis_common.testing_contract_apps import (
     DEFAULT_CONTRACT_API_KEY,
@@ -36,51 +33,6 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-
-# ---------------------------------------------------------------------------
-# App + client fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app(contract_conn):
-    """paper_ingestion app wired to the contract connection, rate limiter off."""
-    from unittest.mock import MagicMock
-
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_embedder = getattr(app.state, "embedder", None)
-
-    app.state.db_pool = shared
-    app.state.http_client = MagicMock()
-    app.state.embedder = MagicMock()
-    app.dependency_overrides[get_db_pool] = lambda: shared
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            app.state.__dict__.pop("http_client", None)
-        else:
-            app.state.http_client = original_http
-        if original_embedder is None:
-            app.state.__dict__.pop("embedder", None)
-        else:
-            app.state.embedder = original_embedder
-        app.dependency_overrides.pop(get_db_pool, None)
 
 
 # ---------------------------------------------------------------------------
@@ -511,3 +463,69 @@ async def test_feed_summary_join_scoped_to_calling_user(
     assert body["total"] == len(body["papers"]), (
         f"count inflated: total={body['total']} but returned {len(body['papers'])} rows"
     )
+
+
+async def test_feed_hides_stale_summary_and_zotero_note_until_current_generation_restores_them(
+    contract_two_users, _pi_app, _configure_api_key, contract_conn
+):
+    """Generation changes remove stale feed evidence and current rows restore it."""
+    marker = "GENERATION-FEED-MARKER"
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('feed-generation', 'arxiv', 'feed generation paper', ARRAY['A'],
+                   'https://example.test/feed-generation', NULL) RETURNING id"""
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries
+           (paper_id, summary_brief, summary_detailed, confidence, user_id, content_generation)
+           VALUES ($1, $2, $2, 'HIGH', $3, 0)""",
+        paper_id,
+        marker,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_notes (paper_id, user_id, source, user_note, content_generation)
+           VALUES ($1, $2, 'zotero', $3, 0)""",
+        paper_id,
+        contract_two_users.user_a_id,
+        marker,
+    )
+    await contract_conn.execute("UPDATE papers SET content_generation = 1 WHERE id = $1", paper_id)
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        stale_feed = await c.get("/api/papers/feed", params={"scope": "library"})
+        stale_search = await c.get(
+            "/api/papers/feed", params={"q": marker, "include_zotero_notes": "true"}
+        )
+    assert stale_feed.status_code == 200
+    stale_rows = [paper for paper in stale_feed.json()["papers"] if paper["id"] == paper_id]
+    assert len(stale_rows) == 1
+    assert stale_rows[0]["summary_brief"] is None
+    assert stale_rows[0]["tldr"] is None
+    assert stale_rows[0]["confidence"] is None
+    assert stale_rows[0]["has_summary"] is False
+    assert stale_search.status_code == 200
+    assert paper_id not in [paper["id"] for paper in stale_search.json()["papers"]]
+
+    await contract_conn.execute(
+        "UPDATE paper_summaries SET content_generation = 1 WHERE paper_id = $1", paper_id
+    )
+    await contract_conn.execute(
+        "UPDATE paper_notes SET content_generation = 1 WHERE paper_id = $1", paper_id
+    )
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        current_feed = await c.get("/api/papers/feed", params={"scope": "library"})
+        current_search = await c.get(
+            "/api/papers/feed", params={"q": marker, "include_zotero_notes": "true"}
+        )
+    rows = [paper for paper in current_feed.json()["papers"] if paper["id"] == paper_id]
+    assert len(rows) == 1
+    assert rows[0]["summary_brief"] == marker
+    assert rows[0]["confidence"] == "HIGH"
+    assert rows[0]["has_summary"] is True
+    assert paper_id in [paper["id"] for paper in current_search.json()["papers"]]

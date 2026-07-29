@@ -22,9 +22,6 @@ Unique constraint on recommendation_feedback:
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
-
-from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
 pytestmark = [
@@ -32,51 +29,6 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-
-# ---------------------------------------------------------------------------
-# App fixture — wires PI app to the per-test contract connection
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app(contract_conn):
-    """paper_ingestion app wired to the contract connection, rate limiter off."""
-    from unittest.mock import MagicMock
-
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_embedder = getattr(app.state, "embedder", None)
-
-    app.state.db_pool = shared
-    app.state.http_client = MagicMock()
-    app.state.embedder = MagicMock()
-    app.dependency_overrides[get_db_pool] = lambda: shared
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            app.state.__dict__.pop("http_client", None)
-        else:
-            app.state.http_client = original_http
-        if original_embedder is None:
-            app.state.__dict__.pop("embedder", None)
-        else:
-            app.state.embedder = original_embedder
-        app.dependency_overrides.pop(get_db_pool, None)
 
 
 # ---------------------------------------------------------------------------

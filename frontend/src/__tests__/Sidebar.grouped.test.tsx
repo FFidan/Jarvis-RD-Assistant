@@ -15,9 +15,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from '@/components/layout/Sidebar';
 import {
   useNavPrefsStore,
@@ -49,6 +48,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockUseAuthStore = vi.mocked(useAuthStore);
 const mockUseUIStore = vi.mocked(useUIStore);
@@ -86,16 +86,13 @@ function renderSidebar({
   // on jsdom's localStorage carry-over.
   useNavPrefsStore.setState({ navMode });
 
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Sidebar />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Sidebar />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

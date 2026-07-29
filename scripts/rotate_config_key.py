@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,10 +24,40 @@ class ScriptError(RuntimeError):
     """Script-level error; caught by the __main__ block."""
 
 
-def _required_env(name: str) -> str:
-    value = os.environ.get(name, "")
+def _checked_host(name: str, value: str) -> str:
+    """Validate a database host while preserving bracketed IPv6 literals."""
     if not value:
-        raise ScriptError(f"{name} is required")
+        raise ScriptError(f"{name} invalid host: empty")
+    if any(ch.isspace() for ch in value):
+        raise ScriptError(f"{name} invalid host: whitespace")
+    if any(ch in value for ch in "@/?#%"):
+        raise ScriptError(f"{name} invalid host: URI delimiter")
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            IPv6Address(value[1:-1])
+        except ValueError as exc:
+            raise ScriptError(f"{name} invalid host: bracketed IPv6") from exc
+        return value
+    if "[" in value or "]" in value:
+        raise ScriptError(f"{name} invalid host: malformed brackets")
+    if ":" in value:
+        raise ScriptError(f"{name} invalid host: unbracketed colon")
+    if value.replace(".", "").isdigit():
+        try:
+            IPv4Address(value)
+        except ValueError as exc:
+            raise ScriptError(f"{name} invalid host: IPv4") from exc
+    return value
+
+
+def _checked_port(name: str, value: str) -> str:
+    """Validate a database TCP port."""
+    if not value:
+        raise ScriptError(f"{name} invalid port: empty")
+    if not value.isascii() or not value.isdecimal():
+        raise ScriptError(f"{name} invalid port: ASCII decimal digits required")
+    if not 1 <= int(value) <= 65535:
+        raise ScriptError(f"{name} invalid port: out of range")
     return value
 
 
@@ -66,8 +97,8 @@ def _database_url() -> str:
 
     user = quote(os.environ.get("POSTGRES_USER", "jarvis"), safe="")
     database = quote(os.environ.get("POSTGRES_DB", "jarvis"), safe="")
-    host = os.environ.get("POSTGRES_HOST", "postgres")
-    port = os.environ.get("POSTGRES_PORT", "5432")
+    host = _checked_host("POSTGRES_HOST", os.environ.get("POSTGRES_HOST", "postgres"))
+    port = _checked_port("POSTGRES_PORT", os.environ.get("POSTGRES_PORT", "5432"))
     return f"postgresql://{user}:{quote(password, safe='')}@{host}:{port}/{database}"
 
 

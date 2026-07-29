@@ -15,9 +15,10 @@ from xml.etree.ElementTree import fromstring
 import httpx
 import pytest
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ATOM_NS, ArxivSource
+from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ATOM_NS
 from paper_ingestion.sources.base import SourceQuery
+from tests._source_fakes import make_arxiv_source as _make_source
+from tests._source_fakes import make_topic as _make_topic
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -25,22 +26,6 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_source(db_pool=None, config_extra: dict | None = None) -> ArxivSource:
-    """Create an ArxivSource with a minimal PaperSourceConfig."""
-    config = PaperSourceConfig(
-        id=1,
-        source_type=SourceType.ARXIV,
-        enabled=True,
-        config=config_extra or {},
-    )
-    client = httpx.AsyncClient()
-    return ArxivSource(config, client, db_pool=db_pool)
-
-
-def _make_topic(name: str, terms: list[str] | None = None, idx: int = 1) -> TopicRef:
-    return TopicRef(id=idx, name=name, query_terms=terms or [name])
 
 
 def _fixture_xml() -> bytes:

@@ -4,11 +4,11 @@
  * the My-Day page.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const pauseMock = vi.fn();
 const resumeMock = vi.fn();
@@ -44,15 +44,12 @@ vi.mock('@/lib/api', () => ({
 }));
 
 function renderHeader() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <HeaderPomodoro />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HeaderPomodoro />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

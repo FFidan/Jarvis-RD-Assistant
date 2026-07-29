@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # Tuned independently of streaming._SEARCH_SCORE_THRESHOLD — same value today,
 # but the two thresholds serve different retrieval paths and may diverge.
 _HYBRID_SEARCH_SCORE_THRESHOLD = 0.05
+_HYBRID_SEARCH_CANDIDATE_LIMIT = 200
 _SEARCH_SCOPE_KEYS = {"user_id", "library_paper_ids", "allowed_paper_ids"}
 
 
@@ -576,11 +577,13 @@ class EmbeddingSearchMixin:
             Maximum number of results to return.
         offset : int
             Number of results to skip (for pagination).  The offset is applied
-            *after* RRF fusion so that relative rankings are computed over the
-            full candidate pool (``limit + offset`` items) before slicing.
-            This preserves RRF correctness: both BM25 and semantic legs see
-            the full candidate set, and the merged ranking is sliced at the
-            end rather than before fusion.
+            *after* RRF fusion and after the metadata visibility recheck, so
+            that relative rankings are computed over the full candidate pool
+            (``limit + offset`` items) before slicing and pagination walks the
+            papers the caller may actually see.  This preserves RRF
+            correctness: both BM25 and semantic legs see the full candidate
+            set, and the merged ranking is sliced at the end rather than
+            before fusion.
         k : int
             RRF constant (higher = more weight to lower-ranked results).
             Standard value is 60.
@@ -594,9 +597,12 @@ class EmbeddingSearchMixin:
         # ------------------------------------------------------------------
         # BM25 leg — PostgreSQL full-text search
         # ------------------------------------------------------------------
-        # PI-CORE-006: fetch limit+offset candidates so pagination works correctly
-        # after RRF fusion.  Cap at 200 to match search_chunks_global's guard.
-        candidate_limit = min(limit + offset, 200)
+        # Fetch the full bounded pool before the relational metadata recheck.
+        # A page-sized request lets stale or invisible semantic hits consume
+        # every candidate slot, leaving no lower-ranked visible paper with
+        # which to fill the page. The existing 200-item ceiling keeps both
+        # retrieval legs bounded.
+        candidate_limit = _HYBRID_SEARCH_CANDIDATE_LIMIT
         bm25_sql, bm25_args = _build_bm25_query(query, candidate_limit, user_id)
         library_paper_ids = await _fetch_library_paper_ids_for_scope(db_pool, user_id)
         async with db_pool.acquire() as conn:
@@ -661,27 +667,32 @@ class EmbeddingSearchMixin:
             scored.append((pid, rrf_score))
 
         # Sort by RRF score descending, then by paper_id for stable ordering.
-        # Slice to limit+offset candidates first, then apply offset pagination
-        # after RRF so that the full merged ranking is preserved.
+        # Fusion runs over the full candidate pool so the merged ranking is
+        # preserved, and the page is cut at the very end.
         scored.sort(key=lambda x: (-x[1], x[0]))
-        top_ids = [pid for pid, _ in scored[offset : offset + limit]]
 
         # ------------------------------------------------------------------
         # Fetch metadata for papers found only in semantic leg
         # ------------------------------------------------------------------
-        missing_ids = [pid for pid in top_ids if pid not in bm25_meta]
+        # Every fused candidate is resolved, not just the ones the page would
+        # have covered: this fetch re-applies the caller's visibility policy to
+        # papers the semantic leg alone produced, and a candidate it denies must
+        # not consume a result slot that is never given back. Fusion has already
+        # happened, so each survivor keeps the rank it earned within its own
+        # leg — filtering changes which papers are returned, not their order.
+        missing_ids = [pid for pid, _ in scored if pid not in bm25_meta]
         if missing_ids:
             bm25_meta.update(await _fetch_missing_metadata(db_pool, missing_ids, user_id))
 
         # ------------------------------------------------------------------
         # Build result list
         # ------------------------------------------------------------------
+        resolved_ids = [pid for pid, _ in scored if pid in bm25_meta]
+        top_ids = resolved_ids[offset : offset + limit]
         rrf_map = dict(scored)
         results: list[dict] = []
         for pid in top_ids:
-            meta = bm25_meta.get(pid)
-            if meta is None:
-                continue  # paper deleted between queries
+            meta = bm25_meta[pid]
             results.append(
                 {
                     "id": meta["id"],
@@ -733,7 +744,9 @@ class EmbeddingSearchMixin:
         Returns
         -------
         list[dict]
-            Each dict: {paper_id, score, content} deduplicated by paper_id.
+            Each dict: {paper_id, score, chunk_index, content} deduplicated by
+            paper_id. ``chunk_index`` identifies the excerpt the content came
+            from, so callers can check it against the paper's stored chunks.
         """
         from qdrant_client.models import (
             FieldCondition,
@@ -797,6 +810,7 @@ class EmbeddingSearchMixin:
                 best[pid] = {
                     "paper_id": pid,
                     "score": score,
+                    "chunk_index": payload.get("chunk_index"),
                     "content": (payload.get("content") or "")[:300],
                 }
 

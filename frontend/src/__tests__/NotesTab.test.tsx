@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotesTab } from '@/components/paper/NotesTab';
 import type { Note } from '@/types';
 
@@ -10,6 +9,7 @@ vi.mock('sonner', () => ({
 }));
 
 import { toast } from 'sonner';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/stores/job-store', () => ({
   useJobStore: (selector: (s: { trackExternalJob: ReturnType<typeof vi.fn> }) => unknown) =>
@@ -43,19 +43,17 @@ function makeNote(overrides: Partial<Note> = {}): Note {
     verified_quote: null,
     verified_page_number: null,
     promoted_at: null,
+    stale: false,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   };
 }
 
 function renderTab() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <NotesTab paperId={42} />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <NotesTab paperId={42} />,
+    { queryClient },
   );
 }
 
@@ -163,5 +161,22 @@ describe('NotesTab', () => {
 
     expect(await screen.findByText('Verified evidence, page 3')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /promote verified evidence/i })).not.toBeInTheDocument();
+  });
+
+  it('labels an earlier-version highlight and disables evidence promotion', async () => {
+    vi.mocked(fetchNotes).mockImplementation(async (_paperId, source) => {
+      if (source === 'zotero') return [makeNote({ stale: true })];
+      return [];
+    });
+
+    renderTab();
+
+    expect(
+      await screen.findByText('This highlight belongs to an earlier version of the paper.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /promote verified evidence/i }),
+    ).toBeDisabled();
+    expect(promoteZoteroNote).not.toHaveBeenCalled();
   });
 });

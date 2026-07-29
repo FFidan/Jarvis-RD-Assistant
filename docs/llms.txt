@@ -16,8 +16,10 @@ Important boundaries
   prompts and source excerpts are sent to that provider for the chosen task.
 - "Verified" means an answer or claim is traceable to retrieved source text; it
   does not mean the scientific claim is independently proven correct.
-- The canonical paper corpus is shared within a deployment, while user library
-  state, annotations, tasks, exports, and review data are scoped to the user.
+- Papers from verified public sources (arXiv, Semantic Scholar, OpenAlex,
+  PubMed) are shared within a deployment; uploads, Zotero imports, and other
+  client-driven material stay private to the importing user; library state,
+  annotations, tasks and review data are per-user.
 
 Primary documentation map
 

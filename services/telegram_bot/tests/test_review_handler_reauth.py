@@ -10,7 +10,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.testing import make_bot_config
+from jarvis_common.testing import (
+    PTBContextOptions,
+    make_bot_config,
+    make_ptb_context,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.review_handler import (
     SHOWING_BACK,
@@ -52,17 +56,16 @@ def _make_callback_update(callback_data: str, chat_id: int = _TEST_CHAT_ID) -> M
     return update
 
 
-def _make_context(user_data: dict | None = None) -> tuple[MagicMock, AsyncMock]:
-    context = MagicMock()
-    context.user_data = user_data if user_data is not None else {}
+def _make_context(
+    user_data: dict[str, object] | None = None,
+) -> tuple[MagicMock, AsyncMock]:
     config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = AsyncMock()
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": AsyncMock(),
-        "http_client": mock_http,
-    }
+    context = make_ptb_context(
+        AsyncMock(),
+        config,
+        options=PTBContextOptions(http_client=mock_http, user_data=user_data),
+    )
     return context, mock_http
 
 

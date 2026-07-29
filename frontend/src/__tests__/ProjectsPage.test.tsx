@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 
@@ -26,6 +25,7 @@ import {
   fetchMilestones,
   fetchProjectPapers,
 } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchProjects = vi.mocked(fetchProjects);
 const mockFetchQuestions = vi.mocked(fetchProjectQuestions);
 const mockFetchActivity = vi.mocked(fetchProjectActivity);
@@ -34,15 +34,12 @@ const mockFetchMilestones = vi.mocked(fetchMilestones);
 const mockFetchPapers = vi.mocked(fetchProjectPapers);
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ProjectsPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ProjectsPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

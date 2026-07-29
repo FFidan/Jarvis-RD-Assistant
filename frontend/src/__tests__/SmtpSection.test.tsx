@@ -12,9 +12,8 @@
  * Per-file QueryClient (no shared state between tests).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // ---------------------------------------------------------------------------
 // Hoisted fixtures — accessible inside vi.mock() factory
@@ -112,6 +111,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { getSmtpConfig, saveSmtpConfig } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGetSmtpConfig = vi.mocked(getSmtpConfig);
 const mockSaveSmtpConfig = vi.mocked(saveSmtpConfig);
 
@@ -120,17 +120,16 @@ const mockSaveSmtpConfig = vi.mocked(saveSmtpConfig);
 // ---------------------------------------------------------------------------
 
 function makeQC() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 async function renderSmtp() {
   // Dynamic import after mocks are set up
   const { SmtpSection } = await import('@/components/settings/SmtpSection');
   const qc = makeQC();
-  return render(
-    <QueryClientProvider client={qc}>
-      <SmtpSection />
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <SmtpSection />,
+    { queryClient: qc },
   );
 }
 
@@ -142,15 +141,14 @@ describe('SettingsRail — Sources section', () => {
   it('shows exactly ONE "Sources" rail button (not per-source items)', async () => {
     const { SettingsRail } = await import('@/components/settings/SettingsRail');
     const qc = makeQC();
-    render(
-      <QueryClientProvider client={qc}>
-        <SettingsRail
-          activeSection="sources"
-          activeItem="sources"
-          isAdmin={true}
-          onSelect={vi.fn()}
-        />
-      </QueryClientProvider>,
+    renderWithProviders(
+      <SettingsRail
+        activeSection="sources"
+        activeItem="sources"
+        isAdmin={true}
+        onSelect={vi.fn()}
+      />,
+      { queryClient: qc },
     );
 
     // Wait for rail to render
@@ -216,10 +214,9 @@ describe('SmtpSection — hydration', () => {
     const user = userEvent.setup();
     const { SmtpSection } = await import('@/components/settings/SmtpSection');
     const qc = makeQC();
-    const { rerender } = render(
-      <QueryClientProvider client={qc}>
-        <SmtpSection />
-      </QueryClientProvider>,
+    const { rerender } = renderWithProviders(
+      <SmtpSection />,
+      { queryClient: qc },
     );
 
     // Wait for initial hydration
@@ -231,12 +228,10 @@ describe('SmtpSection — hydration', () => {
     await user.type(hostInput, 'smtp.custom.net');
     expect(hostInput).toHaveValue('smtp.custom.net');
 
-    // Force a re-render (new QueryClientProvider instance triggers a fresh
-    // useEffect call with config — the !hydrated guard must block re-seeding)
+    // Force a re-render; the hydrated guard must prevent cached config from
+    // re-seeding the user's edited field.
     rerender(
-      <QueryClientProvider client={qc}>
-        <SmtpSection />
-      </QueryClientProvider>,
+      <SmtpSection />,
     );
 
     // User's edit must survive: the !hydrated guard made the useEffect a no-op

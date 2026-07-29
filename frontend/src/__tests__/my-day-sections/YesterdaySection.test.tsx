@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { YesterdaySection } from '@/components/my-day/sections/YesterdaySection';
 import type { YesterdaySummary } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', () => ({
   fetchYesterday: vi.fn(),
@@ -13,13 +13,10 @@ vi.mock('@/lib/api', () => ({
 const { fetchYesterday, updateTask } = await import('@/lib/api');
 
 function renderSection() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <YesterdaySection />
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <YesterdaySection />,
+    { queryClient: qc },
   );
 }
 

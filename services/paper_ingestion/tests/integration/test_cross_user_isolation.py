@@ -26,7 +26,6 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from httpx import ASGITransport
 
 # The real apps. SessionMiddleware + strict resolvers are wired in main.
 # learning_engine is only importable when both service roots are on
@@ -42,6 +41,7 @@ le_main = pytest.importorskip(
 le_app = le_main.app
 
 from jarvis_common.testing_contract_apps import (  # noqa: E402
+    configure_contract_api_key,
     make_contract_client as _make_contract_client,
 )
 from paper_ingestion.main import app as pi_app  # noqa: E402
@@ -72,18 +72,8 @@ _TEST_API_KEY = "iso-suite-shared-key-do-not-use-in-prod"
 @pytest.fixture(autouse=True)
 def _configure_api_key(monkeypatch):
     """Set JARVIS_API_KEY so verify_api_key enforces (not 401-misconfig)."""
-    from jarvis_common import auth as _auth
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    # SecretsSettings is pydantic-settings backed; clear its cache then
-    # refresh the module-level API-key cache verify_api_key reads.
-    from jarvis_common.settings import get_secrets_settings
-
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
+    with configure_contract_api_key(monkeypatch, key=_TEST_API_KEY):
+        yield
 
 
 # Which app serves which path prefix. paper_ingestion owns papers/notes/
@@ -108,18 +98,6 @@ _LEAK_MARKERS = (A_PAPER_TITLE, *_PRIVATE_MARKERS)
 
 def _app(which: str):
     return pi_app if which == _PI else le_app
-
-
-async def _client(app, cookie: str) -> httpx.AsyncClient:
-    # X-API-Key proves request authenticity (shared, same for both users);
-    # the jarvis_session cookie is the ONLY thing that selects the user.
-    client = httpx.AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-    )
-    client.cookies.set("jarvis_session", cookie)
-    return client
 
 
 def _resolve(template: str, tu) -> str:
@@ -287,7 +265,11 @@ async def test_user_b_cannot_reach_user_a_resource(
     if template == "/api/tasks/{task_id}/papers":
         body = {"paper_id": two_users.paper_id_a}
 
-    async with await _client(app, two_users.cookie_b) as client:
+    async with _make_contract_client(
+        app,
+        two_users.cookie_b,
+        api_key=_TEST_API_KEY,
+    ) as client:
         resp = await client.request(method, path, json=body)
         text = resp.text
 
@@ -564,7 +546,6 @@ async def test_aud007_zotero_link_scoped_to_calling_user(
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
     from jarvis_common.testing import SharedConnPool
 
     from paper_ingestion.integrations.zotero_service import push_highlights_for_paper

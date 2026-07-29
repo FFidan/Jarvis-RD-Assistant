@@ -37,7 +37,18 @@ def _visible_paper_entities_exists(entity_alias: str, param_idx: int) -> str:
         f"EXISTS (SELECT 1 FROM paper_entities pe "
         f"JOIN papers visible_p ON visible_p.id = pe.paper_id "
         f"WHERE pe.entity_id = {entity_alias} "
+        f"AND pe.content_generation = visible_p.content_generation "
         f"AND {paper_visible_sql(param_idx, alias='visible_p')})"
+    )
+
+
+def _current_entity_paper_count_sql(entity_alias: str) -> str:
+    """Count distinct papers whose entity link matches the current generation."""
+    return (
+        "(SELECT COUNT(DISTINCT pe.paper_id) FROM paper_entities pe "
+        "JOIN papers current_p ON current_p.id = pe.paper_id "
+        f"WHERE pe.entity_id = {entity_alias} "
+        "AND pe.content_generation = current_p.content_generation)"
     )
 
 
@@ -61,6 +72,7 @@ def visible_entity_paper_count_sql(entity_alias: str, param_idx: int) -> str:
         "(SELECT COUNT(DISTINCT pe.paper_id) FROM paper_entities pe "
         "JOIN papers visible_p ON visible_p.id = pe.paper_id "
         f"WHERE pe.entity_id = {entity_alias} "
+        f"AND pe.content_generation = visible_p.content_generation "
         f"AND {paper_visible_sql(param_idx, alias='visible_p')})"
     )
 
@@ -81,12 +93,9 @@ async def _find_or_create_entity(
     that long-running HTTP calls do not hold a database connection.  Pass
     the pre-computed results via *embedding* and *similar_entity_id*.
 
-    ``paper_count`` is **not** incremented here.  The caller
-    (``extract_entities_for_paper``) increments it only when the
-    ``paper_entities`` upsert actually INSERTs a new ``(paper, entity, user)``
-    row (detected via ``RETURNING (xmax = 0)``), so re-running extraction for
-    the same paper — or the LLM emitting the same entity name twice in one run
-    — never double-counts.
+    Current paper counts are derived from generation-matched
+    ``paper_entities`` rows at read time, so resolving an entity never mutates
+    the legacy denormalized count.
     """
     canonical = name.lower().strip()
 
@@ -167,9 +176,13 @@ async def get_knowledge_graph(
                 )
             else:
                 entities = await conn.fetch(
-                    """SELECT id, name, canonical_name, entity_type, description, metadata,
-                              embedding_id, paper_count, created_at FROM entities
-                       WHERE entity_type = $1 AND paper_count >= $2
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                              e.description, e.metadata, e.embedding_id,
+                              {_current_entity_paper_count_sql("e.id")} AS paper_count,
+                              e.created_at
+                       FROM entities e
+                       WHERE e.entity_type = $1
+                         AND {_current_entity_paper_count_sql("e.id")} >= $2
                        ORDER BY paper_count DESC LIMIT $3""",
                     entity_type,
                     min_paper_count,
@@ -191,9 +204,12 @@ async def get_knowledge_graph(
                 )
             else:
                 entities = await conn.fetch(
-                    """SELECT id, name, canonical_name, entity_type, description, metadata,
-                              embedding_id, paper_count, created_at FROM entities
-                       WHERE paper_count >= $1
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                              e.description, e.metadata, e.embedding_id,
+                              {_current_entity_paper_count_sql("e.id")} AS paper_count,
+                              e.created_at
+                       FROM entities e
+                       WHERE {_current_entity_paper_count_sql("e.id")} >= $1
                        ORDER BY paper_count DESC LIMIT $2""",
                     min_paper_count,
                     limit,
@@ -217,6 +233,7 @@ async def get_knowledge_graph(
                  AND EXISTS (
                      SELECT 1 FROM papers p
                      WHERE p.id = er.paper_id
+                       AND er.content_generation = p.content_generation
                        AND {paper_visible_sql(2)}
                  )
                ORDER BY confidence DESC""",
@@ -225,10 +242,16 @@ async def get_knowledge_graph(
         )
     else:
         relationships = await conn.fetch(
-            """SELECT id, source_entity_id, target_entity_id, relationship_type,
-                      paper_id, evidence_quote, confidence, metadata, created_at
-               FROM entity_relationships
+            """SELECT er.id, er.source_entity_id, er.target_entity_id,
+                      er.relationship_type, er.paper_id, er.evidence_quote,
+                      er.confidence, er.metadata, er.created_at
+               FROM entity_relationships er
                WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
+                 AND EXISTS (
+                     SELECT 1 FROM papers p
+                     WHERE p.id = er.paper_id
+                       AND er.content_generation = p.content_generation
+                 )
                ORDER BY confidence DESC""",
             entity_ids,
         )
@@ -305,6 +328,7 @@ async def query_knowledge_graph(
                          AND EXISTS (
                              SELECT 1 FROM papers p
                              WHERE p.id = er.paper_id
+                               AND er.content_generation = p.content_generation
                                AND {paper_visible_sql(2)}
                          )
                        ORDER BY er.confidence DESC""",
@@ -321,6 +345,11 @@ async def query_knowledge_graph(
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
                          AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
+                         AND EXISTS (
+                             SELECT 1 FROM papers p
+                             WHERE p.id = er.paper_id
+                               AND er.content_generation = p.content_generation
+                         )
                        ORDER BY er.confidence DESC""",
                     f"%{escape_like(target_name)}%",
                 )
@@ -339,6 +368,7 @@ async def query_knowledge_graph(
                          AND EXISTS (
                              SELECT 1 FROM papers p
                              WHERE p.id = er.paper_id
+                               AND er.content_generation = p.content_generation
                                AND {paper_visible_sql(1)}
                          )
                        ORDER BY er.confidence DESC
@@ -353,6 +383,11 @@ async def query_knowledge_graph(
                        JOIN entities e1 ON er.source_entity_id = e1.id
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE er.relationship_type = 'outperforms'
+                         AND EXISTS (
+                             SELECT 1 FROM papers p
+                             WHERE p.id = er.paper_id
+                               AND er.content_generation = p.content_generation
+                         )
                        ORDER BY er.confidence DESC
                        LIMIT 50""",
                 )
@@ -362,25 +397,34 @@ async def query_knowledge_graph(
             # Generic: search entities by name
             if user_id is not None:
                 rows = await conn.fetch(
-                    f"""SELECT DISTINCT e.*, pe.paper_id, p.title AS paper_title
+                    f"""SELECT DISTINCT e.id, e.name, e.canonical_name,
+                              e.entity_type, e.description, e.metadata,
+                              e.embedding_id,
+                              {visible_entity_paper_count_sql("e.id", 2)} AS paper_count,
+                              e.created_at, pe.paper_id, p.title AS paper_title
                        FROM entities e
                        JOIN paper_entities pe ON e.id = pe.entity_id
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
+                         AND pe.content_generation = p.content_generation
                          AND {paper_visible_sql(2)}
-                       ORDER BY e.paper_count DESC
+                       ORDER BY paper_count DESC
                        LIMIT 20""",
                     f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
                     user_id,
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT e.*, pe.paper_id,
-                              (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type,
+                              e.description, e.metadata, e.embedding_id,
+                              {_current_entity_paper_count_sql("e.id")} AS paper_count,
+                              e.created_at, pe.paper_id, p.title AS paper_title
                        FROM entities e
                        JOIN paper_entities pe ON e.id = pe.entity_id
+                       JOIN papers p ON p.id = pe.paper_id
                        WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
-                       ORDER BY e.paper_count DESC
+                         AND pe.content_generation = p.content_generation
+                       ORDER BY paper_count DESC
                        LIMIT 20""",
                     f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
                 )

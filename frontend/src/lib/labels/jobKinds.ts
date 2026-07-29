@@ -19,6 +19,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   'card.generate_batch': 'Batch Card Generation',
   'zotero.push': 'Pushing to Zotero',
   'zotero.resync': 'Resyncing Zotero',
+  'zotero.poll': 'Syncing Zotero',
   'zotero.sync_from_zotero': 'Syncing Zotero',
   'zotero.sync_annotations': 'Syncing Highlights',
   'zotero.push_highlights': 'Exporting Highlights to Zotero',

@@ -32,6 +32,10 @@ from jarvis_common.sse import SSE_DONE, sse_event
 from paper_ingestion.ingestion.search_scope import SearchScope
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.perf_probe import probe_span
+from paper_ingestion.queries.chunk_liveness import (
+    drop_chunks_without_stored_rows,
+    read_stored_chunk_keys,
+)
 from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
@@ -247,9 +251,11 @@ async def prepare_single_paper_rag(
     PaperNotFoundError
         If ``paper_id`` does not identify a visible paper.
     NoRelevantChunksError
-        If retrieval and reranking produce no usable excerpts.
+        If retrieval, the stored-chunk requirement, and reranking leave no
+        usable excerpts.
     """
     library_paper_ids: list[int] | None = None
+    stored_chunk_keys: set[tuple[int, int]] = set()
     async with db_pool.acquire() as conn:
         if user_id is None:
             paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
@@ -267,6 +273,10 @@ async def prepare_single_paper_rag(
                 user_id,
             )
             library_paper_ids = [row["paper_id"] for row in lib_rows]
+        # Read the paper's stored chunk records on the connection already held —
+        # retrieval below runs outside this block and must not hold one open.
+        if paper:
+            stored_chunk_keys = await read_stored_chunk_keys(conn, [paper_id])
     if not paper:
         raise PaperNotFoundError("Paper not found")
 
@@ -278,6 +288,12 @@ async def prepare_single_paper_rag(
         score_threshold=_SEARCH_SCORE_THRESHOLD,
         user_id=user_id,
         library_paper_ids=library_paper_ids,
+    )
+    # Serve only excerpts the paper still stores, before they cost a rerank. A
+    # drop here reports that the paper's content was superseded, so it keeps the
+    # helper's default WARNING.
+    chunks = drop_chunks_without_stored_rows(
+        chunks, stored_chunk_keys, paper_id=paper_id, caller="single-paper retrieval"
     )
     # Cross-encoder rerank for quality, then trim to requested max_chunks
     chunks = await embedder.rerank_chunks(body.question, chunks, top_k=body.max_chunks)
@@ -521,13 +537,20 @@ async def prepare_cross_paper_rag(
                 sources=[],
             )
 
-        # Deduplicate and trim the result set to the requested limits.
-        selected_chunks = _select_chunks_by_paper(all_chunks, body.max_papers, body.max_chunks)
-
         # Recheck database visibility so a mistagged vector payload cannot expose
         # another user's paper metadata. Public scope and explicit caller-library
         # membership are the only authenticated access branches.
-        unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
+        #
+        # Both this check and the chunk-liveness one below run before the
+        # per-paper selection, not after it. Selection is a hard budget — top
+        # papers, then top chunks — so a candidate whose paper is denied here, or
+        # whose chunk rows the paper no longer stores, would otherwise win a slot
+        # on vector score and be discarded afterwards. The slot is not refilled,
+        # so a live result ranked just below it never reaches the prompt, and a
+        # query with enough dead leaders reports no results while live evidence
+        # was available. The single-paper path filters before its rerank for the
+        # same reason.
+        unique_paper_ids = list({c["paper_id"] for c in all_chunks})
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT p.id, p.title, p.authors, p.url FROM papers p"
@@ -541,16 +564,26 @@ async def prepare_cross_paper_rag(
                 user_id,
                 allowed_paper_ids,
             )
+            stored_chunk_keys = await read_stored_chunk_keys(conn, unique_paper_ids)
         paper_meta = {row["id"]: row for row in rows}
 
         # Defense-in-depth: drop chunks the DB visibility check denied so they
-        # never reach the prompt or the sources list.
-        selected_chunks = [c for c in selected_chunks if c["paper_id"] in paper_meta]
-        if not selected_chunks:
+        # never reach the prompt or the sources list, then drop those the owning
+        # paper no longer stores.
+        all_chunks = [c for c in all_chunks if c["paper_id"] in paper_meta]
+        all_chunks = drop_chunks_without_stored_rows(
+            all_chunks, stored_chunk_keys, caller="cross-paper retrieval"
+        )
+        if not all_chunks:
             return CrossPaperRagNoResults(
                 answer="No relevant information found in the paper collection.",
                 sources=[],
             )
+
+        # Deduplicate and trim the surviving candidates to the requested limits.
+        # ``max_papers`` and ``max_chunks`` are both bounded at 1 or more, so a
+        # non-empty input cannot select down to nothing.
+        selected_chunks = _select_chunks_by_paper(all_chunks, body.max_papers, body.max_chunks)
 
         # Build the prompt with one section per paper.
         safe_question = safe_for_prompt(body.question, mode="escape")

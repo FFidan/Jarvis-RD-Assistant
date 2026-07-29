@@ -3,11 +3,11 @@
  * Stop & log, and cycle progress dots.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeroTask } from '@/components/my-day/sections/HeroTask';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const stopAndLogMock = vi.fn();
 const skipBreakMock = vi.fn();
@@ -46,15 +46,12 @@ vi.mock('@/lib/api', () => ({
 }));
 
 function renderHero() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <HeroTask />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HeroTask />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

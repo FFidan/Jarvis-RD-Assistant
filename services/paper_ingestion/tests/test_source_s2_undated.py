@@ -13,26 +13,19 @@ should be excluded.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 
 import httpx
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
+from paper_ingestion.sources.semantic_scholar_source import S2_API_URL
+from tests._source_fakes import make_semantic_scholar_source, make_topic
 
 
-def _make_source() -> SemanticScholarSource:
-    config = PaperSourceConfig(
-        id=3,
-        source_type=SourceType.SEMANTIC_SCHOLAR,
-        enabled=True,
-        config={},
-    )
-    client = httpx.AsyncClient()
-    return SemanticScholarSource(config, client, db_pool=None)
-
-
-def _make_topic(name: str) -> TopicRef:
-    return TopicRef(id=1, name=name, query_terms=[name])
+_make_source = partial(
+    make_semantic_scholar_source,
+    source_id=3,
+)
+_make_topic = make_topic
 
 
 def _s2_item(

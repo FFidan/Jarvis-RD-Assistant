@@ -642,6 +642,15 @@ DROP TABLE IF EXISTS magic_link_tokens CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 DROP TABLE IF EXISTS webauthn_challenges CASCADE;
 DROP TABLE IF EXISTS webauthn_credentials CASCADE;
+DROP TABLE IF EXISTS cards CASCADE;
+DROP TABLE IF EXISTS paper_notes CASCADE;
+DROP TABLE IF EXISTS entity_relationships CASCADE;
+DROP TABLE IF EXISTS paper_entities CASCADE;
+DROP TABLE IF EXISTS paper_extractions CASCADE;
+DROP TABLE IF EXISTS paper_summaries CASCADE;
+DROP TABLE IF EXISTS paper_highlights CASCADE;
+DROP TABLE IF EXISTS paper_user_zotero_links CASCADE;
+DROP TABLE IF EXISTS paper_contradictions CASCADE;
 DROP TABLE IF EXISTS papers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS user_config CASCADE;
@@ -673,6 +682,25 @@ CREATE TABLE papers(
   source_type text,
   discovery_origin text NOT NULL DEFAULT 'direct'
 );
+CREATE TABLE paper_contradictions(
+  id bigint PRIMARY KEY,
+  paper_a_id bigint NOT NULL,
+  paper_b_id bigint NOT NULL,
+  quote_a text NOT NULL,
+  quote_b text NOT NULL,
+  user_id bigint
+);
+CREATE TABLE paper_user_zotero_links(
+  id bigint PRIMARY KEY,
+  updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE paper_highlights(id bigint PRIMARY KEY);
+CREATE TABLE paper_summaries(id bigint PRIMARY KEY);
+CREATE TABLE paper_extractions(id bigint PRIMARY KEY);
+CREATE TABLE paper_entities(id bigint PRIMARY KEY);
+CREATE TABLE entity_relationships(id bigint PRIMARY KEY);
+CREATE TABLE paper_notes(id bigint PRIMARY KEY);
+CREATE TABLE cards(id bigint PRIMARY KEY);
 CREATE TABLE audit_log(
   id bigserial PRIMARY KEY,
   user_id text,

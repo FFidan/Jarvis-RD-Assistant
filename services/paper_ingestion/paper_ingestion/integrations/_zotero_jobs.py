@@ -91,7 +91,9 @@ async def _zotero_sync_from_zotero_job(
     # are attributed correctly. NULL when scheduler-cron-invoked (system poll).
     polling_user_id = payload.get("user_id")
     result = await poll_zotero_library(pool, http_client, polling_user_id=polling_user_id)
-    await ctx.update_progress(1.0, "Done")
+    status = str(result.get("status", "error"))
+    headline = "Done" if status == "ok" else status.replace("_", " ").title()
+    await ctx.update_progress(1.0, headline)
     return result
 
 

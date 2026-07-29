@@ -4,9 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ReviewMode } from '@/components/cards/ReviewMode';
 import type { Card } from '@/types';
@@ -22,6 +21,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 import { getNextReview, fetchDecks } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGetNextReview = vi.mocked(getNextReview);
 const mockFetchDecks = vi.mocked(fetchDecks);
 
@@ -35,6 +35,7 @@ const CARD_FIXTURE: Card = {
   evidence: null,
   fsrs_state: {},
   due_at: new Date(Date.now() - 86400_000).toISOString(),
+  stale: false,
   created_at: new Date(Date.now() - 7 * 86400_000).toISOString(),
   updated_at: new Date(Date.now() - 4 * 86400_000).toISOString(), // 4 days ago
 };
@@ -44,7 +45,7 @@ const DECK_FIXTURE = [
 ];
 
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 function renderReview(props: Partial<React.ComponentProps<typeof ReviewMode>> & {
@@ -55,16 +56,15 @@ function renderReview(props: Partial<React.ComponentProps<typeof ReviewMode>> & 
   mockGetNextReview.mockResolvedValue(nextCards);
 
   const qc = makeQueryClient();
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <ReviewMode
-          sessionCardIndex={1}
-          submitReviewFn={vi.fn().mockResolvedValue({})}
-          {...rest}
-        />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter>
+      <ReviewMode
+        sessionCardIndex={1}
+        submitReviewFn={vi.fn().mockResolvedValue({})}
+        {...rest}
+      />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 
@@ -78,12 +78,11 @@ describe('ReviewMode', () => {
   it('shows loading state initially', () => {
     mockGetNextReview.mockReturnValue(new Promise(() => {})); // never resolves
     const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     expect(screen.getByText(/loading next card/i)).toBeInTheDocument();
   });
@@ -93,6 +92,20 @@ describe('ReviewMode', () => {
     await waitFor(() => {
       expect(screen.getByText(CARD_FIXTURE.front)).toBeInTheDocument();
     });
+  });
+
+  it('does not expose rating controls for an earlier-version cached card', async () => {
+    const submitReviewFn = vi.fn().mockResolvedValue({});
+    renderReview({
+      nextCards: [{ ...CARD_FIXTURE, stale: true }],
+      submitReviewFn,
+    });
+
+    expect(
+      await screen.findByText('This card is from an earlier paper version'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Good' })).not.toBeInTheDocument();
+    expect(submitReviewFn).not.toHaveBeenCalled();
   });
 
   it('shows "Click to reveal answer" prompt before flip', async () => {
@@ -122,12 +135,11 @@ describe('ReviewMode', () => {
   it('calls submitReviewFn (the offline seam) on rating click', async () => {
     const submitFn = vi.fn().mockResolvedValue({});
     const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} submitReviewFn={submitFn} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} submitReviewFn={submitFn} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
     await userEvent.click(screen.getByText(/click to reveal answer/i));
@@ -140,16 +152,15 @@ describe('ReviewMode', () => {
   it('calls onReviewSuccess after rating', async () => {
     const onSuccess = vi.fn();
     const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode
-            sessionCardIndex={1}
-            submitReviewFn={vi.fn().mockResolvedValue({})}
-            onReviewSuccess={onSuccess}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode
+          sessionCardIndex={1}
+          submitReviewFn={vi.fn().mockResolvedValue({})}
+          onReviewSuccess={onSuccess}
+        />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
     await userEvent.click(screen.getByText(/click to reveal answer/i));
@@ -189,12 +200,11 @@ describe('ReviewMode', () => {
     mockGetNextReview.mockResolvedValue([]);
     const onSessionEnd = vi.fn();
     const qc = makeQueryClient();
-    const { container } = render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} onSessionEnd={onSessionEnd} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const { container } = renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} onSessionEnd={onSessionEnd} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await waitFor(() => {
       // When empty, ReviewMode renders nothing (null)
@@ -217,12 +227,11 @@ describe('ReviewMode', () => {
   it('shows QueryErrorState (not null/empty) when query rejects', async () => {
     mockGetNextReview.mockRejectedValue(new Error('network error'));
     const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await waitFor(() => {
       expect(
@@ -246,16 +255,15 @@ describe('ReviewMode', () => {
 
     const onSessionEnd = vi.fn();
     const qc = makeQueryClient();
-    const { unmount } = render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode
-            sessionCardIndex={1}
-            submitReviewFn={vi.fn().mockResolvedValue({})}
-            onSessionEnd={onSessionEnd}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const { unmount } = renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode
+          sessionCardIndex={1}
+          submitReviewFn={vi.fn().mockResolvedValue({})}
+          onSessionEnd={onSessionEnd}
+        />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
@@ -276,12 +284,11 @@ describe('ReviewMode', () => {
   it('error state is distinct from true-empty queue (empty returns null, not error UI)', async () => {
     mockGetNextReview.mockResolvedValue([]);
     const qc = makeQueryClient();
-    const { container } = render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const { container } = renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await waitFor(() => {
       expect(container.querySelector('.mx-auto')).toBeNull();
@@ -315,12 +322,11 @@ describe('ReviewMode offline seam', () => {
     );
 
     const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ReviewMode sessionCardIndex={1} submitReviewFn={offlineSubmit} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter>
+        <ReviewMode sessionCardIndex={1} submitReviewFn={offlineSubmit} />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));

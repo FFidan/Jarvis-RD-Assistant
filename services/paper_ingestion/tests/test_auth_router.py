@@ -16,20 +16,11 @@ import pytest
 from fastapi import BackgroundTasks
 from jarvis_common.testing import make_pool_and_conn
 
+pytestmark = pytest.mark.usefixtures("_disable_limiter")
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _disable_limiter():
-    from paper_ingestion.deps import limiter
-
-    original = limiter.enabled
-    limiter.enabled = False
-    yield
-    limiter.enabled = original
 
 
 def _build_request(pool: MagicMock, url_path: str = "/api/auth/request-link") -> SimpleNamespace:

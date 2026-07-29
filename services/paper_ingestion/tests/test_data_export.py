@@ -180,11 +180,42 @@ async def test_export_all_expected_tables_present() -> None:
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         names = zf.namelist()
 
-    expected = {name for name, _ in _EXPORT_QUERIES}
+    expected = {
+        "papers",
+        "user_library",
+        "paper_notes",
+        "paper_highlights",
+        "paper_contradictions",
+        "paper_summaries",
+        "cards",
+        "decks",
+        "review_logs",
+        "projects",
+        "tasks",
+        "milestones",
+        "journal_entries",
+        "daily_log",
+        "user_config",
+        "paper_extractions",
+        "paper_entities",
+    }
     actual = {n.removesuffix(".jsonl") for n in names}
     assert expected == actual, (
         f"ZIP entries mismatch. expected={sorted(expected)} actual={sorted(actual)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_export_retains_stale_highlights_and_contradictions_with_generations() -> None:
+    """Raw export retains owner content regardless of its source generation."""
+    pool = _build_pool({1: ['{"content_generation": 3, "text": "retained stale work"}']})
+    zip_bytes = await build_export_zip(pool, user_id=1)
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for name in ("paper_highlights.jsonl", "paper_contradictions.jsonl"):
+            exported = zf.read(name)
+            assert b"retained stale work" in exported
+            assert b"content_generation" in exported
 
 
 @pytest.mark.asyncio

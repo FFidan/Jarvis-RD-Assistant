@@ -426,13 +426,50 @@ async def test_sync_annotations_attributed_to_syncing_user(contract_conn):
 
     # The paper_notes row must be attributed to user B (the syncing user).
     row = await contract_conn.fetchrow(
-        "SELECT user_id, zotero_annotation_key FROM paper_notes"
+        "SELECT user_id, zotero_annotation_key, content_generation FROM paper_notes"
         " WHERE paper_id = $1 AND zotero_annotation_key = 'ANNCONTRACT1'",
         int(paper_id),
     )
     assert row is not None, "paper_notes row not found after sync"
     assert row["user_id"] == user_b_id, (
         f"Expected user_id={user_b_id} (syncing user B), got {row['user_id']}"
+    )
+    assert row["content_generation"] == 0
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        int(paper_id),
+    )
+    changed_annotation = [
+        {
+            "key": "ANNCONTRACT1",
+            "data": {
+                "annotationText": "Updated text from the same Zotero annotation",
+                "annotationComment": "Updated comment",
+                "annotationPageLabel": "4",
+            },
+        }
+    ]
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_cls:
+        mock_cls.return_value.get_item_children = AsyncMock(return_value=changed_annotation)
+        repeated = await sync_annotations_for_paper(
+            paper_id=int(paper_id),
+            db_pool=shared,
+            http_client=http,
+            owner_user_id=user_b_id,
+        )
+    assert repeated["status"] == "ok"
+    rebound = await contract_conn.fetchrow(
+        """
+        SELECT highlight_text, content_generation
+        FROM paper_notes
+        WHERE paper_id = $1 AND zotero_annotation_key = 'ANNCONTRACT1'
+        """,
+        int(paper_id),
+    )
+    assert rebound["highlight_text"] == "Updated text from the same Zotero annotation"
+    assert rebound["content_generation"] == 0, (
+        "Refreshing annotation text must not rebind retained evidence to the new paper source"
     )
 
     # Confirm user A's view is empty — annotation scoped to B's user_id.
@@ -476,4 +513,108 @@ async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403 on resync; got {resp.status_code}: {resp.text}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# analysis scheduling budget — the arithmetic, against a real column
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_each_scheduling_attempt_advances_the_budget_by_one(contract_conn):
+    """Every recorded attempt spends exactly one unit of the import's budget.
+
+    The bound on retrying an unschedulable import is only as good as this
+    statement: an increment that moved by the wrong amount would either spend a
+    whole budget on one failure or never spend it at all, and the mocked poll
+    suite cannot tell, because its connection double re-implements the
+    arithmetic instead of running it. Run the real statement against the real
+    column.
+    """
+    from paper_ingestion.integrations._zotero_poll import _record_analysis_enqueue_attempt
+
+    user_id, paper_id = await _seed_user_and_paper(
+        contract_conn,
+        email="zotero-budget@contract.example.com",
+        title="Budget Paper",
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key, updated_at)
+           VALUES ($1, $2, 'BUDGET001', NOW())""",
+        paper_id,
+        user_id,
+    )
+
+    async def _attempts() -> int:
+        return int(
+            await contract_conn.fetchval(
+                "SELECT analysis_enqueue_attempts FROM paper_user_zotero_links"
+                " WHERE paper_id = $1 AND user_id = $2",
+                paper_id,
+                user_id,
+            )
+        )
+
+    assert await _attempts() == 0, "a fresh link row starts with its budget unspent"
+
+    observed = []
+    for _ in range(3):
+        await _record_analysis_enqueue_attempt(contract_conn, paper_id, user_id)
+        observed.append(await _attempts())
+
+    assert observed == [1, 2, 3], (
+        f"each attempt must advance the count by exactly one; got {observed}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_one_imports_attempts_never_come_out_of_anothers_budget(contract_conn):
+    """The budget belongs to the import that spent it, not to the library.
+
+    A bound that shared one counter would give up on an import that had failed
+    once because a different import was stuck. The counter is keyed on the link
+    row, so recording against one leaves every other untouched.
+    """
+    from paper_ingestion.integrations._zotero_poll import _record_analysis_enqueue_attempt
+
+    user_id, stuck_paper_id = await _seed_user_and_paper(
+        contract_conn,
+        email="zotero-budget-isolation@contract.example.com",
+        title="Stuck Paper",
+    )
+    healthy_paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ($1, 'arxiv', 'Healthy Paper', ARRAY['Author Y'], 'https://example.com/y', $2)
+        RETURNING id
+        """,
+        f"arxiv:zotero-budget-healthy-{user_id}",
+        user_id,
+    )
+    for linked_paper_id, item_key in ((stuck_paper_id, "STUCK001"), (healthy_paper_id, "OK001")):
+        await contract_conn.execute(
+            """INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key, updated_at)
+               VALUES ($1, $2, $3, NOW())""",
+            linked_paper_id,
+            user_id,
+            item_key,
+        )
+
+    for _ in range(4):
+        await _record_analysis_enqueue_attempt(contract_conn, stuck_paper_id, user_id)
+
+    spent = {
+        int(row["paper_id"]): int(row["analysis_enqueue_attempts"])
+        for row in await contract_conn.fetch(
+            "SELECT paper_id, analysis_enqueue_attempts FROM paper_user_zotero_links"
+            " WHERE user_id = $1",
+            user_id,
+        )
+    }
+
+    assert spent == {stuck_paper_id: 4, int(healthy_paper_id): 0}, (
+        f"only the failing import may spend its budget; got {spent}"
     )

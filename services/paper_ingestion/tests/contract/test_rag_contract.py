@@ -22,8 +22,13 @@ Additional additions:
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any
+
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 
 pytestmark = [
     pytest.mark.contract,
@@ -57,12 +62,41 @@ async def pi_test_client(contract_conn):
             yield client
 
 
+@contextmanager
+def _disabled_limiter_overrides(
+    app: FastAPI,
+    overrides: Mapping[Any, Any],
+) -> Iterator[None]:
+    """Install scoped dependency overrides while rate limiting is disabled."""
+    from jarvis_common.testing_contract_apps import patch_dependency_overrides
+
+    limiter_was_enabled = app.state.limiter.enabled
+    app.state.limiter.enabled = False
+    try:
+        with patch_dependency_overrides(app, set_overrides=overrides):
+            yield
+    finally:
+        app.state.limiter.enabled = limiter_was_enabled
+
+
 async def _add_to_library(conn, user_id: int, paper_id: int) -> None:
     """Make a private paper visible through explicit caller membership."""
     await conn.execute(
         "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
         user_id,
         paper_id,
+    )
+
+
+async def _store_chunk_rows(conn, paper_id: int, *chunk_indexes: int) -> None:
+    """Store the ``paper_chunks`` rows that back a paper's retrievable excerpts.
+
+    Real processing writes one row per embedded chunk, so a retrieved chunk with
+    no row describes text the paper no longer stores.
+    """
+    await conn.executemany(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content) VALUES ($1, $2, $3)",
+        [(paper_id, index, f"stored chunk {index}") for index in chunk_indexes],
     )
 
 
@@ -92,6 +126,7 @@ async def test_prepare_single_paper_rag_title_from_real_db(contract_conn):
         " VALUES ('contract-rag-01', 'arxiv', 'Neural ODEs Contract', '{}', 'http://c1')"
         " RETURNING id"
     )
+    await _store_chunk_rows(contract_conn, paper_id, 0)
 
     # Qdrant boundary: idiomatic mock (external service).
     mock_qdrant = AsyncMock()
@@ -212,6 +247,8 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
         " VALUES ('contract-xrag-02', 'arxiv', 'Attention Paper Contract', '{\"B\"}', 'http://tb')"
         " RETURNING id"
     )
+    await _store_chunk_rows(contract_conn, pid_a, 0)
+    await _store_chunk_rows(contract_conn, pid_b, 0)
 
     # Qdrant boundary: idiomatic mock returning chunks for both papers.
     mock_qdrant = AsyncMock()
@@ -306,6 +343,8 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
         owner_id,
         pid_owned,
     )
+    # A stored chunk row keeps visibility the only reason the chunk is dropped.
+    await _store_chunk_rows(contract_conn, pid_owned, 0)
 
     mock_qdrant = AsyncMock()
     mock_http = AsyncMock(spec=httpx.AsyncClient)
@@ -348,6 +387,267 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
 
 
 # ---------------------------------------------------------------------------
+# 2b. Every served excerpt is backed by a stored chunk record
+#
+# Retrieved chunks carry their own copy of the text in the vector payload, so
+# nothing downstream re-reads it from SQL.  These tests pin that both RAG paths
+# serve an excerpt only while the owning paper still stores the matching
+# paper_chunks row.  No Qdrant instance is involved: the vector layer is stubbed
+# so it keeps offering a chunk after the row backing it is gone.
+# ---------------------------------------------------------------------------
+
+_SUPERSEDED_EXCERPT = "Text derived from the source URL the promotion replaced."
+_STORED_EXCERPT = "Text the paper still stores."
+
+
+def _adapter_paper(external_id: str, pdf_url: str):
+    """Build the metadata a verified arXiv adapter returns for *external_id*."""
+    from paper_ingestion.models.papers import PaperCreate, SourceType
+
+    return PaperCreate(
+        external_id=external_id,
+        source_type=SourceType.ARXIV,
+        title="Stored Chunk Backing Paper",
+        authors=["Verified Author"],
+        url="https://arxiv.org/abs/stored-chunk-backing",
+        pdf_url=pdf_url,
+    )
+
+
+def _stub_vector_layer(paper_id: int, chunk_index: int, content: str):
+    """Vector layer that returns one chunk whatever the database now stores.
+
+    ``search_chunks_in_paper`` results carry no ``paper_id`` — the caller
+    supplies it — while ``search_chunks_global`` results do.  Verified:
+    services/paper_ingestion/paper_ingestion/ingestion/search.py:344 and :512.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    in_paper = {
+        "chunk_index": chunk_index,
+        "content": content,
+        "page_number": 1,
+        "score": 0.9,
+    }
+    return SimpleNamespace(
+        search_chunks_in_paper=AsyncMock(return_value=[in_paper]),
+        search_chunks_global=AsyncMock(return_value=[{"paper_id": paper_id, **in_paper}]),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_neither_rag_path_serves_a_chunk_whose_stored_row_is_gone(contract_conn):
+    """A promotion that discards derived content also ends retrieval of that text.
+
+    Promoting a private row whose source URL the adapter replaces deletes the
+    paper's ``paper_chunks`` rows.  The vector layer here still offers the
+    superseded excerpt — the state a point outliving its row leaves behind — and
+    a library member must get it from neither the single-paper nor the
+    cross-paper path.
+    """
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import AskRequest, CrossPaperAskRequest
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+    from paper_ingestion.rag.streaming import (
+        CrossPaperRagNoResults,
+        prepare_cross_paper_rag,
+        prepare_single_paper_rag,
+    )
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    reader_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('stored-chunk-reader@contract.example.com', 'user') RETURNING id"
+    )
+    seeded = await upsert_paper(
+        contract_conn,
+        _adapter_paper("contract-stored-chunk-01", "https://arxiv.org/pdf/9901.00001.pdf"),
+    )
+    await _store_chunk_rows(contract_conn, seeded["id"], 0)
+    await _add_to_library(contract_conn, reader_id, seeded["id"])
+
+    promoted = await upsert_verified_public_paper(
+        contract_conn,
+        _adapter_paper("contract-stored-chunk-01", "https://arxiv.org/pdf/9901.00002.pdf"),
+    )
+    assert promoted["id"] == seeded["id"]
+    remaining = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1", seeded["id"]
+    )
+    assert remaining == 0, "precondition: the promotion discarded the stored chunk rows"
+
+    embedder = _stub_vector_layer(seeded["id"], 0, _SUPERSEDED_EXCERPT)
+    pool = SharedConnPool(contract_conn)
+
+    with pytest.raises(NoRelevantChunksError):
+        await prepare_single_paper_rag(
+            embedder,
+            pool,
+            paper_id=seeded["id"],
+            body=AskRequest(question="What does the paper say?", max_chunks=5),
+            http_client=AsyncMock(),
+            user_id=reader_id,
+        )
+
+    result = await prepare_cross_paper_rag(
+        embedder,
+        pool,
+        CrossPaperAskRequest(question="What does the paper say?", decompose=False),
+        AsyncMock(),
+        user_id=reader_id,
+    )
+    assert isinstance(result, CrossPaperRagNoResults), (
+        f"cross-paper retrieval must yield no results, got {result!r}"
+    )
+    assert result.sources == []
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_both_rag_paths_keep_chunks_backed_by_a_stored_row(contract_conn):
+    """The stored-row requirement leaves a fully processed paper's excerpts alone."""
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import AskRequest, CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import (
+        CrossPaperRagPrep,
+        prepare_cross_paper_rag,
+        prepare_single_paper_rag,
+    )
+
+    reader_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('stored-chunk-healthy@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-stored-chunk-02', 'arxiv', 'Healthy Chunked Paper', '{}',"
+        " 'http://healthy-chunked') RETURNING id"
+    )
+    await _store_chunk_rows(contract_conn, paper_id, 0)
+    await _add_to_library(contract_conn, reader_id, paper_id)
+
+    embedder = _stub_vector_layer(paper_id, 0, _STORED_EXCERPT)
+    pool = SharedConnPool(contract_conn)
+
+    _messages, sources = await prepare_single_paper_rag(
+        embedder,
+        pool,
+        paper_id=paper_id,
+        body=AskRequest(question="What does the paper say?", max_chunks=5),
+        http_client=AsyncMock(),
+        user_id=reader_id,
+    )
+    assert [s["content"] for s in sources] == [_STORED_EXCERPT]
+
+    result = await prepare_cross_paper_rag(
+        embedder,
+        pool,
+        CrossPaperAskRequest(question="What does the paper say?", decompose=False),
+        AsyncMock(),
+        user_id=reader_id,
+    )
+    assert isinstance(result, CrossPaperRagPrep), f"expected prepared results, got {result!r}"
+    assert [s["content"] for s in result.sources] == [_STORED_EXCERPT]
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_cross_paper_rag_serves_a_healthy_paper_beside_one_whose_rows_are_gone(
+    contract_conn,
+):
+    """A discard costs the corpus only the excerpts of the paper it emptied.
+
+    A discard leaves a mixed corpus: the promoted paper's ``paper_chunks`` rows
+    are gone while every other paper's remain. Retrieval that reaches both must
+    narrow to the paper that still stores its text, not fall back to no results.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:226
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    reader_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('stored-chunk-mixed@contract.example.com', 'user') RETURNING id"
+    )
+    healthy_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-stored-chunk-03', 'arxiv', 'Mixed Corpus Healthy Paper', '{}',"
+        " 'http://mixed-healthy') RETURNING id"
+    )
+    await _store_chunk_rows(contract_conn, healthy_id, 0)
+    await _add_to_library(contract_conn, reader_id, healthy_id)
+
+    seeded = await upsert_paper(
+        contract_conn,
+        _adapter_paper("contract-stored-chunk-04", "https://arxiv.org/pdf/9901.00003.pdf"),
+    )
+    emptied_id = seeded["id"]
+    await _store_chunk_rows(contract_conn, emptied_id, 0)
+    await _add_to_library(contract_conn, reader_id, emptied_id)
+    await upsert_verified_public_paper(
+        contract_conn,
+        _adapter_paper("contract-stored-chunk-04", "https://arxiv.org/pdf/9901.00004.pdf"),
+    )
+    remaining = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1", emptied_id
+    )
+    assert remaining == 0, "precondition: the promotion discarded the stored chunk rows"
+
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(
+            return_value=[
+                {
+                    "paper_id": healthy_id,
+                    "chunk_index": 0,
+                    "content": _STORED_EXCERPT,
+                    "page_number": 1,
+                    "score": 0.90,
+                },
+                {
+                    "paper_id": emptied_id,
+                    "chunk_index": 0,
+                    "content": _SUPERSEDED_EXCERPT,
+                    "page_number": 1,
+                    "score": 0.95,
+                },
+            ]
+        ),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    result = await prepare_cross_paper_rag(
+        embedder,
+        SharedConnPool(contract_conn),
+        CrossPaperAskRequest(question="What do the papers say?", decompose=False),
+        AsyncMock(),
+        user_id=reader_id,
+    )
+
+    assert isinstance(result, CrossPaperRagPrep), f"expected prepared results, got {result!r}"
+    assert [s["paper_id"] for s in result.sources] == [healthy_id]
+    assert [s["content"] for s in result.sources] == [_STORED_EXCERPT]
+    assert _SUPERSEDED_EXCERPT not in result.messages[-1]["content"]
+
+
+# ---------------------------------------------------------------------------
 # 3. /api/ask endpoint: real DB for paper existence, external stubs kept
 #
 # Collapses: test_cross_rag.py::test_ask_cross_paper_endpoint_structure
@@ -376,6 +676,7 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
         " RETURNING id"
     )
     await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _store_chunk_rows(contract_conn, paper_id, 0)
     chunks = [
         {
             "paper_id": paper_id,
@@ -396,15 +697,12 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
         assert "Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="Transformers use self-attention.")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
-    app.state.limiter.enabled = False
     try:
         with (
-            patch_dependency_overrides(
+            _disabled_limiter_overrides(
                 app,
-                set_overrides={
+                {
                     verify_api_key: lambda: None,
                     get_embedder: lambda: embedder,
                     get_http_client: lambda: AsyncMock(),
@@ -421,7 +719,6 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
                 json={"question": "How do transformers work?", "decompose": False},
             )
     finally:
-        app.state.limiter.enabled = True
         pi_test_client.cookies.clear()
 
     assert resp.status_code == 200, resp.text
@@ -456,6 +753,7 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
         " RETURNING id"
     )
     await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _store_chunk_rows(contract_conn, paper_id, 0)
     chunks = [
         {
             "paper_id": paper_id,
@@ -473,15 +771,12 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
     async def _stub_call_rag_llm(messages, *, smart_model):
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
-    app.state.limiter.enabled = False
     try:
         with (
-            patch_dependency_overrides(
+            _disabled_limiter_overrides(
                 app,
-                set_overrides={
+                {
                     verify_api_key: lambda: None,
                     get_embedder: lambda: embedder,
                     get_http_client: lambda: AsyncMock(),
@@ -498,7 +793,6 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
                 json={"question": "How do transformers work?", "decompose": False},
             )
     finally:
-        app.state.limiter.enabled = True
         pi_test_client.cookies.clear()
 
     assert resp.status_code == 504, resp.text
@@ -527,6 +821,7 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
         " RETURNING id"
     )
     await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _store_chunk_rows(contract_conn, paper_id, 0)
     chunks = [
         {
             "paper_id": paper_id,
@@ -546,15 +841,12 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
             "LiteLLM chat response contained no visible content after think-block stripping"
         )
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
-    app.state.limiter.enabled = False
     try:
         with (
-            patch_dependency_overrides(
+            _disabled_limiter_overrides(
                 app,
-                set_overrides={
+                {
                     verify_api_key: lambda: None,
                     get_embedder: lambda: embedder,
                     get_http_client: lambda: AsyncMock(),
@@ -571,7 +863,6 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
                 json={"question": "How do transformers work?", "decompose": False},
             )
     finally:
-        app.state.limiter.enabled = True
         pi_test_client.cookies.clear()
 
     assert resp.status_code == 502, resp.text
@@ -661,8 +952,10 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
         user_id,
     )
     await _add_to_library(contract_conn, user_id, paper_id)
+    await _store_chunk_rows(contract_conn, paper_id, 0)
     chunks = [
         {
+            "chunk_index": 0,
             "content": "Key finding from the paper.",
             "page_number": 1,
             "score": 0.87,
@@ -679,32 +972,26 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
         assert "A104 Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="This paper is about contract tests.")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: embedder,
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag._call_rag_llm",
-                side_effect=_stub_call_rag_llm,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask",
-                json={"question": "What is this paper about?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag._call_rag_llm",
+            side_effect=_stub_call_rag_llm,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "What is this paper about?"},
+        )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -739,7 +1026,8 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
         user_id,
     )
     await _add_to_library(contract_conn, user_id, paper_id)
-    chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
+    await _store_chunk_rows(contract_conn, paper_id, 0)
+    chunks = [{"chunk_index": 0, "content": "Finding.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
@@ -748,32 +1036,26 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
     async def _stub_call_rag_llm(messages, *, smart_model):
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: embedder,
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag._call_rag_llm",
-                side_effect=_stub_call_rag_llm,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask",
-                json={"question": "What is this paper about?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag._call_rag_llm",
+            side_effect=_stub_call_rag_llm,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "What is this paper about?"},
+        )
 
     assert resp.status_code == 504, resp.text
     assert resp.json()["detail"] == "LLM request timed out"
@@ -804,7 +1086,8 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
         user_id,
     )
     await _add_to_library(contract_conn, user_id, paper_id)
-    chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
+    await _store_chunk_rows(contract_conn, paper_id, 0)
+    chunks = [{"chunk_index": 0, "content": "Finding.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
@@ -813,32 +1096,26 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
     async def _stub_call_rag_llm(messages, *, smart_model):
         raise EmptyVisibleLLMContentError("no visible content")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: embedder,
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag._call_rag_llm",
-                side_effect=_stub_call_rag_llm,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask",
-                json={"question": "What is this paper about?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag._call_rag_llm",
+            side_effect=_stub_call_rag_llm,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "What is this paper about?"},
+        )
 
     assert resp.status_code == 502, resp.text
     assert resp.json()["detail"] == {
@@ -879,26 +1156,20 @@ async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_clie
         " VALUES ('a104-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with patch_dependency_overrides(
-            app,
-            set_overrides={
-                verify_api_key: lambda: None,
-                get_current_user_id: lambda: intruder_id,
-                get_embedder: lambda: AsyncMock(),
-                get_http_client: lambda: AsyncMock(),
-                get_verifier: lambda: MagicMock(),
-            },
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask",
-                json={"question": "Snoop?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with _disabled_limiter_overrides(
+        app,
+        {
+            verify_api_key: lambda: None,
+            get_current_user_id: lambda: intruder_id,
+            get_embedder: lambda: AsyncMock(),
+            get_http_client: lambda: AsyncMock(),
+            get_verifier: lambda: MagicMock(),
+        },
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "Snoop?"},
+        )
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403; got {resp.status_code}: {resp.text}"
@@ -955,36 +1226,30 @@ async def test_a105_ask_stream_owner_gets_sse_response(contract_conn, pi_test_cl
         yield sse_event({"type": "done", "full_answer": "Hello."})
         yield SSE_DONE
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: AsyncMock(),
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag",
-                side_effect=_stub_prepare,
-            ),
-            patch(
-                "paper_ingestion.routers.rag.stream_rag_events",
-                side_effect=_stub_stream,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask/stream",
-                json={"question": "stream question?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: AsyncMock(),
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag.prepare_single_paper_rag",
+            side_effect=_stub_prepare,
+        ),
+        patch(
+            "paper_ingestion.routers.rag.stream_rag_events",
+            side_effect=_stub_stream,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "stream question?"},
+        )
 
     assert resp.status_code == 200, resp.text
     assert "text/event-stream" in resp.headers.get("content-type", ""), (
@@ -1020,26 +1285,20 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
         " VALUES ('a105-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with patch_dependency_overrides(
-            app,
-            set_overrides={
-                verify_api_key: lambda: None,
-                get_current_user_id: lambda: intruder_id,
-                get_embedder: lambda: AsyncMock(),
-                get_http_client: lambda: AsyncMock(),
-                get_verifier: lambda: MagicMock(),
-            },
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask/stream",
-                json={"question": "snoop?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with _disabled_limiter_overrides(
+        app,
+        {
+            verify_api_key: lambda: None,
+            get_current_user_id: lambda: intruder_id,
+            get_embedder: lambda: AsyncMock(),
+            get_http_client: lambda: AsyncMock(),
+            get_verifier: lambda: MagicMock(),
+        },
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "snoop?"},
+        )
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403 on stream endpoint; got {resp.status_code}: {resp.text}"
@@ -1488,6 +1747,7 @@ async def test_ask_endpoint_returns_503_when_openai_client_not_initialized(
         " RETURNING id"
     )
     await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _store_chunk_rows(contract_conn, paper_id, 0)
     chunks = [
         {
             "paper_id": paper_id,
@@ -1502,17 +1762,15 @@ async def test_ask_endpoint_returns_503_when_openai_client_not_initialized(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
     import paper_ingestion._state as _state
 
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
-    app.state.limiter.enabled = False
     orig_client = _state.svc.openai_client
     _state.svc.openai_client = None
     try:
-        with patch_dependency_overrides(
+        with _disabled_limiter_overrides(
             app,
-            set_overrides={
+            {
                 verify_api_key: lambda: None,
                 get_embedder: lambda: embedder,
                 get_http_client: lambda: AsyncMock(),
@@ -1525,7 +1783,6 @@ async def test_ask_endpoint_returns_503_when_openai_client_not_initialized(
             )
     finally:
         _state.svc.openai_client = orig_client
-        app.state.limiter.enabled = True
         pi_test_client.cookies.clear()
 
     assert resp.status_code == 503, (
@@ -1557,22 +1814,21 @@ async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized
         user_id,
     )
     await _add_to_library(contract_conn, user_id, paper_id)
-    chunks = [{"content": "Relevant chunk.", "page_number": 1, "score": 0.87}]
+    await _store_chunk_rows(contract_conn, paper_id, 0)
+    chunks = [{"chunk_index": 0, "content": "Relevant chunk.", "page_number": 1, "score": 0.87}]
     embedder = SimpleNamespace(
         search_chunks_in_paper=AsyncMock(return_value=chunks),
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
     import paper_ingestion._state as _state
 
-    app.state.limiter.enabled = False
     orig_client = _state.svc.openai_client
     _state.svc.openai_client = None
     try:
-        with patch_dependency_overrides(
+        with _disabled_limiter_overrides(
             app,
-            set_overrides={
+            {
                 verify_api_key: lambda: None,
                 get_current_user_id: lambda: user_id,
                 get_embedder: lambda: embedder,
@@ -1586,7 +1842,6 @@ async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized
             )
     finally:
         _state.svc.openai_client = orig_client
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 503, (
         f"Expected 503 for null client, got {resp.status_code}: {resp.text}"
@@ -1638,32 +1893,26 @@ async def test_a105_ask_stream_paper_not_found_maps_404(contract_conn, pi_test_c
     async def _raise_not_found(embedder, db_pool, paper_id_, body, http_client, **kwargs):
         raise PaperNotFoundError("paper gone")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: AsyncMock(),
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag",
-                side_effect=_raise_not_found,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask/stream",
-                json={"question": "Where did the paper go?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: AsyncMock(),
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag.prepare_single_paper_rag",
+            side_effect=_raise_not_found,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "Where did the paper go?"},
+        )
 
     assert resp.status_code == 404, (
         f"PaperNotFoundError must map to HTTP 404, got {resp.status_code}: {resp.text}"
@@ -1708,32 +1957,26 @@ async def test_a105_ask_stream_no_relevant_chunks_maps_422(contract_conn, pi_tes
     async def _raise_no_chunks(embedder, db_pool, paper_id_, body, http_client, **kwargs):
         raise NoRelevantChunksError(_error_detail)
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: AsyncMock(),
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag",
-                side_effect=_raise_no_chunks,
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask/stream",
-                json={"question": "Any relevant chunks here?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: AsyncMock(),
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag.prepare_single_paper_rag",
+            side_effect=_raise_no_chunks,
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "Any relevant chunks here?"},
+        )
 
     assert resp.status_code == 422, (
         f"NoRelevantChunksError must map to HTTP 422, got {resp.status_code}: {resp.text}"
@@ -1764,27 +2007,19 @@ async def test_h3_batch_summarize_returns_202(contract_conn, pi_test_client):
     mock_task = AsyncMock()
     mock_task.defer_async = AsyncMock()
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: AsyncMock(),
-                },
-            ),
-            patch.dict(
-                "jarvis_common.task_registry._TASK_MAP", {"papers.batch_summarize": mock_task}
-            ),
-        ):
-            resp = await pi_test_client.post("/api/papers/batch-summarize")
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: AsyncMock(),
+            },
+        ),
+        patch.dict("jarvis_common.task_registry._TASK_MAP", {"papers.batch_summarize": mock_task}),
+    ):
+        resp = await pi_test_client.post("/api/papers/batch-summarize")
 
     assert resp.status_code == 202, (
         f"POST /api/papers/batch-summarize must return 202 Accepted; got {resp.status_code}: {resp.text}"
@@ -1852,49 +2087,43 @@ async def test_m11c_verifier_import_failure_not_masked(contract_conn, pi_test_cl
     async def _stub_llm(messages, *, smart_model):
         return _AskResponse(answer="An answer.")
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: embedder,
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag._call_rag_llm",
+            side_effect=_stub_llm,
+        ),
+        patch(
+            "paper_ingestion.routers.rag.prepare_single_paper_rag",
+            return_value=(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}],
+                chunks,
             ),
-            patch(
-                "paper_ingestion.routers.rag._call_rag_llm",
-                side_effect=_stub_llm,
-            ),
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag",
-                return_value=(
-                    [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}],
-                    chunks,
-                ),
-            ),
-            # Simulate a broken verifier by raising ImportError at call time.
-            # Before the fix this would be caught silently; after the fix the
-            # except Exception block still catches it (the key change is that an
-            # import-time failure at startup is now a hard crash, not a per-request
-            # silent degradation).  We verify the module-level name exists and is
-            # not wrapped in a try-import guard.
-            patch(
-                "paper_ingestion.routers.rag.verify_answer_summary",
-                side_effect=ImportError("simulated broken verifier module"),
-            ),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask",
-                json={"question": "test?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+        ),
+        # Simulate a broken verifier by raising ImportError at call time.
+        # Before the fix this would be caught silently; after the fix the
+        # except Exception block still catches it (the key change is that an
+        # import-time failure at startup is now a hard crash, not a per-request
+        # silent degradation).  We verify the module-level name exists and is
+        # not wrapped in a try-import guard.
+        patch(
+            "paper_ingestion.routers.rag.verify_answer_summary",
+            side_effect=ImportError("simulated broken verifier module"),
+        ),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "test?"},
+        )
 
     # With the module-level import, ``verify_answer_summary`` is a direct name in
     # the rag module namespace — ``patch("...rag.verify_answer_summary", ...)`` works
@@ -1946,32 +2175,27 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
         yield sse_event({"type": "token", "content": "x"})
         yield sse_event({"type": "done", "full_answer": "x"})
 
-    from jarvis_common.testing_contract_apps import patch_dependency_overrides
-
-    app.state.limiter.enabled = False
-    try:
-        with (
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    verify_api_key: lambda: None,
-                    get_current_user_id: lambda: user_id,
-                    get_embedder: lambda: AsyncMock(),
-                    get_http_client: lambda: AsyncMock(),
-                    get_verifier: lambda: MagicMock(),
-                },
-            ),
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag", side_effect=_capture_prepare
-            ),
-            patch("paper_ingestion.routers.rag.stream_rag_events", side_effect=_stub_stream),
-        ):
-            resp = await pi_test_client.post(
-                f"/api/papers/{paper_id}/ask/stream",
-                json={"question": "test?"},
-            )
-    finally:
-        app.state.limiter.enabled = True
+    with (
+        _disabled_limiter_overrides(
+            app,
+            {
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: AsyncMock(),
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ),
+        patch(
+            "paper_ingestion.routers.rag.prepare_single_paper_rag",
+            side_effect=_capture_prepare,
+        ),
+        patch("paper_ingestion.routers.rag.stream_rag_events", side_effect=_stub_stream),
+    ):
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "test?"},
+        )
 
     assert resp.status_code == 200
     assert len(call_capture) == 1
@@ -1983,20 +2207,24 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
 async def test_batch_summarize_candidate_scoped_to_calling_user(
     contract_conn, contract_two_users, pi_test_client
 ):
-    """A shared paper user A already summarized must still be a candidate for user B.
+    """A shared paper is a candidate when B has only a prior-generation summary.
 
-    Seed a shared chunked paper in both libraries with a summary owned by A only.
-    User B's batch-summarize must count it in total_unsummarized (NOT EXISTS must
-    be scoped to B's user_id, not the whole corpus).
+    User A has a current summary while B has a stale one. User B's
+    batch-summarize must count the paper: the idempotency check is both
+    user-scoped and generation-scoped.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
+    from paper_ingestion.deps import get_http_client, get_verifier
     from paper_ingestion.main import app
 
     paper_id = await contract_conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
            VALUES ('batchsum-iso-shared', 'arxiv', 'shared-paper-batchsum-isolation',
-                   ARRAY['A. Author'], 'https://example.test/batchsum-iso', NULL)
+                   ARRAY['A. Author'], 'https://example.test/batchsum-iso', NULL, 1)
            RETURNING id"""
     )
     await contract_conn.executemany(
@@ -2011,24 +2239,42 @@ async def test_batch_summarize_candidate_scoped_to_calling_user(
         paper_id,
     )
     await contract_conn.execute(
-        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, user_id)
-           VALUES ($1, 'A summary', 'A summary', $2)""",
+        """INSERT INTO paper_summaries (
+               paper_id, summary_brief, summary_detailed, user_id, content_generation
+           )
+           VALUES ($1, 'A summary', 'A summary', $2, 1)""",
         paper_id,
         contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (
+               paper_id, summary_brief, summary_detailed, user_id, content_generation
+           )
+           VALUES ($1, 'B stale summary', 'B stale summary', $2, 0)""",
+        paper_id,
+        contract_two_users.user_b_id,
     )
 
     mock_task = AsyncMock()
     mock_task.defer_async = AsyncMock()
-    app.state.limiter.enabled = False
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_b)
     try:
-        with patch.dict(
-            "jarvis_common.task_registry._TASK_MAP", {"papers.batch_summarize": mock_task}
+        with (
+            _disabled_limiter_overrides(
+                app,
+                {
+                    get_http_client: lambda: AsyncMock(),
+                    get_verifier: lambda: MagicMock(),
+                },
+            ),
+            patch.dict(
+                "jarvis_common.task_registry._TASK_MAP",
+                {"papers.batch_summarize": mock_task},
+            ),
         ):
             resp = await pi_test_client.post("/api/papers/batch-summarize")
     finally:
         pi_test_client.cookies.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 202, f"{resp.status_code}: {resp.text[:300]}"
     body = resp.json()

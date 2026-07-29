@@ -37,7 +37,7 @@ from jarvis_common.task_registry import KIND_TO_TASK
 from paper_ingestion._state import get_services
 from paper_ingestion.config import get_paper_ingestion_settings as _get_cfg
 from paper_ingestion.pulse.citation_signals import compute_citation_signals
-from paper_ingestion.pulse.deck import assemble_deck, persist_deck
+from paper_ingestion.pulse.deck import assemble_deck, exclude_recently_dismissed, persist_deck
 from paper_ingestion.pulse.discovery import discover_candidates
 from paper_ingestion.pulse.profile import load_profile
 from paper_ingestion.pulse.scoring import (
@@ -48,7 +48,10 @@ from paper_ingestion.pulse.scoring import (
     stage3_combine,
 )
 from paper_ingestion.pulse.training import FEATURE_NAMES, classifier_scores
-from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+from paper_ingestion.services.pdf_workflow import (
+    reclaim_discarded_paper_content,
+    upsert_verified_public_paper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,42 @@ def _fallback_stage2(stage1_out: list[ScoredCandidate]) -> list[ScoredCandidate]
             )
         )
     return fallback
+
+
+async def _select_deck_cards(
+    db_pool: Any,
+    scored: list[ScoredCandidate],
+    *,
+    size: int,
+    user_id: int | None,
+) -> tuple[list[ScoredCandidate], int]:
+    """Drop recently dismissed candidates, then take the top ``size`` of the rest.
+
+    The order is the contract.  Excluding after the deck has been cut to
+    ``size`` can only shorten it, because the dismissed papers would already
+    have consumed slots that eligible candidates could have filled.
+
+    Returns
+    -------
+    tuple[list[ScoredCandidate], int]
+        The deck cards, and how many candidates the exclusion removed.
+    """
+    eligible = await exclude_recently_dismissed(db_pool, scored, user_id=user_id)
+    return assemble_deck(eligible, size=size), len(scored) - len(eligible)
+
+
+def _dismissed_short_deck_reason(*, cards: int, size: int, dismissed: int) -> str | None:
+    """Explain a deck left short by the owner's own recent thumbs-down ratings.
+
+    Returns ``None`` when the deck filled anyway, or when nothing was excluded,
+    so the caller keeps whichever earlier degradation reason it already holds.
+    """
+    if dismissed == 0 or cards >= size:
+        return None
+    return (
+        f"{dismissed} of today's candidates were rated down in the last 60 days and "
+        f"were left out. The deck filled {cards} of {size} card slots."
+    )
 
 
 def _zero_candidate_degraded_reason(source_diagnostics: dict[str, dict[str, Any]]) -> str:
@@ -262,12 +301,14 @@ async def run_pulse(
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
     try:
-        deck = assemble_deck(stage3_out, size=profile.deck_size)
+        deck, dismissed_count = await _select_deck_cards(
+            db_pool, stage3_out, size=profile.deck_size, user_id=user_id
+        )
     except Exception as exc:  # broad: may call DB/services; must not crash pipeline
-        stats["last_error"] = f"assemble_deck: {exc}"
+        stats["last_error"] = f"select_deck_cards: {exc}"
         logger.exception("pulse.assemble failed")
-        deck = []
-    logger.info("pulse.assembled", extra={"cards": len(deck)})
+        deck, dismissed_count = [], 0
+    logger.info("pulse.assembled", extra={"cards": len(deck), "dismissed": dismissed_count})
 
     # Compute duration before persist so it is available even if persist fails
     stats["duration_s"] = round(time.monotonic() - start, 3)
@@ -276,6 +317,11 @@ async def run_pulse(
     # stage produced a reason and no earlier reason was already recorded.
     if degraded_reason is not None:
         stats["degraded_reason"] = degraded_reason
+    # A deck cut short by the owner's own ratings is reported rather than
+    # refilled, so a full deck keeps meaning the sources found that much work.
+    stats["degraded_reason"] = stats["degraded_reason"] or _dismissed_short_deck_reason(
+        cards=len(deck), size=profile.deck_size, dismissed=dismissed_count
+    )
 
     # --- 8. persist (upsert papers + persist deck in one transaction) ---
     # Use stats["degraded_reason"] — the local `degraded_reason` variable may have been
@@ -469,13 +515,20 @@ async def _persist_pipeline(
 ) -> int:
     """Stage 8 — upsert papers + persist deck inside a single outer transaction.
 
+    Storage for content a promotion discarded is reclaimed once the outer
+    transaction has committed and its connection is released, so the deck-wide
+    lock hold grows by nothing. A card whose savepoint rolled back keeps its
+    content, so its ids are dropped rather than carried out of the loop.
+
     Returns card_count.
     """
+    discarded_content_ids: list[int] = []
     try:
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 successes = 0
                 for card in deck:
+                    card_discarded: list[int] = []
                     try:
                         # Nested transaction issues SAVEPOINT/ROLLBACK TO SAVEPOINT
                         # so a single-card failure cannot poison the outer transaction.
@@ -485,8 +538,11 @@ async def _persist_pipeline(
                             # for the deck owner is recorded when the user
                             # accepts the card (rate=save) via the
                             # /api/pulse/rate endpoint.
-                            await upsert_verified_public_paper(conn, card.paper)
+                            await upsert_verified_public_paper(
+                                conn, card.paper, discarded_content_ids=card_discarded
+                            )
                         successes += 1
+                        discarded_content_ids.extend(card_discarded)
                     except Exception as exc:  # per-card: roll back savepoint, keep outer txn alive
                         logger.warning(
                             "pulse.upsert_paper failed for %s: %s",
@@ -511,6 +567,8 @@ async def _persist_pipeline(
                     conn=conn,
                     user_id=user_id,
                 )
+        for paper_id in discarded_content_ids:
+            await reclaim_discarded_paper_content(paper_id, db_pool)
         logger.info("pulse.persisted", extra={"persisted": persisted, "cards": len(deck)})
         return persisted
     except Exception as exc:  # broad: outer txn failure (DB unreachable); stats already captured

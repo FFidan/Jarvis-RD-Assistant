@@ -5,8 +5,8 @@
  * Mirrors the mocking style used in OnboardingWizard.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', () => ({
   getSetupStatus: vi.fn(),
@@ -24,11 +24,10 @@ const BASE_STATUS = {
 };
 
 function renderWithClient(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient },
   );
 }
 

@@ -16,9 +16,9 @@ from urllib.parse import urlsplit, urlunsplit
 import asyncpg
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from paper_ingestion.models import PaperCreate
+from paper_ingestion.models import PaperCreate, PaperResponse
 from paper_ingestion.sources.base import parse_retry_after
 
 # ---------------------------------------------------------------------------
@@ -26,13 +26,27 @@ from paper_ingestion.sources.base import parse_retry_after
 # ---------------------------------------------------------------------------
 
 
+class SearchPersistenceFailure(BaseModel):
+    """One search result that could not be persisted for the caller."""
+
+    external_id: str
+    error: str
+
+
 class MultiSourceSearchResponse(BaseModel):
-    """Response for multi-source search endpoints."""
+    """Response for multi-source search endpoints.
+
+    ``results`` continues to describe everything the source adapters found.
+    ``saved`` and ``failed`` report the independent persistence outcome without
+    changing that discovery contract.
+    """
 
     results: list[PaperCreate]
     total: int
     per_source_counts: dict[str, int]
     degraded_sources: list[str]
+    saved: list[PaperResponse] = Field(default_factory=list)
+    failed: list[SearchPersistenceFailure] = Field(default_factory=list)
 
 
 class SearchPreviewLibraryMatch(BaseModel):

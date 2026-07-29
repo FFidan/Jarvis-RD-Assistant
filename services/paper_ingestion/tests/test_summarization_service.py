@@ -5,14 +5,19 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from jarvis_common.verify import QuoteVerifier
 
-from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
+from paper_ingestion.exceptions import (
+    EmptyChunksError,
+    LLMError,
+    PaperNotFoundError,
+    SourceGenerationChangedError,
+)
 from paper_ingestion.models import Confidence
 from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services import summarization
@@ -32,9 +37,15 @@ async def _noop_lock(*args, **kwargs):
 
 # Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*connections: AsyncMock) -> MagicMock:
-    """Create a pool mock that yields the provided connections in order."""
+    """Create a pool mock that yields transaction-capable connections in order."""
     contexts = []
-    for conn in connections:
+    for index, conn in enumerate(connections):
+        transaction = MagicMock()
+        transaction.__aenter__ = AsyncMock(return_value=transaction)
+        transaction.__aexit__ = AsyncMock(return_value=False)
+        conn.transaction = MagicMock(return_value=transaction)
+        if index > 0 and conn.fetchval._mock_return_value is DEFAULT:
+            conn.fetchval.return_value = 0
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=conn)
         ctx.__aexit__ = AsyncMock(return_value=False)
@@ -53,6 +64,7 @@ def _paper_row() -> dict:
         "authors": ["Ada"],
         "abstract": "Original abstract text.",
         "metadata": {"s2_tldr": "semantic scholar summary"},
+        "content_generation": 0,
     }
 
 
@@ -88,6 +100,13 @@ async def test_find_cross_references_prefers_semantic_results():
     """Semantic search results are deduplicated and preferred over keyword fallback."""
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": "Abstract", "discovered_by": None}
+    # This case is about dedup and ranking order, so the recheck admits both
+    # candidates and decides nothing. Scope is covered separately by
+    # test_cross_references_background_job_ignores_discovery_attribution.
+    conn.fetch.return_value = [
+        {"id": 2, "content_generation": 4},
+        {"id": 3, "content_generation": 7},
+    ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
         {"paper_id": 2, "score": 0.91},
@@ -98,8 +117,8 @@ async def test_find_cross_references_prefers_semantic_results():
     result = await summarization._find_cross_references(conn, 7, "Test Paper", embedder=embedder)
 
     assert [item.related_paper_id for item in result] == [2, 3]
+    assert [item.content_generation for item in result] == [4, 7]
     assert all(item.relationship == "semantic_similarity" for item in result)
-    conn.fetch.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -125,7 +144,7 @@ async def test_find_cross_references_returns_empty_when_semantic_unavailable():
 async def test_generate_paper_summary_returns_existing_summary():
     """Existing summaries short-circuit before any LLM call."""
     conn = AsyncMock()
-    conn.fetchrow.side_effect = [_paper_row(), {"id": 1}]
+    conn.fetchrow.side_effect = [_paper_row(), {"id": 1, "cross_references": []}]
     pool = _make_pool(conn)
     verifier = MagicMock()
     embedder = MagicMock()
@@ -154,6 +173,31 @@ async def test_generate_paper_summary_returns_existing_summary():
 
 
 @pytest.mark.asyncio
+async def test_summary_idempotency_requires_the_current_content_generation():
+    """A retained generation-zero summary cannot suppress generation-one work."""
+    conn = AsyncMock()
+    paper = _paper_row()
+    paper["content_generation"] = 1
+    conn.fetchrow.side_effect = [paper, None]
+    conn.fetch.return_value = [_chunk_row()]
+    pool = _make_pool(conn)
+
+    with patch.object(summarization, "advisory_lock", _noop_lock):
+        loaded = await summarization._load_paper_for_summary(
+            pool,
+            paper_id=7,
+            user_id=42,
+            force=False,
+        )
+
+    assert isinstance(loaded, summarization.SummaryInputs)
+    assert loaded.content_generation == 1
+    lookup = conn.fetchrow.await_args_list[1]
+    assert "content_generation = $3" in lookup.args[0]
+    assert lookup.args[1:] == (7, 42, 1)
+
+
+@pytest.mark.asyncio
 async def test_generate_paper_summary_idempotency_scoped_by_user_id():
     """The idempotency lookup must be scoped by user_id.
 
@@ -162,7 +206,10 @@ async def test_generate_paper_summary_idempotency_scoped_by_user_id():
     the caller. The check must bind the caller's user_id.
     """
     conn = AsyncMock()
-    conn.fetchrow.side_effect = [_paper_row(), {"id": 1}]  # paper found, existing summary
+    conn.fetchrow.side_effect = [
+        _paper_row(),
+        {"id": 1, "cross_references": []},
+    ]  # paper found, existing summary
     pool = _make_pool(conn)
 
     patch_ctx, _llm_mock = _patched_call_llm()
@@ -347,20 +394,17 @@ async def test_api_status_error_does_not_leak_response_body():
     assert "500" in str(raised)
 
 
+@pytest.mark.parametrize(
+    ("status_code", "expected_attempts"),
+    [(400, 1), (503, 2)],
+    ids=("permanent-client-error", "transient-server-error"),
+)
 @pytest.mark.asyncio
-async def test_permanent_error_raises_after_a_single_attempt():
-    """A permanent error (4xx HTTPStatusError) must NOT retry — exactly one LLM call."""
-    err = _http_status_error(400, "bad request")
+async def test_http_error_retry_count(status_code: int, expected_attempts: int) -> None:
+    """Permanent errors fail immediately while transient errors retry once."""
+    err = _http_status_error(status_code, "upstream error")
     _raised, llm_mock = await _drive_summary_llm_failure(err)
-    assert llm_mock.call_count == 1, "permanent errors must raise on the first attempt"
-
-
-@pytest.mark.asyncio
-async def test_transient_5xx_retries_at_most_twice():
-    """A transient 5xx that never recovers retries up to the cap, then raises LLMError."""
-    err = _http_status_error(503, "upstream unavailable")
-    _raised, llm_mock = await _drive_summary_llm_failure(err)
-    assert llm_mock.call_count == 2, "transient errors retry at most once (2 attempts total)"
+    assert llm_mock.call_count == expected_attempts
 
 
 @pytest.mark.asyncio
@@ -546,13 +590,31 @@ async def test_cross_references_semantic_path_scopes_to_requester_not_owner():
 
 
 @pytest.mark.asyncio
-async def test_cross_references_semantic_path_falls_back_to_owner_for_system_jobs():
-    """A trusted job uses discovery attribution as its bounded library context."""
+async def test_cross_references_background_job_ignores_discovery_attribution():
+    """A background job must not inherit the discoverer's visibility scope.
+
+    With no requesting user there is no authorization context to borrow, so the
+    relational authority admits persisted public papers only. Paper 888, private
+    to the discoverer, must not become a cross-reference.
+    """
+
+    async def _fetch(_statement, *params):
+        """Admit 888 only for a user-bound query; the public scope admits 555."""
+        user_bound = any(isinstance(value, int) for value in params)
+        return (
+            [{"paper_id": 888, "id": 888}, {"paper_id": 555, "id": 555}]
+            if user_bound
+            else [{"id": 555, "content_generation": 0}]
+        )
+
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
-    conn.fetch.return_value = [{"paper_id": 7}]
+    conn.fetch.side_effect = _fetch
     embedder = AsyncMock()
-    embedder.search_similar.return_value = []
+    embedder.search_similar.return_value = [
+        {"paper_id": 888, "score": 0.95},
+        {"paper_id": 555, "score": 0.9},
+    ]
 
     result = await summarization._find_cross_references(
         conn,
@@ -561,10 +623,27 @@ async def test_cross_references_semantic_path_falls_back_to_owner_for_system_job
         embedder=embedder,
     )
 
-    assert result == []
-    assert embedder.search_similar.call_args.kwargs["user_id"] == 99
-    assert embedder.search_similar.call_args.kwargs["library_paper_ids"] == [7]
-    assert conn.fetch.await_args.args[-1] == 99
+    assert [r.related_paper_id for r in result] == [555], (
+        "a paper private to the discoverer must not become a background cross-reference"
+    )
+    search_kwargs = embedder.search_similar.call_args.kwargs
+    assert search_kwargs["user_id"] is None
+    assert search_kwargs["library_paper_ids"] is None
+    # The vector query cannot express public-only scope, so this path narrows
+    # afterwards and has to over-fetch. Asking for the same number a scoped
+    # caller asks for would spend the whole budget on papers the recheck drops,
+    # and a public match ranked below it would never be retrieved at all.
+    from paper_ingestion.services.summarization import (  # noqa: PLC0415
+        _CROSS_REFERENCE_CANDIDATES,
+    )
+
+    assert search_kwargs["limit"] > _CROSS_REFERENCE_CANDIDATES, (
+        f"an unscoped candidate fetch must exceed the scoped one; got {search_kwargs['limit']}"
+    )
+    # A single visibility recheck bound to the candidate IDs alone: no library
+    # lookup for the discoverer and no user parameter in the predicate.
+    assert conn.fetch.await_count == 1
+    assert conn.fetch.await_args.args[1:] == ([888, 555],)
 
 
 @pytest.mark.asyncio
@@ -582,7 +661,7 @@ async def test_cross_references_include_public_corpus_paper():
         # requester's library lookup (paper 7 is the source paper)
         [{"paper_id": 7}],
         # The public candidate is visible without library membership.
-        [{"id": 555}],
+        [{"id": 555, "content_generation": 0}],
     ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [{"paper_id": 555, "score": 0.9}]
@@ -618,7 +697,7 @@ async def test_cross_references_exclude_other_users_private_paper():
     conn.fetch.side_effect = [
         [{"paper_id": 7}, {"paper_id": 555}],  # requester's library
         # Public 555 is visible; private 888 in another user's library is not.
-        [{"id": 555}],
+        [{"id": 555, "content_generation": 0}],
     ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
@@ -1130,6 +1209,107 @@ def _stored_row(**overrides) -> dict:
     }
     row.update(overrides)
     return row
+
+
+@pytest.mark.asyncio
+async def test_delayed_summary_writer_returns_the_newer_generation_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generation-zero completion cannot overwrite a generation-one summary."""
+
+    async def _budget(_db_pool, _reserved_output_tokens):
+        return 20_000
+
+    monkeypatch.setattr(summarization, "_input_char_budget", _budget)
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    winner = _stored_row(summary_brief="generation one", content_generation=1)
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchval.return_value = 1
+    conn_phase2.fetchrow.return_value = winner
+    pool = _make_pool(conn_phase1, conn_phase2)
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1,
+        verified_count=1,
+        confidence=Confidence.HIGH,
+    )
+    output = SummarizationOutput(
+        summary_brief="delayed generation zero",
+        summary_detailed="old detail",
+    )
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=output)
+
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    assert all(
+        "INSERT INTO paper_summaries" not in call.args[0]
+        for call in conn_phase2.fetchrow.await_args_list
+    )
+    assert conn_phase2.fetchrow.await_count == 1
+    assert result.summary.summary_brief == "generation one"
+
+
+@pytest.mark.asyncio
+async def test_delayed_summary_writer_without_current_winner_reports_source_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale completion cannot insert or report a generation-zero summary."""
+
+    async def _budget(_db_pool, _reserved_output_tokens):
+        return 20_000
+
+    monkeypatch.setattr(summarization, "_input_char_budget", _budget)
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchval.return_value = 1
+    conn_phase2.fetchrow.return_value = None
+    pool = _make_pool(conn_phase1, conn_phase2)
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1,
+        verified_count=1,
+        confidence=Confidence.HIGH,
+    )
+    output = SummarizationOutput(
+        summary_brief="delayed generation zero",
+        summary_detailed="old detail",
+    )
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=output)
+
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        with pytest.raises(SourceGenerationChangedError, match="Please retry"):
+            await summarization.generate_paper_summary(
+                paper_id=7,
+                db_pool=pool,
+                http_client=AsyncMock(),
+                verifier=verifier,
+                embedder=MagicMock(),
+            )
+
+    assert all(
+        "INSERT INTO paper_summaries" not in call.args[0]
+        for call in conn_phase2.fetchrow.await_args_list
+    )
+    assert conn_phase2.fetchrow.await_count == 1
 
 
 def _window_llm(digests_by_marker: dict, reduce_output: ReduceSummary):

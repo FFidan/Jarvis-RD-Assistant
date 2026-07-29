@@ -106,6 +106,22 @@ KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
 JOB_NOTIFY_CHANNEL = "jarvis_jobs"
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+BatchTerminalStatus = Literal["ok", "partial", "cancelled"]
+
+
+def batch_terminal_status(*, cancelled: bool, incomplete: bool) -> BatchTerminalStatus:
+    """Return the shared terminal outcome for a batch handler.
+
+    Cancellation has priority because the caller stopped the run even when
+    failures also occurred. Otherwise any failed, blocked, skipped, or
+    unprocessed work makes the result partial.
+    """
+    if cancelled:
+        return "cancelled"
+    if incomplete:
+        return "partial"
+    return "ok"
+
 
 # B.4 Step 2: procrastinate broker bridge.
 # The procrastinate schema (migration 052) emits NOTIFY on this channel for

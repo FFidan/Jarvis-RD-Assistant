@@ -18,17 +18,8 @@ from paper_ingestion.integrations.zotero_client import (
     validate_bbt_base_url,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 USER_ID = "123456"
 BASE = f"{ZOTERO_API_BASE}/users/{USER_ID}"
-
-
-@pytest.fixture
-def http_client():
-    return httpx.AsyncClient()
 
 
 @pytest.fixture

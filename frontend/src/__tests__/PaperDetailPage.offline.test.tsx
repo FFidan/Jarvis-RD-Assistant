@@ -10,10 +10,10 @@
  *  - ONLINE rendering unchanged: none of the offline elements appear when online
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Connectivity + persister mocks
@@ -146,20 +146,17 @@ vi.mock('@/stores/job-store', () => ({
 // ---------------------------------------------------------------------------
 
 function makeQc() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderDetail() {
-  return render(
-    <QueryClientProvider client={makeQc()}>
-      <MemoryRouter initialEntries={['/papers/42']}>
-        <Routes>
-          <Route path="/papers/:paperId" element={<PaperDetailPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/papers/42']}>
+      <Routes>
+        <Route path="/papers/:paperId" element={<PaperDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: makeQc() },
   );
 }
 

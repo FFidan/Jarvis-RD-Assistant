@@ -15,7 +15,7 @@ import httpx
 import openai
 from jarvis_common import effective_num_ctx, get_smart_model
 from jarvis_common.db_helpers import assert_paper_ownership
-from jarvis_common.jobs import JobError, ProgressContext
+from jarvis_common.jobs import JobError, ProgressContext, batch_terminal_status
 
 from learning_engine.card_generator import CardGenerator, _empty_result
 from learning_engine.card_store import insert_card
@@ -84,38 +84,48 @@ async def generate_cards_core(
         await ctx.update_progress(0.1, "Validating deck and paper")
 
     async with pool.acquire() as conn:
-        deck = await conn.fetchval(
-            "SELECT id FROM decks WHERE id = $1 AND user_id = $2",
-            deck_id,
-            user_id,
-        )
-        if not deck:
-            raise JobError("Deck not found")
+        async with conn.transaction():
+            deck = await conn.fetchval(
+                "SELECT id FROM decks WHERE id = $1 AND user_id = $2",
+                deck_id,
+                user_id,
+            )
+            if not deck:
+                raise JobError("Deck not found")
 
-        # Defense-in-depth: re-validate paper access even when called from
-        # a job worker (RD-DA-001). assert_paper_ownership is a no-op when
-        # user_id is None (internal/system dispatch paths).
-        await assert_paper_ownership(conn, paper_id, user_id)  # type: ignore[arg-type]
+            # Defense-in-depth: re-validate paper access even when called from
+            # a job worker. Internal single-user dispatches may carry no owner.
+            await assert_paper_ownership(conn, paper_id, user_id)  # type: ignore[arg-type]
 
-        paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
-        if not paper:
-            raise JobError("Paper not found")
+            # Capture one source generation with the chunks and admit only a
+            # summary derived from that source. The row lock prevents a
+            # replacement from splitting this input snapshot.
+            paper = await conn.fetchrow(
+                """
+                SELECT p.*, ps.summary_detailed, ps.methodology, ps.limitations
+                FROM papers p
+                LEFT JOIN paper_summaries ps
+                  ON ps.paper_id = p.id
+                 AND ps.user_id IS NOT DISTINCT FROM $2
+                 AND ps.content_generation = p.content_generation
+                WHERE p.id = $1
+                FOR SHARE OF p
+                """,
+                paper_id,
+                user_id,
+            )
+            if not paper:
+                raise JobError("Paper not found")
+            content_generation = int(paper["content_generation"])
 
-        if ctx:
-            await ctx.update_progress(0.2, "Fetching chunks")
+            if ctx:
+                await ctx.update_progress(0.2, "Fetching chunks")
 
-        chunk_rows = await conn.fetch(
-            "SELECT id, content, page_number FROM paper_chunks"
-            " WHERE paper_id = $1 ORDER BY chunk_index",
-            paper_id,
-        )
-
-        summary_row = await conn.fetchrow(
-            "SELECT summary_detailed, methodology, limitations"
-            " FROM paper_summaries WHERE paper_id = $1"
-            " ORDER BY created_at DESC LIMIT 1",
-            paper_id,
-        )
+            chunk_rows = await conn.fetch(
+                "SELECT id, content, page_number FROM paper_chunks"
+                " WHERE paper_id = $1 ORDER BY chunk_index",
+                paper_id,
+            )
 
     if not chunk_rows:
         raise JobError(
@@ -133,13 +143,13 @@ async def generate_cards_core(
     smart_model = get_smart_model()
 
     summary_text: str | None = None
-    if summary_row:
+    if paper["summary_detailed"] or paper["methodology"] or paper["limitations"]:
         parts = [
             p
             for p in [
-                summary_row["summary_detailed"],
-                summary_row["methodology"],
-                summary_row["limitations"],
+                paper["summary_detailed"],
+                paper["methodology"],
+                paper["limitations"],
             ]
             if p
         ]
@@ -183,6 +193,14 @@ async def generate_cards_core(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
+            current_generation = await conn.fetchval(
+                "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+                paper_id,
+            )
+            if current_generation is None:
+                raise JobError("Paper not found")
+            if int(current_generation) != content_generation:
+                raise JobError("Paper content changed during card generation; please retry")
             for card_data in verified_cards:
                 fsrs_state, due_at = fsrs_manager.create_new_card()
                 try:
@@ -197,6 +215,7 @@ async def generate_cards_core(
                         fsrs_state,
                         due_at,
                         user_id=user_id,
+                        content_generation=content_generation,
                     )
                 except asyncpg.ForeignKeyViolationError as exc:
                     raise JobError("Deck or paper not found") from exc
@@ -252,7 +271,11 @@ async def _card_generate_batch_job(
                 """
                 SELECT p.id FROM papers p
                 WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-                  AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM cards c
+                    WHERE c.paper_id = p.id AND c.deck_id = $1
+                      AND c.content_generation = p.content_generation
+                  )
                   AND EXISTS (
                     SELECT 1 FROM user_library ul
                     WHERE ul.paper_id = p.id AND ul.user_id IS NOT DISTINCT FROM $2
@@ -267,7 +290,11 @@ async def _card_generate_batch_job(
                 """
                 SELECT p.id FROM papers p
                 WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-                  AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM cards c
+                    WHERE c.paper_id = p.id AND c.deck_id = $1
+                      AND c.content_generation = p.content_generation
+                  )
                 LIMIT 50
                 """,
                 deck_id,
@@ -277,10 +304,12 @@ async def _card_generate_batch_job(
     papers_processed = 0
     cards_created = 0
     errors: list[str] = []
+    cancelled = False
 
     for i, paper_row in enumerate(paper_rows):
         paper_id = paper_row["id"]
         if await ctx.is_cancelled():
+            cancelled = True
             break
 
         await ctx.update_progress(i / max(total, 1), f"Paper {i + 1}/{total}")
@@ -300,14 +329,28 @@ async def _card_generate_batch_job(
         except JobError as exc:
             # Paper has no chunks or not found — record but continue batch
             errors.append(f"Paper {paper_id}: {exc}")
-        except Exception as exc:
+        except Exception:
+            # The errors list is returned to the client; keep the detail in the
+            # log and surface only a static message.
             logger.exception("Batch generate failed for paper %s", paper_id)
-            errors.append(f"Paper {paper_id}: {exc}")
+            errors.append(f"Paper {paper_id}: card generation failed")
 
-    await ctx.update_progress(1.0, "Batch complete")
+    status = batch_terminal_status(cancelled=cancelled, incomplete=bool(errors))
+    headline = "Done" if status == "ok" else status.title()
+    await ctx.update_progress(
+        1.0, f"{headline}: {papers_processed}/{total} processed, {cards_created} cards created"
+    )
 
-    return _BatchGenerateResult(
+    # Status and total describe this run, not the cards it produced, so they
+    # are layered onto the result dict instead of onto _BatchGenerateResult:
+    # that model is shared with the single-paper path, which has no batch to
+    # be cancelled part-way through.
+    batch_result = _BatchGenerateResult(
         papers_processed=papers_processed,
         cards_created=cards_created,
         errors=errors,
     ).model_dump()
+    batch_result["status"] = status
+    batch_result["total"] = total
+    batch_result["remaining"] = max(total - papers_processed - len(errors), 0)
+    return batch_result

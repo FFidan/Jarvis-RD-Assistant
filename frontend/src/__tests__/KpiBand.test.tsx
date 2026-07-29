@@ -35,22 +35,14 @@ describe('KpiBand', () => {
     expect(screen.getByText('CARDS REVIEWED')).toBeInTheDocument();
   });
 
-  it('renders papers_read_total value', () => {
+  it.each([
+    ['papers_read_total', '24'],
+    ['focus_hours_total (1dp when non-integer)', '37.2'],
+    ['cards_reviewed_total', '412'],
+  ])('renders %s value', (_label, expected) => {
     renderBand();
     const values = screen.getAllByTestId('kpi-value');
-    expect(values.some((el) => el.textContent === '24')).toBe(true);
-  });
-
-  it('renders focus_hours_total value (1dp when non-integer)', () => {
-    renderBand();
-    const values = screen.getAllByTestId('kpi-value');
-    expect(values.some((el) => el.textContent === '37.2')).toBe(true);
-  });
-
-  it('renders cards_reviewed_total value', () => {
-    renderBand();
-    const values = screen.getAllByTestId('kpi-value');
-    expect(values.some((el) => el.textContent === '412')).toBe(true);
+    expect(values.some((el) => el.textContent === expected)).toBe(true);
   });
 
   // ── Trend chips ─────────────────────────────────────────────────────────

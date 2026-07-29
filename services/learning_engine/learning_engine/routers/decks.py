@@ -4,6 +4,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, Request
 from jarvis_common.auth import current_user_id_strict
 
+from learning_engine.card_store import CURRENT_CARD_SQL
 from learning_engine.converters import row_to_deck_response
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import DeckCreate, DeckResponse
@@ -45,12 +46,15 @@ async def list_decks(
     """List all decks with card and due counts."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT d.*,
                    COUNT(c.id) AS card_count,
-                   COUNT(c.id) FILTER (WHERE c.due_at <= NOW()) AS due_count
+                   COUNT(c.id) FILTER (
+                       WHERE c.due_at <= NOW() AND {CURRENT_CARD_SQL}
+                   ) AS due_count
             FROM decks d
             LEFT JOIN cards c ON c.deck_id = d.id AND c.user_id = $1
+            LEFT JOIN papers p ON p.id = c.paper_id
             WHERE d.user_id = $1
             GROUP BY d.id
             ORDER BY d.created_at DESC

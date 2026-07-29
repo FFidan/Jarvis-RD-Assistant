@@ -578,11 +578,18 @@ async def test_create_card_persists_evidence_payload(
         f"POST /api/cards with evidence failed: {resp.status_code}: {resp.text[:300]}"
     )
     card_id = resp.json()["id"]
+    assert resp.json()["stale"] is False
 
-    evidence_row = await contract_conn.fetchval(
-        "SELECT evidence FROM cards WHERE id = $1",
+    card_row = await contract_conn.fetchrow(
+        """
+        SELECT c.evidence, c.content_generation, p.content_generation AS paper_generation
+        FROM cards c
+        JOIN papers p ON p.id = c.paper_id
+        WHERE c.id = $1
+        """,
         card_id,
     )
+    evidence_row = card_row["evidence"]
     assert evidence_row is not None, "evidence column is NULL — payload not persisted"
     # asyncpg JSONB codec decodes to dict
     assert isinstance(evidence_row, dict), f"evidence should be dict, got {type(evidence_row)}"
@@ -592,6 +599,7 @@ async def test_create_card_persists_evidence_payload(
     assert evidence_row.get("page_number") == 7, (
         f"evidence.page_number not persisted: got {evidence_row.get('page_number')!r}"
     )
+    assert card_row["content_generation"] == card_row["paper_generation"]
 
 
 async def test_create_card_missing_deck_returns_404(
@@ -741,3 +749,80 @@ async def test_export_anki_user_a_exports_own_cards(
     assert "attachment" in resp.headers.get("content-disposition", ""), (
         f"Missing or invalid Content-Disposition header: {resp.headers.get('content-disposition')}"
     )
+
+
+async def test_stale_card_is_retained_but_excluded_from_operational_surfaces(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+):
+    """Earlier-generation cards stay editable while due and export paths ignore them."""
+    card_id = contract_two_users.card_id_a
+    paper_id = contract_two_users.paper_id_a
+    deck_id = contract_two_users.deck_id_a
+    user_id = contract_two_users.user_a_id
+    await contract_conn.execute(
+        """
+        UPDATE cards
+        SET due_at = NOW() - INTERVAL '1 hour',
+            content_generation = (
+                SELECT content_generation FROM papers WHERE id = $2
+            )
+        WHERE id = $1
+        """,
+        card_id,
+        paper_id,
+    )
+    paperless_id = await contract_conn.fetchval(
+        """
+        INSERT INTO cards
+            (deck_id, paper_id, card_type, front, back, user_id, due_at)
+        VALUES ($1, NULL, 'concept', 'paperless-current', 'answer', $2,
+                NOW() - INTERVAL '1 hour')
+        RETURNING id
+        """,
+        deck_id,
+        user_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        listed = await c.get("/api/cards", params={"deck_id": deck_id, "limit": 20})
+        edited = await c.put(
+            f"/api/cards/{card_id}",
+            json={"front": "retained earlier-version card"},
+        )
+        due = await c.get("/api/review/next", params={"deck_id": deck_id, "limit": 10})
+        decks = await c.get("/api/decks")
+        stats = await c.get("/api/stats")
+        _le_app.state.anki_exporter.export_deck.reset_mock()
+        exported = await c.get(f"/api/export/anki/{deck_id}")
+
+    assert listed.status_code == 200, listed.text[:300]
+    stale_card = next(card for card in listed.json() if card["id"] == card_id)
+    assert stale_card["stale"] is True
+    assert edited.status_code == 200, edited.text[:300]
+    assert edited.json()["stale"] is True
+    assert (
+        await contract_conn.fetchval(
+            "SELECT content_generation FROM cards WHERE id = $1",
+            card_id,
+        )
+        == 0
+    )
+
+    assert due.status_code == 200, due.text[:300]
+    assert [card["id"] for card in due.json()] == [paperless_id]
+    deck = next(item for item in decks.json() if item["id"] == deck_id)
+    assert deck["card_count"] == 2
+    assert deck["due_count"] == 1
+    assert stats.json()["total_cards"] == 2
+    assert stats.json()["due_now"] == 1
+
+    assert exported.status_code == 200, exported.text[:300]
+    exported_cards = _le_app.state.anki_exporter.export_deck.call_args.args[1]
+    assert [card["front"] for card in exported_cards] == ["paperless-current"]

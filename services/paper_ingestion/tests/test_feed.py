@@ -1,48 +1,15 @@
 """Tests for the What's New paper feed endpoints."""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_paper_record as _make_paper_record
 
 from tests.conftest import FakeRecord
 
 # ---------------------------------------------------------------------------
 # Helpers — fake asyncpg records
 # ---------------------------------------------------------------------------
-
-
-def _make_paper_record(
-    paper_id: int = 1,
-    discovered_at: datetime | None = None,
-    summary_brief: str | None = "Brief summary",
-    confidence: str | None = "HIGH",
-    user_status: str | None = "new",
-    rating: int | None = None,
-) -> dict:
-    """Return a dict mimicking an asyncpg Record for a joined feed row."""
-    now = discovered_at or datetime.now(UTC)
-    return {
-        "id": paper_id,
-        "external_id": f"arxiv:{paper_id}",
-        "source_type": "arxiv",
-        "title": f"Paper {paper_id}",
-        "authors": ["Author A"],
-        "abstract": "Abstract text",
-        "published_date": None,
-        "url": f"https://arxiv.org/abs/{paper_id}",
-        "pdf_url": None,
-        "pdf_local_path": None,
-        "pdf_downloaded": False,
-        "citation_count": 0,
-        "metadata": {},
-        "discovered_at": now,
-        "created_at": now,
-        "summary_brief": summary_brief,
-        "confidence": confidence,
-        "user_status": user_status,
-        "rating": rating,
-    }
 
 
 def _to_record(d: dict) -> FakeRecord:

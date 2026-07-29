@@ -2,10 +2,9 @@
  * Tests for DeckBrowser — verifies onError toast fires when createDeck fails,
  * and that deck cards render without invalid DOM nesting and support keyboard activation.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DeckBrowser } from '@/components/cards/DeckBrowser';
 import type { Deck } from '@/types';
 
@@ -18,6 +17,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { fetchDecks, createDeck } from '@/lib/api';
 import { toast } from 'sonner';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockFetchDecks = vi.mocked(fetchDecks);
 const mockCreateDeck = vi.mocked(createDeck);
@@ -34,10 +34,11 @@ const makeDeck = (overrides: Partial<Deck> = {}): Deck => ({
 });
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-  });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 describe('DeckBrowser — createDeck onError', () => {

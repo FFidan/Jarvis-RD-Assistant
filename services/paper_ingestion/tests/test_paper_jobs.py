@@ -8,9 +8,12 @@ into the outer 0.1→1.0 range.
 from __future__ import annotations
 
 import sys
-from unittest.mock import ANY, AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Stub objects — created at module scope so tests can mutate their attributes,
@@ -20,7 +23,10 @@ import pytest
 # Import the real path-resolution guard so the stubbed pdf_processor module
 # exposes genuine traversal semantics (a bare MagicMock attribute would always
 # be truthy and silently disable the guard).
+from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.pdf_processor import resolve_safe_pdf_path as _real_resolve_safe_pdf_path
+from paper_ingestion.routers import jobs as _jobs_router_module
+from paper_ingestion.services import pdf_workflow as _real_pdf_workflow
 from paper_ingestion.services.pdf_workflow import (
     PDFRecordMissingError as _RealPDFRecordMissingError,
 )
@@ -52,6 +58,10 @@ def _install_stubs(monkeypatch):
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
     _workflow_stub.PDFRecordMissingError = _RealPDFRecordMissingError
+    # Resolved from the live module, not bound at import: test_pdf_workflow.py
+    # reloads pdf_workflow, which rebinds its classes, and a handler can only
+    # catch the class its own import resolves.
+    _workflow_stub.PDFRebuildNotPermittedError = _real_pdf_workflow.PDFRebuildNotPermittedError
     _workflow_stub.download_and_store_pdf = AsyncMock()
 
     monkeypatch.setitem(sys.modules, "paper_ingestion.pdf_processor", _pdf_proc_stub)
@@ -143,6 +153,86 @@ async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
     assert isinstance(call_kwargs["ctx"], _SubCtx), (
         f"Expected _SubCtx instance, got {type(call_kwargs['ctx'])}"
     )
+
+
+def _force_run_pool(tmp_path, *, library_rows: list):
+    """Return a pool for a downloaded paper whose library membership is *library_rows*."""
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+    # is_visible satisfies assert_paper_ownership: the paper is public, which is
+    # exactly the state a force run must not be allowed to rely on.
+    row = {
+        "id": 42,
+        "pdf_downloaded": True,
+        "pdf_local_path": str(pdf_file),
+        "is_visible": True,
+    }
+    pool = _make_pool(row)
+    pool.acquire.return_value.fetch = AsyncMock(return_value=library_rows)
+    # Populate svc so a run that gets past the membership gate reaches
+    # run_process_pdf rather than dying on uninitialised services — otherwise a
+    # removed gate would surface as an unrelated RuntimeError.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_paper_process_job_refuses_force_without_library_row(tmp_path):
+    """The worker refuses a force run for a caller who does not hold the paper."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job  # noqa: PLC0415
+
+    pool = _force_run_pool(tmp_path, library_rows=[])
+    mock_run = AsyncMock(return_value={"status": "processed", "chunk_count": 5})
+    _workflow_stub.run_process_pdf = mock_run
+    pj.run_process_pdf = mock_run  # type: ignore[attr-defined]  # patched locally
+
+    original_storage = pj.PDF_STORAGE_PATH
+    pj.PDF_STORAGE_PATH = str(tmp_path)
+    try:
+        with pytest.raises(JobError, match="library"):
+            await _paper_process_job(
+                pool=pool,
+                http_client=MagicMock(),
+                payload={"paper_id": 42, "user_id": 7, "force": True},
+                ctx=_make_ctx(),
+            )
+    finally:
+        pj.PDF_STORAGE_PATH = original_storage
+
+    mock_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_process_job_allows_force_for_library_holder(tmp_path):
+    """The same force run proceeds once the caller holds the paper."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job  # noqa: PLC0415
+
+    pool = _force_run_pool(tmp_path, library_rows=[{"?column?": 1}])
+    mock_run = AsyncMock(return_value={"status": "processed", "chunk_count": 5})
+    _workflow_stub.run_process_pdf = mock_run
+    pj.run_process_pdf = mock_run  # type: ignore[attr-defined]  # patched locally
+
+    original_storage = pj.PDF_STORAGE_PATH
+    pj.PDF_STORAGE_PATH = str(tmp_path)
+    try:
+        await _paper_process_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 42, "user_id": 7, "force": True},
+            ctx=_make_ctx(),
+        )
+    finally:
+        pj.PDF_STORAGE_PATH = original_storage
+
+    mock_run.assert_awaited_once()
+    assert mock_run.await_args is not None
+    assert mock_run.await_args.kwargs["force"] is True
 
 
 @pytest.mark.asyncio
@@ -349,6 +439,41 @@ async def test_paper_summarize_job_forwards_user_id(monkeypatch):
 
     _summ_stub.generate_paper_summary.assert_awaited_once()
     assert _summ_stub.generate_paper_summary.await_args.kwargs.get("user_id") == user_id
+
+
+@pytest.mark.asyncio
+async def test_papers_batch_summarize_job_cancelled_mid_run_is_not_unqualified_success(
+    monkeypatch,
+):
+    """A batch summarize run stopped by cancellation must report ``cancelled``
+    — never say ``Done`` — so the papers it never reached cannot read as a
+    clean completion."""
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job  # noqa: PLC0415
+
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = AsyncMock(return_value=None)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.verifier = MagicMock()
+    svc.embedder = MagicMock()
+
+    ctx = _make_ctx()
+    ctx.is_cancelled = AsyncMock(side_effect=[False, True])
+
+    result = await _papers_batch_summarize_job(
+        pool=MagicMock(),
+        http_client=MagicMock(),
+        payload={"paper_ids": [1, 2, 3]},
+        ctx=ctx,
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["total"] == 3
+    assert result["summarized"] == 1
+    terminal_message = ctx.update_progress.await_args_list[-1].args[1]
+    assert "Done" not in terminal_message
 
 
 # ---------------------------------------------------------------------------
@@ -706,11 +831,12 @@ async def test_process_library_all_blocked_is_partial_not_success(tmp_path, monk
     ]
     pool = _make_library_pool(rows, update_rows=[], user_id=user_id)
 
+    ctx = _make_ctx()
     result = await _papers_process_library_job(
         pool=pool,
         http_client=MagicMock(),
         payload={"user_id": user_id, "summarize": False},
-        ctx=_make_ctx(),
+        ctx=ctx,
     )
 
     assert result["status"] == "partial"
@@ -721,6 +847,7 @@ async def test_process_library_all_blocked_is_partial_not_success(tmp_path, monk
     ]
     assert result["processed"] == 0
     assert result["downloaded"] == 0
+    assert ctx.update_progress.await_args_list[-1].args[1].startswith("Partial:")
     svc.pdf_processor.download_pdf.assert_not_awaited()
     run_process_pdf.assert_not_awaited()
 
@@ -1043,3 +1170,362 @@ async def test_process_library_rejects_null_user():
             payload={"summarize": False},  # no user_id
             ctx=_make_ctx(),
         )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/jobs — a force key the payload schema does not declare
+#
+# PaperAnalyzePayload and PapersBatchProcessPayload leave pydantic's default
+# extra="ignore" in place, and the endpoint validates a merged copy of the
+# payload while forwarding the raw one, so an undeclared force reaches the
+# worker. These tests drive the endpoint and run the handler on exactly the
+# payload it deferred, against the real run_process_pdf.
+# ---------------------------------------------------------------------------
+
+_REBUILD_PAPER_ID = 42
+_NON_HOLDER_ID = 7
+_REBUILD_SOURCE_URL = "https://example.test/rebuild-source.pdf"
+_REBUILD_VISIBILITY = VectorVisibility(
+    source_type="arxiv",
+    visibility_scope="public",
+    visibility_generation="a" * 32,
+)
+
+
+def _rebuild_row(pdf_file) -> dict:
+    """Row answering every ``fetchrow`` the rebuild path makes.
+
+    ``is_visible`` makes the paper public — the state a force run must not be
+    allowed to rely on. ``acquired`` answers the per-paper advisory-lock probe.
+    """
+    return {
+        "id": _REBUILD_PAPER_ID,
+        "source_type": "local",
+        "pdf_url": None,
+        "pdf_downloaded": True,
+        "pdf_local_path": str(pdf_file),
+        "is_visible": True,
+        "acquired": True,
+    }
+
+
+def _rebuild_fetchval():
+    """Answer the workflow's ``fetchval`` reads for a paper with two persisted chunks.
+
+    Order: source URL, download premise, chunk count, ``chunked_at``. The commit
+    fence re-reads the source URL, which the trailing default supplies.
+    """
+    answers = iter((_REBUILD_SOURCE_URL, True, 2, None))
+    return lambda *_args, **_kwargs: next(answers, _REBUILD_SOURCE_URL)
+
+
+def _rebuild_pool(tmp_path, *, fetch_results: list):
+    """Return a ``(pool, conn)`` pair on which a permitted force rebuild completes.
+
+    ``fetch_results`` answers the ``fetch`` reads in call order: any ownership
+    batch read, then the holdership probe, then the stale-vector read a refused
+    run never reaches.
+    """
+    pdf_file = tmp_path / f"{_REBUILD_PAPER_ID}.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=_rebuild_row(pdf_file))
+    conn.fetchval = AsyncMock(side_effect=_rebuild_fetchval())
+    conn.fetch = AsyncMock(side_effect=fetch_results)
+    return make_pool_and_conn(conn=conn)
+
+
+def _use_real_workflow(monkeypatch, tmp_path, pj) -> MagicMock:
+    """Point the handlers at the real ``run_process_pdf``; return its PDF processor.
+
+    The gate under test lives inside the workflow, so a mocked workflow would
+    prove nothing about whether a non-holder's force run is refused.
+    """
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    _workflow_stub.run_process_pdf = _real_pdf_workflow.run_process_pdf
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(
+        _real_pdf_workflow,
+        "_resolve_visibility_generation",
+        AsyncMock(return_value=_REBUILD_VISIBILITY.visibility_generation),
+    )
+    monkeypatch.setattr(
+        _real_pdf_workflow,
+        "_load_paper_embedding_context",
+        AsyncMock(return_value=(_REBUILD_VISIBILITY, 17)),
+    )
+    chunks = [SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1)]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-0"]))
+    svc.pdf_processor = pdf_processor
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+    summarization = MagicMock()
+    summarization.generate_paper_summary = AsyncMock()
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", summarization)
+    return pdf_processor
+
+
+def _worker_task(handler, pool, outcome: list) -> MagicMock:
+    """Return a task stand-in whose ``defer_async`` runs *handler* on what it deferred.
+
+    Mirrors the worker: the handler receives exactly the keyword payload the
+    enqueue call was given, so a key the endpoint forwards arrives verbatim.
+    """
+
+    async def _defer(job_id, **payload):
+        try:
+            outcome.append(await handler(pool, MagicMock(), payload, _make_ctx()))
+        except Exception as exc:  # noqa: BLE001 - recorded so the test can assert on it
+            outcome.append(exc)
+
+    task = MagicMock()
+    task.defer_async = AsyncMock(side_effect=_defer)
+    return task
+
+
+def _jobs_app(pool, *, user_id: int):
+    """Return a FastAPI app serving the jobs router against mocked dependencies."""
+    from fastapi import FastAPI  # noqa: PLC0415
+    from jarvis_common.auth import current_user_id_strict  # noqa: PLC0415
+
+    from paper_ingestion.deps import get_db_pool, limiter  # noqa: PLC0415
+
+    # The limiter is a process-wide singleton and every app-level test keys to
+    # the same bucket, so reset it rather than spend another test's quota.
+    limiter.reset()
+
+    app = FastAPI()
+    app.include_router(_jobs_router_module.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[current_user_id_strict] = lambda: user_id
+    return app
+
+
+def _jobs_client(app):
+    """Return an in-process httpx client bound to *app*."""
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+def _assert_no_rebuild(conn, pdf_processor) -> None:
+    """Fail if the run derived fresh content or discarded the persisted chunks."""
+    pdf_processor.process.assert_not_awaited()
+    discard_chunks = call("DELETE FROM paper_chunks WHERE paper_id = $1", _REBUILD_PAPER_ID)
+    assert discard_chunks not in conn.execute.await_args_list
+
+
+@pytest.mark.asyncio
+async def test_jobs_endpoint_analyze_force_wins_no_rebuild_for_non_holder(tmp_path, monkeypatch):
+    """An undeclared force on paper.analyze reaches the worker but rebuilds nothing."""
+    import jarvis_common.task_registry as task_registry  # noqa: PLC0415
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+
+    # No user_library row for this caller; the same stub answers the stale-vector
+    # read a run that got past the gate would make.
+    pool, conn = _rebuild_pool(tmp_path, fetch_results=[[], []])
+    pdf_processor = _use_real_workflow(monkeypatch, tmp_path, pj)
+
+    outcome: list = []
+    task = _worker_task(pj._paper_analyze_job, pool, outcome)
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": task}):
+        async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "kind": "paper.analyze",
+                    "payload": {"paper_id": _REBUILD_PAPER_ID, "force": True},
+                },
+            )
+
+    assert resp.status_code == 202, f"expected 202, got {resp.status_code}: {resp.text}"
+    assert task.defer_async.await_args.kwargs["force"] is True, (
+        "the undeclared force key must survive the endpoint, or this proves nothing"
+    )
+    assert isinstance(outcome[0], JobError), f"expected a refusal, got {outcome[0]!r}"
+    assert "library" in str(outcome[0]).lower()
+    _assert_no_rebuild(conn, pdf_processor)
+
+
+@pytest.mark.asyncio
+async def test_jobs_endpoint_batch_force_wins_no_rebuild_for_non_holder(tmp_path, monkeypatch):
+    """An undeclared force on papers.batch_process reaches the worker but rebuilds nothing."""
+    import jarvis_common.task_registry as task_registry  # noqa: PLC0415
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+
+    # The endpoint and the handler each run one batch ownership read; the
+    # holdership probe that follows finds no user_library row.
+    visible = [{"id": _REBUILD_PAPER_ID, "is_visible": True}]
+    pool, conn = _rebuild_pool(tmp_path, fetch_results=[visible, visible, [], []])
+    pdf_processor = _use_real_workflow(monkeypatch, tmp_path, pj)
+
+    outcome: list = []
+    task = _worker_task(pj._papers_batch_process_job, pool, outcome)
+    with patch.dict(task_registry._TASK_MAP, {"papers.batch_process": task}):
+        async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "kind": "papers.batch_process",
+                    "payload": {"paper_ids": [_REBUILD_PAPER_ID], "force": True},
+                },
+            )
+
+    assert resp.status_code == 202, f"expected 202, got {resp.status_code}: {resp.text}"
+    assert task.defer_async.await_args.kwargs["force"] is True, (
+        "the undeclared force key must survive the endpoint, or this proves nothing"
+    )
+    assert outcome[0]["processed"] == 0, f"a non-holder rebuilt a paper: {outcome[0]}"
+    assert len(outcome[0]["errors"]) == 1
+    _assert_no_rebuild(conn, pdf_processor)
+
+
+@pytest.mark.asyncio
+async def test_paper_process_job_reports_a_gate_refusal_as_a_job_error(tmp_path, monkeypatch):
+    """A force run the workflow refuses is reported as a job failure, not a raw error.
+
+    No requester is named here, so the handler's own membership probe is skipped
+    and the refusal comes from the rebuild gate inside the workflow instead. It
+    has to reach the worker as a job failure like every other refusal this
+    handler reports.
+    """
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+
+    # No fetch reads are expected: an unnamed requester is refused before the
+    # holdership probe would run.
+    pool, conn = _rebuild_pool(tmp_path, fetch_results=[])
+    pdf_processor = _use_real_workflow(monkeypatch, tmp_path, pj)
+
+    with pytest.raises(JobError, match="library"):
+        await pj._paper_process_job(
+            pool,
+            MagicMock(),
+            {"paper_id": _REBUILD_PAPER_ID, "force": True},
+            _make_ctx(),
+        )
+
+    _assert_no_rebuild(conn, pdf_processor)
+
+
+@pytest.mark.asyncio
+async def test_papers_batch_process_job_cancelled_mid_run_is_not_unqualified_success(
+    monkeypatch,
+):
+    """The fourth batch handler reports a cancelled run the same way its siblings do.
+
+    It shares a file with one of them and had the identical shape: break out of
+    the loop on cancellation, then report success. A user who stops it after two
+    of five hundred papers must not be told the run finished.
+    """
+    from paper_ingestion import paper_jobs as pj  # noqa: PLC0415
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+
+    # No stored PDF, so the first paper is skipped without reaching the
+    # workflow and the run stops on the next cancellation check.
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    ctx = _make_ctx()
+    ctx.is_cancelled = AsyncMock(side_effect=[False, True])
+
+    result = await pj._papers_batch_process_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"paper_ids": [1, 2, 3]},
+        ctx=ctx,
+    )
+
+    assert result["status"] == "cancelled", (
+        f"a cancelled batch must not read as a clean completion; got {result}"
+    )
+    assert result["total"] == 3
+    assert result["remaining"] == 2, (
+        "the one skipped paper was examined; only the two untouched papers remain"
+    )
+    terminal_message = ctx.update_progress.await_args_list[-1].args[1]
+    assert "Done" not in terminal_message, (
+        f"the terminal message must not say Done for a cancelled run; got {terminal_message!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_papers_batch_process_skipped_only_is_partial():
+    """An examined paper without usable PDF bytes is incomplete, not successful."""
+    from paper_ingestion import paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None
+    pool, _ = make_pool_and_conn(conn=conn)
+    ctx = _make_ctx()
+    _workflow_stub.run_process_pdf = AsyncMock()
+
+    result = await pj._papers_batch_process_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"paper_ids": [1]},
+        ctx=ctx,
+    )
+
+    assert result == {
+        "processed": 0,
+        "skipped": 1,
+        "errors": [],
+        "failed": 0,
+        "total": 1,
+        "remaining": 0,
+        "status": "partial",
+    }
+    assert ctx.update_progress.await_args_list[-1].args[1].startswith("Partial:")
+    _workflow_stub.run_process_pdf.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_papers_batch_process_failures_are_examined_not_remaining(tmp_path):
+    """Processed, skipped, failed, and untouched counts form one exact partition."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+    available = {"pdf_downloaded": True, "pdf_local_path": str(pdf_file)}
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [available, available, None]
+    pool, _ = make_pool_and_conn(conn=conn)
+    _workflow_stub.run_process_pdf = AsyncMock(
+        side_effect=[RuntimeError("broken PDF"), {"status": "processed"}]
+    )
+
+    original_storage = pj.PDF_STORAGE_PATH
+    pj.PDF_STORAGE_PATH = str(tmp_path)
+    try:
+        result = await pj._papers_batch_process_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_ids": [1, 2, 3]},
+            ctx=_make_ctx(),
+        )
+    finally:
+        pj.PDF_STORAGE_PATH = original_storage
+
+    assert result["status"] == "partial"
+    assert result["processed"] == 1
+    assert result["skipped"] == 1
+    assert result["failed"] == 1
+    assert result["remaining"] == 0
+    assert (
+        result["processed"] + result["skipped"] + result["failed"] + result["remaining"]
+        == result["total"]
+    ), f"batch outcome counts must partition the input exactly: {result}"

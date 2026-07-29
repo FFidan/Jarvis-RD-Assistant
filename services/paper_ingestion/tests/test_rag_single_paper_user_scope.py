@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import shelve_paper
 
 from paper_ingestion.rag.streaming import prepare_single_paper_rag
 from tests.conftest import _make_pool_and_conn
@@ -311,9 +312,14 @@ async def test_prepare_single_paper_rag_threads_user_scope_to_search() -> None:
     embedder.search_chunks_in_paper = AsyncMock(return_value=chunks)
     embedder.rerank_chunks = AsyncMock(return_value=chunks)
 
+    async def _fetch(sql, *args):  # noqa: ARG001
+        if "paper_chunks" in sql:
+            return [{"paper_id": 42, "chunk_index": 0}]
+        return [{"paper_id": 42}, {"paper_id": 99}]
+
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value={"id": 42, "title": "T"})
-    conn.fetch = AsyncMock(return_value=[{"paper_id": 42}, {"paper_id": 99}])
+    conn.fetch = AsyncMock(side_effect=_fetch)
     pool = MagicMock()
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -335,7 +341,10 @@ async def test_prepare_single_paper_rag_threads_user_scope_to_search() -> None:
     )
     # The library lookup must be keyed on the CALLER's id (real-SQL coverage of
     # the user_library query lives in the sidecar contract test).
-    assert conn.fetch.await_args.args[-1] == 7
+    library_call = next(
+        call for call in conn.fetch.await_args_list if "user_library" in call.args[0]
+    )
+    assert library_call.args[-1] == 7
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +379,6 @@ async def _seed_paper(
     )
 
 
-async def _shelve(conn, user_id: int, paper_id: int) -> None:
-    await conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        user_id,
-        paper_id,
-    )
-
-
 @pytest.mark.contract
 @pytest.mark.real_auth
 @pytest.mark.asyncio(loop_scope="session")
@@ -403,7 +404,7 @@ async def test_prepare_single_paper_rag_scopes_paper_to_caller(
         visibility_scope="private",
         discovered_by=user_a,
     )
-    await _shelve(contract_conn, user_a, private_id)
+    await shelve_paper(contract_conn, user_a, private_id)
 
     pool = SharedConnPool(contract_conn)
     body = AskRequest(question="How does attention work?", max_chunks=3)
@@ -457,7 +458,7 @@ async def test_load_paper_for_summary_scopes_paper_to_caller(
         visibility_scope="private",
         discovered_by=user_a,
     )
-    await _shelve(contract_conn, user_a, private_id)
+    await shelve_paper(contract_conn, user_a, private_id)
 
     pool = SharedConnPool(contract_conn)
 

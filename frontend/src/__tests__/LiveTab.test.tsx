@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('@/lib/logs', () => ({
@@ -19,21 +18,19 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { LiveTab } from '@/components/logs/LiveTab';
 import { listEvents, streamCorrelation } from '@/lib/logs';
 import { listJobs } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockListEvents = vi.mocked(listEvents);
 const mockListJobs = vi.mocked(listJobs);
 const mockStreamCorrelation = vi.mocked(streamCorrelation);
 
 function renderTab() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <LiveTab />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <LiveTab />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

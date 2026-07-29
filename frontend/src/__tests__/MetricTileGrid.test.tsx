@@ -61,7 +61,6 @@ describe('MetricTileGrid', () => {
   it('renders 5 tiles (not 7) as confirmed by tile title count', () => {
     renderGrid(mockMetrics);
     const tileTitles = ['Papers', 'Due Cards', 'Active Projects', 'Topics', 'Scheduled Jobs'];
-    expect(tileTitles).toHaveLength(5);
     tileTitles.forEach((title) => {
       expect(screen.getByText(title)).toBeInTheDocument();
     });

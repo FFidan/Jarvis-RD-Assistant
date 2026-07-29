@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { create } from 'zustand';
 import { ActionsSidebar } from '@/components/paper/ActionsSidebar';
 import type { AnalyzeEvent } from '@/lib/sse';
 import type { Job } from '@/stores/job-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Mock sonner toast ---
 
@@ -142,15 +142,12 @@ beforeAll(() => {
 });
 
 function renderSidebar(paperId = 42) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ActionsSidebar paperId={paperId} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ActionsSidebar paperId={paperId} />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -201,13 +198,12 @@ describe('ActionsSidebar', () => {
     unmount();
 
     // pdfDownloaded=true, hasChunks=false: only "Process PDF" visible
-    const queryClient2 = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { unmount: u2 } = render(
-      <QueryClientProvider client={queryClient2}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={false} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient2 = createTestQueryClient();
+    const { unmount: u2 } = renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={false} />
+      </MemoryRouter>,
+      { queryClient: queryClient2 },
     );
     await user.click(screen.getByRole('button', { name: /Show advanced/ }));
     expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
@@ -216,13 +212,12 @@ describe('ActionsSidebar', () => {
     u2();
 
     // hasChunks=true, hasSummary=false: only "Generate Summary" visible
-    const queryClient3 = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={queryClient3}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={true} hasSummary={false} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient3 = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={true} hasSummary={false} />
+      </MemoryRouter>,
+      { queryClient: queryClient3 },
     );
     await user.click(screen.getByRole('button', { name: /Show advanced/ }));
     expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
@@ -434,13 +429,12 @@ describe('ActionsSidebar', () => {
     // Verify !hasChunks contributes to disabled state: even before a deck is
     // chosen, the button's disabled expression includes !hasChunks. When hasChunks
     // is false the button is disabled for that reason in addition to !deckId.
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} hasChunks={false} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} hasChunks={false} />
+      </MemoryRouter>,
+      { queryClient },
     );
 
     await screen.findByText('Target Deck');
@@ -454,13 +448,12 @@ describe('ActionsSidebar', () => {
   it('Generate Cards button is still disabled with hasChunks=true but no deck selected', async () => {
     // With hasChunks=true the !hasChunks condition clears, but !deckId still
     // keeps it disabled until the user picks a deck.
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} hasChunks={true} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} hasChunks={true} />
+      </MemoryRouter>,
+      { queryClient },
     );
 
     await screen.findByText('Target Deck');
@@ -481,13 +474,12 @@ describe('ActionsSidebar', () => {
   it('Generate Cards wires the job into the store via trackExternalJob, not setInterval polling', async () => {
     const user = userEvent.setup();
 
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     // Wait for decks to load, select the deck, then click Generate Cards
@@ -514,13 +506,12 @@ describe('ActionsSidebar', () => {
     // poll loop (the source of the prior 401 leak). 401→handleAuthFailure
     // routing lives in the STORE's SSE subscriber and is covered by the
     // job-store's own tests; asserting it here would be circular.
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     await screen.findByText('Target Deck');
@@ -547,13 +538,12 @@ describe('ActionsSidebar', () => {
   /** Render with all stages done, select the deck, and click Generate Cards. */
   async function startGenerate() {
     const user = userEvent.setup();
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     await screen.findByText('Target Deck');
     await user.click(screen.getByRole('combobox'));
@@ -661,13 +651,12 @@ describe('ActionsSidebar', () => {
   it('clicking "Regenerate Summary" calls summarizePaper with {force: true}', async () => {
     const user = userEvent.setup();
 
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <ActionsSidebar paperId={42} pdfDownloaded hasChunks hasSummary />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const qc = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} pdfDownloaded hasChunks hasSummary />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
 
     // Expand advanced panel to reveal the Regenerate Summary button

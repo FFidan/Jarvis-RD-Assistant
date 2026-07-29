@@ -38,4 +38,5 @@ class NoteResponse(BaseModel):
     verified_quote: str | None = None
     verified_page_number: int | None = None
     promoted_at: datetime | None = None
+    stale: bool = False
     created_at: datetime

@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useSearchParams } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -73,20 +74,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 function makeClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderAt(initialEntry: string) {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/feed" element={<ResearchFeedPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/feed" element={<ResearchFeedPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: makeClient() },
   );
 }
 
@@ -189,22 +187,21 @@ describe('ResearchFeedPage — bulk clears on direct setSearchParams', () => {
     useBulkSelection.setState({ selectedIds: new Set([99]) });
     expect(useBulkSelection.getState().selectedIds.size).toBe(1);
 
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <MemoryRouter initialEntries={['/feed?surface=inbox']}>
-          <Routes>
-            <Route
-              path="/feed"
-              element={
-                <>
-                  <SurfaceSwitcher />
-                  <ResearchFeedPage />
-                </>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/feed?surface=inbox']}>
+        <Routes>
+          <Route
+            path="/feed"
+            element={
+              <>
+                <SurfaceSwitcher />
+                <ResearchFeedPage />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: makeClient() },
     );
 
     // Confirm the page has rendered (surface=inbox is the default content)
@@ -249,22 +246,21 @@ describe('ResearchFeedPage — bulk clears on filter/facet changes (FEE-1)', () 
 
   async function seedThenSwitch(initialEntry: string, param: string, value: string) {
     const user = userEvent.setup();
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route
-              path="/feed"
-              element={
-                <>
-                  <ParamSwitcher param={param} value={value} />
-                  <ResearchFeedPage />
-                </>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route
+            path="/feed"
+            element={
+              <>
+                <ParamSwitcher param={param} value={value} />
+                <ResearchFeedPage />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: makeClient() },
     );
 
     // Page mounted → the mount-effect already cleared. Re-seed AFTER mount so the

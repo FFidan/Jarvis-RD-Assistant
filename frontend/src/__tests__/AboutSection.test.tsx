@@ -3,8 +3,7 @@
  * "update available" hint when they differ (Task 6.4).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { AboutSection } from '@/components/settings/AboutSection';
 import type { StackHealthSummary } from '@/lib/api';
 
@@ -17,6 +16,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 import { fetchStackHealth } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchStackHealth = vi.mocked(fetchStackHealth);
 
 function makeHealth(version: string): StackHealthSummary {
@@ -30,11 +30,10 @@ function makeHealth(version: string): StackHealthSummary {
 }
 
 function renderAboutSection() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AboutSection />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <AboutSection />,
+    { queryClient },
   );
 }
 

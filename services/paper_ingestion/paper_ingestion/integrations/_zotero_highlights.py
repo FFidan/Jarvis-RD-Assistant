@@ -250,7 +250,7 @@ def _build_annotation_item(
 
 
 async def _export_one_highlight(
-    db_pool: asyncpg.Pool,
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     client: Any,
     *,
     highlight_id: int,
@@ -291,12 +291,11 @@ async def _export_one_highlight(
         return {"highlight_id": highlight_id, "status": "push_failed"}
 
     try:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE paper_highlights SET zotero_annotation_key = $1 WHERE id = $2",
-                annotation_key,
-                highlight_id,
-            )
+        await conn.execute(
+            "UPDATE paper_highlights SET zotero_annotation_key = $1 WHERE id = $2",
+            annotation_key,
+            highlight_id,
+        )
     except asyncpg.UniqueViolationError:
         logger.info(
             "Zotero highlight %d already synced (key %s collided on persist)",
@@ -323,20 +322,22 @@ async def _prepare_highlight_push(
     highlight_id: int,
     owner_user_id: int | None,
 ) -> dict[str, Any] | tuple[Any, str]:
-    """Load the owner-scoped highlight and ensure its Zotero PDF attachment."""
+    """Lock a highlight and its current source before ensuring the attachment.
+
+    The caller must hold an open transaction through the subsequent Zotero
+    annotation write and local key update.
+    """
     resolved_owner_id = await _resolve_zotero_user_id(conn, owner_user_id)
     row = await conn.fetchrow(
         """
         SELECT h.paper_id, h.page, h.rect, h.note, h.color, h.quote,
-               h.zotero_annotation_key, l.zotero_item_key, l.zotero_attachment_key
+               h.content_generation, h.zotero_annotation_key
         FROM paper_highlights h
-        JOIN papers p ON p.id = h.paper_id
-        LEFT JOIN paper_user_zotero_links l ON l.paper_id = p.id AND l.user_id = $3
-        WHERE h.id = $1 AND h.user_id = $2
+        WHERE h.id = $1 AND h.user_id IS NOT DISTINCT FROM $2
+        FOR UPDATE
         """,
         highlight_id,
         owner_user_id,
-        resolved_owner_id,
     )
 
     if not row:
@@ -347,7 +348,23 @@ async def _prepare_highlight_push(
             "status": "already_synced",
             "zotero_annotation_key": row["zotero_annotation_key"],
         }
-    zotero_item_key = row["zotero_item_key"]
+    paper = await conn.fetchrow(
+        """
+        SELECT p.content_generation, l.zotero_item_key, l.zotero_attachment_key
+        FROM papers p
+        LEFT JOIN paper_user_zotero_links l
+          ON l.paper_id = p.id AND l.user_id = $2
+        WHERE p.id = $1
+        FOR SHARE OF p
+        """,
+        row["paper_id"],
+        resolved_owner_id,
+    )
+    if paper is None or int(row["content_generation"]) != int(paper["content_generation"]):
+        status = "not_found" if paper is None else "stale_source"
+        return {"highlight_id": highlight_id, "status": status}
+
+    zotero_item_key = paper["zotero_item_key"]
     if not zotero_item_key:
         return {"highlight_id": highlight_id, "status": "not_linked"}
 
@@ -357,12 +374,51 @@ async def _prepare_highlight_push(
             client,
             row["paper_id"],
             str(zotero_item_key),
-            row["zotero_attachment_key"],
+            paper["zotero_attachment_key"],
             resolved_owner_id,
         )
     except _AttachmentUnavailableError as exc:
         return {"highlight_id": highlight_id, "status": exc.status}
     return row, attachment_key
+
+
+async def _push_one_highlight(
+    db_pool: asyncpg.Pool,
+    client: Any,
+    highlight_id: int,
+    owner_user_id: int | None,
+) -> dict[str, Any]:
+    """Serialize source validation, Zotero creation, and the local key write."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            prepared = await _prepare_highlight_push(
+                conn,
+                client,
+                highlight_id,
+                owner_user_id,
+            )
+            if isinstance(prepared, dict):
+                return prepared
+            row, attachment_key = prepared
+
+            sizes = await _get_page_sizes(row["paper_id"], [row["page"]])
+            wh = sizes.get(row["page"])
+            if wh is None:
+                return {"highlight_id": highlight_id, "status": "pdf_unavailable"}
+
+            return await _export_one_highlight(
+                conn,
+                client,
+                highlight_id=highlight_id,
+                page=row["page"],
+                rect=row["rect"],
+                note=row["note"],
+                color=row["color"],
+                quote=row["quote"],
+                attachment_key=attachment_key,
+                width=wh[0],
+                height=wh[1],
+            )
 
 
 async def push_highlight_to_zotero(
@@ -415,35 +471,7 @@ async def push_highlight_to_zotero(
         http_client=http_client,
     )
 
-    # Load the highlight scoped to its owner (tenancy) joined to the paper's
-    # Zotero linkage + attachment key, then ensure the PDF attachment exists on
-    # the SAME connection.
-    async with db_pool.acquire() as conn:
-        prepared = await _prepare_highlight_push(conn, client, highlight_id, owner_user_id)
-    if isinstance(prepared, dict):
-        return prepared
-    row, attachment_key = prepared
-
-    # Page size (PDF points) for the de-normalization — sourced from the same
-    # on-disk PDF that is uploaded to Zotero, so pagination/sizes match.
-    sizes = await _get_page_sizes(row["paper_id"], [row["page"]])
-    wh = sizes.get(row["page"])
-    if wh is None:
-        return {"highlight_id": highlight_id, "status": "pdf_unavailable"}
-
-    return await _export_one_highlight(
-        db_pool,
-        client,
-        highlight_id=highlight_id,
-        page=row["page"],
-        rect=row["rect"],
-        note=row["note"],
-        color=row["color"],
-        quote=row["quote"],
-        attachment_key=attachment_key,
-        width=wh[0],
-        height=wh[1],
-    )
+    return await _push_one_highlight(db_pool, client, highlight_id, owner_user_id)
 
 
 def _paper_export_result(
@@ -491,41 +519,32 @@ async def _export_all_highlights(
     client: Any,
     paper_id: int,
     rows: list[Any],
-    attachment_key: str,
+    owner_user_id: int | None,
 ) -> dict[str, Any]:
-    """Export each prepared highlight as a Zotero annotation and summarize the run."""
-    sizes = await _get_page_sizes(paper_id, [r["page"] for r in rows])
-    if not sizes:
-        return _paper_export_result(paper_id, "pdf_unavailable", failed=len(rows))
-
-    exported = skipped = failed = 0
+    """Export highlights in separate source-locked transactions."""
+    exported = skipped = failed = stale = 0
     for r in rows:
-        wh = sizes.get(r["page"])
-        if wh is None:
-            failed += 1
-            continue
-        outcome = await _export_one_highlight(
+        outcome = await _push_one_highlight(
             db_pool,
             client,
-            highlight_id=r["id"],
-            page=r["page"],
-            rect=r["rect"],
-            note=r["note"],
-            color=r["color"],
-            quote=r["quote"],
-            attachment_key=attachment_key,
-            width=wh[0],
-            height=wh[1],
+            r["id"],
+            owner_user_id,
         )
         status = outcome["status"]
         if status == "ok":
             exported += 1
-        elif status == "already_synced":
+        elif status in {"already_synced", "stale_source"}:
             skipped += 1
+            if status == "stale_source":
+                stale += 1
         else:
             failed += 1
 
-    if failed == 0:
+    if stale == len(rows):
+        summary_status = "stale_source"
+    elif stale:
+        summary_status = "partial"
+    elif failed == 0:
         summary_status = "ok"
     elif exported or skipped:
         summary_status = "partial_failure"
@@ -545,14 +564,15 @@ async def push_highlights_for_paper(
 ) -> dict[str, Any]:
     """Push all of a paper's unsynced in-app highlights to Zotero as annotations.
 
-    Loops the owner's highlights that do not yet carry a Zotero key, ensuring the
-    PDF attachment once (amortized across all highlights) and creating one
-    ``highlight`` annotation each. Idempotent: already-synced highlights and
-    persist collisions are skipped, so a re-run creates zero new annotations.
+    Each highlight is exported in its own transaction. The highlight and source
+    paper stay locked through attachment resolution, annotation creation, and
+    the local key write. Earlier-generation highlights are retained locally but
+    skipped, and a re-run creates no duplicate annotations.
 
     Returns ``{paper_id, exported, skipped, failed, status}``. Short-circuits to
     ``disabled`` / ``config_decrypt_failed`` / ``not_found`` / ``not_linked`` /
-    ``pdf_unavailable`` / attachment-failure statuses with zero exports.
+    ``pdf_unavailable`` / ``stale_source`` / attachment-failure statuses with
+    zero exports.
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
@@ -565,7 +585,7 @@ async def push_highlights_for_paper(
         resolved_owner_id = await _resolve_zotero_user_id(conn, owner_user_id)
         paper = await conn.fetchrow(
             """
-            SELECT p.id, l.zotero_item_key, l.zotero_attachment_key
+            SELECT p.id, l.zotero_item_key
             FROM papers p
             LEFT JOIN paper_user_zotero_links l ON l.paper_id = p.id AND l.user_id = $2
             WHERE p.id = $1
@@ -582,9 +602,11 @@ async def push_highlights_for_paper(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, page, rect, note, color, quote
+            SELECT id
             FROM paper_highlights
-            WHERE paper_id = $1 AND user_id = $2 AND zotero_annotation_key IS NULL
+            WHERE paper_id = $1
+              AND user_id IS NOT DISTINCT FROM $2
+              AND zotero_annotation_key IS NULL
             ORDER BY id
             """,
             paper_id,
@@ -601,20 +623,13 @@ async def push_highlights_for_paper(
         http_client=http_client,
     )
 
-    try:
-        async with db_pool.acquire() as conn:
-            attachment_key = await _ensure_zotero_attachment(
-                conn,
-                client,
-                paper_id,
-                str(zotero_item_key),
-                paper["zotero_attachment_key"],
-                resolved_owner_id,
-            )
-    except _AttachmentUnavailableError as exc:
-        return _paper_export_result(paper_id, exc.status, failed=len(rows))
-
-    return await _export_all_highlights(db_pool, client, paper_id, rows, attachment_key)
+    return await _export_all_highlights(
+        db_pool,
+        client,
+        paper_id,
+        rows,
+        owner_user_id,
+    )
 
 
 def _annotation_page_number(value: Any) -> int | None:
@@ -694,6 +709,12 @@ async def sync_annotations_for_paper(
     imported = 0
     async with db_pool.acquire() as conn:
         async with conn.transaction():
+            content_generation = await conn.fetchval(
+                "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+                paper_id,
+            )
+            if content_generation is None:
+                return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
             for item in annotations:
                 key = item.get("key") or item.get("data", {}).get("key")
                 data = item.get("data", {})
@@ -709,8 +730,8 @@ async def sync_annotations_for_paper(
                     """
                     INSERT INTO paper_notes
                         (paper_id, source, zotero_annotation_key, user_note, highlight_text,
-                         page_number, user_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                         page_number, user_id, content_generation)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (paper_id, user_id, zotero_annotation_key)
                     WHERE zotero_annotation_key IS NOT NULL
                     DO UPDATE
@@ -753,6 +774,7 @@ async def sync_annotations_for_paper(
                     highlight,
                     page_number,
                     resolved_owner_id,
+                    int(content_generation),
                 )
                 imported += 1
 

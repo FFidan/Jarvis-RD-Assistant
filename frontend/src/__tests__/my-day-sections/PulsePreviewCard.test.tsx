@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { PulsePreviewCard } from '@/components/my-day/PulsePreviewCard';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { PulseDeck, PulseCardItem } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -70,20 +71,17 @@ function makeDeck(overrides: Partial<PulseDeck> = {}): PulseDeck {
 }
 
 function renderCard(queryClient?: QueryClient) {
-  const qc = queryClient ?? new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const qc = queryClient ?? createTestQueryClient();
   return {
     qc,
-    ...render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/']}>
-          <Routes>
-            <Route path="/" element={<PulsePreviewCard />} />
-            <Route path="/paper/:id" element={<div data-testid="paper-detail" />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<PulsePreviewCard />} />
+          <Route path="/paper/:id" element={<div data-testid="paper-detail" />} />
+        </Routes>
+      </MemoryRouter>,
+      { queryClient: qc },
     ),
   };
 }
@@ -161,9 +159,7 @@ describe('PulsePreviewCard', () => {
     const PAPER_ID = 101;
     const deck = makeDeck({ cards: [makeCard({ paper_id: PAPER_ID, user_state: 'inbox' })] });
 
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const qc = createTestQueryClient();
     qc.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), deck);
 
     const { qc: usedQc } = renderCard(qc);
@@ -187,9 +183,7 @@ describe('PulsePreviewCard', () => {
     const PAPER_ID = 101;
     const deck = makeDeck({ cards: [makeCard({ paper_id: PAPER_ID, user_state: 'inbox' })] });
 
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
+    const qc = createTestQueryClient();
     qc.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), deck);
 
     renderCard(qc);
