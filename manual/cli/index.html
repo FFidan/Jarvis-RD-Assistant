@@ -1430,6 +1430,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#updating-from-v113" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating from v1.1.3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rolling-back" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1944,6 +1955,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#updating-from-v113" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating from v1.1.3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rolling-back" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2200,10 +2222,10 @@ your branch.</p>
 <li><strong>Enforces a restore point before a data-changing migration.</strong> New migrations
    between your version and the target are inspected. If any one changes data,
    the command triggers a backup and accepts it only when its signed manifest
-   names the exact main-database, model-router, and secrets archives for that
-   run and their sizes and checksums match. A missing, unsigned, incomplete, or
-   mismatched point is refused. Additive-only migrations apply on restart and
-   only suggest taking a restore point first.</li>
+   names the exact main-database, model-router, uploaded-PDF, and secrets
+   archives for that run and their sizes and checksums match. A missing,
+   unsigned, incomplete, or mismatched point is refused. Additive-only
+   migrations apply on restart and only suggest taking a restore point first.</li>
 <li><strong>Stages images, then advances.</strong> The target's Compose files are resolved with
    this install's active profiles. Every exact registry image in that result,
    including profile dependencies and target-added services, is pulled <em>before</em>
@@ -2226,6 +2248,27 @@ stopped before advancing the branch restarts cleanly. If you need to drive the
 post-advance half explicitly, <code>jarvis-research update --resume &lt;tag&gt;</code> runs only
 those remaining steps. The command refuses to resume if the checkout moved to
 an unexpected commit.</p>
+<h3 id="updating-from-v113">Updating from v1.1.3<a class="headerlink" href="#updating-from-v113" title="Permanent link">&para;</a></h3>
+<p>The lifecycle command shipped with v1.1.3 predates the backup protocol required
+by v1.2.2. From the v1.1.3 installation directory, run the v1.2.2 bootstrap
+once:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="o">(</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nb">set</span><span class="w"> </span>-e
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nv">bootstrap</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span><span class="s1">&#39;rm -f &quot;$bootstrap&quot;&#39;</span><span class="w"> </span>EXIT
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span>https://raw.githubusercontent.com/limitcycle-oss/jarvis-rd-assistant/v1.2.2/scripts/update-bootstrap.sh
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>bash<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">&quot;</span><span class="w"> </span>--to<span class="w"> </span>v1.2.2
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="o">)</span>
+</code></pre></div>
+<p>The bootstrap accepts only the managed repository on a clean <code>main</code> checkout,
+validates v1.2.2 against <code>origin</code>, and runs the lifecycle files stored in that
+release. The v1.2.2 updater then creates and authenticates a restore point
+containing both databases, uploaded PDFs and data-coupled secrets before it can
+apply a data-changing migration. If the command is interrupted, run the same
+bootstrap command again; it resumes the recorded update.</p>
+<p>Installations running v1.2.0 or v1.2.1 do not need the bootstrap and update
+normally with <code>jarvis-research update</code>.</p>
 <h3 id="rolling-back">Rolling back<a class="headerlink" href="#rolling-back" title="Permanent link">&para;</a></h3>
 <p><code>update</code> never rolls back on its own. When an update fails after the images
 changed, it prints the exact commands to pin <code>JARVIS_VERSION</code> back to your
@@ -2244,20 +2287,22 @@ stable tag — the diverged-checkout refusal in step 3 fires by design. A normal
 <code>vX.Y.Z</code> releases. To run a stable release after trying a candidate, do a fresh
 install rather than trying to update the rc checkout in place.</p>
 <h2 id="updating-by-hand">Updating by hand<a class="headerlink" href="#updating-by-hand" title="Permanent link">&para;</a></h2>
-<p><code>jarvis-research update</code> is the supported path. Use the lower-level fallback
-only when the lifecycle command itself cannot run:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>pull<span class="w"> </span>--ff-only
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./update.sh<span class="w"> </span>--yes
+<p><code>jarvis-research update</code> is the supported path for v1.2.0 and later; v1.1.3
+uses the bootstrap above. Use the lower-level fallback only to repair a
+lifecycle command that cannot run, and only after independently verifying a
+current restore point:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>pull<span class="w"> </span>--ff-only
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>./update.sh<span class="w"> </span>--yes
 </code></pre></div>
 <p>The fallback does not classify migrations, require a signed restore point, or
-resume a recorded transaction. Take a current restore point first, and use this
-path only to repair a lifecycle command that cannot run.</p>
+resume a recorded transaction. It is not a migration-safe substitute for either
+supported update path.</p>
 <h2 id="uninstalling">Uninstalling<a class="headerlink" href="#uninstalling" title="Permanent link">&para;</a></h2>
 <p><code>jarvis-research uninstall</code> removes an install in four escalating tiers. Each tier
 enumerates the exact containers, images, volumes, and files it will remove and
 confirms before acting — nothing is removed by a bulk <code>docker … prune</code>. Preview any
 teardown first, which mutates nothing:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>jarvis-research<span class="w"> </span>uninstall<span class="w"> </span>--dry-run<span class="w"> </span>--all
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>jarvis-research<span class="w"> </span>uninstall<span class="w"> </span>--dry-run<span class="w"> </span>--all
 </code></pre></div>
 <table>
 <thead>

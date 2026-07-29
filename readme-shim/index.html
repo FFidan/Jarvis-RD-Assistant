@@ -2445,16 +2445,26 @@ guide</a> covers supported access choices and troubleshooting;
 the <a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/">User Guide</a>
 covers first sign-in, family invitations, passkeys, and everyday use.</p>
 <h2 id="updating-jarvis">Updating JARVIS<a class="headerlink" href="#updating-jarvis" title="Permanent link">&para;</a></h2>
+<p>Installations running v1.2.0 or later use the normal lifecycle command:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>jarvis-research<span class="w"> </span>update
 </code></pre></div>
 <p>This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.</p>
-<p>If the lifecycle command itself cannot run, the lower-level fallback is:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>pull<span class="w"> </span>--ff-only
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./update.sh<span class="w"> </span>--yes
+<p>For an installation still running v1.1.3, run the v1.2.2 bootstrap once from
+the installation directory:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="o">(</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nb">set</span><span class="w"> </span>-e
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nv">bootstrap</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span><span class="s1">&#39;rm -f &quot;$bootstrap&quot;&#39;</span><span class="w"> </span>EXIT
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>https://raw.githubusercontent.com/limitcycle-oss/jarvis-rd-assistant/v1.2.2/scripts/update-bootstrap.sh
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>bash<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">&quot;</span><span class="w"> </span>--to<span class="w"> </span>v1.2.2
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="o">)</span>
 </code></pre></div>
-<p><code>update.sh</code> does not provide the lifecycle command's migration classification,
-signed-restore-point requirement, or deterministic resume. See the <a href="../manual/cli/#how-update-works">command-line
-reference</a> before using the fallback.</p>
+<p>The v1.1.3 lifecycle command predates the backup protocol required by v1.2.2.
+The bootstrap validates the selected release and runs its updater, which creates
+and authenticates a complete restore point before any data-changing migration.
+See the <a href="../manual/cli/#updating-from-v113">command-line reference</a> for the
+complete update procedure and its repair-only manual fallback.</p>
 <h2 id="uninstalling-jarvis">Uninstalling JARVIS<a class="headerlink" href="#uninstalling-jarvis" title="Permanent link">&para;</a></h2>
 <p><code>jarvis-research uninstall</code> lists the exact resources selected by each teardown
 tier and confirms before acting. Preview the full plan first:</p>

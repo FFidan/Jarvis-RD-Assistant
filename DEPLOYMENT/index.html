@@ -3474,13 +3474,18 @@ dashboard URL does not. Once signed in as an admin, invite additional users at
 <code>https://jarvis.example.com/admin/users</code>.</p>
 <hr />
 <h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
-<p>Use the lifecycle command:</p>
+<p>Installations running v1.2.0 or later use the lifecycle command:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>jarvis-research<span class="w"> </span>update
 </code></pre></div>
 <p>It verifies the target release, protects data-changing migrations with a signed
 restore point, and can resume an interrupted run. The <a href="../manual/cli/#how-update-works">command-line
-guide</a> is the canonical update runbook, including
-the constrained manual fallback and rollback rules.</p>
+guide</a> is the canonical update runbook.</p>
+<p>An installation running v1.1.3 needs the
+<a href="../manual/cli/#updating-from-v113">v1.2.2 update bootstrap</a> once. It loads the
+v1.2.2 lifecycle command before the migration check so the required signed
+restore point includes both databases, uploaded PDFs and the data-coupled
+secrets. The same guide describes the constrained manual fallback and rollback
+rules.</p>
 <h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram pairing (breaking change).</strong> The Telegram bot now identifies chats
 exclusively via the <code>/pair</code> token flow. To pair: open the dashboard → Settings
