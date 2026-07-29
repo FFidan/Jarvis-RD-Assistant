@@ -243,3 +243,49 @@ def test_load_last_nonempty_deck_not_called_when_today_has_cards(client):
 
     assert resp.status_code == 200
     mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_deck_count_matches_filtered_cards_and_excludes_recent_negatives():
+    """Fallback eligibility and response counts use the cards safe to return now."""
+    from paper_ingestion.pulse.deck import load_last_nonempty_deck
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "id": 7,
+            "deck_date": YESTERDAY,
+            "card_count": 4,
+            "generated_at": datetime(2026, 7, 25, 4, 0, tzinfo=UTC),
+            "stats": {},
+            "degraded_reason": None,
+        }
+    )
+    conn.fetch.return_value = [
+        FakeRecord(
+            {
+                "id": 70,
+                "deck_id": 7,
+                "paper_id": 700,
+                "paper_title": "Visible survivor",
+                "paper_authors": ["A. Author"],
+                "paper_url": "https://example.test/700",
+                "rank": 1,
+                "score": 0.9,
+                "llm_relevance": 8,
+                "llm_novelty": 7,
+                "reasoning": "Relevant",
+                "signals": {},
+                "reasoning_verified": True,
+                "reasoning_confidence": "HIGH",
+                "user_state": "inbox",
+            }
+        )
+    ]
+
+    deck = await load_last_nonempty_deck(pool, user_id=11)
+
+    assert deck is not None
+    assert deck.card_count == len(deck.cards) == 1, (
+        "stored card_count=4 must not survive when current filters return one card"
+    )

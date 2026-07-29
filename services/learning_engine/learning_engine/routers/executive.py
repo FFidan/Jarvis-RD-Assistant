@@ -10,6 +10,7 @@ from jarvis_common.auth import current_user_id_strict, current_user_id_strict_wi
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 
+from learning_engine.card_store import CURRENT_CARD_SQL
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
     FocusSessionRequest,
@@ -46,7 +47,12 @@ _TASKS_SQL = """
     LIMIT 20
 """
 
-_CARDS_DUE_SQL = "SELECT COUNT(*) FROM cards WHERE due_at <= NOW() AND user_id = $1"
+_CARDS_DUE_SQL = (
+    "SELECT COUNT(*) FROM cards c "
+    "LEFT JOIN papers p ON p.id = c.paper_id "
+    "WHERE c.due_at <= NOW() AND c.user_id = $1 "
+    f"AND {CURRENT_CARD_SQL}"
+)
 
 _RECOMMENDATIONS_SQL = """
     SELECT pr.id as recommendation_id, pr.paper_id, pr.score, p.title, p.authors

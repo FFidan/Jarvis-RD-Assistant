@@ -29,6 +29,11 @@ _EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
         "SELECT row_to_json(t) FROM user_library t WHERE t.user_id = $1",
     ),
     ("paper_notes", "SELECT row_to_json(t) FROM paper_notes t WHERE t.user_id = $1"),
+    ("paper_highlights", "SELECT row_to_json(t) FROM paper_highlights t WHERE t.user_id = $1"),
+    (
+        "paper_contradictions",
+        "SELECT row_to_json(t) FROM paper_contradictions t WHERE t.user_id = $1",
+    ),
     ("paper_summaries", "SELECT row_to_json(t) FROM paper_summaries t WHERE t.user_id = $1"),
     ("cards", "SELECT row_to_json(t) FROM cards t WHERE t.user_id = $1"),
     ("decks", "SELECT row_to_json(t) FROM decks t WHERE t.user_id = $1"),

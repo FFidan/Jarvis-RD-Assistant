@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-01 | routes: /projects -->
+<!-- verified-against-UI: 2026-07-25 | routes: /projects -->
 
 # Projects
 
@@ -23,10 +23,10 @@ The status chip on each chapter can be changed inline from the ChapterPane heade
 
 | Status (display) | Meaning |
 |-----------------|---------|
-| **reading** | Actively working on this chapter |
-| **drafting** | Paused; work in progress |
-| **shipped** | Completed |
-| **idle** | Dormant; no active work |
+| **In progress** | Actively working on this chapter |
+| **Draft** | Paused; work in progress |
+| **Completed** | Completed |
+| **Archived** | Dormant; no active work |
 
 ---
 

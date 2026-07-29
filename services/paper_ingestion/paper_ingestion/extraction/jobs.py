@@ -102,5 +102,7 @@ async def _extraction_batch_job(
         "extracted": result.extracted,
         "failed": result.failed,
         "skipped": result.skipped,
-        "total": len(paper_ids),
+        "remaining": result.remaining,
+        "total": result.total,
+        "status": result.status,
     }

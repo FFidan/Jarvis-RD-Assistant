@@ -148,6 +148,57 @@ out="$(export PATH="${bin}:${PATH}"; preflight_disk_lib 1)" && rc=0 || rc=$?
 expect_eq "preflight_disk_lib returns 2 when df cannot measure the root" "$rc" "2"
 expect_eq "unmeasurable root still reports the path with 0 free" "$out" "0 ${FIXTURES}/missing-root"
 
+# === application version resolution =========================================
+
+# These synthetic values exercise the accepted grammar independently of the
+# repository's current release version.
+for valid_version in 0.0.1 7.8.9-alpha.1 10.20.30-preview-7; do
+  app_version_is_valid "$valid_version" && rc=0 || rc=$?
+  expect_eq "app version accepts ${valid_version}" "$rc" "0"
+done
+for invalid_version in "" v0.0.1 7.8 7.8.9+local "7.8.9 bad"; do
+  app_version_is_valid "$invalid_version" && rc=0 || rc=$?
+  expect_eq "app version rejects '${invalid_version}'" "$rc" "1"
+done
+
+commit_tag="0123456789abcdef0123456789abcdef01234567"
+for valid_tag in 0.0.1 7.8.9-alpha.1 "$commit_tag"; do
+  image_tag_is_valid "$valid_tag" && rc=0 || rc=$?
+  expect_eq "image tag accepts ${valid_tag}" "$rc" "0"
+done
+for invalid_tag in "" v0.0.1 \
+  0123456789ABCDEF0123456789ABCDEF01234567 \
+  "${commit_tag%?}" "7.8.9 bad"; do
+  image_tag_is_valid "$invalid_tag" && rc=0 || rc=$?
+  expect_eq "image tag rejects '${invalid_tag}'" "$rc" "1"
+done
+app_version_is_valid "$commit_tag" && rc=0 || rc=$?
+expect_eq "semantic application version rejects a commit image tag" "$rc" "1"
+
+VERSION_DIR="$(mktemp -d "${FIXTURES}/version.XXXXXX")"
+cat > "${VERSION_DIR}/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "2.3.4"
+PYPROJECT
+got="$(cd "$VERSION_DIR"; resolve_checkout_app_version)" && rc=0 || rc=$?
+expect_eq "checkout version falls back to [project].version" "${got}/${rc}" "2.3.4/0"
+
+VERSION_GIT_BIN="$(mktemp -d "${FIXTURES}/version-git.XXXXXX")"
+cat > "${VERSION_GIT_BIN}/git" <<'GIT'
+#!/usr/bin/env bash
+if [ "$*" = "describe --tags --exact-match HEAD" ]; then
+  printf 'v2.3.4-preview.2\n'
+  exit 0
+fi
+exit 1
+GIT
+chmod +x "${VERSION_GIT_BIN}/git"
+got="$(cd "$VERSION_DIR"; PATH="${VERSION_GIT_BIN}:${PATH}" resolve_checkout_app_version)" \
+  && rc=0 || rc=$?
+expect_eq "an exact release tag overrides [project].version" \
+  "${got}/${rc}" "2.3.4-preview.2/0"
+
 # === setup.sh wiring (static) ================================================
 
 scheck() {  # scheck <description> <grep -E pattern>
@@ -164,6 +215,30 @@ scheck "setup.sh parses --skip-disk-check" '--skip-disk-check\)'
 scheck "setup.sh defaults SKIP_DISK_CHECK=0" '^SKIP_DISK_CHECK=0'
 scheck "setup.sh defines preflight_disk()" '^preflight_disk\(\)'
 scheck "the shortfall die names the --skip-disk-check escape" 'skip-disk-check to proceed'
+scheck "setup.sh parses an explicit Compose project" '--compose-project-name\)'
+scheck "setup.sh parses an explicit application image tag" '--image-tag\)'
+scheck "fresh lifecycle admission receives the explicit Compose project" \
+  'claim_lifecycle_operation "\$SCRIPT_DIR" setup "\$NI_COMPOSE_PROJECT_NAME"'
+scheck "setup resolves the checkout application version once" \
+  'CHECKOUT_APP_VERSION="\$\(resolve_checkout_app_version\)"'
+scheck "fresh setup persists the checkout application version" \
+  'upsert_env_var JARVIS_VERSION "\$CHECKOUT_APP_VERSION"'
+scheck "fresh setup persists the selected application image tag" \
+  'upsert_env_var JARVIS_IMAGE_TAG "\$SELECTED_IMAGE_TAG"'
+
+if grep -Fq 'upsert_env_var JARVIS_VERSION "$_installed_app_version"' \
+    "$JARVIS_SETUP_SCRIPT" \
+   && grep -Fq 'export JARVIS_VERSION="$_installed_app_version"' \
+    "$JARVIS_SETUP_SCRIPT" \
+   && grep -Fq 'upsert_env_var JARVIS_IMAGE_TAG "$_installed_image_tag"' \
+    "$JARVIS_SETUP_SCRIPT" \
+   && grep -Fq 'export JARVIS_IMAGE_TAG="$_installed_image_tag"' \
+    "$JARVIS_SETUP_SCRIPT"; then
+  pass "the compatibility bootstrap persists separate application and image identities"
+else
+  printf 'FAIL: compatibility bootstrap does not persist separate application and image identities\n' >&2
+  fail=1
+fi
 
 # The preflight call must come after the smart-model resolution (the required
 # figure depends on it) and before anything pulls or builds.
@@ -208,11 +283,127 @@ fi
 doctor_start="$(sline '^run_doctor\(\)')"
 doctor_end="$(awk "NR>${doctor_start} && /^}/{print NR; exit}" "$SETUP_SCRIPT")"
 if [ -n "$doctor_start" ] && [ -n "$doctor_end" ] \
-   && ! sed -n "${doctor_start},${doctor_end}p" "$SETUP_SCRIPT" | grep -qE 'die "|preflight_disk'; then
+   && ! sed -n "${doctor_start},${doctor_end}p" "$SETUP_SCRIPT" \
+        | grep -qE 'die "|^[[:space:]]*preflight_disk$'; then
   pass "run_doctor keeps the disk check advisory (no die / no fatal preflight)"
 else
   printf 'FAIL: run_doctor (%s-%s) gained a fatal disk path\n' "$doctor_start" "$doctor_end" >&2
   fail=1
+fi
+
+# The project option is validated before Docker work, matches an existing
+# checkout identity exactly, and persists through the production env writer.
+project_validate_src="$(sed -n '/^_validate_compose_project_request()/,/^}/p' "$SETUP_SCRIPT")"
+project_persist_src="$(sed -n '/^_persist_compose_project_request()/,/^}/p' "$SETUP_SCRIPT")"
+existing_env_src="$(sed -n '/^existing_env_value()/,/^}/p' "$SETUP_SCRIPT")"
+eval "$project_validate_src"
+
+PROJECT_FRESH="${FIXTURES}/project-fresh"
+mkdir -p "$PROJECT_FRESH"
+_validate_compose_project_request "$PROJECT_FRESH" smoke-project \
+  && rc=0 || rc=$?
+expect_eq "a valid explicit project is accepted for a fresh install" "$rc" "0"
+_validate_compose_project_request "$PROJECT_FRESH" 'Invalid/Project' \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "an invalid explicit project is rejected before admission" "$rc" "2"
+
+PROJECT_MATCH="${FIXTURES}/project-match"
+mkdir -p "$PROJECT_MATCH"
+printf 'EXISTING=value\n' > "$PROJECT_MATCH/.env"
+_validate_compose_project_request "$PROJECT_MATCH" project-match \
+  && rc=0 || rc=$?
+expect_eq "an old env without a project accepts its directory-derived identity" "$rc" "0"
+_validate_compose_project_request "$PROJECT_MATCH" different-project \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "an existing install refuses a different explicit project" "$rc" "3"
+
+got="$(
+  cd "$PROJECT_FRESH"
+  printf 'EXISTING=value\n' > .env
+  eval "$existing_env_src"
+  eval "$project_persist_src"
+  _persist_compose_project_request smoke-project
+  grep -c '^COMPOSE_PROJECT_NAME=smoke-project$' .env
+)"
+expect_eq "the explicit project is persisted exactly once" "$got" "1"
+
+PROJECT_PARSE_LOG="${FIXTURES}/project-parse-docker.log"
+: > "$PROJECT_PARSE_LOG"
+PROJECT_PARSE_BIN="$(fake_docker '
+printf "%s\n" "$*" >> "$STUB_PROJECT_PARSE_LOG"
+exit 1
+')"
+out="$(PATH="$PROJECT_PARSE_BIN:$PATH" STUB_PROJECT_PARSE_LOG="$PROJECT_PARSE_LOG" \
+  bash "$SETUP_SCRIPT" --non-interactive \
+    --compose-project-name 'Invalid/Project' 2>&1)" && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*Invalid?--compose-project-name*) pass "invalid project fails through the real setup parser" ;;
+  *) printf 'FAIL: real setup parser accepted an invalid project (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+if [ ! -s "$PROJECT_PARSE_LOG" ]; then
+  pass "invalid project fails before any Docker probe"
+else
+  printf 'FAIL: invalid project reached Docker before rejection\n' >&2; fail=1
+fi
+
+: > "$PROJECT_PARSE_LOG"
+out="$(PATH="$PROJECT_PARSE_BIN:$PATH" STUB_PROJECT_PARSE_LOG="$PROJECT_PARSE_LOG" \
+  bash "$SETUP_SCRIPT" --non-interactive --compose-project-name 2>&1)" \
+  && rc=0 || rc=$?
+case "${rc}:${out}" in
+  1:*requires?a?value*) pass "missing spaced project value gets the central parser error" ;;
+  *) printf 'FAIL: missing project value did not get an actionable error (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1 ;;
+esac
+if [ ! -s "$PROJECT_PARSE_LOG" ]; then
+  pass "missing project value fails before any Docker probe"
+else
+  printf 'FAIL: missing project value reached Docker before rejection\n' >&2; fail=1
+fi
+
+# --check executes the production calculator and Docker-data-root resolver but
+# never creates config or starts a service.
+DOCTOR_DATA_ROOT="${FIXTURES}/doctor-data-root"
+DOCTOR_DOCKER_LOG="${FIXTURES}/doctor-docker.log"
+mkdir -p "$DOCTOR_DATA_ROOT"
+: > "$DOCTOR_DOCKER_LOG"
+DOCTOR_BIN="$(fake_docker '
+printf "%s\n" "$*" >> "$STUB_DOCTOR_LOG"
+case "$*" in
+  "compose version") exit 0 ;;
+  "compose version --short") printf "2.24.4\n"; exit 0 ;;
+  "info") exit 0 ;;
+  "info --format {{json .Runtimes}}") printf "{}\n"; exit 0 ;;
+  "info --format {{.DockerRootDir}}") printf "%s\n" "$STUB_DOCTOR_ROOT"; exit 0 ;;
+esac
+exit 1
+')"
+if [ -f "${SCRIPT_DIR}/../../.env" ]; then
+  doctor_env_before="$(cksum < "${SCRIPT_DIR}/../../.env")"
+else
+  doctor_env_before=absent
+fi
+doctor_expected_gb="$(compute_required_disk_gb qwen3:4b cpu-pull)"
+out="$(PATH="$DOCTOR_BIN:$PATH" STUB_DOCTOR_LOG="$DOCTOR_DOCKER_LOG" \
+  STUB_DOCTOR_ROOT="$DOCTOR_DATA_ROOT" \
+  bash "$SETUP_SCRIPT" --check --smart-model qwen3:4b --gpu cpu 2>&1)" \
+  && rc=0 || rc=$?
+expect_eq "setup.sh --check succeeds with its required tools available" "$rc" "0"
+case "$out" in
+  *"Install disk requirement: ~${doctor_expected_gb} GB (cpu-pull, model qwen3:4b)."*)
+    pass "setup.sh --check reports the production calculator result" ;;
+  *) printf 'FAIL: setup.sh --check omitted the exact calculator result\n' >&2; fail=1 ;;
+esac
+if [ -f "${SCRIPT_DIR}/../../.env" ]; then
+  doctor_env_after="$(cksum < "${SCRIPT_DIR}/../../.env")"
+else
+  doctor_env_after=absent
+fi
+expect_eq "setup.sh --check leaves .env byte-identical or absent" \
+  "$doctor_env_after" "$doctor_env_before"
+if grep -Eq 'compose .* (up|pull|build|run)( |$)' "$DOCTOR_DOCKER_LOG"; then
+  printf 'FAIL: setup.sh --check attempted a Compose mutation\n' >&2; fail=1
+else
+  pass "setup.sh --check does not start, pull, build, or run services"
 fi
 
 # === preflight_disk policy (behavioral, extracted from setup.sh) ============
@@ -220,6 +411,7 @@ fi
 # fatal ONLY on a first install; cached app images, an unmeasurable df, or a
 # catalog-fallback estimate with >=20 GB free must all soften to a warning.
 
+variant_src="$(sed -n '/^setup_disk_variant()/,/^}/p' "$SETUP_SCRIPT")"
 pf_src="$(sed -n '/^preflight_disk()/,/^}/p' "$SETUP_SCRIPT")"
 
 run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out> [model_gb]
@@ -246,6 +438,7 @@ run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out> [m
     preflight_disk_lib() { printf "%s" "$LIB_OUT"; return "$LIB_RC"; }
     SKIP_DISK_CHECK="$SKIP"
     NI_SMART_MODEL="qwen3:8b"
+    '"$variant_src"'
     '"$pf_src"'
     preflight_disk
   '
@@ -2165,6 +2358,13 @@ scheck "the setup link uses a loopback/verified base" \
 # guidance instead of exiting immediately after `docker compose up`.
 KEEP_BRANCH="$(sed -n '/if \[ "\$_do_overwrite" -eq 0 \]; then/,/^[[:space:]]*exit 0$/p' "$SETUP_SCRIPT")"
 case "$KEEP_BRANCH" in
+  *'upsert_env_var JARVIS_VERSION "$_keep_app_version"'*'upsert_env_var JARVIS_IMAGE_TAG "$_keep_image_tag"'*'export JARVIS_VERSION="$_keep_app_version"'*'export JARVIS_IMAGE_TAG="$_keep_image_tag"'*)
+    pass "existing-config setup backfills and exports separate application and image identities" ;;
+  *)
+    printf 'FAIL: existing-config setup does not maintain separate application and image identities\n' >&2
+    fail=1 ;;
+esac
+case "$KEEP_BRANCH" in
   *mandatory_health_services*) pass "existing-config resume waits for mandatory services" ;;
   *) printf 'FAIL: existing-config resume skips the mandatory health gate\n' >&2; fail=1 ;;
 esac
@@ -2281,7 +2481,8 @@ run_setup() {  # run_setup <arg...> -> combined stdout+stderr; rc left in $?
 
 for flag in --domain --admin-email --profile --smtp-host --smtp-user \
             --smtp-pass-file --mode --backend --smart-model --gpu \
-            --tunnel-hostname --tunnel-token-file; do
+            --tunnel-hostname --tunnel-token-file --compose-project-name \
+            --image-tag; do
   out="$(run_setup "$flag" --non-interactive --help)" && rc=0 || rc=$?
   case "${rc}:${out}" in
     1:*"${flag} requires a value"*)
@@ -3005,6 +3206,145 @@ else
   fail=1
 fi
 
+# === compose service health convergence =====================================
+# The lookup owns Compose-specific container discovery. The shared helper owns
+# Docker state transitions and samples each file-backed state exactly once.
+HEALTH_SEQUENCE_FILE="${FIXTURES}/health-sequence"
+HEALTH_CURRENT_FILE="${FIXTURES}/health-current"
+HEALTH_LOOKUP_LOG="${FIXTURES}/health-lookups"
+HEALTH_BIN="$(fake_docker '
+if [ "${1:-}" = inspect ] && [ "${2:-}" = --format ]; then
+  cat "$STUB_HEALTH_CURRENT_FILE"
+  exit 0
+fi
+exit 1
+')"
+
+_health_sequence_lookup() {
+  local line
+  line="$(sed -n '1p' "$HEALTH_SEQUENCE_FILE")"
+  sed '1d' "$HEALTH_SEQUENCE_FILE" > "${HEALTH_SEQUENCE_FILE}.next"
+  mv "${HEALTH_SEQUENCE_FILE}.next" "$HEALTH_SEQUENCE_FILE"
+  printf '%s\n' "${line:-absent}" >> "$HEALTH_LOOKUP_LOG"
+  [ -n "$line" ] && [ "$line" != absent ] || return 0
+  printf '%s' "$line" > "$HEALTH_CURRENT_FILE"
+  printf 'container-1'
+}
+
+run_health_sequence() {
+  local sequence="$1" budget="$2" rc=0
+  printf '%s\n' "$sequence" > "$HEALTH_SEQUENCE_FILE"
+  : > "$HEALTH_CURRENT_FILE"
+  : > "$HEALTH_LOOKUP_LOG"
+  export HEALTH_SEQUENCE_FILE HEALTH_CURRENT_FILE HEALTH_LOOKUP_LOG
+  export STUB_HEALTH_CURRENT_FILE="$HEALTH_CURRENT_FILE"
+  PATH="$HEALTH_BIN:$PATH" \
+    wait_for_compose_service_health test-service "$budget" \
+      _health_sequence_lookup 0 || rc=$?
+  printf '%s/%s/%s/%s' "$rc" "$COMPOSE_HEALTH_RESULT" \
+    "$COMPOSE_HEALTH_LAST_STATE" "$(wc -l < "$HEALTH_LOOKUP_LOG" | tr -d ' ')"
+}
+
+got="$(run_health_sequence \
+  $'absent\nstarting|running\nunhealthy|running\nhealthy|running' 4)"
+expect_eq "service health converges across absent, starting, and unhealthy states" \
+  "$got" "0/healthy/healthy/4"
+
+got="$(run_health_sequence \
+  $'unhealthy|running\nunhealthy|running\nunhealthy|running' 3)"
+expect_eq "permanent unhealthy state exhausts the zero-delay budget" \
+  "$got" "1/timeout/unhealthy/3"
+
+got="$(run_health_sequence '|exited' 4)"
+expect_eq "an exited container fails on its first sample" \
+  "$got" "1/terminal/exited/1"
+
+got="$(run_health_sequence 'unhealthy|dead' 4)"
+expect_eq "a dead container fails on its first sample" \
+  "$got" "1/terminal/dead/1"
+
+got="$(run_health_sequence '|running' 4)"
+expect_eq "a running container without a healthcheck is explicitly unverified" \
+  "$got" "0/running-unverified/running/1"
+
+wait_for_compose_service_health test-service 1 invalid-name 0 \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "service health lookup rejects command-like function names" "$rc" "2"
+
+# Both setup entry points provide only Compose lookup and result-wording
+# adapters; the shared helper executes the same transient-state sequence.
+SETUP_HEALTH_LOOKUP_SRC="$(sed -n '/^_setup_service_container_id()/,/^}/p' "$SETUP_SCRIPT")"
+SETUP_HEALTH_WAIT_SRC="$(sed -n '/^_wait_for_setup_service()/,/^}/p' "$SETUP_SCRIPT")"
+JARVIS_HEALTH_LOOKUP_SRC="$(sed -n '/^_jarvis_setup_service_container_id()/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
+JARVIS_HEALTH_WAIT_SRC="$(sed -n '/^_wait_for_jarvis_setup_service()/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
+CALLER_HEALTH_BIN="$(fake_docker '
+if [ "${1:-}" = inspect ]; then
+  cat "$STUB_CALLER_HEALTH_CURRENT"
+  exit 0
+fi
+case " $* " in
+  *" compose "*"ps -q "*)
+    line="$(sed -n "1p" "$STUB_CALLER_HEALTH_SEQUENCE")"
+    sed "1d" "$STUB_CALLER_HEALTH_SEQUENCE" > "${STUB_CALLER_HEALTH_SEQUENCE}.next"
+    mv "${STUB_CALLER_HEALTH_SEQUENCE}.next" "$STUB_CALLER_HEALTH_SEQUENCE"
+    printf "%s\n" "${line:-absent}" >> "$STUB_CALLER_HEALTH_LOG"
+    [ -n "$line" ] && [ "$line" != absent ] || exit 0
+    printf "%s" "$line" > "$STUB_CALLER_HEALTH_CURRENT"
+    printf "container-1"
+    exit 0
+    ;;
+esac
+exit 1
+')"
+
+run_setup_caller_health() {
+  local entrypoint="$1" rc=0
+  printf '%s\n' \
+    $'absent\nstarting|running\nunhealthy|running\nhealthy|running' \
+    > "$HEALTH_SEQUENCE_FILE"
+  : > "$HEALTH_CURRENT_FILE"
+  : > "$HEALTH_LOOKUP_LOG"
+  export STUB_CALLER_HEALTH_SEQUENCE="$HEALTH_SEQUENCE_FILE"
+  export STUB_CALLER_HEALTH_CURRENT="$HEALTH_CURRENT_FILE"
+  export STUB_CALLER_HEALTH_LOG="$HEALTH_LOOKUP_LOG"
+  (
+    info() { :; }
+    ok() { :; }
+    warn() { :; }
+    err() { :; }
+    COMPOSE="docker compose --env-file .env"
+    case "$entrypoint" in
+      setup)
+        eval "$SETUP_HEALTH_LOOKUP_SRC"
+        eval "$SETUP_HEALTH_WAIT_SRC"
+        PATH="$CALLER_HEALTH_BIN:$PATH" \
+          _wait_for_setup_service test-service 4 0 || rc=$?
+        ;;
+      wrapper)
+        eval "$JARVIS_HEALTH_LOOKUP_SRC"
+        eval "$JARVIS_HEALTH_WAIT_SRC"
+        PATH="$CALLER_HEALTH_BIN:$PATH" \
+          _wait_for_jarvis_setup_service test-service 4 0 || rc=$?
+        ;;
+    esac
+    printf '%s/%s/%s' "$rc" "$COMPOSE_HEALTH_RESULT" \
+      "$(wc -l < "$HEALTH_LOOKUP_LOG" | tr -d ' ')"
+  )
+}
+
+got="$(run_setup_caller_health setup)"
+expect_eq "setup.sh delegates transient health convergence to the shared helper" \
+  "$got" "0/healthy/4"
+got="$(run_setup_caller_health wrapper)"
+expect_eq "jarvis-setup delegates transient health convergence to the shared helper" \
+  "$got" "0/healthy/4"
+if grep -qE '^wait_healthy\(\)' "$SETUP_SCRIPT" "$JARVIS_SETUP_SCRIPT"; then
+  printf 'FAIL: a setup entry point still owns a health state machine\n' >&2
+  fail=1
+else
+  pass "setup entry points contain no caller-owned wait_healthy state machine"
+fi
+
 # === host/shared lifecycle exclusion ========================================
 # Host locking must also work on supported macOS/minimal hosts where GNU
 # sha256sum and util-linux flock are absent. Python 3 is a setup prerequisite,
@@ -3063,25 +3403,76 @@ wait "$_fallback_holder" 2>/dev/null || true
 # domain, not through a host descriptor. Stub only the already-live status
 # probe: the claim must ask for the exact kind and ID exported by the parent.
 (
-  lifecycle_volume_helper() {
-    [ "$2" = host-status ] && [ "$3" = setup ] \
-      && [ "$4" = 0123456789abcdef0123456789abcdef ]
+  _lifecycle_volume_helper_for_project() {
+    [ "$2" = lifecycle-repo ] && [ "$3" = host-status ] \
+      && [ "$4" = setup ] \
+      && [ "$5" = 0123456789abcdef0123456789abcdef ]
   }
   export JARVIS_SHARED_LIFECYCLE_LOCK_HELD=1
   export JARVIS_SHARED_LIFECYCLE_KIND=setup
   export JARVIS_SHARED_LIFECYCLE_ID=0123456789abcdef0123456789abcdef
+  export JARVIS_SHARED_LIFECYCLE_PROJECT=lifecycle-repo
   claim_lifecycle_operation "$LIFECYCLE_REPO" setup
 ) && rc=0 || rc=$?
 expect_eq "same-operation re-exec authenticates the named-volume holder" "$rc" "0"
 
 (
-  lifecycle_volume_helper() { return 1; }
+  _lifecycle_volume_helper_for_project() { return 1; }
   export JARVIS_SHARED_LIFECYCLE_LOCK_HELD=1
   export JARVIS_SHARED_LIFECYCLE_KIND=setup
   export JARVIS_SHARED_LIFECYCLE_ID=0123456789abcdef0123456789abcdef
+  export JARVIS_SHARED_LIFECYCLE_PROJECT=lifecycle-repo
   claim_lifecycle_operation "$LIFECYCLE_REPO" setup
 ) >/dev/null 2>&1 && rc=0 || rc=$?
 expect_eq "a dead inherited named-volume holder is rejected" "$rc" "1"
+
+# A claim retains its explicit Compose project so later release and retained
+# cleanup cannot be redirected by a newly written or changed .env.
+PROJECT_REPO="${FIXTURES}/explicit-project-repo"
+PROJECT_LOG="${FIXTURES}/explicit-project.log"
+mkdir -p "$PROJECT_REPO"
+: > "$PROJECT_LOG"
+got="$(
+  set +e
+  trap '
+    original_rc=$?
+    set +e
+    resolved="$(_lifecycle_compose_project_name "$PROJECT_REPO" smoke-project)"
+    resolve_rc=$?
+    printf "%s|%s\n" "$resolved" "$resolve_rc"
+    exit "$original_rc"
+  ' EXIT
+  false
+)" && rc=0 || rc=$?
+expect_eq "explicit lifecycle project resolves successfully inside failure cleanup" \
+  "${got}/${rc}" "smoke-project|0/1"
+(
+  export PROJECT_LOG
+  _lifecycle_volume_helper_for_project() {
+    local project="$2" command="$3"
+    printf '%s|%s\n' "$project" "$command" >> "$PROJECT_LOG"
+    case "$command" in
+      current-host) return 0 ;;
+      reserve-host) printf 'adopt' ;;
+      wait-host|release-host|host-release-complete|clear-retained-host) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  claim_lifecycle_operation "$PROJECT_REPO" setup smoke-project
+  printf 'COMPOSE_PROJECT_NAME=redirected\n' > "$PROJECT_REPO/.env"
+  finish_lifecycle_operation "$PROJECT_REPO" setup retain
+  clear_retained_lifecycle_operation "$PROJECT_REPO" setup \
+    "$JARVIS_SHARED_LIFECYCLE_ID"
+) && rc=0 || rc=$?
+expect_eq "explicit lifecycle project survives release and retained cleanup" "$rc" "0"
+if grep -qv '^smoke-project|' "$PROJECT_LOG" \
+   || ! grep -qxF 'smoke-project|release-host' "$PROJECT_LOG" \
+   || ! grep -qxF 'smoke-project|clear-retained-host' "$PROJECT_LOG"; then
+  printf 'FAIL: lifecycle release or cleanup changed its admitted project\n' >&2
+  fail=1
+else
+  pass "lifecycle release and cleanup use the admitted explicit project"
+fi
 
 SETUP_LEASE_CLEANUP_FN="$(sed -n '/^cleanup_setup_lifecycle_exit() {/,/^}/p' "$SETUP_SCRIPT")"
 JARVIS_SETUP_LEASE_CLEANUP_FN="$(sed -n '/^cleanup_jarvis_setup_lifecycle() {/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
@@ -3146,6 +3537,7 @@ got="$(PATH="$VOLUME_BIN:$PATH" STUB_VOLUME_LOG="$VOLUME_LOG" \
   STUB_VOLUME_CREATED="$VOLUME_CREATED" STUB_VOLUME_EXISTS=1 \
   STUB_VOLUME_LABELS='family|postgres_backups' \
   STUB_VOLUME_JSON='{"volumes":{"postgres_backups":{"name":"family-backups"}}}' \
+  COMPOSE_PROJECT_NAME=ambient-redirect \
   prepare_lifecycle_volume "$VOLUME_REPO")" && rc=0 || rc=$?
 expect_eq "lifecycle volume follows a repo-local Compose override name" \
   "${got}/${rc}" "family-backups/0"
@@ -3155,6 +3547,29 @@ else
   printf 'FAIL: lifecycle volume resolution skipped the managed Compose override\n' >&2
   fail=1
 fi
+
+rm -f "$VOLUME_CREATED"
+: > "$VOLUME_LOG"
+got="$(PATH="$VOLUME_BIN:$PATH" STUB_VOLUME_LOG="$VOLUME_LOG" \
+  STUB_VOLUME_CREATED="$VOLUME_CREATED" STUB_VOLUME_EXISTS=0 \
+  STUB_VOLUME_LABELS='smoke-project|postgres_backups' \
+  STUB_VOLUME_JSON='{"volumes":{"postgres_backups":{"name":"smoke-backups"}}}' \
+  COMPOSE_PROJECT_NAME=ambient-redirect \
+  prepare_lifecycle_volume "$VOLUME_REPO" smoke-project)" && rc=0 || rc=$?
+expect_eq "explicit lifecycle project determines the managed volume" \
+  "${got}/${rc}" "smoke-backups/0"
+if grep -qF -- "-p smoke-project " "$VOLUME_LOG" \
+   && grep -qF 'volume create --label com.docker.compose.project=smoke-project --label com.docker.compose.volume=postgres_backups smoke-backups' \
+      "$VOLUME_LOG"; then
+  pass "explicit lifecycle project determines Compose rendering and ownership labels"
+else
+  printf 'FAIL: explicit lifecycle project did not determine Compose ownership\n' >&2
+  fail=1
+fi
+
+prepare_lifecycle_volume "$VOLUME_REPO" 'Invalid/Project' \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "invalid explicit lifecycle project fails before Docker admission" "$rc" "2"
 
 # Manual .env deletion must not create a lock-free fresh-install path. Compose
 # can still resolve the default project/volume from the repository model and a
@@ -3280,6 +3695,36 @@ got="$(cd "$UPSERT_DIR"; upsert_env_var JARVIS_API_KEY feedface; grep -c '^JARVI
 expect_eq "upsert_env_var never duplicates an existing key" "$got" "1"
 got="$(cd "$UPSERT_DIR"; grep '^JARVIS_API_KEY=' .env)"
 expect_eq "upsert_env_var rewrites the existing value in place" "$got" "JARVIS_API_KEY=feedface"
+
+# The version and image selector form one identity pair. Their dedicated writer
+# replaces duplicate legacy rows through one final rename and rejects invalid
+# input without changing the file.
+IDENTITY_DIR="$(mktemp -d "${FIXTURES}/identity.XXXXXX")"
+cat > "${IDENTITY_DIR}/.env" <<'ENV'
+KEEP_BEFORE=1
+JARVIS_VERSION=1.0.0
+JARVIS_IMAGE_TAG=1.0.0
+JARVIS_VERSION=duplicate
+KEEP_AFTER=2
+ENV
+got="$(
+  cd "$IDENTITY_DIR"
+  upsert_app_identity 2.3.4 0123456789abcdef0123456789abcdef01234567
+  cat .env
+)"
+want="$(printf '%s\n' \
+  'KEEP_BEFORE=1' \
+  'JARVIS_VERSION=2.3.4' \
+  'JARVIS_IMAGE_TAG=0123456789abcdef0123456789abcdef01234567' \
+  'KEEP_AFTER=2')"
+expect_eq "upsert_app_identity replaces both identities and removes duplicates" \
+  "$got" "$want"
+identity_before="$(cksum < "${IDENTITY_DIR}/.env")"
+(cd "$IDENTITY_DIR"; upsert_app_identity invalid invalid) && rc=0 || rc=$?
+expect_eq "upsert_app_identity rejects invalid identities" "$rc" "2"
+identity_after="$(cksum < "${IDENTITY_DIR}/.env")"
+expect_eq "an invalid identity leaves .env byte-identical" \
+  "$identity_after" "$identity_before"
 
 # === _lifecycle_path_inside_repo (shared path-containment helper) ============
 # Literal prefix containment on a trailing-slash-normalized path: a true subpath

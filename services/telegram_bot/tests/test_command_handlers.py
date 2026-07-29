@@ -12,7 +12,6 @@ import pytest
 from jarvis_common.testing import make_bot_config
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
-from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
     done_command,
@@ -27,23 +26,11 @@ from telegram_bot.handlers.commands import (  # noqa: E402
 from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard
 from telegram_bot.handlers.commands.system_commands import focus_command
 
+pytestmark = pytest.mark.usefixtures("_clear_rate_limit_state")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
-    """Clear the rate-limiter's in-memory timestamp store before every test.
-
-    Command handlers decorated with @rate_limit share a module-level
-    defaultdict keyed by ``chat_id:func_name``.  Without this fixture, tests
-    sharing the same chat_id accumulate timestamps and can trip the limit mid
-    suite.
-    """
-    _rate_limit_mod._timestamps.clear()
-    yield
-    _rate_limit_mod._timestamps.clear()
 
 
 @pytest.fixture(autouse=True)

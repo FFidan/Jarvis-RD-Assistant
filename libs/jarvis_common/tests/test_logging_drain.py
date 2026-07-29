@@ -13,30 +13,17 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from jarvis_common.logging_config import SystemEventHandler
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _make_mock_pool(
     *,
     executemany_side_effect: Any = None,
 ) -> tuple[MagicMock, AsyncMock]:
-    """Build a minimal fake asyncpg pool.
-
-    The fake:
-    - pool.acquire() is an async context manager returning a conn mock
-    - conn.executemany is an AsyncMock (can be made to raise)
-    - conn.execute is an AsyncMock (for the recovery row)
-    """
-    conn = AsyncMock()
+    """Build a shared pool with configurable batch-write failure."""
+    pool, conn = make_pool_and_conn()
     conn.executemany = AsyncMock(side_effect=executemany_side_effect)
     conn.execute = AsyncMock()
-
-    pool = MagicMock()
-
-    @asynccontextmanager
-    async def _acquire():
-        yield conn
-
-    pool.acquire = _acquire
     return pool, conn
 
 

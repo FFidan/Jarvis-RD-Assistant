@@ -83,8 +83,8 @@ jobs:
       - name: Validate audited parser tree
         run: npm ls --prefix frontend js-yaml brace-expansion eslint --all
 
-      - name: Audit (fail on high severity)
-        run: npm audit --prefix frontend --audit-level=high
+      - name: Audit (fail on unaccepted high severity)
+        run: python3 scripts/check_npm_audit.py
 
   # ---------------------------------------------------------------------------
   # osv-scanner — Multi-ecosystem CVE scan against OSV database

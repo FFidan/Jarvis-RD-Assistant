@@ -3,9 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { SessionComplete } from '@/components/cards/SessionComplete';
 import type { RetentionStats } from '@/types';
@@ -16,6 +15,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 import { getStats } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGetStats = vi.mocked(getStats);
 
 const STATS_FIXTURE: RetentionStats = {
@@ -28,13 +28,12 @@ const STATS_FIXTURE: RetentionStats = {
 };
 
 function renderComplete(sessionReviewed = 7, onNav = vi.fn()) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <SessionComplete sessionReviewed={sessionReviewed} onNavigateToLibrary={onNav} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <SessionComplete sessionReviewed={sessionReviewed} onNavigateToLibrary={onNav} />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

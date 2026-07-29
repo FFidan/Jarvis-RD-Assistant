@@ -9,9 +9,9 @@
  * - Thinking-mode checkbox renders for supports_thinking entries and persists
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { IngestionSection } from '@/components/settings/IngestionSection';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -165,13 +165,10 @@ const systemModelsWithFitDetail = {
 // ---------------------------------------------------------------------------
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <IngestionSection />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <IngestionSection />,
+    { queryClient },
   );
 }
 

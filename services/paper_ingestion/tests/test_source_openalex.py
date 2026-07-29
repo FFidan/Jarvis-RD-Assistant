@@ -21,22 +21,12 @@ from paper_ingestion.sources.openalex_source import (
     _reconstruct_abstract,
 )
 from pydantic import SecretStr
+from tests._source_fakes import make_openalex_source as _make_source
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SEARCH_FIXTURE = json.loads((FIXTURES / "openalex_search.json").read_text())
 SINGLE_FIXTURE = json.loads((FIXTURES / "openalex_single_work.json").read_text())
 NEW_SINCE_FIXTURE = json.loads((FIXTURES / "openalex_new_since_2026_04.json").read_text())
-
-
-def _make_source(api_key: str | None = "test-oa-key") -> OpenAlexSource:
-    config = PaperSourceConfig(
-        id=3,
-        source_type=SourceType.OPENALEX,
-        enabled=True,
-        config={"api_key": api_key} if api_key else {},
-    )
-    client = httpx.AsyncClient()
-    return OpenAlexSource(config, client)
 
 
 def _make_source_with_keys(
@@ -395,7 +385,7 @@ async def test_http_error_never_exposes_query_key_in_logs_or_diagnostics(
     monkeypatch, caplog, operation
 ):
     secret = "openalex-negative-proof-secret"
-    source = _make_source(secret)
+    source = _make_source(api_key=secret)
     attempted_urls: list[str] = []
 
     async def fail_request(url, *, params, timeout):

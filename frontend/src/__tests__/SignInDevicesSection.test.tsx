@@ -7,9 +7,9 @@
  * warnings. The 401 mid-session-revoke path is covered in the auth401 spec.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Passkey library mock (shared with the hook via the same module) ---
 const browserSupportsWebAuthnMock = vi.fn().mockReturnValue(true);
@@ -75,7 +75,7 @@ const passkey = (over: Partial<Record<string, unknown>> = {}) => ({
 });
 
 function makeQC() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 async function renderSection() {
@@ -83,10 +83,9 @@ async function renderSection() {
   const qc = makeQC();
   return {
     qc,
-    ...render(
-      <QueryClientProvider client={qc}>
-        <SignInDevicesSection />
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <SignInDevicesSection />,
+      { queryClient: qc },
     ),
   };
 }

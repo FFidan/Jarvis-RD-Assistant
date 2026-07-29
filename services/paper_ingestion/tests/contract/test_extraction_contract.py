@@ -9,6 +9,9 @@ Carve-out: LLM (extract_paper) is exempt — mocked at the boundary; require_adm
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+
 import pytest
 import pytest_asyncio
 
@@ -667,3 +670,254 @@ async def test_tenant01_per_user_extraction_isolation(
     assert table_b[0]["extractions"]["finding"]["value"] == "result-B", (
         f"User B table must contain result-B; got {table_b[0]['extractions']}"
     )
+
+
+async def test_batch_extract_treats_a_stale_extraction_as_incomplete(
+    contract_conn,
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """A prior-generation extraction is hidden and cannot satisfy batch idempotency.
+
+    # Verified: services/paper_ingestion/paper_ingestion/extraction/core.py:349
+    """
+    import httpx
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.extraction.core import batch_extract
+
+    user_id = contract_two_users.user_a_id
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
+           VALUES ('stale-batch-extraction', 'arxiv', 'Stale batch extraction',
+                   ARRAY['Author'], 'https://stale-extraction.test/', $1, 1)
+           RETURNING id""",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    template_id = await contract_conn.fetchval(
+        """INSERT INTO extraction_templates (name, fields)
+           VALUES ('stale-batch-template', '[]'::jsonb)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (
+               paper_id, template_id, extractions, extraction_model, user_id,
+               content_generation
+           )
+           VALUES ($1, $2, '{}'::jsonb, 'old-model', $3, 0)""",
+        paper_id,
+        template_id,
+        user_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        listed = await client.get(f"/api/papers/{paper_id}/extractions")
+    assert listed.status_code == 200, listed.text[:300]
+    assert listed.json() == []
+
+    async with httpx.AsyncClient() as client:
+        result = await batch_extract(
+            client,
+            SharedConnPool(contract_conn),
+            [paper_id],
+            template_id,
+            user_id=user_id,
+        )
+
+    assert result.skipped == 0
+    assert result.failed == 1
+    assert result.status == "partial"
+
+
+async def test_writer_recovery_returns_only_current_generation_artifacts(
+    contract_conn,
+    contract_two_users,
+) -> None:
+    """Concurrent-winner recovery excludes retained rows from an older source."""
+    from paper_ingestion.extraction.core import _fetch_current_extraction
+    from paper_ingestion.services.summarization import _fetch_current_summary
+
+    user_id = contract_two_users.user_a_id
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
+           VALUES ('writer-recovery-generation', 'arxiv', 'Writer recovery',
+                   ARRAY['Author'], 'https://writer-recovery.test/', $1, 1)
+           RETURNING id""",
+        user_id,
+    )
+    template_id = await contract_conn.fetchval(
+        """INSERT INTO extraction_templates (name, fields)
+           VALUES ('writer-recovery-template', '[]'::jsonb)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (
+               paper_id, summary_brief, summary_detailed, user_id, content_generation
+           )
+           VALUES ($1, 'stale', 'stale', $2, 0)""",
+        paper_id,
+        user_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (
+               paper_id, template_id, extractions, user_id, content_generation
+           )
+           VALUES ($1, $2, '{}'::jsonb, $3, 0)""",
+        paper_id,
+        template_id,
+        user_id,
+    )
+
+    assert (
+        await _fetch_current_summary(
+            contract_conn,
+            paper_id=paper_id,
+            user_id=user_id,
+        )
+        is None
+    )
+    assert (
+        await _fetch_current_extraction(
+            contract_conn,
+            paper_id=paper_id,
+            template_id=template_id,
+            user_id=user_id,
+        )
+        is None
+    )
+
+    await contract_conn.execute(
+        "UPDATE paper_summaries SET content_generation = 1 WHERE paper_id = $1",
+        paper_id,
+    )
+    await contract_conn.execute(
+        "UPDATE paper_extractions SET content_generation = 1 WHERE paper_id = $1",
+        paper_id,
+    )
+
+    assert (
+        await _fetch_current_summary(
+            contract_conn,
+            paper_id=paper_id,
+            user_id=user_id,
+        )
+        is not None
+    )
+    assert (
+        await _fetch_current_extraction(
+            contract_conn,
+            paper_id=paper_id,
+            template_id=template_id,
+            user_id=user_id,
+        )
+        is not None
+    )
+
+
+async def test_source_generation_guard_serializes_both_race_orders(
+    _contract_pool,
+) -> None:
+    """A guarded writer finishes first or rejects after source replacement wins."""
+    from paper_ingestion.exceptions import SourceGenerationChangedError
+    from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
+
+    external_id = f"source-generation-guard-{uuid.uuid4()}"
+    async with _contract_pool.acquire() as conn:
+        paper_id = await conn.fetchval(
+            """INSERT INTO papers (
+                   external_id, source_type, title, authors, url, content_generation
+               )
+               VALUES ($1, 'arxiv', 'Source generation guard', ARRAY['Author'],
+                       'https://generation-guard.test/', 0)
+               RETURNING id""",
+            external_id,
+        )
+
+    release_writer = asyncio.Event()
+    release_replacement = asyncio.Event()
+    tasks: set[asyncio.Task[None]] = set()
+    try:
+        source_locked = asyncio.Event()
+
+        async def guarded_writer() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with guard_current_source_generation(conn, paper_id, 0):
+                    source_locked.set()
+                    await release_writer.wait()
+
+        writer = asyncio.create_task(guarded_writer())
+        tasks.add(writer)
+        await asyncio.wait_for(source_locked.wait(), timeout=2)
+        replacement_done = asyncio.Event()
+
+        async def replacement_after_writer() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        """UPDATE papers
+                           SET content_generation = content_generation + 1
+                           WHERE id = $1""",
+                        paper_id,
+                    )
+                    replacement_done.set()
+
+        replacement = asyncio.create_task(replacement_after_writer())
+        tasks.add(replacement)
+        await asyncio.sleep(0.05)
+        assert not replacement_done.is_set()
+        release_writer.set()
+        await asyncio.wait_for(writer, timeout=2)
+        await asyncio.wait_for(replacement, timeout=2)
+
+        replacement_locked = asyncio.Event()
+
+        async def held_replacement() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        """UPDATE papers
+                           SET content_generation = content_generation + 1
+                           WHERE id = $1""",
+                        paper_id,
+                    )
+                    replacement_locked.set()
+                    await release_replacement.wait()
+
+        replacement = asyncio.create_task(held_replacement())
+        tasks.add(replacement)
+        await asyncio.wait_for(replacement_locked.wait(), timeout=2)
+
+        async def stale_writer() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with guard_current_source_generation(conn, paper_id, 1):
+                    raise AssertionError("stale writer entered guarded persistence")
+
+        writer = asyncio.create_task(stale_writer())
+        tasks.add(writer)
+        await asyncio.sleep(0.05)
+        assert not writer.done()
+        release_replacement.set()
+        await asyncio.wait_for(replacement, timeout=2)
+        with pytest.raises(SourceGenerationChangedError, match="Please retry"):
+            await asyncio.wait_for(writer, timeout=2)
+    finally:
+        release_writer.set()
+        release_replacement.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        async with _contract_pool.acquire() as conn:
+            await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)

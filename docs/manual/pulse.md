@@ -1,10 +1,10 @@
-<!-- verified-against-UI: 2026-07-20 | routes: /pulse -->
+<!-- verified-against-UI: 2026-07-25 | routes: /pulse -->
 
 # Pulse
 
 The **Pulse** page at `/pulse` shows your daily recommendation deck — a curated set of papers selected by the Pulse engine based on your configured research topics, reading history, and ratings.
 
-<!-- screenshot: /pulse — PulseDeck showing three PulseCards with WhyPopover open on one card and a StaleBadge on another -->
+<!-- screenshot: /pulse — PulseDeck showing three PulseCards with WhyPopover open on one card, and a StaleBadge in the deck header -->
 
 ---
 
@@ -20,7 +20,6 @@ Each card in the deck shows:
 
 - Paper title and authors
 - A short relevance excerpt
-- The **StaleBadge** (see below)
 - Action buttons for rating and opening the paper
 
 When JARVIS has not yet learned from enough of your feedback, the deck labels its ordering as **Basic ranking (learning from your feedback)**. Once a learned model is available, that caption is no longer shown; the rest of the deck remains usable in either state.
@@ -31,11 +30,7 @@ Clicking the **Why?** indicator on a card opens the **WhyPopover**, which explai
 
 ### StaleBadge
 
-If a card was generated more than a configurable number of days ago, a **StaleBadge** appears on it to signal that the recommendation may not reflect your most recent reading activity or topic configuration.
-
-### SourceTimeline
-
-Below or alongside the deck, the **SourceTimeline** shows a chronological breakdown of when the papers in the current deck were published, giving you a sense of the recency distribution of your recommendations.
+If today's deck has not been regenerated and the one shown is from an earlier day, a **StaleBadge** appears in the deck header (not on individual cards) to signal that the recommendations may not reflect your most recent reading activity or topic configuration. Clicking it opens a sheet with per-source diagnostics and a **Generate now** button to request a fresh deck.
 
 ---
 
@@ -53,8 +48,8 @@ Generation can also happen automatically on a schedule. See [Settings](settings.
 
 Each card has **thumbs-up** and **thumbs-down** rating buttons:
 
-- **Thumbs up** — marks the paper as relevant. It is added to your Library and the rating feeds back into the Pulse recommendation model to surface similar papers in future decks.
-- **Thumbs down** — marks the paper as not relevant. It is hidden from future decks. A topic that collects repeated thumbs-down (5 or more within 90 days) is dampened: its positive similarity signal is halved — never boosted — when scoring future candidates, so a topic you keep rejecting quietly stops dominating your deck.
+- **Thumbs up** — marks the paper as relevant. The rating feeds back into the Pulse recommendation model to surface similar papers in future decks; it does not add the paper to your Library.
+- **Thumbs down** — marks the paper as not relevant. It is hidden from future decks for 60 days. A topic that collects repeated thumbs-down (5 or more within 90 days) is dampened: its positive similarity signal is halved — never boosted — when scoring future candidates, so a topic you keep rejecting quietly stops dominating your deck.
 - **Save** — saves the paper to your Library without a quality rating.
 
 ---

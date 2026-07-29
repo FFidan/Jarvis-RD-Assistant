@@ -1,37 +1,36 @@
 name: GHCR publish
 
-# Builds and publishes the application images to GHCR on release tags.
+# Builds application images, publishes commit-addressed verification images for
+# an exact main commit, and promotes only the artifacts from the successful
+# verification run named by an annotated stable tag on that commit.
 #
-# Image mapping (load-bearing for docker-compose.yml's published-image refs):
+# Image mapping:
 #   compose `jarvis/paper_ingestion` -> ghcr.io/limitcycle-oss/jarvis-paper-ingestion
 #   compose `jarvis/learning_engine` -> ghcr.io/limitcycle-oss/jarvis-learning-engine
 #   compose `jarvis/telegram_bot`    -> ghcr.io/limitcycle-oss/jarvis-telegram-bot
 #   compose `jarvis/dashboard`       -> ghcr.io/limitcycle-oss/jarvis-dashboard
 #   services/restore_uploader        -> ghcr.io/limitcycle-oss/jarvis-restore-uploader
-#   (jarvis/langfuse-hardened stays local-build: observability-profile-only,
-#   and publishing a hardened fork of an upstream image adds supply-chain
-#   surface for no install-time gain.)
 #
-# Tagging: git tags are v-prefixed, image tags are NOT (`v1.1.0` -> `:1.1.0`),
-# matching compose's ${JARVIS_VERSION} interpolation. Release candidates get
-# `:X.Y.Z-rc.N`; `latest` is never moved (flavor latest=false).
-# paper-ingestion ships two flavors: `:X.Y.Z` (TORCH_VARIANT=cpu, multi-arch)
-# and `:X.Y.Z-cuda` (amd64-only, includes the reranker extras — see the matrix
-# note on INSTALL_OPTIONAL).
-#
-# arm64 builds run natively on the free public-repo `ubuntu-24.04-arm` hosted
-# runners (no QEMU); multi-arch manifests are assembled from per-platform
-# digest pushes in the merge job.
-#
-# A workflow_dispatch run from a non-tag ref builds WITHOUT pushing — a manual
-# dispatch must never be able to publish arbitrary-SHA images.
+# Manual dispatch without source_commit is build-only. Manual dispatch from main
+# with source_commit equal to github.sha publishes `<SHA>` and `<SHA>-cuda`
+# verification tags. An exact stable `vX.Y.Z` tag never builds: it peels the tag
+# to its commit and promotes only that commit's verified SHA manifests.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      source_commit:
+        description: >-
+          Lowercase 40-hex main commit to publish as verification images. Leave
+          empty for a build-only run.
+        type: string
+        default: ""
+        required: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -41,59 +40,101 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      push: ${{ steps.mode.outputs.push }}
-      stable: ${{ steps.mode.outputs.stable }}
+      mode: ${{ steps.mode.outputs.mode }}
+      source_commit: ${{ steps.mode.outputs.source_commit }}
+      release_version: ${{ steps.mode.outputs.release_version }}
+      verification_run_id: ${{ steps.mode.outputs.verification_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Decide publish vs build-only
+      - name: Resolve the immutable publication mode
         id: mode
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Only two tag shapes may ever publish, matched EXACTLY: a stable
-          # release `vX.Y.Z` or a release candidate `vX.Y.Z-rc.N`. Anything else
-          # that begins with `v` (build metadata like `v1.1.0+meta-rc`, a stray
-          # prerelease id) is refused outright — never published. This closes the
-          # fail-open where `contains(ref, '-rc')` classified the *ref* as a
-          # prerelease while docker/metadata-action's `{{version}}` dropped the
-          # build metadata and published the STABLE `:X.Y.Z` tag unattended.
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
-            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "push=true" >> "$GITHUB_OUTPUT"
-              echo "stable=true" >> "$GITHUB_OUTPUT"
-            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
-              echo "push=true" >> "$GITHUB_OUTPUT"
-              echo "stable=false" >> "$GITHUB_OUTPUT"
+          mode=""
+          source_commit=""
+          release_version=""
+          verification_run_id=""
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -z "$SOURCE_COMMIT" ]; then
+              mode=build-only
+              source_commit="$GITHUB_SHA"
+              echo "Input-free dispatch: build only, no registry writes."
             else
-              echo "::error::tag ${GITHUB_REF_NAME} is not a valid release tag (expected vX.Y.Z or vX.Y.Z-rc.N) — refusing to publish"
+              if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+                echo "::error::source_commit publication must be dispatched with --ref main"
+                exit 1
+              fi
+              if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::source_commit must be a lowercase 40-hex commit SHA"
+                exit 1
+              fi
+              if [ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]; then
+                echo "::error::source_commit must equal github.sha for this main dispatch"
+                exit 1
+              fi
+              git fetch --no-tags origin main
+              if ! git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main; then
+                echo "::error::source_commit is not reachable from origin/main"
+                exit 1
+              fi
+              mode=verify
+              source_commit="$SOURCE_COMMIT"
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            if [ "$GITHUB_REF_TYPE" != "tag" ] \
+               || ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::only an exact stable vX.Y.Z tag may promote images"
               exit 1
             fi
+            if [ "$(git cat-file -t "$GITHUB_REF_NAME" 2>/dev/null || true)" != "tag" ]; then
+              echo "::error::stable releases require an annotated tag"
+              exit 1
+            fi
+            source_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$source_commit" origin/main; then
+              echo "::error::stable tag ${GITHUB_REF_NAME} is not reachable from origin/main"
+              exit 1
+            fi
+            tag_message="$RUNNER_TEMP/release-tag-message.txt"
+            run_json="$RUNNER_TEMP/verification-run.json"
+            git for-each-ref --format='%(contents)' \
+              "refs/tags/${GITHUB_REF_NAME}" > "$tag_message"
+            verification_run_id="$(python3 scripts/release_provenance.py \
+              tag-run-id "$tag_message")"
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${verification_run_id}" \
+              > "$run_json"
+            python3 scripts/release_provenance.py validate-run "$run_json" \
+              --expected-sha "$source_commit" \
+              --workflow-path ".github/workflows/ghcr-publish.yml"
+            mode=promote
+            release_version="${GITHUB_REF_NAME#v}"
           else
-            echo "push=false" >> "$GITHUB_OUTPUT"
-            echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "Not a v* tag ref — building without pushing."
-          fi
-
-      # A writable tag alone must not publish trusted-looking stable images:
-      # stable releases must point at a commit that main already contains. (The
-      # tag ruleset + release environment form the second lock.)
-      - name: Require stable tags to be reachable from main
-        if: steps.mode.outputs.stable == 'true'
-        run: |
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::stable tag ${GITHUB_REF_NAME} is not reachable from origin/main — refusing to publish"
+            echo "::error::unsupported workflow event ${GITHUB_EVENT_NAME}"
             exit 1
           fi
 
+          {
+            echo "mode=$mode"
+            echo "source_commit=$source_commit"
+            echo "release_version=$release_version"
+            echo "verification_run_id=$verification_run_id"
+          } >> "$GITHUB_OUTPUT"
+
   build:
     needs: preflight
+    if: needs.preflight.outputs.mode != 'promote'
+    environment: ${{ needs.preflight.outputs.mode == 'verify' && 'release' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        # NOTE: services/restore_uploader/ lands later on this branch; its legs
-        # stay dormant until the first release tag fires this workflow.
         include:
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
@@ -111,14 +152,6 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
-          # CUDA flavor is amd64-only (no arm64 CUDA wheel set). It also bakes
-          # in the cross-encoder reranker extras: on the CUDA base they add
-          # only sentence-transformers (a few MB), whereas on the CPU flavor
-          # the same flag would pull the ~3.7 GB nvidia-*/triton wheel set the
-          # flavor exists to exclude (constraints-optional.txt is pinned
-          # against the CUDA lock) — so the CPU flavor keeps the default
-          # INSTALL_OPTIONAL=false and RERANKER_ENABLED there needs a
-          # `--build-local` rebuild (documented in the hardware matrix).
           - slug: paper-ingestion-cuda
             image: jarvis-paper-ingestion
             context: .
@@ -189,8 +222,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
-      # Image builds are the peak disk consumer; never share a runner with
-      # model pulls.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -200,21 +231,21 @@ jobs:
           docker image prune --all --force
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.source_commit }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
       - name: Log in to GHCR
-        if: needs.preflight.outputs.push == 'true'
+        if: needs.preflight.outputs.mode == 'verify'
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tags are applied by the merge job; a publish run pushes by digest only,
-      # a build-only run keeps the result in the build cache.
-      - name: Build (and push by digest)
+      - name: Build and optionally push by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
@@ -222,20 +253,18 @@ jobs:
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
           build-args: ${{ matrix.build_args }}
-          # Attestations need an image exporter — skip on the cacheonly
-          # build-only path.
-          sbom: ${{ needs.preflight.outputs.push == 'true' }}
-          outputs: ${{ needs.preflight.outputs.push == 'true' && format('type=image,name=ghcr.io/limitcycle-oss/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
+          sbom: ${{ needs.preflight.outputs.mode == 'verify' }}
+          outputs: ${{ needs.preflight.outputs.mode == 'verify' && format('type=image,name=ghcr.io/limitcycle-oss/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
 
-      - name: Export the digest
-        if: needs.preflight.outputs.push == 'true'
+      - name: Export the platform digest
+        if: needs.preflight.outputs.mode == 'verify'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
-      - name: Upload the digest
-        if: needs.preflight.outputs.push == 'true'
+      - name: Upload the platform digest
+        if: needs.preflight.outputs.mode == 'verify'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: digests-${{ matrix.slug }}-${{ matrix.arch }}
@@ -243,17 +272,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  merge:
+  verify:
     needs: [preflight, build]
-    if: needs.preflight.outputs.push == 'true'
-    # This job is where a tag actually becomes pullable, so it is the publish gate.
-    # A stable `vX.Y.Z` tag enters the `release` environment and waits for the owner's
-    # approval; `-rc` dry-runs resolve to no environment and stay unattended. The
-    # stable/prerelease decision comes from preflight's EXACT-semver classification
-    # (not a ref substring), so the gate can never disagree with the published tag.
-    # Together with the `refs/tags/v*` ruleset (admin-only tag creation), releasing
-    # an image takes two independent, deliberate acts.
-    environment: ${{ needs.preflight.outputs.stable == 'true' && 'release' || '' }}
+    if: needs.preflight.outputs.mode == 'verify'
+    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -276,12 +298,10 @@ jobs:
           - slug: restore-uploader
             image: jarvis-restore-uploader
             suffix: ""
-    name: publish (${{ matrix.slug }})
+    name: verify (${{ matrix.slug }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # The vulnerability scan pulls full image layers (several GB for the
-      # CUDA flavor).
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -290,7 +310,7 @@ jobs:
           sudo rm -rf "/usr/local/share/boost"
           docker image prune --all --force
 
-      - name: Download digests
+      - name: Download platform digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: /tmp/digests
@@ -307,37 +327,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
-        with:
-          images: ghcr.io/limitcycle-oss/${{ matrix.image }}
-          # Emits `1.1.0` / `1.1.0-rc.1` from the v-prefixed git tag; rc tags
-          # never move `latest`.
-          tags: |
-            type=semver,pattern={{version}}
-          flavor: |
-            latest=false
-            suffix=${{ matrix.suffix }}
-
-      - name: Create and push the manifest list
+      - name: Publish the commit-addressed manifest
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/limitcycle-oss/${{ matrix.image }}@sha256:%s ' *)
+          image="ghcr.io/limitcycle-oss/${{ matrix.image }}"
+          tag="${{ needs.preflight.outputs.source_commit }}${{ matrix.suffix }}"
+          shopt -s nullglob
+          digests=(*)
+          sources=()
+          for digest in "${digests[@]}"; do
+            sources+=("${image}@sha256:${digest}")
+          done
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "::error::no platform digests were downloaded"
+            exit 1
+          fi
+          docker buildx imagetools create -t "${image}:${tag}" "${sources[@]}"
 
-      - name: Resolve the published digest
+      - name: Resolve and record the verification digest
         id: digest
         run: |
-          tag="${GITHUB_REF_NAME#v}${{ matrix.suffix }}"
-          docker buildx imagetools inspect "ghcr.io/limitcycle-oss/${{ matrix.image }}:${tag}"
+          image="ghcr.io/limitcycle-oss/${{ matrix.image }}"
+          tag="${{ needs.preflight.outputs.source_commit }}${{ matrix.suffix }}"
+          published_ref="${image}:${tag}"
+          docker buildx imagetools inspect "$published_ref"
           digest="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
-            "ghcr.io/limitcycle-oss/${{ matrix.image }}:${tag}" | tr -d '"')"
-          echo "ref=ghcr.io/limitcycle-oss/${{ matrix.image }}@${digest}" >> "$GITHUB_OUTPUT"
+            "$published_ref" | tr -d '"')"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::could not resolve the verification manifest digest"
+            exit 1
+          fi
+          printf '%s@%s\n' "$published_ref" "$digest" > "digest-${{ matrix.slug }}.txt"
+          echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Verified ${published_ref} at ${digest}." >> "$GITHUB_STEP_SUMMARY"
 
-      # SBOM bound to the published digest (BuildKit additionally attached
-      # per-platform SBOM attestations at build time via `sbom: true`).
+      - name: Upload the verification digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verification-digest-${{ matrix.slug }}
+          path: digest-${{ matrix.slug }}.txt
+          if-no-files-found: error
+
       - name: Generate the image SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
@@ -352,10 +382,7 @@ jobs:
           name: sbom-image-${{ matrix.slug }}
           path: sbom-${{ matrix.slug }}.cdx.json
 
-      # Report-only by design: a hard severity gate here could block a release
-      # on an unrelated base-image CVE; the scheduled security workflow owns
-      # the hard vulnerability bar.
-      - name: Vulnerability report (informational)
+      - name: Vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: image
@@ -373,3 +400,75 @@ jobs:
             cat trivy-${{ matrix.slug }}.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'promote'
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: paper-ingestion-cpu
+            image: jarvis-paper-ingestion
+            suffix: ""
+          - slug: paper-ingestion-cuda
+            image: jarvis-paper-ingestion
+            suffix: "-cuda"
+          - slug: learning-engine
+            image: jarvis-learning-engine
+            suffix: ""
+          - slug: telegram-bot
+            image: jarvis-telegram-bot
+            suffix: ""
+          - slug: dashboard
+            image: jarvis-dashboard
+            suffix: ""
+          - slug: restore-uploader
+            image: jarvis-restore-uploader
+            suffix: ""
+    name: promote (${{ matrix.slug }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download the verified digest receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verification-digest-${{ matrix.slug }}
+          path: /tmp/verification-digest
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.preflight.outputs.verification_run_id }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the verified digest
+        run: |
+          image="ghcr.io/limitcycle-oss/${{ matrix.image }}"
+          source_ref="${image}:${{ needs.preflight.outputs.source_commit }}${{ matrix.suffix }}"
+          target_ref="${image}:${{ needs.preflight.outputs.release_version }}${{ matrix.suffix }}"
+          source_digest="$(python3 scripts/release_provenance.py artifact-digest \
+            /tmp/verification-digest --expected-ref "$source_ref")"
+
+          docker buildx imagetools inspect "${image}@${source_digest}"
+          docker buildx imagetools create -t "$target_ref" "${image}@${source_digest}"
+          target_digest="$(docker buildx imagetools inspect \
+            --format '{{json .Manifest.Digest}}' "$target_ref" | tr -d '"')"
+          if [ "$source_digest" != "$target_digest" ]; then
+            echo "::error::promotion changed the manifest digest"
+            exit 1
+          fi
+          echo "Promoted ${source_ref}@${source_digest} to ${target_ref}." \
+            >> "$GITHUB_STEP_SUMMARY"

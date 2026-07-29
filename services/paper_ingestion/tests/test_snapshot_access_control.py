@@ -5,6 +5,12 @@ Coverage:
   (b) Persisted-public paper snapshots are served to authenticated users.
   (c) Unknown paper_id returns opaque 404 (no existence oracle).
   (d) Path-traversal guard: secure_path blocks escaping paths (400).
+  (e) The routes sharing the guard consult it before touching storage, and
+      still serve a paper the guard admits.
+
+The guard's own predicate is exercised against a real database in
+``tests/contract/test_pi_pdf_contract.py``; here the lookup is mocked, so these
+tests pin how each route reacts to the guard's verdict.
 """
 
 import httpx
@@ -25,7 +31,12 @@ def _visible_paper_row(source_type: str = "local") -> dict[str, str]:
 
 @pytest.fixture()
 def _snap_app(tmp_path):
-    """App with mocked DB/auth and a real PNG on disk for paper_id=1, page=1."""
+    """App with mocked DB/auth and real files on disk for paper_id=1, page=1.
+
+    Both the page PNG and the raw PDF are present, so a route that returns 404
+    can only have been stopped by the shared guard.
+    """
+    import paper_ingestion.routers.pdfs as pdfs_mod
     import paper_ingestion.routers.snapshots as snap_mod
     from jarvis_common.auth import verify_api_key
     from paper_ingestion.deps import get_db_pool
@@ -34,6 +45,7 @@ def _snap_app(tmp_path):
     snap_dir = tmp_path / "1"
     snap_dir.mkdir()
     (snap_dir / "page_1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (tmp_path / "1.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     pool, conn = make_pool_and_conn()
     app.state.db_pool = pool
@@ -43,11 +55,14 @@ def _snap_app(tmp_path):
     app.dependency_overrides[verify_api_key] = lambda: None
 
     original_path = snap_mod.SNAPSHOT_STORAGE_PATH
+    original_pdf_path = pdfs_mod.PDF_STORAGE_PATH
     snap_mod.SNAPSHOT_STORAGE_PATH = str(tmp_path)
+    pdfs_mod.PDF_STORAGE_PATH = str(tmp_path)
 
     yield app, conn
 
     snap_mod.SNAPSHOT_STORAGE_PATH = original_path
+    pdfs_mod.PDF_STORAGE_PATH = original_pdf_path
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 
@@ -279,3 +294,61 @@ async def test_path_traversal_guard_still_active(_snap_app, monkeypatch):
 
     # Guard must fire and return 400 — NOT 404 or 200.
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# (e) The routes sharing the guard follow its verdict
+# ---------------------------------------------------------------------------
+
+
+async def test_shared_routes_serve_a_paper_the_guard_admits(_snap_app):
+    """A paper the guard admits still serves its PDF, snapshot, and highlights.
+
+    Tightening the guard's predicate must not narrow what an ordinary local
+    upload can reach, so all three shared routes are exercised together.
+    """
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 1
+    conn.fetchrow.return_value = _visible_paper_row("local")
+    conn.fetch.return_value = []
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        pdf = await client.get("/api/pdfs/1")
+        snapshot = await client.get("/api/snapshots/1/1")
+        highlights = await client.get("/api/papers/1/highlights")
+
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert snapshot.status_code == 200
+    assert highlights.status_code == 200
+    assert highlights.json() == []
+
+
+async def test_shared_routes_stop_at_the_guard_before_reading_storage(_snap_app):
+    """Every shared route returns an opaque 404 when the guard admits no row.
+
+    Both files exist on disk for paper 1, so a 404 here can only come from the
+    guard. This is the boundary a paper with no stored PDF record reaches: the
+    lookup matches nothing, and no route falls back to the storage directory.
+    """
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 1
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        pdf = await client.get("/api/pdfs/1")
+        snapshot = await client.get("/api/snapshots/1/1")
+        highlights = await client.get("/api/papers/1/highlights")
+
+    assert pdf.status_code == 404
+    assert snapshot.status_code == 404
+    assert highlights.status_code == 404
+    assert "library" not in pdf.text.lower()

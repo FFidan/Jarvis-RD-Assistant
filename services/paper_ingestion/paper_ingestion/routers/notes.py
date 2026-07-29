@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["notes"])
 
 _NOTE_ALLOWED_COLUMNS: set[str] = {"user_note", "highlight_text", "page_number"}
+_NOTE_RESPONSE_COLUMNS = "pn.*, (pn.content_generation <> p.content_generation) AS stale"
 
 
 def _note_response(row: asyncpg.Record | dict) -> NoteResponse:
@@ -25,6 +26,7 @@ def _note_response(row: asyncpg.Record | dict) -> NoteResponse:
     data.setdefault("verified_quote", None)
     data.setdefault("verified_page_number", None)
     data.setdefault("promoted_at", None)
+    data.setdefault("stale", False)
     return NoteResponse(**data)
 
 
@@ -56,17 +58,20 @@ async def list_notes(
         await assert_paper_ownership(conn, paper_id, user_id)
         if source is None:
             rows = await conn.fetch(
-                "SELECT * FROM paper_notes"
-                " WHERE paper_id = $1 AND user_id = $2"
-                " ORDER BY created_at DESC",
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id"
+                " WHERE pn.paper_id = $1 AND pn.user_id IS NOT DISTINCT FROM $2"
+                " ORDER BY pn.created_at DESC",
                 paper_id,
                 user_id,
             )
         else:
             rows = await conn.fetch(
-                "SELECT * FROM paper_notes"
-                " WHERE paper_id = $1 AND source = $2 AND user_id = $3"
-                " ORDER BY created_at DESC",
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id"
+                " WHERE pn.paper_id = $1 AND pn.source = $2"
+                " AND pn.user_id IS NOT DISTINCT FROM $3"
+                " ORDER BY pn.created_at DESC",
                 paper_id,
                 source,
                 user_id,
@@ -102,23 +107,38 @@ async def create_note(
         The newly created note.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-        paper = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not paper:
-            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
+        async with conn.transaction():
+            await assert_paper_ownership(conn, paper_id, user_id)
+            paper = await conn.fetchrow(
+                "SELECT id FROM papers WHERE id = $1 FOR UPDATE",
+                paper_id,
+            )
+            if not paper:
+                raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
 
-        # Write user_id so notes are scoped to their author.
-        # NULL user_id continues to mean "system-shared" (single-tenant legacy).
-        row = await conn.fetchrow(
-            """INSERT INTO paper_notes
-                   (paper_id, user_id, user_note, highlight_text, page_number)
-            VALUES ($1, $2, $3, $4, $5) RETURNING *""",
-            paper_id,
-            user_id,
-            body.user_note,
-            body.highlight_text,
-            body.page_number,
-        )
+            # Write user_id so notes are scoped to their author.
+            # NULL user_id continues to mean "system-shared" (single-tenant legacy).
+            note_id = await conn.fetchval(
+                """INSERT INTO paper_notes
+                       (paper_id, user_id, user_note, highlight_text, page_number,
+                        content_generation)
+                SELECT $1, $2, $3, $4, $5, p.content_generation
+                  FROM papers p
+                 WHERE p.id = $1
+                RETURNING id""",
+                paper_id,
+                user_id,
+                body.user_note,
+                body.highlight_text,
+                body.page_number,
+            )
+            row = await conn.fetchrow(
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id"
+                " WHERE pn.id = $1 AND pn.user_id IS NOT DISTINCT FROM $2",
+                note_id,
+                user_id,
+            )
     return _note_response(row)
 
 
@@ -184,9 +204,42 @@ async def update_note(
             _NOTE_ALLOWED_COLUMNS,
             extra_where=("user_id", user_id) if user_id is not None else None,
         )
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+        if user_id is not None:
+            row = await conn.fetchrow(
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id"
+                " WHERE pn.id = $1 AND pn.user_id = $2",
+                note_id,
+                user_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id"
+                " WHERE pn.id = $1",
+                note_id,
+            )
     return _note_response(row)
+
+
+async def _lock_note_for_promotion(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    note_id: int,
+    user_id: int | None,
+) -> asyncpg.Record | None:
+    """Lock a note while preserving the trusted single-user lookup path."""
+    if user_id is None:
+        return await conn.fetchrow(
+            "SELECT * FROM paper_notes WHERE id = $1 FOR UPDATE",
+            note_id,
+        )
+    return await conn.fetchrow(
+        "SELECT * FROM paper_notes WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        note_id,
+        user_id,
+    )
 
 
 @router.post("/notes/{note_id}/promote", response_model=NoteResponse)
@@ -209,100 +262,113 @@ async def promote_zotero_note(
     was wasteful and prevented test injection.
     """
     async with db_pool.acquire() as conn:
-        # A persisted-public paper can be visible to every caller, so the note
-        # fetch must independently remain scoped to its owning user. This
-        # mirrors update_note/delete_note (exact user_id match, opaque miss,
-        # and the trusted single-user compatibility path).
-        if user_id is not None:
-            note = await conn.fetchrow(
-                "SELECT * FROM paper_notes WHERE id = $1 AND user_id = $2",
-                note_id,
-                user_id,
-            )
-        else:
-            note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
-        if note is None:
-            raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
-        if note["source"] != "zotero":
-            raise HTTPException(
-                status_code=400,
-                detail="Only Zotero annotation notes can be promoted",
-            )
-        # Ownership check (short-circuits when user_id=None).
-        await assert_paper_ownership(conn, note["paper_id"], user_id)
+        async with conn.transaction():
+            # Lock the note before its source paper. Review actions use the same
+            # dependent-row-first ordering, so no path introduces a reversed
+            # card/note-to-paper lock sequence.
+            note = await _lock_note_for_promotion(conn, note_id, user_id)
+            if note is None:
+                raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            if note["source"] != "zotero":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only Zotero annotation notes can be promoted",
+                )
+            await assert_paper_ownership(conn, note["paper_id"], user_id)
 
-        # Idempotency guard: if already verified and promoted, short-circuit —
-        # re-running verification would be wasteful and non-deterministic.
-        if note["verification_status"] == "verified" and note["promoted_at"] is not None:
-            return _note_response(note)
-
-        highlight = str(note["highlight_text"] or "").strip()
-        if not highlight:
-            raise HTTPException(
-                status_code=400,
-                detail="Zotero note has no highlight text to verify",
-            )
-
-        # Page-window optimisation — when the annotation carries a page
-        # number, first try a narrow ±2-page window to avoid loading the entire
-        # paper into memory just for one verification call.  If the window
-        # misses (no match found), fall back to the full chunk set.
-        note_page = note["page_number"]
-        result = None
-        if note_page is not None:
-            window_rows = await conn.fetch(
-                "SELECT * FROM paper_chunks"
-                " WHERE paper_id = $1"
-                "   AND page_number BETWEEN $2 AND $3"
-                " ORDER BY chunk_index",
-                note["paper_id"],
-                note_page - 2,
-                note_page + 2,
-            )
-            if window_rows:
-                window_chunks = [row_to_chunk_response(row) for row in window_rows]
-                window_full_text = "\n\n".join(chunk.content for chunk in window_chunks)
-                window_result = verifier.verify_quote(highlight, window_full_text, window_chunks)
-                if window_result.verified:
-                    result = window_result
-
-        if result is None:
-            # Either no page_number, window had no rows, or window verification failed —
-            # fall back to the full paper chunk set.
-            chunk_rows = await conn.fetch(
-                "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
+            # FOR SHARE conflicts with the source-replacement UPDATE and stays
+            # held through verification and the final note mutation.
+            paper = await conn.fetchrow(
+                "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
                 note["paper_id"],
             )
-            chunks = [row_to_chunk_response(row) for row in chunk_rows]
-            full_text = "\n\n".join(chunk.content for chunk in chunks)
-            result = verifier.verify_quote(highlight, full_text, chunks)
+            if paper is None:
+                raise HTTPException(status_code=404, detail="Paper not found")
+            if int(note.get("content_generation", 0)) != int(paper["content_generation"]):
+                raise HTTPException(
+                    status_code=409,
+                    detail="This highlight belongs to an earlier version of the paper.",
+                )
 
-        if result.verified:
+            # Staleness is checked before this idempotency return: a prior
+            # promotion does not make old evidence current after replacement.
+            if note["verification_status"] == "verified" and note["promoted_at"] is not None:
+                row = await conn.fetchrow(
+                    f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                    " JOIN papers p ON p.id = pn.paper_id WHERE pn.id = $1",
+                    note_id,
+                )
+                return _note_response(row)
+
+            highlight = str(note["highlight_text"] or "").strip()
+            if not highlight:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Zotero note has no highlight text to verify",
+                )
+
+            # Page-window optimisation — when the annotation carries a page
+            # number, first try a narrow ±2-page window to avoid loading the
+            # entire paper into memory for one verification call.
+            note_page = note["page_number"]
+            result = None
+            if note_page is not None:
+                window_rows = await conn.fetch(
+                    "SELECT * FROM paper_chunks"
+                    " WHERE paper_id = $1"
+                    "   AND page_number BETWEEN $2 AND $3"
+                    " ORDER BY chunk_index",
+                    note["paper_id"],
+                    note_page - 2,
+                    note_page + 2,
+                )
+                if window_rows:
+                    window_chunks = [row_to_chunk_response(row) for row in window_rows]
+                    window_full_text = "\n\n".join(chunk.content for chunk in window_chunks)
+                    window_result = verifier.verify_quote(
+                        highlight, window_full_text, window_chunks
+                    )
+                    if window_result.verified:
+                        result = window_result
+
+            if result is None:
+                chunk_rows = await conn.fetch(
+                    "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
+                    note["paper_id"],
+                )
+                chunks = [row_to_chunk_response(row) for row in chunk_rows]
+                full_text = "\n\n".join(chunk.content for chunk in chunks)
+                result = verifier.verify_quote(highlight, full_text, chunks)
+
+            if result.verified:
+                await conn.execute(
+                    """
+                    UPDATE paper_notes
+                       SET verification_status = 'verified',
+                           verified_quote = $1,
+                           verified_page_number = $2,
+                           promoted_at = NOW()
+                     WHERE id = $3
+                    """,
+                    result.matched_text or highlight,
+                    result.page_number or note["page_number"],
+                    note_id,
+                )
+            else:
+                await conn.execute(
+                    """
+                    UPDATE paper_notes
+                       SET verification_status = 'failed',
+                           verified_quote = NULL,
+                           verified_page_number = NULL,
+                           promoted_at = NULL
+                     WHERE id = $1
+                    """,
+                    note_id,
+                )
             row = await conn.fetchrow(
-                """
-                UPDATE paper_notes
-                   SET verification_status = 'verified',
-                       verified_quote = $1,
-                       verified_page_number = $2,
-                       promoted_at = NOW()
-                 WHERE id = $3
-                 RETURNING *
-                """,
-                result.matched_text or highlight,
-                result.page_number or note["page_number"],
-                note_id,
-            )
-        else:
-            row = await conn.fetchrow(
-                """
-                UPDATE paper_notes
-                   SET verification_status = 'failed',
-                       verified_quote = NULL,
-                       verified_page_number = NULL,
-                       promoted_at = NULL
-                 WHERE id = $1
-                 RETURNING *
-                """,
+                f"SELECT {_NOTE_RESPONSE_COLUMNS} FROM paper_notes pn"
+                " JOIN papers p ON p.id = pn.paper_id WHERE pn.id = $1",
                 note_id,
             )
 

@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 
 from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.testing import seed_user_row
 from paper_ingestion.ingestion.embed_store import EmbeddingStoreMixin
 from paper_ingestion.ingestion.search import EmbeddingSearchMixin
 from paper_ingestion.queries.predicates import paper_visible_sql
@@ -29,11 +32,6 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
-
-
-async def _seed_user(conn, email: str) -> int:
-    """Insert one user; return its id."""
-    return int(await conn.fetchval("INSERT INTO users (email) VALUES ($1) RETURNING id", email))
 
 
 async def _seed_paper(
@@ -68,6 +66,44 @@ async def _add_to_library(conn, user_id: int, paper_id: int) -> None:
         user_id,
         paper_id,
     )
+
+
+_SEEDED_PDF_PATH = "/data/pdfs/seeded.pdf"
+_SEEDED_CHUNK_COUNT = 2
+
+
+async def _seed_derived_pdf_content(conn, paper_id: int) -> None:
+    """Give *paper_id* the derived state a completed PDF run leaves behind."""
+    await conn.executemany(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content) VALUES ($1, $2, $3)",
+        [(paper_id, index, f"chunk {index}") for index in range(_SEEDED_CHUNK_COUNT)],
+    )
+    await conn.execute(
+        """UPDATE papers
+              SET pdf_downloaded = TRUE, pdf_local_path = $2, chunked_at = now()
+            WHERE id = $1""",
+        paper_id,
+        _SEEDED_PDF_PATH,
+    )
+
+
+async def _derived_pdf_content(conn, paper_id: int):
+    """Return the persisted PDF-derived columns plus the paper's chunk-row count."""
+    return await conn.fetchrow(
+        """SELECT p.pdf_downloaded, p.pdf_local_path, p.chunked_at,
+                  (SELECT COUNT(*) FROM paper_chunks c WHERE c.paper_id = p.id) AS chunk_count
+             FROM papers p
+            WHERE p.id = $1""",
+        paper_id,
+    )
+
+
+def _assert_derived_pdf_content_intact(state, cell: str) -> None:
+    """Both the chunk rows and the processing columns must survive unchanged."""
+    assert state["chunk_count"] == _SEEDED_CHUNK_COUNT, f"[{cell}] chunk rows were discarded"
+    assert state["pdf_downloaded"] is True, f"[{cell}] pdf_downloaded was reset"
+    assert state["pdf_local_path"] == _SEEDED_PDF_PATH, f"[{cell}] pdf_local_path was reset"
+    assert state["chunked_at"] is not None, f"[{cell}] chunked_at was reset"
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +151,7 @@ async def _assert_layers_agree(
 
 async def test_private_discoverer_without_membership_is_invisible(contract_conn):
     """Discoverer attribution cannot expose a private row."""
-    caller = await _seed_user(contract_conn, "vis-owner@contract.example.com")
+    caller = await seed_user_row(contract_conn, "vis-owner@contract.example.com")
     paper = await _seed_paper(contract_conn, "vis-owned", discovered_by=caller)
     await _assert_layers_agree(
         contract_conn, paper, caller, expected=False, cell="private-discoverer"
@@ -124,8 +160,8 @@ async def test_private_discoverer_without_membership_is_invisible(contract_conn)
 
 async def test_public_paper_visible_independently_of_discoverer(contract_conn):
     """Persisted public scope is visible without a library row."""
-    caller = await _seed_user(contract_conn, "vis-shared@contract.example.com")
-    other = await _seed_user(contract_conn, "vis-shared-other@contract.example.com")
+    caller = await seed_user_row(contract_conn, "vis-shared@contract.example.com")
+    other = await seed_user_row(contract_conn, "vis-shared-other@contract.example.com")
     paper = await _seed_paper(
         contract_conn,
         "vis-shared",
@@ -137,8 +173,8 @@ async def test_public_paper_visible_independently_of_discoverer(contract_conn):
 
 async def test_private_paper_in_library_visible(contract_conn):
     """Explicit caller-library membership exposes a private row."""
-    caller = await _seed_user(contract_conn, "vis-lib-caller@contract.example.com")
-    other = await _seed_user(contract_conn, "vis-lib-other@contract.example.com")
+    caller = await seed_user_row(contract_conn, "vis-lib-caller@contract.example.com")
+    other = await seed_user_row(contract_conn, "vis-lib-other@contract.example.com")
     paper = await _seed_paper(contract_conn, "vis-other-in-lib", discovered_by=other)
     await _add_to_library(contract_conn, caller, paper)
     await _assert_layers_agree(
@@ -148,7 +184,7 @@ async def test_private_paper_in_library_visible(contract_conn):
 
 async def test_unattributed_private_paper_not_in_library_invisible(contract_conn):
     """Null audit attribution does not make a private row public."""
-    caller = await _seed_user(contract_conn, "vis-nolib-caller@contract.example.com")
+    caller = await seed_user_row(contract_conn, "vis-nolib-caller@contract.example.com")
     paper = await _seed_paper(contract_conn, "vis-other-not-in-lib")
     await _assert_layers_agree(
         contract_conn, paper, caller, expected=False, cell="private-unattributed"
@@ -157,7 +193,7 @@ async def test_unattributed_private_paper_not_in_library_invisible(contract_conn
 
 async def test_unknown_source_obeys_scope_and_library_only(contract_conn):
     """An unknown source stays private but remains usable when explicitly shelved."""
-    caller = await _seed_user(contract_conn, "vis-unknown@contract.example.com")
+    caller = await seed_user_row(contract_conn, "vis-unknown@contract.example.com")
     paper = await _seed_paper(
         contract_conn,
         "vis-unknown",
@@ -178,9 +214,11 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     attach-only on conflict: it mutates no canonical column of an existing
     shared row (neither content nor scope). The server-owned adapter path
     (``upsert_verified_public_paper``) inserts public and, on conflict, re-owns
-    EVERY client-provided descriptive column and forces public scope — so
-    promotion fully sanitizes a pre-seeded private row while preserving
-    the insert-only audit provenance (``discovered_by``/``discovery_origin``).
+    EVERY client-provided descriptive column and forces public scope, while
+    preserving the insert-only audit provenance
+    (``discovered_by``/``discovery_origin``). Because a promotion that replaces
+    the row's source URL leaves its PDF-derived content describing the previous
+    one, that content is discarded rather than published under the new scope.
     """
     from datetime import date
 
@@ -253,7 +291,7 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     assert attached["visibility_scope"] == "private"
 
     # --- trusted promotion re-owns EVERY client column + forces public ---
-    audit_user = await _seed_user(contract_conn, "ten2b-discoverer@contract.example.com")
+    audit_user = await seed_user_row(contract_conn, "ten2b-discoverer@contract.example.com")
     seeded = await upsert_paper(
         contract_conn,
         PaperCreate(
@@ -272,6 +310,9 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     )
     assert seeded["visibility_scope"] == "private"
     assert seeded["discovery_origin"] == "user_initiated"
+    # Content produced from the seeded row's own pdf_url, as a completed PDF run
+    # would leave it behind.
+    await _seed_derived_pdf_content(contract_conn, seeded["id"])
 
     promoted = await upsert_verified_public_paper(
         contract_conn,
@@ -305,6 +346,22 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     assert promoted["discovered_by"] == audit_user
     assert promoted["discovery_origin"] == "user_initiated"
 
+    # The promotion supplied a different pdf_url, so everything derived from the
+    # superseded one is discarded instead of being published under public scope.
+    state = await _derived_pdf_content(contract_conn, promoted["id"])
+    assert state["chunk_count"] == 0, "chunk rows from the superseded pdf_url must be deleted"
+    assert state["pdf_downloaded"] is False
+    assert state["pdf_local_path"] is None
+    assert state["chunked_at"] is None
+    # Callers echo the returned record straight into their response, so it must
+    # report the reset rather than the pre-promotion pointers.
+    assert promoted["pdf_downloaded"] is False, (
+        "returned record must not echo a stale download flag"
+    )
+    assert promoted["pdf_local_path"] is None, "returned record must not echo a stale local path"
+    assert promoted["chunked_at"] is None
+    assert promoted["is_insert"] is False
+
     # The client path also cannot demote or mutate the now-public shared row.
     client_replay = await upsert_paper(
         contract_conn,
@@ -320,6 +377,616 @@ async def test_upsert_paths_persist_private_default_and_trusted_public_promotion
     assert client_replay["visibility_scope"] == "public"
     assert client_replay["source_type"] == "arxiv"
     assert client_replay["title"] == "Verified title"
+
+
+# ---------------------------------------------------------------------------
+# Derived-content retention: the three conditions under which a promotion must
+# leave PDF-derived content alone. Each test pins exactly one of them.
+# ---------------------------------------------------------------------------
+
+_ADAPTER_PDF_URL = "https://arxiv.org/pdf/2401.00002.pdf"
+
+
+def _adapter_paper(external_id: str, pdf_url: str | None):
+    """Build the metadata a verified arXiv adapter returns for *external_id*."""
+    from paper_ingestion.models.papers import PaperCreate, SourceType
+
+    return PaperCreate(
+        external_id=external_id,
+        source_type=SourceType.ARXIV,
+        title="Verified title",
+        authors=["Verified Author"],
+        url="https://arxiv.org/abs/derived-content",
+        pdf_url=pdf_url,
+    )
+
+
+async def test_promotion_retains_derived_content_when_source_url_is_unchanged(
+    contract_conn,
+) -> None:
+    """A promotion that confirms the stored source URL leaves derived content in place."""
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn, _adapter_paper("promotion-same-url", _ADAPTER_PDF_URL)
+    )
+    await _seed_derived_pdf_content(contract_conn, seeded["id"])
+
+    promoted = await upsert_verified_public_paper(
+        contract_conn, _adapter_paper("promotion-same-url", _ADAPTER_PDF_URL)
+    )
+
+    assert promoted["id"] == seeded["id"]
+    assert promoted["visibility_scope"] == "public"
+    assert promoted["pdf_downloaded"] is True, "returned record must keep the download state"
+    _assert_derived_pdf_content_intact(
+        await _derived_pdf_content(contract_conn, promoted["id"]), "same-url"
+    )
+
+
+async def test_public_paper_discards_derived_content_when_source_url_changes(
+    contract_conn,
+) -> None:
+    """A source revision invalidates content even when the row is already public."""
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+
+    created = await upsert_verified_public_paper(
+        contract_conn, _adapter_paper("promotion-public-revision", _ADAPTER_PDF_URL)
+    )
+    assert created["visibility_scope"] == "public"
+    await _seed_derived_pdf_content(contract_conn, created["id"])
+
+    refreshed = await upsert_verified_public_paper(
+        contract_conn,
+        _adapter_paper("promotion-public-revision", "https://arxiv.org/pdf/2401.00002v2.pdf"),
+    )
+
+    assert refreshed["id"] == created["id"]
+    assert refreshed["pdf_url"] == "https://arxiv.org/pdf/2401.00002v2.pdf"
+    state = await _derived_pdf_content(contract_conn, refreshed["id"])
+    assert state["chunk_count"] == 0
+    assert state["pdf_downloaded"] is False
+    assert state["pdf_local_path"] is None
+    assert state["chunked_at"] is None
+    assert refreshed["pdf_downloaded"] is False
+    assert refreshed["pdf_local_path"] is None
+    assert refreshed["chunked_at"] is None
+
+
+async def test_first_public_insert_reports_insert_and_discards_nothing(contract_conn) -> None:
+    """A brand-new public row takes no discard path, so callers still see is_insert."""
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
+
+    inserted = await upsert_verified_public_paper(
+        contract_conn, _adapter_paper("promotion-first-insert", _ADAPTER_PDF_URL)
+    )
+
+    assert inserted["is_insert"] is True, "an insert must not be reported as a conflict"
+    assert inserted["visibility_scope"] == "public"
+    assert inserted["pdf_downloaded"] is False
+    assert inserted["pdf_local_path"] is None
+
+
+async def test_promotion_discards_derived_content_inside_nested_transactions(
+    contract_conn,
+) -> None:
+    """The discard behaves correctly at the transaction depth the deck pipeline uses.
+
+    The deck pipeline promotes each card inside a deck-wide transaction plus a
+    per-card savepoint, and the promotion opens a block of its own inside those.
+    asyncpg maps nested blocks onto SAVEPOINTs, so this runs the real promotion
+    at that depth and pins that the discard commits and the enclosing blocks
+    stay usable afterwards.
+    """
+    from paper_ingestion.services.pdf_workflow import (
+        upsert_paper,
+        upsert_verified_public_paper,
+    )
+
+    seeded = await upsert_paper(
+        contract_conn,
+        _adapter_paper("promotion-nested", "https://arxiv.org/pdf/2401.00003.pdf"),
+    )
+    await _seed_derived_pdf_content(contract_conn, seeded["id"])
+
+    async with contract_conn.transaction():
+        async with contract_conn.transaction():
+            promoted = await upsert_verified_public_paper(
+                contract_conn, _adapter_paper("promotion-nested", _ADAPTER_PDF_URL)
+            )
+        enclosing_block_usable = await contract_conn.fetchval("SELECT 1")
+
+    assert enclosing_block_usable == 1, "the deck-wide block must survive the promotion"
+    assert promoted["id"] == seeded["id"]
+    assert promoted["pdf_downloaded"] is False
+    state = await _derived_pdf_content(contract_conn, promoted["id"])
+    assert state["chunk_count"] == 0
+    assert state["pdf_downloaded"] is False
+    assert state["chunked_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# Storage reclamation after a discard.
+#
+# Reclaiming the vector points, the stored PDF and the page images is disk
+# housekeeping, not the control that stops the superseded text being served —
+# that is the stored-chunk requirement in rag/streaming.py. These tests pin both
+# halves: the promotion write path does reclaim, and a reclamation that fails
+# changes neither the committed promotion nor what retrieval returns.
+# ---------------------------------------------------------------------------
+
+_SUPERSEDED_EXCERPT = "Text extracted from the superseded source URL."
+
+
+def _redirect_storage_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paper_id: int
+) -> tuple[Path, Path]:
+    """Point both storage roots at *tmp_path* and fill them for *paper_id*.
+
+    Returns the stored PDF path and the page-image directory a completed run
+    would have left behind.
+    """
+    from paper_ingestion.services import pdf_workflow
+
+    pdf_root = tmp_path / "pdfs"
+    snapshot_root = tmp_path / "snapshots"
+    pdf_root.mkdir()
+    pdf_path = pdf_root / f"{paper_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 superseded")
+    snapshot_dir = snapshot_root / str(paper_id)
+    snapshot_dir.mkdir(parents=True)
+    for page in (1, 2):
+        (snapshot_dir / f"page_{page}.png").write_bytes(b"")
+    monkeypatch.setattr(pdf_workflow, "PDF_STORAGE_PATH", str(pdf_root))
+    monkeypatch.setattr(pdf_workflow, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
+    return pdf_path, snapshot_dir
+
+
+async def test_search_persistence_reports_a_middle_failure_and_continues(
+    contract_conn, monkeypatch
+) -> None:
+    """A bad result neither hides earlier saves nor prevents later saves and cleanup."""
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.routers import search as search_router
+    from paper_ingestion.services.pdf_workflow import upsert_paper
+
+    caller = await seed_user_row(contract_conn, "partial-search@contract.example.com")
+    external_ids = [
+        "partial-search-first",
+        "partial-search-middle",
+        "partial-search-last",
+    ]
+    first = await upsert_paper(
+        contract_conn,
+        _adapter_paper(external_ids[0], "https://arxiv.org/pdf/2401.20001.pdf"),
+    )
+    last = await upsert_paper(
+        contract_conn,
+        _adapter_paper(external_ids[2], "https://arxiv.org/pdf/2401.20003.pdf"),
+    )
+    await _seed_derived_pdf_content(contract_conn, first["id"])
+    await _seed_derived_pdf_content(contract_conn, last["id"])
+
+    real_upsert = search_router.upsert_verified_public_paper
+
+    async def _fail_middle(conn, paper, **kwargs):
+        if paper.external_id == external_ids[1]:
+            raise RuntimeError("simulated persistence failure")
+        return await real_upsert(conn, paper, **kwargs)
+
+    reclaimed_ids: list[int] = []
+
+    async def _record_reclamation(paper_id: int, _db_pool) -> None:
+        reclaimed_ids.append(paper_id)
+
+    monkeypatch.setattr(search_router, "upsert_verified_public_paper", _fail_middle)
+    monkeypatch.setattr(
+        search_router,
+        "reclaim_discarded_paper_content",
+        _record_reclamation,
+    )
+
+    saved, failed = await search_router._persist_search_results(
+        SharedConnPool(contract_conn),
+        [_adapter_paper(external_id, _ADAPTER_PDF_URL) for external_id in external_ids],
+        caller,
+    )
+
+    assert [paper.external_id for paper in saved] == [external_ids[0], external_ids[2]]
+    assert [(failure.external_id, failure.error) for failure in failed] == [
+        (external_ids[1], "unknown_error")
+    ]
+    assert reclaimed_ids == [first["id"], last["id"]]
+
+    persisted = await contract_conn.fetch(
+        """SELECT p.external_id
+             FROM papers p
+             JOIN user_library ul ON ul.paper_id = p.id
+            WHERE ul.user_id = $1 AND p.external_id = ANY($2::text[])
+            ORDER BY p.external_id""",
+        caller,
+        external_ids,
+    )
+    assert [row["external_id"] for row in persisted] == sorted([external_ids[0], external_ids[2]])
+
+
+async def test_search_promotion_reclaims_the_discarded_files_and_vectors(
+    contract_conn, monkeypatch, tmp_path
+) -> None:
+    """The search write path frees the storage a discarded promotion leaves behind."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/search.py:206
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.routers.search import _persist_search_results
+    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services.pdf_workflow import upsert_paper
+
+    caller = await seed_user_row(contract_conn, "reclaim-search@contract.example.com")
+    seeded = await upsert_paper(
+        contract_conn,
+        _adapter_paper("promotion-reclaim-search", "https://arxiv.org/pdf/2401.10001.pdf"),
+    )
+    await _seed_derived_pdf_content(contract_conn, seeded["id"])
+    pdf_path, snapshot_dir = _redirect_storage_roots(tmp_path, monkeypatch, seeded["id"])
+
+    reclaimed_vector_ids: list[int] = []
+
+    async def _record_vector_delete(paper_id: int) -> None:
+        reclaimed_vector_ids.append(paper_id)
+
+    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _record_vector_delete)
+
+    saved, failed = await _persist_search_results(
+        SharedConnPool(contract_conn),
+        [_adapter_paper("promotion-reclaim-search", _ADAPTER_PDF_URL)],
+        caller,
+    )
+
+    assert len(saved) == 1
+    assert failed == []
+    assert (await _derived_pdf_content(contract_conn, seeded["id"]))["chunk_count"] == 0, (
+        "precondition: the promotion discarded the derived content"
+    )
+    assert reclaimed_vector_ids == [seeded["id"]], (
+        f"the vector delete must run exactly once for the promoted paper: {reclaimed_vector_ids}"
+    )
+    assert not pdf_path.exists(), "the PDF stored for the superseded source URL must be removed"
+    assert not snapshot_dir.exists(), (
+        "page images rendered from the superseded PDF must be removed whole, so a shorter "
+        "re-derived document cannot leave higher-numbered pages behind"
+    )
+
+
+async def test_promotion_stands_when_reclamation_fails_and_retrieval_stays_closed(
+    contract_conn, monkeypatch, tmp_path
+) -> None:
+    """A failing reclamation is absorbed rather than rolled back.
+
+    Reclamation is housekeeping, so its failure must not undo a committed
+    promotion and must not reach the caller: the route awaiting this write path
+    has no handler for it and would answer 500 instead of 200. What a library
+    member gets back for the superseded text is decided by the stored-chunk
+    requirement, which the failure leaves untouched.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:1171
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
+    from paper_ingestion.routers.search import _persist_search_results
+    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services.pdf_workflow import upsert_paper
+
+    reader = await seed_user_row(contract_conn, "reclaim-fault@contract.example.com")
+    seeded = await upsert_paper(
+        contract_conn,
+        _adapter_paper("promotion-reclaim-fault", "https://arxiv.org/pdf/2401.10002.pdf"),
+    )
+    await _seed_derived_pdf_content(contract_conn, seeded["id"])
+    pdf_path, snapshot_dir = _redirect_storage_roots(tmp_path, monkeypatch, seeded["id"])
+
+    async def _fail_vector_delete(paper_id: int) -> None:
+        raise RuntimeError("vector store unavailable")
+
+    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _fail_vector_delete)
+
+    pool = SharedConnPool(contract_conn)
+    saved, failed = await _persist_search_results(
+        pool,
+        [_adapter_paper("promotion-reclaim-fault", _ADAPTER_PDF_URL)],
+        reader,
+    )
+
+    assert len(saved) == 1, "the write path must complete so its route can still answer"
+    assert failed == []
+    state = await _derived_pdf_content(contract_conn, seeded["id"])
+    assert state["chunk_count"] == 0, "the promotion must stay committed"
+    assert state["pdf_downloaded"] is False
+    assert state["pdf_local_path"] is None
+    # The steps after the failing one still run.
+    assert not pdf_path.exists()
+    assert not snapshot_dir.exists()
+
+    # The vector layer still offers the superseded excerpt, exactly the state a
+    # failed vector delete leaves behind.
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(
+            return_value=[
+                {
+                    "paper_id": seeded["id"],
+                    "chunk_index": 0,
+                    "content": _SUPERSEDED_EXCERPT,
+                    "page_number": 1,
+                    "score": 0.95,
+                }
+            ]
+        ),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+    result = await prepare_cross_paper_rag(
+        embedder,
+        pool,
+        CrossPaperAskRequest(question="What does the paper say?", decompose=False),
+        AsyncMock(),
+        user_id=reader,
+    )
+
+    assert isinstance(result, CrossPaperRagNoResults), (
+        f"retrieval must yield nothing for the superseded text, got {result!r}"
+    )
+    assert result.sources == []
+
+
+# ---------------------------------------------------------------------------
+# The promotion boundary end to end, over HTTP.
+#
+# POST /api/search is the route a reader reaches a promotion through, so these
+# two run the whole path rather than the write helper underneath it: a private
+# paper carrying the derived content of a completed run, a promotion made over
+# HTTP by a second user, then that user's own reads of the paper detail, the
+# stored PDF, a page image and cross-paper retrieval. Only the source plugin
+# and the vector store are stubbed. The pair differs in one input — whether the
+# adapter confirms the stored source URL or replaces it — so together they pin
+# both that a superseded read is closed and that a confirmed one is untouched.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _promotion_app(contract_conn):
+    """Paper-ingestion app on the contract connection, with session-cookie auth active."""
+    from unittest.mock import MagicMock
+
+    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
+    from paper_ingestion.main import app
+
+    with (
+        patch_app_state(
+            app,
+            {
+                "db_pool": SharedConnPool(contract_conn),
+                "embedder": None,
+                "http_client": MagicMock(),
+            },
+        ),
+        patch_dependency_overrides(
+            app, remove_overrides={current_user_id_strict_with_owner_override}
+        ),
+    ):
+        yield app
+
+
+def _serve_storage_roots_to_routes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point the PDF and page-image routes at the roots the workflow was redirected to."""
+    from paper_ingestion.routers import pdfs, snapshots
+
+    monkeypatch.setattr(pdfs, "PDF_STORAGE_PATH", str(tmp_path / "pdfs"))
+    monkeypatch.setattr(snapshots, "SNAPSHOT_STORAGE_PATH", str(tmp_path / "snapshots"))
+
+
+def _adapter_returns(monkeypatch: pytest.MonkeyPatch, paper) -> None:
+    """Stub source resolution so POST /api/search yields *paper* from the arXiv adapter."""
+    from unittest.mock import AsyncMock
+
+    from paper_ingestion.models import SourceType
+
+    plugin = AsyncMock()
+    plugin.search = AsyncMock(return_value=[paper])
+
+    async def _resolver(source_types, db_pool, http_client, request):
+        return {SourceType.ARXIV: plugin}, {}
+
+    monkeypatch.setattr("paper_ingestion.routers.search._resolve_sources_for_search", _resolver)
+
+
+_SEARCH_BODY = {"query": "verified title", "source_types": ["arxiv"], "max_results": 5}
+
+
+async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
+    contract_conn, contract_two_users, _promotion_app, _configure_api_key, monkeypatch, tmp_path
+) -> None:
+    """Promoting over POST /api/search leaves the promoting reader nothing derived to read.
+
+    The saving user's paper carries a source URL of its own plus everything a
+    completed run produces: chunk rows, a stored PDF and rendered page images.
+    The second user's search returns the adapter's own URL for the same
+    external id, so the promotion supersedes all of it. Every surface that
+    could still hand that content back is then read as that second user.
+
+    The file routes are read twice. Reclamation has already removed both files
+    by the time the promotion route returns, so the first pair of 404s does not
+    on its own show the stored-pointer predicate doing anything. The second pair
+    is taken with the files restored on disk, where only that predicate can
+    still refuse them.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/routers/search.py:250 (POST /api/search)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:67 (chunks)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/snapshots.py:18 (page images)
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import make_contract_client
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
+    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services.pdf_workflow import upsert_paper
+
+    external_id = "promotion-http-superseded"
+    seeded = await upsert_paper(
+        contract_conn, _adapter_paper(external_id, "https://arxiv.org/pdf/2401.30001.pdf")
+    )
+    paper_id = int(seeded["id"])
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _seed_derived_pdf_content(contract_conn, paper_id)
+    pdf_path, snapshot_dir = _redirect_storage_roots(tmp_path, monkeypatch, paper_id)
+    _serve_storage_roots_to_routes(monkeypatch, tmp_path)
+    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", AsyncMock())
+    _adapter_returns(monkeypatch, _adapter_paper(external_id, _ADAPTER_PDF_URL))
+
+    async with make_contract_client(_promotion_app, contract_two_users.cookie_a) as owner:
+        owner_pdf = await owner.get(f"/api/pdfs/{paper_id}")
+        owner_page = await owner.get(f"/api/snapshots/{paper_id}/1")
+    assert owner_pdf.status_code == 200, (
+        "precondition: the files derived from the saving user's own source URL do serve"
+    )
+    assert owner_page.status_code == 200, "precondition: the rendered page image does serve"
+
+    async with make_contract_client(_promotion_app, contract_two_users.cookie_b) as reader:
+        promotion = await reader.post("/api/search", json=_SEARCH_BODY)
+        assert promotion.status_code == 200, promotion.text[:300]
+        persistence = promotion.json()
+        assert [paper["external_id"] for paper in persistence["saved"]] == [external_id]
+        assert persistence["failed"] == []
+        detail = await reader.get(f"/api/papers/{paper_id}")
+        pdf = await reader.get(f"/api/pdfs/{paper_id}")
+        page = await reader.get(f"/api/snapshots/{paper_id}/1")
+
+    assert detail.status_code == 200, detail.text[:300]
+    assert detail.json()["chunks"] == [], (
+        f"the paper must report no stored chunk: {detail.json()['chunks']}"
+    )
+    assert pdf.status_code == 404, f"the superseded PDF must not serve: {pdf.status_code}"
+    assert page.status_code == 404, f"the superseded page image must not serve: {page.status_code}"
+    assert not pdf_path.exists(), "the deferred reclamation must remove the stored PDF"
+    assert not snapshot_dir.exists(), "the deferred reclamation must remove the page images"
+
+    # The promotion route awaits reclamation before returning, so both files
+    # were already gone when those two requests ran and either route would have
+    # answered 404 whatever the stored-pointer predicate said. Putting the files
+    # back and asking again separates the two: the paper is still visible to
+    # this reader and the bytes are on disk, so only the pointer the promotion
+    # cleared can still refuse them.
+    pdf_path.write_bytes(b"%PDF-1.4 restored on disk")
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "page_1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    async with make_contract_client(_promotion_app, contract_two_users.cookie_b) as reader:
+        restored_pdf = await reader.get(f"/api/pdfs/{paper_id}")
+        restored_page = await reader.get(f"/api/snapshots/{paper_id}/1")
+
+    assert restored_pdf.status_code == 404, (
+        "with the file back on disk the refusal must come from the cleared pointer, "
+        f"got {restored_pdf.status_code}"
+    )
+    assert restored_page.status_code == 404, (
+        "the page-image route shares that guard, so it must refuse for the same reason, "
+        f"got {restored_page.status_code}"
+    )
+
+    # Retrieval is asked with the vector layer still offering the superseded
+    # excerpt — the state a failed or deferred vector delete leaves behind.
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(
+            return_value=[
+                {
+                    "paper_id": paper_id,
+                    "chunk_index": 0,
+                    "content": _SUPERSEDED_EXCERPT,
+                    "page_number": 1,
+                    "score": 0.95,
+                }
+            ]
+        ),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+    result = await prepare_cross_paper_rag(
+        embedder,
+        SharedConnPool(contract_conn),
+        CrossPaperAskRequest(question="What does the paper say?", decompose=False),
+        AsyncMock(),
+        user_id=contract_two_users.user_b_id,
+    )
+    assert isinstance(result, CrossPaperRagNoResults), (
+        f"retrieval must yield nothing for the superseded text, got {result!r}"
+    )
+    assert result.sources == []
+
+
+async def test_promotion_confirming_the_source_url_keeps_the_paper_whole_over_http(
+    contract_conn, contract_two_users, _promotion_app, _configure_api_key, monkeypatch, tmp_path
+) -> None:
+    """A promotion that confirms the stored source URL changes nothing a reader can reach.
+
+    Same route and same reader as the superseded case; the one difference is
+    that the adapter returns the URL the paper already carries. The derived
+    columns and chunk rows must survive, the stored PDF must still serve over
+    HTTP, and nothing may decide the paper needs analysing again. The reading
+    list is where that decision is made, so it is exercised here: it reads
+    exactly the chunk rows the promotion left in place.
+    """
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:48
+    #   (PUT /api/papers/{id}/save defers paper.analyze only when no chunk row exists)
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.testing_contract_apps import make_contract_client
+    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services.pdf_workflow import upsert_paper
+
+    external_id = "promotion-http-confirmed"
+    seeded = await upsert_paper(contract_conn, _adapter_paper(external_id, _ADAPTER_PDF_URL))
+    paper_id = int(seeded["id"])
+    await _add_to_library(contract_conn, contract_two_users.user_a_id, paper_id)
+    await _seed_derived_pdf_content(contract_conn, paper_id)
+    pdf_path, snapshot_dir = _redirect_storage_roots(tmp_path, monkeypatch, paper_id)
+    _serve_storage_roots_to_routes(monkeypatch, tmp_path)
+    reclaimed_vector_ids: list[int] = []
+
+    async def _record_vector_delete(reclaimed_id: int) -> None:
+        reclaimed_vector_ids.append(reclaimed_id)
+
+    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _record_vector_delete)
+    _adapter_returns(monkeypatch, _adapter_paper(external_id, _ADAPTER_PDF_URL))
+
+    analyze_task = MagicMock()
+    analyze_task.defer_async = AsyncMock()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": analyze_task}):
+        async with make_contract_client(_promotion_app, contract_two_users.cookie_b) as reader:
+            promotion = await reader.post("/api/search", json=_SEARCH_BODY)
+            assert promotion.status_code == 200, promotion.text[:300]
+            pdf = await reader.get(f"/api/pdfs/{paper_id}")
+            reading_list = await reader.put(f"/api/papers/{paper_id}/save")
+
+    assert pdf.status_code == 200, f"the stored PDF must still serve: {pdf.status_code}"
+    assert reading_list.status_code == 200, reading_list.text[:300]
+    analyze_task.defer_async.assert_not_awaited()
+    assert reclaimed_vector_ids == [], (
+        f"nothing was discarded, so no vector delete may run: {reclaimed_vector_ids}"
+    )
+    _assert_derived_pdf_content_intact(
+        await _derived_pdf_content(contract_conn, paper_id), "http-confirmed"
+    )
+    assert pdf_path.exists() and snapshot_dir.exists(), (
+        "a confirmed source URL must leave the stored files in place"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +1025,7 @@ async def _unsummarized_holders(conn, paper_id: int) -> set[int]:
 
 async def test_holder_without_any_summary_is_selected(contract_conn):
     """A library holder with no summary at all is selected for summarization."""
-    holder = await _seed_user(contract_conn, "sum-plain-holder@contract.example.com")
+    holder = await seed_user_row(contract_conn, "sum-plain-holder@contract.example.com")
     paper = await _seed_paper(contract_conn, "sum-plain")
     await _add_to_library(contract_conn, holder, paper)
 
@@ -367,12 +1034,26 @@ async def test_holder_without_any_summary_is_selected(contract_conn):
 
 async def test_holder_with_own_summary_is_not_selected(contract_conn):
     """A holder who already has THEIR OWN summary is skipped — no redundant LLM spend."""
-    holder = await _seed_user(contract_conn, "sum-own-holder@contract.example.com")
+    holder = await seed_user_row(contract_conn, "sum-own-holder@contract.example.com")
     paper = await _seed_paper(contract_conn, "sum-own")
     await _add_to_library(contract_conn, holder, paper)
     await _seed_summary(contract_conn, paper, holder)
 
     assert await _unsummarized_holders(contract_conn, paper) == set()
+
+
+async def test_holder_with_only_a_stale_summary_is_selected(contract_conn):
+    """A prior-generation summary cannot suppress automatic regeneration."""
+    holder = await seed_user_row(contract_conn, "sum-stale-holder@contract.example.com")
+    paper = await _seed_paper(contract_conn, "sum-stale")
+    await _add_to_library(contract_conn, holder, paper)
+    await _seed_summary(contract_conn, paper, holder)
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        paper,
+    )
+
+    assert await _unsummarized_holders(contract_conn, paper) == {holder}
 
 
 async def test_holder_still_selected_when_a_different_user_has_a_summary(contract_conn):
@@ -381,8 +1062,8 @@ async def test_holder_still_selected_when_a_different_user_has_a_summary(contrac
     A paper-global EXISTS(paper_summaries WHERE paper_id = $1) — the shipped bug —
     returns zero holders here, leaving B with a summary they can never read.
     """
-    summarized = await _seed_user(contract_conn, "sum-cross-a@contract.example.com")
-    pending = await _seed_user(contract_conn, "sum-cross-b@contract.example.com")
+    summarized = await seed_user_row(contract_conn, "sum-cross-a@contract.example.com")
+    pending = await seed_user_row(contract_conn, "sum-cross-b@contract.example.com")
     paper = await _seed_paper(contract_conn, "sum-cross")
     await _add_to_library(contract_conn, summarized, paper)
     await _add_to_library(contract_conn, pending, paper)
@@ -401,13 +1082,37 @@ async def test_non_holder_is_never_selected_even_with_a_summary_row(contract_con
 
     A user with a summary row but no library entry must not be re-summarized.
     """
-    holder = await _seed_user(contract_conn, "sum-nonholder-holder@contract.example.com")
-    stranger = await _seed_user(contract_conn, "sum-nonholder-stranger@contract.example.com")
+    holder = await seed_user_row(contract_conn, "sum-nonholder-holder@contract.example.com")
+    stranger = await seed_user_row(contract_conn, "sum-nonholder-stranger@contract.example.com")
     paper = await _seed_paper(contract_conn, "sum-nonholder")
     await _add_to_library(contract_conn, holder, paper)
     await _seed_summary(contract_conn, paper, stranger)
 
     assert await _unsummarized_holders(contract_conn, paper) == {holder}
+
+
+async def test_process_library_marks_a_stale_summary_for_regeneration(contract_conn):
+    """Process-library treats a retained prior-generation summary as missing."""
+    from paper_ingestion.paper_jobs import _PROCESS_LIBRARY_SELECTION
+
+    holder = await seed_user_row(contract_conn, "process-stale-holder@contract.example.com")
+    paper = await _seed_paper(contract_conn, "process-stale")
+    await _add_to_library(contract_conn, holder, paper)
+    await _seed_summary(contract_conn, paper, holder)
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        paper,
+    )
+
+    rows = await contract_conn.fetch(
+        _PROCESS_LIBRARY_SELECTION,
+        holder,
+        True,
+        100,
+        0,
+    )
+    selected = next(row for row in rows if int(row["id"]) == paper)
+    assert selected["needs_summary"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -606,8 +1311,11 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
         )
         embedder = _LiveVisibilityEmbedder(qdrant, generation)
 
-        caller = await _seed_user(contract_conn, f"{collection_name}@contract.example.com")
-        other = await _seed_user(contract_conn, f"other-{collection_name}@contract.example.com")
+        caller = await seed_user_row(contract_conn, f"{collection_name}@contract.example.com")
+        other = await seed_user_row(
+            contract_conn,
+            f"other-{collection_name}@contract.example.com",
+        )
 
         public_repair = await _seed_paper(
             contract_conn,

@@ -5,7 +5,7 @@
 - **Docker Engine** 24+ with Docker Compose v2.24.4+
 - **Host tools**: Python 3, `openssl`, `curl`, and `git`
 - **RAM**: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)
-- **Disk**: a cold install has a one-time peak of roughly **25–53 GB** depending on your hardware tier — see [Disk budget](#disk-budget) below. The durable footprint afterward is much smaller, plus PDFs and page snapshots that accumulate over time.
+- **Disk**: a default cold install has a one-time peak of roughly **27–54 GB** depending on the selected model and image path — see [Disk budget](#disk-budget) below. Custom models may require more. The durable footprint afterward is much smaller, plus PDFs and page snapshots that accumulate over time.
 - **GPU**: NVIDIA GPU optional (faster Ollama inference). On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported but slower. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop. GPU acceleration is enabled via the `docker-compose.gpu.yml` overlay; `setup.sh` adds it automatically when it detects the Docker nvidia runtime.
 - **OS**: Linux recommended. macOS supported. Windows via WSL2.
 - **Python**: 3.12+ for all services
@@ -26,14 +26,16 @@ From v1.1.0, JARVIS publishes prebuilt images to GitHub Container Registry; `set
 
 **Ollama model set by hardware tier** (what `setup.sh` pulls automatically — see [hardware-and-models.md](manual/hardware-and-models.md) for the tier table):
 
-| Tier | Model set | Size |
-|------|-----------|------|
-| CPU / < 10 GB VRAM | `qwen3:4b` + `qwen3-embedding:4b` | ~5 GB |
-| 10–19 GB VRAM | `qwen3:8b` + `qwen3:4b` + `qwen3-embedding:4b` | ~10 GB |
-| 20–39 GB VRAM | `qwen3:14b` + `qwen3:4b` + `qwen3-embedding:4b` | ~14 GB |
-| ≥ 40 GB VRAM | `qwen3:30b-a3b` + `qwen3:4b` + `qwen3-embedding:4b` | ~22 GB |
+| Setup bucket | Installer pull set | Size |
+|--------------|--------------------|------|
+| `cpu` | `qwen3:1.7b,qwen3:4b,qwen3-embedding:4b` | ~7 GB |
+| `lt-8` | `qwen3:1.7b,qwen3:4b,qwen3-embedding:4b` | ~7 GB |
+| `8-16` | `qwen2.5:7b-instruct,qwen3:4b,qwen3-embedding:4b` | ~10 GB |
+| `16-24` | `qwen2.5:7b-instruct,qwen3:4b,qwen3-embedding:4b` | ~10 GB |
+| `24-48` | `qwen3:14b,qwen3:4b,qwen3-embedding:4b` | ~15 GB |
+| `ge-48` | `qwen3:30b-a3b,qwen3:4b,qwen3-embedding:4b` | ~23 GB |
 
-**Cold-install peak = application images + 14 GB of infrastructure images + your tier's model set.** Worst case (CUDA build, top tier): 17 + 14 + 22 ≈ **53 GB**. Smallest case (GHCR pull, bottom tier): 6 + 14 + 5 ≈ **25 GB**. `setup.sh` builds/pulls the application images first, then downloads the model set, so this is a one-time additive peak, not a steady-state requirement.
+**Cold-install peak = application images + 14 GB of infrastructure images + your tier's model set.** Worst default case (CUDA build, `ge-48`): 17 + 14 + 23 = **54 GB**. Smallest default case (GHCR pull, `cpu`): 6 + 14 + 7 = **27 GB**. `setup.sh` builds or pulls the application images first, then downloads the model set, so this is a one-time additive peak, not a steady-state requirement. A custom `--smart-model` may be larger than this default 27–54 GB range; `setup.sh --check --smart-model <tag>` reports the selected install's calculated requirement.
 
 After a successful local build, Docker may retain builder cache. Running
 `docker builder prune -af` is optional and host-wide: it removes unused build

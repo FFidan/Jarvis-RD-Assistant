@@ -8,27 +8,23 @@ per result).
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from jarvis_common.library import fan_out_to_topic_users, list_users_with_topic
-from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.models import PaperCreate, TopicRef
 from paper_ingestion.pipelines import auto_fetch as af
+from tests._paper_fakes import make_paper_create
 
 
-# Keep local: auto-fetch-specific paper (discovery_origin/citation_count/metadata kwargs) not in pulse_helpers.make_pulse_paper.
 def _make_paper(idx: int = 0) -> PaperCreate:
-    return PaperCreate(
+    """Build a distinct paper returned by a source poll."""
+    return make_paper_create(
         external_id=f"arxiv:1000.0000{idx}",
-        source_type=SourceType.ARXIV,
         title=f"Paper {idx}",
         authors=["Alice"],
         abstract="abs",
         url="https://example.org",
-        pdf_url=None,
-        citation_count=0,
-        metadata={},
-        discovery_origin="user_initiated",
     )
 
 
@@ -115,6 +111,50 @@ async def test_run_auto_pipeline_fans_out_per_topic(monkeypatch):
     fake_source.fetch_new_since.assert_awaited_once()
     topics_arg = fake_source.fetch_new_since.await_args.args[1]
     assert topics_arg == [TopicRef(id=11, name="diffusion")]
+
+
+@pytest.mark.asyncio
+async def test_run_auto_pipeline_threads_configured_query_terms(monkeypatch):
+    """The source receives each topic's configured ``query_terms``, not just its name."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [{"id": 1, "source_type": "arxiv", "enabled": True, "config": {}, "display_order": 1}],
+            [{"id": 9, "name": "RL", "query_terms": ["reinforcement learning"]}],  # topics query
+            [],  # to_download
+            [],  # to_process
+        ]
+    )
+
+    pool = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire = MagicMock(return_value=ctx)
+
+    fake_source = MagicMock()
+    fake_source.fetch_new_since = AsyncMock(return_value=[])
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=pool,
+            http_client=MagicMock(),
+            pdf_processor=MagicMock(),
+            embedder=MagicMock(),
+        )
+    )
+
+    with patch(
+        "paper_ingestion.pipelines.auto_fetch.get_source_class",
+        return_value=lambda *a, **kw: fake_source,
+    ):
+        await af.run_auto_pipeline(app)
+
+    fake_source.fetch_new_since.assert_awaited_once()
+    topics_arg = fake_source.fetch_new_since.await_args.args[1]
+    assert topics_arg == [TopicRef(id=9, name="RL", query_terms=["reinforcement learning"])]
 
 
 @pytest.mark.asyncio
@@ -325,6 +365,87 @@ async def test_discover_and_save_passes_exact_pool_to_source_constructor():
     rows = [{"id": 9, "source_type": "arxiv", "enabled": True, "config": {}}]
 
     with patch("paper_ingestion.pipelines.auto_fetch.get_source_class", return_value=StrictSource):
-        await af._discover_and_save(app, pool, rows, [(12, "graphs")])
+        await af._discover_and_save(app, pool, rows, [(12, "graphs", [])])
 
     assert captured["db_pool"] is pool
+
+
+@pytest.mark.asyncio
+async def test_discover_and_save_drains_every_id_a_promotion_recorded():
+    """Discovery drains the collector once per recorded id, after the connection is released.
+
+    Unlike the pulse deck loop, this loop hands every promotion the same
+    run-wide collector rather than a per-item list merged on success, so an id
+    a promotion has recorded is drained even when that promotion then fails.
+    Both fakes here therefore record before failing, which is where the pulse
+    sibling's per-card list makes the two loops differ. What keeps a rolled-back
+    promotion from recording anything at all is
+    ``upsert_verified_public_paper`` appending only after its own transaction
+    block ends, which is pinned against the real function in
+    tests/test_pdf_workflow.py.
+
+    Verified: paper_ingestion/pipelines/auto_fetch.py:114-157 (one collector for
+    the whole loop, filled inside the connection block and drained after it)
+    """
+    order: list[object] = []
+    conn = AsyncMock()
+    pool = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+
+    async def _release(*_args) -> bool:
+        order.append("connection released")
+        return False
+
+    ctx.__aexit__ = AsyncMock(side_effect=_release)
+    pool.acquire = MagicMock(return_value=ctx)
+
+    committed, rolled_back = _make_paper(0), _make_paper(1)
+    fake_source = MagicMock()
+    fake_source.fetch_new_since = AsyncMock(return_value=[committed, rolled_back])
+
+    async def fake_upsert(conn_arg, paper, *, discarded_content_ids=None, **kwargs):
+        # Both promotions record a discard; only the second then fails.
+        discarded_content_ids.append(111 if paper is committed else 222)
+        if paper is rolled_back:
+            raise RuntimeError("promotion failed after it recorded an id")
+        return {"id": 111, "is_insert": False}
+
+    async def _record_reclaim(paper_id, _pool) -> None:
+        order.append(paper_id)
+
+    reclaimed = AsyncMock(side_effect=_record_reclaim)
+    app = SimpleNamespace(state=SimpleNamespace(http_client=MagicMock()))
+
+    with (
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.get_source_class",
+            return_value=lambda *a, **kw: fake_source,
+        ),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.upsert_verified_public_paper",
+            side_effect=fake_upsert,
+        ),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.fan_out_to_topic_users",
+            AsyncMock(return_value=1),
+        ),
+        patch(
+            "paper_ingestion.pipelines.auto_fetch.reclaim_discarded_paper_content",
+            reclaimed,
+        ),
+    ):
+        await af._discover_and_save(
+            app,
+            pool,
+            [{"id": 1, "source_type": "arxiv", "enabled": True, "config": {}}],
+            [(11, "diffusion", [])],
+        )
+
+    assert reclaimed.await_args_list == [call(111, pool), call(222, pool)], (
+        "every recorded id must be drained once, in the order it was recorded; "
+        f"got {reclaimed.await_args_list}"
+    )
+    assert order == ["connection released", 111, 222], (
+        f"reclaiming must not hold a pool slot: {order}"
+    )

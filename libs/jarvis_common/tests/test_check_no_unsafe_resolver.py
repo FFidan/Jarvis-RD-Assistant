@@ -12,6 +12,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Load the script as a module (it lives in scripts/, not on sys.path).
 # ---------------------------------------------------------------------------
@@ -97,12 +99,6 @@ class TestDependsOnUnsafe:
         assert len(hits) == 1
         assert "uid" in hits[0][1]
 
-    def test_aliased_name_not_flagged_without_alias_set(self) -> None:
-        """Without the alias set, Depends(uid) should pass — uid is unknown."""
-        src = "x = Depends(uid)"
-        hits = _depends_on_unsafe(_parse(src))
-        assert hits == []
-
     def test_attribute_form_flagged(self) -> None:
         """Depends(auth.current_user_id_or_none) must be caught."""
         src = "x = Depends(auth.current_user_id_or_none)"
@@ -110,15 +106,18 @@ class TestDependsOnUnsafe:
         assert len(hits) == 1
         assert "current_user_id_or_none" in hits[0][1]
 
-    def test_attribute_form_safe_name_not_flagged(self) -> None:
-        src = "x = Depends(auth.current_user_id_strict)"
-        hits = _depends_on_unsafe(_parse(src))
-        assert hits == []
-
-    def test_safe_depends_not_flagged(self) -> None:
-        src = "x = Depends(current_user_id_strict)"
-        hits = _depends_on_unsafe(_parse(src))
-        assert hits == []
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "x = Depends(uid)",
+            "x = Depends(auth.current_user_id_strict)",
+            "x = Depends(current_user_id_strict)",
+        ],
+        ids=("unknown-alias", "safe-attribute", "safe-name"),
+    )
+    def test_safe_dependency_not_flagged(self, src: str) -> None:
+        """Unknown aliases and strict resolvers are not reported as unsafe."""
+        assert _depends_on_unsafe(_parse(src)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -187,54 +186,53 @@ class TestMissingResolver:
         assert "GET /feedback-summary" in hits[0][1]
         assert "feedback_summary" in hits[0][1]
 
-    def test_depends_strict_param_satisfies(self) -> None:
-        src = (
-            "@router.get('/missing-foundational')\n"
-            "async def mf(request: Request, "
-            "user_id: int = Depends(current_user_id_strict)):\n"
-            "    return []\n"
-        )
-        assert _missing_resolver(_parse(src), _REL) == []
-
-    def test_direct_body_call_satisfies(self) -> None:
-        """`await current_user_id_strict(request)` in the body counts."""
-        src = (
-            "@router.post('/scan')\n"
-            "async def scan(request: Request):\n"
-            "    user_id = await current_user_id_strict(request)\n"
-            "    return user_id\n"
-        )
-        assert _missing_resolver(_parse(src), _REL) == []
-
-    def test_route_level_dependencies_satisfies(self) -> None:
-        src = (
-            "@router.get('/x', dependencies=[Depends(require_admin)])\n"
-            "async def x(request: Request):\n"
-            "    return {}\n"
-        )
-        assert _missing_resolver(_parse(src), _REL) == []
-
-    def test_router_level_dependency_satisfies_all(self) -> None:
-        src = (
-            "router = APIRouter("
-            "dependencies=[Depends(current_user_id_strict)])\n"
-            "@router.get('/a')\n"
-            "async def a(request: Request):\n"
-            "    return {}\n"
-        )
-        assert _missing_resolver(_parse(src), _REL) == []
-
-    def test_route_allowlist_exempts(self) -> None:
-        """An exact path in ROUTE_ALLOWLIST is not flagged."""
-        rel = "services/paper_ingestion/paper_ingestion/routers/backups.py"
-        src = (
-            "@router.post('/restore/acknowledge')\n"
-            "async def acknowledge_restore(request: Request):\n"
-            "    return None\n"
-        )
+    @pytest.mark.parametrize(
+        ("rel", "src"),
+        [
+            (
+                _REL,
+                "@router.get('/missing-foundational')\n"
+                "async def mf(request: Request, "
+                "user_id: int = Depends(current_user_id_strict)):\n"
+                "    return []\n",
+            ),
+            (
+                _REL,
+                "@router.post('/scan')\n"
+                "async def scan(request: Request):\n"
+                "    user_id = await current_user_id_strict(request)\n"
+                "    return user_id\n",
+            ),
+            (
+                _REL,
+                "@router.get('/x', dependencies=[Depends(require_admin)])\n"
+                "async def x(request: Request):\n"
+                "    return {}\n",
+            ),
+            (
+                _REL,
+                "router = APIRouter(dependencies=[Depends(current_user_id_strict)])\n"
+                "@router.get('/a')\n"
+                "async def a(request: Request):\n"
+                "    return {}\n",
+            ),
+            (
+                "services/paper_ingestion/paper_ingestion/routers/backups.py",
+                "@router.post('/restore/acknowledge')\n"
+                "async def acknowledge_restore(request: Request):\n"
+                "    return None\n",
+            ),
+            (_REL, "async def helper(conn):\n    return 1\n"),
+        ],
+        ids=(
+            "strict-dependency",
+            "strict-body-call",
+            "route-dependency",
+            "router-dependency",
+            "allowlisted-route",
+            "non-route-function",
+        ),
+    )
+    def test_resolved_or_exempt_handler_not_flagged(self, rel: str, src: str) -> None:
+        """Handlers with a resolver or an explicit exemption are accepted."""
         assert _missing_resolver(_parse(src), rel) == []
-
-    def test_non_route_function_ignored(self) -> None:
-        """Helper functions without a route decorator are not checked."""
-        src = "async def helper(conn):\n    return 1\n"
-        assert _missing_resolver(_parse(src), _REL) == []

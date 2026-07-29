@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from unittest.mock import patch
 
 import pytest
@@ -60,12 +61,7 @@ def _configure_api_key(monkeypatch):
         yield
 
 
-def _client(app, cookie: str | None, *, follow_redirects: bool = False):
-    # Loopback base_url so /api/auth/verify's credential-transport gate (loopback
-    # Host or forwarded https) is satisfied.
-    return make_contract_client(
-        app, cookie, base_url="http://localhost", follow_redirects=follow_redirects
-    )
+_client = partial(make_contract_client, base_url="http://localhost")
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")

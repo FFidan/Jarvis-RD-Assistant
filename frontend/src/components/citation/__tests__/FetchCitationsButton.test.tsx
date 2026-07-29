@@ -7,10 +7,9 @@
  * a retry scoped to only the failed ids. A partial failure must surface a
  * degraded/partial state — never a blanket error or an empty state.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/lib/api', () => ({
   fetchCitationsFromS2: vi.fn(),
@@ -18,14 +17,18 @@ vi.mock('@/lib/api', () => ({
 
 import { fetchCitationsFromS2 } from '@/lib/api';
 import { FetchCitationsButton } from '@/components/citation/FetchCitationsButton';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockFetch = vi.mocked(fetchCitationsFromS2);
 
 const mkQc = () =>
-  new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+  createTestQueryClient();
 
 const wrap = (ui: React.ReactNode) =>
-  render(<QueryClientProvider client={mkQc()}>{ui}</QueryClientProvider>);
+  renderWithProviders(
+    ui,
+    { queryClient: mkQc() },
+  );
 
 const ok = (citations: number, references: number) =>
   Promise.resolve({ citations_added: citations, references_added: references, stubs_created: 0 });

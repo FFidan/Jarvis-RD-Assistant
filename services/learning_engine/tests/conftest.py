@@ -43,7 +43,6 @@ from jarvis_common.testing import (  # noqa: E402, F401
 from jarvis_common.testing import make_contract_pg_dsn as _make_contract_pg_dsn  # noqa: E402
 from jarvis_common.testing_contract_apps import (  # noqa: E402
     configure_contract_api_key,
-    make_contract_client,
     patch_app_state,
     patch_dependency_overrides,
 )
@@ -59,11 +58,6 @@ def _configure_api_key(monkeypatch):
     """Configure the standard contract-test API key for ASGI clients."""
     with configure_contract_api_key(monkeypatch) as key:
         yield key
-
-
-def _client(app, cookie: str):
-    """Return the standard contract-test ASGI client for LE contract tests."""
-    return make_contract_client(app, cookie)
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")

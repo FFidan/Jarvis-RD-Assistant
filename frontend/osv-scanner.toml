@@ -1,0 +1,9 @@
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+ignoreUntil = 2026-08-11
+reason = "The remaining affected v1 nodes are dev-only ESLint tooling and receive no untrusted input; v5 is pinned to 5.0.8. Remove when compatible consumers are patched."
+
+[[IgnoredVulns]]
+id = "GHSA-qwww-vcr4-c8h2"
+ignoreUntil = 2026-08-11
+reason = "The frontend uses declarative SPA routing only; unstable React Router RSC packages, configuration, and APIs are absent. Remove when a patched v7 release is available."

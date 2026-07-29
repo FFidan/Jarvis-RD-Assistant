@@ -25,6 +25,7 @@ from paper_ingestion.routers.search import (
     _round_robin_merge,
 )
 from pydantic import ValidationError
+from tests._paper_fakes import make_paper_create
 
 # ---------------------------------------------------------------------------
 # Unit tests for helpers
@@ -133,7 +134,6 @@ def test_default_source_types_is_arxiv():
 # ---------------------------------------------------------------------------
 
 
-# Keep local: multi-source-specific kwargs (doi/arxiv_id/pub_year/source_type) not in pulse_helpers.make_pulse_paper.
 def _make_paper(
     external_id: str,
     title: str,
@@ -143,22 +143,21 @@ def _make_paper(
     pub_year: int | None = None,
     authors: list[str] | None = None,
 ) -> PaperCreate:
-    metadata: dict = {}
+    """Build a source result with optional identifiers used for deduplication."""
+    metadata: dict[str, str] = {}
     if doi:
         metadata["doi"] = doi
     if arxiv_id:
         metadata["arxiv_id"] = arxiv_id
     published_date = date(pub_year, 1, 1) if pub_year else None
-    return PaperCreate(
+    return make_paper_create(
         external_id=external_id,
         source_type=source_type,
         title=title,
-        authors=authors or ["Test Author"],
+        authors=authors if authors is not None else ["Test Author"],
         abstract="Abstract",
         published_date=published_date,
         url=f"https://example.com/{external_id}",
-        pdf_url=None,
-        citation_count=0,
         metadata=metadata,
     )
 

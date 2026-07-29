@@ -22,7 +22,12 @@ Verified identifiers:
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from typing import Any
+
 import pytest
+from starlette.requests import Request
 
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
@@ -337,3 +342,191 @@ async def test_e1_notes_highlight_source_idempotency(
         [id1, id2],
     )
     assert count == 2, f"Both rows must exist in DB; got count={count}"
+
+
+async def test_note_is_retained_and_remains_stale_after_source_replacement_and_edit(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """A source replacement marks retained notes stale; editing does not rebind them."""
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        created = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "retained note", "highlight_text": "old source"},
+        )
+    assert created.status_code == 201, created.text[:300]
+    note_id = created.json()["id"]
+    assert created.json()["stale"] is False
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        listed = await c.get(f"/api/papers/{paper_id}/notes")
+        edited = await c.put(
+            f"/api/notes/{note_id}",
+            json={"user_note": "edited but still old-source"},
+        )
+
+    retained = next(note for note in listed.json() if note["id"] == note_id)
+    assert retained["stale"] is True
+    assert edited.status_code == 200, edited.text[:300]
+    assert edited.json()["stale"] is True
+    row = await contract_conn.fetchrow(
+        "SELECT user_note, content_generation FROM paper_notes WHERE id = $1",
+        note_id,
+    )
+    assert row["user_note"] == "edited but still old-source"
+    assert row["content_generation"] == 0
+
+
+async def test_note_creation_serializes_with_source_replacement(
+    _contract_pool,
+):
+    """A note stamps the source generation before a blocked replacement can proceed."""
+    from jarvis_common.testing import SharedConnPool
+
+    from paper_ingestion.models import NoteCreate
+    from paper_ingestion.routers.notes import create_note
+
+    token = uuid.uuid4().hex
+    async with _contract_pool.acquire() as seed_conn:
+        user_id = await seed_conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+            f"note-race-{token}@contract.test",
+        )
+        paper_id = await seed_conn.fetchval(
+            """
+            INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+            VALUES ($1, 'arxiv', 'Note race', ARRAY['A'], $2, $3)
+            RETURNING id
+            """,
+            f"note-race-{token}",
+            f"https://example.test/note-race-{token}",
+            user_id,
+        )
+        await seed_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            user_id,
+            paper_id,
+        )
+
+    note_insert_started = asyncio.Event()
+    release_note_insert = asyncio.Event()
+
+    class GatedConnection:
+        def __init__(self, connection: Any) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+        async def fetchval(self, query: str, *args: object) -> Any:
+            if "INSERT INTO paper_notes" in query:
+                note_insert_started.set()
+                await release_note_insert.wait()
+            return await self._connection.fetchval(query, *args)
+
+    create_task: asyncio.Task[Any] | None = None
+    replacement_task: asyncio.Task[None] | None = None
+    try:
+        async with _contract_pool.acquire() as note_conn:
+            note_backend_pid = await note_conn.fetchval("SELECT pg_backend_pid()")
+            create_task = asyncio.create_task(
+                create_note(
+                    request=Request(
+                        {
+                            "type": "http",
+                            "method": "POST",
+                            "path": f"/api/papers/{paper_id}/notes",
+                            "headers": [],
+                            "client": ("127.0.0.1", 0),
+                        }
+                    ),
+                    paper_id=paper_id,
+                    body=NoteCreate(user_note="serialized note"),
+                    db_pool=SharedConnPool(GatedConnection(note_conn)),
+                    user_id=user_id,
+                )
+            )
+            try:
+                await asyncio.wait_for(note_insert_started.wait(), timeout=5)
+
+                replacement_started = asyncio.Event()
+                replacement_acquired = asyncio.Event()
+                replacement_backend_pid: int | None = None
+
+                async def replace_source() -> None:
+                    nonlocal replacement_backend_pid
+                    async with _contract_pool.acquire() as replacement_conn:
+                        replacement_backend_pid = int(
+                            await replacement_conn.fetchval("SELECT pg_backend_pid()")
+                        )
+                        replacement_started.set()
+                        async with replacement_conn.transaction():
+                            await replacement_conn.execute(
+                                "UPDATE papers SET content_generation = "
+                                "content_generation + 1 WHERE id = $1",
+                                paper_id,
+                            )
+                            replacement_acquired.set()
+
+                replacement_task = asyncio.create_task(replace_source())
+                await asyncio.wait_for(replacement_started.wait(), timeout=5)
+                assert replacement_backend_pid is not None
+
+                blocked = False
+                async with _contract_pool.acquire() as observer_conn:
+                    for _ in range(100):
+                        blocked = bool(
+                            await observer_conn.fetchval(
+                                "SELECT $1 = ANY(pg_blocking_pids($2))",
+                                note_backend_pid,
+                                replacement_backend_pid,
+                            )
+                        )
+                        if blocked or replacement_task.done():
+                            break
+                        await asyncio.sleep(0.01)
+                assert blocked
+                assert not replacement_acquired.is_set()
+
+                release_note_insert.set()
+                created = await asyncio.wait_for(create_task, timeout=5)
+                await asyncio.wait_for(replacement_task, timeout=5)
+            finally:
+                release_note_insert.set()
+                pending_tasks = [
+                    task
+                    for task in (create_task, replacement_task)
+                    if task is not None and not task.done()
+                ]
+                for task in pending_tasks:
+                    task.cancel()
+                if pending_tasks:
+                    await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        async with _contract_pool.acquire() as verify_conn:
+            row = await verify_conn.fetchrow(
+                """
+                SELECT pn.content_generation AS note_generation, p.content_generation AS paper_generation
+                  FROM paper_notes pn
+                  JOIN papers p ON p.id = pn.paper_id
+                 WHERE pn.id = $1
+                """,
+                created.id,
+            )
+        assert created.stale is False
+        assert row["note_generation"] == 0
+        assert row["paper_generation"] == 1
+    finally:
+        async with _contract_pool.acquire() as cleanup_conn:
+            await cleanup_conn.execute("DELETE FROM paper_notes WHERE paper_id = $1", paper_id)
+            await cleanup_conn.execute("DELETE FROM user_library WHERE paper_id = $1", paper_id)
+            await cleanup_conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+            await cleanup_conn.execute("DELETE FROM users WHERE id = $1", user_id)

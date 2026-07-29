@@ -8,7 +8,7 @@ from jarvis_common import ErrorResponse, log_audit
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership, dynamic_update
 
-from learning_engine.card_store import insert_card
+from learning_engine.card_store import CARD_STALE_SQL, CURRENT_CARD_SQL, insert_card
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
 from learning_engine.fsrs_manager import FSRSManager
@@ -39,38 +39,47 @@ async def create_card(
 ) -> CardResponse:
     """Create a flashcard manually."""
     async with db_pool.acquire() as conn:
-        if body.paper_id is not None:
-            await assert_paper_ownership(conn, body.paper_id, user_id)
+        async with conn.transaction():
+            content_generation = 0
+            if body.paper_id is not None:
+                await assert_paper_ownership(conn, body.paper_id, user_id)
+                content_generation = await conn.fetchval(
+                    "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+                    body.paper_id,
+                )
+                if content_generation is None:
+                    raise HTTPException(status_code=404, detail="Paper not found")
 
-        deck = await conn.fetchval(
-            "SELECT id FROM decks WHERE id = $1 AND user_id = $2",
-            body.deck_id,
-            user_id,
-        )
-        if not deck:
-            raise HTTPException(status_code=404, detail="Deck not found")
-
-        fsrs_state, due_at = fsrs_manager.create_new_card()
-        evidence = body.evidence.model_dump() if body.evidence else {}
-
-        try:
-            row = await insert_card(
-                conn,
+            deck = await conn.fetchval(
+                "SELECT id FROM decks WHERE id = $1 AND user_id = $2",
                 body.deck_id,
-                body.paper_id,
-                body.card_type.value,
-                body.front,
-                body.back,
-                evidence,
-                fsrs_state,
-                due_at,
-                user_id=user_id,
+                user_id,
             )
-        except asyncpg.ForeignKeyViolationError as exc:
-            constraint = getattr(exc, "constraint_name", "") or ""
-            if "paper" in constraint:
-                raise HTTPException(status_code=404, detail="Paper not found") from None
-            raise HTTPException(status_code=404, detail="Deck not found") from None
+            if not deck:
+                raise HTTPException(status_code=404, detail="Deck not found")
+
+            fsrs_state, due_at = fsrs_manager.create_new_card()
+            evidence = body.evidence.model_dump() if body.evidence else {}
+
+            try:
+                row = await insert_card(
+                    conn,
+                    body.deck_id,
+                    body.paper_id,
+                    body.card_type.value,
+                    body.front,
+                    body.back,
+                    evidence,
+                    fsrs_state,
+                    due_at,
+                    user_id=user_id,
+                    content_generation=int(content_generation),
+                )
+            except asyncpg.ForeignKeyViolationError as exc:
+                constraint = getattr(exc, "constraint_name", "") or ""
+                if "paper" in constraint:
+                    raise HTTPException(status_code=404, detail="Paper not found") from None
+                raise HTTPException(status_code=404, detail="Deck not found") from None
     return row_to_card_response(row)
 
 
@@ -89,21 +98,25 @@ async def list_cards(
     conditions: list[str] = []
     params: list = []
 
-    conditions.append(f"user_id = ${len(params) + 1}")
+    conditions.append(f"c.user_id = ${len(params) + 1}")
     params.append(user_id)
 
     if deck_id is not None:
-        conditions.append(f"deck_id = ${len(params) + 1}")
+        conditions.append(f"c.deck_id = ${len(params) + 1}")
         params.append(deck_id)
 
     if due_before is not None:
-        conditions.append(f"due_at <= ${len(params) + 1}")
+        conditions.append(f"c.due_at <= ${len(params) + 1}")
+        conditions.append(CURRENT_CARD_SQL)
         params.append(due_before)
 
-    query = "SELECT * FROM cards"
+    query = (
+        f"SELECT c.*, {CARD_STALE_SQL} AS stale FROM cards c "
+        "LEFT JOIN papers p ON p.id = c.paper_id"
+    )
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += f" ORDER BY due_at ASC NULLS LAST LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+    query += f" ORDER BY c.due_at ASC NULLS LAST LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
     params.extend([limit, offset])
 
     async with db_pool.acquire() as conn:
@@ -125,7 +138,9 @@ async def update_card(
         async with conn.transaction():
             # Scope by user_id to prevent IDOR — user A must not edit user B's card.
             existing = await conn.fetchrow(
-                "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
+                f"SELECT c.*, {CARD_STALE_SQL} AS stale FROM cards c"
+                " LEFT JOIN papers p ON p.id = c.paper_id"
+                " WHERE c.id = $1 AND c.user_id = $2 FOR UPDATE OF c",
                 card_id,
                 user_id,
             )
@@ -145,7 +160,7 @@ async def update_card(
             if not update_dict:
                 return row_to_card_response(existing)
 
-            row = await dynamic_update(
+            updated = await dynamic_update(
                 conn,
                 table="cards",
                 record_id=card_id,
@@ -153,6 +168,15 @@ async def update_card(
                 allowed_columns=_CARD_ALLOWED_COLUMNS,
                 jsonb_columns=_CARD_JSONB_COLUMNS,
                 extra_sets=["updated_at = NOW()"],
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Card not found")
+            row = await conn.fetchrow(
+                f"SELECT c.*, {CARD_STALE_SQL} AS stale FROM cards c"
+                " LEFT JOIN papers p ON p.id = c.paper_id"
+                " WHERE c.id = $1 AND c.user_id = $2",
+                card_id,
+                user_id,
             )
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")

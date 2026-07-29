@@ -4,11 +4,11 @@
  * (not the shared ui-store), matching the runnable prototype.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -65,16 +65,13 @@ const { fetchPulseToday, fetchFeed, fetchThreads } = await import('@/lib/api');
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <HeroNow />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HeroNow />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -100,13 +97,13 @@ describe('HeroNow', () => {
   });
 
   it('defaults to Pulse mode on first render', async () => {
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/No Pulse for today yet/i)).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
   });
 
   it('Continue task tab is hidden when no Pomodoro is active', async () => {
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/No Pulse for today yet/i);
     expect(screen.queryByRole('tab', { name: 'Continue task' })).not.toBeInTheDocument();
   });
@@ -120,7 +117,7 @@ describe('HeroNow', () => {
       cyclesCompleted: 0,
       targetCycles: 4,
     };
-    renderWithProviders();
+    renderSubject();
     // Smart default selects task mode (active Pomodoro, no stored choice).
     expect(await screen.findByRole('tab', { name: 'Continue task' })).toBeInTheDocument();
     expect(screen.getByText('Test task')).toBeInTheDocument();
@@ -136,7 +133,7 @@ describe('HeroNow', () => {
       cyclesCompleted: 0,
       targetCycles: 4,
     };
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/Test task/i);
 
     const taskBtn = screen.getByRole('tab', { name: 'Continue task' });
@@ -157,7 +154,7 @@ describe('HeroNow', () => {
         created_at: '2026-05-10T00:00:00Z',
       },
     ]);
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByRole('tab', { name: 'Resume thread' })).toBeInTheDocument();
   });
 
@@ -170,7 +167,7 @@ describe('HeroNow', () => {
       cyclesCompleted: 0,
       targetCycles: 4,
     };
-    renderWithProviders();
+    renderSubject();
     // HeroTask renders the attached item title
     expect(await screen.findByText('Active focus task')).toBeInTheDocument();
   });

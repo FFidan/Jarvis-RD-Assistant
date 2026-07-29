@@ -186,15 +186,7 @@ def test_restore_state_is_adoptable_only_by_restore_and_retained_after_destructi
     assert state.read_text(encoding="utf-8") == "restore\n"
     assert destructive_log.read_text(encoding="utf-8") == ""
 
-    foreign = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "reserve-host", "setup", "b" * 32],
-        cwd=REPO_ROOT,
-        env=_environment(tmp_path, destructive_log),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=10,
-    )
+    foreign = _run_lifecycle(tmp_path, destructive_log, "reserve-host", "setup", "b" * 32)
     assert foreign.returncode != 0
     assert "another lifecycle operation" in foreign.stderr
 
@@ -206,15 +198,7 @@ def test_preparing_update_yields_to_restore_without_late_activation(tmp_path: Pa
     env = _environment(tmp_path, destructive_log)
     inputs = _write_admission_inputs(tmp_path)
     guard_id = "a" * 32
-    reserved = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "reserve-update", guard_id],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=10,
-    )
+    reserved = _run_lifecycle(tmp_path, destructive_log, "reserve-update", guard_id)
     assert reserved.returncode == 0, reserved.stderr
 
     holder = subprocess.Popen(
@@ -590,33 +574,24 @@ def test_cancelled_host_reservation_cannot_activate_later(tmp_path: Path) -> Non
     """A delayed detached helper never recreates a reservation the caller cancelled."""
     destructive_log = tmp_path / "destructive.log"
     destructive_log.write_text("", encoding="utf-8")
-    env = _environment(tmp_path, destructive_log)
     guard_id = "c" * 32
-    reserve = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "reserve-host", "setup", guard_id],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    reserve = _run_lifecycle(tmp_path, destructive_log, "reserve-host", "setup", guard_id)
     assert reserve.returncode == 0, reserve.stderr
-    cancel = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "cancel-host-reservation", "setup", guard_id],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    cancel = _run_lifecycle(
+        tmp_path,
+        destructive_log,
+        "cancel-host-reservation",
+        "setup",
+        guard_id,
     )
     assert cancel.returncode == 0, cancel.stderr
-    delayed = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "hold-host", "setup", guard_id, "1"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    delayed = _run_lifecycle(
+        tmp_path,
+        destructive_log,
+        "hold-host",
+        "setup",
+        guard_id,
+        "1",
     )
     assert delayed.returncode != 0
     lifecycle = tmp_path / "backups" / ".lifecycle"
@@ -633,14 +608,7 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
     other_id = "e" * 32
     lifecycle = tmp_path / "backups" / ".lifecycle"
 
-    reserved = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "reserve-host", "setup", guard_id],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    reserved = _run_lifecycle(tmp_path, destructive_log, "reserve-host", "setup", guard_id)
     assert reserved.returncode == 0, reserved.stderr
     crashed = subprocess.Popen(
         ["bash", str(LIFECYCLE_HELPER), "hold-host", "setup", guard_id, "30"],
@@ -659,13 +627,12 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
     # gone before testing durable-state adoption.
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        old_status = subprocess.run(
-            ["bash", str(LIFECYCLE_HELPER), "host-status", "setup", guard_id],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        old_status = _run_lifecycle(
+            tmp_path,
+            destructive_log,
+            "host-status",
+            "setup",
+            guard_id,
         )
         if old_status.returncode != 0:
             break
@@ -674,24 +641,22 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
         raise AssertionError("crashed holder did not release its lock")
 
     for kind, candidate_id in (("setup", other_id), ("uninstall", guard_id)):
-        foreign = subprocess.run(
-            ["bash", str(LIFECYCLE_HELPER), "reserve-host", kind, candidate_id],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        foreign = _run_lifecycle(
+            tmp_path,
+            destructive_log,
+            "reserve-host",
+            kind,
+            candidate_id,
         )
         assert foreign.returncode != 0
         assert "another lifecycle operation" in foreign.stderr
 
-    retry_reservation = subprocess.run(
-        ["bash", str(LIFECYCLE_HELPER), "reserve-host", "setup", guard_id],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    retry_reservation = _run_lifecycle(
+        tmp_path,
+        destructive_log,
+        "reserve-host",
+        "setup",
+        guard_id,
     )
     assert retry_reservation.returncode == 0, retry_reservation.stderr
     retry = subprocess.Popen(
@@ -705,13 +670,12 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
     try:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            active = subprocess.run(
-                ["bash", str(LIFECYCLE_HELPER), "host-status", "setup", guard_id],
-                cwd=REPO_ROOT,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
+            active = _run_lifecycle(
+                tmp_path,
+                destructive_log,
+                "host-status",
+                "setup",
+                guard_id,
             )
             if active.returncode == 0:
                 break
@@ -721,13 +685,13 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
         else:
             raise AssertionError("retry never adopted the retained setup identity")
 
-        released = subprocess.run(
-            ["bash", str(LIFECYCLE_HELPER), "release-host", "setup", guard_id, "clear"],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        released = _run_lifecycle(
+            tmp_path,
+            destructive_log,
+            "release-host",
+            "setup",
+            guard_id,
+            "clear",
         )
         assert released.returncode == 0, released.stderr
         assert retry.wait(timeout=5) == 0, retry.stderr.read()

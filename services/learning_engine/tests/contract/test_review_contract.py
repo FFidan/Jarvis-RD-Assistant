@@ -8,9 +8,11 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -280,6 +282,86 @@ async def test_submit_review_owned_card_advances_and_persists_state(
     assert after != before, (
         f"owned-card review must advance and persist fsrs_state; before={before!r} after={after!r}"
     )
+
+
+async def test_stale_card_review_paths_are_terminal_without_mutation(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+):
+    """Direct and offline review reject retained earlier-generation cards."""
+    card_id = contract_two_users.card_id_a
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+    await contract_conn.execute(
+        """
+        UPDATE cards
+        SET due_at = NOW() - INTERVAL '1 hour',
+            content_generation = (
+                SELECT content_generation FROM papers WHERE id = $2
+            )
+        WHERE id = $1
+        """,
+        card_id,
+        paper_id,
+    )
+    before = await contract_conn.fetchrow(
+        "SELECT fsrs_state, due_at, updated_at FROM cards WHERE id = $1",
+        card_id,
+    )
+    daily_before = await contract_conn.fetchval(
+        """
+        SELECT COALESCE(cards_reviewed, 0)
+        FROM daily_log
+        WHERE user_id = $1 AND log_date = CURRENT_DATE
+        """,
+        user_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+    idem_key = f"stale-card-{uuid.uuid4()}"
+    event = {
+        "idempotency_key": idem_key,
+        "card_id": card_id,
+        "rating": 3,
+        "reviewed_at": datetime.now(UTC).isoformat(),
+        "review_duration_ms": 250,
+    }
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        direct = await c.post(
+            f"/api/review/{card_id}",
+            json={"rating": 3, "review_duration_ms": 250},
+        )
+        offline = await c.post("/api/review/sync", json={"reviews": [event]})
+
+    assert direct.status_code == 409, direct.text[:300]
+    assert offline.status_code == 200, offline.text[:300]
+    assert offline.json() == {"synced": 0, "skipped": 1, "already_synced": 0}
+    after = await contract_conn.fetchrow(
+        "SELECT fsrs_state, due_at, updated_at FROM cards WHERE id = $1",
+        card_id,
+    )
+    assert dict(after) == dict(before)
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM review_logs WHERE idempotency_key = $1",
+            idem_key,
+        )
+        == 0
+    )
+    daily_after = await contract_conn.fetchval(
+        """
+        SELECT COALESCE(cards_reviewed, 0)
+        FROM daily_log
+        WHERE user_id = $1 AND log_date = CURRENT_DATE
+        """,
+        user_id,
+    )
+    assert (daily_after or 0) == (daily_before or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -652,3 +734,396 @@ async def test_sync_reviews_concurrent_on_conflict_returns_already_synced(
         f"Patch never applied — expected >= 2 pool.acquire() calls; got {acquire_call_count}. "
         "Handler may have changed structure."
     )
+
+
+async def _seed_generation_race_card(pool, prefix: str) -> tuple[int, int, int, int]:
+    """Commit an isolated user, paper, deck, and paper-linked card."""
+    token = uuid.uuid4().hex
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user_id = await conn.fetchval(
+                "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+                f"{prefix}-{token}@contract.test",
+            )
+            paper_id = await conn.fetchval(
+                """
+                INSERT INTO papers
+                    (external_id, source_type, title, authors, url, discovered_by)
+                VALUES ($1, 'arxiv', 'Generation race', ARRAY['A'], $2, $3)
+                RETURNING id
+                """,
+                f"{prefix}-{token}",
+                f"https://example.test/{token}",
+                user_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO user_library (user_id, paper_id, added_via)
+                VALUES ($1, $2, 'manual_save')
+                """,
+                user_id,
+                paper_id,
+            )
+            deck_id = await conn.fetchval(
+                "INSERT INTO decks (name, user_id) VALUES ($1, $2) RETURNING id",
+                f"{prefix}-{token}",
+                user_id,
+            )
+            card_id = await conn.fetchval(
+                """
+                INSERT INTO cards
+                    (deck_id, paper_id, card_type, front, back, user_id,
+                     content_generation, fsrs_state, due_at)
+                VALUES ($1, $2, 'concept', 'race front', 'race back', $3,
+                        0, '{}'::jsonb, NOW() - INTERVAL '1 hour')
+                RETURNING id
+                """,
+                deck_id,
+                paper_id,
+                user_id,
+            )
+    return int(user_id), int(paper_id), int(deck_id), int(card_id)
+
+
+async def _reset_generation_race_card(
+    pool,
+    *,
+    user_id: int,
+    paper_id: int,
+    card_id: int,
+) -> None:
+    """Make the card current again and remove prior review side effects."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM review_logs WHERE card_id = $1", card_id)
+            await conn.execute("DELETE FROM daily_log WHERE user_id = $1", user_id)
+            await conn.execute(
+                """
+                UPDATE cards
+                SET content_generation = (
+                        SELECT content_generation FROM papers WHERE id = $2
+                    ),
+                    fsrs_state = '{}'::jsonb,
+                    due_at = NOW() - INTERVAL '1 hour',
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                card_id,
+                paper_id,
+            )
+
+
+async def _delete_generation_race_fixture(
+    pool,
+    *,
+    user_id: int,
+    paper_id: int,
+    deck_id: int,
+) -> None:
+    """Remove committed concurrency-test rows."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM daily_log WHERE user_id = $1", user_id)
+            await conn.execute(
+                "DELETE FROM review_logs WHERE card_id IN "
+                "(SELECT id FROM cards WHERE deck_id = $1)",
+                deck_id,
+            )
+            await conn.execute("DELETE FROM cards WHERE deck_id = $1", deck_id)
+            await conn.execute("DELETE FROM decks WHERE id = $1", deck_id)
+            await conn.execute(
+                "DELETE FROM user_library WHERE user_id = $1 AND paper_id = $2",
+                user_id,
+                paper_id,
+            )
+            await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+            await conn.execute("DELETE FROM users WHERE id = $1", user_id)
+
+
+async def _replace_source(
+    pool,
+    paper_id: int,
+    *,
+    started: asyncio.Event | None = None,
+    acquired: asyncio.Event | None = None,
+    release: asyncio.Event | None = None,
+) -> None:
+    """Increment a source generation, optionally holding the update transaction."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if started is not None:
+                started.set()
+            await conn.execute(
+                "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+                paper_id,
+            )
+            if acquired is not None:
+                acquired.set()
+            if release is not None:
+                await release.wait()
+
+
+class _RaceFSRSManager:
+    def schedule_review(self, state, rating, review_datetime=None):
+        return (
+            {"scheduled": True},
+            {"rating": rating},
+            datetime.now(UTC) + timedelta(days=1),
+        )
+
+
+async def test_direct_review_and_source_replacement_serialize_in_both_orders(
+    _contract_pool,
+    monkeypatch,
+):
+    """The paper lock orders direct review and replacement without a stale write."""
+    from fastapi import HTTPException
+
+    import learning_engine.routers.review as review_module
+    from learning_engine.models import ReviewRequest
+
+    user_id, paper_id, deck_id, card_id = await _seed_generation_race_card(
+        _contract_pool,
+        "direct-review-race",
+    )
+    handler = getattr(review_module.submit_review, "__wrapped__", review_module.submit_review)
+    try:
+        action_locked = asyncio.Event()
+        release_action = asyncio.Event()
+
+        async def gated_manager(conn, user_id=None):
+            action_locked.set()
+            await release_action.wait()
+            return _RaceFSRSManager()
+
+        monkeypatch.setattr(review_module, "_build_fsrs_manager_from_db", gated_manager)
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                card_id=card_id,
+                body=ReviewRequest(rating=3, review_duration_ms=100),
+                db_pool=_contract_pool,
+                user_id=user_id,
+            )
+        )
+        await asyncio.wait_for(action_locked.wait(), timeout=2)
+        replacement_started = asyncio.Event()
+        replacement_acquired = asyncio.Event()
+        replacement = asyncio.create_task(
+            _replace_source(
+                _contract_pool,
+                paper_id,
+                started=replacement_started,
+                acquired=replacement_acquired,
+            )
+        )
+        await asyncio.wait_for(replacement_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        assert not replacement_acquired.is_set()
+        release_action.set()
+        result = await asyncio.wait_for(action, timeout=2)
+        await asyncio.wait_for(replacement, timeout=2)
+        assert result.card_id == card_id
+
+        await _reset_generation_race_card(
+            _contract_pool,
+            user_id=user_id,
+            paper_id=paper_id,
+            card_id=card_id,
+        )
+        replacement_locked = asyncio.Event()
+        release_replacement = asyncio.Event()
+        replacement = asyncio.create_task(
+            _replace_source(
+                _contract_pool,
+                paper_id,
+                acquired=replacement_locked,
+                release=release_replacement,
+            )
+        )
+        await asyncio.wait_for(replacement_locked.wait(), timeout=2)
+        forbidden_manager = AsyncMock(side_effect=AssertionError("stale card was scheduled"))
+        monkeypatch.setattr(
+            review_module,
+            "_build_fsrs_manager_from_db",
+            forbidden_manager,
+        )
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                card_id=card_id,
+                body=ReviewRequest(rating=3, review_duration_ms=100),
+                db_pool=_contract_pool,
+                user_id=user_id,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not action.done()
+        release_replacement.set()
+        await asyncio.wait_for(replacement, timeout=2)
+        with pytest.raises(HTTPException) as exc_info:
+            await asyncio.wait_for(action, timeout=2)
+        assert exc_info.value.status_code == 409
+        forbidden_manager.assert_not_awaited()
+        async with _contract_pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM review_logs WHERE card_id = $1",
+                    card_id,
+                )
+                == 0
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM daily_log WHERE user_id = $1",
+                    user_id,
+                )
+                == 0
+            )
+    finally:
+        await _delete_generation_race_fixture(
+            _contract_pool,
+            user_id=user_id,
+            paper_id=paper_id,
+            deck_id=deck_id,
+        )
+
+
+async def test_offline_review_and_source_replacement_serialize_in_both_orders(
+    _contract_pool,
+    monkeypatch,
+):
+    """Offline replay either commits before replacement or terminally skips after it."""
+    import learning_engine.routers.review as review_module
+    from learning_engine.models import ReviewSyncRequest
+
+    user_id, paper_id, deck_id, card_id = await _seed_generation_race_card(
+        _contract_pool,
+        "offline-review-race",
+    )
+    handler = getattr(review_module.sync_reviews, "__wrapped__", review_module.sync_reviews)
+    original_check = review_module._card_source_is_current
+    try:
+        source_locked = asyncio.Event()
+        release_action = asyncio.Event()
+
+        async def gated_check(conn, card):
+            current = await original_check(conn, card)
+            source_locked.set()
+            await release_action.wait()
+            return current
+
+        monkeypatch.setattr(review_module, "_card_source_is_current", gated_check)
+        first_key = f"offline-before-{uuid.uuid4()}"
+        first_body = ReviewSyncRequest(
+            reviews=[
+                {
+                    "idempotency_key": first_key,
+                    "card_id": card_id,
+                    "rating": 3,
+                    "reviewed_at": datetime.now(UTC).isoformat(),
+                    "review_duration_ms": 100,
+                }
+            ]
+        )
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                body=first_body,
+                db_pool=_contract_pool,
+                user_id=user_id,
+            )
+        )
+        await asyncio.wait_for(source_locked.wait(), timeout=2)
+        replacement_started = asyncio.Event()
+        replacement_acquired = asyncio.Event()
+        replacement = asyncio.create_task(
+            _replace_source(
+                _contract_pool,
+                paper_id,
+                started=replacement_started,
+                acquired=replacement_acquired,
+            )
+        )
+        await asyncio.wait_for(replacement_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        assert not replacement_acquired.is_set()
+        release_action.set()
+        first = await asyncio.wait_for(action, timeout=2)
+        await asyncio.wait_for(replacement, timeout=2)
+        assert (first.synced, first.skipped) == (1, 0)
+
+        await _reset_generation_race_card(
+            _contract_pool,
+            user_id=user_id,
+            paper_id=paper_id,
+            card_id=card_id,
+        )
+        replacement_locked = asyncio.Event()
+        release_replacement = asyncio.Event()
+        replacement = asyncio.create_task(
+            _replace_source(
+                _contract_pool,
+                paper_id,
+                acquired=replacement_locked,
+                release=release_replacement,
+            )
+        )
+        await asyncio.wait_for(replacement_locked.wait(), timeout=2)
+        source_checked = asyncio.Event()
+
+        async def observed_check(conn, card):
+            current = await original_check(conn, card)
+            source_checked.set()
+            return current
+
+        monkeypatch.setattr(review_module, "_card_source_is_current", observed_check)
+        second_key = f"offline-after-{uuid.uuid4()}"
+        second_body = ReviewSyncRequest(
+            reviews=[
+                {
+                    "idempotency_key": second_key,
+                    "card_id": card_id,
+                    "rating": 3,
+                    "reviewed_at": datetime.now(UTC).isoformat(),
+                    "review_duration_ms": 100,
+                }
+            ]
+        )
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                body=second_body,
+                db_pool=_contract_pool,
+                user_id=user_id,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not action.done()
+        assert not source_checked.is_set()
+        release_replacement.set()
+        await asyncio.wait_for(replacement, timeout=2)
+        second = await asyncio.wait_for(action, timeout=2)
+        assert (second.synced, second.skipped) == (0, 1)
+        async with _contract_pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM review_logs WHERE card_id = $1",
+                    card_id,
+                )
+                == 0
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM daily_log WHERE user_id = $1",
+                    user_id,
+                )
+                == 0
+            )
+    finally:
+        await _delete_generation_race_fixture(
+            _contract_pool,
+            user_id=user_id,
+            paper_id=paper_id,
+            deck_id=deck_id,
+        )

@@ -12,10 +12,10 @@
  *  - Filter placeholder not clipped (wrapper uses flex-1 layout)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -138,23 +138,20 @@ vi.mock('@/lib/query-persister', async (importOriginal) => {
 });
 
 function makeQueryClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return createTestQueryClient();
 }
 
 function renderPage(initialSearch = '?surface=inbox') {
   const qc = makeQueryClient();
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[`/feed${initialSearch}`]}>
-        <Routes>
-          <Route path="/feed" element={<ResearchFeedPage />} />
-          <Route path="/paper/:id" element={<div data-testid="paper-detail" />} />
-          <Route path="/ask" element={<div data-testid="ask-page" />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[`/feed${initialSearch}`]}>
+      <Routes>
+        <Route path="/feed" element={<ResearchFeedPage />} />
+        <Route path="/paper/:id" element={<div data-testid="paper-detail" />} />
+        <Route path="/ask" element={<div data-testid="ask-page" />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

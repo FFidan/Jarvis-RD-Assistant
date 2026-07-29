@@ -1,49 +1,34 @@
-"""Shared DB test infrastructure.
+"""Shared database test infrastructure.
 
-Asyncpg mocks, live-PG fixtures, contract pool/conn fixtures, shared-conn
-pool, and TwoUsers seed helpers — clusters 1-5 of the original
-decomposition of ``jarvis_common.testing``:
-
-1. FakeRecord + ``make_pool_and_conn`` + ``make_request`` (mock asyncpg pool/conn factories)
-2. LivePG fixture (``_docker_cli`` + ``make_live_pg_dsn``)
-3. Contract fixture factories (``make_contract_pg_dsn``, ``_make_contract_pool_fixture``,
-   ``_make_contract_conn_fixture``)
-4. ``SharedConnPool`` + reentrant async lock
-5. ``TwoUsers`` seed + marker constants + ``_seed_user`` / ``_seed_resources`` /
-   ``_make_contract_two_users_fixture``
-
-Idiomatic-mock carve-out: the following external boundaries MUST keep
-AsyncMock / @patch and must NOT be collapsed into contract_conn:
-  - Ollama embed (httpx call in embed_texts)
-  - Qdrant query (qdrant_client)
-  - Telegram Bot API (python-telegram-bot Application)
-  - OpenAI / Instructor (openai.AsyncOpenAI)
-  - Langfuse trace/span (langfuse SDK)
-  - task_registry._TASK_MAP (module-level mutable dict)
-These boundaries own their own I/O contract; only asyncpg pool mocks
-collapse into contract_conn. This carve-out registry is the load-bearing
-rule for the Postgres naming convention used in session-scoped test DBs.
+Provides asyncpg mock factories, live PostgreSQL fixtures, contract-database
+adapters, a shared-connection pool, and focused row-seeding helpers. External
+service boundaries keep their dedicated HTTP or SDK test doubles; the helpers
+here model database interactions only.
 """
 
 from __future__ import annotations
 
 __all__ = [
-    # cluster 1
+    # Mock records, connections, pools, and requests
     "FakeRecord",
+    "make_conn",
+    "make_paper_record",
     "make_pool_and_conn",
     "_make_pool_and_conn",
     "make_request",
-    # cluster 2
+    "shelve_paper",
+    "seed_user_row",
+    # Live PostgreSQL fixtures
     "make_live_pg_dsn",
     "make_live_pg_session_dsn",
-    # cluster 3
+    # Contract database fixtures
     "make_contract_pg_dsn",
     "_make_contract_pool_fixture",
     "_make_contract_conn_fixture",
-    # cluster 4
+    # Shared connection adapter
     "SharedAcquireCM",
     "SharedConnPool",
-    # cluster 5
+    # Cross-user contract seeds
     "TwoUsers",
     "_make_contract_two_users_fixture",
     "_seed_user",
@@ -62,13 +47,13 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import quote
 
+import asyncpg
 import pytest
-
-if TYPE_CHECKING:
-    import asyncpg
 
 # ---------------------------------------------------------------------------
 # Sentinel used to distinguish "not passed" from "explicitly None"
@@ -97,8 +82,70 @@ class FakeRecord(dict):
 
 
 # ---------------------------------------------------------------------------
-# make_pool_and_conn
+# Connection, record, and pool factories
 # ---------------------------------------------------------------------------
+
+
+def make_conn(
+    *,
+    execute_return: Any = _UNSET,
+    fetchval_return: Any = _UNSET,
+    fetchrow_return: Any = _UNSET,
+    fetch_return: Any = _UNSET,
+    with_transaction: bool = True,
+) -> AsyncMock:
+    """Return an asyncpg connection mock with explicitly configured results."""
+    conn = AsyncMock(spec=asyncpg.Connection)
+
+    if execute_return is not _UNSET:
+        conn.execute = AsyncMock(return_value=execute_return)
+    if fetchval_return is not _UNSET:
+        conn.fetchval = AsyncMock(return_value=fetchval_return)
+    if fetchrow_return is not _UNSET:
+        conn.fetchrow = AsyncMock(return_value=fetchrow_return)
+    if fetch_return is not _UNSET:
+        conn.fetch = AsyncMock(return_value=fetch_return)
+    if with_transaction:
+        txn_cm = MagicMock()
+        txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+        txn_cm.__aexit__ = AsyncMock(return_value=False)
+        conn.transaction = MagicMock(return_value=txn_cm)
+
+    return conn
+
+
+def make_paper_record(
+    paper_id: int = 1,
+    **overrides: Any,
+) -> FakeRecord:
+    """Return the shared asyncpg-record shape used by feed and dashboard tests."""
+    discovered_at = overrides.pop("discovered_at", None)
+    now = discovered_at or datetime.now(UTC)
+    row: dict[str, Any] = {
+        "id": paper_id,
+        "external_id": f"arxiv:{paper_id}",
+        "source_type": "arxiv",
+        "title": f"Paper {paper_id}",
+        "authors": ["Author A"],
+        "abstract": "Abstract text",
+        "published_date": None,
+        "url": f"https://arxiv.org/abs/{paper_id}",
+        "pdf_url": None,
+        "pdf_local_path": None,
+        "pdf_downloaded": False,
+        "citation_count": 0,
+        "metadata": {},
+        "discovered_at": now,
+        "created_at": now,
+        "priority_score": None,
+        "summary_brief": "Brief summary",
+        "tldr": None,
+        "confidence": "HIGH",
+        "user_status": "new",
+        "rating": None,
+    }
+    row.update(overrides)
+    return FakeRecord(row)
 
 
 def make_pool_and_conn(
@@ -116,9 +163,8 @@ def make_pool_and_conn(
     Keyword args wire canned return values and edge-case behaviours.
     """
     if conn is None:
-        conn = AsyncMock()
-
-    if with_transaction:
+        conn = make_conn(with_transaction=with_transaction)
+    elif with_transaction:
         txn_cm = MagicMock()
         txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
         txn_cm.__aexit__ = AsyncMock(return_value=False)
@@ -153,6 +199,26 @@ def make_request(user_id: int = 1, *, role: str | None = None, **state_overrides
     if role is not None:
         state.user_role = role
     return SimpleNamespace(state=state, app=SimpleNamespace(state=SimpleNamespace()))
+
+
+async def shelve_paper(conn: Any, user_id: int, paper_id: int) -> None:
+    """Add a paper to a user's library through the standard manual-save path."""
+    await conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+
+
+async def seed_user_row(conn: Any, email: str, role: str = "user") -> int:
+    """Insert a user row without creating a session and return its identifier."""
+    return int(
+        await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ($1, $2) RETURNING id",
+            email,
+            role,
+        )
+    )
 
 
 # Module-level alias: the 76 importers use ``_make_pool_and_conn``; the
@@ -355,7 +421,7 @@ def _spin_pg_container(
                 f"{logs.stdout}{logs.stderr}"
             )
 
-        yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
+        yield f"postgresql://jarvis:{quote(password, safe='')}@127.0.0.1:{host_port}/jarvis"
     finally:
         _docker_rm_best_effort(container)
 

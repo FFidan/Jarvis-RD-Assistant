@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AutomationSection } from '@/components/settings/AutomationSection';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock Radix Select with native HTML elements (portals do not work in jsdom).
 // Capture onValueChange so tests can invoke it directly.
@@ -44,15 +44,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 const { fetchNudges, fetchConfig, setConfig } = await import('@/lib/api');
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <AutomationSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <AutomationSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HomePage } from '@/pages/HomePage';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const { trackExternalJobMock } = vi.hoisted(() => ({
   trackExternalJobMock: vi.fn(),
@@ -44,15 +44,12 @@ const {
 } = await import('@/lib/api');
 
 function renderHomePage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <HomePage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HomePage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

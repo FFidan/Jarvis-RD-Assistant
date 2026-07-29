@@ -24,6 +24,7 @@ from paper_ingestion.citation_format import (
 )
 from paper_ingestion.citations import _filter_visible_paper_ids
 from paper_ingestion.converters import (
+    filter_current_cross_references,
     row_to_chunk_response,
     row_to_paper_response,
     row_to_summary_response,
@@ -84,9 +85,15 @@ async def get_paper_detail(
         # shared canonical paper never serves another user's summary. IS NOT
         # DISTINCT FROM keeps single-user mode (user_id IS NULL) matching.
         summary_row = await conn.fetchrow(
-            "SELECT * FROM paper_summaries WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT * FROM paper_summaries WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2 "
+            "AND content_generation = (SELECT content_generation FROM papers WHERE id = $1)",
             paper_id,
             user_id,
+        )
+        current_cross_references = (
+            await filter_current_cross_references(conn, list(summary_row["cross_references"] or []))
+            if summary_row
+            else []
         )
         chunk_rows = await conn.fetch(
             "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
@@ -142,7 +149,11 @@ async def get_paper_detail(
         )
 
     paper = row_to_paper_response(paper_row)
-    summary = row_to_summary_response(summary_row) if summary_row else None
+    summary = (
+        row_to_summary_response(summary_row, cross_references=current_cross_references)
+        if summary_row
+        else None
+    )
     chunks = [row_to_chunk_response(r) for r in chunk_rows]
     user_state = (
         UserStateResponse(

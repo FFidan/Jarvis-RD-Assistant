@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 
 // --- idb-keyval: tiny in-memory mock (single-key queue) --------------------
@@ -64,9 +64,10 @@ vi.mock('sonner', () => ({
 
 import { useOfflineReviewQueue } from '@/components/cards/use-offline-review-queue';
 import { getReviewOutbox, __resetOutboxForTests } from '@/lib/review-outbox';
+import { createTestQueryClient } from '@/__tests__/test-utils';
 
 function wrapper({ children }: { children: React.ReactNode }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = createTestQueryClient();
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 

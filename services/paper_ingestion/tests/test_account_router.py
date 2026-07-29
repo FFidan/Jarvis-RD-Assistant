@@ -10,15 +10,7 @@ import pytest
 from jarvis_common.email import MagicLinkDelivery
 from jarvis_common.testing import make_pool_and_conn
 
-
-@pytest.fixture(autouse=True)
-def _disable_limiter():
-    from paper_ingestion.deps import limiter
-
-    original = limiter.enabled
-    limiter.enabled = False
-    yield
-    limiter.enabled = original
+pytestmark = pytest.mark.usefixtures("_disable_limiter")
 
 
 def _make_user_row() -> dict:

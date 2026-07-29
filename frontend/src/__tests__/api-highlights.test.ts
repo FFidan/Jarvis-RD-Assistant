@@ -21,6 +21,7 @@ describe('highlights api', () => {
         color: 'yellow',
         quote: 'q',
         created_at: '2026-01-01T00:00:00Z',
+        stale: false,
       },
     ];
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -51,6 +52,7 @@ describe('highlights api', () => {
       color: null,
       quote: null,
       created_at: '2026-01-01T00:00:00Z',
+      stale: false,
     };
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(created), {

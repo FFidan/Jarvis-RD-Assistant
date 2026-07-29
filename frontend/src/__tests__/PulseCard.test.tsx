@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import * as api from '@/lib/api';
 import type { PulseCardItem } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -44,20 +44,16 @@ function renderCard(
   props: Partial<React.ComponentProps<typeof PulseCard>> = {},
   cardOverrides: Partial<PulseCardItem> = {},
 ) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   const onRate = props.onRate ?? vi.fn();
   const onOpen = props.onOpen;
   const card = { ...sampleCard, ...cardOverrides };
   return {
     onRate,
     onOpen,
-    queryClient,
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <PulseCard card={card} onRate={onRate} onOpen={onOpen} />
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <PulseCard card={card} onRate={onRate} onOpen={onOpen} />,
+      { queryClient },
     ),
   };
 }
@@ -159,28 +155,22 @@ describe('PulseCard', () => {
 
   describe('Save button disabled during pending save', () => {
     it('disables save button when savePending=true', () => {
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       const onRate = vi.fn();
-      render(
-        <QueryClientProvider client={queryClient}>
-          <PulseCard card={sampleCard} onRate={onRate} savePending={true} />
-        </QueryClientProvider>,
+      renderWithProviders(
+        <PulseCard card={sampleCard} onRate={onRate} savePending={true} />,
+        { queryClient },
       );
       const saveButton = screen.getByRole('button', { name: /save/i });
       expect(saveButton).toBeDisabled();
     });
 
     it('enables save button when savePending=false', () => {
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       const onRate = vi.fn();
-      render(
-        <QueryClientProvider client={queryClient}>
-          <PulseCard card={sampleCard} onRate={onRate} savePending={false} />
-        </QueryClientProvider>,
+      renderWithProviders(
+        <PulseCard card={sampleCard} onRate={onRate} savePending={false} />,
+        { queryClient },
       );
       const saveButton = screen.getByRole('button', { name: /save/i });
       expect(saveButton).not.toBeDisabled();
@@ -189,17 +179,14 @@ describe('PulseCard', () => {
 
   describe('B.1 — Save button unsave flow', () => {
     function renderWithRated(rated: boolean, cardOverrides: Partial<PulseCardItem> = {}) {
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       const onRate = vi.fn();
       const card = { ...sampleCard, ...cardOverrides };
       return {
         onRate,
-        ...render(
-          <QueryClientProvider client={queryClient}>
-            <PulseCard card={card} onRate={onRate} rated={rated} />
-          </QueryClientProvider>,
+        ...renderWithProviders(
+          <PulseCard card={card} onRate={onRate} rated={rated} />,
+          { queryClient },
         ),
       };
     }
@@ -243,15 +230,12 @@ describe('PulseCard', () => {
   describe('cache invalidation correctness', () => {
     it('trashAndReject invalidates pulse-today (not the dead pulse-deck key)', async () => {
       const user = userEvent.setup();
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const onRate = vi.fn();
-      render(
-        <QueryClientProvider client={queryClient}>
-          <PulseCard card={sampleCard} onRate={onRate} />
-        </QueryClientProvider>,
+      renderWithProviders(
+        <PulseCard card={sampleCard} onRate={onRate} />,
+        { queryClient },
       );
       await user.click(screen.getByRole('button', { name: /remove and show fewer like this/i }));
       await waitFor(() => {
@@ -266,16 +250,13 @@ describe('PulseCard', () => {
 
     it('unsave invalidates pulse-today', async () => {
       const user = userEvent.setup();
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const onRate = vi.fn();
       const savedCard = { ...sampleCard, user_state: 'to_read' as const };
-      render(
-        <QueryClientProvider client={queryClient}>
-          <PulseCard card={savedCard} onRate={onRate} />
-        </QueryClientProvider>,
+      renderWithProviders(
+        <PulseCard card={savedCard} onRate={onRate} />,
+        { queryClient },
       );
       await user.click(screen.getByRole('button', { name: /^unsave$/i }));
       await waitFor(() => {
@@ -287,9 +268,7 @@ describe('PulseCard', () => {
 
     it('trashAndReject removes card from pulse-today cache optimistically', async () => {
       const user = userEvent.setup();
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
+      const queryClient = createTestQueryClient();
       // Pre-seed the cache with a 2-card deck; sampleCard has card_id=1
       queryClient.setQueryData(['pulse-today'], {
         deck_id: 10,
@@ -302,10 +281,9 @@ describe('PulseCard', () => {
           { ...sampleCard, card_id: 2, paper_id: 99, rank: 2, paper_title: 'Other Paper' },
         ],
       });
-      render(
-        <QueryClientProvider client={queryClient}>
-          <PulseCard card={sampleCard} onRate={vi.fn()} />
-        </QueryClientProvider>,
+      renderWithProviders(
+        <PulseCard card={sampleCard} onRate={vi.fn()} />,
+        { queryClient },
       );
       await user.click(screen.getByRole('button', { name: /remove and show fewer like this/i }));
       // onMutate fires synchronously — cache is patched before the mutation resolves

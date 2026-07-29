@@ -14,9 +14,10 @@ from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
-from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import stage1_embedding_filter
+from tests._paper_fakes import make_paper_create
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,18 +26,12 @@ from paper_ingestion.pulse.scoring import stage1_embedding_filter
 _FIXED_DATE = date(2026, 1, 1)  # fixed "today" for deterministic recency
 
 
-# Keep local: L2-penalty-specific signature (embedding_vec kwarg) not in pulse_helpers.make_pulse_paper.
 def _make_paper(
-    embedding_vec: list[float] | None = None,
     external_id: str = "arxiv:0001",
 ) -> PaperCreate:
-    """Minimal PaperCreate.  embedding_vec is used to set the mock return value."""
-    return PaperCreate(
+    """Build a paper with deterministic recency for cosine-penalty tests."""
+    return make_paper_create(
         external_id=external_id,
-        source_type=SourceType.ARXIV,
-        title="Test Paper",
-        authors=["Author A"],
-        abstract="Test abstract",
         published_date=_FIXED_DATE,
         url=f"https://arxiv.org/abs/{external_id}",
     )

@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /citations -->
+<!-- verified-against-UI: 2026-07-25 | routes: /citations -->
 
 # Citation Graph
 
@@ -55,7 +55,7 @@ Pan and zoom are available via mouse/trackpad directly on the canvas.
 | **Blue** | A paper that is in your library |
 | **Grey** (stub) | A cited paper that has been referenced in citation data but has not been fetched or saved to your library |
 
-Clicking a blue node navigates to that paper's [Paper Detail](paper-detail.md) page. Clicking a grey stub node shows available metadata (title, DOI if known) and offers an option to fetch and save the paper to your library.
+Nodes are display-only and do not respond to clicks.
 
 ---
 
@@ -75,4 +75,4 @@ Edges represent citation relationships. An edge labelled **"influential"** indic
 
 - [Knowledge Graph](knowledge-graph.md) — concept-level entity graph.
 - [Paper Detail](paper-detail.md) — cross-references section shows direct citation neighbours for a single paper.
-- [Research Feed & Library](research-feed.md) — save papers discovered in the citation graph to your library.
+- [Research Feed & Library](research-feed.md) — where you search for and save papers, including ones you noticed while browsing the graph.

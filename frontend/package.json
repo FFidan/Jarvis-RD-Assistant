@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.2",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "Apache-2.0",
   "type": "module",
@@ -98,7 +98,7 @@
     "@tanstack/query-core": "5.101.4",
     "brace-expansion@^1": "1.1.16",
     "brace-expansion@^2": "2.1.2",
-    "brace-expansion@^5": "5.0.7",
+    "brace-expansion@^5": "5.0.8",
     "js-yaml": "^4.3.0",
     "react-pdf-highlighter-extended": {
       "react": "$react",

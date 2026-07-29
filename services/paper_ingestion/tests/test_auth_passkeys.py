@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
+from jarvis_common.testing_contract_apps import make_contract_client as _client
 
 from paper_ingestion.routers import auth_passkeys as pk
 
@@ -292,12 +293,6 @@ async def _passkey_app(contract_conn):
                 del app.state.db_pool
         else:
             app.state.db_pool = original
-
-
-def _client(app, cookie: str | None):
-    from jarvis_common.testing_contract_apps import make_contract_client
-
-    return make_contract_client(app, cookie)
 
 
 async def _register(

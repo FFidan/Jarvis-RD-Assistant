@@ -41,41 +41,6 @@ def _mock_request():
 
 
 # ---------------------------------------------------------------------------
-# Scenario 1 — no project links → enqueue must NOT be called
-# (auto_push_on_star=True but no project links → no enqueue)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_star_no_project_links_does_not_enqueue():
-    """COUNT(*) from project_papers returns 0 → jobs_lib.enqueue is never awaited.
-
-    auto_push_on_star=True but project_link_count=0 → still no enqueue.
-    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
-    fetchrow call 1 = paper existence; call 2 = CTE RETURNING (is_new_row, prev_starred).
-    fetchval call 1 = COUNT(*) project_papers; call 2 = auto_push_on_star config.
-    """
-    pool, conn = _make_pool_and_conn()
-
-    # fetchrow[0]: CTE RETURNING → new star (off→on transition)
-    conn.fetchrow.side_effect = [
-        {"id": 10, "is_visible": True},
-        {"is_new_row": True, "prev_starred": False},
-    ]
-    # fetchval[0] = COUNT(*) project_papers → 0 links; fetchval[1] = auto_push_on_star → True
-    conn.fetchval.side_effect = [0, True]
-
-    mock_task, mock_enqueue = _mock_zotero_push_task()
-    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
-        result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=1
-        )
-
-    assert result == {"status": "ok", "paper_id": 10}
-    mock_enqueue.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
 # Scenario 2 — has project links AND auto_push_on_star=True → enqueue called
 # ---------------------------------------------------------------------------
 

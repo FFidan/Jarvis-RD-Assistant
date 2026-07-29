@@ -17,7 +17,15 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
-import { CheckCircle, RefreshCw, ShieldCheck, StickyNote, Trash2, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle,
+  RefreshCw,
+  ShieldCheck,
+  StickyNote,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { errorMessage } from '@/lib/errors';
 
@@ -29,6 +37,15 @@ interface NotesTabProps {
    * Existing cached notes remain readable. Defaults to false.
    */
   readOnly?: boolean;
+}
+
+function StaleSourceNotice({ noun }: { noun: 'note' | 'highlight' }) {
+  return (
+    <p className="mt-2 flex items-center gap-1 text-xs text-amber-700" role="status">
+      <AlertTriangle className="h-3 w-3" />
+      This {noun} belongs to an earlier version of the paper.
+    </p>
+  );
 }
 
 export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
@@ -199,6 +216,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
               <Card key={note.id} className="rounded-md border-hair shadow-none">
                 <CardContent className="pt-4">
                   <p className="text-sm">{note.user_note}</p>
+                  {note.stale && <StaleSourceNotice noun="note" />}
                   <div className="mt-2 flex items-center justify-between">
                     <p className="text-xs text-muted-foreground">
                       {[
@@ -279,6 +297,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
                     </blockquote>
                   )}
                   <p className="mt-2 text-sm">{note.user_note}</p>
+                  {note.stale && <StaleSourceNotice noun="highlight" />}
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">
@@ -305,7 +324,12 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
                         variant="outline"
                         size="sm"
                         onClick={() => promoteZoteroMut.mutate(note.id)}
-                        disabled={promoteZoteroMut.isPending}
+                        disabled={promoteZoteroMut.isPending || note.stale}
+                        title={
+                          note.stale
+                            ? 'Earlier-version highlights cannot be promoted'
+                            : undefined
+                        }
                       >
                         <ShieldCheck className="mr-2 h-4 w-4" />
                         Promote verified evidence

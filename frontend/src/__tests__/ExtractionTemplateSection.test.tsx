@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -29,15 +29,12 @@ const mockTemplate = {
 };
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ExtractionTemplateSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ExtractionTemplateSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

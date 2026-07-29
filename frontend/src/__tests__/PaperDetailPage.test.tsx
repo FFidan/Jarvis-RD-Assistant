@@ -10,9 +10,8 @@
  * tab clicks.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
 
@@ -75,6 +74,7 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
 }));
 
 import { fetchPaperDetail, fetchContradictions, fetchNotes, fetchDecks, zoteroGetLinkage } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchPaperDetail = vi.mocked(fetchPaperDetail);
 const mockFetchContradictions = vi.mocked(fetchContradictions);
 const mockFetchNotes = vi.mocked(fetchNotes);
@@ -181,22 +181,20 @@ const MOCK_NOTES = [
     verified_quote: null,
     verified_page_number: null,
     promoted_at: null,
+    stale: false,
     created_at: '2026-01-15T10:30:00Z',
   },
 ];
 
 function renderPage(paperId = '42', search = '') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/paper/${paperId}${search}`]}>
-        <Routes>
-          <Route path="paper/:paperId" element={<PaperDetailPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[`/paper/${paperId}${search}`]}>
+      <Routes>
+        <Route path="paper/:paperId" element={<PaperDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

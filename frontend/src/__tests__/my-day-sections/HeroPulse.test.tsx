@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeroPulse } from '@/components/my-day/sections/HeroPulse';
 import type { PulseDeck, PulseCardItem } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -66,17 +67,14 @@ function makeDeck(overrides: Partial<PulseDeck> = {}): PulseDeck {
 }
 
 function renderHeroPulse(queryClient?: QueryClient) {
-  const qc = queryClient ?? new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const qc = queryClient ?? createTestQueryClient();
   return {
     qc,
-    ...render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <HeroPulse />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <MemoryRouter>
+        <HeroPulse />
+      </MemoryRouter>,
+      { queryClient: qc },
     ),
   };
 }

@@ -23,9 +23,14 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
     make_contract_client as _make_client,
+    patch_pi_test_app,
 )
+from paper_ingestion.models import PaperCreate
+from tests._paper_fakes import make_paper_create
 
 pytestmark = [
     pytest.mark.contract,
@@ -38,33 +43,30 @@ pytestmark = [
 async def _pi_app_with_pool(contract_conn):
     from unittest.mock import MagicMock
 
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.main import app
-
     # search-preview reads http_client from app.state via get_http_client dep.
     shared = SharedConnPool(contract_conn)
-    with (
-        patch_app_state(app, {"db_pool": shared, "embedder": None, "http_client": MagicMock()}),
-        patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            state_overrides={"embedder": None, "http_client": MagicMock()},
         ),
-    ):
+    ) as app:
         yield app
 
 
-def _make_paper_create(external_id: str, title: str, source_type: str = "arxiv"):
+def _make_paper_create(
+    external_id: str,
+    title: str,
+    source_type: str = "arxiv",
+) -> PaperCreate:
     """Return a PaperCreate-compatible Pydantic instance."""
-    from paper_ingestion.models import PaperCreate
-
-    return PaperCreate(
+    return make_paper_create(
         external_id=external_id,
         source_type=source_type,
         title=title,
         authors=["A. Author"],
         abstract="abstract",
-        url=f"https://example.test/{external_id}",
         published_date=date(2024, 1, 1),
     )
 

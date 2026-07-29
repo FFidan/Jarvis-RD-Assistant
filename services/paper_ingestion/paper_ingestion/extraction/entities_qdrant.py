@@ -70,12 +70,12 @@ async def _find_similar_entity(
     entity_type: str,
     embedding: list[float],
 ) -> int | None:
-    """Search Qdrant for a semantically similar entity (no DB connection needed).
+    """Read Qdrant for a semantically similar entity.
 
-    Returns the matched ``entity_id`` or ``None``.
+    Collection creation is deferred to the guarded persistence path, so this
+    precomputation cannot mutate Qdrant for a stale source generation.
     """
     try:
-        await _ensure_kg_collection(qdrant_client)
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         results = await qdrant_client.query_points(

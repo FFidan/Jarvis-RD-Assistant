@@ -137,6 +137,8 @@ export interface BatchExtractionResponse {
   extracted: number;
   failed: number;
   skipped: number;
+  total: number;
+  status: 'ok' | 'partial' | 'cancelled';
 }
 
 export interface PaperBrief {

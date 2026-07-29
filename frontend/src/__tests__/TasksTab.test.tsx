@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { TasksTab } from '@/components/projects/TasksTab';
 import type { Task } from '@/types';
 
@@ -16,6 +15,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 import { fetchTasks } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchTasks = vi.mocked(fetchTasks);
 
 const BASE_TASK: Task = {
@@ -42,13 +42,10 @@ const MOCK_TASKS: Task[] = [
 ];
 
 function renderTab(projectId = 1) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <TasksTab projectId={projectId} />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <TasksTab projectId={projectId} />,
+    { queryClient },
   );
 }
 

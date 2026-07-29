@@ -24,6 +24,12 @@ paper_chunks table.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 import pytest_asyncio
 
@@ -80,8 +86,10 @@ async def _seed_zotero_note_with_chunk(
     note_id = await conn.fetchval(
         """
         INSERT INTO paper_notes (paper_id, user_id, source, user_note, highlight_text, page_number,
-                                  verification_status)
-        VALUES ($1, $2, 'zotero', '', $3, 1, 'unverified')
+                                  verification_status, content_generation)
+        SELECT $1, $2, 'zotero', '', $3, 1, 'unverified', p.content_generation
+        FROM papers p
+        WHERE p.id = $1
         RETURNING id
         """,
         paper_id,
@@ -200,6 +208,54 @@ async def test_n04_promote_idempotent_already_verified(
     assert body.get("verification_status") == "verified"
 
 
+async def test_stale_zotero_note_cannot_be_promoted_or_mutated(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool_and_verifier,
+    _configure_api_key,
+):
+    """Promotion rejects earlier-version evidence before invoking verification."""
+    paper_id = contract_two_users.paper_id_a
+    note_id = await _seed_zotero_note_with_chunk(
+        contract_conn,
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+    verifier = MagicMock()
+    verifier.verify_quote.side_effect = AssertionError("stale note reached verifier")
+    previous_verifier = _pi_app_with_pool_and_verifier.state.verifier
+    _pi_app_with_pool_and_verifier.state.verifier = verifier
+    try:
+        async with _make_client(
+            _pi_app_with_pool_and_verifier,
+            contract_two_users.cookie_a,
+        ) as c:
+            resp = await c.post(f"/api/notes/{note_id}/promote")
+    finally:
+        _pi_app_with_pool_and_verifier.state.verifier = previous_verifier
+
+    assert resp.status_code == 409, resp.text[:300]
+    verifier.verify_quote.assert_not_called()
+    row = await contract_conn.fetchrow(
+        """
+        SELECT verification_status, verified_quote, verified_page_number, promoted_at
+        FROM paper_notes
+        WHERE id = $1
+        """,
+        note_id,
+    )
+    assert dict(row) == {
+        "verification_status": "unverified",
+        "verified_quote": None,
+        "verified_page_number": None,
+        "promoted_at": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # N-05: PUT /api/notes/{id} rejects zotero notes
 # ---------------------------------------------------------------------------
@@ -276,3 +332,257 @@ async def test_n06_delete_zotero_note_rejected(
     assert resp_b.status_code == 404, (
         f"Non-owner DELETE on zotero note: expected 404; got {resp_b.status_code}"
     )
+
+
+class _PaperLockGateConnection:
+    """Delegate a real connection while pausing after the paper lock is acquired."""
+
+    def __init__(self, conn, locked: asyncio.Event, release: asyncio.Event):
+        self._conn = conn
+        self._locked = locked
+        self._release = release
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def transaction(self, *args, **kwargs):
+        return self._conn.transaction(*args, **kwargs)
+
+    async def fetchrow(self, query, *args, **kwargs):
+        row = await self._conn.fetchrow(query, *args, **kwargs)
+        if "SELECT content_generation FROM papers" in query and "FOR SHARE" in query:
+            self._locked.set()
+            await self._release.wait()
+        return row
+
+    async def fetch(self, *args, **kwargs):
+        return await self._conn.fetch(*args, **kwargs)
+
+    async def fetchval(self, *args, **kwargs):
+        return await self._conn.fetchval(*args, **kwargs)
+
+    async def execute(self, *args, **kwargs):
+        return await self._conn.execute(*args, **kwargs)
+
+
+class _PaperLockGatePool:
+    def __init__(self, pool, locked: asyncio.Event, release: asyncio.Event):
+        self._pool = pool
+        self._locked = locked
+        self._release = release
+
+    @asynccontextmanager
+    async def acquire(self):
+        async with self._pool.acquire() as conn:
+            yield _PaperLockGateConnection(conn, self._locked, self._release)
+
+
+async def _seed_note_race(pool) -> tuple[int, int, int]:
+    token = uuid.uuid4().hex
+    highlight = "The source-lock contract preserves this exact quote."
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user_id = await conn.fetchval(
+                "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+                f"note-race-{token}@contract.test",
+            )
+            paper_id = await conn.fetchval(
+                """
+                INSERT INTO papers
+                    (external_id, source_type, title, authors, url, discovered_by)
+                VALUES ($1, 'arxiv', 'Note race', ARRAY['A'], $2, $3)
+                RETURNING id
+                """,
+                f"note-race-{token}",
+                f"https://example.test/{token}",
+                user_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO user_library (user_id, paper_id, added_via)
+                VALUES ($1, $2, 'manual_save')
+                """,
+                user_id,
+                paper_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO paper_chunks
+                    (paper_id, chunk_index, content, page_number, start_char, end_char)
+                VALUES ($1, 0, $2, 1, 0, $3)
+                """,
+                paper_id,
+                highlight,
+                len(highlight),
+            )
+            note_id = await conn.fetchval(
+                """
+                INSERT INTO paper_notes
+                    (paper_id, user_id, source, user_note, highlight_text,
+                     page_number, content_generation)
+                VALUES ($1, $2, 'zotero', '', $3, 1, 0)
+                RETURNING id
+                """,
+                paper_id,
+                user_id,
+                highlight,
+            )
+    return int(user_id), int(paper_id), int(note_id)
+
+
+async def _delete_note_race_fixture(
+    pool,
+    *,
+    user_id: int,
+    paper_id: int,
+) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM paper_notes WHERE paper_id = $1", paper_id)
+            await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
+            await conn.execute(
+                "DELETE FROM user_library WHERE user_id = $1 AND paper_id = $2",
+                user_id,
+                paper_id,
+            )
+            await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+            await conn.execute("DELETE FROM users WHERE id = $1", user_id)
+
+
+async def test_note_promotion_and_source_replacement_serialize_in_both_orders(
+    _contract_pool,
+):
+    """Promotion completes before replacement or rejects after replacement wins."""
+    from fastapi import HTTPException
+
+    from paper_ingestion.routers.notes import promote_zotero_note
+
+    user_id, paper_id, note_id = await _seed_note_race(_contract_pool)
+    handler = getattr(promote_zotero_note, "__wrapped__", promote_zotero_note)
+    verifier = MagicMock()
+    verifier.verify_quote.return_value = SimpleNamespace(
+        verified=True,
+        matched_text="The source-lock contract preserves this exact quote.",
+        page_number=1,
+    )
+    try:
+        source_locked = asyncio.Event()
+        release_action = asyncio.Event()
+        gated_pool = _PaperLockGatePool(_contract_pool, source_locked, release_action)
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                note_id=note_id,
+                db_pool=gated_pool,
+                verifier=verifier,
+                user_id=user_id,
+            )
+        )
+        await asyncio.wait_for(source_locked.wait(), timeout=2)
+        replacement_started = asyncio.Event()
+        replacement_acquired = asyncio.Event()
+
+        async def replacement_after_action() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with conn.transaction():
+                    replacement_started.set()
+                    await conn.execute(
+                        """
+                        UPDATE papers
+                        SET content_generation = content_generation + 1
+                        WHERE id = $1
+                        """,
+                        paper_id,
+                    )
+                    replacement_acquired.set()
+
+        replacement = asyncio.create_task(replacement_after_action())
+        await asyncio.wait_for(replacement_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        assert not replacement_acquired.is_set()
+        release_action.set()
+        promoted = await asyncio.wait_for(action, timeout=2)
+        await asyncio.wait_for(replacement, timeout=2)
+        assert promoted.verification_status == "verified"
+
+        async with _contract_pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE paper_notes
+                SET content_generation = (
+                        SELECT content_generation FROM papers WHERE id = $2
+                    ),
+                    verification_status = 'unverified',
+                    verified_quote = NULL,
+                    verified_page_number = NULL,
+                    promoted_at = NULL
+                WHERE id = $1
+                """,
+                note_id,
+                paper_id,
+            )
+        replacement_locked = asyncio.Event()
+        release_replacement = asyncio.Event()
+
+        async def held_replacement() -> None:
+            async with _contract_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        """
+                        UPDATE papers
+                        SET content_generation = content_generation + 1
+                        WHERE id = $1
+                        """,
+                        paper_id,
+                    )
+                    replacement_locked.set()
+                    await release_replacement.wait()
+
+        replacement = asyncio.create_task(held_replacement())
+        await asyncio.wait_for(replacement_locked.wait(), timeout=2)
+        source_locked = asyncio.Event()
+        release_gate = asyncio.Event()
+        release_gate.set()
+        gated_pool = _PaperLockGatePool(_contract_pool, source_locked, release_gate)
+        forbidden_verifier = MagicMock()
+        forbidden_verifier.verify_quote.side_effect = AssertionError("stale note reached verifier")
+        action = asyncio.create_task(
+            handler(
+                request=MagicMock(),
+                note_id=note_id,
+                db_pool=gated_pool,
+                verifier=forbidden_verifier,
+                user_id=user_id,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not action.done()
+        assert not source_locked.is_set()
+        release_replacement.set()
+        await asyncio.wait_for(replacement, timeout=2)
+        with pytest.raises(HTTPException) as exc_info:
+            await asyncio.wait_for(action, timeout=2)
+        assert exc_info.value.status_code == 409
+        forbidden_verifier.verify_quote.assert_not_called()
+        async with _contract_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT verification_status, verified_quote,
+                       verified_page_number, promoted_at
+                FROM paper_notes
+                WHERE id = $1
+                """,
+                note_id,
+            )
+        assert dict(row) == {
+            "verification_status": "unverified",
+            "verified_quote": None,
+            "verified_page_number": None,
+            "promoted_at": None,
+        }
+    finally:
+        await _delete_note_race_fixture(
+            _contract_pool,
+            user_id=user_id,
+            paper_id=paper_id,
+        )

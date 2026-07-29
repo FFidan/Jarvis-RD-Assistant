@@ -17,9 +17,9 @@
  *   (d) setup_completed=true → normal app, no wizard.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -62,17 +62,15 @@ vi.stubGlobal('fetch', vi.fn());
 const api = await import('@/lib/api');
 const { App } = await import('@/App');
 const { useAuthStore } = await import('@/stores/auth-store');
+const { resetAuthState } = await import('@/__tests__/auth-test-utils');
 
 function renderApp(initialEntries: string[] = ['/']) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={initialEntries}>
+      <App />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -83,7 +81,7 @@ describe('App onboarding gate (single signal)', () => {
   });
 
   it('(a) fresh install (unconfigured, not completed): renders the wizard for an unauthed user', async () => {
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     renderApp(['/']);
     // The wizard's step-1 title proves the gate rendered the wizard.
     expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
@@ -93,7 +91,7 @@ describe('App onboarding gate (single signal)', () => {
     // Post-auth steps need a session, so an unauthed user with a configured
     // install must log in first — the wizard resumes after login.
     vi.mocked(api.getFirstRunStatus).mockResolvedValue({ configured: true, setup_completed: false });
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     renderApp(['/']);
     expect(await screen.findByText('JARVIS RD Assistant')).toBeInTheDocument();
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
@@ -132,7 +130,7 @@ describe('App onboarding gate (single signal)', () => {
   // as either.
   it('(GAP-1) getFirstRunStatus rejects: unauthed user sees the error state with Retry (no Login, no wizard)', async () => {
     vi.mocked(api.getFirstRunStatus).mockRejectedValue(new Error('Network error'));
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     renderApp(['/']);
     expect(
       await screen.findByText(/Couldn't reach the server to check setup status/),
@@ -147,7 +145,7 @@ describe('App onboarding gate (single signal)', () => {
     vi.mocked(api.getFirstRunStatus)
       .mockRejectedValueOnce(new Error('Network error'))
       .mockResolvedValueOnce({ configured: true, setup_completed: true });
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     renderApp(['/']);
     const retry = await screen.findByRole('button', { name: 'Retry' });
     fireEvent.click(retry);

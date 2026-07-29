@@ -21,6 +21,7 @@ from jarvis_common.llm_client import (
     call_llm_structured,
     observe,
 )
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 from jarvis_common.paths import secure_path
 from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
 from jarvis_common.text_windows import chunk_windows
@@ -30,11 +31,17 @@ from jarvis_common.verify import QuoteVerifier, VerificationReport
 from paper_ingestion._state import svc
 from paper_ingestion.converters import (
     deduplicate_by_paper_id,
+    filter_current_cross_references,
     row_to_chunk_response,
     row_to_summary_response,
 )
 from paper_ingestion.db_types import ConnLike
-from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
+from paper_ingestion.exceptions import (
+    EmptyChunksError,
+    LLMError,
+    PaperNotFoundError,
+    SourceGenerationChangedError,
+)
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     ChunkResponse,
@@ -44,6 +51,7 @@ from paper_ingestion.models import (
     SummaryResponse,
 )
 from paper_ingestion.queries.predicates import paper_visible_sql
+from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 from paper_ingestion.services.pdf_workflow import advisory_lock
 from paper_ingestion.services.summarization_models import (
     CondensedDigest,
@@ -177,6 +185,40 @@ class SummaryGenerationResult:
     summary: SummaryResponse
     coverage: float
     passes: int
+
+
+@dataclass(slots=True)
+class SummaryInputs:
+    """Paper content and its generation captured for one summary run."""
+
+    paper_row: asyncpg.Record
+    chunks: list[ChunkResponse]
+    full_text: str
+    llm_model_name: str
+    content_generation: int
+
+
+@dataclass(slots=True)
+class SummaryPersistenceInputs:
+    """Typed values needed to persist one completed summary."""
+
+    paper_id: int
+    user_id: int | None
+    paper_title: str
+    embedder: Embedder | None
+    content_generation: int
+    summary_brief: str
+    summary_detailed: str
+    tldr: str | None
+    key_findings: list[KeyFinding]
+    methodology: str | None
+    limitations: str | None
+    relevance_notes: str | None
+    confidence: str
+    llm_model: str
+    prompt: str
+    raw_content: str
+    summary_verified: bool
 
 
 async def _input_char_budget(db_pool: asyncpg.Pool, reserved_output_tokens: int) -> int:
@@ -539,6 +581,55 @@ async def _map_reduce_summary(
     return parsed, carried_findings, report, reduce_prompt, len(windows)
 
 
+# Persisted public scope, the only corpus a background job may cross-reference.
+# Built from the shared constant so the scope vocabulary stays single-sourced.
+_PUBLIC_PAPER_SQL = f"p.visibility_scope = '{PUBLIC_VISIBILITY_SCOPE}'"
+
+# Vector candidates fetched before the visibility recheck narrows them.
+_CROSS_REFERENCE_CANDIDATES = 15
+# Papers are private unless a verified source made them public, so a query that
+# cannot express scope must over-fetch to leave the recheck something to keep.
+_UNSCOPED_CANDIDATE_MULTIPLIER = 3
+
+
+async def _visible_cross_reference_generations(
+    conn: ConnLike,
+    candidate_ids: list[int],
+    requester_id: int | None,
+) -> dict[int, int]:
+    """Return visible candidate IDs mapped to their current content generation.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Open connection used for the authority check.
+    candidate_ids : list[int]
+        Paper IDs proposed by the vector search.
+    requester_id : int | None
+        Authenticated caller, or ``None`` for a background job that carries no
+        authorization context and is therefore limited to public papers.
+
+    Returns
+    -------
+    dict[int, int]
+        Visible candidate IDs and the source generation each reference names.
+    """
+    if requester_id is None:
+        rows = await conn.fetch(
+            f"SELECT p.id, p.content_generation FROM papers p"
+            f" WHERE p.id = ANY($1::int[]) AND {_PUBLIC_PAPER_SQL}",
+            candidate_ids,
+        )
+    else:
+        rows = await conn.fetch(
+            f"SELECT p.id, p.content_generation FROM papers p"
+            f" WHERE p.id = ANY($1::int[]) AND {paper_visible_sql(2)}",
+            candidate_ids,
+            requester_id,
+        )
+    return {row["id"]: int(row["content_generation"]) for row in rows}
+
+
 async def _find_cross_references(
     conn: ConnLike,
     paper_id: int,
@@ -549,10 +640,10 @@ async def _find_cross_references(
 ) -> list[CrossReference]:
     """Find related papers via semantic similarity over chunk vectors.
 
-    A requesting user supplies the authorization context. A trusted background
-    job without that context uses the paper's discovery attribution only to
-    select a bounded library context; that audit field never grants access by
-    itself. Public papers remain searchable regardless of who embedded them.
+    A requesting user supplies the authorization context and reaches their own
+    corpus. A background job carries no such context, so its cross-references
+    are limited to persisted public papers: the paper's discovery attribution is
+    a descriptive field and never selects a scope on someone else's behalf.
 
     Returns ``[]`` when the semantic path is unavailable, fails, or finds
     nothing — honest empty beats keyword-overlap false links.
@@ -560,27 +651,33 @@ async def _find_cross_references(
     if embedder is None:
         return []
 
-    abstract_row = await conn.fetchrow(
-        "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
-    )
+    abstract_row = await conn.fetchrow("SELECT abstract FROM papers WHERE id = $1", paper_id)
     abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
-    attribution_user_id = abstract_row["discovered_by"] if abstract_row else None
-    scope_user_id = requester_id if requester_id is not None else attribution_user_id
 
     library_paper_ids: list[int] | None = None
-    if scope_user_id is not None:
+    if requester_id is not None:
         lib_rows = await conn.fetch(
-            "SELECT paper_id FROM user_library WHERE user_id = $1", scope_user_id
+            "SELECT paper_id FROM user_library WHERE user_id = $1", requester_id
         )
         library_paper_ids = [row["paper_id"] for row in lib_rows]
 
+    # A requester's scope is applied inside the vector query, so every candidate
+    # it returns is already admissible. The background path has no such scope to
+    # apply there and is narrowed to public afterwards, so it must retrieve
+    # enough candidates to cover what that step discards -- otherwise a public
+    # match ranked below the budget is never seen at all.
+    candidate_limit = (
+        _CROSS_REFERENCE_CANDIDATES
+        if requester_id is not None
+        else _CROSS_REFERENCE_CANDIDATES * _UNSCOPED_CANDIDATE_MULTIPLIER
+    )
     try:
         results = await embedder.search_similar(
             query_text=f"{title}. {abstract}",
-            limit=15,
+            limit=candidate_limit,
             paper_id_filter=paper_id,
             score_threshold=0.65,
-            user_id=scope_user_id,
+            user_id=requester_id,
             library_paper_ids=library_paper_ids,
         )
     except Exception:
@@ -596,21 +693,20 @@ async def _find_cross_references(
 
     # Qdrant is only a candidate source. Reapply the relational visibility
     # authority before persisting cross-references.
-    if scope_user_id is not None and sorted_results:
-        candidate_ids = [r["paper_id"] for r in sorted_results]
-        visible_rows = await conn.fetch(
-            f"SELECT p.id FROM papers p WHERE p.id = ANY($1::int[]) AND {paper_visible_sql(2)}",
-            candidate_ids,
-            scope_user_id,
+    if sorted_results:
+        visible_generations = await _visible_cross_reference_generations(
+            conn, [r["paper_id"] for r in sorted_results], requester_id
         )
-        visible_ids = {row["id"] for row in visible_rows}
-        sorted_results = [r for r in sorted_results if r["paper_id"] in visible_ids]
+        sorted_results = [r for r in sorted_results if r["paper_id"] in visible_generations]
+    else:
+        visible_generations = {}
 
     return [
         CrossReference(
             related_paper_id=r["paper_id"],
             relationship="semantic_similarity",
             explanation=f"Semantic similarity score: {r['score']:.3f}",
+            content_generation=visible_generations[r["paper_id"]],
         )
         for r in sorted_results[:5]
     ]
@@ -622,7 +718,7 @@ async def _load_paper_for_summary(
     paper_id: int,
     user_id: int | None,
     force: bool,
-) -> SummaryGenerationResult | tuple[asyncpg.Record, list[ChunkResponse], str, str]:
+) -> SummaryGenerationResult | SummaryInputs:
     """Load the paper inputs under an advisory lock, or the early result when idempotent."""
     async with db_pool.acquire() as conn:
         async with advisory_lock(conn, 2, paper_id):
@@ -636,6 +732,7 @@ async def _load_paper_for_summary(
                 )
             if not paper_row:
                 raise PaperNotFoundError(f"Paper {paper_id} not found")
+            content_generation = int(paper_row["content_generation"])
 
             # Idempotency: return the caller's existing summary. Scoped by
             # user_id — paper_summaries is per-user (UNIQUE (paper_id, user_id)),
@@ -644,13 +741,22 @@ async def _load_paper_for_summary(
             if not force:
                 existing = await conn.fetchrow(
                     "SELECT * FROM paper_summaries"
-                    " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                    " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                    " AND content_generation = $3",
                     paper_id,
                     user_id,
+                    content_generation,
                 )
                 if existing:
+                    current_cross_references = await filter_current_cross_references(
+                        conn, list(existing["cross_references"] or [])
+                    )
                     return SummaryGenerationResult(
-                        summary=row_to_summary_response(existing), coverage=1.0, passes=0
+                        summary=row_to_summary_response(
+                            existing, cross_references=current_cross_references
+                        ),
+                        coverage=1.0,
+                        passes=0,
                     )
 
             chunk_rows = await conn.fetch(
@@ -666,7 +772,13 @@ async def _load_paper_for_summary(
 
             # Read model preference from user_config while connection is held
             smart_model = get_smart_model()
-    return paper_row, chunks, full_text, smart_model
+    return SummaryInputs(
+        paper_row=paper_row,
+        chunks=chunks,
+        full_text=full_text,
+        llm_model_name=smart_model,
+        content_generation=content_generation,
+    )
 
 
 def _apply_verification_fallback(
@@ -687,6 +799,132 @@ def _apply_verification_fallback(
             summary_detailed = abstract or "No abstract available."
             degraded = True
     return summary_brief, summary_detailed, verified_findings, degraded
+
+
+async def _resolve_persisted_summary(
+    conn: ConnLike,
+    row: asyncpg.Record | None,
+    *,
+    paper_id: int,
+    user_id: int | None,
+) -> tuple[asyncpg.Record, list[dict]]:
+    """Resolve a guarded upsert's winner and filter its related-paper evidence."""
+    if row is None:
+        row = await _fetch_current_summary(conn, paper_id=paper_id, user_id=user_id)
+        if row is None:
+            raise RuntimeError(
+                f"summary persistence lost its concurrent winner for paper {paper_id}"
+            )
+    cross_references = await filter_current_cross_references(
+        conn, list(row["cross_references"] or [])
+    )
+    return row, cross_references
+
+
+async def _fetch_current_summary(
+    conn: ConnLike,
+    *,
+    paper_id: int,
+    user_id: int | None,
+) -> asyncpg.Record | None:
+    """Return the caller's summary only when it matches the paper source."""
+    return await conn.fetchrow(
+        """SELECT ps.*
+           FROM paper_summaries ps
+           JOIN papers p ON p.id = ps.paper_id
+                        AND p.content_generation = ps.content_generation
+           WHERE ps.paper_id = $1 AND ps.user_id IS NOT DISTINCT FROM $2""",
+        paper_id,
+        user_id,
+    )
+
+
+async def _persist_generated_summary(
+    db_pool: asyncpg.Pool,
+    inputs: SummaryPersistenceInputs,
+) -> tuple[asyncpg.Record, list[dict]]:
+    """Persist a summary while its captured source generation remains current."""
+    async with db_pool.acquire() as conn:
+        cross_references = await _find_cross_references(
+            conn,
+            inputs.paper_id,
+            inputs.paper_title,
+            embedder=inputs.embedder,
+            requester_id=inputs.user_id,
+        )
+        try:
+            async with guard_current_source_generation(
+                conn,
+                inputs.paper_id,
+                inputs.content_generation,
+            ):
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO paper_summaries (
+                        paper_id, summary_brief, summary_detailed, tldr, key_findings,
+                        methodology, limitations, relevance_notes, confidence,
+                        cross_references, llm_model, llm_prompt, llm_raw_response,
+                        summary_verified, user_id, content_generation
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8,
+                        $9, $10, $11, $12, $13, $14, $15, $16
+                    )
+                    ON CONFLICT (paper_id, user_id) DO UPDATE SET
+                        summary_brief = EXCLUDED.summary_brief,
+                        summary_detailed = EXCLUDED.summary_detailed,
+                        tldr = EXCLUDED.tldr,
+                        key_findings = EXCLUDED.key_findings,
+                        methodology = EXCLUDED.methodology,
+                        limitations = EXCLUDED.limitations,
+                        relevance_notes = COALESCE(
+                            EXCLUDED.relevance_notes, paper_summaries.relevance_notes),
+                        confidence = EXCLUDED.confidence,
+                        cross_references = EXCLUDED.cross_references,
+                        llm_model = EXCLUDED.llm_model,
+                        llm_prompt = EXCLUDED.llm_prompt,
+                        llm_raw_response = EXCLUDED.llm_raw_response,
+                        summary_verified = EXCLUDED.summary_verified,
+                        content_generation = EXCLUDED.content_generation
+                    WHERE paper_summaries.content_generation <= EXCLUDED.content_generation
+                    RETURNING *
+                    """,
+                    inputs.paper_id,
+                    inputs.summary_brief,
+                    inputs.summary_detailed,
+                    inputs.tldr,
+                    [finding.model_dump() for finding in inputs.key_findings],
+                    inputs.methodology,
+                    inputs.limitations,
+                    inputs.relevance_notes,
+                    inputs.confidence,
+                    [reference.model_dump() for reference in cross_references],
+                    inputs.llm_model,
+                    inputs.prompt,
+                    inputs.raw_content,
+                    inputs.summary_verified,
+                    inputs.user_id,
+                    inputs.content_generation,
+                )
+                return await _resolve_persisted_summary(
+                    conn,
+                    row,
+                    paper_id=inputs.paper_id,
+                    user_id=inputs.user_id,
+                )
+        except SourceGenerationChangedError:
+            row = await _fetch_current_summary(
+                conn,
+                paper_id=inputs.paper_id,
+                user_id=inputs.user_id,
+            )
+            if row is None:
+                raise
+            return await _resolve_persisted_summary(
+                conn,
+                row,
+                paper_id=inputs.paper_id,
+                user_id=inputs.user_id,
+            )
 
 
 @observe()
@@ -721,7 +959,11 @@ async def generate_paper_summary(
     loaded = await _load_paper_for_summary(db_pool, paper_id=paper_id, user_id=user_id, force=force)
     if isinstance(loaded, SummaryGenerationResult):
         return loaded
-    paper_row, chunks, full_text, llm_model_name = loaded
+    paper_row = loaded.paper_row
+    chunks = loaded.chunks
+    full_text = loaded.full_text
+    llm_model_name = loaded.llm_model_name
+    content_generation = loaded.content_generation
 
     # Read S2 TLDR from paper metadata (if sourced from Semantic Scholar)
     s2_tldr = (paper_row["metadata"] or {}).get("s2_tldr", "")
@@ -783,7 +1025,6 @@ async def generate_paper_summary(
         )
 
     raw_content = parsed.model_dump_json()
-    llm_model = llm_model_name
 
     # Extract and cap TLDR to 30 words; fall back to S2 TLDR
     tldr = " ".join((parsed.tldr or "").split()[:30])
@@ -818,62 +1059,34 @@ async def generate_paper_summary(
         verified_findings,
     )
 
-    # --- Store in DB (new connection, no advisory lock) ---
-    # ON CONFLICT DO UPDATE handles the rare race where two concurrent requests
-    # both passed the idempotency check above.
-    async with db_pool.acquire() as conn:
-        # Cross-reference consistency check (anti-hallucination rule 9)
-        cross_references = await _find_cross_references(
-            conn, paper_id, paper_row["title"], embedder=embedder, requester_id=user_id
-        )
-
-        row = await conn.fetchrow(
-            """
-            INSERT INTO paper_summaries (
-                paper_id, summary_brief, summary_detailed, tldr, key_findings,
-                methodology, limitations, relevance_notes, confidence,
-                cross_references, llm_model, llm_prompt, llm_raw_response,
-                summary_verified, user_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                summary_brief = EXCLUDED.summary_brief,
-                summary_detailed = EXCLUDED.summary_detailed,
-                tldr = EXCLUDED.tldr,
-                key_findings = EXCLUDED.key_findings,
-                methodology = EXCLUDED.methodology,
-                limitations = EXCLUDED.limitations,
-                relevance_notes = COALESCE(
-                    EXCLUDED.relevance_notes, paper_summaries.relevance_notes),
-                confidence = EXCLUDED.confidence,
-                cross_references = EXCLUDED.cross_references,
-                llm_model = EXCLUDED.llm_model,
-                llm_prompt = EXCLUDED.llm_prompt,
-                llm_raw_response = EXCLUDED.llm_raw_response,
-                summary_verified = EXCLUDED.summary_verified
-            RETURNING *
-            """,
-            paper_id,
-            summary_brief,
-            summary_detailed,
-            tldr or None,
-            [f.model_dump() for f in verified_findings],
-            parsed.methodology,
-            parsed.limitations,
-            parsed.relevance_notes,
-            # DB constraint only allows HIGH|MEDIUM|LOW; map NONE (0 findings) to LOW
-            "LOW" if report.confidence.value == "NONE" else report.confidence.value,
-            [r.model_dump() for r in cross_references],
-            llm_model,
-            prompt,
-            raw_content,
-            report.confidence == Confidence.HIGH,
-            user_id,
-        )
+    row, current_cross_references = await _persist_generated_summary(
+        db_pool,
+        SummaryPersistenceInputs(
+            paper_id=paper_id,
+            user_id=user_id,
+            paper_title=paper_row["title"],
+            embedder=embedder,
+            content_generation=content_generation,
+            summary_brief=summary_brief,
+            summary_detailed=summary_detailed,
+            tldr=tldr or None,
+            key_findings=verified_findings,
+            methodology=parsed.methodology,
+            limitations=parsed.limitations,
+            relevance_notes=parsed.relevance_notes,
+            # DB constraint allows HIGH|MEDIUM|LOW; map NONE (0 findings) to LOW.
+            confidence="LOW" if report.confidence.value == "NONE" else report.confidence.value,
+            llm_model=llm_model_name,
+            prompt=prompt,
+            raw_content=raw_content,
+            summary_verified=report.confidence == Confidence.HIGH,
+        ),
+    )
 
     gen_coverage = 0.0 if degraded else 1.0
-    summary_response = row_to_summary_response(row).model_copy(
-        update={"coverage": gen_coverage, "passes": passes}
-    )
+    summary_response = row_to_summary_response(
+        row, cross_references=current_cross_references
+    ).model_copy(update={"coverage": gen_coverage, "passes": passes})
     return SummaryGenerationResult(
         summary=summary_response,
         coverage=gen_coverage,

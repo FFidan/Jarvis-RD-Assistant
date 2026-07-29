@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import httpx
 from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ArxivSource
 from paper_ingestion.sources.base import PaperSource, SourceQuery, _MAX_RETRY_AFTER_S
@@ -126,17 +127,6 @@ def test_consolidate_topics_each_query_has_exactly_one_topic(stub_source):
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_pool() -> tuple[MagicMock, AsyncMock]:
-    """Shared helper: fake asyncpg pool that records execute calls."""
-    mock_conn = AsyncMock()
-    mock_conn.execute = AsyncMock()
-    mock_pool = MagicMock()
-    mock_pool.acquire = MagicMock()
-    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return mock_pool, mock_conn
-
-
 def _make_config(source_type: SourceType) -> PaperSourceConfig:
     return PaperSourceConfig(id=1, source_type=source_type, enabled=True, config={})
 
@@ -154,7 +144,7 @@ async def test_insert_run_history_hoisted_to_base(
     source_cls, source_type_enum, expected_source_type
 ):
     """_insert_run_history on base inserts correct source_type for each subclass."""
-    mock_pool, mock_conn = _make_mock_pool()
+    mock_pool, mock_conn = make_pool_and_conn()
     config = _make_config(source_type_enum)
     source = source_cls(config=config, http_client=MagicMock(), db_pool=mock_pool)
 

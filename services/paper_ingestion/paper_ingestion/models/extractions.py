@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -107,6 +107,7 @@ class ExtractionResponse(BaseModel):
     template_id: int
     extractions: dict[str, ExtractedField]
     extraction_model: str | None = None
+    content_generation: int = 0
     created_at: datetime
 
 
@@ -129,6 +130,9 @@ class BatchExtractionResponse(BaseModel):
     extracted: int
     failed: int
     skipped: int
+    total: int
+    remaining: int = 0
+    status: Literal["ok", "partial", "cancelled"]
 
 
 class ExtractionTableRow(BaseModel):

@@ -4,6 +4,8 @@
 #   --build-local   Rebuild the application images from source instead of pulling
 #                   the prebuilt ones published to GHCR. Slower and needs far more
 #                   disk; base images and build inputs must be cached or reachable.
+#   --image-tag TAG Select published application images by stable, prerelease,
+#                   or lowercase 40-hex commit tag.
 #   --yes           Assume "yes" for every confirmation prompt (unattended runs).
 #
 # Never rolls back automatically. A direct-run failure prints bounded recovery
@@ -40,9 +42,10 @@ die() {
 
 # print_split_recovery SERVICE... — the post-failure recovery guidance, split so
 # each command names only the services it can actually roll back. Third-party
-# services are pinned in versions.env; application services are tagged by
-# JARVIS_VERSION. THIRD_PARTY_SET (built once the topology is known) decides which
-# half each service belongs to, so newly reconciled services classify correctly.
+# services are pinned in versions.env; published application services are tagged
+# by JARVIS_IMAGE_TAG. THIRD_PARTY_SET (built once the topology is known) decides
+# which half each service belongs to, so newly reconciled services classify
+# correctly.
 print_split_recovery() {
   local svc
   local -a failed_app=() failed_third=()
@@ -73,13 +76,12 @@ EOF
 
   if [ "${#failed_app[@]}" -gt 0 ]; then
     printf '\n  %sApplication-image recovery (not a full release rollback):%s\n' "$C_BOLD" "$C_RESET"
-    printf '  Application services use JARVIS_VERSION; these commands do not move the Git checkout or restore stored data.\n'
-    if ! printf '%s' "${PREVIOUS_APP_VERSION:-}" \
-        | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-      printf '  The previous application version could not be read safely from .env, so no image command was printed.\n'
+    printf '  Application services use JARVIS_IMAGE_TAG; these commands do not move the Git checkout or restore stored data.\n'
+    if ! image_tag_is_valid "${PREVIOUS_IMAGE_TAG:-}"; then
+      printf '  The previous application image tag could not be read safely from .env, so no image command was printed.\n'
     elif [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
       printf '  Use this only if the previous application image is still cached locally:\n'
-      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      printf '    JARVIS_IMAGE_TAG=%q docker compose' "$PREVIOUS_IMAGE_TAG"
       if [ "${#recovery_profiles[@]}" -gt 0 ]; then
         printf ' %q' "${recovery_profiles[@]}"
       fi
@@ -87,14 +89,14 @@ EOF
       printf ' %q' "${failed_app[@]}"
       printf '\n'
     else
-      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      printf '    JARVIS_IMAGE_TAG=%q docker compose' "$PREVIOUS_IMAGE_TAG"
       if [ "${#recovery_profiles[@]}" -gt 0 ]; then
         printf ' %q' "${recovery_profiles[@]}"
       fi
       printf ' pull'
       printf ' %q' "${failed_app[@]}"
       printf '\n'
-      printf '    JARVIS_VERSION=%q docker compose' "$PREVIOUS_APP_VERSION"
+      printf '    JARVIS_IMAGE_TAG=%q docker compose' "$PREVIOUS_IMAGE_TAG"
       if [ "${#recovery_profiles[@]}" -gt 0 ]; then
         printf ' %q' "${recovery_profiles[@]}"
       fi
@@ -130,9 +132,17 @@ cd "$SCRIPT_DIR"
 
 BUILD_LOCAL=0
 ASSUME_YES=0
+REQUESTED_IMAGE_TAG=""
+REQUESTED_IMAGE_TAG_EXPLICIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --build-local) BUILD_LOCAL=1; shift ;;
+    --image-tag)
+      [ "$#" -ge 2 ] && [[ "$2" != -* ]] \
+        || die "--image-tag requires a value." "Run: $0 --help"
+      REQUESTED_IMAGE_TAG="$2"; REQUESTED_IMAGE_TAG_EXPLICIT=1; shift 2 ;;
+    --image-tag=*)
+      REQUESTED_IMAGE_TAG="${1#*=}"; REQUESTED_IMAGE_TAG_EXPLICIT=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     -h|--help)
       sed -n '/^# update.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0"
@@ -193,44 +203,7 @@ case "$_update_lock_rc" in
 esac
 
 # -----------------------------------------------------------------------------
-# 1. Resolve this checkout's application image tag.
-# -----------------------------------------------------------------------------
-# An exact release tag is authoritative for release-candidate checkouts, whose
-# pyproject version intentionally remains the eventual stable version. Otherwise
-# read the project version from this checkout. The result is exported before the
-# first Compose invocation so it overrides any stale JARVIS_VERSION in .env.
-resolve_checkout_app_version() {
-  local exact_tag="" version=""
-  if command -v git >/dev/null 2>&1; then
-    exact_tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
-  fi
-
-  case "$exact_tag" in
-    v[0-9]*) version="${exact_tag#v}" ;;
-    *)
-      [ -r pyproject.toml ] || return 1
-      version="$(awk '
-        /^\[project\][[:space:]]*$/ { in_project = 1; next }
-        in_project && /^\[/ { exit }
-        in_project && /^[[:space:]]*version[[:space:]]*=/ {
-          line = $0
-          if (line !~ /^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"[[:space:]]*$/) exit
-          sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*"/, "", line)
-          sub(/"[[:space:]]*$/, "", line)
-          print line
-          exit
-        }
-      ' pyproject.toml 2>/dev/null)"
-      ;;
-  esac
-
-  [ "${#version}" -le 128 ] || return 1
-  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || return 1
-  printf '%s' "$version"
-}
-
-# -----------------------------------------------------------------------------
-# 2. Load pinned versions
+# 1. Resolve this checkout's application image tag and load pinned versions.
 # -----------------------------------------------------------------------------
 if [ ! -f versions.env ]; then
   die "versions.env not found in $SCRIPT_DIR." \
@@ -243,12 +216,22 @@ if ! CHECKOUT_APP_VERSION="$(resolve_checkout_app_version)"; then
   die "Could not determine a valid application version from this checkout." \
       "Use an exact vMAJOR.MINOR.PATCH[-PRERELEASE] tag, or fix [project].version in pyproject.toml."
 fi
+SELECTED_IMAGE_TAG="$CHECKOUT_APP_VERSION"
+[ "$REQUESTED_IMAGE_TAG_EXPLICIT" -eq 0 ] || SELECTED_IMAGE_TAG="$REQUESTED_IMAGE_TAG"
+image_tag_is_valid "$SELECTED_IMAGE_TAG" \
+  || die "Invalid --image-tag '${SELECTED_IMAGE_TAG}'." \
+    "Use X.Y.Z, X.Y.Z-prerelease, or a lowercase 40-hex commit."
 PREVIOUS_APP_VERSION="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
-if ! printf '%s' "$PREVIOUS_APP_VERSION" \
-    | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+if ! app_version_is_valid "$PREVIOUS_APP_VERSION"; then
   PREVIOUS_APP_VERSION=""
 fi
+PREVIOUS_IMAGE_TAG="$(sed -n 's/^JARVIS_IMAGE_TAG=//p' .env 2>/dev/null | head -1)"
+PREVIOUS_IMAGE_TAG="${PREVIOUS_IMAGE_TAG:-$PREVIOUS_APP_VERSION}"
+if ! image_tag_is_valid "$PREVIOUS_IMAGE_TAG"; then
+  PREVIOUS_IMAGE_TAG=""
+fi
 export JARVIS_VERSION="$CHECKOUT_APP_VERSION"
+export JARVIS_IMAGE_TAG="$SELECTED_IMAGE_TAG"
 
 command -v docker >/dev/null 2>&1 \
   || die "Docker not found in PATH." \
@@ -320,7 +303,7 @@ get_running_image() {
 }
 
 # -----------------------------------------------------------------------------
-# 3. Service → version-var mapping (topology-aware).
+# 2. Service → version-var mapping (topology-aware).
 # -----------------------------------------------------------------------------
 # Parallel arrays keep ordering deterministic and avoid assoc-array iter gotchas.
 # The always-on third-party set plus the disaster-recovery backup sidecar, which
@@ -342,7 +325,7 @@ for _i in "${!OPTIONAL_TP_SVCS[@]}"; do
 done
 
 # The full third-party set for this run, used to classify recovery guidance
-# (versions.env pins vs. JARVIS_VERSION-tagged application images).
+# (versions.env pins vs. JARVIS_IMAGE_TAG-selected application images).
 THIRD_PARTY_SET="${SERVICES[*]}"
 
 # In v1.2 the trusted ingress containers and dashboard use pinned source IPs.
@@ -399,7 +382,7 @@ done
 printf '\n'
 
 # -----------------------------------------------------------------------------
-# 4. Decide what to refresh (third-party pins + application images).
+# 3. Decide what to refresh (third-party pins + application images).
 # -----------------------------------------------------------------------------
 # Nothing is pulled or recreated yet: all decisions are taken first, then every
 # image is STAGED (pulled/built), and only after that is anything recreated. A
@@ -454,7 +437,7 @@ if [ "$DO_TP" -eq 0 ] && [ "$DO_APP" -eq 0 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 5. Stage every image FIRST — all pulls/builds complete before any recreate.
+# 4. Stage every image FIRST — all pulls/builds complete before any recreate.
 # -----------------------------------------------------------------------------
 if [ "$DO_TP" -eq 1 ]; then
   info "Pulling third-party images..."
@@ -484,7 +467,7 @@ if [ "$DO_APP" -eq 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 6. Recreate — every image is staged, so a bring-up only swaps containers.
+# 5. Recreate — every image is staged, so a bring-up only swaps containers.
 # -----------------------------------------------------------------------------
 UPDATE_MUTATION_STARTED=1
 TO_UPDATE=()
@@ -520,66 +503,44 @@ if [ "$DO_APP" -eq 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 7. Health wait loop (per service, 180s budget, 3s interval).
+# 6. Health wait (per service, 180s budget, 3s interval).
 # -----------------------------------------------------------------------------
-UNVERIFIED=()
-wait_healthy() {
-  local svc="$1"
-  local budget=180
-  local interval=3
-  local elapsed=0
-  local cid status run_state
-
-  while [ "$elapsed" -lt "$budget" ]; do
-    cid="$(docker compose ps -q "$svc" 2>/dev/null | head -n 1 || true)"
-    if [ -z "$cid" ]; then
-      sleep "$interval"
-      elapsed=$((elapsed + interval))
-      continue
-    fi
-    # `.State.Health.Status` is empty when the image has no HEALTHCHECK.
-    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
-    case "$status" in
-      "")
-        # No healthcheck: verify the container is at least RUNNING, and say so
-        # plainly instead of silently claiming success — it is not health-verified.
-        run_state="$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || true)"
-        if [ "$run_state" = "running" ]; then
-          warn "$svc: running (no healthcheck) — readiness not verified"
-          UNVERIFIED+=("$svc")
-          return 0
-        fi
-        err "$svc: not running (state: ${run_state:-unknown}, no healthcheck)"
-        return 1
-        ;;
-      healthy)   ok "$svc: healthy"; return 0 ;;
-      starting)  ;;  # still coming up
-      unhealthy) err "$svc: unhealthy"; return 1 ;;
-      *)         ;;  # unknown states — keep polling
-    esac
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
-  err "$svc: did not become healthy within ${budget}s."
-  return 1
+_update_service_container_id() {
+  docker compose ps -q "$1" 2>/dev/null | head -n 1 || true
 }
 
+UNVERIFIED=()
 FAILED=()
 for svc in "${TO_UPDATE[@]}"; do
-  if ! wait_healthy "$svc"; then
+  if wait_for_compose_service_health \
+      "$svc" 180 _update_service_container_id; then
+    case "$COMPOSE_HEALTH_RESULT" in
+      healthy) ok "$svc: healthy" ;;
+      running-unverified)
+        warn "$svc: running (no healthcheck) — readiness not verified"
+        UNVERIFIED+=("$svc")
+        ;;
+    esac
+  else
+    case "$COMPOSE_HEALTH_RESULT" in
+      terminal)
+        err "$svc: not running (state: ${COMPOSE_HEALTH_LAST_STATE})" ;;
+      *)
+        err "$svc: did not become healthy within 180s (last state: ${COMPOSE_HEALTH_LAST_STATE})." ;;
+    esac
     FAILED+=("$svc")
   fi
 done
 
 # -----------------------------------------------------------------------------
-# 8. Report
+# 7. Report
 # -----------------------------------------------------------------------------
 if [ "${#FAILED[@]}" -eq 0 ]; then
   if [ "$DO_APP" -eq 1 ]; then
-    if ! upsert_env_var JARVIS_VERSION "$CHECKOUT_APP_VERSION"; then
-      err "Application services are healthy, but JARVIS_VERSION could not be recorded in .env."
-      printf '        %sFix .env permissions, then re-run ./update.sh so future Compose commands keep version %s.%s\n' \
-        "$C_YELLOW" "$CHECKOUT_APP_VERSION" "$C_RESET" >&2
+    if ! upsert_app_identity "$CHECKOUT_APP_VERSION" "$SELECTED_IMAGE_TAG"; then
+      err "Application services are healthy, but their version and image tag could not be recorded in .env."
+      printf '        %sFix .env permissions, then re-run ./update.sh so future Compose commands keep version %s and image tag %s.%s\n' \
+        "$C_YELLOW" "$CHECKOUT_APP_VERSION" "$SELECTED_IMAGE_TAG" "$C_RESET" >&2
       exit 1
     fi
   fi

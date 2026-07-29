@@ -19,6 +19,8 @@ async def assert_paper_pdf_visible(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     paper_id: int,
     user_id: int,
+    *,
+    lock_for_update: bool = False,
 ) -> str:
     """Return ``source_type`` when the caller may view the paper's PDF.
 
@@ -30,6 +32,9 @@ async def assert_paper_pdf_visible(
         Paper whose stored PDF is being requested.
     user_id : int
         Authenticated caller.
+    lock_for_update : bool
+        Hold a row lock through the caller's transaction. Highlight creation
+        uses this to keep its generation stamp ordered with source replacement.
 
     Returns
     -------
@@ -39,18 +44,34 @@ async def assert_paper_pdf_visible(
     Raises
     ------
     fastapi.HTTPException
-        With an opaque 404 when the paper is absent or outside the caller's
-        visibility scope.
+        With an opaque 404 when the paper is absent, records no stored PDF, or
+        is outside the caller's visibility scope.
 
     Notes
     -----
     Authorization uses the central persisted-scope-or-library predicate;
-    provenance and discoverer fields never grant access. The PDF, snapshot,
-    and highlights routes share this guard so their read boundary is symmetric.
+    provenance and discoverer fields never grant access. Six call sites share
+    this guard, so its predicate is the read boundary for all of them at once:
+    the PDF route below, the page-image route in
+    :mod:`paper_ingestion.routers.snapshots`, both highlight routes in
+    :mod:`paper_ingestion.routers.highlights`, the Zotero highlight-export
+    route in :mod:`paper_ingestion.routers.zotero`, and that export's job
+    handler in :mod:`paper_ingestion.integrations._zotero_jobs`, which
+    re-checks the guard when the job runs.
+
+    A row whose ``pdf_local_path`` is unset is treated as absent. The stored
+    record, not the storage directory, decides what a paper currently has:
+    every writer publishes that pointer in the same transaction that promotes
+    ``{paper_id}.pdf``, and a superseded promotion clears it without removing
+    the file (see :mod:`paper_ingestion.services.pdf_workflow`). Requiring the
+    pointer keeps a file that no live record claims out of every shared route.
     """
     visibility_sql = paper_visibility_sql(2, alias="p")
+    lock_sql = " FOR UPDATE OF p" if lock_for_update else ""
     row = await conn.fetchrow(
-        f"SELECT p.source_type FROM papers p WHERE p.id = $1 AND {visibility_sql}",
+        "SELECT p.source_type FROM papers p "
+        f"WHERE p.id = $1 AND p.pdf_local_path IS NOT NULL AND {visibility_sql}"
+        f"{lock_sql}",
         paper_id,
         user_id,
     )

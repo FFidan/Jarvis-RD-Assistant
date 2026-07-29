@@ -5,11 +5,11 @@
  * independent of the shared ui-store.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const startWorkMock = vi.fn();
 
@@ -60,16 +60,13 @@ vi.mock('@/lib/api', () => ({
 
 const { fetchPulseToday, fetchFeed, fetchThreads } = await import('@/lib/api');
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <HeroNow />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HeroNow />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -92,7 +89,7 @@ describe('HeroNow — localStorage persistence', () => {
 
   it('hydrates from a stored "task" heroMode and shows the task hero', async () => {
     localStorage.setItem('myday.heroMode', 'task');
-    renderWithProviders();
+    renderSubject();
     // HeroTask renders the active item title
     expect(await screen.findByText('Active task')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Continue task' })).toBeInTheDocument();
@@ -102,7 +99,7 @@ describe('HeroNow — localStorage persistence', () => {
     const user = userEvent.setup();
     // Explicit stored "pulse" choice wins over the smart default.
     localStorage.setItem('myday.heroMode', 'pulse');
-    renderWithProviders();
+    renderSubject();
     await screen.findByText(/No Pulse for today yet/i);
 
     const taskBtn = screen.getByRole('tab', { name: 'Continue task' });
@@ -120,7 +117,7 @@ describe('HeroNow — localStorage persistence', () => {
       cyclesCompleted: 0,
       targetCycles: 4,
     };
-    renderWithProviders();
+    renderSubject();
     expect(await screen.findByText(/No Pulse for today yet/i)).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
   });

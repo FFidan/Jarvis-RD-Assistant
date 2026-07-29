@@ -22,31 +22,6 @@ def _load_rotate_config_key():
 rotate_config_key = _load_rotate_config_key()
 
 
-def test_required_env_returns_present_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configured environment values should pass through unchanged."""
-    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
-
-    assert rotate_config_key._required_env("DATABASE_URL") == "postgresql://example"
-
-
-def test_required_env_raises_on_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing required settings should fail before any database connection."""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-
-    with pytest.raises(
-        (rotate_config_key.ScriptError, SystemExit), match="DATABASE_URL is required"
-    ):
-        rotate_config_key._required_env("DATABASE_URL")
-
-
-def test_required_env_raises_script_error_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_required_env must raise ScriptError (not SystemExit) outside __main__."""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-
-    with pytest.raises(rotate_config_key.ScriptError, match="DATABASE_URL is required"):
-        rotate_config_key._required_env("DATABASE_URL")
-
-
 def test_required_secret_reads_file_indirection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -98,6 +73,99 @@ def test_database_url_requires_password_source(monkeypatch: pytest.MonkeyPatch) 
         rotate_config_key.ScriptError,
         match="DATABASE_URL or POSTGRES_PASSWORD_FILE is required",
     ):
+        rotate_config_key._database_url()
+
+
+def test_database_url_preserves_an_explicit_direct_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller-supplied DSN bypasses component construction unchanged."""
+    direct = "postgresql://user:p%40ss@[2001:db8::1]:6543/research?sslmode=require"
+    monkeypatch.setenv("DATABASE_URL", direct)
+    monkeypatch.delenv("POSTGRES_PASSWORD_FILE", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "invalid:host")
+    monkeypatch.setenv("POSTGRES_PORT", "0")
+
+    assert rotate_config_key._database_url() == direct
+
+
+def _rotation_dsn_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    password_file = tmp_path / "postgres-password"
+    password_file.write_text("secret", encoding="utf-8")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("POSTGRES_PASSWORD_FILE", str(password_file))
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["db", "postgres-primary", "host.docker.internal", "192.168.1.10", "[::1]", "[2001:db8::1]"],
+)
+def test_database_url_accepts_valid_hosts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+) -> None:
+    _rotation_dsn_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("POSTGRES_HOST", host)
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+
+    assert f"@{host}:5432/" in rotate_config_key._database_url()
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "db:5432",
+        "[::1",
+        "::1",
+        "[not-ipv6]",
+        "999.1.1.1",
+        "db/svc",
+        "evil@host",
+        "host with space",
+        "db?query",
+        "db#fragment",
+        "db]",
+        "%2Ftmp",
+        "%2ftmp",
+        "%40host",
+        "%3Fquery",
+        "%23fragment",
+    ],
+)
+def test_database_url_rejects_invalid_hosts_while_constructing_dsn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+) -> None:
+    _rotation_dsn_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("POSTGRES_HOST", host)
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+
+    with pytest.raises(rotate_config_key.ScriptError, match="POSTGRES_HOST.*invalid host"):
+        rotate_config_key._database_url()
+
+
+@pytest.mark.parametrize("port", ["1", "5432", "65535"])
+def test_database_url_accepts_valid_ports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, port: str
+) -> None:
+    _rotation_dsn_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PORT", port)
+
+    assert f":{port}/" in rotate_config_key._database_url()
+
+
+@pytest.mark.parametrize(
+    "port",
+    ["", "5432/path", "5432:5433", "0", "65536", "+5432", "-1", "５４３２", " 5432", "port"],
+)
+def test_database_url_rejects_invalid_ports_while_constructing_dsn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, port: str
+) -> None:
+    _rotation_dsn_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PORT", port)
+
+    with pytest.raises(rotate_config_key.ScriptError, match="POSTGRES_PORT.*invalid port"):
         rotate_config_key._database_url()
 
 

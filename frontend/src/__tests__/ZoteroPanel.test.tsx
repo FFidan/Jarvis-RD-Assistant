@@ -14,10 +14,10 @@
  * navigator.clipboard.writeText AFTER userEvent.setup() to control resolve/reject.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Module mocks ---
 
@@ -31,13 +31,10 @@ vi.mock('@/lib/api', () => ({
 }));
 
 function renderPanel() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ZoteroPanel paperId={1} hasProjectLinks />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <ZoteroPanel paperId={1} hasProjectLinks />,
+    { queryClient },
   );
 }
 

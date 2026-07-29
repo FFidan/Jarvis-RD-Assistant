@@ -1,8 +1,8 @@
-<!-- verified-against-UI: 2026-06-06 | routes: /knowledge -->
+<!-- verified-against-UI: 2026-07-25 | routes: /knowledge -->
 
 # Knowledge Graph
 
-The **Knowledge Graph** page at `/knowledge` displays an interactive concept-level graph of entities extracted from papers in your library, rendered using Cytoscape.js.
+The **Knowledge Graph** page at `/knowledge` displays an interactive concept-level graph of entities extracted from papers visible to you — public papers plus any papers in your own library — rendered using Cytoscape.js.
 
 <!-- screenshot: /knowledge — Cytoscape graph with EntityTypeFilter chips visible, coloured nodes, and GraphStats panel -->
 
@@ -31,21 +31,17 @@ A row of filter chips along the top of the graph panel lets you show or hide ent
 
 ### Min-paper-count slider
 
-A slider with a range of **1–10** filters nodes by how many papers they appear in. Dragging the slider to the right hides entities that appear in fewer papers, reducing clutter and surfacing the most widely-attested concepts in your library.
+A slider with a range of **1–10** filters nodes by how many papers they appear in. Dragging the slider to the right hides entities that appear in fewer papers, reducing clutter and surfacing the most widely-attested concepts across the papers visible to you.
 
 ### GraphControls
 
-Standard graph interaction controls:
+A **Layout** dropdown selects one of four layout algorithms: **Force-directed** (cose), **Breadth-first**, **Circle**, or **Concentric**.
 
-- **Fit** — re-centres and re-scales the graph to fit all visible nodes in the viewport.
-- **Reset** — resets the layout to the default.
-- **Zoom in / Zoom out** — step-zoom buttons.
-
-Pan and zoom are also available via mouse or trackpad gestures directly on the graph canvas.
+Pan and zoom are available via mouse or trackpad gestures directly on the graph canvas.
 
 ### KGQueryInput
 
-A text input that filters the graph to nodes whose label contains the query string. Matched nodes are highlighted; unmatched nodes are dimmed. Clear the input to return to the full (filtered) graph.
+A natural-language query box. Type a question such as "What methods are used on ImageNet?" and submit it to search the knowledge graph; matching relationships, comparisons, or entities come back as a list of result cards below the input, rather than as a filter or highlight applied to the graph itself. If nothing matches, a "No results found for this query" message is shown instead.
 
 ---
 
@@ -59,7 +55,7 @@ A text input that filters the graph to nodes whose label contains the query stri
 
 ## Batch extraction
 
-If your library contains papers that have not yet had entities extracted, a **batch-extract prompt** appears on an otherwise empty graph. Clicking it triggers the entity extraction pipeline for all unprocessed papers. The graph populates as extraction jobs complete.
+If unprocessed papers exist, an admin-only **Batch Extract Entities** button appears on an otherwise empty graph. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities. The graph populates as extraction jobs complete.
 
 You can also trigger extraction for individual papers from the [Paper Detail](paper-detail.md) page (the Actions rail → Extract Entities).
 

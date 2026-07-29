@@ -131,7 +131,7 @@ async def test_contradictions_scan_delegates_to_service_and_reports_progress() -
         result = await _contradictions_scan_job(
             MagicMock(),
             MagicMock(),
-            {"paper_id": "7", "limit": "3"},
+            {"user_id": "11", "paper_id": "7", "limit": "3"},
             ctx,
         )
 
@@ -139,6 +139,7 @@ async def test_contradictions_scan_delegates_to_service_and_reports_progress() -
     assert scan.await_args is not None
     assert scan.await_args.kwargs["paper_id"] == 7
     assert scan.await_args.kwargs["limit"] == 3
+    assert scan.await_args.kwargs["user_id"] == 11
     assert scan.await_args.kwargs["openai_client"] is openai_client
     assert [call.args for call in ctx.update_progress.await_args_list] == [
         (0.1, "Collecting verified findings"),

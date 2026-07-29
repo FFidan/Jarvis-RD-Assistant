@@ -8,16 +8,16 @@ from dataclasses import FrozenInstanceError
 from datetime import date
 
 import pytest
-from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.scoring import ScoredCandidate
+from tests._paper_fakes import make_paper_create
 
 
 def _make_paper(title: str = "Test Paper") -> PaperCreate:
-    return PaperCreate(
+    """Build a paper for immutable scoring-candidate assertions."""
+    return make_paper_create(
         external_id="arxiv:test-0001",
-        source_type=SourceType.ARXIV,
         title=title,
-        authors=["Author A"],
         abstract="Test abstract.",
         published_date=date(2025, 1, 1),
         url="https://arxiv.org/abs/test-0001",

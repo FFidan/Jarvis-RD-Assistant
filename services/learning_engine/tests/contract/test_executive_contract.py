@@ -136,6 +136,42 @@ async def test_get_my_day_response_shape(contract_two_users, _le_app, _configure
     assert isinstance(body["project_pulse"], list)
 
 
+async def test_my_day_cards_due_excludes_earlier_generation_cards(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+):
+    """The executive due count tracks the same current-generation rule as review."""
+    card_id = contract_two_users.card_id_a
+    paper_id = contract_two_users.paper_id_a
+    await contract_conn.execute(
+        """
+        UPDATE cards
+        SET due_at = NOW() - INTERVAL '1 hour',
+            content_generation = (
+                SELECT content_generation FROM papers WHERE id = $2
+            )
+        WHERE id = $1
+        """,
+        card_id,
+        paper_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        current = await c.get("/api/executive/my-day")
+    assert current.status_code == 200, current.text[:300]
+    assert current.json()["cards_due"] == 1
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        replaced = await c.get("/api/executive/my-day")
+    assert replaced.status_code == 200, replaced.text[:300]
+    assert replaced.json()["cards_due"] == 0
+
+
 async def test_get_my_day_tasks_scoped_to_caller(contract_two_users, _le_app, _configure_api_key):
     """GET /api/executive/my-day tasks list does not include user B's tasks.
 

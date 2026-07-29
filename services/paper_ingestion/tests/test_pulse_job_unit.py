@@ -292,3 +292,64 @@ async def test_run_stage2_sets_degraded_reason_when_all_cards_fail():
     assert len(stage2_out) == 5
     assert degraded_reason, "all-fail stage-2 must set a non-null deck degraded_reason"
     assert all(sc.llm_relevance is None for sc in stage2_out)
+
+
+# ---------------------------------------------------------------------------
+# Reclaiming storage after the deck loop: only cards whose promotion survived
+# their savepoint hand an id to the reclaim pass.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_pipeline_reclaims_only_cards_whose_promotion_survived():
+    """A card rolled back at its savepoint contributes no id to the reclaim pass.
+
+    Each card promotes inside its own savepoint and collects into a per-card
+    list that is merged into the run-wide list only after that block exits. A
+    card whose block raises therefore leaves nothing behind to reclaim, which
+    matters because the paper still stores the content the reclaim pass would
+    delete.
+
+    Verified: paper_ingestion/pulse/job.py:482-528 (per-card collector, merged
+    after the savepoint block, drained after the outer transaction)
+    """
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from jarvis_common.testing import make_pool_and_conn
+    from paper_ingestion.pulse.job import _persist_pipeline
+
+    from tests.pulse_helpers import make_pulse_paper
+
+    committed = SimpleNamespace(paper=make_pulse_paper(0))
+    rolled_back = SimpleNamespace(paper=make_pulse_paper(1))
+
+    async def fake_upsert(conn, paper, *, discarded_content_ids=None, **kwargs):
+        # Both promotions record a discard; only the second card then fails.
+        discarded_content_ids.append(101 if paper is committed.paper else 202)
+        if paper is rolled_back.paper:
+            raise RuntimeError("card savepoint rolled back")
+        return {"id": 100, "is_insert": False}
+
+    reclaimed = AsyncMock()
+    pool, _conn = make_pool_and_conn()
+
+    with (
+        patch(
+            "paper_ingestion.pulse.job.upsert_verified_public_paper",
+            side_effect=fake_upsert,
+        ),
+        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=1)),
+        patch("paper_ingestion.pulse.job.reclaim_discarded_paper_content", reclaimed),
+    ):
+        persisted = await _persist_pipeline(
+            pool,
+            [committed, rolled_back],
+            datetime(2026, 1, 2, tzinfo=UTC),
+            {},
+            None,
+            42,
+        )
+
+    assert persisted == 1
+    reclaimed.assert_awaited_once_with(101, pool)

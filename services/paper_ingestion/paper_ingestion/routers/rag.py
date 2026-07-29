@@ -346,6 +346,7 @@ async def batch_summarize_papers(
                    SELECT 1 FROM paper_summaries ps
                     WHERE ps.paper_id = p.id
                       AND ps.user_id IS NOT DISTINCT FROM $2
+                      AND ps.content_generation = p.content_generation
                  )
                ORDER BY p.created_at DESC LIMIT $1""",
             limit,

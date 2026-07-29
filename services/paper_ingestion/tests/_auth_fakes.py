@@ -55,28 +55,6 @@ def build_mock_pool(conn: AsyncMock) -> MagicMock:
     return pool
 
 
-def build_request_auth(
-    pool: MagicMock,
-    *,
-    cookies: dict[str, str] | None = None,
-    url_path: str = "/api/auth/request-link",
-) -> SimpleNamespace:
-    """Build a Request stub for auth router tests (test_auth_magic_link.py style)."""
-    state = SimpleNamespace(db_pool=pool)
-    app = SimpleNamespace(state=state)
-    url = SimpleNamespace(
-        path=url_path,
-        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify"),
-    )
-    return SimpleNamespace(
-        url=url,
-        app=app,
-        client=SimpleNamespace(host="127.0.0.1"),
-        cookies=cookies or {},
-        state=SimpleNamespace(),
-    )
-
-
 def build_request_admin(
     pool: MagicMock,
     *,
@@ -101,27 +79,4 @@ def build_request_admin(
         client=SimpleNamespace(host="127.0.0.1"),
         cookies={},
         state=state,
-    )
-
-
-def build_request_account(
-    pool: MagicMock,
-    *,
-    user_id: int | None = 1,
-) -> SimpleNamespace:
-    """Build a Request stub for account router tests (test_account.py style)."""
-    state = SimpleNamespace(db_pool=pool)
-    app = SimpleNamespace(state=state)
-    url = SimpleNamespace(
-        path="/api/account",
-        replace=lambda **kw: SimpleNamespace(
-            __str__=lambda self: "https://x/settings?section=account&item=profile"
-        ),
-    )
-    return SimpleNamespace(
-        url=url,
-        app=app,
-        client=SimpleNamespace(host="127.0.0.1"),
-        cookies={},
-        state=SimpleNamespace(user_id=user_id) if user_id is not None else SimpleNamespace(),
     )

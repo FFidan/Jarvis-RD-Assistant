@@ -21,7 +21,6 @@ from jarvis_common.testing_telegram import make_http_response
 from telegram import Message, Update
 from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
-from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.callback_handler import (
     _callback_auth,
     paper_action_callback,
@@ -31,6 +30,8 @@ from telegram_bot.handlers.callback_handler import (
     task_done_callback,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
+
+pytestmark = pytest.mark.usefixtures("_clear_rate_limit_state")
 
 # ---------------------------------------------------------------------------
 # Test-only scaffolding: start_review_callback
@@ -74,19 +75,6 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
-    """Clear the rate-limiter's in-memory timestamp store before every test.
-
-    The rate_limit decorator uses a module-level defaultdict keyed by
-    ``chat_id:func_name``.  Without this fixture, tests that share chat_id
-    12345 and the same handler accumulate timestamps and trip the limit.
-    """
-    _rate_limit_mod._timestamps.clear()
-    yield
-    _rate_limit_mod._timestamps.clear()
 
 
 # ---------------------------------------------------------------------------

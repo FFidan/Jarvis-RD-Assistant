@@ -10,6 +10,126 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.2 (2026-07-29)
+
+### Fixed
+- **Content derived from a replaced source document.** Promoting a paper to
+  shared visibility now discards the processed content derived from the source
+  document it replaces, and reclaims the stored files and vectors that went with
+  it. Paper excerpts, stored PDFs and page images are served only when a current
+  stored record exists, and discovery results and similar-paper suggestions apply
+  the same rule. The same check now also gates a paper's highlights and its
+  Zotero highlight export, which report the paper as unavailable while no stored
+  file backs it. Discovery cards bind only to papers with shared visibility.
+  Page images are pruned when a paper is reprocessed, so a replacement document
+  with fewer pages no longer leaves the previous document's remaining pages
+  viewable. Replacement and cleanup are ordered so a delayed cleanup cannot
+  remove files or search vectors belonging to a newer source. Summaries,
+  extractions, entities, relationships, contradictions and related-paper
+  evidence from an earlier source no longer satisfy current completion checks
+  or appear as current evidence. User notes, spatial highlights and flashcards
+  are retained and visibly marked as stale instead of silently appearing on the
+  new document. Cards from the earlier source are excluded from study and Anki
+  export until regenerated, and stale highlights are not sent to Zotero.
+- **Account data export.** Raw account exports retain owned highlights and
+  contradiction records from both current and earlier source documents.
+  Operational and Markdown views continue to exclude stale machine-generated
+  evidence, while retained notes and flashcards are visibly identified as stale.
+- **Contradiction and consensus privacy.** Holding the same papers as another
+  user no longer reveals that user's contradiction results or their consensus
+  assessment of those papers. Each account's scan now records and returns its
+  own rows: a migration adds the owner to the contradiction uniqueness key, so a
+  second account scanning the same evidence keeps a row of its own instead of
+  colliding with the first.
+- **Flashcard generation.** Card generation reads only the requesting user's own
+  paper summary, and a batch failure reports a sanitized message rather than raw
+  exception text.
+- **Zotero sync.** Attachments, notes and annotations no longer create
+  placeholder papers, an import with no PDF no longer queues analysis that cannot
+  run, and each sync reports permanent parse failures, temporary import failures,
+  exhausted analysis-scheduling retries and work deferred by the per-sync cap.
+  An incomplete poll now reports a partial outcome rather than unqualified
+  success, while a complete poll reports success only when every selected item
+  is resolved and any library-cursor advance is stored. Scheduling retries remain
+  bounded so a permanently unschedulable item cannot hold back the rest of the
+  library.
+- **Scheduled discovery.** Each topic is searched with its configured query terms
+  rather than its name alone.
+- **Answers across your library.** Papers whose stored content is no longer
+  available are now set aside before an answer chooses which papers to draw on,
+  rather than afterwards. They no longer take a place from a relevant paper, and
+  a question whose closest matches happen to be unavailable is answered from the
+  remaining ones instead of reporting that nothing was found. Similar-paper
+  suggestions, discovery results and citation graphs now apply their visibility
+  and stored-content checks before result limits, so unavailable candidates no
+  longer leave avoidable gaps when eligible results remain.
+- **Pulse relevance.** A thumbs-down now hides that paper from future decks for
+  60 days at the deck sizes people actually use. Decks may therefore look
+  different for anyone with recent thumbs-down history.
+- **Long-running batches.** A cancelled batch reports that it was cancelled and
+  how many items were completed, skipped, failed or remain. A batch with skipped,
+  failed, blocked or unprocessed work reports a partial outcome instead of
+  success.
+- **Consensus counts.** Claim topics written in any script now cluster by their
+  actual text instead of unrelated topics collapsing together, and a consensus
+  view built from a truncated evidence set says so.
+- **Saving search results.** If saving fails part-way through a multi-source
+  search, the response identifies which results were saved and which failed
+  instead of discarding the report.
+- **Shared-paper processing.** Rebuilding a shared paper's derived content now
+  requires holding that paper in your library. Concurrent synchronous processing
+  of the same paper also waits without occupying the database connections other
+  requests need.
+- **Related papers.** Background-generated related-paper suggestions now draw
+  only from shared papers. A private paper may therefore have fewer automatically
+  generated related papers.
+- **Papers whose source document is replaced.** When a source moves to a new
+  revision, its excerpts, page images and search content are re-derived from the
+  new document instead of continuing to serve the old one. Affected papers are
+  reprocessed, which can take time on a self-hosted installation.
+- **Startup and validation.** The schema-floor guard is enforced when the
+  migrations directory is absent, Postgres connection credentials are
+  percent-encoded so that passwords and names containing special characters
+  connect correctly, and database hosts and ports are validated separately
+  before a connection is attempted. Docker service names, DNS names, IPv4 and
+  bracketed IPv6 remain accepted; empty or delimited hosts, malformed or
+  unbracketed IPv6, and non-decimal or out-of-range ports fail at startup instead
+  of altering the connection target. Request fields bounded to the width of the
+  column that stores them — an over-length external identifier, tracked-author
+  identifier, topic category or nudge schedule — now return a validation error
+  instead of a server error. An instance starting while another instance holds
+  the migration lock now verifies the resulting schema floor before serving.
+- **Installer and updater health checks.** Setup and updates now keep waiting
+  through a service's recoverable starting or unhealthy states for the stated
+  timeout instead of failing on the first unhealthy sample. An update records
+  its new application version only after every required service reaches an
+  acceptable state; a running service without a healthcheck is reported as
+  unverified rather than healthy. Setup records the application image version
+  it installs, and uninstall derives that version from checkout metadata for
+  older `.env` files that predate the pin, so application-image teardown remains
+  complete across both new and upgraded installations.
+- **Isolated install validation.** Clean-install and upgrade checks use an
+  explicit Compose project, refuse a project name that already owns resources,
+  and remove only that project's containers, volumes and networks. Teardown
+  also reports a failure if any owned resource remains.
+
+### Upgrade note
+- This release includes four automatic migrations (0107 through 0110). They
+  apply on startup and need no operator action. Migration 0110 preserves all
+  existing contradiction records, including legacy rows without an owner, while
+  requiring new contradiction writes to carry an owner. As with any migration,
+  rolling the code back to an earlier version afterwards requires a matching
+  database restore.
+
+### Changed
+- Corrected operator and user documentation to match current behavior. The
+  headless restore request in the recovery runbook now carries the identity
+  fields the restore entrypoint requires, so the documented procedure completes
+  instead of being refused. Install guidance now derives its default models and
+  27–54 GB disk range from the same selectors and calculator used by setup, and
+  distinguishes the manual environment-template fallback from tier-selected
+  installation.
+
 ## v1.2.1 (2026-07-24)
 
 ### Fixed

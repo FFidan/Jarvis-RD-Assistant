@@ -5,19 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from cryptography.fernet import Fernet
-from jarvis_common.crypto import decrypt_secret, refresh_fernet_cache
-
-
-@pytest.fixture()
-def fernet_key(monkeypatch):
-    """Provision JARVIS_CONFIG_KEY with a fresh Fernet key for each test."""
-    key = Fernet.generate_key().decode()
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", key)
-    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
-    refresh_fernet_cache()
-    yield key
-    refresh_fernet_cache()
+from jarvis_common.crypto import decrypt_secret
 
 
 # Keep local: returns (pool, conn) and exposes conn.execute for assertion — extra

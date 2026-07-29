@@ -4,54 +4,29 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from functools import partial
 
 import httpx
 import pytest
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.models import SourceType
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from jarvis_common.maintenance import OutboundEgressBlockedError
 from paper_ingestion.sources.arxiv_source import ArxivSource
-from paper_ingestion.sources.openalex_source import OPENALEX_API_URL, OpenAlexSource
+from paper_ingestion.sources.openalex_source import OPENALEX_API_URL
 from paper_ingestion.sources.pubmed_source import PubMedSource
-from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
+from paper_ingestion.sources.semantic_scholar_source import S2_API_URL
+from tests._source_fakes import (
+    make_openalex_source as _make_oa_source,
+    make_semantic_scholar_source as _make_s2_source,
+    make_source,
+)
+
+_make_source = partial(make_source, source_id=9)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_s2_source(
-    api_key: str | None = None,
-    *,
-    http_client: httpx.AsyncClient | None = None,
-) -> SemanticScholarSource:
-    config = PaperSourceConfig(
-        id=2,
-        source_type=SourceType.SEMANTIC_SCHOLAR,
-        enabled=True,
-        config={"api_key": api_key} if api_key else {},
-    )
-    return SemanticScholarSource(config, http_client or httpx.AsyncClient())
-
-
-def _make_oa_source(
-    api_key: str | None = "test-oa-key",
-    *,
-    http_client: httpx.AsyncClient | None = None,
-) -> OpenAlexSource:
-    config = PaperSourceConfig(
-        id=3,
-        source_type=SourceType.OPENALEX,
-        enabled=True,
-        config={"api_key": api_key} if api_key else {},
-    )
-    return OpenAlexSource(config, http_client or httpx.AsyncClient())
-
-
-def _make_source(source_type: SourceType, source_class, http_client=None):
-    config = PaperSourceConfig(id=9, source_type=source_type, enabled=True, config={})
-    return source_class(config, http_client or httpx.AsyncClient())
 
 
 def _oa_work(pdf_url_value: str | None) -> dict:

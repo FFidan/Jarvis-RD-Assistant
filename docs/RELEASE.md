@@ -1,85 +1,166 @@
 # Release Process
 
-This document describes how JARVIS RD Assistant versions are tagged, how the
-CHANGELOG is generated, and how Docker images are versioned and published.
+JARVIS RD Assistant publishes stable releases from reviewed commits on `main`.
+Each release has an annotated Semantic Versioning tag and a GitHub Release.
+Prerelease tags are not part of the supported release process.
 
-## How We Tag
-
-Releases follow [Semantic Versioning](https://semver.org/): `vMAJOR.MINOR.PATCH`.
+Releases follow [Semantic Versioning](https://semver.org/):
 
 - `MAJOR` — breaking API or schema changes that require manual operator steps.
-- `MINOR` — new features; existing deployments can upgrade with
-  `jarvis-research update`.
-- `PATCH` — backwards-compatible fixes, security patches, release metadata updates, and maintainer-approved documentation or UX corrections that do not require API, schema, or operator migration changes.
+- `MINOR` — new features that existing deployments can adopt through the
+  managed update command.
+- `PATCH` — backwards-compatible fixes and additive migrations that need no
+  operator action.
 
-To cut a release:
+Migrations are forward-only. After an upgrade applies a migration, returning to
+older code requires a matching database restore.
+
+## Stable Release Procedure
+
+### 1. Prepare the release pull request
+
+Set the release version, generate a changelog draft, and run the local quality
+checks from the release branch:
 
 ```bash
-# 1. Start from the current remote main branch.
-git switch main
-git pull --ff-only
-git switch -c chore/release-vX.Y.Z
+RELEASE_VERSION=X.Y.Z
+RELEASE_TAG="v${RELEASE_VERSION}"
+RELEASE_BRANCH="$(git branch --show-current)"
+test -n "$RELEASE_BRANCH"
+test "$RELEASE_BRANCH" != main
 
-# 2. Prepare and verify the release metadata on this branch.
-git cliff --tag vX.Y.Z -o /tmp/jarvis-changelog-draft.md
+git cliff --tag "$RELEASE_TAG" -o /tmp/jarvis-changelog-draft.md
 make check
-
-# 3. Commit the reviewed version, CHANGELOG, and roadmap changes, then open a
-#    pull request. Do not push a release commit directly to main.
-git add CHANGELOG.md ROADMAP.md pyproject.toml frontend/package.json \
-  frontend/package-lock.json docker-compose.yml
-git commit -m "chore(release): prepare vX.Y.Z"
-git push -u origin chore/release-vX.Y.Z
 ```
 
-Review the generated draft and incorporate the release notes into
-`CHANGELOG.md` before the commit.
+Review the generated notes, update the versioned product files, and include
+those changes in the pull request.
 
-The release metadata may travel in the final feature pull request or in a small
-release-only pull request. In either case, review it and merge it before tagging.
-After the pull request is merged and required checks are green:
+The pull request must pass the hosted CI aggregate, strict Docs build, and
+`Security / npm-audit`. Run the independent hosted checks against the same
+branch:
+
+```bash
+gh workflow run nightly-llm-smoke.yml --ref "$RELEASE_BRANCH"
+gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all
+```
+
+Required JUnit selections must contain at least one pass and no skips, failures,
+or errors. The lifecycle run must complete its CA-verified HTTPS and destructive
+restore checks. These are public-repository workflows; never redirect them to a
+self-hosted runner.
+
+### 2. Merge and identify the exact release commit
+
+Squash-merge the pull request after every required hosted check succeeds. Then
+refresh the protected checkout and record the commit eligible for publication:
 
 ```bash
 git switch main
 git pull --ff-only
-
-# The tag target must be the reviewed commit now reachable from origin/main.
-git merge-base --is-ancestor HEAD origin/main
-git tag -a vX.Y.Z -m "Release vX.Y.Z — <one-line summary>"
-git push origin vX.Y.Z
+MERGED_SHA="$(git rev-parse HEAD)"
+git merge-base --is-ancestor "$MERGED_SHA" origin/main
 ```
 
-Never point a stable tag at a local candidate commit, and never push a stable
-tag together with an unreviewed branch. The image workflow rejects a stable tag
-that is not main-reachable.
+The publication workflow also enforces that `MERGED_SHA` equals the dispatched
+`github.sha` and is main-reachable.
 
-### Pre-release Tags
+### 3. Verify commit-addressed images
 
-The only supported pre-release tag shape is `vX.Y.Z-rc.N`. Tag the reviewed
-candidate commit before it is squash-merged:
+Dispatch the existing GHCR workflow from `main`. A dispatch without
+`source_commit` is build-only; this invocation publishes commit-addressed
+`<MERGED_SHA>` and `<MERGED_SHA>-cuda` verification manifests:
 
 ```bash
-git cliff --tag vX.Y.Z-rc.N --pre-release -o /tmp/jarvis-changelog-draft.md
-git tag -a vX.Y.Z-rc.N -m "Release vX.Y.Z-rc.N"
-git push origin vX.Y.Z-rc.N
+gh workflow run ghcr-publish.yml --ref main -f source_commit="$MERGED_SHA"
 ```
 
-The candidate tag does not have to be reachable from `main`; the publishing
-workflow applies the main-ancestry gate only to stable tags. Treat the candidate
-tag as disposable. After the candidate changes are squash-merged, create the
-stable tag separately: the stable tag must point to the reviewed commit on
-`main`. See the [release-candidate update note](manual/cli.md#release-candidate-tags-are-throwaway)
-for the corresponding operator behavior.
+Wait for every build, manifest, SBOM, and vulnerability-report job to finish.
+Record that run's ID and manifest-digest artifacts. Stop here if any job fails.
 
-## How CHANGELOG Is Generated
+Use the SHA images for the credential-free install and supported upgrade
+checks:
+
+```bash
+gh workflow run first-run-smoke.yml --ref main \
+  -f cold_install_version="$MERGED_SHA"
+
+UPDATE_FROM=vA.B.C
+gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
+  -f update_from="$UPDATE_FROM" -f update_to="$MERGED_SHA"
+```
+
+Run the upgrade check for each maintained source contract:
+
+| Source release | Lifecycle contract | Interrupted-update state exercised |
+|---|---|---|
+| `v1.1.3` | `legacy-staging` | Legacy `staging` journal |
+| `v1.2.1` | `current-merge-pending` | Schema-1 `merge_pending` journal |
+
+The 40-hex value selects commit-addressed verification images; it is not a Git
+tag, version, prerelease, or GitHub Release. The cold install must pull
+anonymously, build no application image, reach a healthy stack, and remove its
+isolated project resources. Each upgrade must start at the selected stable tag,
+recover from its supported interrupted-update state, finish at `MERGED_SHA`,
+and leave no pending journal or project resource behind.
+
+### 4. Tag the release and promote exact digests
+
+After the SHA-based checks pass, record that exact successful workflow run in
+the annotated tag:
+
+```bash
+VERIFY_RUN_ID="replace-with-successful-run-id"
+test "$(gh run view "$VERIFY_RUN_ID" --json headSha --jq .headSha)" = "$MERGED_SHA"
+test "$(gh run view "$VERIFY_RUN_ID" --json conclusion --jq .conclusion)" = success
+
+TAG_MESSAGE="$(mktemp)"
+printf 'Release %s\n\nVerification-Run-ID: %s\n' \
+  "$RELEASE_TAG" "$VERIFY_RUN_ID" > "$TAG_MESSAGE"
+
+git tag -a "$RELEASE_TAG" "$MERGED_SHA" -F "$TAG_MESSAGE"
+git push origin "$RELEASE_TAG"
+```
+
+Never point a stable tag at a commit that is not on `main`. The tag workflow
+rejects non-stable `v*` names, peels the annotated tag to its commit, checks
+that commit against `origin/main`, and validates the recorded run through the
+GitHub Actions API. The run must be a completed, successful dispatch of the
+GHCR workflow from `main` for the tagged commit. Stable mode cannot build
+images. Each promotion job downloads its named digest receipt from that exact
+run, requires one well-formed receipt, promotes the content-addressed digest to
+`${RELEASE_VERSION}` or `${RELEASE_VERSION}-cuda`, fails if the manifest is
+absent or the resulting digest differs, and never moves `latest`. It does not
+re-resolve the mutable SHA tags.
+
+Confirm every stable manifest digest equals its SHA-tagged source digest. A
+failed or cancelled promotion stops the release.
+
+### 5. Create the GitHub Release
+
+After digest promotion succeeds, publish the GitHub Release from the existing
+stable tag:
+
+```bash
+gh release create "$RELEASE_TAG" --verify-tag \
+  --title "JARVIS RD Assistant ${RELEASE_TAG}" \
+  --notes-file /tmp/jarvis-changelog-draft.md
+```
+
+## Release Checks
+
+| Class | Required path | Acceptance rule |
+|---|---|---|
+| Local and pull request | Run `make check`; require hosted CI, strict Docs, and Security checks on the release pull request. | Every required job succeeds. |
+| Independent integration | Dispatch the nightly Qdrant workflow and all lifecycle legs on `$RELEASE_BRANCH`. | Every required selection has passes and no skips, failures, or errors. |
+| Exact commit publication | Dispatch GHCR with `source_commit="$MERGED_SHA"`. | All SHA manifests, SBOMs, reports, and digest receipts succeed under the `release` environment. |
+| Install and upgrade | Run the anonymous SHA cold install and upgrade each supported source release to the same SHA. | The pull-only install and every resumable upgrade pass without leaving project resources behind. |
+| Stable publication | Put the successful verification run ID in the annotated tag, push it, verify digest-preserving promotion from that run's artifacts, then create the GitHub Release. | The run matches the tagged `main` commit, every stable digest matches its exact receipt, and no `latest` mutation occurs. |
+
+## Changelog Generation
 
 `CHANGELOG.md` is generated by [git-cliff](https://github.com/orhun/git-cliff),
-configured in `cliff.toml` at the repo root. The tool reads conventional-commit
-messages and groups them into sections.
-
-### Commit-to-Section Mapping
-
-The `cliff.toml` configuration maps conventional-commit prefixes to CHANGELOG sections:
+configured in `cliff.toml`. Conventional commit prefixes map to sections:
 
 | Commit prefix | CHANGELOG section |
 |---|---|
@@ -92,89 +173,34 @@ The `cliff.toml` configuration maps conventional-commit prefixes to CHANGELOG se
 | `test` | Testing |
 | `chore` | Miscellaneous Tasks |
 
-Breaking changes (commits with `BREAKING:` in body) are highlighted in the output.
-Merge commits and reverts are automatically filtered out.
-
-### Re-generating the Changelog
-
-To regenerate or update `CHANGELOG.md` after a release, run:
-
-```bash
-git cliff -o CHANGELOG.md --tag vX.Y.Z
-```
-
-The `--tag` flag is optional; if omitted, the tool generates entries for all
-commits since the last Git tag.
+Breaking changes with `BREAKING:` in the body are highlighted. Merge commits and
+reverts are omitted.
 
 ## Docker Image Versioning
 
-Five images are published to GHCR on a release tag by `.github/workflows/ghcr-publish.yml`:
+The GHCR workflow publishes
 `ghcr.io/limitcycle-oss/jarvis-{paper-ingestion,learning-engine,telegram-bot,dashboard,restore-uploader}`.
-Image tags drop the leading `v` (`vX.Y.Z` → `:X.Y.Z`), matching the `${JARVIS_VERSION}` interpolation in
-`docker-compose.yml`. `paper-ingestion` also publishes a `:X.Y.Z-cuda` flavor for NVIDIA hosts; the
-default install selects it from the detected GPU. `langfuse-hardened` is not published — it is
-observability-profile-only and built locally.
+Paper ingestion also has a CUDA flavor. `langfuse-hardened` remains a local
+observability-only build.
 
-Because the images are published, **rolling forward or back to a specific version is a registry pull**,
-not a rebuild. Pin `JARVIS_VERSION` and pull:
+Commit verification tags are the lowercase 40-hex Git commit, with `-cuda` for
+the CUDA flavor. Stable image tags omit Git's leading `v`; a release tag
+`vX.Y.Z` therefore promotes to `:X.Y.Z` and `:X.Y.Z-cuda`. Promotion reuses
+registry digests and never rebuilds.
+
+To run an already published stable version:
 
 ```bash
-JARVIS_VERSION=X.Y.Z docker compose pull
-JARVIS_VERSION=X.Y.Z docker compose up -d --no-build
+JARVIS_IMAGE_TAG=X.Y.Z docker compose pull
+JARVIS_IMAGE_TAG=X.Y.Z docker compose up -d --no-build
 ```
 
-The `build:` blocks remain for contributors; `./setup.sh --build-local` (and `./update.sh --build-local`)
-build from source instead of pulling.
+`JARVIS_VERSION` records the semantic application version represented by the
+checkout. `JARVIS_IMAGE_TAG` selects the published application images, including
+commit-addressed verification images used before a stable tag exists.
 
-## Release Gate Map
-
-Run every gate against the exact release-candidate ref and confirm the workflow
-run's commit before accepting its result.
-
-| Class | Required path | Acceptance rule |
-|---|---|---|
-| Fast deterministic PR | Run `make check` locally. The pull request runs `CI / Lint + fast test suite`, the complete frontend job, and `Docs / MkDocs build`; release-metadata tests also lock the workflow wiring. | Every job succeeds. The docs job runs in strict mode, where warnings fail the build. |
-| GitHub-hosted integration | Require the CI aggregate's live PostgreSQL cross-user and contract jobs plus `Security / npm-audit`. Dispatch `gh workflow run nightly-llm-smoke.yml --ref <candidate-branch>` for its independent `Corpus visibility (PostgreSQL + Qdrant)` job. | The `CI gate` and `Security gate` succeed. Each required JUnit selection contains at least one pass and no skips, failures, or errors; the frontend audit rejects high-severity advisories. |
-| Isolated release | Dispatch `gh workflow run lifecycle-smoke.yml --ref <candidate-branch> -f leg=all`. | The GitHub-hosted lifecycle run proves CA-verified HTTPS and the generated destructive restore round trip. Its restore leg rejects `SKIP` and removes only its owned fixture project. |
-
-Do not move the Qdrant or destructive restore suites into fast PR CI, and never
-run a public-repository workflow on a self-hosted runner.
-
-## Release Checklist
-
-Before tagging a release:
-
-- [ ] All planned changes for the milestone have merged to `main`.
-- [ ] Version bumped in lockstep: `pyproject.toml`, `frontend/package.json`
-      (and `package-lock.json`, via `npm version`), the `docker-compose.yml`
-      `JARVIS_VERSION` fallback, and the `CHANGELOG.md` heading + date.
-- [ ] `make check` passes on the reviewed candidate.
-- [ ] Required CI, Security, and strict Docs workflow gates are green, including
-      the high-severity npm audit and the Python and OSV dependency scans.
-- [ ] The candidate's manually dispatched nightly Qdrant and lifecycle runs pass
-      the acceptance rules above; no required selection is skipped or empty.
-- [ ] `CHANGELOG.md` generated and reviewed.
-- [ ] Release metadata was reviewed in a pull request and the merge commit is on
-      `origin/main`.
-- [ ] `docs/known-residual-risks.md` updated with any newly accepted risks.
-- [ ] Docker images built and smoke-tested against a fresh stack.
-- [ ] All external service keys verified (LiteLLM, Langfuse, SMTP, Telegram).
-- [ ] Annotated tag points to that main-reachable commit, then is pushed by itself.
-
-Publishing a stable image is gated by two independent controls: a `refs/tags/v*` repository ruleset
-(admin-only tag creation) and a `release` deployment environment on the publish job (the owner must
-approve the run). Release-candidate tags (`vX.Y.Z-rc.N`) publish unattended for dry-runs; only a clean
-`vX.Y.Z` tag enters the `release` environment.
-
-After the final `vX.Y.Z` publish completes:
-
-- [ ] Confirm the tag still resolves to the reviewed `main` commit. A
-      squash-merged release candidate has a different SHA and must not be reused.
-- [ ] Run the anonymous cold-install smoke against the **final** tags (`gh workflow run first-run-smoke.yml`
-      with the release version) and confirm zero app-image builds and all mandatory services healthy.
-- [ ] `docker manifest inspect` every published image from an **empty** `DOCKER_CONFIG` (`DOCKER_CONFIG="$(mktemp -d)"`),
-      including the `-cuda` flavor, to prove they pull anonymously.
-- [ ] Announce the release only after both the cold-install smoke and the anonymous manifest inspection pass.
+The `build:` blocks remain available to contributors through
+`./setup.sh --build-local` and `./update.sh --build-local`.
 
 ## Rollback Procedures
 
@@ -184,29 +210,25 @@ After the final `vX.Y.Z` publish completes:
 > database restore can leave the schema ahead of the code. Coordinate a code
 > rollback with a restore point, or use a forward-only corrective migration.
 
-To revert to a previously published release after confirming the DB state is compatible, pin
-`JARVIS_VERSION` to that tag and pull it back from the registry:
+To return to a previously published release after confirming its schema is
+compatible:
 
 ```bash
-JARVIS_VERSION=<previous-version> docker compose pull
-JARVIS_VERSION=<previous-version> docker compose up -d --no-build
+JARVIS_IMAGE_TAG=<previous-version> docker compose pull
+JARVIS_IMAGE_TAG=<previous-version> docker compose up -d --no-build
 ```
 
-Only tags already published to GHCR can be rolled back this way. If the target predates the published
-images, or you run a `--build-local` install, check out the target tag's source and rebuild
-(`./update.sh --build-local`) instead.
+If the target predates published images, or the installation uses local builds,
+check out the target tag and rebuild instead.
 
 ### Database Rollback
 
-**Important:** Database migrations are intentionally **forward-only**. There is no
-automated rollback mechanism. To revert a schema change:
+Database migrations are intentionally forward-only. To revert a schema change:
 
-1. **Restore from backup** — take a restore point before upgrading; see
-   [Backup and restore](manual/backup-and-restore.md). The default setup encrypts
-   restore points through `BACKUP_ENCRYPT_KEYFILE`.
-2. **Manually craft a "reverse" migration** — if a change must be undone in-place,
-   add a new migration that restores the old schema state (e.g., re-add a dropped
-   column with default value).
+1. Restore a matching encrypted backup. See
+   [Backup and restore](manual/backup-and-restore.md).
+2. If an in-place correction is required, add a new forward migration that
+   restores the intended schema.
 
-Always review migration diffs before upgrading. Test migrations on a copy of
-production data before applying to the live database.
+Review migration diffs before upgrading and test them against a copy of
+production data.

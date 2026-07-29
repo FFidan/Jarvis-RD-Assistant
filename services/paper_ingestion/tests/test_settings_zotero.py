@@ -11,9 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from cryptography.fernet import Fernet
 from httpx import ASGITransport
-from jarvis_common.crypto import refresh_fernet_cache
 
 from tests.conftest import _make_pool_and_conn
 
@@ -25,16 +23,6 @@ from tests.conftest import _make_pool_and_conn
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def fernet_key(monkeypatch):
-    """Generate a fresh Fernet key and wire it into JARVIS_CONFIG_KEY for the test."""
-    key = Fernet.generate_key().decode()
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", key)
-    refresh_fernet_cache()
-    yield key
-    refresh_fernet_cache()
 
 
 @pytest.fixture()

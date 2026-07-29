@@ -32,16 +32,17 @@ _SUMMARY_SQL = """
     SELECT summary_detailed, methodology, limitations
     FROM paper_summaries
     WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
+      AND content_generation = (SELECT content_generation FROM papers WHERE id = $1)
     ORDER BY created_at DESC LIMIT 1
 """
 _NOTES_SQL = """
-    SELECT user_note, highlight_text, page_number
+    SELECT user_note, highlight_text, page_number, content_generation
     FROM paper_notes
     WHERE paper_id = $1 AND user_id = $2
     ORDER BY created_at, id
 """
 _CARDS_SQL = """
-    SELECT front, back
+    SELECT front, back, content_generation
     FROM cards
     WHERE paper_id = $1 AND user_id = $2
     ORDER BY id
@@ -50,6 +51,7 @@ _EXTRACTIONS_SQL = """
     SELECT extractions
     FROM paper_extractions
     WHERE paper_id = $1 AND user_id = $2
+      AND content_generation = (SELECT content_generation FROM papers WHERE id = $1)
     ORDER BY id
 """
 
@@ -104,22 +106,22 @@ def _summary_section(row: Any) -> str:
     return "\n\n".join(blocks)
 
 
-def _notes_section(rows: list[Any]) -> str:
+def _notes_section(rows: list[Any], heading: str = "Notes") -> str:
     if not rows:
-        return "## Notes\n\n_No notes._"
+        return f"## {heading}\n\n_No notes._"
     items = []
     for row in rows:
         page = f" (p. {row['page_number']})" if row["page_number"] else ""
         items.append(f"- {_inline(row['user_note'])}{page}")
         if highlight := _inline(row["highlight_text"]):
             items.append(f"  > {highlight}")
-    return "## Notes\n\n" + "\n".join(items)
+    return f"## {heading}\n\n" + "\n".join(items)
 
 
-def _cards_section(rows: list[Any]) -> str:
+def _cards_section(rows: list[Any], heading: str = "Cards") -> str:
     if not rows:
-        return "## Cards\n\n_No cards._"
-    blocks = ["## Cards"]
+        return f"## {heading}\n\n_No cards._"
+    blocks = [f"## {heading}"]
     for row in rows:
         blocks += [f"### {_inline(row['front'])}", str(row["back"] or "").strip()]
     return "\n\n".join(blocks)
@@ -164,16 +166,35 @@ async def build_paper_markdown(
     card_rows = await conn.fetch(_CARDS_SQL, paper_id, user_id)
     extraction_rows = await conn.fetch(_EXTRACTIONS_SQL, paper_id, user_id)
 
+    generation = paper_row.get("content_generation")
+    current_notes = [
+        row for row in note_rows if row.get("content_generation") in {None, generation}
+    ]
+    stale_notes = [
+        row for row in note_rows if row.get("content_generation") not in {None, generation}
+    ]
+    current_cards = [
+        row for row in card_rows if row.get("content_generation") in {None, generation}
+    ]
+    stale_cards = [
+        row for row in card_rows if row.get("content_generation") not in {None, generation}
+    ]
+
     citation_key = paper_row["link_citation_key"]
     paper = dict(paper_row) | {"zotero_citation_key": citation_key}
     sections = [
         _front_matter(paper, citation_key),
         f"# {_inline(paper.get('title'))}",
         _summary_section(summary_row),
-        _notes_section(list(note_rows)),
-        _cards_section(list(card_rows)),
+        _notes_section(current_notes),
+        _cards_section(current_cards),
+        _notes_section(stale_notes, "Notes from a previous source version") if stale_notes else "",
+        _cards_section(stale_cards, "Cards from a previous source version") if stale_cards else "",
         _extractions_section(list(extraction_rows)),
         _citation_section(paper),
     ]
     stem = _slug(str(paper.get("title") or "")) or f"paper-{paper_id}"
-    return PaperMarkdown(stem=stem, text="\n\n".join(sections) + "\n")
+    return PaperMarkdown(
+        stem=stem,
+        text="\n\n".join(section for section in sections if section) + "\n",
+    )

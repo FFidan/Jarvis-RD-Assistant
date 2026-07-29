@@ -623,6 +623,43 @@ def test_generate_snapshots_real_pdf_parity(
             assert abs(img.height - round(height * scale)) <= 2
 
 
+def test_generate_snapshots_removes_pages_past_a_shorter_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regenerating for a shorter document must not leave the old tail servable.
+
+    The snapshot directory is keyed only by paper id, so a replacement source
+    with fewer pages overwrites page_1 and leaves the previous document's higher
+    pages behind. Nothing else removes them once the paper's PDF pointer is
+    restored, so they would keep serving under the current paper's identity.
+    """
+    import pypdfium2 as pdfium
+
+    snapshots = tmp_path / "snapshots"
+    monkeypatch.setattr(pdf_processor, "SNAPSHOT_STORAGE_PATH", str(snapshots))
+    processor = PDFProcessor(http_client=MagicMock(), embedder=MagicMock())
+
+    def _write_pdf(name: str, pages: int) -> Path:
+        doc = pdfium.PdfDocument.new()
+        for _ in range(pages):
+            doc.new_page(595.0, 842.0)
+        path = tmp_path / name
+        doc.save(str(path))
+        doc.close()
+        return path
+
+    long_paths = processor.generate_snapshots(_write_pdf("long.pdf", 3), paper_id=11)
+    assert [p.name for p in long_paths] == ["page_1.png", "page_2.png", "page_3.png"]
+
+    short_paths = processor.generate_snapshots(_write_pdf("short.pdf", 1), paper_id=11)
+
+    assert [p.name for p in short_paths] == ["page_1.png"]
+    remaining = sorted(p.name for p in (snapshots / "11").glob("page_*.png"))
+    assert remaining == ["page_1.png"], (
+        f"pages from the superseded document are still servable: {remaining}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Non-PDF / malformed bytes via download_pdf
 # ---------------------------------------------------------------------------

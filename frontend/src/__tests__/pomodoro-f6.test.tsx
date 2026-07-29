@@ -7,10 +7,10 @@
  * because vi.mock is hoisted to module scope and would shadow the real store here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Module-scoped mock — applies to ALL tests in this file.
@@ -63,15 +63,12 @@ vi.mock('@/lib/api', () => ({
 }));
 
 function renderHeader() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <HeaderPomodoro />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <HeaderPomodoro />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

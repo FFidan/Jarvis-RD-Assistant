@@ -8,11 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Module mocks ---
 
@@ -75,17 +75,13 @@ const CONFIGURED_CONFIG = [
 ];
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  const queryClient = createTestQueryClient();
   return {
-    queryClient,
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ZoteroSection />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <MemoryRouter>
+        <ZoteroSection />
+      </MemoryRouter>,
+      { queryClient },
     ),
   };
 }

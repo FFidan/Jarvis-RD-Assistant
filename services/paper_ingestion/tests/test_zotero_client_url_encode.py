@@ -23,11 +23,6 @@ ENCODED_ITEM_KEY = "ABCD%2FEFG%3Fh%3D1"
 
 
 @pytest.fixture
-def http_client():
-    return httpx.AsyncClient()
-
-
-@pytest.fixture
 def client(http_client):
     return ZoteroClient(
         api_key="test_key",

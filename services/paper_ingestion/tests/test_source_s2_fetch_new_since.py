@@ -12,19 +12,9 @@ import httpx
 import pytest
 import respx
 from jarvis_common.maintenance import OutboundEgressBlockedError
-from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
-
-
-def _make_source() -> SemanticScholarSource:
-    config = PaperSourceConfig(
-        id=2,
-        source_type=SourceType.SEMANTIC_SCHOLAR,
-        enabled=True,
-        config={},
-    )
-    client = httpx.AsyncClient()
-    return SemanticScholarSource(config, client)
+from paper_ingestion.models import TopicRef
+from paper_ingestion.sources.semantic_scholar_source import S2_API_URL
+from tests._source_fakes import make_semantic_scholar_source as _make_source
 
 
 async def test_fetch_new_since_propagates_outbound_quarantine(monkeypatch):

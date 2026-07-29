@@ -15,6 +15,8 @@ split into focused helper modules:
 Public API
 ----------
 FakeRecord              asyncpg.Record dict-shim (attr + .get access)
+make_conn               canonical asyncpg connection mock
+make_paper_record       canonical feed/dashboard asyncpg-record factory
 make_pool_and_conn      canonical mock (pool, conn) factory with optional kwargs
 _make_pool_and_conn     module-level alias preserved for existing importers
 make_request            minimal request mock for handler tests
@@ -28,6 +30,8 @@ FakeAcquireCM           async CM returned by pool.acquire() in telegram tests
 FakeTxnCM               async CM returned by conn.transaction() in telegram tests
 make_telegram_update    build a minimal PTB Update-like MagicMock
 make_bot_config         build a minimal BotConfig for telegram_bot tests
+PTBContextOptions       optional fields for make_ptb_context
+make_ptb_context        build a PTB CallbackContext-like MagicMock
 ScriptedReranker        in-process DI seam replacing CrossEncoder
 """
 
@@ -36,9 +40,13 @@ from __future__ import annotations
 __all__ = [
     # cluster 1-5 (testing_db)
     "FakeRecord",
+    "make_conn",
+    "make_paper_record",
     "make_pool_and_conn",
     "_make_pool_and_conn",
     "make_request",
+    "shelve_paper",
+    "seed_user_row",
     "make_live_pg_dsn",
     "make_live_pg_session_dsn",
     "make_contract_pg_dsn",
@@ -60,17 +68,23 @@ __all__ = [
     "FakeTxnCM",
     "make_telegram_update",
     "make_bot_config",
+    "PTBContextOptions",
+    "make_ptb_context",
     # cluster 9 (testing_search)
     "ScriptedReranker",
     # cluster 10 (testing_contract_apps)
     "_make_pi_contract_app_with_litellm_sidecar",
     "_make_le_contract_app_with_litellm_sidecar",
+    "PITestAppOptions",
+    "patch_pi_test_app",
 ]
 
 from jarvis_common.testing_auth import RoleMiddleware  # noqa: F401
 from jarvis_common.testing_contract_apps import (  # noqa: F401
+    PITestAppOptions,
     _make_le_contract_app_with_litellm_sidecar,
     _make_pi_contract_app_with_litellm_sidecar,
+    patch_pi_test_app,
 )
 from jarvis_common.testing_db import (  # noqa: F401
     A_CARD_FRONT,
@@ -86,11 +100,15 @@ from jarvis_common.testing_db import (  # noqa: F401
     _make_contract_pool_fixture,
     _make_contract_two_users_fixture,
     _make_pool_and_conn,
+    make_conn,
     make_contract_pg_dsn,
     make_live_pg_dsn,
     make_live_pg_session_dsn,
+    make_paper_record,
     make_pool_and_conn,
     make_request,
+    seed_user_row,
+    shelve_paper,
 )
 from jarvis_common.testing_db import (
     _seed_resources as _seed_resources,
@@ -102,6 +120,8 @@ from jarvis_common.testing_search import ScriptedReranker  # noqa: F401
 from jarvis_common.testing_telegram import (  # noqa: F401
     FakeAcquireCM,
     FakeTxnCM,
+    PTBContextOptions,
     make_bot_config,
+    make_ptb_context,
     make_telegram_update,
 )

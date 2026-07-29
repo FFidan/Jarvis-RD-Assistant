@@ -11,6 +11,11 @@ from datetime import datetime
 
 import asyncpg
 
+CURRENT_CARD_SQL = "(c.paper_id IS NULL OR c.content_generation = p.content_generation)"
+CARD_STALE_SQL = (
+    "(c.paper_id IS NOT NULL AND c.content_generation IS DISTINCT FROM p.content_generation)"
+)
+
 
 async def insert_card(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
@@ -23,6 +28,7 @@ async def insert_card(
     fsrs_state: dict,
     due_at: datetime,
     user_id: int | None = None,
+    content_generation: int = 0,
 ) -> asyncpg.Record | None:
     """Insert a card row and return the created record.
 
@@ -31,8 +37,9 @@ async def insert_card(
     """
     return await conn.fetchrow(
         """INSERT INTO cards (deck_id, paper_id, card_type, front, back,
-                              evidence, fsrs_state, due_at, user_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                              evidence, fsrs_state, due_at, user_id,
+                              content_generation)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *""",
         deck_id,
         paper_id,
@@ -43,4 +50,5 @@ async def insert_card(
         fsrs_state,
         due_at,
         user_id,
+        content_generation,
     )

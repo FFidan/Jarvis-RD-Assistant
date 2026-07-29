@@ -149,7 +149,12 @@ async def test_batch_summarize_respects_cancellation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_batch_summarize_empty_payload(monkeypatch):
-    """Empty paper_ids list: handler completes cleanly with zero counts."""
+    """Empty paper_ids list: handler completes cleanly with zero counts.
+
+    Nothing was asked for and nothing was left undone, so the run is complete
+    rather than partial -- the same terminal status a batch that finished all
+    its work reports.
+    """
     from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     _install_fake_app(monkeypatch, verifier=MagicMock(), embedder=MagicMock())
@@ -159,7 +164,14 @@ async def test_batch_summarize_empty_payload(monkeypatch):
     ctx = _FakeCtx()
     result = await _papers_batch_summarize_job(MagicMock(), MagicMock(), {"paper_ids": []}, ctx)
 
-    assert result == {"summarized": 0, "failed": 0, "errors": []}
+    assert result == {
+        "summarized": 0,
+        "failed": 0,
+        "errors": [],
+        "total": 0,
+        "remaining": 0,
+        "status": "ok",
+    }
     mock_gen.assert_not_awaited()
     # Should still emit start (0.0) + end (1.0) progress
     assert ctx.progress_calls[0][0] == 0.0

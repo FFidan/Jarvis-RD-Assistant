@@ -604,8 +604,12 @@ describe('JobStore', () => {
 
   // ----- papers.process_library: invalidation + partial honesty -----
 
-  function runLibraryTerminal(id: string, result: Record<string, unknown>) {
-    const job = makeJob({ id, kind: 'papers.process_library', status: 'running' });
+  function runBatchTerminal(
+    id: string,
+    kind: string,
+    result: Record<string, unknown>,
+  ) {
+    const job = makeJob({ id, kind, status: 'running' });
     useJobStore.setState({ jobs: { [id]: job }, activeAborts: {} });
     const doneEvent = JSON.stringify({
       status: 'succeeded', progress: 100, progress_message: 'Done', result,
@@ -615,6 +619,10 @@ describe('JobStore', () => {
     );
     useJobStore.getState().subscribe(id);
     return new Promise((r) => setTimeout(r, 50));
+  }
+
+  function runLibraryTerminal(id: string, result: Record<string, unknown>) {
+    return runBatchTerminal(id, 'papers.process_library', result);
   }
 
   it('papers.process_library: invalidates papers-feed, feed-counts, action-items on success', async () => {
@@ -715,6 +723,81 @@ describe('JobStore', () => {
     const warnCall = vi.mocked(toast.warning).mock.calls[0];
     if (!warnCall) throw new Error('test fixture: toast.warning was not called');
     expect(warnCall[0] as string).toContain('3 not processed');
+  });
+
+  it('non-library partial result uses scalar counts and kind-aware wording', async () => {
+    const { toast } = await import('sonner');
+    await runBatchTerminal('job-extract-partial', 'extraction.batch', {
+      status: 'partial',
+      total: 5,
+      extracted: 2,
+      failed: 2,
+      skipped: 1,
+      remaining: 0,
+      errors: ['one detail'],
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const message = warnCall[0] as string;
+    expect(message).toContain('Batch Extraction finished');
+    expect(message).toContain('2 failed');
+    expect(message).toContain('1 skipped');
+    expect(message).not.toContain('Library processing');
+  });
+
+  it('Zotero partial result warns with its canonical batch counts', async () => {
+    const { toast } = await import('sonner');
+    await runBatchTerminal('job-zotero-partial', 'zotero.poll', {
+      status: 'partial', new_items: 22, linked: 3, enqueued: 18,
+      parse_failed: 1, ingest_failed: 1, gave_up: 0, capped: true,
+      failed: 2, skipped: 0, remaining: 2, total: 24,
+      version_from: 10, version_to: 10, cursor_persisted: true,
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const message = warnCall[0] as string;
+    expect(message).toContain('2 failed');
+    expect(message).toContain('2 not processed');
+    expect(message).toContain('of 24');
+  });
+
+  it('Zotero operational partial uses a generic message without inventing item loss', async () => {
+    const { toast } = await import('sonner');
+    await runBatchTerminal('job-zotero-cursor-partial', 'zotero.poll', {
+      status: 'partial', new_items: 1, linked: 1, enqueued: 0,
+      parse_failed: 0, ingest_failed: 0, gave_up: 0, capped: false,
+      failed: 0, skipped: 0, remaining: 0, total: 1,
+      version_from: 10, version_to: 11, cursor_persisted: false,
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Syncing Zotero finished with incomplete results; open Jobs for details',
+    );
+  });
+
+  it('non-library cancelled result reports scalar failures and untouched work', async () => {
+    const { toast } = await import('sonner');
+    await runBatchTerminal('job-summary-cancelled', 'papers.batch_summarize', {
+      status: 'cancelled',
+      total: 5,
+      summarized: 2,
+      failed: 1,
+      remaining: 2,
+    });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    const warnCall = vi.mocked(toast.warning).mock.calls[0];
+    if (!warnCall) throw new Error('test fixture: toast.warning was not called');
+    const message = warnCall[0] as string;
+    expect(message).toContain('Batch Summarize was cancelled');
+    expect(message).toContain('1 failed');
+    expect(message).toContain('2 not processed');
+    expect(message).not.toContain('Library processing');
   });
 
   it('subscribe: failed terminal event fires toast.error with message', async () => {

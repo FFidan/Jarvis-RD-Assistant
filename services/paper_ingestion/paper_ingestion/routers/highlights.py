@@ -11,6 +11,13 @@ from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
 
 router = APIRouter(prefix="/api", tags=["highlights"])
 
+_HIGHLIGHT_STALE_RETURNING = (
+    " RETURNING paper_highlights.*, "
+    "paper_highlights.content_generation <> "
+    "(SELECT p.content_generation FROM papers p "
+    "WHERE p.id = paper_highlights.paper_id) AS stale"
+)
+
 
 @router.get("/papers/{paper_id}/highlights", response_model=list[HighlightResponse])
 @limiter.limit("60/minute")
@@ -30,7 +37,11 @@ async def list_highlights(
     async with db_pool.acquire() as conn:
         await assert_paper_pdf_visible(conn, paper_id, user_id)
         rows = await conn.fetch(
-            "SELECT * FROM paper_highlights WHERE paper_id = $1 AND user_id = $2 ORDER BY page, id",
+            """SELECT h.*, h.content_generation <> p.content_generation AS stale
+                 FROM paper_highlights h
+                 JOIN papers p ON p.id = h.paper_id
+                WHERE h.paper_id = $1 AND h.user_id = $2
+                ORDER BY h.page, h.id""",
             paper_id,
             user_id,
         )
@@ -60,21 +71,33 @@ async def create_highlight(
         Page, geometry, and optional note/color/quote.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_pdf_visible(conn, paper_id, user_id)
-        row = await conn.fetchrow(
-            """
-            INSERT INTO paper_highlights (paper_id, user_id, page, rect, note, color, quote)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
-            """,
-            paper_id,
-            user_id,
-            body.page,
-            body.rect.model_dump(),
-            body.note,
-            body.color,
-            body.quote,
-        )
+        async with conn.transaction():
+            await assert_paper_pdf_visible(
+                conn,
+                paper_id,
+                user_id,
+                lock_for_update=True,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO paper_highlights (
+                    paper_id, user_id, page, rect, note, color, quote, content_generation
+                )
+                SELECT $1, $2, $3, $4, $5, $6, $7, p.content_generation
+                  FROM papers p
+                 WHERE p.id = $1
+                RETURNING paper_highlights.*, false AS stale
+                """,
+                paper_id,
+                user_id,
+                body.page,
+                body.rect.model_dump(),
+                body.note,
+                body.color,
+                body.quote,
+            )
+            if row is None:
+                raise RuntimeError("highlight insert RETURNING always yields a row")
     return HighlightResponse(**dict(row))
 
 
@@ -109,7 +132,7 @@ async def update_highlight(
         if note_set and color_set:
             row = await conn.fetchrow(
                 "UPDATE paper_highlights SET note = $1, color = $2"
-                " WHERE id = $3 AND user_id = $4 RETURNING *",
+                " WHERE id = $3 AND user_id = $4" + _HIGHLIGHT_STALE_RETURNING,
                 fields["note"],
                 fields["color"],
                 highlight_id,
@@ -117,14 +140,16 @@ async def update_highlight(
             )
         elif note_set:
             row = await conn.fetchrow(
-                "UPDATE paper_highlights SET note = $1 WHERE id = $2 AND user_id = $3 RETURNING *",
+                "UPDATE paper_highlights SET note = $1 WHERE id = $2 AND user_id = $3"
+                + _HIGHLIGHT_STALE_RETURNING,
                 fields["note"],
                 highlight_id,
                 user_id,
             )
         else:
             row = await conn.fetchrow(
-                "UPDATE paper_highlights SET color = $1 WHERE id = $2 AND user_id = $3 RETURNING *",
+                "UPDATE paper_highlights SET color = $1 WHERE id = $2 AND user_id = $3"
+                + _HIGHLIGHT_STALE_RETURNING,
                 fields["color"],
                 highlight_id,
                 user_id,

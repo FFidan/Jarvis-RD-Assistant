@@ -297,7 +297,10 @@ _txn_write_new() {
   local phase="$1" target="$2" version="$3" target_sha="$4"
   local backup_id="${5:-}" backup_run_id="${6:-}" from_version
   TXN_FROM_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
-  from_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  from_version="$(sed -n 's/^JARVIS_IMAGE_TAG=//p' .env 2>/dev/null | head -1)"
+  if [ -z "$from_version" ]; then
+    from_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  fi
   if ! printf '%s' "${from_version:-unknown}" | grep -Eq '^(unknown|[A-Za-z0-9][A-Za-z0-9._+-]*)$'; then
     from_version="unknown"
   fi
@@ -906,7 +909,7 @@ _stage_target_cohort() {
       printf '%s' "$key" | grep -Eq '^[A-Z][A-Z0-9_]*$' || exit 1
       export "$key=$value"
     done < "$tmp_root/versions.env"
-    export JARVIS_VERSION="$target_version"
+    export JARVIS_IMAGE_TAG="$target_version"
     env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
       -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
       JARVIS_TARGET_COHORT_RENDER=1 docker compose \
@@ -1113,7 +1116,7 @@ cmd_update() {
   if ! printf '%s' "$target_ref" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
      || ! printf '%s' "$target_version" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._+/-]*$' \
      || ! printf '%s' "$target_sha" | grep -Eq '^[0-9a-f]{40}$'; then
-    die "The selected release tag does not resolve to a safe, immutable commit identity." \
+    die "The selected release reference does not resolve to a safe, immutable commit identity." \
       "Run: jarvis-research doctor"
   fi
 
@@ -1222,7 +1225,11 @@ _resume_transaction() {
 # _run_update_sh — hand off to update.sh (warm pulls become no-ops) and let it
 # own the recreate + health wait; its exit code is the health verdict.
 _run_update_sh() {
-  ( cd "$REPO" && JARVIS_TRANSACTIONAL_UPDATE=1 bash "${REPO}/update.sh" --yes )
+  (
+    cd "$REPO"
+    JARVIS_TRANSACTIONAL_UPDATE=1 \
+      bash "${REPO}/update.sh" --yes --image-tag "$TXN_TARGET_VERSION"
+  )
 }
 
 # _rollback_pin_lines FROM_VERSION — bounded application-image recovery commands
@@ -1251,14 +1258,14 @@ _rollback_pin_lines() {
   done
 
   printf '    cd %q\n' "$REPO"
-  printf '    JARVIS_VERSION=%q docker compose' "$fv"
+  printf '    JARVIS_IMAGE_TAG=%q docker compose' "$fv"
   if [ "${#profile_args[@]}" -gt 0 ]; then
     printf ' %q' "${profile_args[@]}"
   fi
   printf ' pull'
   printf ' %q' "${svcs[@]}"
   printf '\n'
-  printf '    JARVIS_VERSION=%q docker compose' "$fv"
+  printf '    JARVIS_IMAGE_TAG=%q docker compose' "$fv"
   if [ "${#profile_args[@]}" -gt 0 ]; then
     printf ' %q' "${profile_args[@]}"
   fi
@@ -1283,17 +1290,21 @@ _failure_epilogue() {
   printf '\n%sApplication-image recovery (not a full release rollback):%s\n' "$C_BOLD" "$C_RESET"
   printf '  These commands replace application containers only; they do not move the Git checkout or restore stored data.\n'
   if ! _rollback_pin_lines "$fv"; then
-    printf '  The recorded previous application version or active profile list is unsafe; no image command was printed.\n'
+    printf '  The recorded previous application image tag or active profile list is unsafe; no image command was printed.\n'
   fi
   printf '\nDiagnose first: cd %q && jarvis-research doctor\n' "$REPO"
   printf 'Resume pending update: cd %q && jarvis-research update --resume %q\n' "$REPO" "$target_ref"
 }
 
 _success_epilogue() {
-  local target_ref="$1" fv; fv="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  local target_ref="$1" app_version image_tag
+  app_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  image_tag="$(sed -n 's/^JARVIS_IMAGE_TAG=//p' .env 2>/dev/null | head -1)"
+  image_tag="${image_tag:-$app_version}"
   printf '\n'
   cmd_doctor || true
-  printf '\nNow running %s (JARVIS_VERSION=%s).\n' "$target_ref" "${fv:-unknown}"
+  printf '\nNow running %s (version=%s, image tag=%s).\n' \
+    "$target_ref" "${app_version:-unknown}" "${image_tag:-unknown}"
 }
 
 # -----------------------------------------------------------------------------

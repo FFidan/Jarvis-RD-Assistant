@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
 import type { SessionUser } from '@/stores/auth-store';
+import { createTestQueryClient } from '@/__tests__/test-utils';
 
 // Mock fetch for the API-key→session mint endpoint
 const mockFetch = vi.fn();
@@ -22,7 +22,7 @@ const { useAuthStore, registerQueryClient } = await import('@/stores/auth-store'
 
 // A real QueryClient with spied methods so the purge's cancel→clear path is
 // observable. clear() runs synchronously; cancelQueries is fire-and-forget.
-const mockQueryClient = new QueryClient();
+const mockQueryClient = createTestQueryClient({});
 const mockQueryClientClear = vi.spyOn(mockQueryClient, 'clear');
 const mockCancelQueries = vi
   .spyOn(mockQueryClient, 'cancelQueries')

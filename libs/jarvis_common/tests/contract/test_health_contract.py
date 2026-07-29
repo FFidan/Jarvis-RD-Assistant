@@ -32,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import make_pool_and_conn
 
 pytestmark = [
     pytest.mark.contract,
@@ -60,20 +61,6 @@ def _clear_sweep_memo(app: Any) -> None:
         delattr(app.state, _SWEEP_TASK_ATTR)
 
 
-def _make_mock_pool(*, raise_on_acquire: bool = False) -> MagicMock:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)
-    ctx = MagicMock()
-    if raise_on_acquire:
-        ctx.__aenter__ = AsyncMock(side_effect=RuntimeError("DB down"))
-    else:
-        ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
 def _make_mock_http(*, healthy: bool = True) -> AsyncMock:
     """Mock httpx.AsyncClient whose .get() returns 200 (healthy) or raises (unhealthy)."""
     client = AsyncMock()
@@ -92,7 +79,10 @@ def _wire_pi_app(*, db_up: bool = True, http_healthy: bool = True) -> Any:
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool = _make_mock_pool(raise_on_acquire=not db_up)
+    pool, _ = make_pool_and_conn(
+        fetchval_return=1,
+        raise_on_acquire=RuntimeError("DB down") if not db_up else None,
+    )
     http = _make_mock_http(healthy=http_healthy)
     qdrant = MagicMock()
     qdrant.collection_exists = AsyncMock(return_value=True)
@@ -117,7 +107,10 @@ def _wire_le_app(*, db_up: bool = True, http_healthy: bool = True) -> Any:
     from learning_engine.deps import get_db_pool
     from learning_engine.main import app
 
-    pool = _make_mock_pool(raise_on_acquire=not db_up)
+    pool, _ = make_pool_and_conn(
+        fetchval_return=1,
+        raise_on_acquire=RuntimeError("DB down") if not db_up else None,
+    )
     http = _make_mock_http(healthy=http_healthy)
 
     app.state.db_pool = pool
@@ -374,7 +367,7 @@ def tg_internal_app():
 
     # The probe reads app.state.db_pool when the route is called; without a pool
     # every request here would report degraded.
-    _internal_app.state.db_pool = _make_mock_pool()
+    _internal_app.state.db_pool = make_pool_and_conn(fetchval_return=1)[0]
     return _internal_app
 
 

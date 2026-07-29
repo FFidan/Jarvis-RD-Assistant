@@ -221,9 +221,16 @@ format.
    ```bash
    docker compose cp /path/to/backup_encrypt_key.txt \
      postgres-backup:/restore-inbox/operator_key
+   RESTORE_ID="$(openssl rand -hex 16)"
+   REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
    docker compose exec postgres-backup sh -c \
-     'printf "{\"source\":\"inbox\",\"timestamp\":\"<timestamp>\"}" > /backup-trigger/.restore_request.json'
+     "printf '{\"source\":\"inbox\",\"timestamp\":\"<timestamp>\",\"restore_id\":\"${RESTORE_ID}\",\"requested_at\":\"${REQUESTED_AT}\"}' > /backup-trigger/.restore_request.json"
    ```
+
+   The request is rejected before anything is touched unless it carries both
+   `restore_id` (32 lowercase hex characters) and `requested_at` (an
+   ISO-8601 timestamp with a timezone). Keep the `RESTORE_ID` value — it is
+   the same id you type back in step 5 to acknowledge the restore.
 
 4. Follow `docker compose logs -f postgres-backup`, or run:
 

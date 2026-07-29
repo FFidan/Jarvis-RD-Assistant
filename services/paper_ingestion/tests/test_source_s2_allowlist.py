@@ -10,20 +10,9 @@ import logging
 
 import httpx
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
-from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
-
-
-def _make_source() -> SemanticScholarSource:
-    config = PaperSourceConfig(
-        id=2,
-        source_type=SourceType.SEMANTIC_SCHOLAR,
-        enabled=True,
-        config={},
-    )
-    client = httpx.AsyncClient()
-    return SemanticScholarSource(config, client)
+from paper_ingestion.sources.semantic_scholar_source import S2_API_URL
+from tests._source_fakes import make_semantic_scholar_source as _make_source
 
 
 def _s2_paper(paper_id: str, open_access_pdf: dict | None) -> dict:

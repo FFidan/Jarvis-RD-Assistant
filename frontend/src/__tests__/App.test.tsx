@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -43,19 +43,19 @@ vi.stubGlobal('fetch', vi.fn());
 const api = await import('@/lib/api');
 const { App } = await import('@/App');
 const { useAuthStore } = await import('@/stores/auth-store');
+const { resetAuthState } = await import('@/__tests__/auth-test-utils');
 
 function renderApp(initialEntries: string[] = ['/']) {
-  const queryClient = new QueryClient({
+  const queryClient = createTestQueryClient({
     // retryDelay: 0 keeps the bootstrap query's own retry policy (see App.tsx)
     // from adding real exponential-backoff wait time to these tests.
     defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={initialEntries}>
+      <App />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -65,7 +65,7 @@ describe('App', () => {
     vi.mocked(api.fetchAccount).mockRejectedValue(
       new api.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
     );
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
   });
 
   it('shows login page when not authenticated', async () => {
@@ -106,7 +106,7 @@ describe('App', () => {
 
 
   it('keeps magic-link verification mounted while auth state flips', async () => {
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     renderApp(['/auth/verify#token=route-flip-token']);
 
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe('App', () => {
   });
 
   it('shows an error state, not the login page, when the session probe fails with a server error', async () => {
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     const serverError = () =>
       new api.ApiError(500, JSON.stringify({ detail: 'Internal Server Error' }));
     // 1 initial attempt + 2 retries (the bootstrap query's own retry policy).
@@ -179,7 +179,7 @@ describe('App', () => {
   });
 
   it('shows the login page, not an error state, when the session probe returns 401', async () => {
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    resetAuthState();
     vi.mocked(api.fetchAccount).mockRejectedValueOnce(
       new api.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
     );

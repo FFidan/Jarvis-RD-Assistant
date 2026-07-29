@@ -82,6 +82,9 @@ export interface ConsensusClaim {
 export interface ConsensusResponse {
   claims: ConsensusClaim[];
   total: number;
+  /** True when evidence was dropped before clustering, so `total` counts the
+   *  clusters that survived a capped read rather than everything on record. */
+  truncated: boolean;
 }
 
 // --- Weekly Digest ---

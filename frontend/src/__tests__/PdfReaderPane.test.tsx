@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ScaledPosition } from 'react-pdf-highlighter-extended';
 import { PdfReaderPane } from '@/components/paper/PdfReaderPane';
 import type { Highlight } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 interface MockSelection {
   position: ScaledPosition;
@@ -140,16 +140,16 @@ function makeHighlight(overrides: Partial<Highlight> = {}): Highlight {
     color: '#FBBF24',
     quote: 'persisted quote',
     created_at: '2026-06-26T00:00:00Z',
+    stale: false,
     ...overrides,
   };
 }
 
 function renderPane() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <PdfReaderPane paperId={42} />
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <PdfReaderPane paperId={42} />,
+    { queryClient: qc },
   );
 }
 

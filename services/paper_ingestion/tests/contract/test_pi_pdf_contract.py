@@ -32,8 +32,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
     make_contract_client as _make_client,
+    patch_pi_test_app,
 )
 
 pytestmark = [
@@ -56,11 +59,6 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     """
     from unittest.mock import MagicMock
 
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.main import app
-
     # PDF_STORAGE_PATH is read at module-import; monkeypatch the module constant.
     import paper_ingestion.routers.pdf as _pdf_mod
 
@@ -68,15 +66,13 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     monkeypatch.setenv("PDF_STORAGE_PATH", str(tmp_path))
 
     shared = SharedConnPool(contract_conn)
-    with (
-        patch_app_state(
-            app,
-            {"db_pool": shared, "embedder": None, "pdf_processor": MagicMock()},
+    with patch_pi_test_app(
+        shared,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            state_overrides={"embedder": None, "pdf_processor": MagicMock()},
         ),
-        patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
-        ),
-    ):
+    ) as app:
         yield app
 
 
@@ -305,6 +301,61 @@ async def test_p07_process_pdf_enqueues_job_returns_queued_shape(
     call_kwargs = mock_task.defer_async.call_args.kwargs
     assert call_kwargs["paper_id"] == paper_id_a
     assert str(call_kwargs["user_id"]) == str(contract_two_users.user_a_id)
+
+
+# ---------------------------------------------------------------------------
+# P-08: GET /api/pdfs/{id} — a stored record is required before a file is served
+# ---------------------------------------------------------------------------
+
+
+async def test_p08_pdf_served_only_while_a_stored_record_points_at_it(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, tmp_path, monkeypatch
+):
+    """A visible paper serves its stored PDF only while its pointer is recorded.
+
+    The paper is persisted-public and its file sits in the storage directory
+    throughout, so the caller's visibility never changes between the two
+    requests; only ``pdf_local_path`` does. Recording the pointer flips the
+    same request to 200, which is what keeps the 404 attributable to the
+    missing record rather than to the visibility predicate.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:51
+    # (assert_paper_pdf_visible: WHERE p.id = $1 AND p.pdf_local_path IS NOT NULL AND ...).
+    """
+    import paper_ingestion.routers.pdfs as _pdfs_mod
+
+    monkeypatch.setattr(_pdfs_mod, "PDF_STORAGE_PATH", str(tmp_path))
+
+    paper_id = int(
+        await contract_conn.fetchval(
+            """INSERT INTO papers (
+                   external_id, source_type, title, authors, url, visibility_scope
+               )
+               VALUES ('pdf-unclaimed-file', 'arxiv', 'Unclaimed', ARRAY['A'],
+                       'https://example.test/unclaimed', 'public')
+               RETURNING id"""
+        )
+    )
+    stored_pdf = tmp_path / f"{paper_id}.pdf"
+    stored_pdf.write_bytes(_MIN_PDF_BYTES)
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        unclaimed = await c.get(f"/api/pdfs/{paper_id}")
+    assert unclaimed.status_code == 404, (
+        "a file no stored record points at must not be served; "
+        f"got {unclaimed.status_code}: {unclaimed.text[:300]}"
+    )
+
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1 WHERE id = $2",
+        str(stored_pdf),
+        paper_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        recorded = await c.get(f"/api/pdfs/{paper_id}")
+    assert recorded.status_code == 200, recorded.text[:300]
+    assert recorded.content.startswith(b"%PDF-")
 
 
 # ---------------------------------------------------------------------------

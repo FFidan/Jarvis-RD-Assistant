@@ -234,6 +234,11 @@ OLLAMA_IMAGE=ollama/ollama:0.31.2
 QDRANT_IMAGE=qdrant/qdrant:v1.13.2
 CADDY_IMAGE=caddy:2.9-alpine
 VE
+  cat > "$dir/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "jarvis-rd-assistant"
+version = "1.1.3"
+PYPROJECT
   cat > "$dir/docker-compose.yml" <<'YML'
 services:
   dashboard:
@@ -634,6 +639,33 @@ if [ "$ok_all" -eq 1 ] && [ "$n_rmi" -eq "${#APP_REFS[@]}" ] \
   pass "tier2_removes_exactly_the_ghcr_images: the four app refs and nothing else"
 else
   check_fail "tier2_removes_exactly_the_ghcr_images: n=$n_rmi lines=<<<$rmi_lines>>>"
+fi
+
+# Installations created before JARVIS_VERSION was persisted still resolve the
+# exact checkout version. This fallback is read-only, including in dry-run mode.
+new_env
+grep -v '^JARVIS_VERSION=' "$CLONE/.env" > "$CLONE/.env.next"
+mv "$CLONE/.env.next" "$CLONE/.env"
+before_env="$(cat "$CLONE/.env")"
+out="$(run_un --repo "$CLONE" --dry-run --tier 2 --yes)"; rc=$?
+fallback_ok=1
+for r in "${APP_REFS[@]}"; do has "$out" "PLAN image $r" || fallback_ok=0; done
+if [ "$rc" -eq 0 ] && [ "$fallback_ok" -eq 1 ] \
+   && [ "$(cat "$CLONE/.env")" = "$before_env" ]; then
+  pass "legacy_missing_version_pin_uses_checkout_metadata_without_mutating_env"
+else
+  check_fail "legacy_missing_version_pin: rc=$rc env=$(cat "$CLONE/.env") out=<<<$out>>>"
+fi
+
+# A malformed durable pin is not converted into an arbitrary Docker image ref.
+new_env
+printf 'JARVIS_VERSION=not-a-version\nTORCH_VARIANT_SUFFIX=-cuda\n' > "$CLONE/.env"
+out="$(run_un --repo "$CLONE" --dry-run --tier 2 --yes)"; rc=$?
+if [ "$rc" -ne 0 ] && has "$out" 'application version is missing or invalid' \
+   && ! has "$out" '^PLAN '; then
+  pass "invalid_application_version_refuses_before_uninstall_plan"
+else
+  check_fail "invalid_application_version_refusal: rc=$rc out=<<<$out>>>"
 fi
 
 # tier 3 requires typing the compose project name; a wrong name refuses.

@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminBackupsPage } from '@/pages/AdminBackupsPage';
 
 import { useMaintenanceStore } from '@/stores/maintenance-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const createUploadGrantMock = vi.fn();
 const uploadRestoreFileMock = vi.fn();
@@ -42,15 +42,14 @@ vi.mock('@/stores/auth-store', () => ({
 }));
 
 function renderPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/admin/backups']}>
-        <Routes>
-          <Route path="/admin/backups" element={<AdminBackupsPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={['/admin/backups']}>
+      <Routes>
+        <Route path="/admin/backups" element={<AdminBackupsPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

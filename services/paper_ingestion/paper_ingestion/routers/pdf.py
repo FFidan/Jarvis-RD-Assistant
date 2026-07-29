@@ -1,7 +1,10 @@
 """PDF download, processing, upload, and scan endpoints."""
 
+import asyncio
 import hashlib
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import asyncpg
@@ -17,7 +20,7 @@ from fastapi import (
 )
 from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_strict
 from jarvis_common.auth import require_admin
-from jarvis_common.library import add_to_library
+from jarvis_common.library import DbLike, add_to_library, is_in_library
 from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.converters import row_to_paper_response
@@ -35,6 +38,7 @@ from paper_ingestion.pdf_processor import (
     pdf_publish_operation,
 )
 from paper_ingestion.services.pdf_workflow import (
+    PDFRebuildNotPermittedError,
     PDFRecordMissingError,
     ProcessPdfResult,
     download_and_store_pdf,
@@ -43,6 +47,92 @@ from paper_ingestion.services.pdf_workflow import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
+
+REBUILD_REQUIRES_LIBRARY_DETAIL = "Add this paper to your library before rebuilding its content."
+
+# The synchronous process-pdf branch holds one pooled connection for the whole
+# run — extraction, page rendering and embedding included. This bound caps how
+# many of those runs may be in flight per worker process so the rest of the
+# service keeps most of the pool (jarvis_common.app_factory sets max_size 10).
+SYNC_PROCESS_CONCURRENCY = 3
+SYNC_PROCESS_SLOTS = asyncio.Semaphore(SYNC_PROCESS_CONCURRENCY)
+
+
+@asynccontextmanager
+async def _bounded_sync_run() -> AsyncIterator[None]:
+    """Hold one synchronous-processing slot, refusing rather than queueing.
+
+    A queued request would occupy a worker for the whole run ahead of it while
+    holding nothing the caller can use, so a saturated bound is refused at once.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        With status 429 when the bound is already saturated.
+    """
+    if SYNC_PROCESS_SLOTS.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many synchronous PDF processing requests. "
+            "Retry shortly, or omit sync=true to queue the work.",
+        )
+    async with SYNC_PROCESS_SLOTS:
+        yield
+
+
+async def _require_library_membership(
+    conn: DbLike,
+    paper_id: int,
+    user_id: int,
+) -> None:
+    """Require the caller to hold ``paper_id`` before its content may be rebuilt.
+
+    A rebuild discards the paper's existing derived content, so it needs library
+    membership rather than the read visibility :func:`assert_paper_ownership`
+    grants, which every authenticated caller satisfies for a public paper.
+
+    Parameters
+    ----------
+    conn : DbLike
+        Open connection owned by the caller; reused rather than acquiring another.
+    paper_id : int
+        The paper primary key to check.
+    user_id : int
+        Authenticated caller ID.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        With status 403 when the paper is absent from the caller's library.
+    """
+    if not await is_in_library(conn, user_id=user_id, paper_id=paper_id):
+        raise HTTPException(status_code=403, detail=REBUILD_REQUIRES_LIBRARY_DETAIL)
+
+
+def _process_failure_error(exc: RuntimeError, request: Request, paper_id: int) -> HTTPException:
+    """Return the 502 for a failed synchronous run, sanitized outside dev mode.
+
+    Parameters
+    ----------
+    exc : RuntimeError
+        Service-level failure raised by the workflow.
+    request : fastapi.Request
+        Request whose ``request_id`` correlates the client reply with the logs.
+    paper_id : int
+        Fallback correlation id when the request carries none.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(paper_id)
+    if get_core_settings().dev_mode:
+        detail: dict = {
+            "detail": str(exc),
+            "error_type": type(exc).__name__,
+            "error_detail": str(exc)[:200],
+            "request_id": request_id,
+        }
+    else:
+        logger.exception("PDF process 502", extra={"request_id": request_id, "exc": str(exc)})
+        detail = {"detail": "PDF processing failed", "request_id": request_id}
+    return HTTPException(status_code=502, detail=detail)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +197,10 @@ async def download_pdf(
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="PDF download failed")
     except PDFRecordMissingError as exc:
-        raise HTTPException(status_code=404, detail="Paper not found") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="The paper changed while its PDF was downloading.",
+        ) from exc
     return row_to_paper_response(updated)
 
 
@@ -154,6 +247,14 @@ async def process_pdf(
     dict
         Async mode: ``{"job_id": "...", "status": "queued"}``.
         Sync mode: ``{"paper_id": ..., "chunk_count": ..., "status": ...}``.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        403 when ``force`` is set and the paper is not in the caller's library,
+        on either branch: discarding and rebuilding a paper's derived content
+        requires holding it, not merely being able to see it. 429 when the
+        synchronous concurrency bound is already saturated.
     """
     if not sync:
         import uuid  # noqa: PLC0415
@@ -162,6 +263,8 @@ async def process_pdf(
 
         async with db_pool.acquire() as conn:
             await assert_paper_ownership(conn, paper_id, user_id)
+            if force:
+                await _require_library_membership(conn, paper_id, user_id)
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.process"].defer_async(
             job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id, force=force
@@ -169,45 +272,40 @@ async def process_pdf(
         return {"job_id": jarvis_job_id, "status": "queued"}
 
     # Synchronous path (sync=True) — original blocking behaviour
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
-        await assert_paper_ownership(conn, paper_id, user_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Paper not found")
-    if not row["pdf_downloaded"] or not row["pdf_local_path"]:
-        raise HTTPException(status_code=400, detail="PDF not yet downloaded")
+    async with _bounded_sync_run():
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+            await assert_paper_ownership(conn, paper_id, user_id)
+            if force:
+                await _require_library_membership(conn, paper_id, user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        if not row["pdf_downloaded"] or not row["pdf_local_path"]:
+            raise HTTPException(status_code=400, detail="PDF not yet downloaded")
 
-    pdf_path = Path(row["pdf_local_path"])
+        pdf_path = Path(row["pdf_local_path"])
 
-    # Path traversal protection (S-12)
-    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
-        raise HTTPException(status_code=400, detail="Invalid PDF path")
+        # Path traversal protection (S-12)
+        if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
+            raise HTTPException(status_code=400, detail="Invalid PDF path")
 
-    if not pdf_path.exists():
-        raise HTTPException(status_code=404, detail="PDF file missing from disk")
+        if not pdf_path.exists():
+            raise HTTPException(status_code=404, detail="PDF file missing from disk")
 
-    try:
-        return await run_process_pdf(
-            paper_id,
-            pdf_path,
-            db_pool,
-            pdf_processor,
-            embedder,
-            force=force,
-        )
-    except RuntimeError as exc:
-        request_id = getattr(request.state, "request_id", None) or str(paper_id)
-        if get_core_settings().dev_mode:
-            detail: dict = {
-                "detail": str(exc),
-                "error_type": type(exc).__name__,
-                "error_detail": str(exc)[:200],
-                "request_id": request_id,
-            }
-        else:
-            logger.exception("PDF process 502", extra={"request_id": request_id, "exc": str(exc)})
-            detail = {"detail": "PDF processing failed", "request_id": request_id}
-        raise HTTPException(status_code=502, detail=detail) from exc
+        try:
+            return await run_process_pdf(
+                paper_id,
+                pdf_path,
+                db_pool,
+                pdf_processor,
+                embedder,
+                force=force,
+                requester_id=user_id,
+            )
+        except PDFRebuildNotPermittedError as exc:
+            raise HTTPException(status_code=403, detail=REBUILD_REQUIRES_LIBRARY_DETAIL) from exc
+        except RuntimeError as exc:
+            raise _process_failure_error(exc, request, paper_id) from exc
 
 
 # ---------------------------------------------------------------------------

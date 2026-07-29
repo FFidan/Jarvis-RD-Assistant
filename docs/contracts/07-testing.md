@@ -314,7 +314,7 @@ If a contract test makes a real HTTP request to `api.openai.com` or starts a rea
 
 ## 4. Invariants
 
-Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-test-shape.py) on every commit touching test files. TS-08 is enforced by review. Each invariant has an ERROR or WARN level; ERROR blocks the commit.
+Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-test-shape.py) when a commit touches Python tests under `services/*/tests/` or `libs/jarvis_common/tests/`. TS-08 is enforced by review. Each invariant has an ERROR or WARN level; ERROR blocks the commit.
 
 | ID | Invariant | Level | Rationale |
 |---|---|---|---|
@@ -324,16 +324,18 @@ Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](https://
 | TS-04 | New contract test files under `services/paper_ingestion/tests/contract/` MUST declare `pytest.mark.real_auth` in their `pytestmark` | ERROR | The autouse `_default_authenticated_user` fixture would otherwise resolve `cookie_b` as user 1 (silent IDOR-test failure) |
 | TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (pre-existing tech debt that the test recomposition program cleaned up) |
 | TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Documents the production symbol the test exercises so a reviewer can confirm the cited line still matches behavior |
-| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version is importable from `jarvis_common.testing` (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config`, defined in [testing_telegram.py:92](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L92)) | WARN | Factory dedup — keep [jarvis_common.testing](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
+| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `_make_config` / `_make_source` / `_make_context` / `_make_conn` / `_make_paper` when the canonical version is importable from `jarvis_common.testing` (canonical replacement for `_make_config`: `jarvis_common.testing.make_bot_config`, defined in [testing_telegram.py:92](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L92)) | WARN | Factory dedup — keep [jarvis_common.testing](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
 | TS-08 | The carve-out registry (§5) MUST NOT be deleted or weakened without a paired contract update | ERROR (enforced by review) | Carve-outs protect CI cost + reliability — deleting one without a replacement plan is a real regression |
 
 ### 4.1 Why TS-01 + TS-02 are ERRORs, not WARNs
 
-These two anti-patterns produced ~2,000 of the current legacy mock-unit tests. Allowing more would defeat the purpose of this contract. Existing instances (legacy mock-units) are grandfathered until their file is next touched (§6.1 rot-on-touch). New instances are blocked.
+These two anti-patterns are common in the legacy mock-unit suite. A categorized repository-wide total was not captured, so this contract does not assign them an aggregate count. Existing instances are grandfathered until their file is next touched (§6.1 rot-on-touch). New instances in the enforced path set are blocked.
 
 ### 4.2 What the check does NOT do
 
 It does NOT detect anti-patterns 2.2 (mock-the-mock) or 2.4 (deep orchestration mock) reliably — those require semantic reasoning. They're enforced by PR review, citing this contract.
+
+The hook's path selector does not include repository-root `tests/` or `scripts/tests/`, so TS-01..TS-07 are not automatically applied there. The TS-02 allowlist also retains a dormant entry for the deleted `services/telegram_bot/tests/test_project_manager.py`; the only active SQL-shape carve-out is the data-export test in §5.5.
 
 ---
 
@@ -343,31 +345,31 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 
 ### 5.1 Network / process boundaries
 
-Test-population counts below are approximate and reflect tests remaining in the suite. Where a faux sidecar supersedes a mocked boundary, the row stays in this registry but the legacy population shrinks over time.
+Counts below are test function definitions in this revision whose source contains one of the boundary identifiers named in the row. Parametrized cases count once per function, and overlapping subsets are called out explicitly. The task-map count additionally requires an injection through `patch.dict` or `monkeypatch.setitem`. Where a deterministic sidecar supersedes a mocked boundary, the row stays in this registry because deterministic failure seams still require it.
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; **superseded by `FauxOllamaServer` for new success-path** | **~30 residual** legacy tests; failure-branch + Langfuse-specific only |
-| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`); legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` migrated on rot-on-touch | **1 residual** (`services/paper_ingestion/tests/test_cross_rag.py:46`); 4 `ScriptedReranker` char-tests in `test_testing_factories.py` |
-| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; **superseded by `FauxQdrantClient` for new success-path** | **~25 residual** legacy tests; failure-branch + dimension-mismatch only |
-| `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) — unchanged |
-| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; **superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests**; legacy `MagicMock` path retained for error-path and Langfuse-specific tests | **~15 residual** legacy tests; error-path + observability boundary only |
-| Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests (the PTB carve-out remains; HTTP-side contracts may be layered on top without removing the PTB-side mock) |
+| Ollama HTTP (`embed_texts`, `FauxOllamaServer`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; `FauxOllamaServer` for success paths | **37** functions, including **6** that name `FauxOllamaServer` |
+| Cross-encoder reranker (`rerank_chunks`, `ScriptedReranker`) | `ScriptedReranker` (`jarvis_common.testing`) for deterministic ranking; `AsyncMock` remains valid for boundary failures | **35** functions, including **4** `ScriptedReranker` characterization tests |
+| Qdrant client (`app.state.qdrant`, `query_points`, `RecommendQuery`, `FauxQdrantClient`) | `MagicMock` on `app.state.qdrant`; `FauxQdrantClient` for success paths | **38** functions, including **20** that name `FauxQdrantClient` |
+| `respx.mock` / `httpx_mock` for source HTTP | respx routes | **175** functions across Zotero, S2, OpenAlex, arXiv, PubMed, and adjacent HTTP adapters |
+| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; `FauxLiteLLMServer` for non-streaming and Instructor-patched contracts | **103** functions; overlapping subsets include **39** sidecar functions and **36** that name `call_llm_structured` |
+| Telegram Bot API (`Update`) | `make_telegram_update` + `AsyncMock` | **50** functions (the PTB carve-out remains; HTTP-side contracts may be layered on top without removing the PTB-side mock) |
 
 ### 5.2 Library boundaries
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| `app.state.fsrs_manager` (FSRS scheduling) | `MagicMock` with `schedule_review` returning `(state, log, due)` | ~30 tests |
-| `app.state.card_generator` (LLM card generation) | `AsyncMock` | ~30 tests |
-| `app.state.anki_exporter` (file generation) | `MagicMock` returning bytes blob | ~10 tests |
-| `patch.dict(task_registry._TASK_MAP, ...)` (procrastinate) | `patch.dict` context manager | ~60 tests |
+| `app.state.fsrs_manager` (FSRS scheduling) | `MagicMock` with `schedule_review` returning `(state, log, due)` | **25** functions |
+| `app.state.card_generator` (LLM card generation) | `AsyncMock` | **13** functions |
+| `app.state.anki_exporter` (file generation) | `MagicMock` returning bytes blob | **3** functions |
+| `task_registry._TASK_MAP` injection (Procrastinate) | `patch.dict` context manager or `monkeypatch.setitem` | **93** functions: **85** use `patch.dict`, **8** use `monkeypatch.setitem` |
 
 ### 5.3 Database invariants
 
 | Boundary | Mock mechanism | Notes |
 |---|---|---|
-| `services/paper_ingestion/tests/test_baseline_invariants.py` (post-squash invariants) | none — runs against live Postgres | All 16 tests are LIVE; **NEVER delete** |
+| `services/paper_ingestion/tests/test_baseline_invariants.py` (post-squash invariants) | none — runs against live Postgres | All **36** tests are `live_pg`; **NEVER delete** |
 
 ### 5.5 SQL-shape regression guards (TS-02 carve-out)
 
@@ -376,9 +378,10 @@ These files use SQL-substring assertions (`assert ... in sql`) to guard the stru
 | File | Assertion | Rationale |
 |---|---|---|
 | `services/paper_ingestion/tests/test_data_export.py` | `"discovered_by" not in papers_sql`, `"EXISTS" in papers_sql.upper()` | GDPR data-export query (CFG-GDPR-1): must use `EXISTS`/`user_library` join and must NOT scope by `discovered_by`. SQL-substring assertion is the only way to verify the constant `_EXPORT_QUERIES` tuple without a live DB. |
-| `services/telegram_bot/tests/test_project_manager.py` | `"user_id IS NOT DISTINCT FROM" in sql`, `"IS NOT DISTINCT FROM" not in sql`, `"INSERT INTO daily_log" in sql`, `"VALUES" in sql` | SEC-PRJMGR-1 ownership-scoping regression guards on `ProjectManager.{list_tasks,create_task,complete_milestone,link_paper_to_task,complete_task}`: the WHERE / INSERT shape IS the security contract (wrong predicate = cross-user leak). Behavioral coverage requires a live PG seed of two-user cross-tenancy data; SQL-shape guards are the cheapest proof the correct predicate is present and that the legacy `user_id=None` path remains predicate-free. |
 
-These entries are SACROSANCT per §4 TS-08: do not remove without a paired contract test that proves the same behavioral invariant against a live DB.
+The former Telegram `ProjectManager` carve-out was removed with that class when the bot moved project and task operations behind the Learning Engine REST API. Its replacement task and milestone ownership guarantees are exercised through the live-PostgreSQL contracts in `test_tasks_contract.py` and `test_milestones_contract.py`; they no longer need a Telegram SQL-shape exception.
+
+The remaining entry is SACROSANCT per §4 TS-08: do not remove it without a paired contract test that proves the same behavioral invariant against a live DB.
 
 ### 5.4 Why these are carve-outs
 
@@ -395,9 +398,9 @@ The carve-out registry is closed under "delete only with a contract update." Add
 
 ## 6. Cleanup decisions deferred (rot-on-touch policy)
 
-### 6.1 Existing mock-unit population (~2,000 tests)
+### 6.1 Existing mock-unit population
 
-The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypass + SQL-substring). They were written before this contract existed.
+The codebase has legacy tests that violate §2, but the previous `~2,000` estimate was not backed by a reproducible categorized census. The current machine-searchable handler-bypass census is **36 occurrences across 9 test files**. No aggregate count is claimed for SQL-substring, mock-the-mock, or deep-orchestration cases.
 
 **Policy:** rot-on-touch.
 
@@ -426,13 +429,13 @@ Replacing mocked Ollama / Qdrant / LiteLLM with deterministic sidecars unlocks c
 - `add_stream_tokens(model, tokens)` — enqueue SSE streaming token list
 - `reset()` — clear all queues between tests
 
-**Fixture `pi_contract_app_with_litellm_sidecar`** (defined in `jarvis_common.testing`, exported via PI conftest) yields `(app, faux_server)` with `LITELLM_BASE_URL` pointed at the sidecar and `app.state.openai_client` replaced with an Instructor-patched client. Unblocks conversion of ~250 legacy `patch("call_llm_structured")` mock-units.
+**Fixture `pi_contract_app_with_litellm_sidecar`** (defined in `jarvis_common.testing`, exported via PI conftest) yields `(app, faux_server)` with `LITELLM_BASE_URL` pointed at the sidecar and `app.state.openai_client` replaced with an Instructor-patched client. It is referenced directly by **16** test functions.
 
-A parallel `le_contract_app_with_litellm_sidecar` for the Learning Engine is a future extension — add via `_make_le_contract_app_with_litellm_sidecar()` following the same pattern in `jarvis_common.testing` once the LE app fixture stabilises.
+**Fixture `le_contract_app_with_litellm_sidecar`** provides the equivalent Learning Engine boundary and is referenced directly by **6** test functions. These current populations replace the former speculative claim that roughly 250 mock units were ready for conversion.
 
 ### 6.3 What this contract does NOT defer
 
-It does NOT defer the rules. No new PR may add a §2 anti-pattern test. The pre-commit check enforces TS-01 + TS-02 + TS-03 + TS-04 + TS-05 on every commit touching test files.
+It does NOT defer the rules. No new PR may add a §2 anti-pattern test. The pre-commit check enforces TS-01 + TS-02 + TS-03 + TS-04 + TS-05 for changed tests under `services/*/tests/` and `libs/jarvis_common/tests/`; repository-root `tests/` and `scripts/tests/` remain review-enforced as described in §4.2.
 
 ---
 
@@ -455,20 +458,26 @@ facade); the `file:line` points at the submodule that defines it.
 
 | Citation | File:line | Behavior |
 |---|---|---|
-| `make_pool_and_conn` canonical factory | [testing_db.py:101](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L101) | `(conn, *, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
-| `SharedConnPool` | [testing_db.py:703](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L703) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
-| `contract_conn` fixture | [testing_db.py:642](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L642) | Per-test asyncpg connection wrapped in a transaction that rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
-| `contract_two_users` fixture | [testing_db.py:918](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L918) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
-| `make_bot_config` | [testing_telegram.py:92](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L92) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
-| `configure_contract_api_key` | [testing_contract_apps.py:43](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L43) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
-| `make_contract_client` | [testing_contract_apps.py:60](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L60) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
-| `patch_app_state` | [testing_contract_apps.py:80](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L80) | Restores exact `app.state` attributes after contract app wiring. |
-| `patch_dependency_overrides` | [testing_contract_apps.py:105](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L105) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
-| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:146](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/conftest.py#L146) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
-| `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:138-143](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L138-L143) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
-| Default `addopts` excludes | [pyproject.toml:160](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L160) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
-| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/test_baseline_invariants.py) | Post-squash schema invariants. Marked `live_pg`. |
-| `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
+| `make_pool_and_conn` canonical factory | [testing_db.py:153](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L153) | `(*, conn=None, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
+| `SharedConnPool` | [testing_db.py:774](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L774) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
+| `contract_conn` fixture factory | [testing_db.py:705](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L705) | Creates the per-test asyncpg connection fixture whose transaction rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
+| `contract_two_users` fixture factory | [testing_db.py:983](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L983) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) inside the contract_conn transaction. |
+| `make_bot_config` | [testing_telegram.py:114](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L114) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
+| `configure_contract_api_key` | [testing_contract_apps.py:59](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L59) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
+| `make_contract_client` | [testing_contract_apps.py:76](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L76) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
+| `patch_app_state` | [testing_contract_apps.py:96](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L96) | Restores exact `app.state` attributes after contract app wiring. |
+| `patch_dependency_overrides` | [testing_contract_apps.py:121](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L121) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
+| PI LiteLLM sidecar fixture | [testing_contract_apps.py:197](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L197) | Builds a Paper Ingestion contract fixture backed by `FauxLiteLLMServer`. |
+| LE LiteLLM sidecar fixture | [testing_contract_apps.py:246](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L246) | Builds the equivalent Learning Engine contract fixture and restores service state afterward. |
+| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:241](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/conftest.py#L241) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
+| `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:222](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L222) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
+| Default `addopts` excludes | [pyproject.toml:247](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L247) | Default selection excludes `live_pg`, `live_qdrant`, `integration`, and `slow`, and ignores root integration tests. |
+| `test_baseline_invariants.py` (DO NOT DELETE) | [test_baseline_invariants.py:40](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/test_baseline_invariants.py#L40) | Post-squash schema invariants. The module is marked `live_pg`. |
+| Learning Engine task contracts | [test_tasks_contract.py:21](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/tests/contract/test_tasks_contract.py#L21) | Real-auth, live-PostgreSQL contracts for task ownership, persistence, paper links, and completion counters. |
+| Learning Engine milestone contracts | [test_milestones_contract.py:19](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/tests/contract/test_milestones_contract.py#L19) | Real-auth, live-PostgreSQL contracts for milestone ownership and persistence. |
+| Telegram task service client | [services_client.py:207](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/telegram_bot/telegram_bot/services_client.py#L207) | Marks tasks complete through the Learning Engine REST API instead of direct Telegram-side SQL. |
+| `scripts/check-test-shape.py` path scope | [scripts/check-test-shape.py:111](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-test-shape.py#L111) | Limits TS-01..TS-07 scanning to service tests and `libs/jarvis_common/tests`. |
+| Pre-commit test-shape selector | [.pre-commit-config.yaml:36](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/.pre-commit-config.yaml#L36) | Invokes the checker for the same test paths and for this contract document. |
 
 ---
 

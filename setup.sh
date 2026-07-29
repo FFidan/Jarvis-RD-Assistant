@@ -39,8 +39,15 @@
 #                             package.
 #                             In --non-interactive mode this flag is required for
 #                             host package installation.
+#   --compose-project-name <name>
+#                             Persist a side-by-side or automation identity for
+#                             this install. Lowercase letters, digits, "_", and
+#                             "-" are accepted; the first character is alphanumeric.
+#   --image-tag <tag>         Select published application images by stable,
+#                             prerelease, or lowercase 40-hex commit tag. The
+#                             application version still comes from the checkout.
 #   --skip-disk-check         Skip the pre-install free-disk check on the Docker
-#                             data root (a first install needs ~35-55 GB there,
+#                             data root (default installs need ~27-54 GB there,
 #                             depending on GPU variant and model choice).
 #   --build-local             Build the application images from source instead of
 #                             pulling the prebuilt ones published to GHCR. Much
@@ -386,9 +393,26 @@ prompt_ai_backend() {
     || NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama)
 }
 
+# setup_disk_variant — print the image path this invocation will install.
+setup_disk_variant() {
+  local accel=cpu
+  if [ -n "${NI_GPU_OVERRIDE:-}" ]; then
+    [ "$NI_GPU_OVERRIDE" = cuda ] && accel=cuda
+  elif docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    accel=cuda
+  fi
+  if [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
+    printf '%s-build' "$accel"
+  else
+    printf '%s-pull' "$accel"
+  fi
+}
+
 run_doctor() {
   local fail=0
   local _gpu_detected=0
+  local _docker_ready=0
+  local _python_ready=0
   local _compose_ver=""
   printf '%s--- setup.sh --check (read-only) -------------------------------%s\n' "$C_BOLD" "$C_RESET"
   if command -v docker >/dev/null 2>&1; then ok "docker present"; else err "docker missing — $(os_install_hint docker)"; fail=1; fi
@@ -405,13 +429,25 @@ run_doctor() {
     fail=1
   fi
   # `docker info` (not a socket stat) so DOCKER_HOST/rootless setups are honoured.
-  if docker info >/dev/null 2>&1; then ok "docker daemon reachable"; else err "docker daemon unreachable — start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), or check DOCKER_HOST/permissions"; fail=1; fi
+  if docker info >/dev/null 2>&1; then
+    ok "docker daemon reachable"
+    _docker_ready=1
+  else
+    err "docker daemon unreachable — start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), or check DOCKER_HOST/permissions"
+    fail=1
+  fi
   if command -v openssl >/dev/null 2>&1; then ok "openssl present"; else err "openssl missing"; fail=1; fi
   if command -v curl >/dev/null 2>&1; then ok "curl present"; else err "curl missing — required for downloads and health checks"; fail=1; fi
   # python3 is a hard requirement (model selection + disk sizing shell out to it
   # under `set -euo pipefail`), so its absence FAILS --check rather than the
   # advisory-only probe below it.
-  if command -v python3 >/dev/null 2>&1; then ok "python3 present"; else err "python3 missing — required for model selection and disk sizing (install python3, then re-run ./setup.sh --check)"; fail=1; fi
+  if command -v python3 >/dev/null 2>&1; then
+    ok "python3 present"
+    _python_ready=1
+  else
+    err "python3 missing — required for model selection and disk sizing (install python3, then re-run ./setup.sh --check)"
+    fail=1
+  fi
   if [ "$NI_PROFILE" = "local-https" ]; then
     if mkcert_toolchain_available; then
       ok "mkcert and browser trust tooling present"
@@ -462,12 +498,30 @@ print(recommend_models(${_vram_mb}).summary)
   else
     info "Docker nvidia runtime not found — services run CPU-only (slower, OK)"
   fi
-  # Advisory only: low free disk in the install dir invites a mid-pull failure
-  # (model + image layers run to several GB). 20 GB is a soft floor.
-  local _free_kb=""
-  _free_kb="$(df -Pk . 2>/dev/null | awk 'NR==2{print $4}' || true)"
-  if [ -n "$_free_kb" ] && [ "$_free_kb" -eq "$_free_kb" ] 2>/dev/null && [ "$_free_kb" -lt 20971520 ]; then
-    warn "Low free disk: $((_free_kb / 1048576)) GB free here — recommend ≥20 GB for model + image layers."
+  # Report the same model, image path, and Docker data-root requirement that a
+  # real install would enforce. The check remains advisory and read-only.
+  if [ "$_docker_ready" -eq 1 ] && [ "$_python_ready" -eq 1 ]; then
+    local _disk_variant _disk_model _req_gb _req_exact=1 _disk_out _disk_rc=0
+    local _free_gb _data_root
+    _disk_variant="$(setup_disk_variant)"
+    _disk_model="${NI_SMART_MODEL:-$(_default_model_for_tier "$tier" ollama)}"
+    _req_gb="$(compute_required_disk_gb "$_disk_model" "$_disk_variant")" \
+      || _req_exact=0
+    if [ "$_req_exact" -eq 1 ]; then
+      info "Install disk requirement: ~${_req_gb} GB (${_disk_variant}, model ${_disk_model})."
+    else
+      warn "Install disk requirement: ~${_req_gb} GB conservative estimate (${_disk_variant}, model ${_disk_model}); the model catalog could not be read."
+    fi
+    _disk_out="$(preflight_disk_lib "$_req_gb")" || _disk_rc=$?
+    _free_gb="${_disk_out%% *}"
+    _data_root="${_disk_out#* }"
+    case "$_disk_rc" in
+      0) ok "Docker data root: ${_free_gb} GB free on ${_data_root}." ;;
+      1) warn "Docker data root: ${_free_gb} GB free on ${_data_root}; this install needs ~${_req_gb} GB." ;;
+      2) warn "Docker data root ${_data_root} is not measurable from the host; verify the Docker Desktop VM disk has ~${_req_gb} GB free." ;;
+    esac
+  else
+    warn "Install disk requirement unavailable until Docker and Python 3 are ready."
   fi
   if [ -f .env ]; then info ".env exists (re-run setup.sh to regenerate)"; else info ".env not yet generated"; fi
 
@@ -508,29 +562,9 @@ preflight_disk() {
     info "Skipping disk preflight (--skip-disk-check)."
     return 0
   fi
-  # Budget the path this run will actually take: the default install PULLS the
-  # published images (cpu-pull/cuda-pull), only --build-local builds them
-  # (cpu-build/cuda-build). Charging the build ceiling for a pull would falsely
-  # block hosts that have ample room for the smaller pull.
-  # Budget the accelerator the install will ACTUALLY pull, not just whatever the
-  # Docker runtime reports: an explicit --gpu wins over the runtime probe. Only
-  # --gpu cuda (or, absent an override, an auto-detected NVIDIA runtime) pulls the
-  # larger CUDA image; rocm, vulkan and cpu keep the CPU torch image (mirrors the
-  # _gpu_choice resolution below). Without this, `--gpu cuda` on a host whose
-  # nvidia runtime is not yet configured budgets cpu-pull but pulls cuda -> ENOSPC,
-  # and `--gpu cpu` on an nvidia-runtime host over-budgets and can falsely block.
-  local _accel="cpu"
-  if [ -n "${NI_GPU_OVERRIDE:-}" ]; then
-    [ "$NI_GPU_OVERRIDE" = "cuda" ] && _accel="cuda"
-  elif docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
-    _accel="cuda"
-  fi
+  # Use the same selected pull/build and accelerator path reported by --check.
   local _variant
-  if [ "${BUILD_LOCAL:-0}" -eq 1 ]; then
-    _variant="${_accel}-build"
-  else
-    _variant="${_accel}-pull"
-  fi
+  _variant="$(setup_disk_variant)"
   local _req_gb _req_exact=1
   _req_gb="$(compute_required_disk_gb "${NI_SMART_MODEL:-qwen3:8b}" "$_variant")" || _req_exact=0
   local _out _rc=0
@@ -594,36 +628,27 @@ require_langfuse_secrets() {
   fi
 }
 
-# wait_healthy <svc> [budget_seconds]
-# Poll Docker healthcheck for <svc> until healthy or timeout.
-# Returns 0 on healthy, 1 on unhealthy or timeout.
-wait_healthy() {
-  local svc="$1"
-  local budget="${2:-60}"
-  local interval=3
-  local elapsed=0
-  local cid status
+# _setup_service_container_id SERVICE — print the first Compose container ID.
+_setup_service_container_id() {
+  docker compose ps -q "$1" 2>/dev/null | head -n 1 || true
+}
 
-  while [ "$elapsed" -lt "$budget" ]; do
-    cid="$(docker compose ps -q "$svc" 2>/dev/null | head -n 1 || true)"
-    if [ -z "$cid" ]; then
-      sleep "$interval"
-      elapsed=$((elapsed + interval))
-      continue
-    fi
-    # `.State.Health.Status` is empty when the image has no HEALTHCHECK.
-    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
-    case "$status" in
-      "")        info "$svc: no healthcheck defined — skipping wait."; return 0 ;;
-      healthy)   ok "$svc: healthy"; return 0 ;;
-      starting)  ;;  # still coming up
-      unhealthy) err "$svc: unhealthy"; return 1 ;;
-      *)         ;;  # unknown states — keep polling
+# _wait_for_setup_service SERVICE BUDGET [INTERVAL] — wait and report status.
+_wait_for_setup_service() {
+  local svc="$1" budget="$2" interval="${3:-3}"
+  if wait_for_compose_service_health \
+      "$svc" "$budget" _setup_service_container_id "$interval"; then
+    case "$COMPOSE_HEALTH_RESULT" in
+      healthy) ok "$svc: healthy" ;;
+      running-unverified)
+        warn "$svc: running (no healthcheck) — readiness not verified" ;;
     esac
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
-  err "$svc: did not become healthy within ${budget}s."
+    return 0
+  fi
+  case "$COMPOSE_HEALTH_RESULT" in
+    terminal) err "$svc: not running (state: ${COMPOSE_HEALTH_LAST_STATE})" ;;
+    *) err "$svc: did not become healthy within ${budget}s (last state: ${COMPOSE_HEALTH_LAST_STATE})." ;;
+  esac
   return 1
 }
 
@@ -1037,6 +1062,9 @@ NI_GPU_VENDOR="none"  # nvidia | amd | intel | none; probed before the prompts
 NI_GPU_OVERRIDE=""    # --gpu cuda|rocm|vulkan|cpu — overrides overlay detection
 NI_ADDRESS=""         # --address <ipv4> — overrides LAN IP auto-detection
 NI_PUBLIC_ORIGIN=""   # --public-origin <https-url> — a named private HTTPS origin
+NI_COMPOSE_PROJECT_NAME="" # --compose-project-name — explicit install identity
+NI_IMAGE_TAG=""       # --image-tag — explicit published application image identity
+NI_IMAGE_TAG_EXPLICIT=0
 INSTALL_PREREQS=0
 SKIP_DISK_CHECK=0
 BUILD_LOCAL=0         # --build-local: build app images from source instead of pulling GHCR
@@ -1065,7 +1093,7 @@ while [ $# -gt 0 ]; do
   # `set -u` and abort with a raw "unbound variable". Guard them centrally so the
   # message is actionable. (The --flag=value forms carry their value inline.)
   case "$1" in
-    --domain|--admin-email|--profile|--smtp-host|--smtp-port|--smtp-user|--smtp-from|--smtp-pass-file|--mode|--backend|--smart-model|--gpu|--address|--public-origin|--tunnel-hostname|--tunnel-token-file)
+    --domain|--admin-email|--profile|--smtp-host|--smtp-port|--smtp-user|--smtp-from|--smtp-pass-file|--mode|--backend|--smart-model|--gpu|--address|--public-origin|--tunnel-hostname|--tunnel-token-file|--compose-project-name|--image-tag)
       if [ "$#" -lt 2 ] || [[ "$2" == -* ]]; then
         die "$1 requires a value." "Run: $0 --help"
       fi ;;
@@ -1154,6 +1182,14 @@ while [ $# -gt 0 ]; do
       INSTALL_PREREQS=1; shift ;;
     --skip-disk-check)
       SKIP_DISK_CHECK=1; shift ;;
+    --compose-project-name)
+      NI_COMPOSE_PROJECT_NAME="$2"; shift 2 ;;
+    --compose-project-name=*)
+      NI_COMPOSE_PROJECT_NAME="${1#*=}"; shift ;;
+    --image-tag)
+      NI_IMAGE_TAG="$2"; NI_IMAGE_TAG_EXPLICIT=1; shift 2 ;;
+    --image-tag=*)
+      NI_IMAGE_TAG="${1#*=}"; NI_IMAGE_TAG_EXPLICIT=1; shift ;;
     --build-local)
       BUILD_LOCAL=1; shift ;;
     --tunnel-ack)
@@ -1230,6 +1266,68 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if ! CHECKOUT_APP_VERSION="$(resolve_checkout_app_version)"; then
+  die "Could not determine a valid application version from this checkout." \
+      "Use an exact vMAJOR.MINOR.PATCH[-PRERELEASE] tag, or fix [project].version in pyproject.toml."
+fi
+
+SELECTED_IMAGE_TAG="$CHECKOUT_APP_VERSION"
+_installed_app_version="$(existing_env_value JARVIS_VERSION || true)"
+_installed_image_tag="$(existing_env_value JARVIS_IMAGE_TAG || true)"
+if [ -n "$_installed_app_version" ] && ! app_version_is_valid "$_installed_app_version"; then
+  die "The existing JARVIS_VERSION in .env is invalid." \
+      "Set it to a version such as ${CHECKOUT_APP_VERSION}, then re-run setup."
+fi
+if [ -n "$_installed_image_tag" ] && ! image_tag_is_valid "$_installed_image_tag"; then
+  die "The existing JARVIS_IMAGE_TAG in .env is invalid." \
+      "Set it to a stable, prerelease, or lowercase 40-hex tag, then re-run setup."
+fi
+_installed_image_tag="${_installed_image_tag:-$_installed_app_version}"
+if [ "$NI_IMAGE_TAG_EXPLICIT" -eq 1 ]; then
+  image_tag_is_valid "$NI_IMAGE_TAG" \
+    || die "Invalid --image-tag '${NI_IMAGE_TAG}'." \
+      "Use X.Y.Z, X.Y.Z-prerelease, or a lowercase 40-hex commit."
+  if [ -n "$_installed_image_tag" ] && [ "$NI_IMAGE_TAG" != "$_installed_image_tag" ]; then
+    die "--image-tag '${NI_IMAGE_TAG}' does not match this existing install." \
+      "Use jarvis-research update to change an installed application's image identity."
+  fi
+  SELECTED_IMAGE_TAG="$NI_IMAGE_TAG"
+elif [ -n "$_installed_image_tag" ]; then
+  SELECTED_IMAGE_TAG="$_installed_image_tag"
+fi
+
+# _validate_compose_project_request REPO REQUEST — return 2 for an invalid
+# request, 3 for an existing-install mismatch, or 4 for invalid persisted state.
+_validate_compose_project_request() {
+  local repo="$1" requested="$2" current
+  [ -n "$requested" ] || return 0
+  compose_project_name_is_valid "$requested" || return 2
+  [ -f "$repo/.env" ] || return 0
+  current="$(_lifecycle_compose_project_name "$repo")" || return 4
+  [ "$requested" = "$current" ] || return 3
+}
+
+# _persist_compose_project_request NAME — add or normalize an explicit identity.
+_persist_compose_project_request() {
+  local requested="$1" current=""
+  [ -n "$requested" ] || return 0
+  current="$(existing_env_value COMPOSE_PROJECT_NAME || true)"
+  [ "$current" = "$requested" ] || upsert_env_var COMPOSE_PROJECT_NAME "$requested"
+}
+
+_compose_project_rc=0
+_validate_compose_project_request "$SCRIPT_DIR" "$NI_COMPOSE_PROJECT_NAME" \
+  || _compose_project_rc=$?
+case "$_compose_project_rc" in
+  0) ;;
+  2) die "Invalid --compose-project-name '${NI_COMPOSE_PROJECT_NAME}'." \
+       "Use lowercase letters, digits, underscores, and hyphens; start with a letter or digit." ;;
+  3) die "--compose-project-name '${NI_COMPOSE_PROJECT_NAME}' does not match this existing install." \
+       "Use the project identity already defined by .env or this checkout's directory name." ;;
+  *) die "The existing Compose project identity is invalid." \
+       "Repair COMPOSE_PROJECT_NAME in .env before re-running setup." ;;
+esac
 
 # Validate --profile value.
 case "$NI_PROFILE" in
@@ -1594,7 +1692,8 @@ esac
 claim_setup_volume_lease() {
   [ "${_SETUP_LIFECYCLE_CLAIMED:-0}" -ne 1 ] || return 0
   local rc=0
-  claim_lifecycle_operation "$SCRIPT_DIR" setup || rc=$?
+  claim_lifecycle_operation "$SCRIPT_DIR" setup "$NI_COMPOSE_PROJECT_NAME" \
+    || rc=$?
   case "$rc" in
     0) _SETUP_LIFECYCLE_CLAIMED=1 ;;
     3|4) die "Another lifecycle operation is active or needs recovery." \
@@ -1824,7 +1923,22 @@ if [ -f .env ]; then
     # An .env written before 1.1 carries no TORCH_VARIANT, so the image tag
     # would resolve to the CPU flavour even on a CUDA host whose GPU overlay is
     # still recorded in COMPOSE_FILE. Backfill before anything resolves an image.
+    _keep_app_version="$(existing_env_value JARVIS_VERSION || true)"
     _SETUP_MUTATION_STARTED=1
+    if [ -z "$_keep_app_version" ]; then
+      _keep_app_version="$CHECKOUT_APP_VERSION"
+      upsert_env_var JARVIS_VERSION "$_keep_app_version"
+      info "Recorded this install's application version in .env: ${_keep_app_version}"
+    fi
+    _keep_image_tag="$(existing_env_value JARVIS_IMAGE_TAG || true)"
+    if [ -z "$_keep_image_tag" ]; then
+      _keep_image_tag="$SELECTED_IMAGE_TAG"
+      upsert_env_var JARVIS_IMAGE_TAG "$_keep_image_tag"
+      info "Recorded this install's application image tag in .env: ${_keep_image_tag}"
+    fi
+    export JARVIS_VERSION="$_keep_app_version"
+    export JARVIS_IMAGE_TAG="$_keep_image_tag"
+    _persist_compose_project_request "$NI_COMPOSE_PROJECT_NAME"
     if _keep_variant="$(backfill_torch_variant_from_env)" && [ -n "$_keep_variant" ]; then
       info "Recorded this host's torch image variant in .env: ${_keep_variant}"
     fi
@@ -1885,7 +1999,7 @@ if [ -f .env ]; then
         langfuse)                        _keep_budget=240 ;;
         *)                               _keep_budget=60 ;;
       esac
-      if ! wait_healthy "$svc" "$_keep_budget"; then
+      if ! _wait_for_setup_service "$svc" "$_keep_budget"; then
         KEEP_FAILED+=("$svc")
         docker compose logs --tail 50 "$svc" >&2 || true
       fi
@@ -2721,6 +2835,11 @@ _SETUP_MUTATION_STARTED=1
 mv "$TMP_ENV" .env
 chmod 600 .env
 
+_persist_compose_project_request "$NI_COMPOSE_PROJECT_NAME"
+upsert_env_var JARVIS_VERSION "$CHECKOUT_APP_VERSION"
+export JARVIS_VERSION="$CHECKOUT_APP_VERSION"
+upsert_env_var JARVIS_IMAGE_TAG "$SELECTED_IMAGE_TAG"
+export JARVIS_IMAGE_TAG="$SELECTED_IMAGE_TAG"
 upsert_env_var JARVIS_NET_SUBNET "$JARVIS_NET_SUBNET_VALUE"
 upsert_env_var JARVIS_NET_GATEWAY_IP "$JARVIS_NET_GATEWAY_IP_VALUE"
 upsert_env_var JARVIS_CADDY_IP "$JARVIS_CADDY_IP_VALUE"
@@ -2969,7 +3088,7 @@ info "Starting Ollama: docker compose ${COMPOSE_FILE_ARGS[*]:-} up -d ollama"
 compose_up_or_recover "docker compose up failed." \
     "Inspect logs: docker compose logs --tail=200" \
     ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama
-wait_healthy ollama 180 \
+_wait_for_setup_service ollama 180 \
   || warn "Ollama is still starting — model inventory unknown; proceeding to the model pull."
 
 _FIRST_RUN_PULL=0
@@ -3043,7 +3162,7 @@ for svc in "${MANDATORY_SVCS[@]}"; do
     langfuse)                        _budget=240 ;;  # heavy Node app + its own postgres
     *)                               _budget=60  ;;
   esac
-  if ! wait_healthy "$svc" "$_budget"; then
+  if ! _wait_for_setup_service "$svc" "$_budget"; then
     SETUP_FAILED+=("$svc")
     warn "Dumping last 50 log lines for $svc:"
     docker compose logs --tail 50 "$svc" >&2 || true

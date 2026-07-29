@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import type { FeedPaper, MissingFoundationalPaper } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -34,16 +34,13 @@ const { fetchFeed, fetchMissingFoundationalPapers } = await import('@/lib/api');
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <TriageSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <TriageSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -107,7 +104,7 @@ describe('TriageSection', () => {
     vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 });
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
 
-    const { container } = renderWithProviders();
+    const { container } = renderSubject();
 
     // Wait long enough for queries to resolve
     await new Promise((r) => setTimeout(r, 50));
@@ -121,7 +118,7 @@ describe('TriageSection', () => {
     vi.mocked(fetchFeed).mockRejectedValue(new Error('500'));
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByRole('status')).toHaveTextContent(/unable to load triage/i);
   });
@@ -130,7 +127,7 @@ describe('TriageSection', () => {
     vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 });
     vi.mocked(fetchMissingFoundationalPapers).mockRejectedValue(new Error('500'));
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByRole('status')).toHaveTextContent(/unable to load triage/i);
   });
@@ -139,7 +136,7 @@ describe('TriageSection', () => {
     vi.mocked(fetchFeed).mockRejectedValue(new Error('500'));
     vi.mocked(fetchMissingFoundationalPapers).mockRejectedValue(new Error('500'));
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByRole('status')).toHaveTextContent(/unable to load triage/i);
   });
@@ -153,7 +150,7 @@ describe('TriageSection', () => {
       makeFoundationalPaper(),
     ]);
 
-    renderWithProviders();
+    renderSubject();
 
     // Both titles should appear in the card
     expect(await screen.findByText('Action Item Paper')).toBeInTheDocument();

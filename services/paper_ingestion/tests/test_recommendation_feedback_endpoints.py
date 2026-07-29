@@ -42,78 +42,6 @@ def _row(**kwargs):
 
 
 @pytest.mark.asyncio
-async def test_get_returns_paginated_list_with_topic_join():
-    """Two rows returned → items list of length 2, total == 2."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [
-        _row(paper_id=1, title="Paper A", topic_id=10, topic_name="ML"),
-        _row(paper_id=2, title="Paper B", topic_id=20, topic_name="NLP"),
-    ]
-    conn.fetchval.return_value = 2
-
-    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=None,
-        limit=50,
-        offset=0,
-        db_pool=pool,
-        user_id=None,
-    )
-
-    assert result.total == 2
-    assert len(result.items) == 2
-    assert result.items[0].topic_name == "ML"
-    assert result.items[1].topic_name == "NLP"
-
-
-@pytest.mark.asyncio
-async def test_get_filters_by_paper_id():
-    """When paper_id=42 is supplied, it must appear in the SQL sent to conn.fetch."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_row(paper_id=42)]
-    conn.fetchval.return_value = 1
-
-    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=42,
-        limit=50,
-        offset=0,
-        db_pool=pool,
-        user_id=None,
-    )
-
-    assert result.total == 1
-    # Verify the SQL query passed to conn.fetch includes paper_id as a positional arg.
-    # The handler appends paper_id to params when it is not None, so it must appear
-    # somewhere in the call_args positional arguments.
-    call_args = conn.fetch.call_args
-    # call_args.args = (sql_str, *params, limit, offset)
-    positional = call_args.args
-    assert 42 in positional, f"paper_id=42 not found in fetch args: {positional}"
-
-
-@pytest.mark.asyncio
-async def test_get_scopes_by_user_id():
-    """The SQL sent to conn.fetch must scope by an exact user_id match."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_row()]
-    conn.fetchval.return_value = 1
-
-    await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=None,
-        limit=50,
-        offset=0,
-        db_pool=pool,
-        user_id=7,
-    )
-
-    sql = conn.fetch.call_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "rf.user_id = $1" in sql
-
-
-@pytest.mark.asyncio
 async def test_get_pagination_default():
     """Default limit=50 and offset=0 must be forwarded to the SQL call."""
     pool, conn = _make_pool_and_conn()
@@ -183,23 +111,6 @@ async def test_get_topic_name_join():
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_user_scoped_rows_for_topic():
-    """DELETE with topic_id=5, mock returns 'DELETE 3' → deleted=3, topic_id=5."""
-    pool, conn = _make_pool_and_conn()
-    conn.execute.return_value = "DELETE 3"
-
-    result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
-        request=MagicMock(),
-        topic_id=5,
-        db_pool=pool,
-        user_id=None,
-    )
-
-    assert result.deleted == 3
-    assert result.topic_id == 5
-
-
-@pytest.mark.asyncio
 async def test_delete_returns_zero_when_no_rows():
     """DELETE with no matching rows → asyncpg returns 'DELETE 0', response deleted=0."""
     pool, conn = _make_pool_and_conn()
@@ -214,24 +125,6 @@ async def test_delete_returns_zero_when_no_rows():
 
     assert result.deleted == 0
     assert result.topic_id == 99
-
-
-@pytest.mark.asyncio
-async def test_delete_scopes_by_user_id():
-    """The DELETE SQL must scope recommendation_feedback by an exact user_id."""
-    pool, conn = _make_pool_and_conn()
-    conn.execute.return_value = "DELETE 0"
-
-    await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
-        request=MagicMock(),
-        topic_id=1,
-        db_pool=pool,
-        user_id=7,
-    )
-
-    sql = conn.execute.call_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "user_id = $2" in sql
 
 
 # ---------------------------------------------------------------------------

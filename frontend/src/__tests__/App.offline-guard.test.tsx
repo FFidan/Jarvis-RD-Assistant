@@ -14,9 +14,9 @@
  *   (e) isSessionValid() is pure — does NOT mutate store state when session is expired.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ------ Mock API calls so the onboarding gate is a no-op ------
 vi.mock('@/lib/api', async () => {
@@ -64,25 +64,24 @@ vi.mock('@/lib/query-persister', () => ({
 
 // ------ Mock query-client to avoid the self-attaching persister ------
 vi.mock('@/lib/query-client', async () => {
-  const { QueryClient } = await import('@tanstack/react-query');
-  return { queryClient: new QueryClient() };
+  return { queryClient: createTestQueryClient({}) };
 });
 
 const { App } = await import('@/App');
 const { useAuthStore } = await import('@/stores/auth-store');
+const { resetAuthState } = await import('@/__tests__/auth-test-utils');
 
 // Client-side session ceiling is 30 days (mirrors the backend SESSION_TTL) —
 // an authTime older than that is genuinely expired.
 const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
 
 function renderApp(initialEntries: string[] = ['/']) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter initialEntries={initialEntries}>
+      <App />
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 
@@ -173,12 +172,7 @@ describe('App offline route-guard (P1c)', () => {
   // (c) OFFLINE + never authenticated → still gated (no new access)
   // -------------------------------------------------------------------------
   it('(c) OFFLINE + never authenticated: still shows login page (no new access)', async () => {
-    useAuthStore.setState({
-      isAuthenticated: false,
-      authTime: null,
-      apiKey: null,
-      user: null,
-    });
+    resetAuthState();
     setOnline(false);
 
     renderApp(['/']);

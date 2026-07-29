@@ -13,13 +13,27 @@ __all__ = [
     "FakeTxnCM",
     "make_telegram_update",
     "make_bot_config",
+    "PTBContextOptions",
+    "make_ptb_context",
     "make_http_response",
 ]
 
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+
+
+@dataclass(frozen=True, slots=True)
+class PTBContextOptions:
+    """Optional fields for a PTB callback-context test double."""
+
+    http_client: Any | None = None
+    args: list[str] | None = None
+    user_data: dict[str, Any] | None = None
+    with_bot: bool = False
+
 
 # ---------------------------------------------------------------------------
 # FakeAcquireCM / FakeTxnCM  (telegram_bot pairing tests, D8-04)
@@ -120,6 +134,29 @@ def make_bot_config(bot_config_cls: Any, **overrides: Any) -> Any:
     )
     defaults.update(overrides)
     return bot_config_cls(**defaults)
+
+
+def make_ptb_context(
+    pool: Any,
+    config: Any,
+    *,
+    options: PTBContextOptions | None = None,
+) -> MagicMock:
+    """Build a PTB callback context wired to the standard application state."""
+    options = options or PTBContextOptions()
+    context = MagicMock()
+    context.args = list(options.args or [])
+    context.application = MagicMock()
+    context.application.bot_data = {
+        "config": config,
+        "db_pool": pool,
+        "http_client": (options.http_client if options.http_client is not None else AsyncMock()),
+    }
+    context.user_data = options.user_data if options.user_data is not None else {}
+    if options.with_bot:
+        context.bot = MagicMock()
+        context.bot.send_message = AsyncMock()
+    return context
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from paper_ingestion.models import PaperSourceConfig, TopicRef
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, resolve_safe_pdf_path
 from paper_ingestion.services.pdf_workflow import (
     download_and_store_pdf,
+    reclaim_discarded_paper_content,
     run_process_pdf,
     upsert_verified_public_paper,
 )
@@ -33,7 +34,7 @@ _DISCOVERY_LOOKBACK_DAYS = 7
 _AUTO_PROCESS_PAGE_SIZE = 20
 _AUTO_PROCESS_CONCURRENCY = 3
 # Non-persistent placeholder id for the topic-less default query pair
-# ((None, "machine learning") from _resolve_topic_pairs). TopicRef.id stays
+# ((None, "machine learning", []) from _resolve_topic_pairs). TopicRef.id stays
 # strict `int` (shared with pulse scoring's dampened-topic matching), so this
 # fills the field for a query that has no real topic. Safe because Postgres
 # serial ids start at 1 (never collides with a real row) and this value is
@@ -42,13 +43,21 @@ _AUTO_PROCESS_CONCURRENCY = 3
 _DEFAULT_QUERY_TOPIC_ID = 0
 
 
-def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
-    """Coerce raw ``topics`` rows into ``(topic_id, name)`` pairs.
+# Projection feeding _resolve_topic_pairs. query_terms is what a source
+# actually searches for, so dropping it from the projection silently degrades
+# every discovery query to the bare topic name.
+_DISCOVERY_TOPICS_SQL = "SELECT id, name, query_terms FROM topics"
+
+
+def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str, list[str]]]:
+    """Coerce raw ``topics`` rows into ``(topic_id, name, query_terms)`` triples.
 
     Keep the topic id alongside the name so a search-result paper can be
     fanned out to users subscribed to that topic via user_library.
-    Defensive: tolerate fixtures / partial-schema rows that omit ``id``.
-    Nameless rows are dropped; a non-int/str id coerces to ``None``; an
+    Defensive: tolerate fixtures / partial-schema rows that omit ``id`` or
+    ``query_terms``. Nameless rows are dropped; a non-int/str id coerces to
+    ``None``; a missing, ``None``, or non-sequence ``query_terms`` coerces
+    to an empty list (a present sequence has its elements stringified); an
     empty result falls back to a single sensible default.
     """
 
@@ -58,16 +67,18 @@ def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str]]:
         except (KeyError, IndexError, TypeError):
             return None
 
-    topic_pairs: list[tuple[int | None, str]] = []
+    topic_pairs: list[tuple[int | None, str, list[str]]] = []
     for row in topics_rows:
         name = _row_get(row, "name")
         if not name:
             continue
         tid: Any = _row_get(row, "id")
         topic_id = int(tid) if isinstance(tid, int | str) else None
-        topic_pairs.append((topic_id, str(name)))
+        raw_terms = _row_get(row, "query_terms")
+        query_terms = [str(t) for t in raw_terms] if isinstance(raw_terms, list | tuple) else []
+        topic_pairs.append((topic_id, str(name), query_terms))
     if not topic_pairs:
-        topic_pairs = [(None, "machine learning")]  # sensible default
+        topic_pairs = [(None, "machine learning", [])]  # sensible default
     return topic_pairs
 
 
@@ -96,7 +107,7 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                 config=src_row["config"] or {},
             )
             source = source_class(config, app.state.http_client, db_pool=db_pool)
-            for topic_id, topic_name in topic_pairs:
+            for topic_id, topic_name, topic_query_terms in topic_pairs:
                 try:
                     results = await source.fetch_new_since(
                         since,
@@ -104,18 +115,24 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                             TopicRef(
                                 id=topic_id if topic_id is not None else _DEFAULT_QUERY_TOPIC_ID,
                                 name=topic_name,
+                                query_terms=topic_query_terms,
                             )
                         ],
                         limit=20,
                     )
                     if results:
                         # batch save via internal function (bypasses HTTP rate limiter)
+                        discarded_content_ids: list[int] = []
                         async with db_pool.acquire() as conn:
                             for paper in results:
                                 try:
                                     # system-initiated bulk discovery
                                     paper.discovery_origin = "recommender"
-                                    row = await upsert_verified_public_paper(conn, paper)
+                                    row = await upsert_verified_public_paper(
+                                        conn,
+                                        paper,
+                                        discarded_content_ids=discarded_content_ids,
+                                    )
                                     if row and row["is_insert"]:
                                         papers_added += 1
                                     # Fan out to every user subscribed to
@@ -145,6 +162,10 @@ async def _discover_and_save(app, db_pool, sources_rows, topic_pairs) -> int:
                                         e,
                                         exc_info=True,
                                     )
+                        # Outside the acquired connection: reclaiming storage is
+                        # network and disk work that must not hold a pool slot.
+                        for paper_id in discarded_content_ids:
+                            await reclaim_discarded_paper_content(paper_id, db_pool)
                 except Exception as e:
                     logger.warning(
                         "auto_pipeline: source %s topic '%s' failed: %s",
@@ -215,6 +236,9 @@ _UNSUMMARIZED_HOLDERS_SQL = """
       AND NOT EXISTS (
           SELECT 1 FROM paper_summaries s
           WHERE s.paper_id = ul.paper_id AND s.user_id = ul.user_id
+            AND s.content_generation = (
+                SELECT content_generation FROM papers WHERE id = ul.paper_id
+            )
       )
 """
 
@@ -343,7 +367,7 @@ async def run_auto_pipeline(app) -> None:
                 "SELECT * FROM paper_sources WHERE enabled = TRUE"
                 " ORDER BY display_order ASC, id ASC"
             )
-            topics_rows = await conn.fetch("SELECT id, name FROM topics")
+            topics_rows = await conn.fetch(_DISCOVERY_TOPICS_SQL)
 
         topic_pairs = _resolve_topic_pairs(topics_rows)
 

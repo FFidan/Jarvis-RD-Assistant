@@ -967,6 +967,142 @@ async def test_get_my_export_returns_zip_for_authenticated_user(
     assert len(resp.content) > 0, "Export ZIP body must be non-empty"
 
 
+async def test_get_my_export_retains_current_and_stale_generation_rows(
+    _me_export_client,
+    contract_two_users,
+    contract_conn,
+):
+    """The raw export preserves owner rows across source generations."""
+    import io
+    import json
+    import zipfile
+
+    user_id = contract_two_users.user_a_id
+    paper_ids: list[int] = []
+    for index in (1, 2):
+        paper_id = await contract_conn.fetchval(
+            """INSERT INTO papers (
+                   external_id, source_type, title, authors, url, discovered_by,
+                   content_generation
+               )
+               VALUES ($1, 'arxiv', $2, ARRAY['Author'], $3, $4, 2)
+               RETURNING id""",
+            f"raw-generation-{index}",
+            f"Raw generation paper {index}",
+            f"https://example.test/raw-generation-{index}",
+            user_id,
+        )
+        paper_ids.append(int(paper_id))
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            user_id,
+            paper_id,
+        )
+
+    await contract_conn.executemany(
+        """INSERT INTO paper_notes (
+               paper_id, user_id, user_note, content_generation
+           )
+           VALUES ($1, $2, $3, $4)""",
+        [
+            (paper_ids[0], user_id, "RAW-NOTE-STALE", 1),
+            (paper_ids[1], user_id, "RAW-NOTE-CURRENT", 2),
+        ],
+    )
+    await contract_conn.executemany(
+        """INSERT INTO paper_highlights (
+               paper_id, user_id, page, rect, note, content_generation
+           )
+           VALUES ($1, $2, 1, $3, $4, $5)""",
+        [
+            (paper_ids[0], user_id, [0.1, 0.1, 0.2, 0.2], "RAW-HIGHLIGHT-STALE", 1),
+            (paper_ids[1], user_id, [0.2, 0.2, 0.3, 0.3], "RAW-HIGHLIGHT-CURRENT", 2),
+        ],
+    )
+    await contract_conn.executemany(
+        """INSERT INTO cards (
+               paper_id, user_id, card_type, front, back, content_generation
+           )
+           VALUES ($1, $2, 'concept', $3, 'back', $4)""",
+        [
+            (paper_ids[0], user_id, "RAW-CARD-STALE", 1),
+            (paper_ids[1], user_id, "RAW-CARD-CURRENT", 2),
+        ],
+    )
+    await contract_conn.executemany(
+        """INSERT INTO paper_contradictions (
+               paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+               contradiction_type, explanation, confidence, user_id,
+               paper_a_content_generation, paper_b_content_generation
+           )
+           VALUES ($1, $2, $3, 'finding B', $4, $5, 'direct',
+                   'generation export', 0.8, $6, $7, $7)""",
+        [
+            (
+                paper_ids[0],
+                paper_ids[1],
+                "RAW-CONTRADICTION-STALE",
+                "stale quote A",
+                "stale quote B",
+                user_id,
+                1,
+            ),
+            (
+                paper_ids[0],
+                paper_ids[1],
+                "RAW-CONTRADICTION-CURRENT",
+                "current quote A",
+                "current quote B",
+                user_id,
+                2,
+            ),
+        ],
+    )
+
+    response = await _me_export_client.get("/api/me/export")
+    assert response.status_code == 200, response.text[:300]
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        rows = {
+            table: [
+                json.loads(line)
+                for line in archive.read(f"{table}.jsonl").decode().splitlines()
+                if line
+            ]
+            for table in (
+                "paper_notes",
+                "paper_highlights",
+                "cards",
+                "paper_contradictions",
+            )
+        }
+
+    assert {row["user_note"] for row in rows["paper_notes"] if row["paper_id"] in paper_ids} == {
+        "RAW-NOTE-STALE",
+        "RAW-NOTE-CURRENT",
+    }
+    assert {row["note"] for row in rows["paper_highlights"] if row["paper_id"] in paper_ids} == {
+        "RAW-HIGHLIGHT-STALE",
+        "RAW-HIGHLIGHT-CURRENT",
+    }
+    assert {row["front"] for row in rows["cards"] if row["paper_id"] in paper_ids} == {
+        "RAW-CARD-STALE",
+        "RAW-CARD-CURRENT",
+    }
+    contradictions = [
+        row
+        for row in rows["paper_contradictions"]
+        if row["paper_a_id"] == paper_ids[0] and row["paper_b_id"] == paper_ids[1]
+    ]
+    assert {row["finding_a"] for row in contradictions} == {
+        "RAW-CONTRADICTION-STALE",
+        "RAW-CONTRADICTION-CURRENT",
+    }
+    assert {row["paper_a_content_generation"] for row in contradictions} == {1, 2}
+    for table in ("paper_notes", "paper_highlights", "cards", "paper_contradictions"):
+        assert all(row["user_id"] == user_id for row in rows[table])
+
+
 async def test_get_my_export_requires_auth(contract_conn):
     """A130: GET /api/me/export without a session cookie returns 401.
 

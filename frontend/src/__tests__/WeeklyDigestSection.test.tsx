@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { WeeklyDigestSection } from '@/components/my-day/sections/WeeklyDigestSection';
 import * as api from '@/lib/api';
 import type { WeeklyDigestResponse } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -52,13 +52,10 @@ const digestWithMixedVerification: WeeklyDigestResponse = {
 };
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <WeeklyDigestSection />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <WeeklyDigestSection />,
+    { queryClient },
   );
 }
 

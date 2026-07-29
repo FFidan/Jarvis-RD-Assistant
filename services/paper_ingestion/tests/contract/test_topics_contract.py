@@ -308,3 +308,47 @@ async def test_a169_delete_topic_admin_only_and_row_removed(
     assert resp_404.status_code == 404, (
         f"Expected 404 for missing topic, got {resp_404.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Discovery projection of the topics table (auto_fetch._DISCOVERY_TOPICS_SQL)
+#
+# Discovery searches a topic's query_terms, not its name, so the terms only
+# reach a source when the shipped projection selects that column. A mocked
+# connection returns whatever the fixture lists regardless of the query text,
+# and _resolve_topic_pairs defensively tolerates an absent column, so a
+# narrowed projection is invisible to every mocked test -- it is only
+# observable against real Postgres.
+#
+# Verified: services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py:49
+#           (_DISCOVERY_TOPICS_SQL) and :52 (_resolve_topic_pairs) — imported
+#           here, never re-typed.
+# ---------------------------------------------------------------------------
+
+
+async def test_discovery_projection_carries_configured_query_terms(contract_conn):
+    """A topic's stored query_terms survive the projection discovery runs.
+
+    Narrowing the projection to id and name leaves _resolve_topic_pairs no
+    column to read; it coerces the missing value to an empty list, silently
+    degrading every discovery query to the bare topic name.
+    """
+    from paper_ingestion.pipelines.auto_fetch import (
+        _DISCOVERY_TOPICS_SQL,
+        _resolve_topic_pairs,
+    )
+
+    query_terms = ["graph neural network", "message passing"]
+    topic_id = await contract_conn.fetchval(
+        "INSERT INTO topics (name, query_terms) VALUES ($1, $2::text[]) RETURNING id",
+        "Projection Test Topic",
+        query_terms,
+    )
+
+    rows = await contract_conn.fetch(_DISCOVERY_TOPICS_SQL)
+    resolved = {pair[0]: pair for pair in _resolve_topic_pairs(rows)}
+
+    assert topic_id in resolved, f"Seeded topic {topic_id} is missing from the projection"
+    assert resolved[topic_id] == (topic_id, "Projection Test Topic", query_terms), (
+        f"The projection must carry the configured query terms; got {resolved[topic_id]}"
+    )

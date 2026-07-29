@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any, cast
 import asyncpg
 import httpx
 from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_ownership
-from jarvis_common.jobs import JobError, ProgressContext
+from jarvis_common.jobs import JobError, ProgressContext, batch_terminal_status
+from jarvis_common.library import is_in_library
 
 from paper_ingestion._state import get_services
 from paper_ingestion.job_errors import classify_bulk_error
@@ -94,15 +95,32 @@ async def _paper_process_job(
     Payload keys:
         paper_id (int): DB paper ID — PDF must already be downloaded.
         force (bool): re-process even if chunks already exist.
+
+    A ``force`` run discards the paper's existing derived content, so it
+    requires the paper to be in the caller's library. Read visibility is not
+    enough: ``assert_paper_ownership`` also admits any public paper. The check
+    here turns a doomed job into an immediate refusal; ``run_process_pdf`` holds
+    the same rule for every ``force`` rebuild, whichever path reaches it.
     """
-    from paper_ingestion.services.pdf_workflow import run_process_pdf
+    from paper_ingestion.services.pdf_workflow import (
+        PDFRebuildNotPermittedError,
+        run_process_pdf,
+    )
 
     paper_id: int = payload["paper_id"]
     user_id: int | None = payload.get("user_id")
+    force: bool = bool(payload.get("force", False))
     async with pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-
-    force: bool = bool(payload.get("force", False))
+        # A fast-fail for a requester this payload names, before the row read and
+        # the service lookups below. An unnamed one is not admitted by skipping
+        # it: ``run_process_pdf`` requires a holding requester for a ``force``
+        # rebuild and refuses ``None`` outright.
+        if force and user_id is not None:
+            if not await is_in_library(conn, user_id=user_id, paper_id=paper_id):
+                raise JobError(
+                    f"Paper {paper_id} must be in your library before its content can be rebuilt"
+                )
 
     # Load paper row to get pdf_local_path
     async with pool.acquire() as conn:
@@ -130,21 +148,54 @@ async def _paper_process_job(
     if embedder is None:
         raise RuntimeError("embedder not initialized")
 
-    result = await run_process_pdf(
-        paper_id,
-        pdf_path,
-        pool,
-        pdf_processor,
-        embedder,
-        force=force,
-        ctx=_SubCtx(ctx, 0.1, 1.0),
-    )
+    try:
+        result = await run_process_pdf(
+            paper_id,
+            pdf_path,
+            pool,
+            pdf_processor,
+            embedder,
+            force=force,
+            ctx=_SubCtx(ctx, 0.1, 1.0),
+            requester_id=user_id,
+        )
+    except PDFRebuildNotPermittedError as exc:
+        raise JobError(str(exc)) from exc
     return cast(dict[str, Any], result)
 
 
 # ---------------------------------------------------------------------------
 # paper.analyze handler (composite: download → process → summarize)
 # ---------------------------------------------------------------------------
+
+
+async def _analyze_download_stage(
+    pool: asyncpg.Pool,
+    pdf_processor: PDFProcessor,
+    row: Any,
+    ctx: ProgressContext,
+    *,
+    is_local: bool,
+) -> Any:
+    """Download the paper's PDF when one is still missing; return the current row.
+
+    Local papers and already-downloaded ones report the skip and keep their row.
+    """
+    from paper_ingestion.services.pdf_workflow import (
+        PDFRecordMissingError,
+        download_and_store_pdf,
+    )
+
+    if is_local or row["pdf_downloaded"]:
+        await ctx.update_progress(0.0, "Download skipped" if is_local else "Already downloaded")
+        return row
+
+    await ctx.update_progress(0.0, "Downloading PDF")
+    paper_id = row["id"]
+    try:
+        return await download_and_store_pdf(pool, pdf_processor, row["pdf_url"], paper_id)
+    except PDFRecordMissingError as exc:
+        raise JobError(f"Paper {paper_id} changed while its PDF was downloading") from exc
 
 
 async def _paper_analyze_job(
@@ -157,13 +208,14 @@ async def _paper_analyze_job(
 
     Payload keys:
         paper_id (int): DB paper ID.
+        force (bool): rebuild derived content instead of resuming it. Reported
+            as a job failure unless the paper is in the caller's library.
 
     B6 fix: local papers (source_type='local' or pdf_local_path IS NOT NULL)
     skip the download step.
     """
     from paper_ingestion.services.pdf_workflow import (
-        PDFRecordMissingError,
-        download_and_store_pdf,
+        PDFRebuildNotPermittedError,
         run_process_pdf,
     )
     from paper_ingestion.services.summarization import generate_paper_summary
@@ -202,19 +254,7 @@ async def _paper_analyze_job(
         raise RuntimeError("verifier not initialized")
 
     # ---- Step 1: Download (skip for local) ----
-    if not is_local and not row["pdf_downloaded"]:
-        await ctx.update_progress(0.0, "Downloading PDF")
-        try:
-            row = await download_and_store_pdf(
-                pool,
-                pdf_processor,
-                row["pdf_url"],
-                paper_id,
-            )
-        except PDFRecordMissingError as exc:
-            raise JobError(f"Paper {paper_id} deleted during download") from exc
-    else:
-        await ctx.update_progress(0.0, "Download skipped" if is_local else "Already downloaded")
+    row = await _analyze_download_stage(pool, pdf_processor, row, ctx, is_local=is_local)
 
     # ---- Step 2: Process PDF ----
     await ctx.update_progress(0.2, "Processing PDF")
@@ -224,15 +264,19 @@ async def _paper_analyze_job(
         raise JobError(f"Invalid or missing PDF for paper {paper_id}")
 
     sub_ctx = _SubCtx(ctx, 0.2, 0.7)
-    result = await run_process_pdf(
-        paper_id,
-        pdf_path,
-        pool,
-        pdf_processor,
-        embedder,
-        force=force,
-        ctx=sub_ctx,
-    )
+    try:
+        result = await run_process_pdf(
+            paper_id,
+            pdf_path,
+            pool,
+            pdf_processor,
+            embedder,
+            force=force,
+            ctx=sub_ctx,
+            requester_id=user_id,
+        )
+    except PDFRebuildNotPermittedError as exc:
+        raise JobError(str(exc)) from exc
 
     # ---- Step 3: Summarize ----
     await ctx.update_progress(0.7, "Summarizing")
@@ -315,6 +359,8 @@ async def _papers_batch_process_job(
 
     Payload keys:
         paper_ids (list[int]): DB paper IDs whose PDFs should be processed.
+        force (bool): rebuild derived content instead of resuming it. Recorded
+            as a per-paper error for any paper outside the caller's library.
     """
     from paper_ingestion.services.pdf_workflow import run_process_pdf
 
@@ -340,8 +386,11 @@ async def _papers_batch_process_job(
 
     await ctx.update_progress(0.05, f"Starting: {total} papers")
 
+    cancelled = False
+
     for i, paper_id in enumerate(paper_ids):
         if await ctx.is_cancelled():
+            cancelled = True
             break
         inner_start = (i / max(total, 1)) * 0.9 + 0.05
         inner_end = ((i + 1) / max(total, 1)) * 0.9 + 0.05
@@ -368,14 +417,33 @@ async def _papers_batch_process_job(
                 embedder,
                 force=force,
                 ctx=sub_ctx,
+                requester_id=user_id,
             )
             processed += 1
         except Exception as exc:  # noqa: BLE001
             logger.exception("Batch process failed for paper %s", paper_id)
             errors.append(f"Paper {paper_id}: {classify_bulk_error(exc)}")
 
-    await ctx.update_progress(1.0, f"Done: {processed} processed, {skipped} skipped")
-    return {"processed": processed, "skipped": skipped, "errors": errors}
+    failed = len(errors)
+    remaining = max(total - processed - skipped - failed, 0)
+    status = batch_terminal_status(
+        cancelled=cancelled,
+        incomplete=bool(skipped or failed or remaining),
+    )
+    headline = "Done" if status == "ok" else status.title()
+    await ctx.update_progress(
+        1.0,
+        f"{headline}: {processed} processed, {skipped} skipped, {failed} failed",
+    )
+    return {
+        "processed": processed,
+        "skipped": skipped,
+        "errors": errors,
+        "failed": failed,
+        "total": total,
+        "remaining": remaining,
+        "status": status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +474,7 @@ _PROCESS_LIBRARY_SELECTION = """
     JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
     LEFT JOIN paper_summaries s
       ON s.paper_id = p.id AND s.user_id IS NOT DISTINCT FROM $1
+     AND s.content_generation = p.content_generation
     WHERE p.id > $4
     ORDER BY p.id
     LIMIT $3
@@ -464,12 +533,10 @@ class _LibraryProgress:
     def result(self, total: int, *, cancelled: bool) -> dict[str, Any]:
         """Build the public job result with an honest terminal status."""
         remaining = max(total - self.examined, 0)
-        if cancelled:
-            status = "cancelled"
-        elif self.errors or self.blocked or remaining:
-            status = "partial"
-        else:
-            status = "ok"
+        status = batch_terminal_status(
+            cancelled=cancelled,
+            incomplete=bool(self.errors or self.blocked or remaining),
+        )
         return {
             "status": status,
             "total": total,
@@ -545,7 +612,7 @@ async def _library_download_stage(row: Any, run: _LibraryRun) -> Any:
             paper_id,
         )
     except PDFRecordMissingError as exc:
-        raise JobError(f"Paper {paper_id} deleted during download") from exc
+        raise JobError(f"Paper {paper_id} changed while its PDF was downloading") from exc
     return updated["pdf_local_path"]
 
 
@@ -687,13 +754,14 @@ async def _finish_library_run(
     cancelled: bool,
 ) -> dict[str, Any]:
     """Publish terminal progress and build the caller-visible result."""
-    headline = "Cancelled" if cancelled else "Done"
+    result = progress.result(total, cancelled=cancelled)
+    headline = "Done" if result["status"] == "ok" else result["status"].title()
     await ctx.update_progress(
         1.0,
         f"{headline}: {progress.examined}/{total} examined, "
         f"{progress.processed} processed, {progress.summarized} summarized",
     )
-    return progress.result(total, cancelled=cancelled)
+    return result
 
 
 async def _papers_process_library_job(
@@ -804,10 +872,12 @@ async def _papers_batch_summarize_job(
     summarized = 0
     failed = 0
     errors: list[str] = []
+    cancelled = False
 
     await ctx.update_progress(0.0, f"Starting: {total} papers")
     for i, paper_id in enumerate(paper_ids):
         if await ctx.is_cancelled():
+            cancelled = True
             break
         frac = (i / max(total, 1)) * 0.95
         await ctx.update_progress(frac, f"Summarizing paper {paper_id} ({i + 1}/{total})")
@@ -821,8 +891,18 @@ async def _papers_batch_summarize_job(
             errors.append(f"Paper {paper_id}: {classify_bulk_error(exc)}")
             logger.exception("Batch summarize failed for paper %s", paper_id)
 
-    await ctx.update_progress(1.0, f"Done: {summarized} ok, {failed} failed")
-    return {"summarized": summarized, "failed": failed, "errors": errors}
+    remaining = max(total - summarized - failed, 0)
+    status = batch_terminal_status(cancelled=cancelled, incomplete=bool(failed or remaining))
+    headline = "Done" if status == "ok" else status.title()
+    await ctx.update_progress(1.0, f"{headline}: {summarized} ok, {failed} failed")
+    return {
+        "status": status,
+        "total": total,
+        "summarized": summarized,
+        "failed": failed,
+        "remaining": remaining,
+        "errors": errors,
+    }
 
 
 async def _digest_weekly_job(

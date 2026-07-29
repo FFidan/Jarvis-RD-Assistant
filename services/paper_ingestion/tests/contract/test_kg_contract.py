@@ -365,6 +365,128 @@ async def test_a49_get_entity_detail_owner_gets_200(
     assert body["entity"]["name"] == "detail-ent-owner"
 
 
+async def test_stale_entity_link_is_hidden_and_makes_paper_eligible_for_reextraction(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Only current-generation entity evidence satisfies graph reads and backfill."""
+    from unittest.mock import AsyncMock, patch
+
+    from jarvis_common.auth import require_admin
+    from paper_ingestion.deps import get_http_client, get_optional_embedder, get_optional_qdrant
+
+    user_id = contract_two_users.user_a_id
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (
+               external_id, source_type, title, authors, url, discovered_by,
+               content_generation
+           )
+           VALUES ('kg-stale-entity', 'arxiv', 'Stale entity source',
+                   ARRAY['Author'], 'https://example.test/kg-stale', $1, 1)
+           RETURNING id""",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (
+               paper_id, user_id, summary_brief, summary_detailed, content_generation
+           )
+           VALUES ($1, $2, 'current summary', 'current summary', 1)""",
+        paper_id,
+        user_id,
+    )
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('stale-detail-entity', 'stale-detail-entity', 'concept', 1)
+           RETURNING id"""
+    )
+    related_entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('stale-related-entity', 'stale-related-entity', 'concept', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (
+               paper_id, entity_id, user_id, content_generation
+           )
+           VALUES ($1, $2, $3, 0)""",
+        paper_id,
+        entity_id,
+        user_id,
+    )
+    relationship_id = await contract_conn.fetchval(
+        """INSERT INTO entity_relationships (
+               source_entity_id, target_entity_id, relationship_type, paper_id,
+               evidence_quote, content_generation
+           )
+           VALUES ($1, $2, 'related', $3, 'stale relationship evidence', 0)
+           RETURNING id""",
+        entity_id,
+        related_entity_id,
+        paper_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        stale_detail = await client.get(f"/api/knowledge-graph/entity/{entity_id}")
+    assert stale_detail.status_code == 404
+
+    extracted_ids: list[int] = []
+
+    async def record_extraction(_client, _pool, selected_paper_id, **_kwargs):
+        extracted_ids.append(int(selected_paper_id))
+
+    async def allow_admin() -> None:
+        return None
+
+    dependency_overrides = {
+        require_admin: allow_admin,
+        get_http_client: lambda: AsyncMock(),
+        get_optional_embedder: lambda: None,
+        get_optional_qdrant: lambda: None,
+    }
+    _pi_app_with_pool.dependency_overrides.update(dependency_overrides)
+    try:
+        with patch(
+            "paper_ingestion.routers.knowledge_graph.extract_entities_for_paper",
+            new=AsyncMock(side_effect=record_extraction),
+        ):
+            async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+                batch_response = await client.post("/api/extract-entities/batch")
+    finally:
+        for dependency in dependency_overrides:
+            _pi_app_with_pool.dependency_overrides.pop(dependency, None)
+    assert batch_response.status_code == 200, batch_response.text[:300]
+    assert paper_id in extracted_ids
+
+    await contract_conn.execute(
+        """UPDATE paper_entities
+           SET content_generation = 1
+           WHERE paper_id = $1 AND entity_id = $2""",
+        paper_id,
+        entity_id,
+    )
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        current_detail = await client.get(f"/api/knowledge-graph/entity/{entity_id}")
+    assert current_detail.status_code == 200, current_detail.text[:300]
+    assert [paper["id"] for paper in current_detail.json()["papers"]] == [paper_id]
+    assert current_detail.json()["relationships"] == []
+
+    await contract_conn.execute(
+        "UPDATE entity_relationships SET content_generation = 1 WHERE id = $1",
+        relationship_id,
+    )
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        restored_detail = await client.get(f"/api/knowledge-graph/entity/{entity_id}")
+    assert restored_detail.status_code == 200, restored_detail.text[:300]
+    assert [row["id"] for row in restored_detail.json()["relationships"]] == [relationship_id]
+
+
 # ---------------------------------------------------------------------------
 # E1.PI extensions — relationship traversal, duplicate entity similarity-merge path
 #
@@ -1344,11 +1466,7 @@ async def test_extract_entities_paper_count_incremented_once_on_reextraction(
     pi_contract_app_with_litellm_sidecar,
     _configure_api_key,
 ):
-    """Re-running extraction for the same (paper, entity, user) must NOT inflate
-    entities.paper_count: the second POST is a paper_entities ON CONFLICT DO UPDATE
-    (no fresh insert), so paper_count stays at 1. On HEAD the per-run set ignores
-    DB state and re-increments → paper_count becomes 2.
-    """
+    """Re-extraction keeps one absolute mention count for the current generation."""
     from paper_ingestion._state import set_services
     from jarvis_common.testing_contract_apps import patch_app_state
     from jarvis_common.testing_sidecars import FauxQdrantClient
@@ -1380,7 +1498,10 @@ async def test_extract_entities_paper_count_incremented_once_on_reextraction(
         faux_litellm.add_pydantic_response(
             "fast",
             KGExtractionOutput(
-                entities=[KGEntityCandidate(name="Dat4Concept", type="method")],
+                entities=[
+                    KGEntityCandidate(name="Dat4Concept", type="method"),
+                    KGEntityCandidate(name="dat4concept", type="method"),
+                ],
                 relationships=[],
             ),
         )
@@ -1398,19 +1519,18 @@ async def test_extract_entities_paper_count_incremented_once_on_reextraction(
     finally:
         set_services(openai_client=None)
 
-    # The entity created by the first run; its global paper_count must be 1, not 2.
-    paper_count = await contract_conn.fetchval(
-        """SELECT e.paper_count FROM entities e
-           JOIN paper_entities pe ON pe.entity_id = e.id
-           WHERE pe.paper_id = $1 AND pe.user_id = $2
-           LIMIT 1""",
+    link = await contract_conn.fetchrow(
+        """SELECT pe.mention_count, pe.content_generation,
+                  p.content_generation AS paper_generation
+           FROM paper_entities pe
+           JOIN papers p ON p.id = pe.paper_id
+           WHERE pe.paper_id = $1 AND pe.user_id = $2""",
         paper_id,
         contract_two_users.user_a_id,
     )
-    assert paper_count == 1, (
-        f"entities.paper_count={paper_count} — re-extraction double-counted "
-        "(must increment only on a genuinely fresh paper_entities insert)"
-    )
+    assert link is not None
+    assert link["mention_count"] == 2
+    assert link["content_generation"] == link["paper_generation"] == 0
 
 
 # ---------------------------------------------------------------------------

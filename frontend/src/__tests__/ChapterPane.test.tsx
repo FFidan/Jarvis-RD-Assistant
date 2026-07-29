@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ChapterPane } from '@/components/projects/ChapterPane';
 import type { Project } from '@/types';
@@ -23,6 +22,7 @@ import {
   fetchMilestones,
   fetchTasks,
 } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockFetchQuestions = vi.mocked(fetchProjectQuestions);
 const mockFetchActivity = vi.mocked(fetchProjectActivity);
@@ -43,15 +43,12 @@ const MOCK_PROJECT: Project = {
 };
 
 function renderPane(project: Project | null = MOCK_PROJECT) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ChapterPane project={project} onDeleted={vi.fn()} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <ChapterPane project={project} onDeleted={vi.fn()} />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

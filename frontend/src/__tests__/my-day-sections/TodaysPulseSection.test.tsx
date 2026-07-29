@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { TodaysPulseSection } from '@/components/my-day/sections/TodaysPulseSection';
 import type { PulseCardItem, PulseDeck } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -66,16 +66,13 @@ function makeDeck(cards: PulseCardItem[]): PulseDeck {
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithProviders() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <TodaysPulseSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+function renderSubject() {
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <TodaysPulseSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -100,7 +97,7 @@ describe('TodaysPulseSection', () => {
 
     vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck(cards));
 
-    renderWithProviders();
+    renderSubject();
 
     // The section renders tail cards (index 1+) with contiguous display ranks starting at 2
     expect(await screen.findByText('#2')).toBeInTheDocument();
@@ -118,7 +115,7 @@ describe('TodaysPulseSection', () => {
 
     vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck(cards));
 
-    const { container } = renderWithProviders();
+    const { container } = renderSubject();
 
     // Wait for query to resolve
     await new Promise((r) => setTimeout(r, 50));
@@ -130,7 +127,7 @@ describe('TodaysPulseSection', () => {
     // fetchPulseToday never resolves — simulates pending state
     vi.mocked(fetchPulseToday).mockReturnValue(new Promise(() => {}));
 
-    renderWithProviders();
+    renderSubject();
 
     // SectionHeader renders "Today's pulse" — use a partial regex to match
     expect(screen.getByText(/Today's pulse/)).toBeInTheDocument();
@@ -139,7 +136,7 @@ describe('TodaysPulseSection', () => {
   it('shows error message when query fails', async () => {
     vi.mocked(fetchPulseToday).mockRejectedValue(new Error('Network error'));
 
-    renderWithProviders();
+    renderSubject();
 
     expect(await screen.findByText("Could not load today's pulse.")).toBeInTheDocument();
   });

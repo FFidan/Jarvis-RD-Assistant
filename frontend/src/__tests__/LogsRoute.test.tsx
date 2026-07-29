@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { resetAuthState } from '@/__tests__/auth-test-utils';
 import { LogsRoute } from '@/components/auth/LogsRoute';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -47,12 +48,7 @@ describe('LogsRoute', () => {
   });
 
   it('redirects when not authenticated', () => {
-    useAuthStore.setState({
-      isAuthenticated: false,
-      authTime: null,
-      user: null,
-      apiKey: null,
-    });
+    resetAuthState();
     renderGuard();
     expect(screen.queryByText('logs content')).not.toBeInTheDocument();
   });

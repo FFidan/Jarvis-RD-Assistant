@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import sys
 import types
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 
 class _FakeCtx:
@@ -42,10 +44,23 @@ def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
 
 @pytest.mark.asyncio
 async def test_extraction_batch_happy_path(monkeypatch):
-    """Handler returns extracted/failed/skipped/total from batch_extract result."""
+    """Handler returns all batch outcome counts and status from batch_extract.
+
+    The terminal status and remaining count are carried through rather than
+    recomputed here, so a cancelled batch reaches the job result intact.
+    """
     from paper_ingestion.extraction.jobs import _extraction_batch_job
 
-    fake_result = SimpleNamespace(extracted=5, failed=1, skipped=2)
+    # Neither value can be recomputed from the other counts below, so this
+    # fixture distinguishes pass-through from a locally reconstructed result.
+    fake_result = SimpleNamespace(
+        extracted=5,
+        failed=1,
+        skipped=2,
+        remaining=3,
+        total=13,
+        status="cancelled",
+    )
     _install_fake_batch_extract(monkeypatch, fake_result)
     embedder = MagicMock()
     verifier = MagicMock()
@@ -61,7 +76,12 @@ async def test_extraction_batch_happy_path(monkeypatch):
     assert result["extracted"] == 5
     assert result["failed"] == 1
     assert result["skipped"] == 2
-    assert result["total"] == 8
+    assert result["remaining"] == 3
+    assert result["total"] == 13
+    assert result["status"] == "cancelled", (
+        "the job result must carry the terminal status the batch reported, "
+        f"not one it decided for itself; got {result.get('status')!r}"
+    )
 
     # batch_extract should have been called once with pool, http_client, ids, template_id
     # Use sys.modules directly: `import pkg.mod` after the real module was already loaded
@@ -93,3 +113,169 @@ async def test_extraction_batch_missing_template_id(monkeypatch):
         await _extraction_batch_job(MagicMock(), MagicMock(), {"paper_ids": [1, 2]}, _FakeCtx())
 
     fake_mod.batch_extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_cancelled_mid_run_is_not_unqualified_success():
+    """A batch extraction run stopped by cancellation must report a
+    ``cancelled`` status and a total — never look like a clean completion."""
+    from paper_ingestion.extraction.core import batch_extract
+
+    pool, _conn = make_pool_and_conn(fetchval_return=None)
+
+    ctx = _FakeCtx()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(side_effect=[False, True])
+
+    with patch(
+        "paper_ingestion.extraction.core.extract_fields_for_paper",
+        AsyncMock(return_value=None),
+    ):
+        result = await batch_extract(MagicMock(), pool, [1, 2, 3], 3, ctx=ctx)
+
+    assert result.status == "cancelled"
+    assert result.total == 3
+    assert result.extracted == 1
+    assert result.remaining == 2
+    terminal_message = ctx.update_progress.await_args_list[-1].args[1]
+    assert "Done" not in terminal_message
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_skipped_only_is_partial():
+    """An already-current extraction is skipped work, not a complete new run."""
+    from paper_ingestion.extraction.core import batch_extract
+
+    pool, _conn = make_pool_and_conn(fetchval_return=17)
+    ctx = _FakeCtx()
+    ctx.update_progress = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.extract_fields_for_paper",
+        AsyncMock(),
+    ) as extract:
+        result = await batch_extract(MagicMock(), pool, [1], 3, ctx=ctx)
+
+    assert result.extracted == 0
+    assert result.failed == 0
+    assert result.skipped == 1
+    assert result.remaining == 0
+    assert result.total == 1
+    assert result.status == "partial"
+    assert ctx.update_progress.await_args_list[-1].args[1].startswith("Partial:")
+    extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delayed_extraction_writer_returns_the_newer_generation_winner():
+    """A generation-zero result cannot replace an extraction from generation one."""
+    from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import ExtractedFieldOutput
+
+    pool, conn = make_pool_and_conn()
+    conn.fetchval.return_value = 1
+    winner = {
+        "id": 19,
+        "paper_id": 7,
+        "template_id": 3,
+        "extractions": {"method": {"value": "generation one"}},
+        "extraction_model": "newer-model",
+        "content_generation": 1,
+        "created_at": datetime.now(UTC),
+    }
+    conn.fetchrow.side_effect = [
+        {
+            "id": 3,
+            "fields": [
+                {
+                    "name": "method",
+                    "label": "Method",
+                    "description": "method used",
+                    "type": "text",
+                }
+            ],
+        },
+        {"id": 7, "title": "Paper", "content_generation": 0},
+        winner,
+    ]
+    conn.fetch.return_value = [
+        {"id": 1, "chunk_index": 0, "content": "A method.", "page_number": 1}
+    ]
+    llm_result = SimpleNamespace(
+        method=ExtractedFieldOutput(value="delayed generation zero"),
+        model_dump_json=lambda: "{}",
+    )
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            MagicMock(),
+            pool,
+            7,
+            3,
+            openai_client=MagicMock(),
+            user_id=42,
+        )
+
+    assert all(
+        "INSERT INTO paper_extractions" not in call.args[0]
+        for call in conn.fetchrow.await_args_list
+    )
+    assert conn.fetchrow.await_count == 3
+    assert result.content_generation == 1
+    assert result.extractions["method"].value == "generation one"
+
+
+@pytest.mark.asyncio
+async def test_delayed_extraction_writer_without_current_winner_reports_source_change():
+    """A stale completion cannot insert or report a generation-zero extraction."""
+    from paper_ingestion.exceptions import SourceGenerationChangedError
+    from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import ExtractedFieldOutput
+
+    pool, conn = make_pool_and_conn()
+    conn.fetchval.return_value = 1
+    conn.fetchrow.side_effect = [
+        {
+            "id": 3,
+            "fields": [
+                {
+                    "name": "method",
+                    "label": "Method",
+                    "description": "method used",
+                    "type": "text",
+                }
+            ],
+        },
+        {"id": 7, "title": "Paper", "content_generation": 0},
+        None,
+    ]
+    conn.fetch.return_value = [
+        {"id": 1, "chunk_index": 0, "content": "A method.", "page_number": 1}
+    ]
+    llm_result = SimpleNamespace(
+        method=ExtractedFieldOutput(value="delayed generation zero"),
+        model_dump_json=lambda: "{}",
+    )
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=llm_result),
+    ):
+        with pytest.raises(SourceGenerationChangedError, match="Please retry"):
+            await extract_fields_for_paper(
+                MagicMock(),
+                pool,
+                7,
+                3,
+                openai_client=MagicMock(),
+                user_id=42,
+            )
+
+    assert all(
+        "INSERT INTO paper_extractions" not in call.args[0]
+        for call in conn.fetchrow.await_args_list
+    )
+    assert conn.fetchrow.await_count == 3

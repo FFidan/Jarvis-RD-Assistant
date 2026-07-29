@@ -16,11 +16,20 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
-from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
+from jarvis_common.testing import (
+    FakeAcquireCM,
+    FakeTxnCM,
+    PTBContextOptions,
+    make_bot_config,
+    make_conn,
+    make_ptb_context,
+    make_telegram_update,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.pairing_commands import (
     pair_command,
@@ -37,17 +46,12 @@ def _make_config(telegram_chat_id: int | None = 777):
     return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
 
 
-def _make_conn(
+_make_conn = partial(
+    make_conn,
     fetchrow_return=None,
     fetchval_return=None,
     execute_return="EXECUTE 1",
-):
-    conn = MagicMock()
-    conn.fetchrow = AsyncMock(return_value=fetchrow_return)
-    conn.fetchval = AsyncMock(return_value=fetchval_return)
-    conn.execute = AsyncMock(return_value=execute_return)
-    conn.transaction = MagicMock(return_value=FakeTxnCM())
-    return conn
+)
 
 
 def _make_pool(conn, *, fetchrow_return=None, fetchval_return=None, fetch_return=None):
@@ -59,16 +63,16 @@ def _make_pool(conn, *, fetchrow_return=None, fetchval_return=None, fetch_return
     return pool
 
 
-def _make_context(pool, config=None, args=None):
-    context = MagicMock()
-    context.args = args or []
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config or _make_config(),
-        "db_pool": pool,
-        "http_client": AsyncMock(),
-    }
-    return context
+def _make_context(
+    pool: object,
+    config: BotConfig | None = None,
+    args: list[str] | None = None,
+) -> MagicMock:
+    return make_ptb_context(
+        pool,
+        config or _make_config(),
+        options=PTBContextOptions(args=args),
+    )
 
 
 # ---------------------------------------------------------------------------

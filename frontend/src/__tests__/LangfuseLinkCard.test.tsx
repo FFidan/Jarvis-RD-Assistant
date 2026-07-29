@@ -1,6 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LangfuseLinkCard } from '@/components/settings/LangfuseLinkCard';
 import { useAuthStore } from '@/stores/auth-store';
 import type { ConfigEntry } from '@/types';
@@ -11,16 +10,18 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { fetchConfig, setConfig } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const CONFIG_KEY = 'observability.langfuse_dashboard_url';
 
 const asMock = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
 
 const wrap = (ui: React.ReactNode) => {
-  const qc = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-  });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const qc = createTestQueryClient();
+  return renderWithProviders(
+    ui,
+    { queryClient: qc },
+  );
 };
 
 const setUser = (role: 'user' | 'admin') =>

@@ -14,9 +14,13 @@
 #   - tailscale_serve_https      : privilege-aware private HTTPS configuration
 #   - sync_ingress_ips_from_env  : persist exact proxy peers for an install subnet
 #   - upsert_env_var             : idempotent in-place .env key write
+#   - upsert_app_identity        : atomic semantic-version + image-tag write
 #   - print_setup_link           : click-to-finish wizard link when token exists
 #   - headless_setup_route       : safe loopback browser base + SSH tunnel port
 #   - is_wsl_host                : Windows/WSL launcher and kernel detection
+#   - app_version_is_valid       : semantic application-version validation
+#   - image_tag_is_valid         : published image tag validation
+#   - resolve_checkout_app_version : exact tag / project-version resolution
 #   - latest_stable_tag          : highest vX.Y.Z release tag on a git remote
 #   - install_cli_shim           : install the jarvis-research launcher + registry
 #   - verify_release_manifests   : registry-backed images for a release all exist
@@ -156,8 +160,19 @@ claim_host_lifecycle_lock() {
 # Host commands enter that Linux lock domain through short-lived `docker run`
 # helpers, while a detached helper owns the operation flock for the command's
 # lifetime. This remains one lock domain on Linux and Docker Desktop alike.
+# compose_project_name_is_valid NAME — accept Docker Compose's local project
+# identity subset used by JARVIS.
+compose_project_name_is_valid() {
+  [[ "${1:-}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+}
+
 _lifecycle_compose_project_name() {
-  local repo="$1" name
+  local repo="$1" explicit="${2:-}" name
+  if [ -n "$explicit" ]; then
+    compose_project_name_is_valid "$explicit" || return 1
+    printf '%s' "$explicit"
+    return 0
+  fi
   name="$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$repo/.env" 2>/dev/null | head -1)"
   case "$name" in
     \"*\") name="${name#\"}"; name="${name%\"}" ;;
@@ -165,7 +180,7 @@ _lifecycle_compose_project_name() {
   esac
   [ -n "$name" ] \
     || name="$(basename "$repo" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
-  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9_-]*$' || return 1
+  compose_project_name_is_valid "$name" || return 1
   printf '%s' "$name"
 }
 
@@ -247,8 +262,8 @@ print(f"{name}\t{0 if external else 1}\t{0 if external or configured_creation el
 }
 
 prepare_lifecycle_volume() {
-  local repo="$1" project spec volume managed creatable labels
-  project="$(_lifecycle_compose_project_name "$repo")" || return 2
+  local repo="$1" project="${2:-}" spec volume managed creatable labels
+  project="$(_lifecycle_compose_project_name "$repo" "$project")" || return 2
   spec="$(_lifecycle_volume_spec "$repo" "$project")" || return 2
   IFS=$'\t' read -r volume managed creatable <<< "$spec"
   [ "$managed" = 1 ] || return 4
@@ -265,9 +280,9 @@ prepare_lifecycle_volume() {
 }
 
 _lifecycle_docker_run() {
-  local repo="$1" mode="$2"; shift 2
+  local repo="$1" project="$2" mode="$3"; shift 3
   local volume image helper
-  volume="$(prepare_lifecycle_volume "$repo")" || return $?
+  volume="$(prepare_lifecycle_volume "$repo" "$project")" || return $?
   image="$(_lifecycle_postgres_image "$repo")" || return 2
   helper="$repo/scripts/backup-lifecycle.sh"
   [ -f "$helper" ] && [ ! -L "$helper" ] || return 2
@@ -286,9 +301,16 @@ _lifecycle_docker_run() {
   fi
 }
 
+# Run one lifecycle command against an already-validated Compose project.
+_lifecycle_volume_helper_for_project() {
+  local repo="$1" project="$2"; shift 2
+  _lifecycle_docker_run "$repo" "$project" foreground "$@"
+}
+
 lifecycle_volume_helper() {
-  local repo="$1"; shift
-  _lifecycle_docker_run "$repo" foreground "$@"
+  local repo="$1" project; shift
+  project="$(_lifecycle_compose_project_name "$repo")" || return 2
+  _lifecycle_volume_helper_for_project "$repo" "$project" "$@"
 }
 
 lifecycle_update_guard_is_active() {
@@ -300,54 +322,67 @@ lifecycle_update_guard_is_promoted() {
 }
 
 claim_lifecycle_operation() {
-  local repo="$1" kind="$2" current="" id="" action="" helper=""
+  local repo="$1" kind="$2" project="" current="" id="" action="" helper=""
   local attempts="${JARVIS_HOST_GUARD_READY_ATTEMPTS:-100}"
   local interval="${JARVIS_HOST_GUARD_READY_INTERVAL:-0.1}"
   local timeout="${JARVIS_HOST_GUARD_TIMEOUT:-21600}"
   _lifecycle_operation_valid_kind "$kind" || return 2
+  project="$(_lifecycle_compose_project_name "$repo" "${3:-}")" || return 2
   if [ "${JARVIS_SHARED_LIFECYCLE_LOCK_HELD:-0}" = 1 ]; then
     [ "${JARVIS_SHARED_LIFECYCLE_KIND:-}" = "$kind" ] \
-      && lifecycle_volume_helper "$repo" host-status "$kind" \
+      && [ "${JARVIS_SHARED_LIFECYCLE_PROJECT:-}" = "$project" ] \
+      && _lifecycle_volume_helper_for_project "$repo" "$project" host-status "$kind" \
            "${JARVIS_SHARED_LIFECYCLE_ID:-}" >/dev/null 2>&1
     return
   fi
-  current="$(lifecycle_volume_helper "$repo" current-host 2>/dev/null || true)"
+  current="$(_lifecycle_volume_helper_for_project "$repo" "$project" current-host 2>/dev/null || true)"
   case "$current" in
     "${kind}:"*) id="${current#*:}" ;;
     "") id="$(python3 -c 'import secrets; print(secrets.token_hex(16))' 2>/dev/null || true)" ;;
     *) return 4 ;;
   esac
   printf '%s' "$id" | grep -Eq '^[0-9a-f]{32}$' || return 2
-  action="$(lifecycle_volume_helper "$repo" reserve-host "$kind" "$id")" || return 4
+  action="$(_lifecycle_volume_helper_for_project "$repo" "$project" reserve-host "$kind" "$id")" \
+    || return 4
   case "$action" in
     launch)
-      helper="$(_lifecycle_docker_run "$repo" detached hold-host "$kind" "$id" "$timeout")" \
-        || { lifecycle_volume_helper "$repo" cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 || true; return 2; }
+      helper="$(_lifecycle_docker_run "$repo" "$project" detached hold-host "$kind" "$id" "$timeout")" \
+        || {
+          _lifecycle_volume_helper_for_project "$repo" "$project" \
+            cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 || true
+          return 2
+        }
       ;;
     adopt) ;;
     *) return 2 ;;
   esac
-  if ! lifecycle_volume_helper "$repo" wait-host "$kind" "$id" "$attempts" "$interval" >/dev/null 2>&1; then
-    lifecycle_volume_helper "$repo" cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 \
+  if ! _lifecycle_volume_helper_for_project "$repo" "$project" \
+      wait-host "$kind" "$id" "$attempts" "$interval" >/dev/null 2>&1; then
+    _lifecycle_volume_helper_for_project "$repo" "$project" \
+      cancel-host-reservation "$kind" "$id" >/dev/null 2>&1 \
       && return 2
     return 4
   fi
   JARVIS_SHARED_LIFECYCLE_LOCK_HELD=1
   JARVIS_SHARED_LIFECYCLE_KIND="$kind"
   JARVIS_SHARED_LIFECYCLE_ID="$id"
+  JARVIS_SHARED_LIFECYCLE_PROJECT="$project"
   export JARVIS_SHARED_LIFECYCLE_LOCK_HELD JARVIS_SHARED_LIFECYCLE_KIND
-  export JARVIS_SHARED_LIFECYCLE_ID
+  export JARVIS_SHARED_LIFECYCLE_ID JARVIS_SHARED_LIFECYCLE_PROJECT
 }
 
 finish_lifecycle_operation() {
-  local repo="$1" kind="$2" action="${3:-clear}" attempt=0 id
+  local repo="$1" kind="$2" action="${3:-clear}" attempt=0 id project
   [ "${JARVIS_SHARED_LIFECYCLE_LOCK_HELD:-0}" = 1 ] || return 0
   [ "${JARVIS_SHARED_LIFECYCLE_KIND:-}" = "$kind" ] || return 1
   id="${JARVIS_SHARED_LIFECYCLE_ID:-}"
-  lifecycle_volume_helper "$repo" release-host "$kind" "$id" "$action" >/dev/null \
+  project="${JARVIS_SHARED_LIFECYCLE_PROJECT:-}"
+  compose_project_name_is_valid "$project" || return 1
+  _lifecycle_volume_helper_for_project "$repo" "$project" \
+    release-host "$kind" "$id" "$action" >/dev/null \
     || return 1
   while [ "$attempt" -lt 50 ]; do
-    if lifecycle_volume_helper "$repo" host-release-complete \
+    if _lifecycle_volume_helper_for_project "$repo" "$project" host-release-complete \
         "$kind" "$id" "$action" >/dev/null 2>&1; then
       JARVIS_SHARED_LIFECYCLE_LOCK_HELD=0
       export JARVIS_SHARED_LIFECYCLE_LOCK_HELD
@@ -360,7 +395,76 @@ finish_lifecycle_operation() {
 }
 
 clear_retained_lifecycle_operation() {
-  lifecycle_volume_helper "$1" clear-retained-host "$2" "$3" >/dev/null
+  local repo="$1" kind="$2" id="$3"
+  local project="${4:-${JARVIS_SHARED_LIFECYCLE_PROJECT:-}}"
+  project="$(_lifecycle_compose_project_name "$repo" "$project")" || return 2
+  _lifecycle_volume_helper_for_project "$repo" "$project" \
+    clear-retained-host "$kind" "$id" >/dev/null
+}
+
+# wait_for_compose_service_health SERVICE BUDGET LOOKUP_FUNCTION [INTERVAL]
+# Sets COMPOSE_HEALTH_RESULT to healthy, running-unverified, terminal, or
+# timeout, and COMPOSE_HEALTH_LAST_STATE to the last observed container state.
+wait_for_compose_service_health() {
+  local service="${1:-}" budget="${2:-}" lookup="${3:-}" interval="${4:-3}"
+  local elapsed=0 step cid inspection health_state run_state
+  COMPOSE_HEALTH_RESULT=timeout
+  COMPOSE_HEALTH_LAST_STATE=absent
+
+  [ -n "$service" ] || return 2
+  case "$budget" in ''|*[!0-9]*) return 2 ;; esac
+  case "$interval" in ''|*[!0-9]*) return 2 ;; esac
+  case "$lookup" in ''|[0-9]*|*[!A-Za-z0-9_]*) return 2 ;; esac
+  declare -F "$lookup" >/dev/null || return 2
+  if [ "$interval" -eq 0 ]; then step=1; else step="$interval"; fi
+
+  while [ "$elapsed" -lt "$budget" ]; do
+    cid="$("$lookup" "$service" 2>/dev/null || true)"
+    if [ -z "$cid" ]; then
+      COMPOSE_HEALTH_LAST_STATE=absent
+    else
+      inspection="$(docker inspect --format \
+        '{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.State.Status}}' \
+        "$cid" 2>/dev/null || true)"
+      case "$inspection" in
+        *'|'*)
+          health_state="${inspection%%|*}"
+          run_state="${inspection#*|}"
+          ;;
+        *)
+          health_state=""
+          run_state=""
+          ;;
+      esac
+      COMPOSE_HEALTH_LAST_STATE="${health_state:-${run_state:-unknown}}"
+      case "$run_state" in
+        exited|dead)
+          COMPOSE_HEALTH_RESULT=terminal
+          COMPOSE_HEALTH_LAST_STATE="$run_state"
+          return 1
+          ;;
+      esac
+      case "$health_state" in
+        healthy)
+          COMPOSE_HEALTH_RESULT=healthy
+          return 0
+          ;;
+        "")
+          if [ "$run_state" = running ]; then
+            COMPOSE_HEALTH_RESULT=running-unverified
+            COMPOSE_HEALTH_LAST_STATE="$run_state"
+            return 0
+          fi
+          ;;
+        starting|unhealthy) ;;
+        *) ;;
+      esac
+    fi
+    [ "$interval" -eq 0 ] || sleep "$interval"
+    elapsed=$((elapsed + step))
+  done
+  COMPOSE_HEALTH_RESULT=timeout
+  return 1
 }
 
 # resolve_nvidia_smi -> echoes a usable nvidia-smi path, or returns 1 if none.
@@ -2038,6 +2142,33 @@ upsert_env_var() {
   mv "$tmp" .env || { rm -f "$tmp"; printf 'upsert_env_var: mv to .env failed\n' >&2; return 1; }
 }
 
+# upsert_app_identity VERSION IMAGE_TAG — validate and atomically persist the
+# application identity pair so readers can never observe a mixed generation.
+upsert_app_identity() {
+  local version="$1" image_tag="$2" tmp
+  app_version_is_valid "$version" && image_tag_is_valid "$image_tag" || return 2
+  tmp="$(mktemp .env.XXXXXX)" \
+    || { printf 'upsert_app_identity: mktemp failed\n' >&2; return 1; }
+  awk -v version="$version" -v image_tag="$image_tag" '
+    /^JARVIS_VERSION=/ {
+      if (!seen_version) { print "JARVIS_VERSION=" version; seen_version = 1 }
+      next
+    }
+    /^JARVIS_IMAGE_TAG=/ {
+      if (!seen_image_tag) { print "JARVIS_IMAGE_TAG=" image_tag; seen_image_tag = 1 }
+      next
+    }
+    { print }
+    END {
+      if (!seen_version) print "JARVIS_VERSION=" version
+      if (!seen_image_tag) print "JARVIS_IMAGE_TAG=" image_tag
+    }
+  ' .env > "$tmp" \
+    || { rm -f "$tmp"; printf 'upsert_app_identity: awk rewrite of .env failed\n' >&2; return 1; }
+  mv "$tmp" .env \
+    || { rm -f "$tmp"; printf 'upsert_app_identity: mv to .env failed\n' >&2; return 1; }
+}
+
 # sync_ingress_ips_from_env — derive and persist the exact trusted ingress peers
 # from the effective JARVIS_NET_SUBNET. This is the upgrade bridge for installs
 # created before v1.2, which recorded only the subnet. Exporting the same values
@@ -2278,6 +2409,55 @@ merge_env_file() {
 # Release helpers (shared by setup.sh, update.sh, and the CLI installer)
 # ---------------------------------------------------------------------------
 
+# app_version_is_valid VERSION — accept the release and pre-release version
+# grammar used for application image tags. The length cap bounds checkout
+# metadata before it is used as a Docker tag.
+app_version_is_valid() {
+  local version="${1:-}"
+  [ "${#version}" -le 128 ] || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+}
+
+# image_tag_is_valid TAG — accept a semantic application version or the
+# lowercase 40-hex identity used by commit-addressed verification images.
+image_tag_is_valid() {
+  local tag="${1:-}"
+  [ "${#tag}" -le 128 ] || return 1
+  app_version_is_valid "$tag" || [[ "$tag" =~ ^[0-9a-f]{40}$ ]]
+}
+
+# resolve_checkout_app_version — print the application image version represented
+# by the current checkout. An exact release tag is authoritative for tagged
+# checkouts; otherwise [project].version in pyproject.toml is used.
+resolve_checkout_app_version() {
+  local exact_tag="" version=""
+  if command -v git >/dev/null 2>&1; then
+    exact_tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+  fi
+
+  case "$exact_tag" in
+    v[0-9]*) version="${exact_tag#v}" ;;
+    *)
+      [ -r pyproject.toml ] || return 1
+      version="$(awk '
+        /^\[project\][[:space:]]*$/ { in_project = 1; next }
+        in_project && /^\[/ { exit }
+        in_project && /^[[:space:]]*version[[:space:]]*=/ {
+          line = $0
+          if (line !~ /^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"[[:space:]]*$/) exit
+          sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*"/, "", line)
+          sub(/"[[:space:]]*$/, "", line)
+          print line
+          exit
+        }
+      ' pyproject.toml 2>/dev/null)"
+      ;;
+  esac
+
+  app_version_is_valid "$version" || return 1
+  printf '%s' "$version"
+}
+
 # latest_stable_tag [REMOTE] -> the highest STABLE release tag on REMOTE
 # (default: origin), or empty when there are none. Stable means vMAJOR.MINOR.PATCH
 # with no pre-release suffix, so vX.Y.Z-rc1 and other candidates are excluded, and
@@ -2369,8 +2549,9 @@ install_cli_shim() {
 # verify_release_manifests TARGET_REF [ACTIVE_PROFILE...] -> confirm every
 # registry-backed image a release needs already exists in the registry, closing
 # the window where a tag is visible but its images are not yet published.
-# TARGET_REF is a git tag (v-prefixed); image tags are NOT, so it is normalised
-# once here. Inspected set, for the ACTIVE topology:
+# TARGET_REF is either a v-prefixed release tag or a lowercase commit SHA.
+# Release tags are normalized once; commit identities remain unchanged.
+# Inspected set, for the ACTIVE topology:
 #   * application images at the target version (paper_ingestion carries
 #     TORCH_VARIANT_SUFFIX), plus telegram_bot when that profile is active;
 #   * the third-party pins the target ref's versions.env declares;

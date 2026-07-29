@@ -16,11 +16,11 @@
  * - The API-key input opts out of browser credential storage.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LoginPage } from '@/pages/LoginPage';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const requestMagicLinkMock = vi.fn().mockResolvedValue({ sent: true });
 const getFirstRunStatusMock = vi.fn();
@@ -84,7 +84,7 @@ vi.mock('@/stores/auth-store', () => {
 });
 
 function makeQC() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 /** Render LoginPage with an optional mocked first-run status response. */
@@ -98,12 +98,11 @@ function renderLoginPage(firstRunData?: object | null) {
   }
   return {
     qc,
-    ...render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <LoginPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+      { queryClient: qc },
     ),
   };
 }
@@ -303,12 +302,11 @@ describe('LoginPage', () => {
 
   it('shows initial error from query param', () => {
     const qc = makeQC();
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/login?error=Invalid+token']}>
-          <LoginPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/login?error=Invalid+token']}>
+        <LoginPage />
+      </MemoryRouter>,
+      { queryClient: qc },
     );
     expect(screen.getByText(/invalid token/i)).toBeInTheDocument();
   });

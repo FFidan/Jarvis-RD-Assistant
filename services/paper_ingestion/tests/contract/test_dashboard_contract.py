@@ -268,3 +268,54 @@ async def test_pending_papers_scoped_to_calling_user(
         f"pending_papers={body['pending_papers']} != scoped {expected_b}; "
         "user A's summary leaked into B's pending count"
     )
+
+
+async def test_dashboard_pending_and_due_counts_follow_current_generation(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Replacement makes old summaries pending again and removes stale cards from due."""
+    paper_id = contract_two_users.paper_id_a
+    card_id = contract_two_users.card_id_a
+    user_id = contract_two_users.user_a_id
+    await contract_conn.execute(
+        """
+        INSERT INTO paper_summaries
+            (paper_id, summary_brief, summary_detailed, user_id, content_generation)
+        SELECT p.id, 'current', 'current', $2, p.content_generation
+        FROM papers p
+        WHERE p.id = $1
+        """,
+        paper_id,
+        user_id,
+    )
+    await contract_conn.execute(
+        """
+        UPDATE cards
+        SET due_at = NOW() - INTERVAL '1 hour',
+            content_generation = (
+                SELECT content_generation FROM papers WHERE id = $2
+            )
+        WHERE id = $1
+        """,
+        card_id,
+        paper_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        current = await c.get("/api/dashboard/metrics")
+    assert current.status_code == 200, current.text[:300]
+    assert current.json()["pending_papers"] == 0
+    assert current.json()["due_cards"] == 1
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
+        paper_id,
+    )
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        replaced = await c.get("/api/dashboard/metrics")
+    assert replaced.status_code == 200, replaced.text[:300]
+    assert replaced.json()["pending_papers"] == 1
+    assert replaced.json()["due_cards"] == 0

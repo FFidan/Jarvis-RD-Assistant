@@ -4,7 +4,7 @@ This directory is the ledger for incremental schema migrations applied on top of
 
 The repository's squashed baseline schema version is `101`; it is fully captured
 in `db/init.sql`. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is `106`, also recorded in
+incremental files below. The current schema version is `110`, also recorded in
 `db/SCHEMA_VERSION`.
 
 New migrations land here numbered sequentially (`0102_<descriptive>.sql` and up)
@@ -18,6 +18,10 @@ and are applied via `run_migrations`
 | `0104` | `0104_drop_paper_chunks_user_ownership.sql` | Remove obsolete chunk-level ownership; paper visibility is enforced at the paper boundary. |
 | `0105` | `0105_backfill_owner_user_id.sql` | Assign an unambiguous sole administrator as instance owner and leave ambiguous upgrades for explicit host repair. |
 | `0106` | `0106_paper_visibility_scope.sql` | Persist source-aware public/private paper scope, defaulting unknown and client-driven material to private. |
+| `0107` | `0107_scope_contradiction_uniqueness_to_owner.sql` | Add the owner to the contradiction uniqueness key so each account keeps its own row for a shared pair of quotes. |
+| `0108` | `0108_record_zotero_analysis_enqueue.sql` | Record when a Zotero import's analysis scheduling was resolved, and how many attempts it has spent, so a poll can retry an enqueue that failed without re-scheduling items it already handled or retrying one item forever. |
+| `0109` | `0109_track_paper_content_generation.sql` | Stamp PDF-derived results and retained user work with the paper content generation that produced or contextualized them. |
+| `0110` | `0110_require_contradiction_owner.sql` | Preserve historical contradiction evidence while requiring ownership for new writes and separating evidence produced from different paper generations. |
 
 The migration runner serializes application with PostgreSQL advisory lock 42,
 records each applied version in `schema_migrations`, and refuses files newer

@@ -16,30 +16,30 @@ from paper_ingestion.pulse.scoring import (
     _llm_model,
     stage1_embedding_filter,
 )
+from tests._paper_fakes import make_paper_create
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-# Keep local: richer kwargs signature (abstract/authors/external_id/published_date) not covered by pulse_helpers.make_pulse_paper.
 def _make_paper(
     title: str = "Test Paper",
     abstract: str = "Test abstract",
     published_date: date | None = None,
     authors: list[str] | None = None,
     external_id: str = "arxiv:0001",
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> PaperCreate:
-    return PaperCreate(
+    """Build a paper with the defaults used by stage-one scoring tests."""
+    return make_paper_create(
         external_id=external_id,
-        source_type=SourceType.ARXIV,
         title=title,
-        authors=authors or ["Author A"],
+        authors=authors,
         abstract=abstract,
         published_date=published_date or date.today(),
         url=f"https://arxiv.org/abs/{external_id}",
-        metadata=metadata or {},
+        metadata=metadata,
     )
 
 
@@ -214,7 +214,6 @@ async def test_stage1_recency_decay_formula():
 @pytest.mark.asyncio
 async def test_stage1_recency_none_date_handled():
     """Paper with published_date=None does not crash; recency treated as 0.0 or clamped."""
-    paper = _make_paper(published_date=None, external_id="arxiv:nodate")
     paper = PaperCreate(
         external_id="arxiv:nodate",
         source_type=SourceType.ARXIV,

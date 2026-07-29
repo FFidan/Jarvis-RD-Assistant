@@ -9,8 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { HealthDots } from '@/components/shared/HealthDots';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
@@ -50,6 +49,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 import { fetchStackHealth } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchStackHealth = vi.mocked(fetchStackHealth);
 
 // ---------------------------------------------------------------------------
@@ -124,13 +124,10 @@ function makeWithDegraded(count: number): StackHealthSummary {
 }
 
 function renderHealthDots(compact = false) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <HealthDots compact={compact} />
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <HealthDots compact={compact} />,
+    { queryClient },
   );
 }
 
@@ -176,15 +173,12 @@ describe('HealthDots', () => {
       isSessionValid: () => false,
       expireSession: vi.fn(),
     };
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.stack.health(), makeAllOk());
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDots />
-      </QueryClientProvider>,
+    renderWithProviders(
+      <HealthDots />,
+      { queryClient },
     );
 
     expect(mockFetchStackHealth).not.toHaveBeenCalled();
@@ -427,13 +421,10 @@ describe('HealthDots', () => {
   it('does not flash "Checking services…" during refetch when cached data exists', async () => {
     // First fetch succeeds and populates cache
     mockFetchStackHealth.mockResolvedValue(makeAllOk());
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <HealthDots />
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <HealthDots />,
+      { queryClient },
     );
 
     // Wait for initial data to render

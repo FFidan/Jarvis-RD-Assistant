@@ -177,6 +177,148 @@ async def test_build_citation_graph_without_user_id_keeps_all_nodes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The node budget is spent on papers the caller can see, and the walk decides
+# which ones — so the same request answers with the same graph every time.
+# ---------------------------------------------------------------------------
+
+
+def _graph_conn(*, edges: list[tuple[int, int]], visible_ids: set[int]):
+    """Fake conn answering each query build_citation_graph issues, by query shape.
+
+    The visibility filter answers in reverse, as a database is free to: a test
+    that still sees walk order proves the order comes from the walk.
+    Returns ``(conn, visibility_batches)`` where the second item records the ID
+    list each visibility query was asked about.
+    """
+    _pool, conn = make_pool_and_conn()
+    visibility_batches: list[list[int]] = []
+
+    async def _fetch(query, *args):
+        requested = list(args[0])
+        if "is_influential" in query:
+            return [
+                _citation_row(source_paper_id=source, cited_paper_id=cited)
+                for source, cited in edges
+                if source in requested and cited in requested
+            ]
+        if "FROM paper_citations" in query:
+            frontier = set(requested)
+            return [
+                _citation_row(source_paper_id=source, cited_paper_id=cited)
+                for source, cited in edges
+                if source in frontier or cited in frontier
+            ]
+        if "citation_count" in query:
+            return [_paper_row(paper_id=paper_id) for paper_id in requested]
+        visibility_batches.append(requested)
+        return [
+            FakeRecord({"id": paper_id})
+            for paper_id in reversed(requested)
+            if paper_id in visible_ids
+        ]
+
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    return conn, visibility_batches
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_node_budget_is_filled_with_visible_papers() -> None:
+    """Papers the caller cannot see must not consume node slots.
+
+    The seed reaches 400 papers in one hop and the 100 the walk reaches first
+    are invisible. All 200 node slots must still be filled, from the visible
+    papers the walk reached later.
+    """
+    from paper_ingestion.citations import _MAX_GRAPH_NODES, build_citation_graph
+
+    seed_id = 1
+    neighbours = list(range(2, 402))
+    hidden_ids = set(range(2, 102))
+    visible_ids = {seed_id, *(pid for pid in neighbours if pid not in hidden_ids)}
+
+    conn, _batches = _graph_conn(
+        edges=[(seed_id, pid) for pid in neighbours],
+        visible_ids=visible_ids,
+    )
+
+    result = await build_citation_graph(conn, [seed_id], depth=1, user_id=7)
+
+    assert len(result.nodes) == _MAX_GRAPH_NODES, (
+        "the node budget must be filled from the papers the caller can see; a hidden "
+        f"paper must not take a slot that is never given back, got {len(result.nodes)} nodes"
+    )
+    assert not {n.id for n in result.nodes} & hidden_ids, "no hidden paper may appear as a node"
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_keeps_the_seeds_and_answers_the_same_way_twice() -> None:
+    """Seeds hold the first node slots and the walk order decides the rest.
+
+    The seed IDs are higher than every neighbour's, so a selection that depends
+    on set iteration order rather than the walk drops the very papers the caller
+    asked about.
+    """
+    from paper_ingestion.citations import _MAX_GRAPH_NODES, build_citation_graph
+
+    seed_ids = [9001, 9002]
+    neighbours = list(range(1, 301))
+    edges = [(9001, pid) for pid in neighbours]
+    visible_ids = {*seed_ids, *neighbours}
+
+    conn, _batches = _graph_conn(edges=edges, visible_ids=visible_ids)
+    first = await build_citation_graph(conn, seed_ids, depth=1, user_id=7)
+    repeat_conn, _repeat_batches = _graph_conn(edges=edges, visible_ids=visible_ids)
+    second = await build_citation_graph(repeat_conn, seed_ids, depth=1, user_id=7)
+
+    node_ids = [n.id for n in first.nodes]
+    assert node_ids[: len(seed_ids)] == seed_ids, (
+        f"the papers the caller asked about must keep the first node slots; got {node_ids[:5]}"
+    )
+    assert node_ids == seed_ids + neighbours[: _MAX_GRAPH_NODES - len(seed_ids)], (
+        f"nodes must follow the walk: seeds, then the hop in ID order; got {node_ids[:8]}"
+    )
+    assert [n.id for n in second.nodes] == node_ids, "the same request must return the same graph"
+    expected_walk = seed_ids + neighbours
+    assert _batches == [expected_walk]
+    assert _repeat_batches == [expected_walk], (
+        "visibility must receive the whole ordered walk before the 200-node response cap; "
+        "capping a set first can pass the node assertion accidentally for integer IDs"
+    )
+
+
+@pytest.mark.asyncio
+async def test_citation_graph_expansion_stops_at_the_candidate_bound() -> None:
+    """The walk stops collecting once the candidate bound is reached.
+
+    Filtering before the node budget is applied only works while the set being
+    filtered stays bounded, so the expansion has a bound of its own.
+    """
+    from paper_ingestion.citations import (
+        _MAX_GRAPH_CANDIDATES,
+        _MAX_GRAPH_NODES,
+        build_citation_graph,
+    )
+
+    seed_id = 1
+    neighbours = list(range(2, 3002))
+    visible_ids = {seed_id, *neighbours}
+
+    conn, visibility_batches = _graph_conn(
+        edges=[(seed_id, pid) for pid in neighbours],
+        visible_ids=visible_ids,
+    )
+
+    result = await build_citation_graph(conn, [seed_id], depth=1, user_id=7)
+
+    assert visibility_batches, "the visibility filter must run"
+    assert len(visibility_batches[0]) == _MAX_GRAPH_CANDIDATES, (
+        "the visibility filter must run over a bounded candidate set; got "
+        f"{len(visibility_batches[0])} candidates"
+    )
+    assert len(result.nodes) == _MAX_GRAPH_NODES
+
+
+# ---------------------------------------------------------------------------
 # GET /api/citations/{paper_id} must strip invisible counter-parties
 # ---------------------------------------------------------------------------
 

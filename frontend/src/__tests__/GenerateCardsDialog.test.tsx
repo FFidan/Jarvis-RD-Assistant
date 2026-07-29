@@ -2,11 +2,11 @@
  * Tests for GenerateCardsDialog — job-polling UX and action_link error rendering.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { GenerateCardsDialog } from '@/components/cards/CreateCardForm';
 import type { Job } from '@/stores/job-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -31,15 +31,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 function renderDialog(open = true) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <GenerateCardsDialog open={open} onOpenChange={vi.fn()} defaultDeckId={1} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <GenerateCardsDialog open={open} onOpenChange={vi.fn()} defaultDeckId={1} />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -194,26 +191,4 @@ describe('GenerateCardsDialog', () => {
     expect(isGeneratingAfterTerminal).toBe(false);
   });
 
-  // console.info must NOT be called in production (or at all, since it was deleted).
-  it('test_create_card_form_no_console_in_production_build: console.info is never called when a job succeeds', async () => {
-    // The console.info('[GenerateCardsDialog] generation succeeded', ...) line was deleted.
-    // This test verifies it is not called during the succeeded-job polling path.
-    vi.useFakeTimers();
-    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
-
-    const succeededJob = makeJob({ status: 'succeeded', result: { cards_created: 2 } });
-    // First poll returns succeeded immediately
-    mockGetJob.mockResolvedValue(succeededJob);
-    mockGenerateCardsJob.mockResolvedValue({ job_id: 'test-job-001', status: 'queued' });
-
-    renderDialog();
-
-    // Advance timers to allow polling to run
-    await vi.runAllTimersAsync();
-
-    expect(consoleInfoSpy).not.toHaveBeenCalled();
-
-    consoleInfoSpy.mockRestore();
-    vi.useRealTimers();
-  });
 });

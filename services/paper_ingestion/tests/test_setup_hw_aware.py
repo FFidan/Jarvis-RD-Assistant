@@ -35,16 +35,17 @@ _requires_openssl = pytest.mark.skipif(
 
 
 def _stage_hw_tmpdir(tmp: Path) -> None:
-    """Copy setup.sh, Compose config, .env.example, scripts/, config/, and litellm/ into tmpdir.
+    """Copy the checkout files exercised by the setup tests into ``tmp``.
 
     setup.sh --non-interactive needs:
-    - setup.sh + docker-compose.yml + .env.example in the working directory
+    - setup.sh, docker-compose.yml, .env.example, and pyproject.toml
     - scripts/ (init-secrets.sh, gen-langfuse-keys.sh, render-litellm-config.sh, …)
     - config/llm-tier-candidates.yaml  (read by _default_model_for_tier and render-litellm-config.sh)
     - litellm/config.yaml              (written by render-litellm-config.sh)
     """
     shutil.copy2(REPO_ROOT / "setup.sh", tmp / "setup.sh")
     (tmp / "setup.sh").chmod(0o755)
+    shutil.copy2(REPO_ROOT / "pyproject.toml", tmp / "pyproject.toml")
     if (REPO_ROOT / ".env.example").exists():
         shutil.copy2(REPO_ROOT / ".env.example", tmp / ".env.example")
     shutil.copy2(REPO_ROOT / "docker-compose.yml", tmp / "docker-compose.yml")
@@ -92,9 +93,10 @@ def _write_docker_shim(tmp: Path, *, up_exit_code: int) -> tuple[Path, Path]:
 
     The stub logs every invocation, reports a v2 compose version, and models
     the successful setup lifecycle lease: Compose config exposes the managed
-    backup volume, the volume is created and ownership-checked, and the
-    short-lived lifecycle helpers reserve, hold, wait for, and release it.
-    It exits ``up_exit_code`` for any ``compose ... up -d ...`` call.
+    backup volume, the volume is created and ownership-checked, mandatory
+    services report healthy running containers, and the short-lived lifecycle
+    helpers reserve, hold, wait for, and release it. It exits ``up_exit_code``
+    for any ``compose ... up -d ...`` call.
     """
     bin_dir = tmp / "dockerbin"
     bin_dir.mkdir()
@@ -125,7 +127,7 @@ def _write_docker_shim(tmp: Path, *, up_exit_code: int) -> tuple[Path, Path]:
         '  run*" release-host setup "*) ;;\n'
         '  run*" host-release-complete setup "*) ;;\n'
         '  compose*"ps -q "*) echo "healthy-container" ;;\n'
-        '  inspect*"healthy-container"*) echo "healthy" ;;\n'
+        '  inspect*"healthy-container"*) echo "healthy|running" ;;\n'
         f'  compose*"up -d"*) exit {up_exit_code} ;;\n'
         "esac\n"
         "exit 0\n"

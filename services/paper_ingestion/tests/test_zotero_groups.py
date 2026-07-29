@@ -28,11 +28,6 @@ GROUP_BASE = f"{ZOTERO_API_BASE}/groups/{GROUP_ID}"
 
 
 @pytest.fixture
-def http_client():
-    return httpx.AsyncClient()
-
-
-@pytest.fixture
 def user_client(http_client):
     """ZoteroClient configured for a personal library (default)."""
     return ZoteroClient(

@@ -10,6 +10,7 @@ export interface Note {
   verified_quote: string | null;
   verified_page_number: number | null;
   promoted_at: string | null;
+  stale: boolean;
   created_at: string;
 }
 
@@ -38,6 +39,7 @@ export interface Highlight {
   color: string | null;
   quote: string | null;
   created_at: string;
+  stale: boolean;
 }
 
 export interface HighlightCreate {

@@ -11,6 +11,7 @@ from jarvis_common import ErrorResponse
 from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.streak import compute_streak
 
+from learning_engine.card_store import CURRENT_CARD_SQL
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.fsrs_manager import FSRSManager
@@ -105,6 +106,23 @@ async def _build_fsrs_manager_from_db(
     return FSRSManager(desired_retention=desired_retention, learning_steps=learning_steps)
 
 
+async def _card_source_is_current(
+    conn: asyncpg.pool.PoolConnectionProxy,
+    card: asyncpg.Record | dict,
+) -> bool:
+    """Lock a card's source paper and report whether the card is current."""
+    paper_id = card["paper_id"]
+    if paper_id is None:
+        return True
+    content_generation = await conn.fetchval(
+        "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+        paper_id,
+    )
+    return content_generation is not None and int(card["content_generation"]) == int(
+        content_generation
+    )
+
+
 router = APIRouter(
     prefix="/api",
     tags=["review"],
@@ -128,9 +146,11 @@ async def get_next_review(
     """Get next due card(s) for review, optionally scoped to a deck."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT c.* FROM cards c "
+            "SELECT c.*, FALSE AS stale FROM cards c "
+            "LEFT JOIN papers p ON p.id = c.paper_id "
             "WHERE c.due_at <= NOW() "
             "AND c.user_id = $1 "
+            f"AND {CURRENT_CARD_SQL} "
             "AND ($2::int IS NULL OR (c.deck_id = $2::int AND EXISTS ("
             "  SELECT 1 FROM decks d WHERE d.id = $2::int AND d.user_id = $1"
             "))) "
@@ -165,6 +185,14 @@ async def submit_review(
             )
             if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
+            if not await _card_source_is_current(conn, row):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This card was created from an earlier version of the paper "
+                        "and can't be reviewed."
+                    ),
+                )
 
             fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
             new_state, log_dict, next_due = fsrs_manager.schedule_review(
@@ -269,6 +297,10 @@ async def sync_reviews(
                         applied.add(event.idempotency_key)
                         skipped += 1
                         continue
+                    if not await _card_source_is_current(conn, card):
+                        applied.add(event.idempotency_key)
+                        skipped += 1
+                        continue
                     event_utc = _to_utc(event.reviewed_at).astimezone(UTC)
                     # Read the card's newest already-applied review BEFORE inserting this
                     # event's log: under the FOR UPDATE lock this MAX excludes the current
@@ -279,7 +311,7 @@ async def sync_reviews(
                         event.card_id,
                         user_id,
                     )
-                    is_stale = prior_last is not None and event_utc < _to_utc(
+                    is_out_of_order = prior_last is not None and event_utc < _to_utc(
                         prior_last
                     ).astimezone(UTC)
                     new_state, log_dict, next_due = fsrs_manager.schedule_review(
@@ -315,7 +347,7 @@ async def sync_reviews(
                     # Out-of-order guard: a review older than the card's newest applied
                     # review must not rewind persisted scheduling — record it (log above)
                     # but skip the card overwrite so due_at / last_review never regress.
-                    if not is_stale:
+                    if not is_out_of_order:
                         await conn.execute(
                             "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
                             "WHERE id = $3 AND user_id = $4",
@@ -355,13 +387,16 @@ async def get_stats(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             stats_row = await conn.fetchrow(
-                """
+                f"""
                 WITH card_stats AS (
                     SELECT
                         COUNT(*) AS total_cards,
-                        COUNT(*) FILTER (WHERE due_at <= NOW()) AS due_now
-                    FROM cards
-                    WHERE user_id = $1
+                        COUNT(*) FILTER (
+                            WHERE c.due_at <= NOW() AND {CURRENT_CARD_SQL}
+                        ) AS due_now
+                    FROM cards c
+                    LEFT JOIN papers p ON p.id = c.paper_id
+                    WHERE c.user_id = $1
                 ),
                 today_stats AS (
                     SELECT COUNT(*) AS reviewed_today
@@ -378,7 +413,7 @@ async def get_stats(
                 ),
                 rating_agg AS (
                     SELECT
-                        COALESCE(jsonb_object_agg(rating::text, cnt), '{}'::jsonb) AS by_rating,
+                        COALESCE(jsonb_object_agg(rating::text, cnt), '{{}}'::jsonb) AS by_rating,
                         COALESCE(SUM(cnt), 0) AS total_recent,
                         COALESCE(SUM(cnt) FILTER (WHERE rating IN (3, 4)), 0) AS good_easy
                     FROM rating_stats

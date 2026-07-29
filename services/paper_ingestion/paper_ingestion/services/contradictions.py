@@ -299,7 +299,7 @@ async def scan_contradictions(
     openai_client: openai.AsyncOpenAI,
     paper_id: int | None = None,
     limit: int = 25,
-    user_id: int | None = None,
+    user_id: int,
 ) -> dict[str, Any]:
     """Scan verified findings for cross-paper contradictions.
 
@@ -309,7 +309,7 @@ async def scan_contradictions(
     async with AdvisoryLock(
         db_pool,
         key1=_kind_lock_key("contradictions.scan"),
-        key2=user_id or 0,
+        key2=user_id,
     ) as locked:
         if not locked:
             return {"scan_already_in_progress": True}
@@ -332,7 +332,7 @@ async def _do_scan_contradictions(
     openai_client: openai.AsyncOpenAI,
     paper_id: int | None = None,
     limit: int = 25,
-    user_id: int | None = None,
+    user_id: int,
 ) -> dict[str, Any]:
     model = get_smart_model()
     async with db_pool.acquire() as conn:

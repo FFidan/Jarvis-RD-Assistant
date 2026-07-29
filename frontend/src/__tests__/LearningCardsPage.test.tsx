@@ -4,9 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
 
@@ -23,6 +22,7 @@ vi.mock('@/lib/api', async () => {
 });
 
 import { getStats, fetchDecks, submitReview } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGetStats = vi.mocked(getStats);
 const mockFetchDecks = vi.mocked(fetchDecks);
 const mockSubmitReview = vi.mocked(submitReview);
@@ -50,7 +50,7 @@ const DECKS = [
 ];
 
 function renderPage(initialRoute = '/cards') {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = createTestQueryClient();
   // Mock fetch for review/next
   vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : (input as Request).url;
@@ -59,14 +59,13 @@ function renderPage(initialRoute = '/cards') {
     }
     return new Response('{}', { status: 200 });
   });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[initialRoute]}>
-        <Routes>
-          <Route path="/cards" element={<LearningCardsPage />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <MemoryRouter initialEntries={[initialRoute]}>
+      <Routes>
+        <Route path="/cards" element={<LearningCardsPage />} />
+      </Routes>
+    </MemoryRouter>,
+    { queryClient: qc },
   );
 }
 

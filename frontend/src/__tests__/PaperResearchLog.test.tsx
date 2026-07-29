@@ -11,10 +11,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import type { Paper, Summary, Chunk, UserState } from '@/types';
+import { createTestQueryClient } from '@/__tests__/test-utils';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -142,7 +143,7 @@ function renderLog(
     recommendationScore: number | null;
   }> = {},
 ) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = createTestQueryClient();
   return render(
     <MemoryRouter>
       <QueryClientProvider client={qc}>

@@ -1,14 +1,7 @@
-"""Tests that all three source types emit category='source' log_event rows.
+"""Source event-emission tests across arXiv, OpenAlex, and Semantic Scholar.
 
-Consolidated from test_source_arxiv_events.py, test_source_openalex_events.py,
-and test_source_s2_events.py — 3 files × 4 behaviors → parametrized over sources.
-The sibling files (openalex / s2) import nothing; this module is the sole container.
-
-Covered behaviors (12 cases = 3 sources × 4):
-  1. emits_source_event_on_success
-  2. emits_source_event_on_rate_limit
-  3. emits_source_event_on_http_error
-  4. no_log_event_without_pool
+Each provider is exercised on success, rate limiting, HTTP failure, and the
+no-database path.
 """
 
 from __future__ import annotations
@@ -20,12 +13,17 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
-from paper_ingestion.sources.openalex_source import OPENALEX_API_URL, OpenAlexSource
-from paper_ingestion.sources.semantic_scholar_source import S2_API_URL, SemanticScholarSource
+from paper_ingestion.sources.arxiv_source import ARXIV_API_URL
+from paper_ingestion.sources.openalex_source import OPENALEX_API_URL
+from paper_ingestion.sources.semantic_scholar_source import S2_API_URL
 
-from tests._source_fakes import mock_log_event_pool
+from tests._source_fakes import (
+    make_arxiv_source as _make_arxiv_source,
+    make_openalex_source as _make_openalex_source,
+    make_semantic_scholar_source as _make_s2_source,
+    make_topic as _make_topic,
+    mock_log_event_pool,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -67,45 +65,6 @@ _S2_PAPER_ITEM = {
     "openAccessPdf": None,
     "tldr": None,
 }
-
-
-# ---------------------------------------------------------------------------
-# Source factories
-# ---------------------------------------------------------------------------
-
-
-def _make_arxiv_source(db_pool=None) -> ArxivSource:
-    config = PaperSourceConfig(
-        id=1,
-        source_type=SourceType.ARXIV,
-        enabled=True,
-        config={},
-    )
-    return ArxivSource(config, httpx.AsyncClient(), db_pool=db_pool)
-
-
-def _make_openalex_source(db_pool=None) -> OpenAlexSource:
-    config = PaperSourceConfig(
-        id=3,
-        source_type=SourceType.OPENALEX,
-        enabled=True,
-        config={"api_key": "test-oa-key"},
-    )
-    return OpenAlexSource(config, httpx.AsyncClient(), db_pool=db_pool)
-
-
-def _make_s2_source(db_pool=None) -> SemanticScholarSource:
-    config = PaperSourceConfig(
-        id=2,
-        source_type=SourceType.SEMANTIC_SCHOLAR,
-        enabled=True,
-        config={},
-    )
-    return SemanticScholarSource(config, httpx.AsyncClient(), db_pool=db_pool)
-
-
-def _make_topic(name: str, terms: list[str] | None = None) -> TopicRef:
-    return TopicRef(id=1, name=name, query_terms=terms or [name])
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { BulkToolbar } from '@/components/feed/BulkToolbar';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -21,17 +21,16 @@ vi.mock('sonner', () => ({
 }));
 
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return createTestQueryClient();
 }
 
 function renderToolbar(
   surface: Parameters<typeof BulkToolbar>[0]['surface'],
   papersOnPage: number[] = [1, 2, 3],
 ) {
-  return render(
-    <QueryClientProvider client={makeQueryClient()}>
-      <BulkToolbar surface={surface} papersOnPage={papersOnPage} />
-    </QueryClientProvider>,
+  return renderWithProviders(
+    <BulkToolbar surface={surface} papersOnPage={papersOnPage} />,
+    { queryClient: makeQueryClient() },
   );
 }
 

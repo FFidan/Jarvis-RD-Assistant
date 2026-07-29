@@ -16,6 +16,29 @@ import pytest
 from paper_ingestion.weekly_summary_models import ThemeOutput, WeeklyDigestOutput
 
 
+def _fake_paper_row(
+    paper_id: int,
+    title: str,
+    summary_brief: str,
+    **overrides: object,
+) -> dict[str, object]:
+    """Build the row shape consumed by weekly-summary generation."""
+    row: dict[str, object] = {
+        "id": paper_id,
+        "title": title,
+        "url": f"http://example.com/paper{paper_id}",
+        "published_date": None,
+        "authors": ["A. Author"],
+        "topic_name": "Deep Learning",
+        "topic_id": 1,
+        "relevance_score": 0.9,
+        "summary_brief": summary_brief,
+        "confidence": 0.8,
+    }
+    row.update(overrides)
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Structural: ThemeOutput attribute access
 # ---------------------------------------------------------------------------
@@ -78,37 +101,21 @@ async def test_generate_weekly_summary_theme_attribute_in_output() -> None:
         summary="Two papers explore transformer architectures this week.",
     )
 
-    # Minimal asyncpg row that satisfies the weekly_summary query projection.
-    fake_row = {
-        "id": 1,
-        "title": "Transformers and long-range dependency modelling",
-        "url": "http://example.com/paper1",
-        "published_date": None,
-        "authors": ["A. Author"],
-        "topic_name": "Deep Learning",
-        "topic_id": 1,
-        "relevance_score": 0.9,
-        "summary_brief": "Transformers outperform RNNs on long-range tasks.",
-        "confidence": 0.8,
-    }
-    fake_row2 = {
-        "id": 2,
-        "title": "RNN vs Transformer: a comparative study",
-        "url": "http://example.com/paper2",
-        "published_date": None,
-        "authors": ["B. Author"],
-        "topic_name": "Deep Learning",
-        "topic_id": 1,
-        "relevance_score": 0.85,
-        "summary_brief": "Comparative study confirms Transformer superiority on long-range tasks.",
-        "confidence": 0.75,
-    }
-
-    # Wrap dicts as asyncpg-compatible record-likes (subscriptable + .get()).
-    class _FakeRow(dict):
-        pass
-
-    rows = [_FakeRow(fake_row), _FakeRow(fake_row2)]
+    rows = [
+        _fake_paper_row(
+            1,
+            "Transformers and long-range dependency modelling",
+            "Transformers outperform RNNs on long-range tasks.",
+        ),
+        _fake_paper_row(
+            2,
+            "RNN vs Transformer: a comparative study",
+            "Comparative study confirms Transformer superiority on long-range tasks.",
+            authors=["B. Author"],
+            relevance_score=0.85,
+            confidence=0.75,
+        ),
+    ]
 
     # Mock the DB pool.
     mock_conn = AsyncMock()
@@ -163,6 +170,100 @@ async def test_generate_weekly_summary_theme_attribute_in_output() -> None:
     all_annotated = topic["verified_themes"] + topic["unverified_themes"]
     assert len(all_annotated) == 1, "each theme must appear in exactly one annotated list"
     assert all_annotated[0] is theme_dict, "split lists must hold the same annotated dicts"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_prompt_excludes_stale_summary_text(contract_conn) -> None:
+    """A prior-generation summary never enters digest synthesis or verification."""
+    from jarvis_common.testing import SharedConnPool, seed_user_row
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    user_id = await seed_user_row(contract_conn, "weekly-generation@contract.example.com")
+    topic_id = await contract_conn.fetchval(
+        """INSERT INTO topics (name, query_terms, description)
+           VALUES ('weekly-generation-topic', ARRAY['generation'], 'generation contract')
+           RETURNING id"""
+    )
+    paper_ids: list[int] = []
+    stale_markers = ["STALE-WEEKLY-ONE", "STALE-WEEKLY-TWO"]
+    for index, marker in enumerate(stale_markers, 1):
+        paper_id = await contract_conn.fetchval(
+            """INSERT INTO papers (
+                   external_id, source_type, title, authors, url, discovered_by,
+                   content_generation
+               )
+               VALUES ($1, 'arxiv', $2, ARRAY['Author'], $3, $4, 1)
+               RETURNING id""",
+            f"weekly-generation-{index}",
+            f"Current title {index}",
+            f"https://example.test/weekly-generation-{index}",
+            user_id,
+        )
+        paper_ids.append(int(paper_id))
+        await contract_conn.execute(
+            """INSERT INTO paper_topics (paper_id, topic_id, relevance_score)
+               VALUES ($1, $2, 1.0)""",
+            paper_id,
+            topic_id,
+        )
+        await contract_conn.execute(
+            """INSERT INTO paper_user_state (paper_id, user_id, state)
+               VALUES ($1, $2, 'reading')""",
+            paper_id,
+            user_id,
+        )
+        await contract_conn.execute(
+            """INSERT INTO paper_summaries (
+                   paper_id, user_id, summary_brief, summary_detailed,
+                   content_generation
+               )
+               VALUES ($1, $2, $3, $3, 0)""",
+            paper_id,
+            user_id,
+            marker,
+        )
+
+    prompts: list[str] = []
+
+    async def capture_digest(*_args, **kwargs):
+        prompts.append(str(kwargs["prompt"]))
+        return WeeklyDigestOutput(themes=[], summary="A sufficiently detailed weekly digest.")
+
+    with (
+        patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            new=AsyncMock(side_effect=capture_digest),
+        ),
+        patch("paper_ingestion.weekly_summary.get_smart_model", return_value="smart"),
+    ):
+        await generate_weekly_summary(
+            db_pool=SharedConnPool(contract_conn),
+            verifier=QuoteVerifier(),
+            user_id=user_id,
+            openai_client=MagicMock(),
+        )
+
+        assert len(prompts) == 1
+        assert all(marker not in prompts[0] for marker in stale_markers)
+
+        await contract_conn.execute(
+            """UPDATE paper_summaries
+               SET content_generation = 1
+               WHERE paper_id = ANY($1::bigint[])""",
+            paper_ids,
+        )
+        prompts.clear()
+        await generate_weekly_summary(
+            db_pool=SharedConnPool(contract_conn),
+            verifier=QuoteVerifier(),
+            user_id=user_id,
+            openai_client=MagicMock(),
+        )
+
+    assert len(prompts) == 1
+    assert all(marker in prompts[0] for marker in stale_markers)
 
 
 @pytest.mark.asyncio
@@ -227,23 +328,19 @@ async def test_weekly_summary_fallback_escapes_topic() -> None:
     from jarvis_common.verify import QuoteVerifier
 
     malicious_topic = 'Adversarial ML" <script>alert(1)</script>'
-    fake_row = {
-        "id": 42,
-        "title": "Adversarial examples in ML",
-        "url": "http://example.com/adv",
-        "published_date": None,
-        "authors": ["C. Author"],
-        "topic_name": malicious_topic,
-        "topic_id": 7,
-        "relevance_score": 0.7,
-        "summary_brief": "Brief on adversarial examples.",
-        "confidence": 0.6,
-    }
-
-    class _FakeRow(dict):
-        pass
-
-    rows = [_FakeRow(fake_row)]  # single paper → fallback path (len < 2)
+    rows = [
+        _fake_paper_row(
+            42,
+            "Adversarial examples in ML",
+            "Brief on adversarial examples.",
+            url="http://example.com/adv",
+            authors=["C. Author"],
+            topic_name=malicious_topic,
+            topic_id=7,
+            relevance_score=0.7,
+            confidence=0.6,
+        )
+    ]
 
     mock_conn = AsyncMock()
     mock_conn.fetch = AsyncMock(return_value=rows)

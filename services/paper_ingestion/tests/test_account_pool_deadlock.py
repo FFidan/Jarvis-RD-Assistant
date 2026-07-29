@@ -28,18 +28,10 @@ from types import SimpleNamespace
 import asyncpg
 import pytest
 
-pytestmark = pytest.mark.live_pg
-
-
-@pytest.fixture(autouse=True)
-def _disable_limiter():
-    """Await the ``@limiter.limit``-decorated handler directly (mirror test_account_router)."""
-    from paper_ingestion.deps import limiter
-
-    original = limiter.enabled
-    limiter.enabled = False
-    yield
-    limiter.enabled = original
+pytestmark = [
+    pytest.mark.live_pg,
+    pytest.mark.usefixtures("_disable_limiter"),
+]
 
 
 class _FakeURL:

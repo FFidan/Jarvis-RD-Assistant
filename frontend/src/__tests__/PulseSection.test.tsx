@@ -6,12 +6,12 @@
  * Each describe block gets a fresh QueryClient.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { PulseSection } from '@/components/settings/PulseSection';
 import type { PulseStats, SystemCapabilities } from '@/types';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Inline fixtures (avoid module-const TDZ in vi.mock factories)
@@ -81,15 +81,12 @@ const mockUseAuthStore = vi.mocked(useAuthStoreMock);
 // ---------------------------------------------------------------------------
 
 function renderSection() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <PulseSection />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <PulseSection />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 

@@ -17,7 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
-from jarvis_common.testing import make_bot_config, make_telegram_update
+from jarvis_common.testing import (
+    PTBContextOptions,
+    make_bot_config,
+    make_ptb_context,
+    make_telegram_update,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 
@@ -48,16 +53,16 @@ def _make_pool():
     return pool
 
 
-def _make_context(pool, config, user_data=None):
-    context = MagicMock()
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": pool,
-        "http_client": AsyncMock(),
-    }
-    context.user_data = user_data if user_data is not None else {}
-    return context
+def _make_context(
+    pool: object,
+    config: object,
+    user_data: dict[str, object] | None = None,
+) -> MagicMock:
+    return make_ptb_context(
+        pool,
+        config,
+        options=PTBContextOptions(user_data=user_data),
+    )
 
 
 # ---------------------------------------------------------------------------

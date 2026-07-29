@@ -24,6 +24,7 @@ Carve-out:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
@@ -31,6 +32,12 @@ import pytest
 
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
+)
+from paper_ingestion.services.contradiction_models import ContradictionClassification
+from paper_ingestion.services.contradictions import (
+    ContradictionCandidate,
+    VerifiedFinding,
+    _persist_contradiction,
 )
 from paper_ingestion.services.contradictions_extract import _load_verified_findings
 
@@ -105,9 +112,19 @@ async def _seed_summary_findings(
     finding: str,
     quote: str,
     related_paper_id: int | None = None,
+    related_content_generation: int = 0,
 ) -> None:
     """Insert a paper_summaries row with one verified-style key finding."""
-    refs = [] if related_paper_id is None else [{"related_paper_id": related_paper_id}]
+    refs = (
+        []
+        if related_paper_id is None
+        else [
+            {
+                "related_paper_id": related_paper_id,
+                "content_generation": related_content_generation,
+            }
+        ]
+    )
     await conn.execute(
         """
         INSERT INTO paper_summaries (
@@ -200,6 +217,51 @@ async def test_load_verified_findings_focused_scan_keeps_related_papers_in_libra
     assert {finding.paper_id for finding in findings} == {owned}
 
 
+async def test_cross_reference_generation_filters_only_the_stale_target(
+    contract_two_users, contract_conn
+):
+    """Advancing a related paper removes its link but keeps the source findings."""
+    user_id = contract_two_users.user_a_id
+    source = await _seed_library_paper(contract_conn, user_id, "cross-gen-source")
+    target = await _seed_library_paper(contract_conn, user_id, "cross-gen-target")
+    await _seed_summary_findings(
+        contract_conn,
+        source,
+        user_id=user_id,
+        finding="source finding",
+        quote="source quote",
+        related_paper_id=target,
+        related_content_generation=0,
+    )
+
+    before = await _load_verified_findings(
+        contract_conn,
+        paper_id=target,
+        user_id=user_id,
+    )
+    assert [finding.paper_id for finding in before] == [source]
+    assert before[0].cross_reference_ids == frozenset({target})
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        target,
+    )
+
+    focused_target = await _load_verified_findings(
+        contract_conn,
+        paper_id=target,
+        user_id=user_id,
+    )
+    focused_source = await _load_verified_findings(
+        contract_conn,
+        paper_id=source,
+        user_id=user_id,
+    )
+    assert focused_target == []
+    assert [finding.finding for finding in focused_source] == ["source finding"]
+    assert focused_source[0].cross_reference_ids == frozenset()
+
+
 # ---------------------------------------------------------------------------
 # GET /api/contradictions — list scoped to caller
 # ---------------------------------------------------------------------------
@@ -209,6 +271,10 @@ async def test_c5_01_list_contradictions_returns_rows_scoped_to_user(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
     """GET /api/contradictions returns the caller's rows; not others' (IDOR).
+
+    Both evidence papers sit in BOTH libraries, so the library predicate admits
+    user B for every row. Only row ownership can exclude A's assessment, which
+    is the property under test: sharing the papers must not share the reading.
 
     # Verified: services/paper_ingestion/paper_ingestion/routers/contradictions.py:29
     # (get_contradictions calls list_contradictions(conn, user_id=user_id, ...)).
@@ -222,11 +288,17 @@ async def test_c5_01_list_contradictions_returns_rows_scoped_to_user(
         """,
         contract_two_users.user_a_id,
     )
-    await contract_conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        contract_two_users.user_a_id,
-        paper_b_id,
-    )
+    for holder in (contract_two_users.user_a_id, contract_two_users.user_b_id):
+        for shared_paper_id in (contract_two_users.paper_id_a, paper_b_id):
+            await contract_conn.execute(
+                """
+                INSERT INTO user_library (user_id, paper_id, added_via)
+                VALUES ($1, $2, 'manual_save')
+                ON CONFLICT (user_id, paper_id) DO NOTHING
+                """,
+                holder,
+                shared_paper_id,
+            )
 
     cid_a = await _seed_contradiction(
         contract_conn, contract_two_users.paper_id_a, paper_b_id, contract_two_users.user_a_id
@@ -275,6 +347,11 @@ async def test_c5_02_list_contradictions_user_b_returns_empty(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
     """User B with no seeded contradictions returns total=0.
+
+    The second evidence paper is in nobody's library, so membership already
+    excludes the row: this pins the empty-response shape, not tenancy, and stays
+    green if the ownership predicate is deleted. Ownership over papers both
+    users hold is pinned by test_c5_01.
 
     # Verified: services/paper_ingestion/paper_ingestion/routers/contradictions.py:29
     # (response.total === len(rows) when user has no contradictions).
@@ -578,7 +655,8 @@ async def test_c5_07_consensus_aggregates_by_normalized_claim(
     """GET /api/consensus folds near-duplicate claim topics and counts stances.
 
     # Verified: contradictions_persist.aggregate_consensus groups on a
-    # normalized claim_topic (lowercased, punctuation collapsed).
+    # normalized claim_topic (casefolded, punctuation collapsed, letters of
+    # every script preserved).
     """
     user_a = contract_two_users.user_a_id
     p1 = await _seed_library_paper(contract_conn, user_a, "consensus-p1")
@@ -647,10 +725,16 @@ async def test_c5_08_supports_excluded_from_contradictions_list(
     assert supports_id not in ids, f"supports row leaked into contradiction list: {ids}"
 
 
-async def test_c5_09_consensus_tenancy_isolation(
+async def test_c5_09_consensus_excludes_papers_outside_the_callers_library(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
     """User B cannot see a consensus cluster built only from user A's papers.
+
+    Both evidence papers sit in user A's library alone, so the library-membership
+    clauses exclude user B before ownership is ever evaluated. This test pins
+    membership and nothing else -- deleting the ownership predicate leaves it
+    green. Ownership of a cluster over papers BOTH users hold is pinned by
+    test_c5_09c.
 
     # Verified: aggregate_consensus requires both evidence papers in user_library.
     """
@@ -691,13 +775,453 @@ async def test_c5_09b_consensus_hides_mixed_library_pair(
     assert "mixed claim" not in topics
 
 
+async def test_c5_09c_consensus_excludes_another_users_reading_of_shared_papers(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """Sharing both evidence papers must not share user A's assessment of them.
+
+    Both papers sit in BOTH libraries, so the membership predicate admits user B
+    for every row and only ownership can withhold the cluster.
+
+    # Verified: services/paper_ingestion/paper_ingestion/services/
+    # contradictions_persist.py:220 (aggregate_consensus constrains pc.user_id
+    # alongside the two user_library membership checks).
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "shared-consensus-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "shared-consensus-p2")
+    for shared_paper_id in (p1, p2):
+        await contract_conn.execute(
+            """
+            INSERT INTO user_library (user_id, paper_id, added_via)
+            VALUES ($1, $2, 'manual_save')
+            ON CONFLICT (user_id, paper_id) DO NOTHING
+            """,
+            contract_two_users.user_b_id,
+            shared_paper_id,
+        )
+    await _seed_stance_row(
+        contract_conn, p1, p2, user_a, stance="supports", claim_topic="shared claim"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_a = await c.get("/api/consensus")
+    assert resp_a.status_code == 200, resp_a.text[:300]
+    topics_a = [claim["claim_topic"] for claim in resp_a.json()["claims"]]
+    assert "shared claim" in topics_a, f"user A should see their own cluster: {topics_a}"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.get("/api/consensus")
+    assert resp_b.status_code == 200, resp_b.text[:300]
+    topics_b = [claim["claim_topic"] for claim in resp_b.json()["claims"]]
+    assert "shared claim" not in topics_b, (
+        f"user B saw user A's assessment of shared papers: {topics_b}"
+    )
+
+
+async def test_c5_10b_unique_index_admits_one_row_per_owner(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """Two users scanning the same evidence each keep their own row.
+
+    While the key spanned the deployment, the second user's insert collided with
+    the first user's row and recorded nothing of their own, which is why a
+    user-scoped read would have shown them an empty page.
+
+    # Verified: db/migrations/0110_require_contradiction_owner.sql:56
+    # keys idx_paper_contradictions_unique_quotes directly by user_id.
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "per-owner-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "per-owner-p2")
+
+    id_a = await _seed_contradiction(contract_conn, p1, p2, user_a)
+    id_b = await _seed_contradiction(contract_conn, p1, p2, contract_two_users.user_b_id)
+
+    assert id_a != id_b, "each owner must hold a distinct row for the same evidence"
+
+
+async def test_c5_10c_normalized_write_reuses_legacy_whitespace_variant(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """The first normalized write after upgrade must not duplicate a raw legacy row."""
+    user_id = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_id, "legacy-space-p1")
+    p2 = await _seed_library_paper(contract_conn, user_id, "legacy-space-p2")
+    legacy_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="supports",
+        claim_topic="whether X holds",
+        quote_a="Paper A  says\tX.",
+        quote_b="Paper B says  not X.",
+    )
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=p1,
+            title="Paper A",
+            finding="Finding A",
+            quote="Paper A says X.",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=p2,
+            title="Paper B",
+            finding="Finding B",
+            quote="Paper B says not X.",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.8,
+        reason="cross_reference",
+    )
+    parsed = ContradictionClassification(
+        is_contradiction=False,
+        stance="supports",
+        claim_topic="whether X holds",
+        explanation="Both findings affirm the claim.",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+        confidence=0.8,
+    )
+
+    persisted_id = await _persist_contradiction(
+        contract_conn,
+        candidate,
+        parsed,
+        page_a=1,
+        page_b=2,
+        model="contract-model",
+        user_id=user_id,
+    )
+    row_count = await contract_conn.fetchval(
+        """
+        SELECT count(*) FROM paper_contradictions
+        WHERE LEAST(paper_a_id, paper_b_id) = LEAST($1::integer, $2::integer)
+          AND GREATEST(paper_a_id, paper_b_id) = GREATEST($1::integer, $2::integer)
+          AND user_id = $3
+        """,
+        p1,
+        p2,
+        user_id,
+    )
+
+    assert persisted_id == legacy_id
+    assert row_count == 1, "normalizing the new write must not create a second evidence row"
+
+
+async def test_contradiction_generation_hides_old_evidence_and_admits_a_rescan(
+    contract_two_users, contract_conn
+):
+    """The same evidence can be persisted again only for the new source generation."""
+    from paper_ingestion.services.contradictions_persist import list_contradictions
+
+    user_id = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_id, "contra-generation-p1")
+    p2 = await _seed_library_paper(contract_conn, user_id, "contra-generation-p2")
+    old_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="opposes",
+        claim_topic="generation claim",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+    )
+    before, _ = await list_contradictions(contract_conn, user_id=user_id, paper_id=p1)
+    assert old_id in {row.id for row in before}
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        p1,
+    )
+    stale, _ = await list_contradictions(contract_conn, user_id=user_id, paper_id=p1)
+    assert old_id not in {row.id for row in stale}
+
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=p1,
+            title="Paper A",
+            finding="Finding A",
+            quote="Paper A says X.",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+            content_generation=1,
+        ),
+        b=VerifiedFinding(
+            paper_id=p2,
+            title="Paper B",
+            finding="Finding B",
+            quote="Paper B says not X.",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+            content_generation=0,
+        ),
+        score=0.8,
+        reason="lexical_overlap",
+    )
+    classification = ContradictionClassification(
+        is_contradiction=True,
+        stance="opposes",
+        claim_topic="generation claim",
+        explanation="The findings disagree.",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+        confidence=0.9,
+    )
+    current_id = await _persist_contradiction(
+        contract_conn,
+        candidate,
+        classification,
+        page_a=1,
+        page_b=2,
+        model="contract-model",
+        user_id=user_id,
+    )
+
+    assert current_id is not None and current_id != old_id
+    current, _ = await list_contradictions(contract_conn, user_id=user_id, paper_id=p1)
+    assert {row.id for row in current} == {current_id}
+    raw_count = await contract_conn.fetchval(
+        """SELECT count(*) FROM paper_contradictions
+           WHERE user_id = $1
+             AND LEAST(paper_a_id, paper_b_id) = LEAST($2::integer, $3::integer)
+             AND GREATEST(paper_a_id, paper_b_id) = GREATEST($2::integer, $3::integer)""",
+        user_id,
+        p1,
+        p2,
+    )
+    assert raw_count == 2
+
+
+async def test_operational_contradiction_views_rank_whitespace_variants_once(
+    contract_two_users, contract_conn
+):
+    """Legacy whitespace variants remain stored but contribute one assessment."""
+    from paper_ingestion.services.contradictions_persist import (
+        aggregate_consensus,
+        list_contradictions,
+    )
+
+    user_id = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_id, "contra-ranked-p1")
+    p2 = await _seed_library_paper(contract_conn, user_id, "contra-ranked-p2")
+    first_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="opposes",
+        claim_topic="ranked claim",
+        quote_a="Paper A  says\tX.",
+        quote_b="Paper B says  not X.",
+    )
+    await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="opposes",
+        claim_topic="ranked claim",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+    )
+
+    listed, total = await list_contradictions(contract_conn, user_id=user_id, paper_id=p1)
+    claims, truncated = await aggregate_consensus(contract_conn, user_id=user_id)
+    raw_count = await contract_conn.fetchval(
+        """SELECT count(*) FROM paper_contradictions
+           WHERE user_id = $1
+             AND LEAST(paper_a_id, paper_b_id) = LEAST($2::integer, $3::integer)
+             AND GREATEST(paper_a_id, paper_b_id) = GREATEST($2::integer, $3::integer)""",
+        user_id,
+        p1,
+        p2,
+    )
+
+    assert raw_count == 2
+    assert total == 1
+    assert [row.id for row in listed] == [first_id]
+    claim = next(item for item in claims if item.claim_topic == "ranked claim")
+    assert claim.opposes == 1
+    assert not truncated
+
+
+async def test_0110_preserves_legacy_rows_and_requires_owner_for_new_evidence(
+    contract_two_users, contract_conn
+) -> None:
+    """The ownership migration leaves legacy evidence byte-for-byte intact."""
+    user_id = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_id, "migration-0110-p1")
+    p2 = await _seed_library_paper(contract_conn, user_id, "migration-0110-p2")
+
+    await contract_conn.execute(
+        "ALTER TABLE paper_contradictions "
+        "DROP CONSTRAINT IF EXISTS chk_paper_contradictions_user_id_present"
+    )
+    await contract_conn.execute(
+        "ALTER TABLE paper_contradictions ALTER COLUMN user_id DROP NOT NULL"
+    )
+    await contract_conn.execute("DROP INDEX IF EXISTS idx_paper_contradictions_unique_quotes")
+    await contract_conn.execute(
+        """CREATE UNIQUE INDEX idx_paper_contradictions_unique_quotes
+               ON paper_contradictions (
+                   LEAST(paper_a_id, paper_b_id),
+                   GREATEST(paper_a_id, paper_b_id),
+                   md5(quote_a),
+                   md5(quote_b),
+                   COALESCE(user_id, 0)
+               )"""
+    )
+    first_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="supports",
+        claim_topic="whether X holds",
+        quote_a="Paper A  says\tX.",
+        quote_b="Paper B says  not X.",
+    )
+    second_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="opposes",
+        claim_topic="whether X holds",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+    )
+    ownerless_id = int(
+        await contract_conn.fetchval(
+            """INSERT INTO paper_contradictions (
+                   paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+                   contradiction_type, explanation, confidence, user_id
+               ) VALUES (
+                   $1, $2, 'A', 'B', 'ownerless A', 'ownerless B',
+                   'direct', 'unattributed', 0.5, NULL
+               )
+               RETURNING id""",
+            p1,
+            p2,
+        )
+    )
+    legacy_ids = [first_id, second_id, ownerless_id]
+    before = [
+        dict(row)
+        for row in await contract_conn.fetch(
+            """SELECT id, user_id, quote_a, quote_b, finding_a, finding_b,
+                      stance, claim_topic, paper_a_content_generation,
+                      paper_b_content_generation
+                 FROM paper_contradictions
+                WHERE id = ANY($1::bigint[])
+                ORDER BY id""",
+            legacy_ids,
+        )
+    ]
+
+    migration_sql = (
+        Path(__file__).resolve().parents[4]
+        / "db"
+        / "migrations"
+        / "0110_require_contradiction_owner.sql"
+    ).read_text(encoding="utf-8")
+    await contract_conn.execute(migration_sql)
+
+    after = [
+        dict(row)
+        for row in await contract_conn.fetch(
+            """SELECT id, user_id, quote_a, quote_b, finding_a, finding_b,
+                      stance, claim_topic, paper_a_content_generation,
+                      paper_b_content_generation
+                 FROM paper_contradictions
+                WHERE id = ANY($1::bigint[])
+                ORDER BY id""",
+            legacy_ids,
+        )
+    ]
+    assert after == before
+    assert len(after) == 3
+
+    with pytest.raises(asyncpg.CheckViolationError):
+        async with contract_conn.transaction():
+            await contract_conn.execute(
+                """INSERT INTO paper_contradictions (
+                       paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+                       contradiction_type, explanation, confidence, user_id
+                   ) VALUES (
+                       $1, $2, 'A', 'B', 'new A', 'new B',
+                       'direct', 'must be owned', 0.5, NULL
+                   )""",
+                p1,
+                p2,
+            )
+
+    index_sql = await contract_conn.fetchval(
+        """SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = 'idx_paper_contradictions_unique_quotes'"""
+    )
+    assert index_sql is not None
+    assert "COALESCE" in index_sql
+    assert "paper_a_content_generation" in index_sql
+    assert "paper_b_content_generation" in index_sql
+
+    await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_id,
+        stance="supports",
+        claim_topic="new evidence",
+        quote_a="normalized A",
+        quote_b="normalized B",
+    )
+    with pytest.raises(asyncpg.UniqueViolationError):
+        async with contract_conn.transaction():
+            await _seed_stance_row(
+                contract_conn,
+                p1,
+                p2,
+                user_id,
+                stance="opposes",
+                claim_topic="same evidence",
+                quote_a="normalized A",
+                quote_b="normalized B",
+            )
+
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        p1,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_contradictions (
+               paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+               contradiction_type, explanation, confidence, user_id,
+               paper_a_content_generation, paper_b_content_generation
+           ) VALUES (
+               $1, $2, 'A3', 'B3', 'normalized A', 'normalized B',
+               'direct', 'new generation', 0.7, $3, 1, 0
+           )""",
+        p1,
+        p2,
+        user_id,
+    )
+
+
 async def test_c5_10_unique_index_ignores_stance_and_topic_labels(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """The unique index keys on pair + quotes only; a drifted label still collides.
+    """For one owner the key is pair + quotes; a drifted label still collides.
 
-    # Verified: migration 0098 leaves idx_paper_contradictions_unique_quotes on
-    # (pair, md5 quotes), so a re-scan of the same evidence with a drifted
+    # Verified: db/migrations/0110_require_contradiction_owner.sql:56
+    # keys the index on pair, quote hashes, and user_id, so a re-scan by the
+    # SAME user of the same evidence with a drifted
     # stance/claim_topic label hits the same key and is deduped (the persist
     # UniqueViolation -> reuse fallback returns the existing row in production,
     # where each statement autocommits). Were the label part of the key, the

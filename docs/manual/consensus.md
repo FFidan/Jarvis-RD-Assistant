@@ -59,4 +59,4 @@ A completed scan can still produce no chart. In that case the page explains why 
 
 - [Paper Detail](paper-detail.md) — the **Contradictions** card in the right pane triggers a per-paper contradiction scan and lists contradictions for that paper.
 - [Citation Graph](citation-graph.md) — explore citation relationships between the same papers.
-- [Knowledge Graph](knowledge-graph.md) — visualise the entities and relationships extracted from your library.
+- [Knowledge Graph](knowledge-graph.md) — visualise the entities and relationships extracted from the papers visible to you.

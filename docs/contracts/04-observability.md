@@ -120,7 +120,7 @@ Every span MUST attach the following tags where the value is non-null:
 
 | Tag | Always required | Source |
 |---|---|---|
-| `user_id` | When known | Function parameter (currently `None` in single-tenant mode; mandatory once multi-tenant lands) |
+| `user_id` | When known | Function parameter (the calling user's id). It is `None` for operations that have no owning user, such as system-global extraction templates, and is absent on traced entry points that take no such parameter |
 | `paper_id` | When per-paper | The paper being processed |
 | `template_id` | Extraction sites only | The template being applied |
 | `deck_date` | Pulse run only | The date of the deck |

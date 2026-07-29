@@ -27,6 +27,17 @@ from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSourc
 
 logger = logging.getLogger(__name__)
 
+# Nodes one graph response may carry, so the payload stays renderable.
+_MAX_GRAPH_NODES = 200
+
+# Papers the expansion may collect before it stops. Visibility filtering runs
+# over the collected set and can only shrink it, so the walk needs headroom
+# above the node budget to still fill a response. The multiple bounds how many
+# candidates are collected, and with them the visibility and edge queries. It
+# does not bound the rows one hop reads: a hub-heavy graph still fetches every
+# edge touching the current frontier before the cap is consulted.
+_MAX_GRAPH_CANDIDATES = _MAX_GRAPH_NODES * 5
+
 _INSERT_CITATION_SQL = """INSERT INTO paper_citations (source_paper_id, cited_paper_id,
        citation_context, is_influential, intent)
    VALUES ($1, $2, $3, $4, $5)
@@ -288,6 +299,68 @@ async def _filter_visible_paper_ids(
     return [r["id"] for r in rows]
 
 
+async def _collect_graph_candidates(
+    conn: ConnLike,
+    paper_ids: list[int],
+    depth: int,
+) -> list[int]:
+    """Walk ``paper_citations`` from *paper_ids* and return the papers reached.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Connection the caller already holds.
+    paper_ids : list[int]
+        Seed papers the walk starts from.
+    depth : int
+        Number of hops to expand.
+
+    Returns
+    -------
+    list[int]
+        Seeds in the order given, then each hop, ascending by ID within a hop,
+        so the same request collects the same papers in the same order. The
+        walk stops once ``_MAX_GRAPH_CANDIDATES`` papers are collected.
+
+    Raises
+    ------
+    asyncpg.exceptions.UndefinedTableError
+        If the ``paper_citations`` table does not exist.
+    """
+    ordered: list[int] = []
+    seen: set[int] = set()
+    frontier: list[int] = []
+    for paper_id in paper_ids:
+        if paper_id not in seen:
+            seen.add(paper_id)
+            ordered.append(paper_id)
+            frontier.append(paper_id)
+
+    for _ in range(depth):
+        if not frontier or len(ordered) >= _MAX_GRAPH_CANDIDATES:
+            break
+        rows = await conn.fetch(
+            """SELECT source_paper_id, cited_paper_id
+               FROM paper_citations
+               WHERE source_paper_id = ANY($1) OR cited_paper_id = ANY($1)""",
+            frontier,
+        )
+        discovered: set[int] = set()
+        for row in rows:
+            discovered.add(row["source_paper_id"])
+            discovered.add(row["cited_paper_id"])
+        next_frontier: list[int] = []
+        for paper_id in sorted(discovered - seen):
+            if len(ordered) >= _MAX_GRAPH_CANDIDATES:
+                break
+            seen.add(paper_id)
+            ordered.append(paper_id)
+            next_frontier.append(paper_id)
+        frontier = next_frontier
+
+    return ordered
+
+
 async def build_citation_graph(
     conn: ConnLike,
     paper_ids: list[int],
@@ -302,8 +375,11 @@ async def build_citation_graph(
     ``cited_paper_id`` at each hop.
 
     Constraints / non-obvious behaviour:
-    * The result is capped at **200 nodes** to avoid oversized payloads;
-      excess nodes are silently dropped (no deterministic ordering guarantee).
+    * Expansion stops after ``_MAX_GRAPH_CANDIDATES`` papers and the response
+      carries at most ``_MAX_GRAPH_NODES`` of them, seeds first and then by
+      hop, ascending by ID within a hop. The node budget is applied after the
+      visibility filter, so the same request returns the same graph and a
+      paper the caller cannot see never occupies a node slot.
     * ``display_size`` on each node is derived from ``citation_count`` and
       clamped to [15, 40].
     * If the ``paper_citations`` table is missing, returns an empty graph
@@ -316,40 +392,20 @@ async def build_citation_graph(
     if not paper_ids:
         return CitationGraphResponse(nodes=[], edges=[])
 
-    # Collect all paper IDs in the graph through expansion
-    collected_ids: set[int] = set(paper_ids)
-    frontier: set[int] = set(paper_ids)
-
     try:
-        for _ in range(depth):
-            if not frontier:
-                break
-            # Find all papers connected to the frontier
-            rows = await conn.fetch(
-                """SELECT source_paper_id, cited_paper_id
-                   FROM paper_citations
-                   WHERE source_paper_id = ANY($1) OR cited_paper_id = ANY($1)""",
-                list(frontier),
-            )
-            new_ids: set[int] = set()
-            for row in rows:
-                new_ids.add(row["source_paper_id"])
-                new_ids.add(row["cited_paper_id"])
-            frontier = new_ids - collected_ids
-            collected_ids.update(new_ids)
+        candidate_ids = await _collect_graph_candidates(conn, paper_ids, depth)
     except asyncpg.exceptions.UndefinedTableError:
         return CitationGraphResponse(nodes=[], edges=[])
 
-    if not collected_ids:
-        return CitationGraphResponse(nodes=[], edges=[])
-
-    # Cap at 200 nodes
-    all_ids = list(collected_ids)[:200]
-
-    # Restrict node fetch to papers visible to the caller — prevents cross-user enumeration.
+    # Restrict node fetch to papers visible to the caller — prevents cross-user
+    # enumeration. The filter runs over the whole walk and the node budget is
+    # applied afterwards, so a paper the caller cannot see never occupies a slot
+    # that a visible one, discovered later in the walk, would have taken.
     if user_id is not None:
-        all_ids = await _filter_visible_paper_ids(conn, all_ids, user_id)
+        visible_ids = set(await _filter_visible_paper_ids(conn, candidate_ids, user_id))
+        candidate_ids = [pid for pid in candidate_ids if pid in visible_ids]
 
+    all_ids = candidate_ids[:_MAX_GRAPH_NODES]
     if not all_ids:
         return CitationGraphResponse(nodes=[], edges=[])
 
@@ -359,6 +415,7 @@ async def build_citation_graph(
            FROM papers WHERE id = ANY($1)""",
         all_ids,
     )
+    rows_by_id = {r["id"]: r for r in node_rows}
     nodes = [
         GraphNode(
             id=r["id"],
@@ -368,7 +425,7 @@ async def build_citation_graph(
             is_stub=(r["metadata"] or {}).get("stub") == "true",
             display_size=min(40, max(15, 15 + (r["citation_count"] or 0) // 10)),
         )
-        for r in node_rows
+        for r in (rows_by_id[pid] for pid in all_ids if pid in rows_by_id)
     ]
 
     # Fetch edges between collected nodes

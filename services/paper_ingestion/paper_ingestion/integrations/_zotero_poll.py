@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import asyncpg
 import httpx
+from jarvis_common.jobs import batch_terminal_status
 from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from jarvis_common.task_registry import KIND_TO_TASK
@@ -25,10 +26,30 @@ from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
 
-# Maximum number of items enqueued per sync cycle.  When this limit is hit the
-# library version cursor is NOT advanced so the next sync resumes from the same
-# point and processes the next batch.
-MAX_ENQUEUE_PER_SYNC = 20
+# Maximum work one sync cycle may do: papers inserted, and analysis jobs
+# deferred. Either counter reaching the limit stops the cycle. The two are
+# independent — a library whose papers another user already imported inserts
+# nothing yet still owes every item a scheduling decision — so bounding
+# insertions alone leaves the analysis enqueues unbounded. When this limit is
+# hit the library version cursor is NOT advanced, so the next sync resumes from
+# the same point and processes the next batch.
+MAX_INGEST_PER_SYNC = 20
+
+# How many times one import may try to schedule its analysis before the poll
+# gives up on that item. A failed enqueue pins the version cursor so the next
+# cycle retries it; without a bound, an import whose enqueue can never succeed
+# stops every other item in the library from ever syncing. Five tries spans
+# five cycles of the default hourly poll — long enough to outlast a worker
+# restart or a short job-queue outage, short enough that a hopeless import
+# holds the library back for hours rather than indefinitely.
+MAX_ANALYSIS_ENQUEUE_ATTEMPTS = 5
+
+# Zotero item types that carry no bibliographic record of their own. Zotero
+# also allows them to exist standalone, with no parentItem — a PDF or a note
+# dragged straight into a library is one — so the item type decides here, not
+# parentage. Ingesting one would create a placeholder paper named after its
+# item key.
+_NON_BIBLIOGRAPHIC_ITEM_TYPES = frozenset({"annotation", "attachment", "note"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,82 +482,295 @@ async def _migrate_unambiguous_legacy_identity(
         logger.info("Concurrent Zotero identity migration kept the existing namespaced row")
 
 
+async def _link_zotero_item(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    *,
+    paper_id: int,
+    item_key: str,
+    polling_user_id: int | None,
+) -> tuple[int | None, bool, int]:
+    """Store a Zotero item key on the polling user's link row and read its state.
+
+    Parameters
+    ----------
+    conn
+        Connection inside the ingestion transaction.
+    paper_id
+        The upserted paper.
+    item_key
+        The Zotero item this import came from; empty when the item carries none.
+    polling_user_id
+        The polling user, or None for a single-tenant / system poll.
+
+    Returns
+    -------
+    tuple[int | None, bool, int]
+        The link row's owner, whether that row already records a resolved
+        analysis-scheduling decision, and how many scheduling attempts it has
+        already spent. The owner is None when no row can carry the marker — an
+        item with no key, or ambiguous ownership — and the caller then has only
+        the brand-new-paper signal to work from; the flag is False and the
+        count 0 in that case, since neither has anywhere to live.
+
+    Notes
+    -----
+    The decision flag reads ``analysis_enqueued_at IS NOT NULL``. That column
+    records when a link row's analysis-scheduling decision was resolved, not
+    when a job was enqueued: rows predating the column were backfilled with the
+    row's last-touched time as their resolution marker. Only the NULL /
+    NOT NULL distinction is ever read, so both writers agree.
+    """
+    if not item_key:
+        return None, False, 0
+    link_user_id = await _resolve_zotero_user_id(conn, polling_user_id)
+    if link_user_id is None:
+        return None, False, 0
+    # At-most-once: claim the item key only while the link's own is still NULL.
+    await conn.execute(
+        """
+        INSERT INTO paper_user_zotero_links
+            (paper_id, user_id, zotero_item_key, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (paper_id, user_id) DO UPDATE
+           SET zotero_item_key = EXCLUDED.zotero_item_key,
+               updated_at = NOW()
+         WHERE paper_user_zotero_links.zotero_item_key IS NULL
+        """,
+        paper_id,
+        link_user_id,
+        item_key,
+    )
+    state = await conn.fetchrow(
+        """
+        SELECT analysis_enqueued_at IS NOT NULL AS scheduling_recorded,
+               analysis_enqueue_attempts
+          FROM paper_user_zotero_links
+         WHERE paper_id = $1
+           AND user_id = $2
+        """,
+        paper_id,
+        link_user_id,
+    )
+    if state is None:
+        return link_user_id, False, 0
+    return (
+        link_user_id,
+        bool(state["scheduling_recorded"]),
+        int(state["analysis_enqueue_attempts"]),
+    )
+
+
+async def _record_analysis_enqueue_attempt(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    paper_id: int,
+    link_user_id: int,
+) -> None:
+    """Count one analysis-scheduling attempt on this import's link row.
+
+    Issued inside the ingestion transaction, which commits before the enqueue
+    runs, so an attempt is recorded even when the enqueue then raises. That
+    durability is what bounds the retrying: the count is per link row, so a
+    single import exhausting its budget never costs another import an attempt.
+    """
+    await conn.execute(
+        """
+        UPDATE paper_user_zotero_links
+           SET analysis_enqueue_attempts = analysis_enqueue_attempts + 1
+         WHERE paper_id = $1
+           AND user_id = $2
+        """,
+        paper_id,
+        link_user_id,
+    )
+
+
+async def _record_analysis_scheduling(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    paper_id: int,
+    link_user_id: int,
+) -> None:
+    """Mark this import's analysis scheduling as resolved on its link row.
+
+    ``analysis_enqueued_at`` carries one meaning: when this link row's
+    analysis-scheduling decision was resolved. It is not a timestamp of the
+    enqueue itself — rows predating the column were backfilled with the row's
+    last-touched time as their resolution marker — and only the NULL /
+    NOT NULL distinction is ever read.
+
+    A decision resolves three ways, and all three write here: ``paper.analyze``
+    was deferred, the import was found to carry no PDF to analyse, or the
+    import spent every attempt its budget allowed and was given up on. Until
+    one of them happens the column stays NULL, which is what lets the next poll
+    retry a decision that never completed. The column records that a decision
+    was reached, not which of the three it was — ``analysis_enqueue_attempts``
+    is what distinguishes an import that was given up on.
+    """
+    await conn.execute(
+        """
+        UPDATE paper_user_zotero_links
+           SET analysis_enqueued_at = NOW()
+         WHERE paper_id = $1
+           AND user_id = $2
+           AND analysis_enqueued_at IS NULL
+        """,
+        paper_id,
+        link_user_id,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _IngestOutcome:
+    """What one item's ingestion actually did.
+
+    ``inserted`` bounds the cycle; ``analysis_enqueued`` is reported to the
+    caller; ``analysis_gave_up`` records an exhausted scheduling budget. They
+    are independent: an insert without a PDF URL enqueues nothing.
+    """
+
+    inserted: bool
+    analysis_enqueued: bool
+    analysis_gave_up: bool
+
+
 async def _ingest_new_item(
     db_pool: asyncpg.Pool,
     paper_create: PaperCreate,
     item_key: str,
     polling_user_id: int | None,
     namespace: _ZoteroLibraryNamespace,
-) -> bool:
+) -> _IngestOutcome:
     """Upsert a new paper, mirror it into the polling user's library, store the
-    Zotero link, and enqueue ``paper.analyze`` for brand-new papers.
+    Zotero link, and enqueue ``paper.analyze`` for downloadable imports whose
+    analysis has not been scheduled yet.
 
-    Returns ``True`` when ``paper.analyze`` was enqueued (the paper was an
-    insert), ``False`` otherwise. Raises on DB/enqueue failure so the caller
-    can pin the cursor.
+    Returns the insertion and scheduling outcome. Raises on DB/enqueue failure so the
+    caller can pin the cursor — except once an import has spent
+    ``MAX_ANALYSIS_ENQUEUE_ATTEMPTS`` on scheduling: that import's decision is
+    then resolved as "given up on" and this returns normally, so the cursor
+    advances and the rest of the library keeps syncing.
     """
-    async with db_pool.acquire() as conn, conn.transaction():
-        await _migrate_unambiguous_legacy_identity(
-            conn,
-            item_key=item_key,
-            namespace=namespace,
-        )
-        # Upsert the namespace-qualified private paper, then add exact library
-        # membership for the polling user. ``discovered_by`` is audit-only.
-        row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
-        paper_id = row["id"]
-        is_new_paper = bool(row["is_insert"])
-        if polling_user_id is not None:
-            await add_to_library(
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await _migrate_unambiguous_legacy_identity(
                 conn,
+                item_key=item_key,
+                namespace=namespace,
+            )
+            # Upsert the namespace-qualified private paper, then add exact library
+            # membership for the polling user. ``discovered_by`` records provenance
+            # and grants no access.
+            row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
+            paper_id = row["id"]
+            is_new_paper = bool(row["is_insert"])
+            if polling_user_id is not None:
+                await add_to_library(
+                    conn,
+                    user_id=polling_user_id,
+                    paper_id=paper_id,
+                    added_via="zotero_pull",
+                )
+                # First-sync wins: INSERT to_read state but never overwrite
+                # existing user state (user may have trashed the paper).
+                await _upsert_paper_user_state(
+                    conn,
+                    paper_id,
+                    polling_user_id,
+                    state="to_read",
+                    starred=False,
+                    on_conflict="do_nothing",
+                )
+            link_user_id, analysis_scheduled, enqueue_attempts = await _link_zotero_item(
+                conn,
+                paper_id=paper_id,
+                item_key=item_key,
+                polling_user_id=polling_user_id,
+            )
+
+            # The gate asks whether scheduling is still unresolved, never
+            # whether the paper was analysed. Gating on pdf_downloaded (or any
+            # completion field) would re-enqueue every already-imported item on
+            # each capped or failed re-poll and pin the cursor (storm).
+            # is_insert alone cannot reopen the gate after a defer that raised,
+            # so the link row's durable marker carries the decision instead —
+            # and an item already marked is skipped outright on every later
+            # poll. An import that has spent its attempt budget schedules
+            # nothing by either half of the gate.
+            attempts_exhausted = enqueue_attempts >= MAX_ANALYSIS_ENQUEUE_ATTEMPTS
+            gave_up = attempts_exhausted and not analysis_scheduled
+            needs_scheduling = not attempts_exhausted and (
+                is_new_paper or (link_user_id is not None and not analysis_scheduled)
+            )
+            if link_user_id is not None:
+                if needs_scheduling and paper_create.pdf_url:
+                    # Counted here, still inside the transaction, because the
+                    # enqueue below runs after it commits: an attempt that ends
+                    # in a raising defer must still be spent, or the budget
+                    # never runs down.
+                    await _record_analysis_enqueue_attempt(conn, paper_id, link_user_id)
+                elif gave_up:
+                    # Resolved in the same transaction as the read that decided
+                    # it. A resolve issued after the commit can itself fail, and
+                    # the next poll would then re-enter this branch and pin the
+                    # cursor again, restoring the unbounded retrying the budget
+                    # exists to end.
+                    await _record_analysis_scheduling(conn, paper_id, link_user_id)
+
+        # The transaction has committed. The enqueue stays outside it because
+        # procrastinate's connector defers on its own connection: a job written
+        # inside this transaction would be visible to a worker before the paper
+        # row it names had committed.
+        if gave_up and link_user_id is not None:
+            # Reported once, after the resolve above committed, so every later
+            # poll of the same item takes the already-resolved path in silence.
+            # Returning instead of raising lets the version cursor advance and
+            # the rest of the library keep syncing.
+            logger.error(
+                "Zotero poll: paper %s (item %s) has failed to schedule its analysis on "
+                "%d attempts — giving up; it will not be retried",
+                paper_id,
+                item_key,
+                enqueue_attempts,
+            )
+            return _IngestOutcome(
+                inserted=is_new_paper,
+                analysis_enqueued=False,
+                analysis_gave_up=True,
+            )
+        if not needs_scheduling:
+            return _IngestOutcome(
+                inserted=is_new_paper,
+                analysis_enqueued=False,
+                analysis_gave_up=False,
+            )
+
+        # _paper_analyze_job raises "has no PDF URL" for a non-local paper
+        # without pdf_url, so enqueueing an import that has none only schedules
+        # a job that fails deterministically.
+        enqueued = bool(paper_create.pdf_url)
+        if enqueued:
+            await KIND_TO_TASK["paper.analyze"].defer_async(
+                job_id=str(uuid.uuid4()),
                 user_id=polling_user_id,
                 paper_id=paper_id,
-                added_via="zotero_pull",
             )
-            # First-sync wins: INSERT to_read state but never overwrite
-            # existing user state (user may have trashed the paper).
-            await _upsert_paper_user_state(
-                conn,
+        else:
+            # Ingesting without enqueueing used to surface as a job that failed with
+            # "has no PDF URL"; say so here instead, or the import is silent.
+            logger.info(
+                "Zotero poll: imported paper %s (item %s) has no PDF URL — analysis not scheduled",
                 paper_id,
-                polling_user_id,
-                state="to_read",
-                starred=False,
-                on_conflict="do_nothing",
+                item_key,
             )
-        # Store the Zotero item key in the polling user's link row
-        # (at-most-once: only when the link's item_key is still NULL).
-        if item_key:
-            resolved_polling_user_id = await _resolve_zotero_user_id(conn, polling_user_id)
-            if resolved_polling_user_id is not None:
-                await conn.execute(
-                    """
-                    INSERT INTO paper_user_zotero_links
-                        (paper_id, user_id, zotero_item_key, updated_at)
-                    VALUES ($1, $2, $3, NOW())
-                    ON CONFLICT (paper_id, user_id) DO UPDATE
-                       SET zotero_item_key = EXCLUDED.zotero_item_key,
-                           updated_at = NOW()
-                     WHERE paper_user_zotero_links.zotero_item_key IS NULL
-                    """,
-                    paper_id,
-                    resolved_polling_user_id,
-                    item_key,
-                )
-    # Enqueue gate = is_insert (brand-new paper), NOT an analysis-
-    # completion marker. Zotero-imported papers carry no pdf_url, so
-    # _paper_analyze_job raises before the download that would flip
-    # pdf_downloaded — gating on pdf_downloaded (or any "analyzed?"
-    # field) would re-enqueue every already-imported item on each
-    # capped/failed re-poll and pin the cursor (storm). is_insert is
-    # False on every re-poll, so the cursor advances to the next batch.
-    if is_new_paper:
-        await KIND_TO_TASK["paper.analyze"].defer_async(
-            job_id=str(uuid.uuid4()),
-            user_id=polling_user_id,
-            paper_id=paper_id,
+        # Only now, with the defer returned, is the decision durable. Marking
+        # the PDF-less case too keeps a doomed import from being re-evaluated
+        # on every subsequent poll.
+        if link_user_id is not None:
+            await _record_analysis_scheduling(conn, paper_id, link_user_id)
+        return _IngestOutcome(
+            inserted=is_new_paper,
+            analysis_enqueued=enqueued,
+            analysis_gave_up=False,
         )
-        return True
-    return False
 
 
 async def _persist_poll_cursor(
@@ -577,15 +811,26 @@ class _PollBatch:
 
     ``parse_failed_keys`` (permanently malformed — will never succeed on retry)
     and ``ingest_failed_keys`` (transient — may succeed on retry) are tracked
-    separately so the cursor-pin decision can distinguish them.
+    separately so the cursor-pin decision can distinguish them. Scheduling
+    give-ups are counted without exposing their item keys to callers.
     """
 
     new_count: int
     linked_count: int
     enqueued_count: int
     capped: bool
+    remaining_count: int
     parse_failed_keys: list[str]
     ingest_failed_keys: list[str]
+    gave_up_count: int
+
+
+def _is_eligible_poll_item(data: dict[str, Any]) -> bool:
+    """Whether an item represents a bibliographic record JARVIS should process."""
+    return (
+        "jarvis_paper_id=" not in (data.get("extra", "") or "")
+        and data.get("itemType") not in _NON_BIBLIOGRAPHIC_ITEM_TYPES
+    )
 
 
 async def _process_poll_batch(
@@ -594,23 +839,40 @@ async def _process_poll_batch(
     polling_user_id: int | None,
     namespace: _ZoteroLibraryNamespace,
 ) -> _PollBatch:
-    """Link or ingest each new item, stopping at the per-cycle enqueue cap."""
+    """Link or ingest each new item, stopping at the per-cycle work cap."""
     new_count = 0
     linked_count = 0
+    inserted_count = 0
     enqueued_count = 0
-    capped = False  # True when we hit MAX_ENQUEUE_PER_SYNC mid-batch.
+    capped = False  # True when we hit MAX_INGEST_PER_SYNC mid-batch.
+    remaining_count = 0
     parse_failed_keys: list[str] = []
     ingest_failed_keys: list[str] = []
+    gave_up_count = 0
 
-    for outer_item in items:
-        if enqueued_count >= MAX_ENQUEUE_PER_SYNC:
+    for item_index, outer_item in enumerate(items):
+        # Insertions and analysis enqueues are counted separately because an
+        # item can produce either without the other: a library another user
+        # already imported inserts nothing yet still owes every item its own
+        # scheduling decision, so only the enqueue counter bounds that cycle.
+        if inserted_count >= MAX_INGEST_PER_SYNC or enqueued_count >= MAX_INGEST_PER_SYNC:
             capped = True
+            remaining_count = sum(
+                _is_eligible_poll_item(item.get("data", {})) for item in items[item_index:]
+            )
             break
         data: dict[str, Any] = outer_item.get("data", {})
         item_key: str = data.get("key", outer_item.get("key", ""))
 
         # Skip items that originated in JARVIS.
-        if "jarvis_paper_id=" in (data.get("extra", "") or ""):
+        if not _is_eligible_poll_item(data):
+            if "jarvis_paper_id=" not in (data.get("extra", "") or ""):
+                item_type = data.get("itemType")
+                logger.info(
+                    "Zotero poll: skipping item %s — item type %s carries no bibliographic record",
+                    item_key,
+                    item_type,
+                )
             continue
 
         new_count += 1
@@ -633,14 +895,13 @@ async def _process_poll_batch(
             continue
 
         try:
-            if await _ingest_new_item(
+            outcome = await _ingest_new_item(
                 db_pool,
                 parsed.paper_create,
                 parsed.item_key,
                 polling_user_id,
                 namespace,
-            ):
-                enqueued_count += 1
+            )
         except Exception:
             logger.error(
                 "Zotero poll: failed to upsert/enqueue paper for key %s",
@@ -648,9 +909,21 @@ async def _process_poll_batch(
                 exc_info=True,
             )
             ingest_failed_keys.append(parsed.item_key)
+            continue
+
+        inserted_count += int(outcome.inserted)
+        enqueued_count += int(outcome.analysis_enqueued)
+        gave_up_count += int(outcome.analysis_gave_up)
 
     return _PollBatch(
-        new_count, linked_count, enqueued_count, capped, parse_failed_keys, ingest_failed_keys
+        new_count,
+        linked_count,
+        enqueued_count,
+        capped,
+        remaining_count,
+        parse_failed_keys,
+        ingest_failed_keys,
+        gave_up_count,
     )
 
 
@@ -662,9 +935,10 @@ async def poll_zotero_library(
     """Incremental poll of Zotero library since last known version.
 
     For each new item:
+    - If itemType is an attachment, note or annotation → skip (not a paper)
     - If Extra field contains 'jarvis_paper_id=' → skip (originated in JARVIS)
     - If DOI matches existing JARVIS paper → link zotero_item_key (skip ingestion)
-    - Else → enqueue paper.process job with Zotero metadata as seed
+    - Else → ingest the paper, enqueueing paper.analyze only when it has a PDF URL
 
     Persists last library version in user_config as 'zotero.last_library_version'.
     """
@@ -715,32 +989,63 @@ async def poll_zotero_library(
         )
 
     # Persist updated library version.
-    # If the enqueue cap was hit, do NOT advance the cursor — the next sync
-    # will re-fetch items starting from last_version and process the next batch.
+    # If the per-cycle work cap was hit, do NOT advance the cursor — the next
+    # sync will re-fetch items starting from last_version and process the next
+    # batch. Either counter can stop a cycle, so this does not name insertions:
+    # a cycle that inserted nothing and only scheduled analyses reaches it too.
     if batch.capped:
         new_version = last_version
         logger.info(
-            "Zotero poll: enqueue cap (%d) reached — deferring version advance to next sync",
-            MAX_ENQUEUE_PER_SYNC,
+            "Zotero poll: per-cycle cap (%d) reached — deferring version advance to next sync",
+            MAX_INGEST_PER_SYNC,
         )
     cursor_persisted = True
     if new_version != last_version:
         cursor_persisted = await _persist_poll_cursor(db_pool, polling_user_id, new_version)
 
+    parse_failed = len(batch.parse_failed_keys)
+    ingest_failed = len(batch.ingest_failed_keys)
+    failed = parse_failed + ingest_failed + batch.gave_up_count
+    remaining = batch.remaining_count
+    status = batch_terminal_status(
+        cancelled=False,
+        incomplete=bool(
+            batch.capped
+            or parse_failed
+            or ingest_failed
+            or batch.gave_up_count
+            or not cursor_persisted
+        ),
+    )
     logger.info(
-        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d persisted=%s",
+        "Zotero poll complete: status=%s new=%d linked=%d enqueued=%d "
+        "parse_failed=%d ingest_failed=%d gave_up=%d capped=%s "
+        "version=%d→%d persisted=%s",
+        status,
         batch.new_count,
         batch.linked_count,
         batch.enqueued_count,
+        parse_failed,
+        ingest_failed,
+        batch.gave_up_count,
+        batch.capped,
         last_version,
         new_version,
         cursor_persisted,
     )
     return {
-        "status": "ok",
+        "status": status,
         "new_items": batch.new_count,
         "linked": batch.linked_count,
         "enqueued": batch.enqueued_count,
+        "parse_failed": parse_failed,
+        "ingest_failed": ingest_failed,
+        "gave_up": batch.gave_up_count,
+        "capped": batch.capped,
+        "failed": failed,
+        "skipped": 0,
+        "remaining": remaining,
+        "total": batch.new_count + remaining,
         "version_from": last_version,
         "version_to": new_version,
         "cursor_persisted": cursor_persisted,

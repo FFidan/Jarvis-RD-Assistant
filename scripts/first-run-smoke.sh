@@ -5,7 +5,8 @@
 # following the README's documented first-run command. Catches "works on my
 # machine" / undocumented-manual-step regressions before public launch.
 #
-# It runs the EXACT documented non-interactive bootstrap from the README:
+# It runs the documented non-interactive bootstrap from the README, adding only
+# the explicit project identity that isolates this smoke:
 #
 #     ./setup.sh --non-interactive --profile=dev   # local dev / CI smoke test
 #
@@ -16,11 +17,12 @@
 # smoke additionally verifies the dashboard responds on http://localhost:3001.
 #
 # ISOLATION (so this can NEVER wipe a real deployment):
-#   * Runs under a dedicated compose project name (jarvis-firstrun-smoke) via
-#     COMPOSE_PROJECT_NAME, which docker compose honours natively — setup.sh's
-#     own `docker compose` calls and this script's teardown all target that
-#     isolated project (separate containers, volumes, and network).
-#   * Refuses to run if that smoke project already has containers/volumes
+#   * setup.sh receives a dedicated persisted project name
+#     (`jarvis-firstrun-<checkout-key>`); the compatibility wrapper receives the
+#     same name through COMPOSE_PROJECT_NAME. Teardown is explicitly scoped
+#     with `-p`.
+#   * Refuses to run if that smoke project already has containers, volumes, or
+#     networks
 #     (unless --force), and refuses if a `.env` already exists in the repo
 #     (the documented first run starts with NO .env, and this smoke regenerates
 #     it). The real deployment's project + volumes are never touched.
@@ -30,11 +32,12 @@
 #
 # Usage:
 #   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS] [--build-local]
-#                                   [--integration] [--rerun] [--wrapper] [--help]
+#                                   [--image-tag TAG] [--integration] [--rerun]
+#                                   [--wrapper] [--help]
 #
-#   --force            Tear down a pre-existing smoke project before starting,
-#                      instead of refusing. (Never affects the real deployment;
-#                      only the isolated jarvis-firstrun-smoke project.)
+#   --force            Remove pre-existing resources carrying the exact smoke
+#                      project label before starting, instead of refusing.
+#                      Never affects the real deployment.
 #   --timeout SECONDS  Overall budget for `setup.sh` to finish (default 3600).
 #                      The first run pulls 7-11 GB of model data, so a clean
 #                      machine legitimately needs 20-60 min.
@@ -45,6 +48,8 @@
 #                      Incompatible with --wrapper: scripts/jarvis-setup.sh
 #                      takes no bootstrap-mode flag, so there is nothing to
 #                      forward to it.
+#   --image-tag TAG    Pull stable, prerelease, or lowercase 40-hex commit-tagged
+#                      application images. Incompatible with --wrapper.
 #   --integration      After the stack is healthy, run the gated integration
 #                      suite against it (sets SMOKE_INTEGRATION=1; requires uv).
 #   --rerun            After the first bootstrap succeeds, run it again with
@@ -57,9 +62,8 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
-# Dedicated, isolated compose project — never collides with the real deployment.
-readonly SMOKE_PROJECT="jarvis-firstrun-smoke"
-export COMPOSE_PROJECT_NAME="$SMOKE_PROJECT"
+# The dedicated Compose project is derived from the canonical checkout after
+# setup_lib.sh is loaded. Separate checkouts therefore never share teardown.
 
 # Isolation: distinct subnet + dashboard port so a smoke run never collides with
 # a live deploy on the same host (which uses 10.137.241.0/24 and port 3001).
@@ -88,9 +92,12 @@ DISK_BUDGET_GB=6
 FORCE=0
 TIMEOUT_SECONDS=3600
 BUILD_LOCAL=0
+IMAGE_TAG=""
+IMAGE_TAG_EXPLICIT=0
 INTEGRATION=0
 RERUN=0
 WRAPPER=0
+SMOKE_OWNS_PROJECT=0
 
 # -----------------------------------------------------------------------------
 # Output helpers
@@ -120,6 +127,13 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --timeout=*) TIMEOUT_SECONDS="${1#*=}"; shift ;;
     --build-local) BUILD_LOCAL=1; shift ;;
+    --image-tag)
+      if [ "$#" -lt 2 ] || [[ "$2" == -* ]]; then
+        err "--image-tag requires a value."
+        exit 2
+      fi
+      IMAGE_TAG="$2"; IMAGE_TAG_EXPLICIT=1; shift 2 ;;
+    --image-tag=*) IMAGE_TAG="${1#*=}"; IMAGE_TAG_EXPLICIT=1; shift ;;
     --integration) INTEGRATION=1; shift ;;
     --rerun)   RERUN=1; shift ;;
     --wrapper) WRAPPER=1; shift ;;
@@ -133,6 +147,11 @@ esac
 if [ "$BUILD_LOCAL" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
   err "--build-local cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
   err "bootstrap-mode flag, so there is nothing to forward to it."
+  exit 2
+fi
+if [ "$IMAGE_TAG_EXPLICIT" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
+  err "--image-tag cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
+  err "published-image selector."
   exit 2
 fi
 # Adjust the budget to the path this run actually takes. The default above (6) is
@@ -153,30 +172,122 @@ readonly DISK_BUDGET_GB
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=setup_lib.sh
+source "${SCRIPT_DIR}/setup_lib.sh"
+if [ "$IMAGE_TAG_EXPLICIT" -eq 1 ] && ! image_tag_is_valid "$IMAGE_TAG"; then
+  err "--image-tag must be X.Y.Z, X.Y.Z-prerelease, or a lowercase 40-hex commit."
+  exit 2
+fi
+
+_smoke_lock_path="$(host_lifecycle_lock_path "$REPO_ROOT")" \
+  || { err "Could not derive the checkout's isolated project identity."; exit 1; }
+_smoke_project_key="${_smoke_lock_path##*/}"
+_smoke_project_key="${_smoke_project_key%.lock}"
+case "$_smoke_project_key" in
+  ''|*[!0-9a-f]*)
+    err "The checkout's isolated project identity is invalid."
+    exit 1
+    ;;
+esac
+[ "${#_smoke_project_key}" -eq 64 ] \
+  || { err "The checkout's isolated project identity has the wrong length."; exit 1; }
+readonly SMOKE_PROJECT="jarvis-firstrun-${_smoke_project_key:0:16}"
+unset _smoke_lock_path _smoke_project_key
+[ "$WRAPPER" -ne 1 ] || export COMPOSE_PROJECT_NAME="$SMOKE_PROJECT"
 
 # Whether a .env already existed BEFORE this run — drives teardown (only remove
 # the .env if WE generated it, never an operator's existing config).
 ENV_PREEXISTED=0
 [ -f "$REPO_ROOT/.env" ] && ENV_PREEXISTED=1
 
+# project_resource_ids PROJECT KIND — list exactly project-labeled resources.
+project_resource_ids() {
+  local project="$1"
+  case "$2" in
+    containers)
+      docker ps -aq --filter "label=com.docker.compose.project=${project}" ;;
+    volumes)
+      docker volume ls -q --filter "label=com.docker.compose.project=${project}" ;;
+    networks)
+      docker network ls -q --filter "label=com.docker.compose.project=${project}" ;;
+    *) return 2 ;;
+  esac
+}
+
+# project_has_resources PROJECT — return 0 when any owned resource exists.
+project_has_resources() {
+  local project="$1" kind ids
+  for kind in containers volumes networks; do
+    ids="$(project_resource_ids "$project" "$kind")" || return 2
+    [ -z "$ids" ] || return 0
+  done
+  return 1
+}
+
+# require_project_resource_labels PROJECT KIND — require non-empty exact labels.
+require_project_resource_labels() {
+  local project="$1" kind="$2" ids id label
+  ids="$(project_resource_ids "$project" "$kind")" || return 1
+  [ -n "$ids" ] || {
+    err "The smoke project owns no ${kind} after bootstrap."
+    return 1
+  }
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    case "$kind" in
+      containers)
+        label="$(docker inspect --format \
+          '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")" ;;
+      volumes)
+        label="$(docker volume inspect --format \
+          '{{ index .Labels "com.docker.compose.project" }}' "$id")" ;;
+      networks)
+        label="$(docker network inspect --format \
+          '{{ index .Labels "com.docker.compose.project" }}' "$id")" ;;
+    esac
+    if [ "$label" != "$project" ]; then
+      err "${kind%?} ${id} is labeled for '${label:-none}', not '${project}'."
+      return 1
+    fi
+  done <<< "$ids"
+}
+
 # -----------------------------------------------------------------------------
 # Teardown — ALWAYS runs (trap EXIT). Leaves no residue.
 # -----------------------------------------------------------------------------
 teardown() {
-  local rc=$?
+  local rc=$? kind leftovers cleanup_ok=1
   printf '\n'
-  info "Teardown: removing the isolated '${SMOKE_PROJECT}' project (containers + volumes)..."
-  # -v removes the named volumes for THIS project only; --remove-orphans clears
-  # any one-off (ollama-bootstrap / *-db-init) containers. Scoped to the
-  # isolated project via COMPOSE_PROJECT_NAME, so the real deployment is safe.
-  docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans 2>/dev/null || true
+  if [ "$SMOKE_OWNS_PROJECT" -eq 1 ]; then
+    info "Teardown: removing the isolated '${SMOKE_PROJECT}' project..."
+    # -v removes this project's named volumes; --remove-orphans clears its
+    # one-off bootstrap containers. The explicit project keeps teardown scoped.
+    docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans 2>/dev/null \
+      || warn "Compose teardown returned non-zero; checking owned resources."
+    for kind in containers volumes networks; do
+      if ! leftovers="$(project_resource_ids "$SMOKE_PROJECT" "$kind")"; then
+        err "Could not verify ${kind} cleanup for '${SMOKE_PROJECT}'."
+        cleanup_ok=0
+      elif [ -n "$leftovers" ]; then
+        err "Teardown left project-owned ${kind}: ${leftovers//$'\n'/ }"
+        cleanup_ok=0
+      fi
+    done
+  else
+    info "Teardown: the smoke project was not acquired; no Docker state removed."
+  fi
 
   # Remove bootstrap-generated working-tree artifacts so the checkout is clean.
   # Only delete the .env if THIS run created it (never an operator's existing one).
   if [ "$ENV_PREEXISTED" -eq 0 ]; then
     rm -f "$REPO_ROOT/.env" "$REPO_ROOT"/docker-compose.override.yml.bak.* 2>/dev/null || true
   fi
-  ok "Teardown complete."
+  if [ "$cleanup_ok" -eq 1 ]; then
+    ok "Teardown complete; no project-owned containers, volumes, or networks remain."
+  else
+    rc=1
+    err "Teardown could not prove complete project cleanup."
+  fi
 
   if [ "$rc" -eq 0 ]; then
     printf '\n%s================ FIRST-RUN SMOKE: PASS ================%s\n' "$C_GREEN" "$C_RESET"
@@ -210,39 +321,87 @@ if [ "$INTEGRATION" -eq 1 ]; then
 fi
 ok "docker + compose present; setup.sh found."
 
-# Guard: never silently clobber a real deployment. Refuse if the SMOKE project
-# already has containers or volumes, unless --force tears them down first.
-existing_containers="$(docker compose -p "$SMOKE_PROJECT" ps -aq 2>/dev/null || true)"
-existing_volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=${SMOKE_PROJECT}" 2>/dev/null || true)"
-if [ -n "$existing_containers" ] || [ -n "$existing_volumes" ]; then
-  if [ "$FORCE" -eq 1 ]; then
-    warn "Pre-existing '${SMOKE_PROJECT}' state found — removing it (--force)."
-    docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans 2>/dev/null || true
-  else
-    err "An isolated '${SMOKE_PROJECT}' project already exists (containers/volumes)."
-    err "Re-run with --force to remove it first. (The real deployment is never touched.)"
-    exit 1
-  fi
-fi
-
-# Guard: the documented first run starts with NO .env. A pre-existing .env means
-# this is not a clean machine; refuse rather than overwrite the operator's config.
+# The documented first run starts with no .env. Refuse before any forced
+# cleanup so an operator's Compose model can never influence smoke deletion.
 if [ "$ENV_PREEXISTED" -eq 1 ]; then
   err "A .env already exists at $REPO_ROOT/.env — this is not a clean checkout."
   err "Run the first-run smoke on a fresh checkout (CI) where no .env is present."
   exit 1
 fi
+
+# Hold the checkout lifecycle lock before project admission and ownership. The
+# setup subprocess inherits the authenticated descriptor; a concurrent smoke
+# from this checkout fails before its EXIT trap may remove Docker state.
+_smoke_lock_rc=0
+claim_host_lifecycle_lock "$REPO_ROOT" || _smoke_lock_rc=$?
+case "$_smoke_lock_rc" in
+  0) ;;
+  3)
+    err "Another setup or first-run check is already using this checkout."
+    exit 1
+    ;;
+  *)
+    err "The checkout lifecycle lock is unavailable or unsafe."
+    exit 1
+    ;;
+esac
+
+# Guard: never silently clobber a prior smoke run. Refuse if its exact project
+# labels own any resource; --force may remove only that already-identified state.
+existing_containers="$(project_resource_ids "$SMOKE_PROJECT" containers)" \
+  || { err "Could not inspect existing smoke containers."; exit 1; }
+existing_volumes="$(project_resource_ids "$SMOKE_PROJECT" volumes)" \
+  || { err "Could not inspect existing smoke volumes."; exit 1; }
+existing_networks="$(project_resource_ids "$SMOKE_PROJECT" networks)" \
+  || { err "Could not inspect existing smoke networks."; exit 1; }
+if [ -n "$existing_containers" ] || [ -n "$existing_volumes" ] \
+   || [ -n "$existing_networks" ]; then
+  if [ "$FORCE" -eq 1 ]; then
+    warn "Pre-existing '${SMOKE_PROJECT}' state found — removing it (--force)."
+    while IFS= read -r _resource; do
+      [ -z "$_resource" ] \
+        || docker rm -f "$_resource" >/dev/null 2>&1 || true
+    done <<< "$existing_containers"
+    while IFS= read -r _resource; do
+      [ -z "$_resource" ] \
+        || docker network rm "$_resource" >/dev/null 2>&1 || true
+    done <<< "$existing_networks"
+    while IFS= read -r _resource; do
+      [ -z "$_resource" ] \
+        || docker volume rm "$_resource" >/dev/null 2>&1 || true
+    done <<< "$existing_volumes"
+    _force_rc=0
+    project_has_resources "$SMOKE_PROJECT" || _force_rc=$?
+    case "$_force_rc" in
+      1) ;;
+      0) err "--force did not remove all pre-existing '${SMOKE_PROJECT}' resources."; exit 1 ;;
+      *) err "Could not verify '${SMOKE_PROJECT}' after --force cleanup."; exit 1 ;;
+    esac
+  else
+    err "An isolated '${SMOKE_PROJECT}' project already exists (containers, volumes, or networks)."
+    err "Re-run with --force to remove it first. (The real deployment is never touched.)"
+    exit 1
+  fi
+fi
+SMOKE_OWNS_PROJECT=1
+
+CHECKOUT_PROJECT="$(_lifecycle_compose_project_name "$REPO_ROOT")" \
+  || { err "The checkout directory does not resolve to a valid Compose project."; exit 1; }
 ok "Preconditions met — clean checkout, no conflicting deployment."
 
 # -----------------------------------------------------------------------------
 # Run the documented first-run bootstrap (README: "Non-interactive (CI/cloud-init)")
 #   ./setup.sh --non-interactive --profile=dev   (or scripts/jarvis-setup.sh
 #   with --wrapper)
-# Under COMPOSE_PROJECT_NAME=jarvis-firstrun-smoke, so every container/volume
-# the bootstrap creates lands in the isolated project.
+# setup.sh receives its persisted project explicitly. The compatibility wrapper
+# receives the same project through its supported ambient Compose selector.
 # -----------------------------------------------------------------------------
-BOOTSTRAP_CMD=(./setup.sh --non-interactive --profile=dev)
+BOOTSTRAP_CMD=(
+  ./setup.sh --non-interactive --profile=dev
+  --compose-project-name "$SMOKE_PROJECT"
+)
 [ "$BUILD_LOCAL" -eq 1 ] && BOOTSTRAP_CMD+=(--build-local)
+[ "$IMAGE_TAG_EXPLICIT" -eq 0 ] || BOOTSTRAP_CMD+=(--image-tag "$IMAGE_TAG")
 [ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
 
 # App images plus Docker build cache, in bytes — the disk the install acquires.
@@ -292,6 +451,28 @@ if [ "$setup_rc" -ne 0 ]; then
   exit 1
 fi
 ok "Bootstrap completed: ${BOOTSTRAP_CMD[*]}"
+
+# The bootstrap must own a real, labeled project and must not have fallen back
+# to the checkout directory after setup sanitized its caller environment.
+for _kind in containers volumes networks; do
+  require_project_resource_labels "$SMOKE_PROJECT" "$_kind" || exit 1
+done
+if [ "$CHECKOUT_PROJECT" != "$SMOKE_PROJECT" ]; then
+  _checkout_rc=0
+  project_has_resources "$CHECKOUT_PROJECT" || _checkout_rc=$?
+  case "$_checkout_rc" in
+    1) ;;
+    0)
+      err "Bootstrap also created resources under checkout-derived project '${CHECKOUT_PROJECT}'."
+      exit 1
+      ;;
+    *)
+      err "Could not verify the checkout-derived project '${CHECKOUT_PROJECT}'."
+      exit 1
+      ;;
+  esac
+fi
+ok "Bootstrap resources are non-empty, correctly labeled, and isolated."
 
 # -----------------------------------------------------------------------------
 # Disk-budget ratchet: what this run added in app images + build cache must fit

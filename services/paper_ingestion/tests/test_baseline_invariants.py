@@ -31,11 +31,48 @@ disposable ``postgres:16.8`` container (``live_pg_dsn`` fixture).
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 
 import asyncpg
 import pytest
 
 pytestmark = pytest.mark.live_pg
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_CONTRADICTION_INDEX_NAME = "idx_paper_contradictions_unique_quotes"
+_PROBE_INDEX_NAME = "probe_paper_contradictions_unique_quotes"
+_CONTRADICTION_INDEX_SQL_RE = re.compile(
+    rf"CREATE\s+UNIQUE\s+INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+"
+    rf"{re.escape(_CONTRADICTION_INDEX_NAME)}\b.*?;",
+    re.IGNORECASE | re.DOTALL,
+)
+_CONTRADICTION_INDEX_NAME_RE = re.compile(
+    rf"(CREATE\s+UNIQUE\s+INDEX)(?:\s+IF\s+NOT\s+EXISTS)?\s+"
+    rf"{re.escape(_CONTRADICTION_INDEX_NAME)}\b",
+    re.IGNORECASE,
+)
+
+
+def _final_contradiction_index_sql() -> str:
+    """Return the last definition of the contradiction identity index."""
+    definitions: list[str] = []
+    migrations_dir = _REPO_ROOT / "db" / "migrations"
+    for migration in sorted(migrations_dir.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+        definitions.extend(_CONTRADICTION_INDEX_SQL_RE.findall(migration.read_text()))
+    if not definitions:
+        raise AssertionError(f"no ordered migration defines {_CONTRADICTION_INDEX_NAME}")
+    return definitions[-1]
+
+
+def _without_index_name(indexdef: str) -> str:
+    """Remove only the index identifier from a PostgreSQL index definition."""
+    return re.sub(
+        r"^(CREATE UNIQUE INDEX) \S+",
+        r"\1 <index>",
+        indexdef,
+        count=1,
+    )
 
 
 async def _seed_paper(conn: asyncpg.Connection, external_id: str) -> int:
@@ -1246,3 +1283,124 @@ async def test_baseline_paper_notes_annotation_unique_nulls_not_distinct(
             "VALUES ($1, 'n', 'zotero', 'ANNKEY', NULL)",
             paper_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Baseline plus ordered migrations must converge to the final identity index.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_baseline_and_migration_chain_converge_to_final_contradiction_index(
+    test_db_pool: asyncpg.Pool,
+) -> None:
+    """The installed index matches the last definition in the migration chain."""
+    expected_sql = _CONTRADICTION_INDEX_NAME_RE.sub(
+        rf"\1 {_PROBE_INDEX_NAME}",
+        _final_contradiction_index_sql(),
+        count=1,
+    )
+
+    async with test_db_pool.acquire() as conn:
+        await conn.execute(expected_sql)
+        try:
+            installed = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1",
+                _CONTRADICTION_INDEX_NAME,
+            )
+            expected = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1",
+                _PROBE_INDEX_NAME,
+            )
+        finally:
+            await conn.execute(f"DROP INDEX IF EXISTS {_PROBE_INDEX_NAME}")
+
+    assert installed is not None
+    assert expected is not None
+    assert _without_index_name(installed) == _without_index_name(expected)
+
+
+@pytest.mark.asyncio
+async def test_migrated_pdf_artifacts_have_generation_columns(
+    test_db_pool: asyncpg.Pool,
+) -> None:
+    """Every PDF-derived table records the source generation it belongs to."""
+    expected = {
+        ("papers", "content_generation"),
+        ("paper_highlights", "content_generation"),
+        ("paper_summaries", "content_generation"),
+        ("paper_extractions", "content_generation"),
+        ("paper_entities", "content_generation"),
+        ("entity_relationships", "content_generation"),
+        ("paper_notes", "content_generation"),
+        ("cards", "content_generation"),
+        ("paper_contradictions", "paper_a_content_generation"),
+        ("paper_contradictions", "paper_b_content_generation"),
+    }
+    async with test_db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT table_name, column_name, data_type, is_nullable, column_default
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND (table_name, column_name) IN (
+                   ('papers', 'content_generation'),
+                   ('paper_highlights', 'content_generation'),
+                   ('paper_summaries', 'content_generation'),
+                   ('paper_extractions', 'content_generation'),
+                   ('paper_entities', 'content_generation'),
+                   ('entity_relationships', 'content_generation'),
+                   ('paper_notes', 'content_generation'),
+                   ('cards', 'content_generation'),
+                   ('paper_contradictions', 'paper_a_content_generation'),
+                   ('paper_contradictions', 'paper_b_content_generation')
+               )
+            """
+        )
+
+    assert {(row["table_name"], row["column_name"]) for row in rows} == expected
+    assert all(row["data_type"] == "bigint" for row in rows)
+    assert all(row["is_nullable"] == "NO" for row in rows)
+    assert all(row["column_default"] == "0" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_migrated_contradictions_preserve_nullable_storage_but_reject_new_absent_owner(
+    test_db_pool: asyncpg.Pool,
+) -> None:
+    """Reject new ownerless evidence without rewriting the legacy column."""
+    async with test_db_pool.acquire() as conn:
+        column_nullable = await conn.fetchval(
+            """
+            SELECT is_nullable
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'paper_contradictions'
+               AND column_name = 'user_id'
+            """
+        )
+        constraint_validated = await conn.fetchval(
+            """
+            SELECT convalidated
+              FROM pg_constraint
+             WHERE conrelid = 'paper_contradictions'::regclass
+               AND conname = 'chk_paper_contradictions_user_id_present'
+            """
+        )
+        paper_a = await _seed_paper(conn, "owned-contradiction-a")
+        paper_b = await _seed_paper(conn, "owned-contradiction-b")
+        with pytest.raises(asyncpg.CheckViolationError):
+            async with conn.transaction():
+                await conn.execute(
+                    """INSERT INTO paper_contradictions (
+                           paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+                           explanation, confidence, stance, user_id
+                       ) VALUES (
+                           $1, $2, 'fa', 'fb', 'qa', 'qb', 'e', 0.5, 'opposes', NULL
+                       )""",
+                    paper_a,
+                    paper_b,
+                )
+
+    assert column_nullable == "YES"
+    assert constraint_validated is False

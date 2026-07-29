@@ -27,12 +27,23 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 def test_resolve_topic_pairs_defaults_and_coerces_ids():
     from paper_ingestion.pipelines.auto_fetch import _resolve_topic_pairs
 
-    assert _resolve_topic_pairs([]) == [(None, "machine learning")]
-    assert _resolve_topic_pairs([{"id": 7, "name": "graphs"}]) == [(7, "graphs")]
+    assert _resolve_topic_pairs([]) == [(None, "machine learning", [])]
+    assert _resolve_topic_pairs([{"id": 7, "name": "graphs"}]) == [(7, "graphs", [])]
     # nameless rows are dropped; non-int id coerces to None
     assert _resolve_topic_pairs([{"id": None, "name": "nlp"}, {"id": 3, "name": ""}]) == [
-        (None, "nlp")
+        (None, "nlp", [])
     ]
+    # a NULL query_terms (partial-schema row) coerces to [], same as a missing key
+    assert _resolve_topic_pairs([{"id": 5, "name": "vision", "query_terms": None}]) == [
+        (5, "vision", [])
+    ]
+
+
+def test_resolve_topic_pairs_carries_configured_query_terms():
+    from paper_ingestion.pipelines.auto_fetch import _resolve_topic_pairs
+
+    rows = [{"id": 9, "name": "RL", "query_terms": ["reinforcement learning"]}]
+    assert _resolve_topic_pairs(rows) == [(9, "RL", ["reinforcement learning"])]
 
 
 def _make_app(conn) -> SimpleNamespace:

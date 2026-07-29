@@ -527,12 +527,25 @@ flags).
 
 ### Setup system-check — models-ready condition
 
+`setup.sh` chooses the smart model from its installer buckets (`cpu`, `lt-8`,
+`8-16`, `16-24`, `24-48`, `ge-48`) and pulls that tier-selected model with
+`qwen3:4b` and `qwen3-embedding:4b`. This installer choice is distinct from the
+static runtime fallback documented above. The production disk calculator gives
+a **27–54 GB** default cold-install range across the smallest prebuilt-image
+pull and largest CUDA build; custom models may require more.
+
 The onboarding wizard's Step 1 system check reports models as **ready** when **both** of the following hold:
 
 - At least one model whose name starts with `qwen3:` is installed (matches `qwen3:4b`, `qwen3:8b`, `qwen3:14b`; excludes `qwen3-embedding:*` which starts with a different prefix).
 - At least one model whose name starts with `_EMBEDDER_BASE` (derived from `EMBEDDING_MODEL_NAME` at startup; typically `qwen3-embedding`) is installed.
 
-The default install (`setup.sh`) pulls `qwen3:8b` and `qwen3-embedding:4b`, which satisfies this condition. There is **no hardcoded requirement for `qwen3:14b`**. The check also distinguishes "Ollama is reachable but still pulling" from "Ollama is unreachable / not yet started" — missing models are named in the system-check panel rather than showing a generic not-ready state.
+The tier-selected install always pulls a `qwen3:` chat model or the compatible
+`qwen2.5:7b-instruct` choice together with `qwen3:4b` and
+`qwen3-embedding:4b`, which satisfies this condition. There is **no hardcoded
+requirement for `qwen3:14b`**. The check also distinguishes "Ollama is reachable
+but still pulling" from "Ollama is unreachable / not yet started" — missing
+models are named in the system-check panel rather than showing a generic
+not-ready state.
 
 Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/routers/system.py`.
 
@@ -582,7 +595,7 @@ Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/r
 | `ensure_smart_fallback(fast_model, ...)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Creates/refreshes the `smart-fallback` deployment group (fast-tier model, timeout 120). |
 | `_reconcile_litellm_models_once(pool)` / `_litellm_model_reconciler_loop(pool)` | services/paper_ingestion/paper_ingestion/main.py | Persistent ~30 s boot reconciler: desired-model precedence, `llm.delivery_pending` bookkeeping, smart-fallback ensure. |
 | `get_provider_api_key(provider, db_pool)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Decrypts a cloud-provider key from `user_config`. |
-| `model_catalog.json` (14 entries) | libs/jarvis_common/jarvis_common/data/model_catalog.json | Curated local + cloud catalog; no `mistral-nemo` / `nomic-embed-text`. |
+| `model_catalog.json` | libs/jarvis_common/jarvis_common/data/model_catalog.json | Curated local + cloud catalog; no `mistral-nemo` / `nomic-embed-text`. |
 | `GET /api/system/models` | services/paper_ingestion/paper_ingestion/routers/system.py | Returns installed, hardware, current, issues, catalog, recommendations. |
 | `GET /api/system/hardware` | services/paper_ingestion/paper_ingestion/routers/system.py | Returns `HardwareInfo.to_dict()` incl. `machine_id`. |
 | `SystemModelsResponse` | services/paper_ingestion/paper_ingestion/models/papers.py:404-413 | Loose Pydantic response; additive `fit_detail` does not break clients. |

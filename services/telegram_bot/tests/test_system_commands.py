@@ -9,10 +9,11 @@ goes through :func:`auth_check`:
 
 from __future__ import annotations
 
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_bot_config, make_telegram_update
+from jarvis_common.testing import make_bot_config, make_ptb_context, make_telegram_update
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.system_commands import start_command
 
@@ -23,17 +24,10 @@ def _make_pool(*, pairing_row=None):
     return pool
 
 
-def _make_context(pool, config=None):
-    if config is None:
-        config = make_bot_config(BotConfig, telegram_chat_id=None)
-    context = MagicMock()
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": pool,
-        "http_client": AsyncMock(),
-    }
-    return context
+_make_context = partial(
+    make_ptb_context,
+    config=make_bot_config(BotConfig, telegram_chat_id=None),
+)
 
 
 @pytest.mark.asyncio

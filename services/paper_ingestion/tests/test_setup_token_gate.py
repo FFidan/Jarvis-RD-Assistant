@@ -21,6 +21,8 @@ from starlette.datastructures import Headers
 
 _TOKEN = "test-sentinel-token"
 
+pytestmark = pytest.mark.usefixtures("_disable_limiter")
+
 
 def _loopback_transport() -> dict[str, object]:
     """Transport fields for a request made directly on the server."""
@@ -29,16 +31,6 @@ def _loopback_transport() -> dict[str, object]:
         "client": SimpleNamespace(host="127.0.0.1", port=51234),
         "url": SimpleNamespace(scheme="http"),
     }
-
-
-@pytest.fixture(autouse=True)
-def _disable_limiter():
-    from paper_ingestion.deps import limiter
-
-    original = limiter.enabled
-    limiter.enabled = False
-    yield
-    limiter.enabled = original
 
 
 @pytest.fixture

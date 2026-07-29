@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { KnowledgeGraphPage } from '@/pages/KnowledgeGraphPage';
 import { useAuthStore } from '@/stores/auth-store';
 import * as api from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock cytoscape so jsdom doesn't choke on canvas. Capture registered tap
 // handlers so a test can simulate a node click.
@@ -61,15 +61,12 @@ const WITH_ENTITIES = {
 const EMPTY_GRAPH = { entities: [], relationships: [], entity_type_counts: {} };
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <KnowledgeGraphPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <KnowledgeGraphPage />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
@@ -193,15 +190,12 @@ describe('KnowledgeGraphPage — Batch Extract admin gate', () => {
 
   function renderAsRole(role: 'user' | 'admin') {
     useAuthStore.setState({ user: { id: 1, email: 'a@b.c', role } });
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <KnowledgeGraphPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    const queryClient = createTestQueryClient();
+    return renderWithProviders(
+      <MemoryRouter>
+        <KnowledgeGraphPage />
+      </MemoryRouter>,
+      { queryClient },
     );
   }
 

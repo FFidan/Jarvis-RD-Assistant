@@ -22,10 +22,6 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 # ---------------------------------------------------------------------------
 
 
-def _now():
-    return datetime.now(UTC)
-
-
 def _template_row(id=1, name="Default Template", description=None, is_default=True):
     return FakeRecord(
         id=id,
@@ -35,8 +31,8 @@ def _template_row(id=1, name="Default Template", description=None, is_default=Tr
             {"name": "method", "label": "Method", "description": "Method used", "type": "text"}
         ],
         is_default=is_default,
-        created_at=_now(),
-        updated_at=_now(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
 
 
@@ -291,7 +287,7 @@ async def test_get_paper_extractions_found(_app):
                 }
             },
             extraction_model="smart",
-            created_at=_now(),
+            created_at=datetime.now(UTC),
         ),
     ]
 

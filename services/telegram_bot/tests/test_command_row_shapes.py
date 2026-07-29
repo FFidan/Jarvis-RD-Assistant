@@ -8,11 +8,12 @@ import pytest
 from jarvis_common.testing import make_bot_config
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
-from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands.project_commands import projects_command
 from telegram_bot.handlers.commands.task_commands import tasks_command
 
 _TEST_CHAT_ID = 12345
+
+pytestmark = pytest.mark.usefixtures("_clear_rate_limit_state")
 
 
 def _make_update_and_context(args=None):
@@ -33,14 +34,6 @@ def _make_update_and_context(args=None):
         "http_client": http,
     }
     return update, context, http
-
-
-@pytest.fixture(autouse=True)
-def _clear_rate_limit_state():
-    """Command decorators share rate-limit memory across tests."""
-    _rate_limit_mod._timestamps.clear()
-    yield
-    _rate_limit_mod._timestamps.clear()
 
 
 @pytest.fixture(autouse=True)

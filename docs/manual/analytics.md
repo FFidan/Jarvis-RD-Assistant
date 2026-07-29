@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /analytics -->
+<!-- verified-against-UI: 2026-07-25 | routes: /analytics -->
 
 # Analytics
 
@@ -15,9 +15,10 @@ A **DateRangeFilter** at the top of the page lets you choose the time window for
 | Preset | Window |
 |--------|--------|
 | 7d | Last 7 days |
-| 14d | Last 14 days |
 | 30d | Last 30 days |
 | 90d | Last 90 days |
+
+A **custom** field next to the presets accepts any whole number of days from 1 to 365.
 
 Changing the date range updates all charts and the KPI band simultaneously.
 
@@ -25,7 +26,7 @@ Changing the date range updates all charts and the KPI band simultaneously.
 
 ## KPI band
 
-The **KpiBand** shows a row of key-performance-indicator tiles summarising the selected period at a glance. Typical tiles include papers added, cards reviewed, and Pulse decks generated.
+The **KpiBand** shows three key-performance-indicator tiles summarising the selected period at a glance: **Papers Read**, **Focus Hours**, and **Cards Reviewed**. Papers Read and Focus Hours each carry a trend indicator comparing the tile to the previous period. Cards Reviewed shows your current review streak while one is running, and falls back to the same period-on-period trend when it is not.
 
 ---
 
@@ -35,7 +36,7 @@ All charts use **Recharts**. Each chart is scoped to the selected date range.
 
 ### ActivityChart
 
-A time-series chart showing your daily activity — papers saved, notes added, reviews completed — over the selected window. Use this to spot gaps in your research cadence or identify productive periods.
+A time-series chart showing your daily activity across three series — **Papers Read**, **Cards Reviewed**, and **Tasks Completed** — over the selected window. Use this to spot gaps in your research cadence or identify productive periods.
 
 ### RetentionChart (FSRS)
 
@@ -63,5 +64,4 @@ A chart showing estimated LLM token usage and cost over the selected period, bro
 
 - [Learning Cards](learning-cards.md) — the FSRS review system whose ratings feed the RetentionChart and ReviewsByRatingChart.
 - [Research Feed & Library](research-feed.md) — the library whose growth is reflected in the PapersBySourceChart and PapersByStatusChart.
-- [Pulse](pulse.md) — Pulse decks generated per period appear in the KPI band.
 - [Settings](settings.md) — configure LLM providers whose cost is tracked in LlmCostChart.

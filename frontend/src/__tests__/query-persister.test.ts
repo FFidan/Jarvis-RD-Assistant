@@ -17,7 +17,7 @@
  */
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { QueryClient, type Query } from '@tanstack/react-query';
+import { type Query } from '@tanstack/react-query';
 import { clear as idbClear } from 'idb-keyval';
 import {
   attachQueryPersister,
@@ -28,6 +28,7 @@ import {
   SENSITIVE_QUERY_KEYS,
   __resetPersisterForTests,
 } from '@/lib/query-persister';
+import { createTestQueryClient } from '@/__tests__/test-utils';
 
 /** Build a minimal Query-like object for the predicate (no real fetch). */
 function fakeQuery(
@@ -124,7 +125,7 @@ describe('shouldDehydrateQuery — NON-GOAL exclusions', () => {
 
 describe('persister round-trip (dehydrate -> restore)', () => {
   it('restores read-surface queries but NOT NON-GOAL queries', async () => {
-    const source = new QueryClient({
+    const source = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub = attachQueryPersister(source);
@@ -138,7 +139,7 @@ describe('persister round-trip (dehydrate -> restore)', () => {
 
     // Fresh client + fresh module singletons -> restore from IDB.
     __resetPersisterForTests();
-    const restored = new QueryClient({
+    const restored = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub2 = attachQueryPersister(restored);
@@ -158,7 +159,7 @@ describe('persister round-trip (dehydrate -> restore)', () => {
 
 describe('clearPersistedQueryCache', () => {
   it('empties the IDB snapshot on logout', async () => {
-    const c = new QueryClient({
+    const c = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub = attachQueryPersister(c);
@@ -190,7 +191,7 @@ describe('getPersistedCacheTimestamp', () => {
     expect(await getPersistedCacheTimestamp()).toBeNull();
 
     const before = Date.now();
-    const c = new QueryClient({
+    const c = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub = attachQueryPersister(c);
@@ -235,7 +236,7 @@ describe("notes — offline read surface + shared-device purge (L-6)", () => {
 
   it("notes persisted to IDB are erased by clearPersistedQueryCache (shared-device guard)", async () => {
     // Persist a notes query into IDB.
-    const source = new QueryClient({
+    const source = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub = attachQueryPersister(source);
@@ -253,7 +254,7 @@ describe("notes — offline read surface + shared-device purge (L-6)", () => {
 
     // A freshly attached client must NOT restore the notes entry.
     __resetPersisterForTests();
-    const restored = new QueryClient({
+    const restored = createTestQueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
     const unsub2 = attachQueryPersister(restored);

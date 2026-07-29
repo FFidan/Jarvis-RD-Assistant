@@ -7,9 +7,8 @@
  *  3. Shows plain confirmation after a successful save (no restart text).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +40,7 @@ vi.mock('@/stores/auth-store', () => ({
 }));
 
 import { getFirstRunStatus, saveSetupMode } from '@/lib/api';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockGetStatus = vi.mocked(getFirstRunStatus);
 const mockSave = vi.mocked(saveSetupMode);
 
@@ -49,7 +49,7 @@ const mockSave = vi.mocked(saveSetupMode);
 // ---------------------------------------------------------------------------
 
 function makeQC() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createTestQueryClient();
 }
 
 async function renderSection() {
@@ -57,10 +57,9 @@ async function renderSection() {
   const qc = makeQC();
   return {
     qc,
-    ...render(
-      <QueryClientProvider client={qc}>
-        <AccessModeSection />
-      </QueryClientProvider>,
+    ...renderWithProviders(
+      <AccessModeSection />,
+      { queryClient: qc },
     ),
   };
 }

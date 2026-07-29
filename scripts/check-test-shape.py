@@ -72,8 +72,9 @@ _TS06_DEF_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test_", re.MULTILINE)
 
 # TS-07: inline factories that have canonical replacements
 _TS07_INLINE_FACTORIES = re.compile(
-    r"^\s*(?:async\s+)?def\s+_(make_pool|mock_pool|make_embedder|build_request|"
-    r"FakeRecord|make_telegram_update|make_config)\s*\(",
+    r"^\s*(?:async\s+)?def\s+_(make_pool|mock_pool|make_mock_pool|make_embedder|"
+    r"build_request|FakeRecord|make_telegram_update|make_config|make_source|"
+    r"make_context|make_conn|make_paper)\s*\(",
     re.MULTILINE,
 )
 

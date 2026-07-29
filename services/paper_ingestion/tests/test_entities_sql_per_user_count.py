@@ -231,3 +231,82 @@ async def test_min_count_with_entity_type_filter_uses_visible_count(
     assert "f15-typed-entity" in names_b, (
         f"User B (per-user count=2) must see typed entity at min_paper_count=2; names_b={names_b}"
     )
+
+
+async def test_graph_omits_stale_links_and_relationships_in_both_scopes(
+    contract_two_users,
+    contract_conn,
+):
+    """Generation-stale graph evidence is absent from scoped and trusted reads."""
+    from paper_ingestion.extraction.entities_sql import get_knowledge_graph
+
+    user_id = contract_two_users.user_a_id
+    current_paper = await _seed_library_paper(
+        contract_conn,
+        "kg-generation-current",
+        library_user_id=user_id,
+        attribution_user_id=user_id,
+    )
+    stale_paper = await _seed_library_paper(
+        contract_conn,
+        "kg-generation-stale",
+        library_user_id=user_id,
+        attribution_user_id=user_id,
+    )
+    source_id, target_id, stale_only_id = await contract_conn.fetchrow(
+        """
+        WITH source AS (
+            INSERT INTO entities (name, canonical_name, entity_type)
+            VALUES ('kg-current-source', 'kg-current-source', 'method')
+            RETURNING id
+        ),
+        target AS (
+            INSERT INTO entities (name, canonical_name, entity_type)
+            VALUES ('kg-current-target', 'kg-current-target', 'dataset')
+            RETURNING id
+        ),
+        stale_only AS (
+            INSERT INTO entities (name, canonical_name, entity_type)
+            VALUES ('kg-stale-only', 'kg-stale-only', 'concept')
+            RETURNING id
+        )
+        SELECT source.id AS source_id,
+               target.id AS target_id,
+               stale_only.id AS stale_only_id
+        FROM source, target, stale_only
+        """
+    )
+    await contract_conn.executemany(
+        """INSERT INTO paper_entities
+               (paper_id, entity_id, mention_count, user_id, content_generation)
+           VALUES ($1, $2, 1, $3, 0)""",
+        [
+            (current_paper, source_id, user_id),
+            (current_paper, target_id, user_id),
+            (stale_paper, stale_only_id, user_id),
+        ],
+    )
+    relationship_id = await contract_conn.fetchval(
+        """INSERT INTO entity_relationships (
+               source_entity_id, target_entity_id, relationship_type,
+               paper_id, evidence_quote, confidence, content_generation
+           ) VALUES ($1, $2, 'used_on', $3, 'current evidence', 1.0, 0)
+           RETURNING id""",
+        source_id,
+        target_id,
+        stale_paper,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET content_generation = 1 WHERE id = $1",
+        stale_paper,
+    )
+
+    scoped = await get_knowledge_graph(contract_conn, user_id=user_id)
+    unscoped = await get_knowledge_graph(contract_conn, user_id=None)
+
+    for graph in (scoped, unscoped):
+        names = {entity["name"] for entity in graph["entities"]}
+        relationship_ids = {row["id"] for row in graph["relationships"]}
+        assert "kg-stale-only" not in names
+        assert {"kg-current-source", "kg-current-target"} <= names
+        assert relationship_id not in relationship_ids

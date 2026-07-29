@@ -135,14 +135,24 @@ def _make_fetch_pool(records: list) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_discover_from_seeds_dedups_and_sorts() -> None:
-    """Recommend hits are deduped by paper_id (best score kept) then sorted descending."""
+    """Recommend hits are deduped by paper_id (best score kept) then sorted descending.
+
+    Each surviving hit also carries the winning point's own ``chunk_index``.
+    Both discovery endpoints keep only hits whose ``(paper_id, chunk_index)``
+    pair still has a stored ``paper_chunks`` row, so a hit that reaches them
+    without an index matches nothing and the endpoint answers empty.
+
+    Verified: paper_ingestion/ingestion/search.py:799-804 (per-paper best hit)
+    Verified: paper_ingestion/queries/chunk_liveness.py (a chunk carrying no
+    chunk_index matches no stored key)
+    """
     embedder = _make_embedder()
     embedder.qdrant.scroll = AsyncMock(return_value=([_FakeRecord("p1"), _FakeRecord("p2")], None))
     hits = [
-        _FakeHit(0.7, {"paper_id": 5, "content": "c5-low"}),
-        _FakeHit(0.9, {"paper_id": 5, "content": "c5-high"}),
-        _FakeHit(0.8, {"paper_id": 7, "content": "c7"}),
-        _FakeHit(0.6, {"paper_id": None, "content": "skip"}),
+        _FakeHit(0.7, {"paper_id": 5, "chunk_index": 11, "content": "c5-low"}),
+        _FakeHit(0.9, {"paper_id": 5, "chunk_index": 4, "content": "c5-high"}),
+        _FakeHit(0.8, {"paper_id": 7, "chunk_index": 0, "content": "c7"}),
+        _FakeHit(0.6, {"paper_id": None, "chunk_index": 2, "content": "skip"}),
     ]
     embedder.qdrant.query_points = AsyncMock(return_value=_FakeResponse(hits))
 
@@ -151,6 +161,42 @@ async def test_discover_from_seeds_dedups_and_sorts() -> None:
     assert [r["paper_id"] for r in results] == [5, 7]
     assert results[0]["score"] == 0.9
     assert results[0]["content"] == "c5-high"
+    assert [r.get("chunk_index") for r in results] == [4, 0], (
+        "each result must carry the chunk_index of the point that won its paper; "
+        f"got {[r.get('chunk_index') for r in results]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_similar_carries_each_hit_chunk_index() -> None:
+    """Every hit ``search_similar`` returns carries its own point's ``chunk_index``.
+
+    ``GET /api/similar`` is the only consumer of this producer, and it keeps
+    only hits whose ``(paper_id, chunk_index)`` pair still has a stored
+    ``paper_chunks`` row. A hit reaching it without an index matches no stored
+    key, so dropping the index here empties the endpoint for every caller. The
+    contract tests cannot see that: they stub ``search_similar`` with the key
+    already present.
+
+    Verified: paper_ingestion/ingestion/search.py:256-263 (per-hit result dict)
+    Verified: paper_ingestion/queries/chunk_liveness.py:83-88 (a chunk carrying
+    no chunk_index matches no stored key)
+    """
+    embedder = _make_embedder()
+    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+    hits = [
+        _FakeHit(0.9, {"paper_id": 5, "chunk_index": 4, "content": "c5"}),
+        _FakeHit(0.8, {"paper_id": 7, "chunk_index": 0, "content": "c7"}),
+    ]
+    embedder.qdrant.query_points = AsyncMock(return_value=_FakeResponse(hits))
+
+    results = await embedder.search_similar(query_text="a question", limit=5)
+
+    assert [r["paper_id"] for r in results] == [5, 7]
+    assert [r.get("chunk_index") for r in results] == [4, 0], (
+        "each hit must carry the chunk_index of the point it came from; "
+        f"got {[r.get('chunk_index') for r in results]}"
+    )
 
 
 @pytest.mark.asyncio

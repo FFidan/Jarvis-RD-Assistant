@@ -77,6 +77,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if ! CHECKOUT_APP_VERSION="$(resolve_checkout_app_version)"; then
+  die "Could not determine a valid application version from this checkout." \
+      "Use an exact vMAJOR.MINOR.PATCH[-PRERELEASE] tag, or fix [project].version in pyproject.toml."
+fi
+
 # ---------------------------------------------------------------------------
 # Prerequisite: Docker
 # ---------------------------------------------------------------------------
@@ -182,6 +187,37 @@ else
   chmod 600 .env
   ok "Created .env from .env.example (chmod 600) — secrets will be generated next"
 fi
+
+# Record the semantic application version and published image identity used by
+# this installation. Existing valid values stay unchanged on an idempotent
+# re-run; legacy .env files adopt the version represented by this checkout.
+_installed_app_version="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+if [ -n "$_installed_app_version" ] \
+    && ! app_version_is_valid "$_installed_app_version"; then
+  die "The existing JARVIS_VERSION in .env is invalid." \
+      "Set it to a version such as ${CHECKOUT_APP_VERSION}, then re-run this installer."
+fi
+if [ -z "$_installed_app_version" ]; then
+  _installed_app_version="$CHECKOUT_APP_VERSION"
+  _SETUP_MUTATION_STARTED=1
+  upsert_env_var JARVIS_VERSION "$_installed_app_version"
+  info "Recorded this install's application version in .env: ${_installed_app_version}"
+fi
+export JARVIS_VERSION="$_installed_app_version"
+
+_installed_image_tag="$(sed -n 's/^JARVIS_IMAGE_TAG=//p' .env 2>/dev/null | head -1)"
+if [ -n "$_installed_image_tag" ] \
+    && ! image_tag_is_valid "$_installed_image_tag"; then
+  die "The existing JARVIS_IMAGE_TAG in .env is invalid." \
+      "Set it to a stable, prerelease, or lowercase 40-hex tag, then re-run this installer."
+fi
+if [ -z "$_installed_image_tag" ]; then
+  _installed_image_tag="$_installed_app_version"
+  _SETUP_MUTATION_STARTED=1
+  upsert_env_var JARVIS_IMAGE_TAG "$_installed_image_tag"
+  info "Recorded this install's application image tag in .env: ${_installed_image_tag}"
+fi
+export JARVIS_IMAGE_TAG="$_installed_image_tag"
 
 # A pre-1.1 .env carries no TORCH_VARIANT, so the paper-ingestion tag would
 # resolve to the CPU flavour even on a kept GPU install — pulling a CPU image
@@ -302,37 +338,27 @@ if [ -f versions.env ]; then
   COMPOSE="${COMPOSE} --env-file versions.env"
 fi
 
-# wait_healthy <svc> [budget_seconds]
-# Poll Docker healthcheck for <svc> until healthy or timeout. Duplicated from
-# setup.sh (setup.sh is a plain script, not cleanly sourceable — only the
-# helpers in scripts/setup_lib.sh are shared between the two entry points).
-wait_healthy() {
-  local svc="$1"
-  local budget="${2:-60}"
-  local interval=3
-  local elapsed=0
-  local cid status
+# _jarvis_setup_service_container_id SERVICE — print the first container ID.
+_jarvis_setup_service_container_id() {
+  ${COMPOSE} ps -q "$1" 2>/dev/null | head -n 1 || true
+}
 
-  while [ "$elapsed" -lt "$budget" ]; do
-    cid="$(${COMPOSE} ps -q "$svc" 2>/dev/null | head -n 1 || true)"
-    if [ -z "$cid" ]; then
-      sleep "$interval"
-      elapsed=$((elapsed + interval))
-      continue
-    fi
-    # `.State.Health.Status` is empty when the image has no HEALTHCHECK.
-    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
-    case "$status" in
-      "")        info "$svc: no healthcheck defined — skipping wait."; return 0 ;;
-      healthy)   ok "$svc: healthy"; return 0 ;;
-      starting)  ;;  # still coming up
-      unhealthy) err "$svc: unhealthy"; return 1 ;;
-      *)         ;;  # unknown states — keep polling
+# _wait_for_jarvis_setup_service SERVICE BUDGET [INTERVAL] — wait and report.
+_wait_for_jarvis_setup_service() {
+  local svc="$1" budget="$2" interval="${3:-3}"
+  if wait_for_compose_service_health \
+      "$svc" "$budget" _jarvis_setup_service_container_id "$interval"; then
+    case "$COMPOSE_HEALTH_RESULT" in
+      healthy) ok "$svc: healthy" ;;
+      running-unverified)
+        warn "$svc: running (no healthcheck) — readiness not verified" ;;
     esac
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
-  err "$svc: did not become healthy within ${budget}s."
+    return 0
+  fi
+  case "$COMPOSE_HEALTH_RESULT" in
+    terminal) err "$svc: not running (state: ${COMPOSE_HEALTH_LAST_STATE})" ;;
+    *) err "$svc: did not become healthy within ${budget}s (last state: ${COMPOSE_HEALTH_LAST_STATE})." ;;
+  esac
   return 1
 }
 
@@ -360,7 +386,7 @@ fi
 # 7-11 GB first pull looks like a hang (mirrors setup.sh's streamed pull).
 info "Starting Ollama: ${COMPOSE} up -d ollama"
 ${COMPOSE} up -d ollama
-wait_healthy ollama 180 \
+_wait_for_jarvis_setup_service ollama 180 \
   || warn "Ollama is still starting — model inventory unknown; proceeding to the model pull."
 
 _FIRST_RUN_PULL=0
@@ -401,7 +427,7 @@ for svc in "${MANDATORY_SVCS[@]}"; do
     paper_ingestion|learning_engine) [ "$_FIRST_RUN_PULL" -eq 1 ] && _budget=3600 || _budget=60 ;;
     *)                               _budget=60  ;;
   esac
-  if ! wait_healthy "$svc" "$_budget"; then
+  if ! _wait_for_jarvis_setup_service "$svc" "$_budget"; then
     SETUP_FAILED+=("$svc")
     warn "Dumping last 50 log lines for $svc:"
     ${COMPOSE} logs --tail 50 "$svc" >&2 || true

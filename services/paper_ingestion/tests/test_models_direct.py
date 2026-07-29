@@ -22,6 +22,7 @@ from paper_ingestion.models import (  # noqa: E402
     GraphNode,
     KeyFinding,
     NoteCreate,
+    PaperCreate,
     PaperDetailResponse,
     PaperResponse,
     SearchRequest,
@@ -66,6 +67,31 @@ def test_paper_response_rejects_non_http_urls():
             url="ftp://example.com/paper.pdf",
             created_at=datetime.now(UTC),
         )
+
+
+@pytest.mark.parametrize(
+    ("length", "accepted"),
+    [(255, True), (256, False)],
+)
+def test_paper_create_bounds_external_id_at_the_column_width(length: int, accepted: bool):
+    """external_id is capped at 255 so it cannot exceed papers.external_id varchar(255).
+
+    Without the bound an over-long identifier reaches Postgres and fails there,
+    turning a rejected input into a 500 instead of a validation error.
+    """
+    fields = {
+        "external_id": "x" * length,
+        "source_type": SourceType.ARXIV,
+        "title": "Paper",
+        "authors": ["Ada"],
+        "url": "https://example.com/paper",
+    }
+
+    if accepted:
+        assert len(PaperCreate(**fields).external_id) == length
+        return
+    with pytest.raises(ValidationError, match="external_id"):
+        PaperCreate(**fields)
 
 
 def test_summary_response_parses_nested_findings():

@@ -210,7 +210,9 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
     )
 
     assert result == {"paper_id": 1, "chunk_count": 8, "status": "processed"}
-    run_process_pdf.assert_awaited_once_with(1, paper_path, pool, processor, embedder, force=True)
+    run_process_pdf.assert_awaited_once_with(
+        1, paper_path, pool, processor, embedder, force=True, requester_id=1
+    )
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).

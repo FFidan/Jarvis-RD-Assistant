@@ -268,6 +268,7 @@ async def get_paper_extractions(
             rows = await conn.fetch(
                 """SELECT id, paper_id, template_id, extractions, extraction_model, created_at
                    FROM paper_extractions WHERE paper_id = $1 AND user_id = $2
+                     AND content_generation = (SELECT content_generation FROM papers WHERE id = $1)
                    ORDER BY created_at DESC""",
                 paper_id,
                 user_id,
@@ -378,6 +379,7 @@ async def get_extraction_table(
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1 AND pe.paper_id = ANY($2) AND pe.user_id = $3
+                         AND pe.content_generation = p.content_generation
                        ORDER BY p.title""",
                     template_id,
                     ids,
@@ -395,6 +397,7 @@ async def get_extraction_table(
                        JOIN papers p ON p.id = pe.paper_id
                        JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
                        WHERE pe.template_id = $1 AND pe.user_id = $2
+                         AND pe.content_generation = p.content_generation
                        ORDER BY p.title""",
                     template_id,
                     user_id,

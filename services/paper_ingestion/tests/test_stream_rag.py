@@ -11,26 +11,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_hit(paper_id: int, chunk_index: int, content: str, page_number: int, score: float):
-    """Create a mock Qdrant ScoredPoint-like object."""
-    hit = MagicMock()
-    hit.payload = {
-        "paper_id": paper_id,
-        "chunk_index": chunk_index,
-        "content": content,
-        "page_number": page_number,
-    }
-    hit.score = score
-    return hit
-
-
-def _make_query_response(hits: list):
-    """Wrap hits in a mock Qdrant query_points response."""
-    resp = MagicMock()
-    resp.points = hits
-    return resp
-
-
 class FakeSSELine:
     """Simulate an async line iterator for httpx streaming response."""
 
@@ -84,7 +64,7 @@ class FakeStreamResponseError:
 # ---------------------------------------------------------------------------
 
 
-async def teststream_rag_events_format():
+async def test_stream_rag_events_format():
     """stream_rag_events yields token, sources, done, and [DONE] events."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -137,7 +117,7 @@ async def teststream_rag_events_format():
 # ---------------------------------------------------------------------------
 
 
-async def teststream_rag_events_token_parsing():
+async def test_stream_rag_events_token_parsing():
     """Tokens are correctly extracted from LiteLLM delta chunks."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -175,7 +155,7 @@ async def teststream_rag_events_token_parsing():
     assert "".join(tokens) == "The answer is 42."
 
 
-async def teststream_rag_events_allows_split_paragraph_boundary_whitespace():
+async def test_stream_rag_events_allows_split_paragraph_boundary_whitespace():
     """Whitespace after a paragraph boundary should not fail before the next chunk."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -218,7 +198,7 @@ async def teststream_rag_events_allows_split_paragraph_boundary_whitespace():
 # ---------------------------------------------------------------------------
 
 
-async def teststream_rag_events_work_notes_fails_closed():
+async def test_stream_rag_events_work_notes_fails_closed():
     """Visible work notes emits only a sanitized error and DONE sentinel."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -257,7 +237,7 @@ async def teststream_rag_events_work_notes_fails_closed():
         ["First, I n", "eed to compare the papers first."],
     ],
 )
-async def teststream_rag_events_partial_work_note_prefix_is_not_leaked(chunks):
+async def test_stream_rag_events_partial_work_note_prefix_is_not_leaked(chunks):
     """Risky partial prefixes stay quarantined until classified."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -285,7 +265,7 @@ async def teststream_rag_events_partial_work_note_prefix_is_not_leaked(chunks):
     assert events[1].strip() == "data: [DONE]"
 
 
-async def teststream_rag_events_empty_visible_answer_fails_closed():
+async def test_stream_rag_events_empty_visible_answer_fails_closed():
     """Empty post-filter answers do not emit sources, done, or confidence events."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -316,7 +296,7 @@ async def teststream_rag_events_empty_visible_answer_fails_closed():
     assert parsed_types == ["error", "DONE"]
 
 
-async def teststream_rag_events_whitespace_only_visible_answer_fails_closed():
+async def test_stream_rag_events_whitespace_only_visible_answer_fails_closed():
     """Whitespace-only visible output does not emit a token before the error."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -343,7 +323,7 @@ async def teststream_rag_events_whitespace_only_visible_answer_fails_closed():
     assert events[1].strip() == "data: [DONE]"
 
 
-async def teststream_rag_events_error_handling():
+async def test_stream_rag_events_error_handling():
     """An error event is yielded when the LiteLLM stream fails."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -369,7 +349,7 @@ async def teststream_rag_events_error_handling():
     assert events[1].strip() == "data: [DONE]"
 
 
-async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch):
+async def test_stream_rag_events_uses_shared_litellm_config_base_url(monkeypatch):
     """Streaming RAG should use the shared LiteLLM base URL (transparent proxy, no auth)."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -424,7 +404,7 @@ async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-async def testprepare_cross_paper_rag_no_chunks_returns_dict():
+async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
     """When no chunks match, prepare_cross_paper_rag returns a canned dict."""
     from paper_ingestion.ingestion.embedder import Embedder
     from paper_ingestion.models import CrossPaperAskRequest
@@ -456,7 +436,7 @@ async def testprepare_cross_paper_rag_no_chunks_returns_dict():
 # ---------------------------------------------------------------------------
 
 
-async def teststream_rag_events_sse_termination():
+async def test_stream_rag_events_sse_termination():
     """Each SSE event line ends with double newline for proper SSE format."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -486,7 +466,7 @@ async def teststream_rag_events_sse_termination():
 # ---------------------------------------------------------------------------
 
 
-async def teststream_rag_events_think_blocks_filtered():
+async def test_stream_rag_events_think_blocks_filtered():
     """Think-block tokens are stripped from token events and full_answer (defense-in-depth)."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
@@ -533,7 +513,7 @@ async def teststream_rag_events_think_blocks_filtered():
     assert "visible text." in full_answer
 
 
-async def teststream_rag_events_confidence_event_emitted_before_done():
+async def test_stream_rag_events_confidence_event_emitted_before_done():
     """confidence SSE event appears after done and before [DONE] when verifier+pool provided."""
     import json
     from unittest.mock import MagicMock
@@ -600,7 +580,7 @@ async def teststream_rag_events_confidence_event_emitted_before_done():
     assert isinstance(conf_event["per_sentence"], list)
 
 
-async def teststream_rag_events_no_confidence_event_for_uncheckable_answer():
+async def test_stream_rag_events_no_confidence_event_for_uncheckable_answer():
     """An answer with no checkable sentences emits NO confidence event at all.
 
     The frontend renders no badge when the event is absent; emitting

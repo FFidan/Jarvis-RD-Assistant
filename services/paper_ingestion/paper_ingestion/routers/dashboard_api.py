@@ -55,13 +55,18 @@ async def get_dashboard_metrics(
                               AND {EXCLUDED_STATE_SQL}
                          )) AS unread_papers,
                     (SELECT COUNT(*) FROM user_library ul
+                     JOIN papers p ON p.id = ul.paper_id
                      LEFT JOIN paper_summaries ps
                        ON ul.paper_id = ps.paper_id AND ps.user_id = $1
+                      AND ps.content_generation = p.content_generation
                      WHERE ul.user_id = $1
                        AND ps.id IS NULL) AS pending_papers,
-                    (SELECT COUNT(*) FROM cards
-                     WHERE due_at IS NOT NULL AND due_at <= NOW()
-                       AND user_id = $1) AS due_cards,
+                    (SELECT COUNT(*) FROM cards c
+                     LEFT JOIN papers p ON p.id = c.paper_id
+                     WHERE c.due_at IS NOT NULL AND c.due_at <= NOW()
+                       AND c.user_id = $1
+                       AND (c.paper_id IS NULL
+                            OR c.content_generation = p.content_generation)) AS due_cards,
                     (SELECT COUNT(*) FROM projects
                      WHERE status = 'active'
                        AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
@@ -91,10 +96,14 @@ async def get_dashboard_metrics(
                     (SELECT COUNT(*) FROM papers p
                      LEFT JOIN paper_summaries ps
                        ON p.id = ps.paper_id AND ps.user_id IS NULL
+                      AND ps.content_generation = p.content_generation
                      WHERE ps.id IS NULL) AS pending_papers,
-                    (SELECT COUNT(*) FROM cards
-                     WHERE due_at IS NOT NULL AND due_at <= NOW()
-                       AND user_id IS NULL) AS due_cards,
+                    (SELECT COUNT(*) FROM cards c
+                     LEFT JOIN papers p ON p.id = c.paper_id
+                     WHERE c.due_at IS NOT NULL AND c.due_at <= NOW()
+                       AND c.user_id IS NULL
+                       AND (c.paper_id IS NULL
+                            OR c.content_generation = p.content_generation)) AS due_cards,
                     (SELECT COUNT(*) FROM projects
                      WHERE status = 'active'
                        AND user_id IS NULL) AS active_projects,

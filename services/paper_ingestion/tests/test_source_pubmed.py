@@ -7,12 +7,14 @@ fixtures.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import httpx
 import pytest
 import respx
 from jarvis_common.maintenance import OutboundEgressBlockedError
+from jarvis_common.testing import make_pool_and_conn as _make_mock_pool
 from lxml import etree
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.pubmed_source import (
@@ -24,21 +26,18 @@ from paper_ingestion.sources.pubmed_source import (
     _parse_doi,
     _parse_pub_date,
 )
+from tests._source_fakes import make_source
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ESEARCH_XML = (FIXTURES / "pubmed_esearch.xml").read_bytes()
 EFETCH_XML = (FIXTURES / "pubmed_efetch.xml").read_bytes()
 
-
-def _make_source(api_key: str | None = None) -> PubMedSource:
-    config = PaperSourceConfig(
-        id=4,
-        source_type=SourceType.PUBMED,
-        enabled=True,
-        config={"api_key": api_key} if api_key else {},
-    )
-    client = httpx.AsyncClient()
-    return PubMedSource(config, client)
+_make_source = partial(
+    make_source,
+    SourceType.PUBMED,
+    PubMedSource,
+    source_id=4,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -537,19 +536,6 @@ def _make_source_with_pool(mock_pool) -> PubMedSource:
     config = PaperSourceConfig(id=4, source_type=SourceType.PUBMED, enabled=True, config={})
     client = httpx.AsyncClient()
     return PubMedSource(config, client, db_pool=mock_pool)
-
-
-def _make_mock_pool():
-    """Return (pool, conn) mocks wired for asyncpg-style acquire()."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    mock_conn = AsyncMock()
-    mock_conn.execute = AsyncMock()
-    mock_pool = MagicMock()
-    mock_pool.acquire = MagicMock()
-    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return mock_pool, mock_conn
 
 
 @respx.mock

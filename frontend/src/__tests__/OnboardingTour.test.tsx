@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { OnboardingTour } from '@/components/onboarding/OnboardingTour';
 import * as api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
@@ -61,15 +61,12 @@ vi.mock('react-joyride', () => {
 // ── Test helpers ───────────────────────────────────────────────────────────
 
 function renderTour() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <OnboardingTour />
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const queryClient = createTestQueryClient();
+  return renderWithProviders(
+    <MemoryRouter>
+      <OnboardingTour />
+    </MemoryRouter>,
+    { queryClient },
   );
 }
 
