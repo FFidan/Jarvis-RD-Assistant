@@ -1155,7 +1155,9 @@ wait_verify_backup() {
     sleep "$interval"
     waited=$((waited + interval))
   done
-  fail "no authenticated backup for this request appeared within ${timeout}s"
+  printf 'ERROR: no authenticated backup for this request appeared within %ss\n' \
+    "$timeout" >&2
+  return 75
 }
 
 # Inspect or acknowledge one exact off-host restore quarantine. Inspection

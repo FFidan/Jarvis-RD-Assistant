@@ -168,22 +168,33 @@ covers first sign-in, family invitations, passkeys, and everyday use.
 
 ## Updating JARVIS
 
+Installations running v1.2.0 or later use the normal lifecycle command:
+
 ```bash
 jarvis-research update
 ```
 
 This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
 
-If the lifecycle command itself cannot run, the lower-level fallback is:
+For an installation still running v1.1.3, run the v1.2.2 bootstrap once from
+the installation directory:
 
 ```bash
-git pull --ff-only
-./update.sh --yes
+(
+  set -e
+  bootstrap="$(mktemp)"
+  trap 'rm -f "$bootstrap"' EXIT
+  curl -fsSL -o "$bootstrap" \
+    https://raw.githubusercontent.com/limitcycle-oss/jarvis-rd-assistant/v1.2.2/scripts/update-bootstrap.sh
+  bash "$bootstrap" --repo "$PWD" --to v1.2.2
+)
 ```
 
-`update.sh` does not provide the lifecycle command's migration classification,
-signed-restore-point requirement, or deterministic resume. See the [command-line
-reference](docs/manual/cli.md#how-update-works) before using the fallback.
+The v1.1.3 lifecycle command predates the backup protocol required by v1.2.2.
+The bootstrap validates the selected release and runs its updater, which creates
+and authenticates a complete restore point before any data-changing migration.
+See the [command-line reference](docs/manual/cli.md#updating-from-v113) for the
+complete update procedure and its repair-only manual fallback.
 
 ## Uninstalling JARVIS
 

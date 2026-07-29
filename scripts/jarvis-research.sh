@@ -22,6 +22,13 @@
 # approved release tag; the branch is never force-rewritten.
 set -euo pipefail
 
+LIFECYCLE_CODE_DIR="$(
+  cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P
+)" || {
+  printf '[ERROR] Cannot resolve the lifecycle command directory.\n' >&2
+  exit 1
+}
+
 # -----------------------------------------------------------------------------
 # Output and error helpers.
 # -----------------------------------------------------------------------------
@@ -58,6 +65,7 @@ STATE_DIR="${JARVIS_CLI_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-r
 INSTALLS_FILE="${STATE_DIR}/installs"
 LEGACY_PENDING_FILE_PATH="${STATE_DIR}/pending-update.json"
 PENDING_FILE_PATH=""
+STAGED_SIDECAR_MARKER_PATH=""
 
 _acquire_update_lock() {
   local rc=0
@@ -167,6 +175,7 @@ _init_pending_file_path() {
   install_key="${install_key%.lock}"
   printf '%s' "$install_key" | grep -Eq '^[0-9a-f]{64}$' || return 1
   PENDING_FILE_PATH="${STATE_DIR}/pending-update-${install_key}.json"
+  STAGED_SIDECAR_MARKER_PATH="${STATE_DIR}/pending-update-${install_key}.backup-sidecar-quiesced"
 }
 
 _txn_file_field() {
@@ -499,6 +508,7 @@ BACKUP_COMPOSE_CONFIG_LABEL=""
 declare -a BACKUP_COMPOSE_FILES=()
 UPDATE_VOLUME_GUARD_ID=""
 UPDATE_VOLUME_GUARD_ACTIVE=0
+STAGED_BACKUP_SIDECAR_QUIESCED=0
 
 _init_backup_volume_compose() {
   local raw item candidate canon seen="" joined="" name
@@ -533,18 +543,26 @@ _init_backup_volume_compose() {
     joined="${joined:+${joined},}${canon}"
   done
   [ "${BACKUP_COMPOSE_FILES[0]:-}" = "$REPO/docker-compose.yml" ] || return 1
-  [ -f "$REPO/scripts/backup-lifecycle.sh" ] || return 1
+  [ -f "$LIFECYCLE_CODE_DIR/backup-lifecycle.sh" ] \
+    && [ ! -L "$LIFECYCLE_CODE_DIR/backup-lifecycle.sh" ] || return 1
   BACKUP_COMPOSE_CONFIG_LABEL="$joined"
   BACKUP_COMPOSE_INITIALIZED=1
 }
 
 _raw_backup_volume_compose() {
   local -a cmd=(docker compose --project-directory "$REPO" --env-file "$REPO/.env" -p "$BACKUP_COMPOSE_PROJECT")
-  local file
+  local file timeout_seconds="${BACKUP_COMPOSE_TIMEOUT_SECONDS:-}"
   for file in "${BACKUP_COMPOSE_FILES[@]}"; do cmd+=(-f "$file"); done
-  env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
-      -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
-      "${cmd[@]}" "$@" 8>&-
+  if [ -n "$timeout_seconds" ]; then
+    timeout --kill-after=5s "${timeout_seconds}s" \
+      env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
+        -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
+        "${cmd[@]}" "$@" 8>&-
+  else
+    env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES \
+        -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE \
+        "${cmd[@]}" "$@" 8>&-
+  fi
 }
 
 _verify_backup_volume_compose_owner() {
@@ -571,8 +589,148 @@ _backup_volume_compose() {
 
 _backup_volume_helper() {
   _backup_volume_compose run --rm --no-deps --entrypoint bash \
-    --volume "$REPO/scripts/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
+    --volume "$LIFECYCLE_CODE_DIR/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
     postgres-backup /tmp/backup-lifecycle.sh "$@"
+}
+
+_backup_sidecar_runtime_state() {
+  local cid state
+  cid="$(_backup_volume_compose ps -q postgres-backup 2>/dev/null | head -1)" \
+    || return 1
+  if [ -z "$cid" ]; then
+    printf 'absent|||'
+    return 0
+  fi
+  printf '%s' "$cid" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  state="$(docker inspect --format \
+    '{{.State.Paused}}|{{.State.Running}}|{{.State.Pid}}' "$cid" 2>/dev/null)" \
+    || return 1
+  printf '%s' "$state" \
+    | grep -Eq '^(true|false)\|(true|false)\|[0-9]+$' || return 1
+  printf '%s|%s' "$cid" "$state"
+}
+
+_staged_sidecar_marker_present() {
+  [ -f "$STAGED_SIDECAR_MARKER_PATH" ] \
+    && [ ! -L "$STAGED_SIDECAR_MARKER_PATH" ] \
+    && [ "$(cat "$STAGED_SIDECAR_MARKER_PATH" 2>/dev/null || true)" = quiesced ]
+}
+
+_write_staged_sidecar_marker() {
+  local tmp
+  mkdir -p "$STATE_DIR" || return 1
+  [ ! -L "$STAGED_SIDECAR_MARKER_PATH" ] || return 1
+  tmp="$(mktemp "${STATE_DIR}/.backup-sidecar-quiesced.XXXXXX")" || return 1
+  if ! printf 'quiesced\n' > "$tmp" \
+     || ! chmod 600 "$tmp" 2>/dev/null \
+     || ! mv -f "$tmp" "$STAGED_SIDECAR_MARKER_PATH"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+_quiesce_staged_backup_sidecar() {
+  local state cid paused running init_pid processes marker_existed=0 paused_here=0
+  _lifecycle_runtime_is_staged || return 0
+  if [ -e "$STAGED_SIDECAR_MARKER_PATH" ] || [ -L "$STAGED_SIDECAR_MARKER_PATH" ]; then
+    _staged_sidecar_marker_present \
+      || { err "The backup sidecar handoff record is invalid."; return 1; }
+    marker_existed=1
+  fi
+  state="$(_backup_sidecar_runtime_state)" \
+    || { err "The installed backup sidecar state could not be verified."; return 1; }
+  IFS='|' read -r cid paused running init_pid <<< "$state"
+  if [ "$cid" = absent ] || [ "$running" != true ]; then
+    [ "$marker_existed" -eq 0 ] || STAGED_BACKUP_SIDECAR_QUIESCED=1
+    return 0
+  fi
+  if [ "$paused" = true ] && [ "$marker_existed" -eq 0 ]; then
+    err "The installed backup sidecar is already paused outside this update."
+    return 1
+  fi
+
+  if [ "$marker_existed" -eq 0 ]; then
+    _write_staged_sidecar_marker \
+      || { err "The backup sidecar handoff could not be recorded."; return 1; }
+  fi
+  if [ "$paused" = false ]; then
+    if ! _backup_volume_compose pause postgres-backup >/dev/null; then
+      [ "$marker_existed" -eq 1 ] || rm -f "$STAGED_SIDECAR_MARKER_PATH"
+      err "The installed backup sidecar could not be paused safely."
+      return 1
+    fi
+    paused_here=1
+    state="$(_backup_sidecar_runtime_state)" || state=""
+    IFS='|' read -r cid paused running init_pid <<< "$state"
+  fi
+  if [ "$paused" != true ] || [ "$running" != true ] \
+     || ! printf '%s' "$init_pid" | grep -Eq '^[1-9][0-9]*$'; then
+    [ "$paused_here" -eq 0 ] \
+      || _backup_volume_compose unpause postgres-backup >/dev/null 2>&1
+    [ "$marker_existed" -eq 1 ] || rm -f "$STAGED_SIDECAR_MARKER_PATH"
+    err "The installed backup sidecar did not reach a verified paused state."
+    return 1
+  fi
+
+  processes="$(docker top "$cid" -eo pid,args 2>/dev/null)" || {
+    [ "$paused_here" -eq 0 ] \
+      || _backup_volume_compose unpause postgres-backup >/dev/null 2>&1
+    [ "$marker_existed" -eq 1 ] || rm -f "$STAGED_SIDECAR_MARKER_PATH"
+    err "The installed backup sidecar process state could not be verified."
+    return 1
+  }
+  if printf '%s\n' "$processes" \
+      | awk -v init="$init_pid" 'NR > 1 && $1 != init { $1 = ""; print }' \
+      | grep -Eq '/usr/local/bin/(backup|restore|prune)\.sh([[:space:]]|$)'; then
+    if [ ! -f "$PENDING_FILE_PATH" ]; then
+      _backup_volume_compose unpause postgres-backup >/dev/null 2>&1 || true
+      rm -f "$STAGED_SIDECAR_MARKER_PATH"
+    fi
+    err "A backup, restore, or prune operation is already active."
+    printf '        Let it finish, then re-run: jarvis-research update\n' >&2
+    return 1
+  fi
+  STAGED_BACKUP_SIDECAR_QUIESCED=1
+}
+
+_release_staged_backup_sidecar() {
+  local state cid paused running init_pid
+  [ "$STAGED_BACKUP_SIDECAR_QUIESCED" -eq 1 ] || return 0
+  [ ! -f "$PENDING_FILE_PATH" ] || return 0
+  _staged_sidecar_marker_present || return 1
+  state="$(_backup_sidecar_runtime_state)" || return 1
+  IFS='|' read -r cid paused running init_pid <<< "$state"
+  if [ "$cid" = absent ] || [ "$running" = false ]; then
+    _backup_volume_compose up -d --no-deps postgres-backup >/dev/null || return 1
+  elif [ "$paused" = true ] && [ "$running" = true ]; then
+    _backup_volume_compose unpause postgres-backup >/dev/null || return 1
+  elif [ "$paused" != false ]; then
+    return 1
+  fi
+  rm -f "$STAGED_SIDECAR_MARKER_PATH"
+  STAGED_BACKUP_SIDECAR_QUIESCED=0
+}
+
+_activate_selected_backup_sidecar() {
+  local state cid paused running init_pid refreshed
+  _staged_sidecar_marker_present || return 0
+  state="$(_backup_sidecar_runtime_state)" \
+    || { err "The paused backup sidecar state could not be verified."; return 1; }
+  IFS='|' read -r cid paused running init_pid <<< "$state"
+  if [ "$cid" != absent ]; then
+    { [ "$paused" = true ] && [ "$running" = true ]; } || [ "$running" = false ] \
+      || { err "The recorded backup sidecar is not safely paused."; return 1; }
+    docker rm -f -- "$cid" >/dev/null \
+      || { err "The paused backup sidecar could not be replaced."; return 1; }
+  fi
+  rm -f "$STAGED_SIDECAR_MARKER_PATH"
+  STAGED_BACKUP_SIDECAR_QUIESCED=0
+  _backup_volume_compose up -d --no-deps --force-recreate postgres-backup >/dev/null \
+    || { err "The selected release's backup sidecar could not be started."; return 1; }
+  refreshed="$(_backup_sidecar_runtime_state)" || return 1
+  IFS='|' read -r cid paused running init_pid <<< "$refreshed"
+  [ "$cid" != absent ] && [ "$paused" = false ] && [ "$running" = true ] \
+    || { err "The selected release's backup sidecar is not running."; return 1; }
 }
 
 _release_update_volume_guard() {
@@ -596,11 +754,17 @@ _promote_update_volume_guard() {
   _backup_volume_helper promote-update "$UPDATE_VOLUME_GUARD_ID" >/dev/null
 }
 
+_begin_update_mutation() {
+  _quiesce_staged_backup_sidecar || return 1
+  _promote_update_volume_guard
+}
+
 _update_volume_guard_exit() {
   local rc=$?
   trap - EXIT
   set +e
   _release_update_volume_guard
+  _release_staged_backup_sidecar
   exit "$rc"
 }
 
@@ -668,7 +832,7 @@ _acquire_update_volume_guard() {
       ;;
     launch)
       helper_container="$(_backup_volume_compose run --rm --no-deps -d --entrypoint bash \
-        --volume "$REPO/scripts/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
+        --volume "$LIFECYCLE_CODE_DIR/backup-lifecycle.sh:/tmp/backup-lifecycle.sh:ro" \
         postgres-backup /tmp/backup-lifecycle.sh hold-update \
         "$UPDATE_VOLUME_GUARD_ID" "$timeout" 8>&-)" \
         || die "Could not start the backup lifecycle guard." \
@@ -786,21 +950,103 @@ _verify_recorded_update_backup() {
   fi
 }
 
-# _require_fresh_backup — generate a per-request ID, publish it atomically in the
-# backup trigger, and accept only the signed manifest that echoes that exact ID.
+_lifecycle_runtime_is_staged() {
+  local installed
+  installed="$(cd -- "$REPO/scripts" 2>/dev/null && pwd -P)" || return 1
+  [ "$LIFECYCLE_CODE_DIR" != "$installed" ]
+}
+
+_run_staged_backup_producer() {
+  local request_id="$1" timeout_seconds="$2" producer pdf_dir repo_dir
+  producer="$LIFECYCLE_CODE_DIR/backup.sh"
+  [ -f "$producer" ] && [ ! -L "$producer" ] \
+    || { err "The selected release's backup producer is unavailable or unsafe."; return 1; }
+  repo_dir="$(cd -- "$REPO" 2>/dev/null && pwd -P)" || return 1
+  pdf_dir="$(cd -- "$REPO/shared/pdf_storage" 2>/dev/null && pwd -P)" \
+    || { err "The installation's PDF storage directory is unavailable."; return 1; }
+  [ "$pdf_dir" = "$repo_dir/shared/pdf_storage" ] \
+    && [ -d "$pdf_dir" ] && [ ! -L "$REPO/shared/pdf_storage" ] \
+    || { err "The installation's PDF storage directory is unsafe."; return 1; }
+
+  BACKUP_COMPOSE_TIMEOUT_SECONDS="$timeout_seconds" \
+    _backup_volume_compose run --rm --no-deps --entrypoint bash \
+    --env "BACKUP_RUN_ID=$request_id" \
+    --volume "$producer:/tmp/jarvis-target-backup.sh:ro" \
+    --volume "$pdf_dir:/pdf-storage:rw" \
+    postgres-backup /tmp/jarvis-target-backup.sh
+}
+
+_require_staged_runtime_backup() {
+  local request_id="$1" timeout="$2" interval="$3"
+  local started now verified rc=0 remaining delay
+  started="$(date +%s)"
+  while true; do
+    now="$(date +%s)"
+    remaining=$((timeout - (now - started)))
+    if [ "$remaining" -le 0 ]; then
+      err "The selected release's backup producer exceeded the ${timeout}s limit."
+      return 1
+    fi
+    rc=0
+    _run_staged_backup_producer "$request_id" "$remaining" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+        err "The selected release's backup producer exceeded the ${timeout}s limit."
+      else
+        err "The selected release's backup producer failed."
+        printf '        Review: docker compose logs postgres-backup\n' >&2
+      fi
+      return 1
+    fi
+    if verified="$(_backup_volume_helper wait-verify "$request_id" 1 1)"; then
+      printf '%s' "$verified"
+      return 0
+    else
+      rc=$?
+    fi
+    if [ "$rc" -ne 75 ]; then
+      err "The selected release's backup could not be authenticated."
+      return 1
+    fi
+    now="$(date +%s)"
+    remaining=$((timeout - (now - started)))
+    if [ "$remaining" -le 0 ]; then
+      err "No authenticated backup for this update appeared within ${timeout}s."
+      printf '        Review: docker compose logs postgres-backup\n' >&2
+      return 1
+    fi
+    delay="$interval"
+    [ "$delay" -le "$remaining" ] || delay="$remaining"
+    sleep "$delay"
+  done
+}
+
+# _require_fresh_backup — generate a per-request ID and accept only the signed
+# manifest that echoes that exact ID. An in-checkout command asks the running
+# sidecar; a staged target runtime uses that target's producer directly.
 # Wall-clock mtimes are deliberately irrelevant and cannot make an old backup pass.
 _require_fresh_backup() {
   local _start_epoch="${1:-}" timeout interval request_id verified
   request_id="$(openssl rand -hex 16 2>/dev/null || true)"
   printf '%s' "$request_id" | grep -Eq '^[0-9a-f]{32}$' || { err "Could not create a secure backup request ID."; return 1; }
-  if ! _backup_volume_helper publish-request "$request_id" >/dev/null; then
-    err "Cannot publish the backup request."
-    return 1
-  fi
-  info "Requested an on-demand backup; waiting for a fresh, verified restore point..."
   timeout="${JARVIS_BACKUP_POLL_TIMEOUT:-300}"; interval="${JARVIS_BACKUP_POLL_INTERVAL:-3}"
-  verified="$(_backup_volume_helper wait-verify "$request_id" "$timeout" "$interval")" \
-    || return 1
+  printf '%s' "$timeout" | grep -Eq '^[1-9][0-9]{0,5}$' \
+    && printf '%s' "$interval" | grep -Eq '^[1-9][0-9]{0,3}$' \
+    || { err "Backup wait settings must be positive integers."; return 1; }
+  if _lifecycle_runtime_is_staged; then
+    info "Creating a restore point with the selected release's backup format..."
+    _quiesce_staged_backup_sidecar || return 1
+    verified="$(_require_staged_runtime_backup "$request_id" "$timeout" "$interval")" \
+      || return 1
+  else
+    if ! _backup_volume_helper publish-request "$request_id" >/dev/null; then
+      err "Cannot publish the backup request."
+      return 1
+    fi
+    info "Requested an on-demand backup; waiting for a fresh, verified restore point..."
+    verified="$(_backup_volume_helper wait-verify "$request_id" "$timeout" "$interval")" \
+      || return 1
+  fi
   VERIFIED_BACKUP_TS="${verified%%|*}"
   VERIFIED_BACKUP_RUN_ID="${verified#*|}"
   printf '%s' "$VERIFIED_BACKUP_TS" | grep -Eq '^[0-9]{8}_[0-9]{6}$' \
@@ -1042,8 +1288,8 @@ cmd_update() {
       die "--resume ${resume_ref} does not match the pending update target (${TXN_TARGET})." \
         "Re-run: jarvis-research update --resume ${TXN_TARGET}"
     fi
-    _promote_update_volume_guard \
-      || die "A restore took priority before this update began changing the installation." \
+    _begin_update_mutation \
+      || die "Exclusive lifecycle ownership could not be established for this update." \
         "No update changes were applied. Let the restore finish, then re-run: jarvis-research update"
     case "$TXN_PHASE" in
       committed)
@@ -1071,7 +1317,7 @@ cmd_update() {
   # fails closed; no newly published tag can silently replace it.
   if [ -f "$PENDING_FILE_PATH" ]; then
     _txn_load_or_die
-    _promote_update_volume_guard \
+    _begin_update_mutation \
       || die "The retained update cannot reacquire exclusive lifecycle ownership." \
         "No new update changes were applied. Finish the active recovery, then re-run: jarvis-research update"
     case "$TXN_PHASE" in
@@ -1160,8 +1406,8 @@ cmd_update() {
     fi
   fi
 
-  _promote_update_volume_guard \
-    || die "A restore took priority before this update began changing the installation." \
+  _begin_update_mutation \
+    || die "Exclusive lifecycle ownership could not be established for this update." \
       "No update changes were applied. Let the restore finish, then re-run: jarvis-research update"
   if ! _txn_write_new merge_pending "$target_ref" "$target_version" "$target_sha" \
       "$backup_id" "$backup_run_id"; then                                  # (6)
@@ -1205,6 +1451,11 @@ _resume_transaction() {
   if ! _verify_recorded_update_backup; then
     die "The pending update's recovery backup is no longer authenticated, complete, and pinned." \
       "No services were recreated. Repair the recorded restore point, then re-run: jarvis-research update --resume ${target_ref}"
+  fi
+  if ! _activate_selected_backup_sidecar; then
+    _txn_update_phase health
+    _failure_epilogue "$target_ref"
+    exit 1
   fi
   if ! _run_update_sh; then
     _txn_update_phase health
@@ -1771,8 +2022,8 @@ fi
 REPO="$(resolve_repo)"
 cd "$REPO"
 # shellcheck source=scripts/setup_lib.sh
-# shellcheck disable=SC1091  # resolved at runtime relative to the repo root
-. scripts/setup_lib.sh
+# shellcheck disable=SC1091  # selected lifecycle runtime, verified by its caller
+. "$LIFECYCLE_CODE_DIR/setup_lib.sh"
 # The managed repo, not the caller's shell, owns Compose file/project/profile
 # selection. Compose reloads the install's persisted selectors from its .env.
 sanitize_compose_environment

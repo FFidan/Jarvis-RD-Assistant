@@ -89,10 +89,10 @@ In order, an update:
 5. **Enforces a restore point before a data-changing migration.** New migrations
    between your version and the target are inspected. If any one changes data,
    the command triggers a backup and accepts it only when its signed manifest
-   names the exact main-database, model-router, and secrets archives for that
-   run and their sizes and checksums match. A missing, unsigned, incomplete, or
-   mismatched point is refused. Additive-only migrations apply on restart and
-   only suggest taking a restore point first.
+   names the exact main-database, model-router, uploaded-PDF, and secrets
+   archives for that run and their sizes and checksums match. A missing,
+   unsigned, incomplete, or mismatched point is refused. Additive-only
+   migrations apply on restart and only suggest taking a restore point first.
 6. **Stages images, then advances.** The target's Compose files are resolved with
    this install's active profiles. Every exact registry image in that result,
    including profile dependencies and target-added services, is pulled *before*
@@ -116,6 +116,33 @@ stopped before advancing the branch restarts cleanly. If you need to drive the
 post-advance half explicitly, `jarvis-research update --resume <tag>` runs only
 those remaining steps. The command refuses to resume if the checkout moved to
 an unexpected commit.
+
+### Updating from v1.1.3
+
+The lifecycle command shipped with v1.1.3 predates the backup protocol required
+by v1.2.2. From the v1.1.3 installation directory, run the v1.2.2 bootstrap
+once:
+
+```bash
+(
+  set -e
+  bootstrap="$(mktemp)"
+  trap 'rm -f "$bootstrap"' EXIT
+  curl -fsSL -o "$bootstrap" \
+    https://raw.githubusercontent.com/limitcycle-oss/jarvis-rd-assistant/v1.2.2/scripts/update-bootstrap.sh
+  bash "$bootstrap" --repo "$PWD" --to v1.2.2
+)
+```
+
+The bootstrap accepts only the managed repository on a clean `main` checkout,
+validates v1.2.2 against `origin`, and runs the lifecycle files stored in that
+release. The v1.2.2 updater then creates and authenticates a restore point
+containing both databases, uploaded PDFs and data-coupled secrets before it can
+apply a data-changing migration. If the command is interrupted, run the same
+bootstrap command again; it resumes the recorded update.
+
+Installations running v1.2.0 or v1.2.1 do not need the bootstrap and update
+normally with `jarvis-research update`.
 
 ### Rolling back
 
@@ -141,8 +168,10 @@ install rather than trying to update the rc checkout in place.
 
 ## Updating by hand
 
-`jarvis-research update` is the supported path. Use the lower-level fallback
-only when the lifecycle command itself cannot run:
+`jarvis-research update` is the supported path for v1.2.0 and later; v1.1.3
+uses the bootstrap above. Use the lower-level fallback only to repair a
+lifecycle command that cannot run, and only after independently verifying a
+current restore point:
 
 ```bash
 git pull --ff-only
@@ -150,8 +179,8 @@ git pull --ff-only
 ```
 
 The fallback does not classify migrations, require a signed restore point, or
-resume a recorded transaction. Take a current restore point first, and use this
-path only to repair a lifecycle command that cannot run.
+resume a recorded transaction. It is not a migration-safe substitute for either
+supported update path.
 
 ## Uninstalling
 

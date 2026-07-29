@@ -102,6 +102,7 @@ test-shell-contracts:
 	bash scripts/tests/test_prune_coverage.sh
 	bash scripts/tests/test_setup_lib_helpers.sh
 	bash scripts/tests/test_update_coverage.sh
+	bash scripts/tests/test_update_bootstrap.sh
 	bash scripts/tests/test_jarvis_research_cli.sh
 	bash scripts/tests/test_uninstall.sh
 
@@ -133,6 +134,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/check-burned-secrets.sh
 	$(MAKE) test-shell-contracts
 	bash scripts/tests/test_restore_swap_recovery.sh
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/update-bootstrap.sh scripts/backup-lifecycle.sh; else echo "shellcheck not installed; skipping update bootstrap and backup lifecycle lint"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/jarvis-research.sh; else echo "shellcheck not installed; skipping scripts/jarvis-research.sh lint"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/uninstall.sh; else echo "shellcheck not installed; skipping scripts/uninstall.sh lint"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/lifecycle-smoke.sh; else echo "shellcheck not installed; skipping scripts/lifecycle-smoke.sh lint"; fi

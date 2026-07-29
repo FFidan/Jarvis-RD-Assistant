@@ -108,6 +108,11 @@ references to a globally shared corpus must not be read as current behavior.
   it installs, and uninstall derives that version from checkout metadata for
   older `.env` files that predate the pin, so application-image teardown remains
   complete across both new and upgraded installations.
+- **Updates from supported releases.** Installations on v1.1.3 can load the
+  v1.2.2 lifecycle command with a one-time bootstrap; v1.2.0 and v1.2.1 continue
+  to use `jarvis-research update` directly. Before a data-changing migration,
+  the selected updater now creates and authenticates a complete restore point
+  containing both databases, uploaded PDFs and data-coupled secrets.
 - **Isolated install validation.** Clean-install and upgrade checks use an
   explicit Compose project, refuse a project name that already owns resources,
   and remove only that project's containers, volumes and networks. Teardown
