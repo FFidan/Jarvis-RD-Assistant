@@ -15,13 +15,17 @@
 #
 # Usage:
 #   bash scripts/lifecycle-smoke.sh [--leg tls|update|uninstall|restore]...
-#     [--update-from vX.Y.Z --update-to <40-hex-commit>] [--timeout N]
+#     [--update-from vX.Y.Z --update-to <40-hex-commit>]
+#     [--update-mode direct|bootstrap] [--timeout N]
 #
 #   --leg NAME       Run only this leg. Repeatable. Default: all four.
 #   --update-from TAG Stable source release for an exact upgrade receipt.
 #   --update-to SHA   Lowercase 40-hex target commit with published SHA images.
 #                    Both update arguments are required together. Without them,
 #                    the update leg compares the two newest stable tags.
+#   --update-mode MODE
+#                    Invoke the source's installed command (`direct`, default)
+#                    or load the target's command first (`bootstrap`).
 #   --timeout N      Per-install budget in seconds (default 3600). A cold install
 #                    pulls several GB, so a clean machine legitimately needs
 #                    20-60 minutes.
@@ -53,6 +57,7 @@ LEGS=()
 TIMEOUT_SECONDS=3600
 UPDATE_FROM=""
 UPDATE_TO=""
+UPDATE_MODE=direct
 while [ $# -gt 0 ]; do
   case "$1" in
     --leg)
@@ -67,6 +72,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { err "--update-to requires a value."; exit 2; }
       UPDATE_TO="$2"; shift 2 ;;
     --update-to=*) UPDATE_TO="${1#*=}"; shift ;;
+    --update-mode)
+      [ $# -ge 2 ] || { err "--update-mode requires a value."; exit 2; }
+      UPDATE_MODE="$2"; shift 2 ;;
+    --update-mode=*) UPDATE_MODE="${1#*=}"; shift ;;
     --timeout)
       [ $# -ge 2 ] || { err "--timeout requires a value."; exit 2; }
       TIMEOUT_SECONDS="$2"; shift 2 ;;
@@ -91,6 +100,10 @@ if [ -n "$UPDATE_FROM" ]; then
     exit 2
   fi
 fi
+case "$UPDATE_MODE" in
+  direct|bootstrap) ;;
+  *) err "--update-mode must be direct or bootstrap (got: ${UPDATE_MODE})."; exit 2 ;;
+esac
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
@@ -407,8 +420,9 @@ SHIM
 
 run_leg_update() {
   local project scratch clone state shim previous latest rc=0
-  local from_commit to_commit head_before pending journal_shape
-  local -a pending_candidates=()
+  local from_commit to_commit head_before pending
+  local bootstrap bootstrap_mode
+  local -a pending_candidates=() update_command=()
   new_project update || return 1
   project="$PROJECT"
   new_scratch; scratch="$SCRATCH"
@@ -457,6 +471,22 @@ run_leg_update() {
   assert_project_resources_owned "$project" || return 1
 
   local cli="${clone}/scripts/jarvis-research.sh"
+  if [ "$UPDATE_MODE" = bootstrap ]; then
+    bootstrap="${scratch}/update-bootstrap.sh"
+    bootstrap_mode="$(
+      git -C "$clone" ls-tree "$to_commit" -- scripts/update-bootstrap.sh \
+        | awk 'NR == 1 { print $1 }'
+    )"
+    if [ "$bootstrap_mode" != 100755 ] \
+       || ! git -C "$clone" show "${to_commit}:scripts/update-bootstrap.sh" > "$bootstrap"; then
+      err "The selected target does not contain an executable update bootstrap."
+      return 1
+    fi
+    chmod 500 "$bootstrap"
+    update_command=(bash "$bootstrap" --repo "$clone" --to "$latest" --yes)
+  else
+    update_command=(bash "$cli" --repo "$clone" update --to "$latest" --yes)
+  fi
   printf '%s\n' "$clone" > "${state}/installs"
 
   head_before="$(git -C "$clone" rev-parse HEAD)"
@@ -471,7 +501,7 @@ run_leg_update() {
   rc=0
   ( cd "$clone" && PATH="${shim}:${PATH}" JARVIS_CLI_CONFIG_DIR="$state" \
       COMPOSE_PROJECT_NAME="$project" \
-      bash "$cli" --repo "$clone" update --to "$latest" --yes ) > "$injected_log" 2>&1 || rc=$?
+      "${update_command[@]}" ) > "$injected_log" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     err "The update succeeded despite the injected pull failure — the fault was not injected."
     return 1
@@ -495,39 +525,22 @@ run_leg_update() {
     return 1
   fi
   pending="${pending_candidates[0]}"
-  if grep -q '"phase":"staging"' "$pending" \
-     && ! grep -q '"schema_version":1' "$pending"; then
-    journal_shape=legacy-staging
-  elif grep -q '"phase":"merge_pending"' "$pending" \
-       && grep -q '"schema_version":1' "$pending"; then
-    journal_shape=current-merge-pending
-  else
+  if ! grep -q '"phase":"merge_pending"' "$pending" \
+     || ! grep -q '"schema_version":1' "$pending"; then
     err "Pending transaction has an unsupported shape: $(cat "$pending")"
     return 1
   fi
-  case "$previous" in
-    v1.1.3)
-      [ "$journal_shape" = legacy-staging ] || {
-        err "v1.1.3 did not leave the expected legacy staging journal."
-        return 1
-      } ;;
-    v1.2.1)
-      [ "$journal_shape" = current-merge-pending ] || {
-        err "v1.2.1 did not leave the expected merge_pending journal."
-        return 1
-      } ;;
-  esac
   if [ "$(git -C "$clone" rev-parse HEAD)" != "$head_before" ]; then
     err "The checkout advanced despite the failed staging phase."
     return 1
   fi
-  ok "Pending transaction survived as ${journal_shape} with the checkout unadvanced."
+  ok "A schema-1 merge_pending transaction survived with the checkout unadvanced."
 
   info "Retrying the update with pulls restored..."
   local resume_log="${scratch}/update-resumed.log"
   rc=0
   ( cd "$clone" && JARVIS_CLI_CONFIG_DIR="$state" COMPOSE_PROJECT_NAME="$project" \
-      bash "$cli" --repo "$clone" update --to "$latest" --yes ) > "$resume_log" 2>&1 || rc=$?
+      "${update_command[@]}" ) > "$resume_log" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "The resumed update failed (rc=${rc}) — an interrupted update is not recoverable:"
     tail -n 40 "$resume_log" >&2

@@ -129,6 +129,7 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
     assert 'cold_install_version="$MERGED_SHA"' in release
     assert 'update_from="$UPDATE_FROM"' in release
     assert 'update_to="$MERGED_SHA"' in release
+    assert 'update_mode="$UPDATE_MODE"' in release
     assert "downloads its named digest receipt from that exact run" in release_words
 
 
@@ -137,28 +138,28 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     lifecycle = _read("scripts/lifecycle-smoke.sh")
     update_leg = lifecycle.split("run_leg_update() {", 1)[1].split("\n# Leg: uninstall", 1)[0]
 
-    documented = dict(
-        re.findall(
-            r"\| `(v[0-9]+\.[0-9]+\.[0-9]+)` \| `([a-z-]+)` \|",
+    documented = {
+        source: (strategy, journal)
+        for source, strategy, journal in re.findall(
+            r"\| `(v[0-9]+\.[0-9]+\.[0-9]+)` \| "
+            r"`([a-z-]+)` \| `([a-z-]+)` \|",
             release,
         )
-    )
-    enforced = dict(
-        re.findall(
-            r"(v[0-9]+\.[0-9]+\.[0-9]+)\)\s+"
-            r'\[ "\$journal_shape" = ([a-z-]+) \]',
-            update_leg,
-        )
-    )
+    }
+    expected = {
+        "v1.1.3": ("bootstrap", "current-merge-pending"),
+        "v1.2.0": ("direct", "current-merge-pending"),
+        "v1.2.1": ("direct", "current-merge-pending"),
+    }
 
-    assert (
-        documented
-        == enforced
-        == {
-            "v1.1.3": "legacy-staging",
-            "v1.2.1": "current-merge-pending",
-        }
-    )
+    assert documented == expected
+    assert 'if [ "$UPDATE_MODE" = bootstrap ]; then' in update_leg
+    assert "direct|bootstrap)" in lifecycle
+    assert update_leg.count('"${update_command[@]}"') == 2
+    assert 'git -C "$clone" show "${to_commit}:scripts/update-bootstrap.sh"' in update_leg
+    assert '"phase":"staging"' not in update_leg
+    assert '"phase":"merge_pending"' in update_leg
+    assert '"schema_version":1' in update_leg
 
 
 def test_local_cross_user_gate_forces_the_root_pytest_config() -> None:
@@ -183,6 +184,7 @@ def test_fast_shell_contracts_have_one_make_and_ci_entrypoint() -> None:
         "scripts/tests/test_prune_coverage.sh",
         "scripts/tests/test_setup_lib_helpers.sh",
         "scripts/tests/test_update_coverage.sh",
+        "scripts/tests/test_update_bootstrap.sh",
         "scripts/tests/test_jarvis_research_cli.sh",
         "scripts/tests/test_uninstall.sh",
     }
@@ -337,7 +339,9 @@ def test_lifecycle_candidate_inputs_are_paired_isolated_and_project_scoped() -> 
 
     assert "update_from:" in workflow
     assert "update_to:" in workflow
+    assert "update_mode:" in workflow
     assert 'args+=(--update-from "$UPDATE_FROM" --update-to "$UPDATE_TO")' in workflow
+    assert 'args+=(--update-mode "$UPDATE_MODE")' in workflow
     assert "--update-from" in lifecycle
     assert "--update-to" in lifecycle
     assert r"^v[0-9]+\.[0-9]+\.[0-9]+$" in lifecycle
@@ -384,7 +388,7 @@ def test_lifecycle_candidate_inputs_are_paired_isolated_and_project_scoped() -> 
     assert "project_resource_ids" in absence_helper
 
     assert 'pending_candidates=("$state"/pending-update*.json)' in lifecycle
-    assert '"phase":"staging"' in lifecycle
+    assert '"phase":"staging"' not in lifecycle
     assert '"phase":"merge_pending"' in lifecycle
     assert '"schema_version":1' in lifecycle
     assert "stable_tags | tail -n 2" in lifecycle
@@ -416,6 +420,7 @@ def test_lifecycle_candidate_inputs_fail_before_docker_admission() -> None:
             ("--update-from", "v1.1.3", "--update-to", "A" * 40),
             "must be a lowercase 40-hex commit SHA",
         ),
+        (("--update-mode", "automatic"), "must be direct or bootstrap"),
     )
 
     for arguments, expected_error in invalid_inputs:

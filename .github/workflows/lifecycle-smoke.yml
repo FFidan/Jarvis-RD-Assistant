@@ -13,7 +13,7 @@ on:
         options: [all, tls, update, uninstall, restore]
         required: false
       update_from:
-        description: Stable source tag for an exact upgrade receipt (for example v1.1.3)
+        description: Maintained stable source tag for an exact upgrade receipt
         type: string
         default: ""
         required: false
@@ -21,6 +21,12 @@ on:
         description: Lowercase 40-hex commit whose SHA-tagged images this run verifies
         type: string
         default: ""
+        required: false
+      update_mode:
+        description: Use the source command directly or load the target command first
+        type: choice
+        options: [direct, bootstrap]
+        default: direct
         required: false
 
 permissions:
@@ -59,6 +65,7 @@ jobs:
           LEG: ${{ inputs.leg }}
           UPDATE_FROM: ${{ inputs.update_from }}
           UPDATE_TO: ${{ inputs.update_to }}
+          UPDATE_MODE: ${{ inputs.update_mode }}
         run: |
           args=()
           if [ "$LEG" != "all" ]; then
@@ -67,6 +74,7 @@ jobs:
           if [ -n "$UPDATE_FROM" ] || [ -n "$UPDATE_TO" ]; then
             args+=(--update-from "$UPDATE_FROM" --update-to "$UPDATE_TO")
           fi
+          args+=(--update-mode "$UPDATE_MODE")
           # Preserve the smoke script's status while still writing a complete log.
           rc=0
           bash scripts/lifecycle-smoke.sh "${args[@]}" > lifecycle-smoke.log 2>&1 || rc=$?

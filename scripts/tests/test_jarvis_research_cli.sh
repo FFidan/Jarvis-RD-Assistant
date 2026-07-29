@@ -19,6 +19,7 @@ CLI="${REPO_ROOT}/scripts/jarvis-research.sh"
 LIB="${REPO_ROOT}/scripts/setup_lib.sh"
 UPDATE_SCRIPT="${REPO_ROOT}/update.sh"
 LIFECYCLE_HELPER="${REPO_ROOT}/scripts/backup-lifecycle.sh"
+BACKUP_SCRIPT="${REPO_ROOT}/scripts/backup.sh"
 
 fail=0
 pass_n=0
@@ -194,6 +195,8 @@ chmod +x "$STUB/git"
 cat > "$STUB/docker" <<'DOCKER'
 #!/usr/bin/env bash
 log() { [ -n "${STUB_LOG:-}" ] && printf 'docker %s\n' "$*" >> "$STUB_LOG"; }
+BACKUP_CID="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+sidecar_state() { cat "$STUB_SIDECAR_STATE_FILE" 2>/dev/null || printf 'absent'; }
 health_sample() {
   local sample="" version image_tag
   if [ -n "${STUB_HEALTH_SEQUENCE:-}" ] && [ -f "$STUB_HEALTH_SEQUENCE" ]; then
@@ -276,6 +279,13 @@ case "${1:-}" in
     shift; fmt=""
     while [ $# -gt 0 ]; do case "$1" in --format) fmt="$2"; shift 2 ;; *) shift ;; esac; done
     case "$fmt" in
+      *State.Paused*State.Running*State.Pid*)
+        case "$(sidecar_state)" in
+          paused) printf 'true|true|4242\n' ;;
+          running) printf 'false|true|4242\n' ;;
+          *) printf 'false|false|0\n' ;;
+        esac
+        ;;
       *State.Health*State.Status*) health_sample ;;
       *com.docker.compose.project.working_dir*)
         project="${STUB_COMPOSE_LABEL_PROJECT:-$(basename "$STUB_REPO" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
@@ -287,14 +297,56 @@ case "${1:-}" in
       *) : ;;
     esac
     exit 0 ;;
+  top)
+    printf 'PID COMMAND\n'
+    printf '4242 sh -uc sidecar-loop\n'
+    if [ -n "${STUB_SIDECAR_CHILD:-}" ]; then
+      printf '4243 %s\n' "$STUB_SIDECAR_CHILD"
+    else
+      printf '4243 sleep 5\n'
+    fi
+    exit 0 ;;
+  rm)
+    log "rm ${*:2}"
+    printf 'absent\n' > "$STUB_SIDECAR_STATE_FILE"
+    exit 0 ;;
   restart) log "restart ${*:2}"; exit 0 ;;
   compose)
     log "compose-env file=${COMPOSE_FILE-<unset>} project=${COMPOSE_PROJECT_NAME-<unset>} profiles=${COMPOSE_PROFILES-<unset>} separator=${COMPOSE_PATH_SEPARATOR-<unset>} envfiles=${COMPOSE_ENV_FILES-<unset>} disable=${COMPOSE_DISABLE_ENV_FILE-<unset>}"
     raw_args=("$@")
+    helper_source=""
+    producer_source=""
+    pdf_source=""
+    request_id=""
+    for arg in "${raw_args[@]}"; do
+      case "$arg" in
+        *:/tmp/backup-lifecycle.sh:ro)
+          helper_source="${arg%:/tmp/backup-lifecycle.sh:ro}"
+          ;;
+        *:/tmp/jarvis-target-backup.sh:ro)
+          producer_source="${arg%:/tmp/jarvis-target-backup.sh:ro}"
+          ;;
+        *:/pdf-storage:rw)
+          pdf_source="${arg%:/pdf-storage:rw}"
+          ;;
+        BACKUP_RUN_ID=*)
+          request_id="${arg#BACKUP_RUN_ID=}"
+          ;;
+      esac
+    done
+    for arg in "${raw_args[@]}"; do
+      if [ "$arg" = /tmp/jarvis-target-backup.sh ]; then
+        log "target-backup request=$request_id source=$producer_source pdf=$pdf_source"
+        [ -z "${STUB_TARGET_BACKUP_SLEEP:-}" ] || sleep "$STUB_TARGET_BACKUP_SLEEP"
+        exit "${STUB_TARGET_BACKUP_RC:-0}"
+      fi
+    done
     for ((i=0; i<${#raw_args[@]}; i++)); do
       if [ "${raw_args[$i]}" = /tmp/backup-lifecycle.sh ]; then
         helper_args=("${raw_args[@]:$((i + 1))}")
         log "lifecycle ${helper_args[*]}"
+        helper_script="${helper_source:-$STUB_LIFECYCLE_HELPER}"
+        log "lifecycle-source $helper_script"
         if [ "${helper_args[0]:-}" = wait-update ] \
            && [ -n "${STUB_UPDATE_WAIT_FAIL_ONCE_FILE:-}" ] \
            && [ ! -e "$STUB_UPDATE_WAIT_FAIL_ONCE_FILE" ]; then
@@ -307,7 +359,7 @@ case "${1:-}" in
             exec env JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
               JARVIS_HOST_SECRETS_DIR="$STUB_REPO/secrets" \
               JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
-              bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+              bash "$helper_script" "${helper_args[@]}"
           ) >/dev/null 2>&1 &
           printf '0123456789abcdef0123456789abcdef\n'
           exit 0
@@ -321,7 +373,7 @@ case "${1:-}" in
         JARVIS_BACKUP_TRIGGER_DIR="$STUB_TRIGGER_DIR" JARVIS_BACKUP_DIR="$STUB_BACKUP_DIR" \
           JARVIS_HOST_SECRETS_DIR="$STUB_REPO/secrets" \
           JARVIS_BACKUP_KEY_FILE="$STUB_BACKUP_KEY_FILE" \
-          bash "$STUB_LIFECYCLE_HELPER" "${helper_args[@]}"
+          bash "$helper_script" "${helper_args[@]}"
         exit $?
       fi
     done
@@ -375,7 +427,14 @@ case "${1:-}" in
           *) exit 1 ;;
         esac ;;
       ps)
-        if [ "${2:-}" = "-q" ]; then running_svc "${3:-}" && printf 'cid-%s\n' "${3:-}"; exit 0; fi
+        if [ "${2:-}" = "-q" ]; then
+          if [ "${3:-}" = postgres-backup ]; then
+            [ "$(sidecar_state)" = absent ] || printf '%s\n' "$BACKUP_CID"
+          elif running_svc "${3:-}"; then
+            printf 'cid-%s\n' "${3:-}"
+          fi
+          exit 0
+        fi
         # bare `ps` (status/doctor table)
         printf 'NAME                 STATUS\n'
         printf 'jarvis-dashboard-1   Up 3 minutes (healthy)\n'
@@ -387,8 +446,21 @@ case "${1:-}" in
         fi
         [ "${STUB_FAIL_STAGE_PULL:-0}" = 1 ] && exit 1
         exit 0 ;;
-      up)    log "compose up ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"; exit 0 ;;
+      up)
+        log "compose up ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"
+        if printf '%s\n' "$*" | grep -qw postgres-backup; then
+          printf 'running\n' > "$STUB_SIDECAR_STATE_FILE"
+        fi
+        exit 0 ;;
       build) log "compose build ${*:2} version=${JARVIS_VERSION:-missing} image=${JARVIS_IMAGE_TAG:-missing}"; exit 0 ;;
+      pause)
+        log "compose $*"
+        printf 'paused\n' > "$STUB_SIDECAR_STATE_FILE"
+        exit 0 ;;
+      unpause)
+        log "compose $*"
+        printf 'running\n' > "$STUB_SIDECAR_STATE_FILE"
+        exit 0 ;;
       stop|restart|logs) log "compose $*"; exit 0 ;;
       *) exit 0 ;;
     esac ;;
@@ -406,7 +478,7 @@ chmod +x "$STUB/docker"
 # =============================================================================
 make_repo() {
   local dir="$1"
-  mkdir -p "$dir/scripts/tests" "$dir/db/migrations"
+  mkdir -p "$dir/scripts/tests" "$dir/db/migrations" "$dir/shared/pdf_storage"
   ln -sf "$CLI" "$dir/scripts/jarvis-research.sh"
   ln -sf "$LIB" "$dir/scripts/setup_lib.sh"
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
@@ -438,6 +510,17 @@ SETUP
   chmod +x "$dir/setup.sh"
 }
 
+make_target_runtime() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cp "$CLI" "$dir/jarvis-research.sh"
+  cp "$LIB" "$dir/setup_lib.sh"
+  cp "$LIFECYCLE_HELPER" "$dir/backup-lifecycle.sh"
+  cp "$BACKUP_SCRIPT" "$dir/backup.sh"
+  chmod +x "$dir/jarvis-research.sh" "$dir/setup_lib.sh" \
+    "$dir/backup-lifecycle.sh" "$dir/backup.sh"
+}
+
 # Fresh per-test environment: a repo, a CLI state dir, a backup dir + trigger dir,
 # a clean stub log. Echoes nothing; exports globals the run_cli helper consumes.
 new_env() {
@@ -449,7 +532,9 @@ new_env() {
         STUB_HEALTH_SEQUENCE STUB_FAST_SLEEP \
         STUB_TARGET_SHA STUB_COMPOSE_LABEL_PROJECT STUB_UPDATE_WAIT_FAIL_ONCE_FILE \
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
-        STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK CLI_STDIN_FILE \
+        STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
+        STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
+        CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
   REPO="$ROOT/repo.$RANDOM.$RANDOM"
@@ -462,10 +547,13 @@ new_env() {
   : > "$STUB_LOG"
   install_key="$(printf '%s' "$(realpath "$REPO")" | sha256sum | cut -d' ' -f1)"
   PENDING_FILE="$CFG/pending-update-${install_key}.json"
+  SIDECAR_MARKER="$CFG/pending-update-${install_key}.backup-sidecar-quiesced"
   LEGACY_PENDING_FILE="$CFG/pending-update.json"
   UPDATE_PIN_FILE="$BK/.lifecycle/update-backup-pin.json"
   STUB_HEAD_FILE="$CFG/head"
   STUB_PSQL_INPUT_FILE="$CFG/psql-input.sql"
+  STUB_SIDECAR_STATE_FILE="$CFG/backup-sidecar.state"
+  printf 'running\n' > "$STUB_SIDECAR_STATE_FILE"
   printf '%s\n' "$SOURCE_SHA" > "$STUB_HEAD_FILE"
   printf '%s\n' "$SOURCE_SHA" > "$REPO/.stub-head"
 }
@@ -476,6 +564,7 @@ new_env() {
 run_cli() {
   local norepo=0
   if [ "${1:-}" = "--norepo" ]; then norepo=1; shift; fi
+  local cli_path="${RUN_CLI_PATH:-$REPO/scripts/jarvis-research.sh}"
   local stub_path="$STUB:$PATH"
   [ "${STUB_FAST_SLEEP:-0}" != 1 ] || stub_path="$FAST_SLEEP_BIN:$stub_path"
   local -a pre=(env "PATH=$stub_path" "STUB_LOG=$STUB_LOG" "PENDING_FILE=$PENDING_FILE"
@@ -505,6 +594,10 @@ run_cli() {
     "STUB_MERGE_CRASH=${STUB_MERGE_CRASH:-0}" "STUB_HEAD_FILE=$STUB_HEAD_FILE"
     "STUB_OWNER_ENV=${STUB_OWNER_ENV:-}" "STUB_OWNER_DB_RESULT=${STUB_OWNER_DB_RESULT:-}"
     "STUB_OWNER_SET_RC=${STUB_OWNER_SET_RC:-0}"
+    "STUB_TARGET_BACKUP_RC=${STUB_TARGET_BACKUP_RC:-0}"
+    "STUB_TARGET_BACKUP_SLEEP=${STUB_TARGET_BACKUP_SLEEP:-}"
+    "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
+    "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
     "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
     "STUB_PSQL_INPUT_FILE=$STUB_PSQL_INPUT_FILE"
     "STUB_TARGET_SHA=${STUB_TARGET_SHA:-$TARGET_SHA}")
@@ -512,13 +605,13 @@ run_cli() {
   if [ "${RUN_CLI_EXEC:-0}" = 1 ]; then
     if [ "$norepo" -eq 1 ]; then
       cd "$REPO" || return 1
-      exec "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" <"$stdin_path" 2>&1
+      exec "${pre[@]}" bash "$cli_path" "$@" <"$stdin_path" 2>&1
     fi
-    exec "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" "$@" <"$stdin_path" 2>&1
+    exec "${pre[@]}" bash "$cli_path" --repo "$REPO" "$@" <"$stdin_path" 2>&1
   elif [ "$norepo" -eq 1 ]; then
-    ( cd "$REPO" && "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" "$@" ) <"$stdin_path" 2>&1
+    ( cd "$REPO" && "${pre[@]}" bash "$cli_path" "$@" ) <"$stdin_path" 2>&1
   else
-    "${pre[@]}" bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" "$@" <"$stdin_path" 2>&1
+    "${pre[@]}" bash "$cli_path" --repo "$REPO" "$@" <"$stdin_path" 2>&1
   fi
 }
 
@@ -535,6 +628,16 @@ run_cli_with_input() {
 
 # register REPO in the state file (so the managed-install guard's (a) leg passes).
 register_repo() { printf '%s\n' "$REPO" > "$CFG/installs"; }
+
+new_staged_update_env() {
+  new_env
+  register_repo
+  STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
+  STUB_MIG_CONTENT="DELETE FROM telegram_user_pairings WHERE chat_id < 0;"
+  TARGET_RUNTIME="$ROOT/target-runtime.$RANDOM.$RANDOM"
+  make_target_runtime "$TARGET_RUNTIME"
+  RUN_CLI_PATH="$TARGET_RUNTIME/jarvis-research.sh"
+}
 
 RESTORE_REVIEW_ID=0123456789abcdef0123456789abcdef
 OTHER_RESTORE_REVIEW_ID=fedcba9876543210fedcba9876543210
@@ -790,12 +893,121 @@ respond_to_backup() {
         request_id="$(tr -d '\r\n' < "$TRIG/.backup_now" 2>/dev/null || true)"
         break
       fi
+      request_id="$(
+        sed -n 's/^docker target-backup request=\([0-9a-f]\{32\}\) .*/\1/p' \
+          "$STUB_LOG" 2>/dev/null | tail -1
+      )"
+      [ -z "$request_id" ] || break
       sleep 0.02
     done
     if [ "$mode" = "replayed" ]; then request_id="00000000000000000000000000000000"; mode="good"; fi
     seed_fresh_backup "$BK" "$mode" "$request_id"
   ) >/dev/null 2>&1 &
 }
+
+new_staged_update_env
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+staged_log="$(cat "$STUB_LOG")"
+sidecar_pause_line="$(grep -n 'docker compose pause postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
+target_backup_line="$(grep -n 'docker target-backup request=' "$STUB_LOG" | head -1 | cut -d: -f1)"
+if [ "$rc" -eq 0 ] \
+   && has "$staged_log" 'target-backup request=[0-9a-f]\{32\}' \
+   && has "$staged_log" "source=$TARGET_RUNTIME/backup.sh" \
+   && has "$staged_log" "pdf=$REPO/shared/pdf_storage" \
+   && has "$staged_log" "lifecycle-source $TARGET_RUNTIME/backup-lifecycle.sh" \
+   && ! has "$staged_log" 'lifecycle publish-request ' \
+   && has "$staged_log" 'docker compose pause postgres-backup' \
+   && [ "$sidecar_pause_line" -lt "$target_backup_line" ] \
+   && has "$staged_log" 'merge --ff-only' \
+   && has "$staged_log" "docker rm -f -- 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+   && has "$staged_log" 'docker compose up -d --no-deps --force-recreate postgres-backup' \
+   && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = running ] \
+   && [ ! -e "$SIDECAR_MARKER" ] \
+   && [ ! -e "$UPDATE_PIN_FILE" ]; then
+  pass "staged target runtime creates a target-format backup and hands off the backup sidecar"
+else
+  check_fail "staged target runtime backup: rc=$rc out=<<<$out>>> log=$staged_log"
+fi
+
+new_staged_update_env
+STUB_TARGET_BACKUP_SLEEP=3
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" "backup producer exceeded the 1s limit" \
+   && has "$(cat "$STUB_LOG")" 'docker compose pause postgres-backup' \
+   && has "$(cat "$STUB_LOG")" 'docker compose unpause postgres-backup' \
+   && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = running ] \
+   && [ ! -e "$SIDECAR_MARKER" ]; then
+  pass "staged target backup execution is bounded before any update mutation"
+else
+  check_fail "staged target runtime timeout: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "staged target runtime timeout: no branch or image mutation"
+
+new_staged_update_env
+STUB_TARGET_BACKUP_RC=9
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" "selected release's backup producer failed" \
+   && has "$(cat "$STUB_LOG")" 'target-backup request=[0-9a-f]\{32\}'; then
+  pass "staged target runtime stops before branch movement when its backup producer fails"
+else
+  check_fail "staged target runtime producer failure: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "staged target runtime producer failure: no branch or image mutation"
+
+new_staged_update_env
+respond_to_backup bad_hmac
+out="$(run_cli update --yes)"; rc=$?
+producer_calls="$(grep -c 'docker target-backup request=' "$STUB_LOG" 2>/dev/null || true)"
+if [ "$rc" -eq 1 ] && [ "$producer_calls" -eq 1 ] \
+   && has "$out" "selected release's backup could not be authenticated"; then
+  pass "staged target runtime never retries a matching invalid backup"
+else
+  check_fail "staged target runtime invalid backup: rc=$rc calls=$producer_calls out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "staged target runtime invalid backup: no branch or image mutation"
+
+new_staged_update_env
+STUB_SIDECAR_CHILD="/usr/local/bin/restore.sh"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" "backup, restore, or prune operation is already active" \
+   && has "$(cat "$STUB_LOG")" 'docker compose pause postgres-backup' \
+   && has "$(cat "$STUB_LOG")" 'docker compose unpause postgres-backup' \
+   && ! has "$(cat "$STUB_LOG")" 'target-backup request=' \
+   && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = running ] \
+   && [ ! -e "$SIDECAR_MARKER" ]; then
+  pass "staged update refuses to race an installed backup-sidecar operation"
+else
+  check_fail "staged sidecar activity barrier: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "staged sidecar activity barrier: no branch or image mutation"
+
+new_staged_update_env
+STUB_FAIL_STAGE_PULL=1
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && [ -f "$PENDING_FILE" ] \
+   && [ -f "$SIDECAR_MARKER" ] \
+   && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = paused ]; then
+  pass "staged update retains its sidecar handoff across an interrupted transaction"
+else
+  check_fail "staged sidecar retained handoff: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+STUB_FAIL_STAGE_PULL=0
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$(cat "$STUB_LOG")" "docker rm -f -- 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+   && has "$(cat "$STUB_LOG")" 'docker compose up -d --no-deps --force-recreate postgres-backup' \
+   && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = running ] \
+   && [ ! -e "$SIDECAR_MARKER" ]; then
+  pass "a retried staged update completes the recorded sidecar handoff"
+else
+  check_fail "staged sidecar retry: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
 
 new_env; register_repo
 STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
@@ -806,6 +1018,7 @@ if has "$(cat "$STUB_LOG")" 'merge --ff-only' \
    && has "$(cat "$STUB_LOG")" 'UPDATE_PIN_AT_MERGE={"timestamp":"20991231_235959","run_id":"[0-9a-f]\{32\}"}' \
    && has "$(cat "$STUB_LOG")" 'LIFECYCLE_GUARD_AT_MERGE=[0-9a-f]\{32\}' \
    && has "$(cat "$STUB_LOG")" 'LIFECYCLE_GUARD_AT_PULL=[0-9a-f]\{32\}' \
+   && ! has "$(cat "$STUB_LOG")" 'target-backup request=' \
    && [ ! -e "$UPDATE_PIN_FILE" ]; then
   pass "update lifecycle flock spans pin publication through merge, pull, health, and commit"
 else
