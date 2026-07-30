@@ -456,7 +456,8 @@ _require_docker_daemon() {
     || env_die "The Docker daemon is not reachable." "Start Docker, then re-run: jarvis-research doctor"
 }
 _require_clean_main_checkout() {
-  local branch; branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+  local branch git_dir op hidden marker_rel tracked_marker dirt
+  branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
   if [ -z "$branch" ]; then
     die "HEAD is detached; jarvis-research updates only a normal 'main' checkout." \
         "Run: git checkout main   (then: jarvis-research update)"
@@ -465,9 +466,60 @@ _require_clean_main_checkout() {
     die "You are on branch '${branch}', not 'main'; refusing to update a working branch." \
         "Run: git checkout main   (then: jarvis-research update)"
   fi
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+
+  # A clean tree is not the same as an updatable tree. An interrupted rebase,
+  # merge, cherry-pick or revert leaves the porcelain status empty but makes the
+  # release fast-forward fail once the update transaction is already open.
+  # Refuse here, while nothing is at stake.
+  git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
+    || die "Could not locate this installation's Git directory." \
+        "Check the checkout, then re-run: jarvis-research doctor"
+  for op in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [ -e "${git_dir}/${op}" ]; then
+      die "A Git operation is already in progress in this checkout; refusing to update." \
+          "Finish or abort it (for example: git rebase --abort), then re-run: jarvis-research update"
+    fi
+  done
+
+  # Tracked files flagged skip-worktree (tag 'S') or assume-unchanged (lowercase
+  # tag) hide real modifications from every status query, including the one below.
+  hidden="$(git ls-files -v 2>/dev/null | sed -n 's/^[a-zS] //p')" \
+    || die "Could not inspect this installation's index flags." \
+        "Check the Git installation, then re-run: jarvis-research doctor"
+  if [ -n "$hidden" ]; then
+    printf '%s\n' "$hidden" | head -20 >&2
+    die "Some tracked files are flagged to hide local changes; refusing to update." \
+        "Clear them with: git update-index --no-skip-worktree --no-assume-unchanged <path>"
+  fi
+
+  # The exemption is for one product-managed regular file. A directory or symlink
+  # at that path is not it: the pathspec below excludes a prefix, so without this
+  # fence any content beneath it would be laundered.
+  marker_rel="secrets/manifest-hmac-required"
+  if { [ -e "$marker_rel" ] || [ -L "$marker_rel" ]; } \
+     && { [ ! -f "$marker_rel" ] || [ -L "$marker_rel" ]; }; then
+    die "The signed-manifest marker is not a regular file; refusing to update." \
+        "Inspect ${marker_rel}, then re-run: jarvis-research doctor"
+  fi
+  # It is machine-local and must never be tracked; a tracked copy would let the
+  # exclusion hide a real modification to a committed file.
+  tracked_marker="$(git ls-files -- "$marker_rel" 2>/dev/null)" \
+    || die "Could not inspect this installation's index." \
+        "Check the Git installation, then re-run: jarvis-research doctor"
+  if [ -n "$tracked_marker" ]; then
+    die "The signed-manifest marker is tracked in this checkout; refusing to update." \
+        "Remove it from version control, then re-run: jarvis-research update"
+  fi
+  # One repo-wide status. Declared then assigned: `local x="$(...)"` returns
+  # local's status and would silently defeat the fail-closed branch.
+  dirt="$(git status --porcelain -- ':(top)' ":(top,exclude)${marker_rel}" 2>/dev/null)" \
+    || die "Could not inspect this installation's working tree." \
+        "Check the Git installation, then re-run: jarvis-research doctor"
+  if [ -n "$dirt" ]; then
+    printf '%s\n' "$dirt" | head -20 >&2
+    [ "$(printf '%s\n' "$dirt" | wc -l)" -le 20 ] || printf '        ... and more\n' >&2
     die "Your working tree has uncommitted changes; refusing to update." \
-        "Commit or stash them, then re-run: jarvis-research update"
+        "Commit or stash them, then re-run: jarvis-research update. Leave ${marker_rel} in place; it is managed by the backup service."
   fi
 }
 
@@ -1912,6 +1964,17 @@ cmd_doctor() {
     ok "This install is registered with jarvis-research."
   else
     warn "This install is not registered (run: jarvis-research register)."
+  fi
+  # Both update refusals point here, so doctor must be able to answer the
+  # question they raise. _require_clean_main_checkout exits on refusal, so the
+  # command substitution both isolates that exit and captures the explanation.
+  local readiness
+  printf '\n%s-- update readiness --%s\n' "$C_BOLD" "$C_RESET"
+  if readiness="$(_require_clean_main_checkout 2>&1)"; then
+    ok "The checkout is ready to update."
+  else
+    printf '%s\n' "$readiness" | sed 's/^/  /'
+    rc=1
   fi
   local latest cur; latest="$(latest_stable_tag origin 2>/dev/null || true)"
   cur="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"

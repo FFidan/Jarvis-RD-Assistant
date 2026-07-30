@@ -59,14 +59,62 @@ resolve_repository() {
 }
 
 require_managed_checkout() {
-  local repo="$1" branch origin actual expected
+  local repo="$1" branch origin actual expected git_dir op hidden marker_rel marker tracked_marker dirt
   branch="$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || true)"
   [ "$branch" = main ] \
     || die "Updates require a normal main checkout." \
       "Switch this installation to main, then retry."
-  [ -z "$(git -C "$repo" status --porcelain 2>/dev/null)" ] \
-    || die "The working tree has uncommitted changes." \
-      "Commit or stash them before updating."
+
+  # A clean tree is not the same as an updatable tree. An interrupted rebase,
+  # merge, cherry-pick or revert leaves the porcelain status empty but makes the
+  # release fast-forward fail once the update transaction is already open.
+  # Refuse here, while nothing is at stake.
+  git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" \
+    || die "Could not locate this installation's Git directory." "Check the checkout, then retry."
+  for op in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [ -e "${git_dir}/${op}" ]; then
+      die "A Git operation is already in progress in this checkout." \
+        "Finish or abort it (for example: git rebase --abort), then retry."
+    fi
+  done
+
+  # Tracked files flagged skip-worktree (tag 'S') or assume-unchanged (lowercase
+  # tag) hide real modifications from every status query, including the one below.
+  hidden="$(git -C "$repo" ls-files -v 2>/dev/null | sed -n 's/^[a-zS] //p')" \
+    || die "Could not inspect this installation's index flags." "Check the Git installation, then retry."
+  if [ -n "$hidden" ]; then
+    printf '%s\n' "$hidden" | head -20 >&2
+    die "Some tracked files are flagged to hide local changes." \
+      "Clear them with: git update-index --no-skip-worktree --no-assume-unchanged <path>"
+  fi
+
+  # The exemption is for one product-managed regular file. A directory or symlink
+  # at that path is not it: the pathspec below excludes a prefix, so without this
+  # fence any content beneath it would be laundered.
+  marker_rel="secrets/manifest-hmac-required"
+  marker="${repo}/${marker_rel}"
+  if { [ -e "$marker" ] || [ -L "$marker" ]; } && { [ ! -f "$marker" ] || [ -L "$marker" ]; }; then
+    die "The signed-manifest marker is not a regular file." "Inspect ${marker_rel}, then retry."
+  fi
+  # It is machine-local and must never be tracked; a tracked copy would let the
+  # exclusion hide a real modification to a committed file.
+  tracked_marker="$(git -C "$repo" ls-files -- "$marker_rel" 2>/dev/null)" \
+    || die "Could not inspect this installation's index." "Check the Git installation, then retry."
+  if [ -n "$tracked_marker" ]; then
+    die "The signed-manifest marker is tracked in this checkout." \
+      "Remove it from version control, then retry."
+  fi
+  # One repo-wide status. Declared then assigned: `local x="$(...)"` returns
+  # local's status and would silently defeat the fail-closed branch.
+  dirt="$(git -C "$repo" status --porcelain -- ':(top)' ":(top,exclude)${marker_rel}" 2>/dev/null)" \
+    || die "Could not inspect this installation's working tree." \
+      "Check the Git installation, then retry."
+  if [ -n "$dirt" ]; then
+    printf '%s\n' "$dirt" | head -20 >&2
+    [ "$(printf '%s\n' "$dirt" | wc -l)" -le 20 ] || printf '        ... and more\n' >&2
+    die "The working tree has uncommitted changes." \
+      "Commit or stash them before updating. Leave ${marker_rel} in place; it is managed by the backup service."
+  fi
 
   origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
   expected="${JARVIS_RESEARCH_REMOTE:-limitcycle-oss/jarvis-rd-assistant}"
