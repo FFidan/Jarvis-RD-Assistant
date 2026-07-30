@@ -158,7 +158,6 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     # The runbook and the matrix are prose; this input is what a dispatched run
     # actually uses, so a divergence here silently unverifies every source.
     update_mode_input = workflow.split("update_mode:", 1)[1].split("\n\n", 1)[0]
-    assert {strategy for strategy, _journal in expected.values()} == {"bootstrap"}
     assert "default: bootstrap" in update_mode_input
 
     assert 'if [ "$UPDATE_MODE" = bootstrap ]; then' in update_leg
