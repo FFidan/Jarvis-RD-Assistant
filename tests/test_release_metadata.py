@@ -136,6 +136,7 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
 def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> None:
     release = _read("docs/RELEASE.md")
     lifecycle = _read("scripts/lifecycle-smoke.sh")
+    workflow = _read(".github/workflows/lifecycle-smoke.yml")
     update_leg = lifecycle.split("run_leg_update() {", 1)[1].split("\n# Leg: uninstall", 1)[0]
 
     documented = {
@@ -148,11 +149,18 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     }
     expected = {
         "v1.1.3": ("bootstrap", "current-merge-pending"),
-        "v1.2.0": ("direct", "current-merge-pending"),
-        "v1.2.1": ("direct", "current-merge-pending"),
+        "v1.2.0": ("bootstrap", "current-merge-pending"),
+        "v1.2.1": ("bootstrap", "current-merge-pending"),
     }
 
     assert documented == expected
+
+    # The runbook and the matrix are prose; this input is what a dispatched run
+    # actually uses, so a divergence here silently unverifies every source.
+    update_mode_input = workflow.split("update_mode:", 1)[1].split("\n\n", 1)[0]
+    assert {strategy for strategy, _journal in expected.values()} == {"bootstrap"}
+    assert "default: bootstrap" in update_mode_input
+
     assert 'if [ "$UPDATE_MODE" = bootstrap ]; then' in update_leg
     assert "direct|bootstrap)" in lifecycle
     assert update_leg.count('"${update_command[@]}"') == 2
@@ -160,6 +168,8 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     assert '"phase":"staging"' not in update_leg
     assert '"phase":"merge_pending"' in update_leg
     assert '"schema_version":1' in update_leg
+    assert "':(top,exclude)secrets/manifest-hmac-required'" in update_leg
+    assert "left unexpected repository paths dirty" in update_leg
 
 
 def test_local_cross_user_gate_forces_the_root_pytest_config() -> None:

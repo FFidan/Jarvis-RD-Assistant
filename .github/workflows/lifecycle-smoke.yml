@@ -26,7 +26,7 @@ on:
         description: Use the source command directly or load the target command first
         type: choice
         options: [direct, bootstrap]
-        default: direct
+        default: bootstrap
         required: false
 
 permissions:

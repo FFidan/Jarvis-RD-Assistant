@@ -536,6 +536,24 @@ run_leg_update() {
   fi
   ok "A schema-1 merge_pending transaction survived with the checkout unadvanced."
 
+  # Whatever the interrupted attempt left behind, it must be only the product-managed
+  # marker. Anything else means the retry below would be exercising a different defect.
+  local marker="${clone}/secrets/manifest-hmac-required"
+  if { [ -e "$marker" ] || [ -L "$marker" ]; } && { [ ! -f "$marker" ] || [ -L "$marker" ]; }; then
+    err "The signed-manifest marker is not a regular file: $(ls -ld "$marker" 2>&1)"
+    return 1
+  fi
+  local unexpected
+  unexpected="$(git -C "$clone" status --porcelain \
+      -- ':(top)' ':(top,exclude)secrets/manifest-hmac-required' 2>/dev/null)" \
+    || { err "Could not inspect the interrupted checkout."; return 1; }
+  if [ -n "$unexpected" ]; then
+    err "The interrupted update left unexpected repository paths dirty:"
+    printf '%s\n' "$unexpected" >&2
+    return 1
+  fi
+  ok "The interrupted checkout carries no unexpected dirty paths."
+
   info "Retrying the update with pulls restored..."
   local resume_log="${scratch}/update-resumed.log"
   rc=0

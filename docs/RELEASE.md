@@ -86,7 +86,7 @@ gh workflow run first-run-smoke.yml --ref main \
   -f cold_install_version="$MERGED_SHA"
 
 UPDATE_FROM=vA.B.C
-UPDATE_MODE=direct
+UPDATE_MODE=bootstrap
 gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
   -f update_from="$UPDATE_FROM" -f update_to="$MERGED_SHA" \
   -f update_mode="$UPDATE_MODE"
@@ -97,8 +97,8 @@ Run the upgrade check for each maintained source contract:
 | Source release | Update path | Interrupted-update state |
 |---|---|---|
 | `v1.1.3` | `bootstrap` | `current-merge-pending` |
-| `v1.2.0` | `direct` | `current-merge-pending` |
-| `v1.2.1` | `direct` | `current-merge-pending` |
+| `v1.2.0` | `bootstrap` | `current-merge-pending` |
+| `v1.2.1` | `bootstrap` | `current-merge-pending` |
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
@@ -106,8 +106,8 @@ anonymously, build no application image, reach a healthy stack, and remove its
 isolated project resources. Each upgrade must start at the selected stable tag,
 recover from its supported interrupted-update state, finish at `MERGED_SHA`,
 and leave no pending journal or project resource behind.
-The v1.1.3 check loads the candidate's bootstrap before invoking the updater;
-v1.2.0 and v1.2.1 invoke their installed lifecycle command directly.
+Every source loads the candidate's bootstrap before invoking the updater, so
+each check exercises the update path the candidate actually ships.
 
 ### 4. Tag the release and promote exact digests
 
