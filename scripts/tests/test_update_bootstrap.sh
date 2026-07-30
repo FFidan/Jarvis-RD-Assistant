@@ -231,6 +231,34 @@ else
 fi
 rm -f "$INSTALL/$MARKER_REL"
 
+# (h) An in-progress Git operation is refused even though the tree is clean. This is
+#     the shape a plain porcelain check cannot see: the fast-forward would fail later,
+#     after the update transaction is already open.
+INSTALL_GIT_DIR="$(git -C "$INSTALL" rev-parse --absolute-git-dir)"
+: > "${INSTALL_GIT_DIR}/MERGE_HEAD"
+rm -f "$LOG" "$RUNTIME_LOG"
+out="$(run_bootstrap --to v2.0.0 --yes 2>&1)"; rc=$?
+rm -f "${INSTALL_GIT_DIR}/MERGE_HEAD"
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'already in progress' && [ ! -e "$LOG" ]; then
+  pass "an in-progress Git operation is refused before target loading"
+else
+  check_fail "in-progress refusal: rc=$rc out=<<<$out>>>"
+fi
+
+# (i) A tracked file flagged to hide local changes is refused. Porcelain reports
+#     nothing for these, so without the index-flag fence the modification is invisible.
+git -C "$INSTALL" update-index --skip-worktree docker-compose.yml
+printf 'hidden\n' >> "$INSTALL/docker-compose.yml"
+rm -f "$LOG" "$RUNTIME_LOG"
+out="$(run_bootstrap --to v2.0.0 --yes 2>&1)"; rc=$?
+git -C "$INSTALL" update-index --no-skip-worktree docker-compose.yml
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'hide local changes' \
+   && printf '%s' "$out" | grep -q 'docker-compose.yml' && [ ! -e "$LOG" ]; then
+  pass "a tracked file flagged to hide local changes is refused, and is named"
+else
+  check_fail "hide-flag refusal: rc=$rc out=<<<$out>>>"
+fi
+
 # Restore the shared fixture to its pinned state for every later case.
 git -C "$INSTALL" reset -q --hard "$SOURCE_SHA"
 git -C "$INSTALL" clean -qfd
