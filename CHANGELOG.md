@@ -10,7 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## v1.2.2 (2026-07-29)
+## v1.2.2 (2026-07-31)
 
 ### Fixed
 - **Content derived from a replaced source document.** Promoting a paper to
