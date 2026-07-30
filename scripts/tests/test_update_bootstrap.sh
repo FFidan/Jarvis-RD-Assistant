@@ -259,6 +259,18 @@ else
   check_fail "hide-flag refusal: rc=$rc out=<<<$out>>>"
 fi
 
+# (j) An unreadable index fails closed. Case (g) breaks only the status query; an
+#     unreadable index breaks the ls-files fences instead, which run earlier and
+#     would otherwise report "no hidden flags" for an index Git cannot parse.
+printf 'not-an-index\n' > "$ROOT/bogus-index"
+rm -f "$LOG" "$RUNTIME_LOG"
+out="$(GIT_INDEX_FILE="$ROOT/bogus-index" run_bootstrap --to v2.0.0 --yes 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "index flags" && [ ! -e "$LOG" ]; then
+  pass "an unreadable index fails closed before handoff"
+else
+  check_fail "unreadable-index fail-closed: rc=$rc out=<<<$out>>>"
+fi
+
 # Restore the shared fixture to its pinned state for every later case.
 git -C "$INSTALL" reset -q --hard "$SOURCE_SHA"
 git -C "$INSTALL" clean -qfd

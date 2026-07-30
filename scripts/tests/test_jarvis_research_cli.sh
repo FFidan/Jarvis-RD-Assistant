@@ -128,6 +128,20 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Could not inspect'; then
 else
   check_fail "installed updater fail-closed: rc=$rc out=<<<$out>>>"
 fi
+
+# The status query is not the only Git call that can fail. An unreadable index
+# breaks the ls-files fences, which run first and would otherwise report "no
+# hidden flags" for an index Git cannot parse.
+printf 'not-an-index\n' > "$CLEAN_FIXTURE/../bogus-index"
+out="$( cd "$CLEAN_FIXTURE" \
+  && GIT_INDEX_FILE="${CLEAN_FIXTURE}/../bogus-index" \
+     _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "index flags"; then
+  pass "the installed updater fails closed when the index is unreadable"
+else
+  check_fail "installed updater unreadable index: rc=$rc out=<<<$out>>>"
+fi
+rm -f "$CLEAN_FIXTURE/../bogus-index"
 rm -rf "$CLEAN_FIXTURE"
 
 # Differential oracle. legacy() is the policy we are replacing, verbatim.
