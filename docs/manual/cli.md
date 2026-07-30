@@ -117,11 +117,11 @@ post-advance half explicitly, `jarvis-research update --resume <tag>` runs only
 those remaining steps. The command refuses to resume if the checkout moved to
 an unexpected commit.
 
-### Updating from v1.1.3
+### Updating from a release before v1.2.2
 
-The lifecycle command shipped with v1.1.3 predates the backup protocol required
-by v1.2.2. From the v1.1.3 installation directory, run the v1.2.2 bootstrap
-once:
+The lifecycle commands shipped with v1.1.3, v1.2.0 and v1.2.1 all predate the
+backup protocol required by v1.2.2. From the installation directory, run the
+v1.2.2 bootstrap once:
 
 ```bash
 (
@@ -141,8 +141,14 @@ containing both databases, uploaded PDFs and data-coupled secrets before it can
 apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
-Installations running v1.2.0 or v1.2.1 do not need the bootstrap and update
-normally with `jarvis-research update`.
+If the update stops and reports that `secrets/manifest-hmac-required` makes the
+checkout unclean, leave that file alone. The backup service creates it to record
+that this installation requires a signed backup manifest, and v1.2.2 knows to
+ignore it. Deleting it would let a later restore accept an unsigned manifest,
+and committing it would put installation-specific state into your checkout.
+
+Installations already running v1.2.2 or later update normally with
+`jarvis-research update`.
 
 ### Rolling back
 
@@ -168,8 +174,8 @@ install rather than trying to update the rc checkout in place.
 
 ## Updating by hand
 
-`jarvis-research update` is the supported path for v1.2.0 and later; v1.1.3
-uses the bootstrap above. Use the lower-level fallback only to repair a
+`jarvis-research update` is the supported path for v1.2.2 and later; earlier
+releases use the bootstrap above. Use the lower-level fallback only to repair a
 lifecycle command that cannot run, and only after independently verifying a
 current restore point:
 

@@ -176,8 +176,8 @@ jarvis-research update
 
 This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
 
-For an installation still running v1.1.3, run the v1.2.2 bootstrap once from
-the installation directory:
+For an installation still running v1.1.3, v1.2.0 or v1.2.1, run the v1.2.2
+bootstrap once from the installation directory:
 
 ```bash
 (
@@ -190,10 +190,11 @@ the installation directory:
 )
 ```
 
-The v1.1.3 lifecycle command predates the backup protocol required by v1.2.2.
-The bootstrap validates the selected release and runs its updater, which creates
+Those lifecycle commands predate the backup protocol required by v1.2.2. The
+bootstrap validates the selected release and runs its updater, which creates
 and authenticates a complete restore point before any data-changing migration.
-See the [command-line reference](docs/manual/cli.md#updating-from-v113) for the
+See the [command-line
+reference](docs/manual/cli.md#updating-from-a-release-before-v122) for the
 complete update procedure and its repair-only manual fallback.
 
 ## Uninstalling JARVIS
