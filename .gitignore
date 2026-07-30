@@ -36,6 +36,17 @@ secrets/*.txt
 secrets/*.rotation
 secrets/.jarvis_config_key_rotation.lock
 
+# Machine-local lifecycle state and interrupted-write residue. These are created by
+# setup, update, backup, restore and key rotation; none is ever committed, and an
+# orphaned one must not be able to block a future update. The six-character form
+# matches the `mktemp .env.XXXXXX` template and leaves `.env.example` visible.
+secrets/manifest-hmac-required
+secrets/*.txt.restore.*
+secrets/jarvis_config_key_rotation_state.txt.*
+.env.restore.*
+.env.??????
+litellm/.config.yaml.*
+
 # Docker local overrides
 docker-compose.override.yml
 
@@ -49,6 +60,7 @@ scripts/pii-allowlist-local.txt
 
 # Generated data (large, user-specific)
 shared/pdf_storage/
+shared/local_pdfs/
 shared/snapshots/
 shared/perf/
 
