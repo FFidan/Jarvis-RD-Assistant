@@ -2449,8 +2449,8 @@ covers first sign-in, family invitations, passkeys, and everyday use.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>jarvis-research<span class="w"> </span>update
 </code></pre></div>
 <p>This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.</p>
-<p>For an installation still running v1.1.3, run the v1.2.2 bootstrap once from
-the installation directory:</p>
+<p>For an installation still running v1.1.3, v1.2.0 or v1.2.1, run the v1.2.2
+bootstrap once from the installation directory:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="o">(</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nb">set</span><span class="w"> </span>-e
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nv">bootstrap</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
@@ -2460,10 +2460,11 @@ the installation directory:</p>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>bash<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">&quot;</span><span class="w"> </span>--to<span class="w"> </span>v1.2.2
 <a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="o">)</span>
 </code></pre></div>
-<p>The v1.1.3 lifecycle command predates the backup protocol required by v1.2.2.
-The bootstrap validates the selected release and runs its updater, which creates
+<p>Those lifecycle commands predate the backup protocol required by v1.2.2. The
+bootstrap validates the selected release and runs its updater, which creates
 and authenticates a complete restore point before any data-changing migration.
-See the <a href="../manual/cli/#updating-from-v113">command-line reference</a> for the
+See the <a href="../manual/cli/#updating-from-a-release-before-v122">command-line
+reference</a> for the
 complete update procedure and its repair-only manual fallback.</p>
 <h2 id="uninstalling-jarvis">Uninstalling JARVIS<a class="headerlink" href="#uninstalling-jarvis" title="Permanent link">&para;</a></h2>
 <p><code>jarvis-research uninstall</code> lists the exact resources selected by each teardown
