@@ -132,16 +132,40 @@ fi
 # The status query is not the only Git call that can fail. An unreadable index
 # breaks the ls-files fences, which run first and would otherwise report "no
 # hidden flags" for an index Git cannot parse.
-printf 'not-an-index\n' > "$CLEAN_FIXTURE/../bogus-index"
+# The scratch index lives in its own directory: a fixed path under TMPDIR is
+# shared between concurrent runs of this suite, which corrupt each other.
+BOGUS_INDEX_DIR="$(mktemp -d)"
+printf 'not-an-index\n' > "$BOGUS_INDEX_DIR/index"
 out="$( cd "$CLEAN_FIXTURE" \
-  && GIT_INDEX_FILE="${CLEAN_FIXTURE}/../bogus-index" \
+  && GIT_INDEX_FILE="$BOGUS_INDEX_DIR/index" \
      _require_clean_main_checkout 2>&1 )"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "index flags"; then
   pass "the installed updater fails closed when the index is unreadable"
 else
   check_fail "installed updater unreadable index: rc=$rc out=<<<$out>>>"
 fi
-rm -f "$CLEAN_FIXTURE/../bogus-index"
+rm -rf "$BOGUS_INDEX_DIR"
+
+# A Git too old to know --absolute-git-dir echoes the unrecognised flag and exits
+# 0, so the in-progress fence would probe a path that cannot exist. The shim
+# reproduces that behaviour on any Git.
+OLDGIT_DIR="$(mktemp -d)"
+cat > "$OLDGIT_DIR/git" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = --absolute-git-dir ]; then printf '%s\n' --absolute-git-dir; exit 0; fi
+done
+exec "$(command -v git)" "\$@"
+SHIM
+chmod +x "$OLDGIT_DIR/git"
+out="$( cd "$CLEAN_FIXTURE" \
+  && PATH="$OLDGIT_DIR:$PATH" _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Upgrade Git'; then
+  pass "the installed updater refuses a Git without --absolute-git-dir"
+else
+  check_fail "installed updater old git: rc=$rc out=<<<$out>>>"
+fi
+rm -rf "$OLDGIT_DIR"
 rm -rf "$CLEAN_FIXTURE"
 
 # Differential oracle. legacy() is the policy we are replacing, verbatim.
@@ -257,7 +281,6 @@ if [ "${1:-}" = -C ]; then
     rev-parse)
       case "${2:-}" in
         HEAD) cat "$repo/.stub-head" 2>/dev/null || exit 1 ;;
-        --absolute-git-dir) [ -d "$repo/.git" ] && printf '%s\n' "$repo/.git" || printf '%s\n' "$repo" ;;
         *) printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
       esac
       exit 0 ;;
@@ -274,9 +297,10 @@ case "${1:-}" in
     # peels to the same deterministic target commit unless a test overrides it.
     case "${2:-}" in
       HEAD) cat "$STUB_HEAD_FILE" ;;
-      # The guard requires a real directory here, and then probes it for
-      # in-progress operation markers; a fixture has none, so the fence passes.
-      --absolute-git-dir) [ -d "$PWD/.git" ] && printf '%s\n' "$PWD/.git" || printf '%s\n' "$PWD" ;;
+      # Answer only with a real Git directory, and fail like Git does when there
+      # is none. Substituting the working tree would make the guard's directory
+      # assertion unfailable and would point its marker probe at the wrong place.
+      --absolute-git-dir) [ -d "$PWD/.git" ] || exit 128; printf '%s\n' "$PWD/.git" ;;
       *)    printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
     esac
     exit 0 ;;
@@ -627,7 +651,7 @@ chmod +x "$STUB/docker"
 # =============================================================================
 make_repo() {
   local dir="$1"
-  mkdir -p "$dir/scripts/tests" "$dir/db/migrations" "$dir/shared/pdf_storage"
+  mkdir -p "$dir/scripts/tests" "$dir/db/migrations" "$dir/shared/pdf_storage" "$dir/.git"
   ln -sf "$CLI" "$dir/scripts/jarvis-research.sh"
   ln -sf "$LIB" "$dir/scripts/setup_lib.sh"
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"

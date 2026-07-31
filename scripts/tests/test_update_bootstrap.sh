@@ -275,6 +275,30 @@ fi
 git -C "$INSTALL" reset -q --hard "$SOURCE_SHA"
 git -C "$INSTALL" clean -qfd
 
+# (k) A Git too old to know --absolute-git-dir is refused. rev-parse echoes an
+#     unrecognised flag and exits 0, so without the directory assertion the
+#     in-progress fence would probe a path that cannot exist and let the update
+#     through. Runs on the restored fixture so only this condition can refuse.
+SHIM_DIR="$ROOT/oldgit"
+mkdir -p "$SHIM_DIR"
+REAL_GIT="$(command -v git)"
+cat > "$SHIM_DIR/git" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = --absolute-git-dir ]; then printf '%s\n' --absolute-git-dir; exit 0; fi
+done
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$SHIM_DIR/git"
+rm -f "$LOG" "$RUNTIME_LOG"
+out="$(PATH="$SHIM_DIR:$PATH" run_bootstrap --to v2.0.0 --yes 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Upgrade Git' && [ ! -e "$LOG" ]; then
+  pass "a Git without --absolute-git-dir is refused before handoff"
+else
+  check_fail "old-git fail-closed: rc=$rc out=<<<$out>>>"
+fi
+rm -rf "$SHIM_DIR"
+
 rm -f "$LOG" "$RUNTIME_LOG"
 out="$(
   JARVIS_RESEARCH_REMOTE=other/project \
