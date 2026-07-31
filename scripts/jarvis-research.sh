@@ -318,8 +318,12 @@ _txn_write_new() {
   TXN_PHASE="$phase"; TXN_STARTED_AT="${UPDATE_START_EPOCH:-0}"
   TXN_BACKUP_ID="$backup_id"; TXN_BACKUP_RUN_ID="$backup_run_id"
   TXN_LEGACY_RECOVERY="false"
-  if ! printf '%s' "$TXN_FROM_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+  # Refuse to persist any field the state reader would reject: a record that
+  # cannot be loaded back strands the update it is supposed to make resumable.
+  if ! [[ "$TXN_FROM_SHA" =~ ^[0-9a-f]{40}$ ]] \
      || [ "$TXN_PHASE" != "merge_pending" ] \
+     || ! [[ "$TXN_BACKUP_ID" =~ ^([0-9]{8}_[0-9]{6})?$ ]] \
+     || ! [[ "$TXN_BACKUP_RUN_ID" =~ ^([0-9a-f]{32})?$ ]] \
      || { [ -n "$TXN_BACKUP_ID" ] && [ -z "$TXN_BACKUP_RUN_ID" ]; } \
      || { [ -z "$TXN_BACKUP_ID" ] && [ -n "$TXN_BACKUP_RUN_ID" ]; }; then
     return 1
@@ -1046,7 +1050,9 @@ _require_staged_runtime_backup() {
       return 1
     fi
     rc=0
-    _run_staged_backup_producer "$request_id" "$remaining" || rc=$?
+    # The producer narrates progress on stdout, but this function's stdout is
+    # the verified payload its caller captures; route the narration to stderr.
+    _run_staged_backup_producer "$request_id" "$remaining" >&2 || rc=$?
     if [ "$rc" -ne 0 ]; then
       if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
         err "The selected release's backup producer exceeded the ${timeout}s limit."
@@ -1107,7 +1113,9 @@ _require_fresh_backup() {
   fi
   VERIFIED_BACKUP_TS="${verified%%|*}"
   VERIFIED_BACKUP_RUN_ID="${verified#*|}"
-  printf '%s' "$VERIFIED_BACKUP_TS" | grep -Eq '^[0-9]{8}_[0-9]{6}$' \
+  # grep matches per line, so a multi-line value with one clean line would
+  # pass; the whole-string match rejects anything but the bare timestamp.
+  [[ "$VERIFIED_BACKUP_TS" =~ ^[0-9]{8}_[0-9]{6}$ ]] \
     && [ "$VERIFIED_BACKUP_RUN_ID" = "$request_id" ]
 }
 
