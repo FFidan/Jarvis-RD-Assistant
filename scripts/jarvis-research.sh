@@ -471,9 +471,15 @@ _require_clean_main_checkout() {
   # merge, cherry-pick or revert leaves the porcelain status empty but makes the
   # release fast-forward fail once the update transaction is already open.
   # Refuse here, while nothing is at stake.
+  # Git before 2.13 does not know --absolute-git-dir. rev-parse echoes an unknown
+  # flag back and exits 0, so a successful call is not yet a usable directory and
+  # the loop below would silently test paths that cannot exist.
   git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
     || die "Could not locate this installation's Git directory." \
         "Check the checkout, then re-run: jarvis-research doctor"
+  [ -d "$git_dir" ] \
+    || die "Could not locate this installation's Git directory." \
+        "Upgrade Git to 2.13 or newer, then re-run: jarvis-research doctor"
   for op in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
     if [ -e "${git_dir}/${op}" ]; then
       die "A Git operation is already in progress in this checkout; refusing to update." \

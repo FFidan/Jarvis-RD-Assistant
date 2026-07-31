@@ -141,11 +141,16 @@ containing both databases, uploaded PDFs and data-coupled secrets before it can
 apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
-If the update stops and reports that `secrets/manifest-hmac-required` makes the
-checkout unclean, leave that file alone. The backup service creates it to record
-that this installation requires a signed backup manifest, and v1.2.2 knows to
-ignore it. Deleting it would let a later restore accept an unsigned manifest,
-and committing it would put installation-specific state into your checkout.
+Your installed command may refuse first with `Your working tree has uncommitted
+changes; refusing to update.`, which does not say which path it means. Run `git
+status`. If the only path listed is `secrets/manifest-hmac-required`, that is
+expected and the bootstrap above is the way forward — it knows to leave that file
+alone.
+
+Do not act on the "commit or stash" advice for this one file. It is untracked, so
+`git stash` will not move it, and deleting it would let a later restore accept an
+unsigned backup manifest. The backup service creates it to record that this
+installation requires a signed one.
 
 Installations already running v1.2.2 or later update normally with
 `jarvis-research update`.

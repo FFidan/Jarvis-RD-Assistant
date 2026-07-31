@@ -44,7 +44,7 @@ secrets/manifest-hmac-required
 secrets/*.txt.restore.*
 secrets/jarvis_config_key_rotation_state.txt.*
 .env.restore.*
-.env.??????
+/.env.??????
 litellm/.config.yaml.*
 
 # Docker local overrides

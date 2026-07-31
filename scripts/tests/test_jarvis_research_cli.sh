@@ -257,6 +257,7 @@ if [ "${1:-}" = -C ]; then
     rev-parse)
       case "${2:-}" in
         HEAD) cat "$repo/.stub-head" 2>/dev/null || exit 1 ;;
+        --absolute-git-dir) [ -d "$repo/.git" ] && printf '%s\n' "$repo/.git" || printf '%s\n' "$repo" ;;
         *) printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
       esac
       exit 0 ;;
@@ -273,6 +274,9 @@ case "${1:-}" in
     # peels to the same deterministic target commit unless a test overrides it.
     case "${2:-}" in
       HEAD) cat "$STUB_HEAD_FILE" ;;
+      # The guard requires a real directory here, and then probes it for
+      # in-progress operation markers; a fixture has none, so the fence passes.
+      --absolute-git-dir) [ -d "$PWD/.git" ] && printf '%s\n' "$PWD/.git" || printf '%s\n' "$PWD" ;;
       *)    printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
     esac
     exit 0 ;;

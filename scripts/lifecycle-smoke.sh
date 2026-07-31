@@ -480,6 +480,8 @@ run_leg_update() {
     if [ "$bootstrap_mode" != 100755 ] \
        || ! git -C "$clone" show "${to_commit}:scripts/update-bootstrap.sh" > "$bootstrap"; then
       err "The selected target does not contain an executable update bootstrap."
+      err "Bootstrap mode requires a target that ships one. Select a newer target, or pass"
+      err "update_mode=direct to exercise the source release's own update command instead."
       return 1
     fi
     chmod 500 "$bootstrap"
