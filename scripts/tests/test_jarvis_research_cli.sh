@@ -177,14 +177,15 @@ ORACLE_STATES=(
   "type_change:rm \$W/docker-compose.yml && ln -s /etc/hostname \$W/docker-compose.yml"
   "ignored_only:touch \$W/secrets/api.txt"
   "marker_tracked:: > \$W/$M; git -C \$W add -f $M; git -C \$W -c user.email=t@t -c user.name=t commit -qm t"
-  "rebase_in_progress:echo z > \$W/n.txt; git -C \$W add n.txt; git -C \$W -c user.email=t@t -c user.name=t commit -qm n; GIT_SEQUENCE_EDITOR='sed -i \"1s/^pick/break/\"' git -C \$W rebase -qi HEAD~1"
+  "rebase_detaches_head:echo z > \$W/n.txt; git -C \$W add n.txt; git -C \$W -c user.email=t@t -c user.name=t commit -qm n; GIT_SEQUENCE_EDITOR='sed -i \"1s/^pick/break/\"' git -C \$W rebase -qi HEAD~1"
+  "merge_in_progress:git -C \$W rev-parse HEAD > \$W/.git/MERGE_HEAD"
   "skip_worktree:git -C \$W update-index --skip-worktree docker-compose.yml && echo h >> \$W/docker-compose.yml"
   "assume_unchanged:git -C \$W update-index --assume-unchanged docker-compose.yml && echo h >> \$W/docker-compose.yml"
 )
 # States where the NEW policy may accept what the old one refused. Exactly one.
 ORACLE_NARROWED="marker_only"
 # States where the NEW policy may refuse what the old one accepted. Declared strengthening.
-ORACLE_STRENGTHENED="rebase_in_progress skip_worktree assume_unchanged marker_tracked"
+ORACLE_STRENGTHENED="rebase_detaches_head merge_in_progress skip_worktree assume_unchanged marker_tracked"
 
 oracle_fail=0
 observed_narrowed=""
