@@ -480,6 +480,9 @@ run_leg_update() {
     if [ "$bootstrap_mode" != 100755 ] \
        || ! git -C "$clone" show "${to_commit}:scripts/update-bootstrap.sh" > "$bootstrap"; then
       err "The selected target does not contain an executable update bootstrap."
+      err "Bootstrap mode requires a target that ships one. Select a newer target, or run in"
+      err "direct mode (--update-mode direct here, update_mode=direct as a workflow input) to"
+      err "exercise the source release's own update command instead."
       return 1
     fi
     chmod 500 "$bootstrap"
@@ -535,6 +538,24 @@ run_leg_update() {
     return 1
   fi
   ok "A schema-1 merge_pending transaction survived with the checkout unadvanced."
+
+  # Whatever the interrupted attempt left behind, it must be only the product-managed
+  # marker. Anything else means the retry below would be exercising a different defect.
+  local marker="${clone}/secrets/manifest-hmac-required"
+  if { [ -e "$marker" ] || [ -L "$marker" ]; } && { [ ! -f "$marker" ] || [ -L "$marker" ]; }; then
+    err "The signed-manifest marker is not a regular file: $(ls -ld "$marker" 2>&1)"
+    return 1
+  fi
+  local unexpected
+  unexpected="$(git -C "$clone" status --porcelain \
+      -- ':(top)' ':(top,exclude)secrets/manifest-hmac-required' 2>/dev/null)" \
+    || { err "Could not inspect the interrupted checkout."; return 1; }
+  if [ -n "$unexpected" ]; then
+    err "The interrupted update left unexpected repository paths dirty:"
+    printf '%s\n' "$unexpected" >&2
+    return 1
+  fi
+  ok "The interrupted checkout carries no unexpected dirty paths."
 
   info "Retrying the update with pulls restored..."
   local resume_log="${scratch}/update-resumed.log"

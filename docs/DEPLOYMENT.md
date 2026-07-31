@@ -660,7 +660,7 @@ dashboard URL does not. Once signed in as an admin, invite additional users at
 
 ## Update Workflow
 
-Installations running v1.2.0 or later use the lifecycle command:
+Installations running v1.2.2 or later use the lifecycle command:
 
 ```bash
 jarvis-research update
@@ -670,8 +670,8 @@ It verifies the target release, protects data-changing migrations with a signed
 restore point, and can resume an interrupted run. The [command-line
 guide](manual/cli.md#how-update-works) is the canonical update runbook.
 
-An installation running v1.1.3 needs the
-[v1.2.2 update bootstrap](manual/cli.md#updating-from-v113) once. It loads the
+An installation running v1.1.3, v1.2.0 or v1.2.1 needs the [v1.2.2 update
+bootstrap](manual/cli.md#updating-from-a-release-before-v122) once. It loads the
 v1.2.2 lifecycle command before the migration check so the required signed
 restore point includes both databases, uploaded PDFs and the data-coupled
 secrets. The same guide describes the constrained manual fallback and rollback

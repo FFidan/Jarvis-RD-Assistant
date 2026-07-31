@@ -48,6 +48,7 @@ docs_dir: docs
 validation:
   links:
     not_found: warn
+    anchors: warn
     absolute_links: ignore
     unrecognized_links: ignore
 

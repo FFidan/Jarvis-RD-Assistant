@@ -78,6 +78,175 @@ else
   check_fail "success epilogue printed unsupported rollback guidance: out=<<<$out>>>"
 fi
 
+# =============================================================================
+# The cleanliness gate, against real Git. `update` refuses on this function, and
+# the recording git stub below cannot model pathspecs, so its policy is proven
+# here with real repositories instead.
+# =============================================================================
+clean_src="$(sed -n '/^_require_clean_main_checkout() {/,/^}/p' "$CLI")"
+[ -n "$clean_src" ] || { printf 'FAIL: could not extract _require_clean_main_checkout\n' >&2; exit 1; }
+eval "$clean_src"
+# The extracted function refuses by calling die, which exits. Every case below
+# runs it in a subshell, so a refusal is observable as a non-zero status.
+die() { err "$1"; printf '        %s\n' "${2:-}" >&2; exit 1; }
+
+CLEAN_FIXTURE="$(mktemp -d)"
+(
+  cd "$CLEAN_FIXTURE" || exit 1
+  git init -q -b main; git config user.email t@t; git config user.name t
+  mkdir -p secrets; touch docker-compose.yml secrets/.gitkeep
+  printf 'secrets/*.txt\n' > .gitignore
+  git add -A; git commit -qm init
+)
+
+# marker-only must be accepted by the installed updater
+: > "$CLEAN_FIXTURE/secrets/manifest-hmac-required"
+out="$( cd "$CLEAN_FIXTURE" && _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "the installed updater accepts a marker-only checkout"
+else
+  check_fail "installed updater marker-only: rc=$rc out=<<<$out>>>"
+fi
+
+# a second untracked file must still be refused, and named
+touch "$CLEAN_FIXTURE/OTHER-DIRT.bin"
+out="$( cd "$CLEAN_FIXTURE" && _require_clean_main_checkout 2>&1 )"; rc=$?
+rm -f "$CLEAN_FIXTURE/OTHER-DIRT.bin"
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'OTHER-DIRT.bin'; then
+  pass "the installed updater still refuses unrelated dirt, and names it"
+else
+  check_fail "installed updater unrelated dirt: rc=$rc out=<<<$out>>>"
+fi
+
+# Git inspection failure must fail closed. Only the status query is broken here;
+# an unusable GIT_DIR would refuse at the branch check and prove nothing.
+out="$( cd "$CLEAN_FIXTURE" \
+  && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=status.showUntrackedFiles GIT_CONFIG_VALUE_0=bogus \
+     _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Could not inspect'; then
+  pass "the installed updater fails closed when Git inspection fails"
+else
+  check_fail "installed updater fail-closed: rc=$rc out=<<<$out>>>"
+fi
+
+# The status query is not the only Git call that can fail. An unreadable index
+# breaks the ls-files fences, which run first and would otherwise report "no
+# hidden flags" for an index Git cannot parse.
+# The scratch index lives in its own directory: a fixed path under TMPDIR is
+# shared between concurrent runs of this suite, which corrupt each other.
+BOGUS_INDEX_DIR="$(mktemp -d)"
+printf 'not-an-index\n' > "$BOGUS_INDEX_DIR/index"
+out="$( cd "$CLEAN_FIXTURE" \
+  && GIT_INDEX_FILE="$BOGUS_INDEX_DIR/index" \
+     _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "index flags"; then
+  pass "the installed updater fails closed when the index is unreadable"
+else
+  check_fail "installed updater unreadable index: rc=$rc out=<<<$out>>>"
+fi
+rm -rf "$BOGUS_INDEX_DIR"
+
+# A Git too old to know --absolute-git-dir echoes the unrecognised flag and exits
+# 0, so the in-progress fence would probe a path that cannot exist. The shim
+# reproduces that behaviour on any Git.
+OLDGIT_DIR="$(mktemp -d)"
+cat > "$OLDGIT_DIR/git" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = --absolute-git-dir ]; then printf '%s\n' --absolute-git-dir; exit 0; fi
+done
+exec "$(command -v git)" "\$@"
+SHIM
+chmod +x "$OLDGIT_DIR/git"
+out="$( cd "$CLEAN_FIXTURE" \
+  && PATH="$OLDGIT_DIR:$PATH" _require_clean_main_checkout 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Upgrade Git'; then
+  pass "the installed updater refuses a Git without --absolute-git-dir"
+else
+  check_fail "installed updater old git: rc=$rc out=<<<$out>>>"
+fi
+rm -rf "$OLDGIT_DIR"
+rm -rf "$CLEAN_FIXTURE"
+
+# Differential oracle. legacy() is the policy we are replacing, verbatim.
+legacy() { [ -z "$(git status --porcelain 2>/dev/null)" ]; }
+shipped() { ( _require_clean_main_checkout ) >/dev/null 2>&1; }
+
+ORACLE_ROOT="$(mktemp -d)"
+oracle_reset() {
+  rm -rf "$ORACLE_ROOT/w"; mkdir -p "$ORACLE_ROOT/w/secrets"
+  (
+    cd "$ORACLE_ROOT/w" || exit 1
+    git init -q -b main; git config user.email t@t; git config user.name t
+    mkdir -p sub; touch docker-compose.yml secrets/.gitkeep sub/keep.txt
+    printf 'secrets/*.txt\n' > .gitignore
+    git add -A; git commit -qm init
+  )
+}
+M=secrets/manifest-hmac-required
+
+# name:setup — every state the two policies could disagree on.
+ORACLE_STATES=(
+  "clean:true"
+  "marker_only::> \$W/$M"
+  "marker_dir:mkdir -p \$W/$M/d && echo x > \$W/$M/d/p"
+  "marker_symlink:ln -s /etc/hostname \$W/$M"
+  "untracked_root:touch \$W/ROOT.bin"
+  "untracked_subdir:touch \$W/sub/S.bin"
+  "marker_plus_untracked::> \$W/$M; touch \$W/ROOT.bin"
+  "modified_tracked:echo x >> \$W/docker-compose.yml"
+  "staged_add:touch \$W/N.bin && git -C \$W add N.bin"
+  "staged_delete:git -C \$W rm -q --cached sub/keep.txt"
+  "deleted_tracked:rm \$W/sub/keep.txt"
+  "type_change:rm \$W/docker-compose.yml && ln -s /etc/hostname \$W/docker-compose.yml"
+  "ignored_only:touch \$W/secrets/api.txt"
+  "marker_tracked:: > \$W/$M; git -C \$W add -f $M; git -C \$W -c user.email=t@t -c user.name=t commit -qm t"
+  "rebase_detaches_head:echo z > \$W/n.txt; git -C \$W add n.txt; git -C \$W -c user.email=t@t -c user.name=t commit -qm n; GIT_SEQUENCE_EDITOR='sed -i \"1s/^pick/break/\"' git -C \$W rebase -qi HEAD~1"
+  "merge_in_progress:git -C \$W rev-parse HEAD > \$W/.git/MERGE_HEAD"
+  "skip_worktree:git -C \$W update-index --skip-worktree docker-compose.yml && echo h >> \$W/docker-compose.yml"
+  "assume_unchanged:git -C \$W update-index --assume-unchanged docker-compose.yml && echo h >> \$W/docker-compose.yml"
+)
+# States where the NEW policy may accept what the old one refused. Exactly one.
+ORACLE_NARROWED="marker_only"
+# States where the NEW policy may refuse what the old one accepted. Declared strengthening.
+ORACLE_STRENGTHENED="rebase_detaches_head merge_in_progress skip_worktree assume_unchanged marker_tracked"
+
+oracle_fail=0
+observed_narrowed=""
+observed_strengthened=""
+for entry in "${ORACLE_STATES[@]}"; do
+  name="${entry%%:*}"; setup="${entry#*:}"
+  oracle_reset; W="$ORACLE_ROOT/w"; eval "$setup" >/dev/null 2>&1 || true
+  if ( cd "$W" && legacy ); then old=ACCEPT; else old=REFUSE; fi
+  if ( cd "$W" && shipped ); then new=ACCEPT; else new=REFUSE; fi
+  case "$old->$new" in
+    "REFUSE->ACCEPT")
+      observed_narrowed="${observed_narrowed}${name} "
+      printf '%s\n' "$ORACLE_NARROWED" | grep -qx "$name" \
+        || { printf 'ORACLE: undeclared narrowing at state %s\n' "$name" >&2; oracle_fail=1; } ;;
+    "ACCEPT->REFUSE")
+      observed_strengthened="${observed_strengthened}${name} "
+      printf '%s\n' $ORACLE_STRENGTHENED | grep -qx "$name" \
+        || { printf 'ORACLE: undeclared strengthening at state %s\n' "$name" >&2; oracle_fail=1; } ;;
+  esac
+done
+# Every declared narrowing and strengthening must actually occur, or the list is
+# stale and would silently license a divergence nobody measured.
+for name in $ORACLE_NARROWED; do
+  printf '%s\n' $observed_narrowed | grep -qx "$name" \
+    || { printf 'ORACLE: declared narrowing %s never occurred\n' "$name" >&2; oracle_fail=1; }
+done
+for name in $ORACLE_STRENGTHENED; do
+  printf '%s\n' $observed_strengthened | grep -qx "$name" \
+    || { printf 'ORACLE: declared strengthening %s never occurred\n' "$name" >&2; oracle_fail=1; }
+done
+rm -rf "$ORACLE_ROOT"
+if [ "$oracle_fail" -eq 0 ]; then
+  pass "the new cleanliness policy is a minimal, declared narrowing of the old one"
+else
+  check_fail "differential oracle reported undeclared policy divergence"
+fi
+
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 STUB="$ROOT/stub"
@@ -128,6 +297,10 @@ case "${1:-}" in
     # peels to the same deterministic target commit unless a test overrides it.
     case "${2:-}" in
       HEAD) cat "$STUB_HEAD_FILE" ;;
+      # Answer only with a real Git directory, and fail like Git does when there
+      # is none. Substituting the working tree would make the guard's directory
+      # assertion unfailable and would point its marker probe at the wrong place.
+      --absolute-git-dir) [ -d "$PWD/.git" ] || exit 128; printf '%s\n' "$PWD/.git" ;;
       *)    printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" ;;
     esac
     exit 0 ;;
@@ -478,7 +651,7 @@ chmod +x "$STUB/docker"
 # =============================================================================
 make_repo() {
   local dir="$1"
-  mkdir -p "$dir/scripts/tests" "$dir/db/migrations" "$dir/shared/pdf_storage"
+  mkdir -p "$dir/scripts/tests" "$dir/db/migrations" "$dir/shared/pdf_storage" "$dir/.git"
   ln -sf "$CLI" "$dir/scripts/jarvis-research.sh"
   ln -sf "$LIB" "$dir/scripts/setup_lib.sh"
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
@@ -783,6 +956,7 @@ new_env; register_repo; STUB_DIRTY=" M setup.sh"
 out="$(run_cli update --yes)"; rc=$?
 unset STUB_DIRTY
 if [ "$rc" -eq 1 ]; then pass "update_refuses_dirty_tree: exit 1"; else check_fail "update_refuses_dirty_tree: rc=$rc out=$out"; fi
+want "$out" 'M setup.sh' "update_refuses_dirty_tree: the refusal names the offending path"
 log_lacks_mutations "update_refuses_dirty_tree: no mutation"
 
 new_env; register_repo; STUB_BRANCH="feature/x"
@@ -1856,6 +2030,25 @@ if has "$out" 'render node\|/dev/dri\|render' && [ "$rc" -ne 2 ]; then
   pass "doctor_warns_overlay_without_dri: render-node WARN emitted, exit unchanged"
 else
   check_fail "doctor_warns_overlay_without_dri: rc=$rc out=<<<$out>>>"
+fi
+
+# doctor answers the question both update refusals send the user here to ask.
+new_env; register_repo
+out="$(run_cli doctor)"; clean_rc=$?
+if has "$out" 'update readiness' && has "$out" 'ready to update'; then
+  pass "doctor_reports_update_readiness: a clean checkout is reported ready"
+else
+  check_fail "doctor_reports_update_readiness: rc=$clean_rc out=<<<$out>>>"
+fi
+
+new_env; register_repo; STUB_DIRTY=" M setup.sh"
+out="$(run_cli doctor)"; rc=$?
+unset STUB_DIRTY
+if [ "$rc" -ne 0 ] && [ "$clean_rc" -eq 0 ] \
+   && has "$out" 'uncommitted changes' && has "$out" 'M setup.sh'; then
+  pass "doctor_reports_unupdatable_checkout: refusal reported and exit turns non-zero"
+else
+  check_fail "doctor_reports_unupdatable_checkout: rc=$rc clean_rc=$clean_rc out=<<<$out>>>"
 fi
 
 # Recovery honesty: a migration-bearing update that fails health identifies the

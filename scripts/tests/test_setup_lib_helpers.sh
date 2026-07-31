@@ -1837,6 +1837,42 @@ for ignored_transaction_path in \
   fi
 done
 
+# Setup, update, backup, restore and key rotation each write machine-local state
+# next to the checkout. A single orphaned one makes the tree unclean, and an
+# unclean tree refuses every later update, so each must be ignored and untracked.
+machine_local_residue=(
+  secrets/manifest-hmac-required
+  secrets/example.txt.restore.123456
+  secrets/jarvis_config_key_rotation_state.txt.123456
+  .env.restore.123456
+  .env.a1b2c3
+  litellm/.config.yaml.123456
+  shared/local_pdfs/notes.txt
+)
+residue_repo_root="${SCRIPT_DIR}/../.."
+if git -C "$residue_repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  for residue_path in "${machine_local_residue[@]}"; do
+    if ! git -C "$residue_repo_root" check-ignore --no-index -q "$residue_path"; then
+      printf 'FAIL: git can stage machine-local residue %s\n' "$residue_path" >&2
+      fail=1
+    elif git -C "$residue_repo_root" ls-files --error-unmatch "$residue_path" \
+        >/dev/null 2>&1; then
+      printf 'FAIL: machine-local residue %s is tracked\n' "$residue_path" >&2
+      fail=1
+    else
+      pass "git ignores and does not track ${residue_path}"
+    fi
+  done
+  if git -C "$residue_repo_root" check-ignore --no-index -q .env.example; then
+    printf 'FAIL: .env.example is ignored; the residue rules are too broad\n' >&2
+    fail=1
+  else
+    pass ".env.example stays visible to git"
+  fi
+else
+  printf 'NOTE: skipping the machine-local residue contract, no work tree\n' >&2
+fi
+
 # === access reconfiguration rollback =========================================
 # A failed replacement is a live-runtime transaction, not only a file restore.
 # Stub every side effect so the log proves the required order without touching
