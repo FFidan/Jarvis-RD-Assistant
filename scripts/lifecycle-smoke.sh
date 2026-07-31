@@ -538,6 +538,7 @@ run_leg_update() {
     return 1
   fi
   ok "A schema-1 merge_pending transaction survived with the checkout unadvanced."
+  info "Interrupted transaction record: $(cat "$pending")"
 
   # Whatever the interrupted attempt left behind, it must be only the product-managed
   # marker. Anything else means the retry below would be exercising a different defect.
@@ -565,6 +566,11 @@ run_leg_update() {
   if [ "$rc" -ne 0 ]; then
     err "The resumed update failed (rc=${rc}) — an interrupted update is not recoverable:"
     tail -n 40 "$resume_log" >&2
+    if [ -f "$pending" ]; then
+      err "Transaction record at failure: $(cat "$pending")"
+    else
+      err "No transaction record remained at ${pending}."
+    fi
     return 1
   fi
   pending_candidates=()
