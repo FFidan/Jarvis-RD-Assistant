@@ -42,8 +42,14 @@ branch:
 
 ```bash
 gh workflow run nightly-llm-smoke.yml --ref "$RELEASE_BRANCH"
-gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all
+gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all \
+  -f update_mode=direct
 ```
+
+This branch check selects the two newest published tags, which predate the
+candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
+covered by the per-source upgrade checks in step 3, which pass explicit
+`update_from` and `update_to` values.
 
 Required JUnit selections must contain at least one pass and no skips, failures,
 or errors. The lifecycle run must complete its CA-verified HTTPS and destructive
