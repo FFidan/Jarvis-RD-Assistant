@@ -510,6 +510,9 @@ case "${1:-}" in
     for arg in "${raw_args[@]}"; do
       if [ "$arg" = /tmp/jarvis-target-backup.sh ]; then
         log "target-backup request=$request_id source=$producer_source pdf=$pdf_source"
+        # The real producer narrates on stdout (scripts/backup.sh); a silent
+        # stub would hide any caller that captures stdout it does not own.
+        printf '[2026-07-31T00:00:00+00:00] Starting backup...\n'
         [ -z "${STUB_TARGET_BACKUP_SLEEP:-}" ] || sleep "$STUB_TARGET_BACKUP_SLEEP"
         exit "${STUB_TARGET_BACKUP_RC:-0}"
       fi
@@ -1165,11 +1168,13 @@ respond_to_backup good
 out="$(run_cli update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] \
    && [ -f "$PENDING_FILE" ] \
+   && [ "$(wc -l < "$PENDING_FILE")" -eq 1 ] \
+   && grep -Eq '"backup_id":"[0-9]{8}_[0-9]{6}"' "$PENDING_FILE" \
    && [ -f "$SIDECAR_MARKER" ] \
    && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = paused ]; then
   pass "staged update retains its sidecar handoff across an interrupted transaction"
 else
-  check_fail "staged sidecar retained handoff: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+  check_fail "staged sidecar retained handoff: rc=$rc pending=$([ -f "$PENDING_FILE" ] && cat "$PENDING_FILE") out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
 STUB_FAIL_STAGE_PULL=0
 out="$(run_cli update --yes)"; rc=$?
