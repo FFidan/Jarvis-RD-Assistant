@@ -253,6 +253,13 @@ async def _schedule_auto_pipeline_catchup(
     Jobs live in memory, so an interval fire due while the service was down is
     simply lost. A stale last-run stamp means exactly that happened: run once
     shortly after boot, leaving the service time to finish starting up.
+
+    ``max_instances`` is per job id, so a boot whose anchored fire lands inside
+    this two-minute window runs the pipeline twice over. That costs a duplicated
+    discovery sweep and repeated downloads, and nothing worse: papers upsert on
+    a canonical key, publication is guarded by a file lock, and both processing
+    and summarization take a per-paper advisory lock, so no row is written twice
+    and no model is billed twice.
     """
     if interval_hours <= 0:
         return
