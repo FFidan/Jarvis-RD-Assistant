@@ -225,6 +225,22 @@ async def test_one_oversized_page_is_reported_as_truncated(
 
 
 @pytest.mark.asyncio
+async def test_an_unfollowable_next_page_is_reported_as_truncated() -> None:
+    """A provider may advertise its next page as a URL we cannot rebuild.
+
+    Presenting the page we did read as the whole list is the one thing worse
+    than showing a partial one.
+    """
+    handler = Recorder({"data": [{"id": "vendor/a"}], "links": {"next": "https://x/models?page=2"}})
+
+    listing = await _fetch("openrouter", handler)
+
+    assert [entry.name for entry in listing.entries] == ["vendor/a"]
+    assert listing.truncated is True
+    assert len(handler.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_pagination_is_followed_and_truncates_at_the_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -421,6 +437,11 @@ async def test_sweep_isolates_one_failing_provider() -> None:
         ("openrouter", "vendor/model-x", {}, "chat"),
         ("custom_openai_compatible", "org/model-y", {}, "chat"),
         ("mistral", "mistral-large-latest", {}, "chat"),
+        # A provider that describes its own models is believed over the prefix
+        # list, so a family nobody has heard of is still classified correctly.
+        ("mistral", "leanstral-2-medium", {"capabilities": {"completion_chat": True}}, "chat"),
+        ("mistral", "mistral-ocr-latest", {"capabilities": {"completion_chat": False}}, "other"),
+        ("mistral", "voxtral-small-latest", {}, "unknown"),
         ("moonshot", "kimi-k2", {}, "chat"),
         ("zai", "glm-4.6", {}, "chat"),
         ("deepseek", "deepseek-chat", {}, "chat"),

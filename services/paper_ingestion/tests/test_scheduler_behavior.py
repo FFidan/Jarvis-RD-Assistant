@@ -427,11 +427,13 @@ async def test_reconcile_zotero_poll_job_registers_with_a_misfire_grace() -> Non
 
 async def test_stale_last_run_schedules_a_catch_up() -> None:
     """A last-run stamp older than the interval means a fire was missed while the
-    process was down; jobs live in memory only, so it is scheduled explicitly."""
+    process was down; jobs live in memory only, so the next fire is pulled in."""
     stale = (datetime.now(UTC) - timedelta(hours=9)).isoformat()
     scheduler = await _start(_make_scheduler_app(last_run=stale), 5)
     try:
-        assert scheduler.get_job("auto_pipeline_catchup") is not None
+        next_run = scheduler.get_job("auto_pipeline").next_run_time
+        assert next_run is not None
+        assert next_run - datetime.now(UTC) < timedelta(minutes=5)
     finally:
         scheduler.shutdown(wait=False)
 
@@ -441,6 +443,22 @@ async def test_fresh_last_run_schedules_no_catch_up() -> None:
     fresh = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     scheduler = await _start(_make_scheduler_app(last_run=fresh), 5)
     try:
-        assert scheduler.get_job("auto_pipeline_catchup") is None
+        next_run = scheduler.get_job("auto_pipeline").next_run_time
+        assert next_run is not None
+        assert next_run - datetime.now(UTC) > timedelta(minutes=5)
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_catch_up_never_adds_a_second_pipeline_job() -> None:
+    """Two ids running one pipeline each carry their own max_instances, so a boot
+    whose anchored fire lands in the catch-up window runs the pipeline twice."""
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
+    stale = (datetime.now(UTC) - timedelta(hours=9)).isoformat()
+    scheduler = await _start(_make_scheduler_app(last_run=stale), 5)
+    try:
+        pipeline_jobs = [job for job in scheduler.get_jobs() if job.func is run_auto_pipeline]
+        assert [job.id for job in pipeline_jobs] == ["auto_pipeline"]
     finally:
         scheduler.shutdown(wait=False)

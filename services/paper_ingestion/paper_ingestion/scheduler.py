@@ -6,7 +6,6 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.maintenance import skip_for_maintenance
@@ -248,18 +247,18 @@ def _log_schedule(scheduler: AsyncIOScheduler) -> None:
 async def _schedule_auto_pipeline_catchup(
     scheduler: AsyncIOScheduler, app: Any, interval_hours: float, effective_interval: float
 ) -> None:
-    """Register a one-shot run when the last interval fire was missed.
+    """Pull the interval job forward when its last fire was missed.
 
     Jobs live in memory, so an interval fire due while the service was down is
     simply lost. A stale last-run stamp means exactly that happened: run once
     shortly after boot, leaving the service time to finish starting up.
 
-    ``max_instances`` is per job id, so a boot whose anchored fire lands inside
-    this two-minute window runs the pipeline twice over. That costs a duplicated
-    discovery sweep and repeated downloads, and nothing worse: papers upsert on
-    a canonical key, publication is guarded by a file lock, and both processing
-    and summarization take a per-paper advisory lock, so no row is written twice
-    and no model is billed twice.
+    This MOVES the existing job rather than registering a second one. Two ids
+    running the same pipeline would each get their own ``max_instances``, so a
+    boot whose anchored fire landed in this window would run the pipeline twice
+    over. The interval trigger re-anchors to whichever fire actually happened,
+    so the spacing is preserved and only the phase shifts, until the next
+    restart re-anchors it to the fixed epoch.
     """
     if interval_hours <= 0:
         return
@@ -267,16 +266,7 @@ async def _schedule_auto_pipeline_catchup(
     now = datetime.now(UTC)
     if last_run is not None and now - last_run < timedelta(hours=effective_interval):
         return
-    scheduler.add_job(
-        run_auto_pipeline,
-        trigger=DateTrigger(run_date=now + timedelta(minutes=2)),
-        args=[app],
-        id="auto_pipeline_catchup",
-        name="Auto fetch->process catch-up for a missed interval",
-        replace_existing=True,
-        max_instances=1,
-        misfire_grace_time=3600,
-    )
+    scheduler.modify_job("auto_pipeline", next_run_time=now + timedelta(minutes=2))
     logger.info("auto_pipeline catch-up scheduled (last successful run: %s)", last_run)
 
 

@@ -86,7 +86,9 @@ _NON_CHAT_MARKERS = (
     "clip",
 )
 # Providers whose /models response reports no capabilities: recognise their
-# published chat families and treat everything else as unknown.
+# published chat families and treat everything else as unknown. Entries here are
+# a fallback only — a provider that describes its own models is read directly,
+# so this list does not have to keep pace with every family a vendor launches.
 _CHAT_ID_FAMILIES: Mapping[str, tuple[str, ...]] = {
     "openai": ("gpt-", "chatgpt-"),
     "deepseek": ("deepseek-",),
@@ -230,6 +232,19 @@ def _parse_model_items(payload: Any) -> tuple[list[tuple[str, dict[str, Any]]], 
     return items, observed
 
 
+def _more_pages_offered(payload: Any) -> bool:
+    """Return whether the payload says more models exist beyond this page.
+
+    Some providers advertise the next page as a URL rather than as parameters we
+    know how to rebuild. We cannot follow it, but we can decline to call a list
+    complete when the provider itself says it is not.
+    """
+    if not isinstance(payload, dict):
+        return False
+    links = payload.get("links")
+    return isinstance(links, dict) and bool(links.get("next"))
+
+
 def _next_page_params(payload: Any) -> dict[str, str] | None:
     """Return the query parameters for the next page, or ``None`` at the end."""
     if not isinstance(payload, dict):
@@ -245,16 +260,26 @@ def _next_page_params(payload: Any) -> dict[str, str] | None:
 
 
 def _declared_capability(raw: Mapping[str, Any]) -> Capability | None:
-    """Read the capability the entry itself declares, or ``None`` when it declares none."""
+    """Read the capability the entry itself declares, or ``None`` when it declares none.
+
+    Reading what a provider says beats matching id prefixes: a prefix list is a
+    standing bet that no vendor will ever name a family we have not heard of,
+    and that bet loses on every launch.
+    """
     methods = raw.get("supportedGenerationMethods")
-    if not isinstance(methods, list):
-        return None
-    names = {str(method) for method in methods}
-    if "generateContent" in names:
-        return "chat"
-    if "embedContent" in names:
-        return "embed"
-    return "unknown"
+    if isinstance(methods, list):
+        names = {str(method) for method in methods}
+        if "generateContent" in names:
+            return "chat"
+        if "embedContent" in names:
+            return "embed"
+        return "unknown"
+
+    capabilities = raw.get("capabilities")
+    if isinstance(capabilities, Mapping) and "completion_chat" in capabilities:
+        return "chat" if capabilities["completion_chat"] else "other"
+
+    return None
 
 
 def _capability_from_id(provider_id: str, segment: str) -> Capability:
@@ -430,6 +455,12 @@ async def _collect_items(
             )
         items.extend(page_items)
         params = _next_page_params(payload)
+        if _more_pages_offered(payload) and params is None:
+            # The provider says there is more but describes the next page in a
+            # form we cannot rebuild. Report the list as partial rather than
+            # presenting what we did read as everything.
+            truncated = True
+            break
         if len(items) >= _MAX_MODELS_PER_PROVIDER:
             # A single unpaginated page can overshoot the cap on its own, so the
             # slice below drops models even when there is no next page to ask for.

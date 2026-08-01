@@ -410,9 +410,8 @@ async def test_test_provider_happy_path_anthropic(_app):
         "encrypted_value": ciphertext,
     }
 
-    # Mock the Anthropic count_tokens endpoint
-    respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-        return_value=httpx.Response(200, json={"input_tokens": 5})
+    respx.get("https://api.anthropic.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "claude-x"}]})
     )
 
     resp = await _post_provider_test(app, "anthropic")
@@ -488,7 +487,7 @@ async def test_test_provider_http_error_returns_ok_false(_app):
         "encrypted_value": ciphertext,
     }
 
-    respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+    respx.get("https://api.anthropic.com/v1/models").mock(
         return_value=httpx.Response(401, json={"error": {"message": "Invalid API key"}})
     )
 
@@ -516,7 +515,7 @@ async def test_test_provider_connection_error_returns_ok_false(_app):
         "encrypted_value": ciphertext,
     }
 
-    respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+    respx.get("https://api.anthropic.com/v1/models").mock(
         side_effect=httpx.ConnectError("Connection refused")
     )
 
