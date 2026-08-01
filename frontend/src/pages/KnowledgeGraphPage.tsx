@@ -126,6 +126,18 @@ export function KnowledgeGraphPage() {
             </div>
 
             <GraphControls layout={layout} onLayoutChange={setLayout} />
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEntityType('All');
+                setMinPaperCount(1);
+                setSelectedNodeId(null);
+              }}
+            >
+              Reset filters
+            </Button>
           </div>
         </CardContent>
       </Card>
