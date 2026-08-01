@@ -239,6 +239,40 @@ async def _read_auto_pipeline_last_run(db_pool: Any) -> datetime | None:
     return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
 
 
+def _log_schedule(scheduler: AsyncIOScheduler) -> None:
+    """Log when every registered job next fires, so the schedule is observable."""
+    for job in scheduler.get_jobs():
+        logger.info("scheduler job %s next fires at %s", job.id, job.next_run_time)
+
+
+async def _schedule_auto_pipeline_catchup(
+    scheduler: AsyncIOScheduler, app: Any, interval_hours: float, effective_interval: float
+) -> None:
+    """Register a one-shot run when the last interval fire was missed.
+
+    Jobs live in memory, so an interval fire due while the service was down is
+    simply lost. A stale last-run stamp means exactly that happened: run once
+    shortly after boot, leaving the service time to finish starting up.
+    """
+    if interval_hours <= 0:
+        return
+    last_run = await _read_auto_pipeline_last_run(app.state.db_pool)
+    now = datetime.now(UTC)
+    if last_run is not None and now - last_run < timedelta(hours=effective_interval):
+        return
+    scheduler.add_job(
+        run_auto_pipeline,
+        trigger=DateTrigger(run_date=now + timedelta(minutes=2)),
+        args=[app],
+        id="auto_pipeline_catchup",
+        name="Auto fetch->process catch-up for a missed interval",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    logger.info("auto_pipeline catch-up scheduled (last successful run: %s)", last_run)
+
+
 async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
     """Return scheduler registration readiness and cron_expr from user_config.
 
@@ -659,27 +693,9 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     register_purge_sessions(scheduler, app)
 
-    # Jobs live in memory, so an interval fire due while the service was down is
-    # simply lost. A stale last-run stamp means exactly that happened: run once
-    # shortly after boot, leaving the service time to finish starting up.
-    if interval_hours > 0:
-        last_run = await _read_auto_pipeline_last_run(app.state.db_pool)
-        now = datetime.now(UTC)
-        if last_run is None or now - last_run >= timedelta(hours=_effective_interval):
-            scheduler.add_job(
-                run_auto_pipeline,
-                trigger=DateTrigger(run_date=now + timedelta(minutes=2)),
-                args=[app],
-                id="auto_pipeline_catchup",
-                name="Auto fetch->process catch-up for a missed interval",
-                replace_existing=True,
-                max_instances=1,
-                misfire_grace_time=3600,
-            )
-            logger.info("auto_pipeline catch-up scheduled (last successful run: %s)", last_run)
+    await _schedule_auto_pipeline_catchup(scheduler, app, interval_hours, _effective_interval)
 
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
-    for job in scheduler.get_jobs():
-        logger.info("scheduler job %s next fires at %s", job.id, job.next_run_time)
+    _log_schedule(scheduler)
     return scheduler
