@@ -321,6 +321,9 @@ class RestoreRequest(BaseModel):
         Read-only local archive store or staged off-host inbox.
     allow_missing_pdfs : bool
         Explicit consent for eligible legacy sets without saved PDFs.
+    allow_unknown_schema : bool
+        Explicit consent for sets that record no usable database schema
+        version, whose compatibility therefore cannot be checked.
 
     """
 
@@ -331,6 +334,7 @@ class RestoreRequest(BaseModel):
     # The default keeps every existing caller/test valid.
     source: Literal["local", "inbox"] = "local"
     allow_missing_pdfs: bool = False
+    allow_unknown_schema: bool = False
 
 
 class RestoreAcknowledgement(BaseModel):
@@ -1404,6 +1408,7 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
                         "confirm": "RESTORE",
                         "source": req.source,
                         "allow_missing_pdfs": req.allow_missing_pdfs,
+                        "allow_unknown_schema": req.allow_unknown_schema,
                         "requested_at": requested_at,
                         "restore_id": restore_id,
                     }

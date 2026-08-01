@@ -270,8 +270,8 @@ fi
 
 # 6c. PRESENT-but-NO-CHECKSUMS manifest rejected BEFORE the DROP
 #     (fail_before_destruction, nothing destroyed); the ABSENT-manifest WARN+proceed
-#     back-compat path is unchanged (a present-valid manifest lacking only
-#     schema_version still proceeds — NOT rejected).
+#     back-compat path is unchanged. A present manifest that records no usable
+#     schema version is refused unless the request acknowledges it (6e below).
 check "rejects a present-but-corrupt manifest (no archive checksums)" \
   'present but corrupt or incomplete \(no archive checksums\)'
 corrupt_line="$(line_of 'present but corrupt or incomplete \(no archive checksums\)')"
@@ -296,6 +296,44 @@ else
 fi
 check "still refuses a newer-than-code backup before destruction" \
   'backup is newer than this deployment'
+
+# 6e. A manifest that records no usable schema version (absent, or the 0 written by
+#     older backups whose schema query failed) leaves the compat gate with nothing to
+#     check. Restoring one is only allowed when the request says so explicitly, so the
+#     gate block is run for real against fixture manifests with a stubbed refusal.
+schema_gate_block="$(sed -n \
+  '/MANIFEST_SCHEMA="\$(printf/,/^  if \[ "\$MANIFEST_AUTHENTICATED" = "1" \]; then$/p' \
+  "$RESTORE_SCRIPT" | sed '$d')"
+run_schema_gate() {
+  # run_schema_gate <manifest json> <ALLOW_UNKNOWN_SCHEMA>
+  bash -c '
+    set -euo pipefail
+    fail_before_destruction() { printf "REFUSED %s" "$1"; exit 9; }
+    MANIFEST_CONTENT="$1"
+    ALLOW_UNKNOWN_SCHEMA="$2"
+    TIMESTAMP="20260801_120000"
+    MIGRATIONS_DIR="$3"
+    '"$schema_gate_block"'
+    printf "PROCEEDED"
+  ' _ "$1" "$2" "${SCRIPT_DIR}/../../db/migrations" 2>/dev/null
+}
+schema_zero_refused="$(run_schema_gate '{"schema_version":0}' 0 || true)"
+schema_zero_allowed="$(run_schema_gate '{"schema_version":0}' 1 || true)"
+schema_absent_refused="$(run_schema_gate '{"app_version":"1.0.0"}' 0 || true)"
+schema_known_proceeds="$(run_schema_gate '{"schema_version":1}' 0 || true)"
+if [ -n "$schema_gate_block" ] \
+   && case "$schema_zero_refused" in REFUSED*) true ;; *) false ;; esac \
+   && printf '%s' "$schema_zero_refused" | grep -q 'allow_unknown_schema' \
+   && [ "$schema_zero_allowed" = "PROCEEDED" ] \
+   && case "$schema_absent_refused" in REFUSED*) true ;; *) false ;; esac \
+   && [ "$schema_known_proceeds" = "PROCEEDED" ]; then
+  pass "a manifest without a usable schema version is refused unless the request acknowledges it"
+else
+  printf 'FAIL: unusable-schema gate wrong (zero=%s allowed=%s absent=%s known=%s)\n' \
+    "$schema_zero_refused" "$schema_zero_allowed" "$schema_absent_refused" \
+    "$schema_known_proceeds" >&2
+  fail=1
+fi
 
 # === Rename-swap: preflight, swap-state file, sole gate, deterministic recovery =
 
@@ -927,6 +965,28 @@ else
   fail=1
 fi
 rm -rf "$pdf_dir"
+
+# I10b. The unknown-schema acknowledgement is parsed with the same strictness as the
+#       missing-PDF one: absent and false are safe defaults, duplicate or non-boolean
+#       values are refused rather than read as consent.
+run_schema_consent() {
+  bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    if parse_allow_unknown_schema_request "$2"; then parsed=OK; else parsed=BAD; fi
+    printf "%s:%s" "$parsed" "$ALLOW_UNKNOWN_SCHEMA"
+  ' _ "$RESTORE_SCRIPT" "$1" 2>/dev/null
+}
+if [ "$(run_schema_consent '{}')" = "OK:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":true}')" = "OK:1" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":false}')" = "OK:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":true,"allow_unknown_schema":false}')" = "BAD:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":"true"}')" = "BAD:0" ]; then
+  pass "the unknown-schema acknowledgement defaults to off and refuses malformed values"
+else
+  printf 'FAIL: unknown-schema acknowledgement parsing accepted an unsafe request\n' >&2
+  fail=1
+fi
 
 # I11. The decrypted plaintext secret bundle is shredded (not just rm'd) on exit.
 check "shreds the staged plaintext secret files (not a bare rm)" \
