@@ -227,6 +227,26 @@ export PGPASSWORD
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+case "$RETENTION_DAYS" in
+  ''|*[!0-9]*)
+    echo "[$(date -Iseconds)] WARNING: BACKUP_RETENTION_DAYS='${BACKUP_RETENTION_DAYS:-}' is not a number; using 7" >&2
+    RETENTION_DAYS=7 ;;
+esac
+
+# set_retention_age_enabled — whether the age window prunes at all. 0 days means
+# "no age limit", NOT "delete everything older than a day", and keeping that
+# decision in its own flag is what lets RETENTION_DAYS stay a number the status
+# record can always emit. Called again once the UI window has had its say, so an
+# install that later configures a window re-enables the sweep.
+set_retention_age_enabled() {
+  RETENTION_AGE_ENABLED=1
+  [ "$RETENTION_DAYS" -eq 0 ] 2>/dev/null && RETENTION_AGE_ENABLED=0
+  return 0
+}
+set_retention_age_enabled
+# Set by the age sweep when it refuses to take more than half the restore points
+# at once; recorded in .last_run.json so the refusal is visible, not silent.
+RETENTION_BULK_REFUSED=0
 ENVIRONMENT="${ENVIRONMENT:-development}"
 # When set (e.g. by restore.sh's safety pre-backup) the retention prune at the
 # tail is skipped, so a pre-restore safety backup can never delete the very
@@ -427,9 +447,19 @@ write_last_run() {
   # backup failure, so /status can word the two differently.
   local skipped="false"
   [ "${SKIPPED_MAINTENANCE:-0}" = "1" ] && skipped="true"
+  # With no age limit configured there is no number of days to report, so the
+  # field is null rather than a 0 the status surface would render as "kept for
+  # 0 days". retention_age_enabled makes the disabled state queryable.
+  local retention="$RETENTION_DAYS" age_enabled="true"
+  if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+    retention="null"
+    age_enabled="false"
+  fi
+  local bulk_refused="false"
+  [ "${RETENTION_BULK_REFUSED:-0}" -eq 1 ] && bulk_refused="true"
   local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
   cat > "$lr_tmp" <<JSON
-{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${retention},"retention_age_enabled":${age_enabled},"retention_bulk_refused":${bulk_refused},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
 JSON
   mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
 }
@@ -579,10 +609,31 @@ dump_db() {
   printf '%s' "$out"
 }
 
+# capture_schema_version — read the applied migration version into SCHEMA_VERSION,
+# for the manifest to record against the dump taken next. It is read HERE rather
+# than at manifest time because a migration landing during the rest of the run
+# would otherwise leave the manifest describing a schema its dump does not carry;
+# reading immediately before pg_dump can only ever understate the version, which
+# is the conservative direction for restore.sh's compatibility gate. Postgres is
+# about to be dumped, so an unreadable version here is a real failure rather than
+# a restart to wait out.
+capture_schema_version() {
+  SCHEMA_VERSION="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
+    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
+    2>/dev/null || true)"
+  case "$SCHEMA_VERSION" in
+    ''|*[!0-9]*)
+      echo "[$(date -Iseconds)] FATAL: could not read the database schema version; refusing to take a backup that cannot gate a restore" >&2
+      return 1 ;;
+  esac
+  return 0
+}
+
 echo "[$(date -Iseconds)] Starting backup..."
 BACKUP_ARCHIVES=()
 
 # --- PostgreSQL: jarvis (primary) + litellm (API keys / virtual keys / spend) -
+capture_schema_version
 JARVIS_BACKUP_FILE="$(dump_db "${PGDATABASE:-jarvis}" jarvis)"
 JARVIS_STATE="ok"
 BACKUP_ARCHIVES+=("$JARVIS_BACKUP_FILE")
@@ -770,20 +821,12 @@ discard_current_backup() {
 # secrets); it is not matched by the router's archive globs, so it is never
 # listed or downloaded as a backup.
 write_manifest() {
-  local schema_version app_version created_at manifest manifest_tmp
+  local app_version created_at manifest manifest_tmp
   local first f base sum size
   declare -A seen=()
-  # ~30s of retries: a postgres container restart is the failure this exists to
-  # survive, and a manifest write that fails discards the whole backup set.
-  local attempt
-  schema_version=""
-  for attempt in 1 2 3 4 5 6; do
-    schema_version="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
-      -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
-      2>/dev/null)" && break
-    schema_version=""
-    if [ "$attempt" -lt 6 ]; then sleep 5; fi
-  done
+  # Captured beside the dump this manifest describes, never re-read here: the two
+  # must agree, and a value read now would describe a schema that may have moved.
+  local schema_version="${SCHEMA_VERSION:-}"
   case "$schema_version" in
     ''|*[!0-9]*)
       echo "[$(date -Iseconds)] FATAL: could not read the database schema version; refusing to write a manifest that cannot gate a restore" >&2
@@ -940,6 +983,9 @@ if [ -f "$RETENTION_FILE" ]; then
   ui_keep_n="$(grep -oE '"keep_last_n"[[:space:]]*:[[:space:]]*[0-9]+' "$RETENTION_FILE" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
   [ -n "${ui_keep_n:-}" ] && KEEP_LAST_N="$ui_keep_n"
 fi
+# RETENTION_DAYS is final here: re-decide the age policy so a configured UI window
+# turns the sweep back on for an install whose env var says 0.
+set_retention_age_enabled
 
 # prune_in_flight_ts — every timestamp a present restore or update is using, one
 # per line, so neither age nor keep-last-N pruning can remove a rollback point.
@@ -973,19 +1019,35 @@ prune_in_flight_ts() {
 # Apply the age window one exact file at a time so in-flight restore/update
 # timestamps survive as complete sets. Dot-directories used for staged restore
 # safety copies do not match these archive names and are never considered.
+#
+# Two floors bound what one automatic sweep may take, because an age window is a
+# policy about old backups and never a licence to leave an install with nothing
+# to restore from:
+#   * one complete restore point always survives, however old every point is; and
+#   * a sweep that would take more than half of a fleet of more than two points is
+#     read as a symptom — a forward clock jump ages every archive at once — and
+#     takes only the oldest half, so a genuine window change still converges over
+#     the next few runs. BACKUP_ALLOW_BULK_PRUNE=1 sweeps fully in one pass.
+# Both count distinct dump timestamps (restore points), never files: one point is
+# six to twelve files, so a file count trips on an ordinary steady-state day.
 retention_prune_age() {
-  local dir="$1" days="$2" in_flight="$3" path base ts
-  [ "$days" -ge 0 ] 2>/dev/null || return 1
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    base="$(basename "$path")"
-    ts="$(printf '%s' "$base" | grep -oE '[0-9]{8}_[0-9]{6}' | tail -1 || true)"
-    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$in_flight"; then
-      echo "[$(date -Iseconds)] age-${days}: not pruning ${ts} (in-flight restore/update)"
-      continue
-    fi
-    rm -f -- "$path"
-  done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) \( \
+  local dir="$1" days="$2" in_flight="$3" base ts
+  local points candidates aged_points doomed
+  local total=0 aged=0 allowed=0
+  if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+    echo "[$(date -Iseconds)] Age retention disabled; keeping every restore point"
+    return 0
+  fi
+  [ -n "$days" ] && [ "$days" -ge 1 ] 2>/dev/null || return 0
+
+  # One jarvis dump == one restore point, derived exactly as retention_keep_last_n
+  # derives it below.
+  points="$(find "$dir" -maxdepth 1 -type f \
+        \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) -printf '%f\n' 2>/dev/null \
+      | grep -oE '[0-9]{8}_[0-9]{6}' | sort -u || true)"
+  [ -n "$points" ] && total="$(printf '%s\n' "$points" | wc -l)"
+
+  candidates="$(find "$dir" -maxdepth 1 \( -type f -o -type l \) \( \
       -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \
       -o -name 'litellm_*.sql.gz' -o -name 'litellm_*.sql.gz.enc' \
       -o -name 'pdfs_*.tar.gz' -o -name 'pdfs_*.tar.gz.enc' \
@@ -993,7 +1055,40 @@ retention_prune_age() {
       -o -name 'qdrant_*.snapshot' -o -name 'qdrant_*.snapshot.enc' \
       -o -name 'manifest_*.json' -o -name 'manifest_*.json.hmac' \
       -o -name '*.tmp' -o -name '*.raw' \
-    \) -mtime "+${days}" -print)
+    \) -mtime "+${days}" -printf '%f\n')"
+
+  # The restore points whose own dump has aged out, oldest first (timestamps sort
+  # chronologically), so both bounds trim from the oldest end.
+  aged_points="$(printf '%s\n' "$candidates" \
+      | grep -oE '^jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?$' \
+      | grep -oE '[0-9]{8}_[0-9]{6}' | sort -u || true)"
+  [ -n "$aged_points" ] && aged="$(printf '%s\n' "$aged_points" | wc -l)"
+
+  allowed="$aged"
+  if [ "${BACKUP_ALLOW_BULK_PRUNE:-}" != "1" ] \
+     && [ "$total" -gt 2 ] && [ $((aged * 2)) -gt "$total" ]; then
+    allowed=$((aged / 2))
+    RETENTION_BULK_REFUSED=1
+    echo "[$(date -Iseconds)] WARNING: retention sweep would delete ${aged} of ${total} restore points in one pass; deleting the oldest ${allowed} only (set BACKUP_ALLOW_BULK_PRUNE=1 to sweep fully)" >&2
+  fi
+  [ "$allowed" -gt $((total - 1)) ] && allowed=$((total - 1))
+  [ "$allowed" -lt 0 ] && allowed=0
+  doomed="$(printf '%s\n' "$aged_points" | head -n "$allowed")"
+
+  while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    ts="$(printf '%s' "$base" | grep -oE '[0-9]{8}_[0-9]{6}' | tail -1 || true)"
+    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$in_flight"; then
+      echo "[$(date -Iseconds)] age-${days}: not pruning ${ts} (in-flight restore/update)"
+      continue
+    fi
+    # A member of a surviving restore point stays with it; debris whose restore
+    # point is already gone has nothing to keep it and is always collectable.
+    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$points" && ! grep -qxF "$ts" <<<"$doomed"; then
+      continue
+    fi
+    rm -f -- "${dir}/${base}"
+  done <<<"$candidates"
 }
 
 # retention_keep_last_n <backup_dir> <keep_n> <in_flight_ts_newline_list>

@@ -80,6 +80,10 @@ The **Retention policy** section controls how long backups are kept. Two indepen
 
 Leave a field blank to use the default. Older or excess restore points are pruned automatically by the backup service — you never need to clean up by hand. Click **Save retention policy** to apply changes.
 
+Automatic pruning has two floors you cannot switch off. Your last restore point is never removed, however old it is; and a single automatic run never removes more than half of your restore points, because a server clock that jumps forward makes every archive look old at once. When that happens the run removes only the oldest half and says so, and normal runs converge on the window you asked for over the following days. Deleting a restore point yourself from the Backups panel is not subject to either floor — that is what the typed **DELETE** confirmation is for — and each delete records how many restore points are left.
+
+If you set the `BACKUP_RETENTION_DAYS` environment variable, `0` means *no age limit*; earlier releases read `0` as "remove anything older than about a day". The **Keep most recent** cap still applies either way.
+
 ---
 
 ## One-click restore

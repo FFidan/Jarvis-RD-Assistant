@@ -123,14 +123,23 @@ json_array_from_lines() {
 deleted=""
 skipped=""
 
+# remaining_restore_points — how many complete restore points /backups still holds
+# (one jarvis dump == one point). Recorded with every outcome so an operator delete
+# that empties the directory is a visible act rather than a silent one.
+remaining_restore_points() {
+  find "$BACKUP_DIR" -maxdepth 1 -type f \
+      \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) -printf '%f\n' 2>/dev/null \
+    | wc -l
+}
+
 # write_outcome <reason-or-empty> — record the outcome; never abort the script.
 write_outcome() {
   local reason="$1" tmp="${OUTCOME_FILE}.tmp" reason_json d_json s_json
   d_json="$(printf '%s\n' "$deleted" | json_array_from_lines)"
   s_json="$(printf '%s\n' "$skipped" | json_array_from_lines)"
   if [ -z "$reason" ]; then reason_json="null"; else reason_json="\"$(_json_escape "$reason")\""; fi
-  printf '{"deleted":%s,"skipped":%s,"at":"%s","reason":%s}' \
-    "$d_json" "$s_json" "$(date -Iseconds)" "$reason_json" > "$tmp" 2>/dev/null || return 0
+  printf '{"deleted":%s,"skipped":%s,"at":"%s","reason":%s,"remaining_restore_points":%s}' \
+    "$d_json" "$s_json" "$(date -Iseconds)" "$reason_json" "$(remaining_restore_points)" > "$tmp" 2>/dev/null || return 0
   mv -f "$tmp" "$OUTCOME_FILE" 2>/dev/null || return 0
 }
 
