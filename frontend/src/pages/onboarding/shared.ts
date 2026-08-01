@@ -74,6 +74,17 @@ export function readSetupTokenFromHash(hash: string): string | null {
   return new URLSearchParams(raw).get('setup_token');
 }
 
+export function deriveSteps(
+  firstRun: Pick<FirstRunStatus, 'configured' | 'setup_mode'>,
+  opts: { canManageTopics: boolean },
+): readonly StepKind[] {
+  const showAdminStep = !firstRun.configured;
+  const baseSteps =
+    showAdminStep && firstRun.setup_mode === 'single' ? SINGLE_USER_FIRST_RUN_STEPS : ALL_STEPS;
+  const steps = showAdminStep ? baseSteps : ALL_STEPS.filter((s) => s !== 'admin');
+  return opts.canManageTopics ? steps : steps.filter((s) => s !== 'topic');
+}
+
 export interface StepNavProps {
   stepNumber: number;
   totalSteps: number;
