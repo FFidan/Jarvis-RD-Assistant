@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { markSetupCompleted, type FirstRunStatus } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 import {
-  ALL_STEPS,
-  SINGLE_USER_FIRST_RUN_STEPS,
+  deriveSteps,
   readStoredSetupToken,
   readSetupTokenFromHash,
   storeSetupToken,
@@ -83,9 +83,10 @@ function OnboardingWizardContent({ firstRun, authed }: OnboardingWizardProps) {
   }, []);
 
   const showAdminStep = !firstRun.configured;
-  const baseSteps =
-    showAdminStep && firstRun.setup_mode === 'single' ? SINGLE_USER_FIRST_RUN_STEPS : ALL_STEPS;
-  const steps = showAdminStep ? baseSteps : ALL_STEPS.filter((s) => s !== 'admin');
+  const role = useAuthStore((s) => s.user?.role);
+  // First run creates the first admin, so an unauthenticated wizard is admin-to-be.
+  const canManageTopics = !authed || role === 'admin';
+  const steps = deriveSteps(firstRun, { canManageTopics });
   const totalSteps = steps.length;
 
   const clampStep = (raw: string | null): number => {
