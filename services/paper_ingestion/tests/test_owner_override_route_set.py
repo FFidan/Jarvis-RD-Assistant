@@ -15,12 +15,18 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from fastapi import routing
 from httpx import ASGITransport
 from jarvis_common.auth import current_user_id_strict_with_owner_override
 from paper_ingestion.main import app
 
 from tests.conftest import _make_pool_and_conn
+
+try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
+    from fastapi.routing import (
+        iter_route_contexts as _iter_route_contexts,  # type: ignore[attr-defined]
+    )
+except ImportError:  # FastAPI <0.137 has no iterator; the walk cannot run.
+    _iter_route_contexts = None
 
 # Every (method, path) the Telegram bot calls, from its services_client URL
 # shapes plus the paper-action suffix table in its callback handler.
@@ -66,8 +72,9 @@ def _dependency_calls(dependant: object) -> set[object]:
 
 
 def _observed_owner_override_routes() -> set[tuple[str, str]]:
+    assert _iter_route_contexts is not None
     observed: set[tuple[str, str]] = set()
-    for context in routing.iter_route_contexts(app.routes):
+    for context in _iter_route_contexts(app.routes):
         dependant = getattr(context.route, "dependant", None)
         if dependant is None:
             continue
@@ -79,6 +86,11 @@ def _observed_owner_override_routes() -> set[tuple[str, str]]:
     return observed
 
 
+@pytest.mark.skipif(
+    _iter_route_contexts is None,
+    reason="fastapi.routing.iter_route_contexts is absent below FastAPI 0.137, "
+    "so the route-table walk this pin needs cannot run",
+)
 def test_owner_override_is_scoped_to_the_bot_route_set() -> None:
     observed = _observed_owner_override_routes()
 
