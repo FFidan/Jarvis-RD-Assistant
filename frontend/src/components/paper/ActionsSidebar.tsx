@@ -65,7 +65,14 @@ const ANALYZE_STEPS = [
   { key: 'summarizing', label: 'Generating summary' },
 ] as const;
 
-type StepStatus = 'pending' | 'active' | 'completed' | 'failed';
+type StepStatus = 'pending' | 'active' | 'completed' | 'skipped' | 'failed';
+
+const STEP_STATUS: Record<string, StepStatus> = {
+  started: 'active',
+  completed: 'completed',
+  skipped: 'skipped',
+  failed: 'failed',
+};
 
 const TERMINAL_STATUSES: Job['status'][] = ['succeeded', 'failed', 'cancelled'];
 
@@ -91,6 +98,7 @@ export function ActionsSidebar({
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string; action_link?: { label: string; href: string } } | null>(null);
   const [analyzeStep, setAnalyzeStep] = useState<AnalyzeStep>(null);
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
+  const [stepReasons, setStepReasons] = useState<Record<string, string>>({});
   const [chunkCount, setChunkCount] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -164,12 +172,13 @@ export function ActionsSidebar({
       for await (const event of streamAnalyze(paperId, controller.signal)) {
         if (event.type === 'step') {
           setAnalyzeStep(event.step);
-          setStepStatuses((prev) => ({
-            ...prev,
-            [event.step]: event.status === 'started' ? 'active'
-              : event.status === 'completed' ? 'completed'
-              : 'failed',
-          }));
+          setStepStatuses((prev) => {
+            const mapped = STEP_STATUS[event.status];
+            return mapped ? { ...prev, [event.step]: mapped } : prev;
+          });
+          if (event.status === 'skipped' && event.reason) {
+            setStepReasons((prev) => ({ ...prev, [event.step]: event.reason as string }));
+          }
           if (event.step === 'processing' && event.status === 'completed' && event.chunk_count != null) {
             setChunkCount(event.chunk_count);
           }
@@ -347,9 +356,12 @@ export function ActionsSidebar({
             const isDone = status === 'completed';
             const isCurrent = status === 'active';
             const Icon = isFailed ? XCircle : isDone ? CheckCircle2 : isCurrent ? Loader2 : null;
-            const label = step.key === 'processing' && isDone && chunkCount != null
-              ? `${step.label} (${chunkCount} chunks)`
-              : step.label;
+            const isSkipped = status === 'skipped';
+            const label = isSkipped
+              ? `${step.label} — Skipped${stepReasons[step.key] ? ` (${stepReasons[step.key]})` : ''}`
+              : step.key === 'processing' && isDone && chunkCount != null
+                ? `${step.label} (${chunkCount} chunks)`
+                : step.label;
             return (
               <div key={step.key} className="flex items-center gap-2 text-sm">
                 {Icon ? (

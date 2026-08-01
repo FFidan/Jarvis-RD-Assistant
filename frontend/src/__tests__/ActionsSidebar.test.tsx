@@ -254,6 +254,57 @@ describe('ActionsSidebar', () => {
     expect(streamAnalyze).toHaveBeenCalledWith(42, expect.any(AbortSignal));
   });
 
+  it('a skipped step renders the reason and no failure styling', async () => {
+    const user = userEvent.setup();
+
+    mockStreamEvents = [
+      { type: 'step', step: 'downloading', status: 'skipped', reason: 'local paper' },
+      { type: 'step', step: 'processing', status: 'started' },
+      { type: 'step', step: 'processing', status: 'completed', chunk_count: 3 },
+      { type: 'step', step: 'summarizing', status: 'started' },
+      { type: 'step', step: 'summarizing', status: 'completed' },
+      { type: 'complete', paper_id: 42 },
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Analysis complete')).toBeInTheDocument();
+    });
+
+    const label = screen.getByText('Downloading PDF — Skipped (local paper)');
+    expect(label).toBeInTheDocument();
+    expect(label.className).not.toContain('text-destructive');
+    expect(label.className).not.toContain('line-through');
+  });
+
+  it('an unknown step status leaves the prior step state unchanged', async () => {
+    const user = userEvent.setup();
+
+    let resolveGate!: () => void;
+    mockStreamGate = new Promise((r) => { resolveGate = r; });
+    mockStreamEvents = [
+      { type: 'step', step: 'downloading', status: 'started' },
+      // Backend sends a status the frontend does not recognize.
+      { type: 'step', step: 'downloading', status: 'bogus' } as unknown as AnalyzeEvent,
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+    resolveGate();
+
+    await waitFor(() => {
+      expect(screen.getByText('Downloading PDF')).toBeInTheDocument();
+    });
+
+    // Prior 'active' state survives the unrecognized event — it must NOT have
+    // been coerced into 'failed' (which would render the destructive icon/text).
+    const label = screen.getByText('Downloading PDF');
+    expect(label.className).not.toContain('text-destructive');
+    expect(document.querySelector('.animate-spin')).toBeInTheDocument();
+  });
+
   it('successful analysis shows "Analysis complete" message', async () => {
     const user = userEvent.setup();
 
