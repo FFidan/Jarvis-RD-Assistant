@@ -5,6 +5,7 @@ Reuses the mocked-pool style from test_admin_users.py (no Docker needed).
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -159,6 +160,37 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
     sd = next(c for c in calls if c["action"] == "admin.user.soft_delete")
     assert sd["resource"] == "users/5"
     assert sd["user_id"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_targets_the_deleted_users_sessions(monkeypatch) -> None:
+    """Exactly one session statement is issued, bound to the deleted user.
+
+    The behavioural scoping proof — other users stay signed in — lives in
+    tests/contract/test_session_revocation_contract.py against a real database.
+    """
+    from fastapi import Response
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value="user")
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    _patch_audit(monkeypatch)
+
+    pool = _build_mock_pool_txn(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+    await admin_router.soft_delete_user(5, request, Response())
+
+    session_calls = [call for call in conn.execute.await_args_list if "sessions" in call.args[0]]
+    assert len(session_calls) == 1
+    statement, *bound = session_calls[0].args
+    assert bound == [5]
+    # An unscoped revocation signs out every account on the instance. A mock cannot
+    # observe which rows a statement would touch, but it can observe that every value
+    # bound is one the statement actually consumes: dropping the user predicate leaves
+    # the id bound to a statement with no placeholder for it.
+    placeholders = {int(match) for match in re.findall(r"\$(\d+)", statement)}
+    assert placeholders == set(range(1, len(bound) + 1))
 
 
 def _patch_audit(monkeypatch) -> list[dict]:

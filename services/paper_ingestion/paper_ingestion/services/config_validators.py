@@ -35,6 +35,7 @@ __all__ = [
     "_validate_library_type",
     "_validate_group_id",
     "_validate_zotero_cron",
+    "_validate_zotero_allowed_private_hosts",
     "_validate_langfuse_dashboard_url",
     "validate_custom_openai_base_url",
     "_validate_fsrs_retention",
@@ -271,6 +272,31 @@ def _validate_group_id(v: Any) -> None:
         raise ValueError("zotero.group_id must be a positive integer or null")
 
 
+_MAX_ALLOWED_PRIVATE_HOSTS = 20
+_BARE_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+
+
+def _validate_zotero_allowed_private_hosts(v: Any) -> None:
+    """Validate zotero.allowed_private_hosts — bare hostnames, at most twenty.
+
+    Bare hostnames only: the value is compared against a parsed URL's host, so a
+    scheme, path or port in an entry could never match and would read as an
+    allowlist entry that silently does nothing.
+    """
+    if not isinstance(v, list):
+        raise ValueError("zotero.allowed_private_hosts must be a list of hostnames")
+    if len(v) > _MAX_ALLOWED_PRIVATE_HOSTS:
+        raise ValueError(
+            f"zotero.allowed_private_hosts accepts at most {_MAX_ALLOWED_PRIVATE_HOSTS} hostnames"
+        )
+    for entry in v:
+        if not isinstance(entry, str) or not _BARE_HOSTNAME_RE.fullmatch(entry):
+            raise ValueError(
+                "zotero.allowed_private_hosts entries must be bare hostnames "
+                "without a scheme, port or path"
+            )
+
+
 def _validate_langfuse_dashboard_url(v: Any) -> None:
     """Validate observability.langfuse_dashboard_url.
 
@@ -355,6 +381,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.group_id": _validate_group_id,
     "zotero.poll_enabled": _validate_bool,
     "zotero.poll_cron": _validate_zotero_cron,
+    "zotero.allowed_private_hosts": _validate_zotero_allowed_private_hosts,
     "zotero.auto_push_on_star": _validate_bool,
     # Observability
     "observability.langfuse_dashboard_url": _validate_langfuse_dashboard_url,

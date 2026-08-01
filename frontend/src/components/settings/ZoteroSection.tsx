@@ -19,6 +19,12 @@ const ZOTERO_LIBRARY_SCOPE_KEYS = new Set([
   'zotero.group_id',
 ]);
 
+function getAllowedPrivateHosts(configs: ConfigEntry[]): string[] {
+  const entry = configs.find((c) => c.key === 'zotero.allowed_private_hosts');
+  if (entry == null || !Array.isArray(entry.value)) return [];
+  return entry.value.filter((h): h is string => typeof h === 'string');
+}
+
 function getConfigValue(configs: ConfigEntry[], key: string): string {
   const entry = configs.find((c) => c.key === key);
   if (entry == null) return '';
@@ -44,12 +50,14 @@ export function ZoteroSection() {
   const autoPush = getConfigValue(configs, 'zotero.auto_push_on_star') === 'true';
   const pollEnabled = getConfigValue(configs, 'zotero.poll_enabled') === 'true';
   const pollCron = getConfigValue(configs, 'zotero.poll_cron') || '';
+  const allowedPrivateHosts = getAllowedPrivateHosts(configs).join(', ');
 
   // Local draft state for text inputs (saved on blur)
   const [draftApiKey, setDraftApiKey] = useState<string | null>(null);
   const [draftUserId, setDraftUserId] = useState<string | null>(null);
   const [draftGroupId, setDraftGroupId] = useState<string | null>(null);
   const [draftPollCron, setDraftPollCron] = useState<string | null>(null);
+  const [draftAllowedHosts, setDraftAllowedHosts] = useState<string | null>(null);
   const [pollCronError, setPollCronError] = useState<string | null>(null);
 
   // Test connection state
@@ -109,6 +117,17 @@ export function ZoteroSection() {
         // keep draft visible so the user can correct it; do NOT save
       }
     }
+  };
+
+  const handleBlurAllowedHosts = () => {
+    if (draftAllowedHosts !== null && draftAllowedHosts !== allowedPrivateHosts) {
+      const hosts = draftAllowedHosts
+        .split(',')
+        .map((h) => h.trim())
+        .filter((h) => h !== '');
+      setMut.mutate({ key: 'zotero.allowed_private_hosts', value: hosts });
+    }
+    setDraftAllowedHosts(null);
   };
 
   const handleLibraryTypeChange = (type: 'user' | 'group') => {
@@ -294,6 +313,24 @@ export function ZoteroSection() {
             </p>
           </div>
         )}
+
+        {/* Better BibTeX hosts on the operator's own network */}
+        <div className="space-y-2">
+          <Label htmlFor="zotero-allowed-private-hosts">Allowed private hostnames</Label>
+          <Input
+            id="zotero-allowed-private-hosts"
+            type="text"
+            placeholder="zotero.lan, 192.168.1.50"
+            value={draftAllowedHosts ?? allowedPrivateHosts}
+            onChange={(e) => setDraftAllowedHosts(e.target.value)}
+            onBlur={handleBlurAllowedHosts}
+          />
+          <p className="text-xs text-muted-foreground">
+            Comma-separated hostnames on your own network that may serve Better BibTeX citation
+            keys. Any other host on a private address is refused.{' '}
+            <code className="font-mono">host.docker.internal</code> is always allowed.
+          </p>
+        </div>
 
         {/* Test connection */}
         <div className="flex items-center gap-3">

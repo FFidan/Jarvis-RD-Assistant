@@ -145,6 +145,41 @@ async def test_p02_upload_pdf_rejects_oversized_title(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/upload-pdf — browser upload cap
+# ---------------------------------------------------------------------------
+
+
+async def test_upload_pdf_refusal_names_the_browser_upload_limit(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """An oversized browser upload is refused with 400 and the 50 MB figure.
+
+    The cap is shrunk for the test rather than materialising 50 MB; the figure
+    in the message comes from the route, so it still pins the user-facing text.
+    The disk-scan and download paths keep the larger shared limit.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:374
+    # (upload_pdf refuses above MAX_UPLOAD_PDF_SIZE)
+    # Verified: services/paper_ingestion/paper_ingestion/pdf_processor.py:62
+    # (MAX_UPLOAD_PDF_SIZE = 50 MB, separate from MAX_PDF_SIZE)
+    """
+    import paper_ingestion.routers.pdf as _pdf_mod
+
+    monkeypatch.setattr(_pdf_mod, "MAX_UPLOAD_PDF_SIZE", 64)
+    oversized = b"%PDF-1.7\n" + b"x" * 200
+    files = {"file": ("big.pdf", io.BytesIO(oversized), "application/pdf")}
+    data = {"title": "Too big", "authors": "A", "abstract": "test"}
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/upload-pdf", files=files, data=data)
+
+    assert resp.status_code == 400, (
+        f"Expected 400 above the upload cap; got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["detail"] == "File exceeds 50 MB size limit"
+
+
+# ---------------------------------------------------------------------------
 # P-03: POST /api/download-pdf/{id} — already-downloaded short-circuit
 # ---------------------------------------------------------------------------
 

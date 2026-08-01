@@ -79,6 +79,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
+        # Deployment-wide: which private hosts the Better BibTeX client may reach.
+        "zotero.allowed_private_hosts",
         # Cloud LLM provider keys
         "llm.anthropic.api_key",
         "llm.openai.api_key",
@@ -217,6 +219,9 @@ SYSTEM_KEYS: frozenset[str] = (
             "smtp.pass",
             "smtp.reply_to",
             "smtp.from_name",
+            # Zotero — which private hosts Better BibTeX may be reached on; the
+            # network topology is a property of the deployment, not of a user.
+            "zotero.allowed_private_hosts",
             # Observability — one deployment-wide Langfuse dashboard link; admin-only.
             "observability.langfuse_dashboard_url",
             # Automation — pipeline interval; system-wide, admin-only.

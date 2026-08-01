@@ -72,6 +72,7 @@ const CONFIGURED_CONFIG = [
   { key: 'zotero.auto_push_on_star', value: 'false' },
   { key: 'zotero.poll_enabled', value: 'true' },
   { key: 'zotero.poll_cron', value: '0 * * * *' },
+  { key: 'zotero.allowed_private_hosts', value: ['zotero.lan'] },
 ];
 
 function renderSection() {
@@ -265,6 +266,24 @@ describe('ZoteroSection', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /sync now/i })).toBeDisabled();
+    });
+  });
+  it('saves the allowed private hostnames as a list on blur', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    const hostsInput = await screen.findByLabelText('Allowed private hostnames');
+    expect(hostsInput).toHaveValue('zotero.lan');
+
+    await user.clear(hostsInput);
+    await user.type(hostsInput, 'zotero.lan, 192.168.1.50');
+    await user.tab(); // trigger blur
+
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith('zotero.allowed_private_hosts', [
+        'zotero.lan',
+        '192.168.1.50',
+      ]);
     });
   });
 });

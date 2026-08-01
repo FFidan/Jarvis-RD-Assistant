@@ -24,7 +24,7 @@ async def test_scan_links_duplicate_into_scanning_users_library(
 
     content = b"%PDF-1.4\n" + b"x" * 64
     file_hash = hashlib.sha256(content).hexdigest()
-    external_id = f"local:{file_hash[:16]}"
+    external_id = f"local:{file_hash}"
 
     # The paper is already in the corpus, discovered and held by a *different*
     # user — the scanner has no claim on it yet.
@@ -90,7 +90,7 @@ async def test_scan_existing_paper_add_to_library_failure_is_logged(
 
     content = b"%PDF-1.4\n" + b"x" * 64
     file_hash = hashlib.sha256(content).hexdigest()
-    external_id = f"local:{file_hash[:16]}"
+    external_id = f"local:{file_hash}"
 
     # Insert a user and a pre-existing corpus paper so the scan hits the already-exists path.
     scanner = await contract_conn.fetchval(
