@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import type { FeedPaper, MissingFoundationalPaper } from '@/types';
@@ -9,6 +10,18 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 // Mocks
 // ---------------------------------------------------------------------------
 
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: toastMocks,
+}));
+
+const startJobMock = vi.hoisted(() => vi.fn());
+
 vi.mock('@/stores/job-store', () => ({
   useJobStore: vi.fn((selector: (s: unknown) => unknown) =>
     selector({
@@ -16,7 +29,7 @@ vi.mock('@/stores/job-store', () => ({
       activeAborts: {},
       hasRunning: () => false,
       isRunning: () => false,
-      startJob: vi.fn(),
+      startJob: startJobMock,
       trackExternalJob: vi.fn(),
     }),
   ),
@@ -28,7 +41,7 @@ vi.mock('@/lib/api', () => ({
   fetchAndProcessFoundationalPaper: vi.fn(),
 }));
 
-const { fetchFeed, fetchMissingFoundationalPapers } = await import('@/lib/api');
+const { fetchFeed, fetchMissingFoundationalPapers, fetchAndProcessFoundationalPaper } = await import('@/lib/api');
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -98,6 +111,7 @@ function makeFoundationalPaper(overrides: Partial<MissingFoundationalPaper> = {}
 describe('TriageSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    startJobMock.mockResolvedValue(undefined);
   });
 
   it('renders nothing when both action items and foundational papers are empty', async () => {
@@ -158,5 +172,40 @@ describe('TriageSection', () => {
 
     // Section header includes "Triage"
     expect(screen.getByText(/Triage/i)).toBeInTheDocument();
+  });
+
+  it('a rejected startJob fires toast.error instead of silently swallowing it', async () => {
+    const user = userEvent.setup();
+    startJobMock.mockRejectedValue(new Error('queue full'));
+    vi.mocked(fetchFeed).mockResolvedValue({
+      papers: [makeFeedPaper({ pdf_downloaded: true })],
+      total: 1,
+    });
+    vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
+
+    renderSubject();
+
+    const processButton = await screen.findByRole('button', { name: 'Process' });
+    await user.click(processButton);
+
+    await vi.waitFor(() => {
+      expect(toastMocks.error).toHaveBeenCalledWith('Could not start processing: queue full');
+    });
+  });
+
+  it('the addMut error path fires toast.error', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 });
+    vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([makeFoundationalPaper()]);
+    vi.mocked(fetchAndProcessFoundationalPaper).mockRejectedValue(new Error('locked'));
+
+    renderSubject();
+
+    const addButton = await screen.findByRole('button', { name: /Add & process/ });
+    await user.click(addButton);
+
+    await vi.waitFor(() => {
+      expect(toastMocks.error).toHaveBeenCalledWith('Could not add the paper: locked');
+    });
   });
 });
