@@ -2,12 +2,13 @@
 
 import logging
 import sys
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from apscheduler.triggers.interval import IntervalTrigger
 
 # ---------------------------------------------------------------------------
 # Stub objects — created at module scope so tests can mutate their attributes,
@@ -321,3 +322,125 @@ async def test_auto_pipeline_self_gates_on_zero_interval(monkeypatch: pytest.Mon
     await run_auto_pipeline(fake_app)
 
     assert not pool_acquire_called, "DB pool must not be acquired when interval_hours=0"
+
+
+# ---------------------------------------------------------------------------
+# Periodic work survives a restart: anchored intervals, misfire grace, catch-up
+# ---------------------------------------------------------------------------
+
+
+def _make_scheduler_app(*, last_run: str | None = None) -> SimpleNamespace:
+    """Fake app whose stubbed DB answers both reads ``start_scheduler`` makes.
+
+    ``last_run`` is the stored auto-fetch last-run stamp; ``None`` means the row
+    does not exist yet.
+    """
+
+    async def _fetchrow(query: str, *_args):
+        if "pulse.cron" in query:
+            return {"value": "0 2 * * *"}
+        return None if last_run is None else {"value": last_run}
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
+    conn.fetch = AsyncMock(return_value=[])
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+
+async def _start(app: SimpleNamespace, interval_hours: float):
+    """Start the scheduler with recommendation refresh stubbed out."""
+    from paper_ingestion.scheduler import start_scheduler  # noqa: PLC0415
+
+    with patch("paper_ingestion.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
+        return await start_scheduler(app, interval_hours=interval_hours)
+
+
+async def test_auto_pipeline_interval_is_anchored_to_a_fixed_epoch() -> None:
+    """The registered interval trigger must fire on an epoch-anchored grid.
+
+    An unanchored IntervalTrigger takes its start_date from construction time,
+    so every restart pushes the next run a full interval away and a box that
+    reboots daily never reaches a long interval at all.
+    """
+    from paper_ingestion.scheduler import _INTERVAL_EPOCH  # noqa: PLC0415
+
+    scheduler = await _start(_make_scheduler_app(), 5)
+    try:
+        trigger = scheduler.get_job("auto_pipeline").trigger
+        now = datetime(2026, 6, 1, 9, 30, tzinfo=UTC)
+        anchored = IntervalTrigger(hours=5, start_date=_INTERVAL_EPOCH)
+        unanchored = IntervalTrigger(hours=5)
+
+        actual = trigger.get_next_fire_time(None, now)
+        assert actual == anchored.get_next_fire_time(None, now), (
+            "the registered trigger must fire on the fixed-epoch grid"
+        )
+        assert actual != unanchored.get_next_fire_time(None, now), (
+            "an unanchored trigger must not produce the same next fire time"
+        )
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_every_registered_job_carries_a_misfire_grace() -> None:
+    """Every job start_scheduler registers must tolerate an hour of event-loop stall.
+
+    Iterating the scheduler rather than a list of ids means a job added later —
+    including the ones registered by the jobs/ helper modules — cannot silently
+    keep APScheduler's one-second default.
+    """
+    scheduler = await _start(_make_scheduler_app(), 5)
+    try:
+        jobs = scheduler.get_jobs()
+        assert {"data_purge", "purge_magic_link_tokens", "purge_sessions"} <= {
+            j.id for j in jobs
+        }, "the jobs/ helper modules must have registered, or this check is vacuous"
+        offenders = [(j.id, j.misfire_grace_time) for j in jobs if j.misfire_grace_time != 3600]
+        assert not offenders, f"jobs without a one-hour misfire grace: {offenders}"
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_reconcile_zotero_poll_job_registers_with_a_misfire_grace() -> None:
+    """The live reconcile route registers the same job id as boot, so it needs
+    the same misfire semantics; its job is not in get_jobs() after boot."""
+    from paper_ingestion.scheduler import reconcile_zotero_poll_job  # noqa: PLC0415
+
+    fake_scheduler = MagicMock()
+    with patch(
+        "paper_ingestion.scheduler._list_zotero_polling_schedules",
+        new=AsyncMock(return_value=[(7, "0 5 * * *")]),
+    ):
+        await reconcile_zotero_poll_job(
+            scheduler=fake_scheduler,
+            app=SimpleNamespace(),
+            db_pool=MagicMock(),
+            user_id=7,
+        )
+
+    fake_scheduler.add_job.assert_called_once()
+    assert fake_scheduler.add_job.call_args.kwargs["misfire_grace_time"] == 3600
+
+
+async def test_stale_last_run_schedules_a_catch_up() -> None:
+    """A last-run stamp older than the interval means a fire was missed while the
+    process was down; jobs live in memory only, so it is scheduled explicitly."""
+    stale = (datetime.now(UTC) - timedelta(hours=9)).isoformat()
+    scheduler = await _start(_make_scheduler_app(last_run=stale), 5)
+    try:
+        assert scheduler.get_job("auto_pipeline_catchup") is not None
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_fresh_last_run_schedules_no_catch_up() -> None:
+    """A recent successful run means nothing was missed — no extra run at boot."""
+    fresh = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    scheduler = await _start(_make_scheduler_app(last_run=fresh), 5)
+    try:
+        assert scheduler.get_job("auto_pipeline_catchup") is None
+    finally:
+        scheduler.shutdown(wait=False)

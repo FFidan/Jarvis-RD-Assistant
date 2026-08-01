@@ -15,6 +15,7 @@ try/except entirely, so the only thing that can contain it is the gather call.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -490,3 +491,51 @@ async def test_auto_summarize_defer_failure_is_swallowed(monkeypatch, caplog):
         f"expected exactly one enqueue-failed ERROR record; got: "
         f"{[r.getMessage() for r in caplog.records]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Last-run stamp — the scheduler's catch-up reads it, so it must record only
+# runs that actually completed.
+# ---------------------------------------------------------------------------
+
+
+def _last_run_writes(conn) -> list:
+    """Every conn.execute call that persists the last-run stamp."""
+    return [
+        call for call in conn.execute.await_args_list if af.AUTO_PIPELINE_LAST_RUN_KEY in call.args
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_run_records_the_last_run_stamp(monkeypatch):
+    """A run that reaches the end persists exactly one stamp, carrying its time."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[[], [], [], []])
+
+    await af.run_auto_pipeline(_make_app(conn))
+
+    writes = _last_run_writes(conn)
+    assert len(writes) == 1, f"expected exactly one last-run write; got {len(writes)}"
+    stamp = writes[0].args[2]
+    assert datetime.fromisoformat(stamp).tzinfo is not None, (
+        f"the stamp must be an unambiguous timestamp; got {stamp!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_run_leaves_the_last_run_stamp_unmoved(monkeypatch):
+    """A run whose discovery raises must NOT record a stamp — otherwise the next
+    boot believes the pipeline succeeded and skips the catch-up it needs."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "1")
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[[], []])
+
+    with patch.object(
+        af, "_discover_and_save", AsyncMock(side_effect=RuntimeError("discovery unavailable"))
+    ):
+        await af.run_auto_pipeline(_make_app(conn))
+
+    assert _last_run_writes(conn) == [], "a failed run must not move the last-run stamp"

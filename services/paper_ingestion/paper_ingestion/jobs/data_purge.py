@@ -302,6 +302,7 @@ def register_data_purge(scheduler: Any, app: Any) -> None:
             name="Daily expired-user hard purge",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("data_purge scheduler registered (cron=%s)", _DATA_PURGE_CRON)
     except Exception:

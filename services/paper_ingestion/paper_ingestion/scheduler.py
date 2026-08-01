@@ -1,19 +1,27 @@
 """Automated fetch->embed pipeline scheduler for paper_ingestion."""
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.maintenance import skip_for_maintenance
 from jarvis_common.serialization import _coerce_bool, read_global_config_flag
 
 from paper_ingestion.ingestion import refresh_recommendations
-from paper_ingestion.pipelines.auto_fetch import run_auto_pipeline
+from paper_ingestion.pipelines.auto_fetch import AUTO_PIPELINE_LAST_RUN_KEY, run_auto_pipeline
 
 logger = logging.getLogger(__name__)
+
+# Interval triggers default their start_date to construction time, which re-phases
+# every job to the moment of the last restart — a box that reboots daily never
+# reaches a long interval. Anchoring to a fixed past instant keeps the fire grid
+# stable across restarts.
+_INTERVAL_EPOCH = datetime(2026, 1, 1, 3, 0, tzinfo=UTC)
 
 # Re-export so callers that do ``from paper_ingestion.scheduler import run_auto_pipeline``
 # (e.g. tests) continue to work without modification.
@@ -206,6 +214,29 @@ async def _get_pulse_cron(db_pool: Any) -> str:
             return _DEFAULT_PULSE_CRON
         return expr
     return _DEFAULT_PULSE_CRON
+
+
+async def _read_auto_pipeline_last_run(db_pool: Any) -> datetime | None:
+    """Read the persisted auto-fetch last-run stamp, or ``None`` if unusable."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                AUTO_PIPELINE_LAST_RUN_KEY,
+            )
+    except Exception:
+        logger.exception("auto_pipeline: failed to read the last-run stamp")
+        return None
+    value = row["value"] if row is not None else None
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        logger.warning("auto_pipeline: last-run stamp %r is not a timestamp", value)
+        return None
+    # A hand-edited row may be naive; comparing it to an aware ``now`` would raise.
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
 
 
 async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
@@ -458,6 +489,7 @@ async def reconcile_zotero_poll_job(
         name=f"Zotero library sync for user {user_id}",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
     logger.info("%s scheduler reconciled (cron=%s)", job_id, cron_expr)
 
@@ -504,21 +536,26 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     _effective_interval = max(interval_hours, 1.0) if interval_hours > 0 else 24
     scheduler.add_job(
         run_auto_pipeline,
-        trigger=IntervalTrigger(hours=_effective_interval),  # type: ignore[arg-type]
+        trigger=IntervalTrigger(
+            hours=_effective_interval,  # type: ignore[arg-type]
+            start_date=_INTERVAL_EPOCH,
+        ),
         args=[app],
         id="auto_pipeline",
         name="Auto fetch->process pipeline",
         replace_existing=True,
         max_instances=1,  # prevent overlap if a run takes longer than the interval
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _run_recommendations,
-        IntervalTrigger(hours=24),
+        IntervalTrigger(hours=24, start_date=_INTERVAL_EPOCH),
         args=[app],
         id="recommendation_refresh",
         name="Nightly recommendation refresh",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # Pulse classifier training (cron-scheduled before the overnight deck; gated on pulse.enabled)
@@ -531,6 +568,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             name="Pulse classifier retraining",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info(
             "pulse_classifier_training scheduler registered (cron=%s)",
@@ -550,6 +588,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             name="Overnight Pulse deck generation",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("pulse_overnight scheduler registered (cron=%s)", cron_expr)
     except Exception:
@@ -565,6 +604,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             name="Weekly digest regeneration",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("weekly_digest scheduler registered (cron=%s)", _DEFAULT_WEEKLY_DIGEST_CRON)
     except Exception:
@@ -582,6 +622,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
                 name=f"Zotero library sync for user {uid}",
                 replace_existing=True,
                 max_instances=1,
+                misfire_grace_time=3600,
             )
         logger.info("zotero_library_sync scheduler registered (%d users)", len(zotero_schedules))
     except Exception:
@@ -597,6 +638,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             name="Tiered system_events purge",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("purge_system_events scheduler registered (cron=0 2 * * *)")
     except Exception:
@@ -617,6 +659,27 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     register_purge_sessions(scheduler, app)
 
+    # Jobs live in memory, so an interval fire due while the service was down is
+    # simply lost. A stale last-run stamp means exactly that happened: run once
+    # shortly after boot, leaving the service time to finish starting up.
+    if interval_hours > 0:
+        last_run = await _read_auto_pipeline_last_run(app.state.db_pool)
+        now = datetime.now(UTC)
+        if last_run is None or now - last_run >= timedelta(hours=_effective_interval):
+            scheduler.add_job(
+                run_auto_pipeline,
+                trigger=DateTrigger(run_date=now + timedelta(minutes=2)),
+                args=[app],
+                id="auto_pipeline_catchup",
+                name="Auto fetch->process catch-up for a missed interval",
+                replace_existing=True,
+                max_instances=1,
+                misfire_grace_time=3600,
+            )
+            logger.info("auto_pipeline catch-up scheduled (last successful run: %s)", last_run)
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
+    for job in scheduler.get_jobs():
+        logger.info("scheduler job %s next fires at %s", job.id, job.next_run_time)
     return scheduler
