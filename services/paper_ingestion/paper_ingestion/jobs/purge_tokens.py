@@ -68,6 +68,7 @@ def register_purge_tokens(scheduler: Any, app: Any) -> None:
             name="Daily expired magic_link_tokens purge",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("purge_magic_link_tokens scheduler registered (cron=%s)", _PURGE_TOKENS_CRON)
     except Exception:

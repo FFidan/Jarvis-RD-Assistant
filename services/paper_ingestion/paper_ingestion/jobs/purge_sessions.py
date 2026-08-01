@@ -85,6 +85,7 @@ def register_purge_sessions(scheduler: Any, app: Any) -> None:
             name="Daily stale sessions purge",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("purge_sessions scheduler registered (cron=%s)", _PURGE_SESSIONS_CRON)
     except Exception:
