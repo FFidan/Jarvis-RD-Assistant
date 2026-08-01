@@ -57,14 +57,22 @@ libs/jarvis_common/jarvis_common/data/model_catalog.json
 ```
 
 Bundled inside the Python package, loaded via `importlib.resources` so it works in Docker,
-installed wheel, and editable installs identically. No runtime fetch; no auto-update. **The
-catalog is NOT a live registry** — we do not fetch the Ollama search API at runtime.
+installed wheel, and editable installs identically. **The bundled file itself is static**: it is
+never fetched or auto-updated at runtime, and we do not call the Ollama search API.
+
+Live cloud model lists are separate and ARE fetched at runtime: for each provider with usable
+access configured, `GET /api/system/models` requests that provider's own model list, synthesizes a
+catalog entry per listed model, and merges those entries into the same `catalog` field it serves
+from the bundled file. Merged entries are marked `source: "provider"` and carry the `fetched_at`
+of the listing they came from; a `provider_lists` map on the same response reports each provider's
+fetch time, truncation, exclusion counts and error. The bundled file is the offline fallback for
+this path, not its source.
 
 ### 1.2 Entry schema
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | Unique key. Ollama: `name:tag`. Cloud: `provider/model-id`. |
+| `id` | string | Unique key. Ollama: `name:tag`. Cloud: `provider/model` for direct providers; `provider/vendor/model` for the router and the self-hosted OpenAI-compatible endpoint, whose ids may carry one vendor prefix (a second namespace separator is refused). |
 | `name` | string | Human display name. |
 | `provider` | `"ollama" \| "anthropic" \| "openai" \| "google" \| "openrouter" \| "deepseek" \| "mistral" \| "moonshot" \| "zai" \| "custom_openai_compatible"` | Drives status computation. |
 | `ollama_tag` | string \| null | Null for cloud entries. Must match `ollama list` NAME exactly. |
@@ -262,7 +270,7 @@ Assignment goes through the existing `PUT /api/config/{key}` path for `llm.smart
 `llm.fast_model`, which runs `update_litellm_model()` (delivery mechanism in §5.5; no reload step —
 `/model/new` registers the deployment with the router immediately). The Settings dropdown sends the
 catalog entry `id`; the backend maps it to the Ollama tag → LiteLLM `ollama/<tag>` or to a cloud
-alias such as `anthropic/<model>`, `openai/<model>`, `gemini/<model>`, `openrouter/<model>`, `deepseek/<model>`, `mistral/<model>`, `moonshot/<model>`, `zai/<model>`, or `custom_openai/<model>`. Custom OpenAI-compatible assignments are delivered to LiteLLM with the `openai/` provider prefix plus the configured `api_base`. `llm.embed_model` is the exception: the embed alias is
+alias such as `anthropic/<model>`, `openai/<model>`, `gemini/<model>`, `openrouter/<model>`, `deepseek/<model>`, `mistral/<model>`, `moonshot/<model>`, `zai/<model>`, or `custom_openai/<model>`. The `openrouter/` and `custom_openai/` aliases may carry one vendor namespace (`openrouter/<vendor>/<model>`); every other provider alias is a single model segment, and a second namespace separator is refused. Custom OpenAI-compatible assignments are delivered to LiteLLM with the `openai/` provider prefix plus the configured `api_base` — on BOTH delivery paths: the role alias and the `smart-fallback` deployment apply the same translation, so the fallback that fires exactly when `smart` fails reaches the same endpoint the primary alias does. `llm.embed_model` is the exception: the embed alias is
 dimension-locked to the Qdrant collection and stays YAML-seeded — re-selecting the routed model is a
 no-op; re-routing it is refused with an explicit error (switching embedders = edit
 `litellm/config.yaml` + re-embed).
@@ -272,7 +280,7 @@ guides the user to the Pull CTA.
 
 ### 5.4 Cloud model assignment
 
-Cloud-provider settings are admin-wide and registry-driven. Existing flat keys (`llm.anthropic.api_key`, `llm.openai.api_key`, `llm.google.api_key`) remain backward-compatible; new providers use namespaced keys such as `llm.providers.openrouter.api_key`. `POST /api/providers/{provider}/test` validates connectivity without exposing raw keys. When an administrator picks a cloud entry in a role dropdown, `update_litellm_model` runs the cloud path: `get_provider_api_key` decrypts the key in memory and carries it in the `/model/new` payload; LiteLLM persists it in its admin database encrypted under `LITELLM_SALT_KEY` (see `docs/SECURITY.md`). The key is never written to `litellm/config.yaml` or any other file. Supported provider entries are `anthropic`, `openai`, `google`, `openrouter`, `deepseek`, `mistral`, `moonshot`, `zai`, and `custom_openai_compatible`. Missing keys keep matching cloud entries visible but not assignable.
+Cloud-provider settings are admin-wide and registry-driven. Existing flat keys (`llm.anthropic.api_key`, `llm.openai.api_key`, `llm.google.api_key`) remain backward-compatible; new providers use namespaced keys such as `llm.providers.openrouter.api_key`. `POST /api/providers/{provider}/test` validates connectivity without exposing raw keys. When an administrator picks a cloud entry in a role dropdown, `update_litellm_model` runs the cloud path: `get_provider_api_key` decrypts the key in memory and carries it in the `/model/new` payload; LiteLLM persists it in its admin database encrypted under `LITELLM_SALT_KEY` (see `docs/SECURITY.md`). The key is never written to `litellm/config.yaml` or any other file. Supported provider entries are `anthropic`, `openai`, `google`, `openrouter`, `deepseek`, `mistral`, `moonshot`, `zai`, and `custom_openai_compatible`. For keyed providers, a missing key keeps matching cloud entries visible but not assignable; the custom OpenAI-compatible endpoint is reachable on a stored base URL alone and needs a key only if its own server requires one. One shared access predicate (stored key OR, where the provider has one, stored base URL) decides both what the picker renders as available and what the assignment save path accepts, so the two cannot disagree.
 
 ### 5.5 Delivery mechanism — LiteLLM admin DB
 

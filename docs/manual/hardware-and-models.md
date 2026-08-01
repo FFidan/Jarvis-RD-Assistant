@@ -118,7 +118,41 @@ Consider an optional cloud provider when:
   relevant data leaves the machine.
 - You want to experiment with a larger model before committing to pulling it locally.
 
-To add cloud capacity, use **Settings → Models → Providers & Routing**. JARVIS supports OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint. Provider settings are admin-wide and keys are stored encrypted at rest. Once a provider key is active, matching cloud models can be assigned to the `smart` or `fast` role alongside local Ollama models.
+To add cloud capacity, use **Settings → Models → Providers & Routing**. JARVIS supports OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint. Provider settings are admin-wide and keys are stored encrypted at rest.
+
+Once a provider is reachable — a saved API key, or a base URL alone for the self-hosted
+OpenAI-compatible endpoint, which needs a key only if its own server requires one — JARVIS asks
+that provider for its own model list the next time the Models page loads, and offers the result in
+the `smart` and `fast` dropdowns alongside local Ollama models. A cloud group in the dropdown says
+when its list was fetched, and the provider's tile in Settings says how many models are available;
+lists are re-used for a few minutes rather than re-fetched on every page load. You always choose
+from a list — there is no free-text model field anywhere.
+
+If a list cannot be fetched, nothing is silently dropped: the group heading in the dropdown says
+the list is unavailable, the Settings tile says there are no models yet when that provider has
+none, and the built-in catalog stays on offer as the offline fallback. That fallback carries cloud
+entries for Anthropic and OpenAI only, so a provider with no reachable list and no bundled entries
+still shows its name and the unavailable note rather than an empty gap.
+
+What is deliberately left out or left unassignable:
+
+- **Self-hosted endpoints must not point into a private network.** The base URL has to be
+  `http://localhost…` on the same host, or an HTTPS address that resolves to a public one. A
+  literal private address such as `http://10.0.0.5…` or `http://192.168.1.20…` is refused the
+  moment you save it. A hostname is accepted when you save it and checked when it is used: if it
+  resolves to a private address, fetching the model list and routing a request both refuse it, so
+  the endpoint simply never works. Letting the server call into private networks on request is a
+  well-known way to reach systems that were never meant to be exposed, so the refusal is by design
+  and there is no override.
+- **Only one vendor prefix.** OpenRouter and self-hosted endpoints publish ids like
+  `vendor/model-name`. An id with more nesting than that is left out of the fetched list.
+- **Very long lists are capped.** If a provider offers more models than JARVIS lists at once, the
+  dropdown says there are more instead of implying the list is complete.
+- **A model is only offered where it can actually work.** One whose capability the provider does
+  not report appears in the `smart` and `fast` lists but cannot be assigned, and the entry says
+  why. One the provider reports as embedding-only is not offered for those roles at all — the
+  embedding model is fixed separately, as described above. Models that are plainly not chat
+  models — speech, image, moderation and similar families — are left out entirely.
 
 !!! note "Privacy"
     When a cloud model is assigned to a role, the prompts and relevant paper excerpts for that role's requests are sent to the configured provider. Local models keep model inference on infrastructure controlled by the operator. The embedding model is separate: changing it requires a deliberate re-index workflow, not a runtime provider switch.

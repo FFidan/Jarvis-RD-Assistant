@@ -44,11 +44,14 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
   output private. Current visibility details live in the SECURITY.md
   source-aware matrix.
 - **Researcher-grade model plane + trust polish.** Per-hardware model selection
-  that actually takes effect, optional admin-wide cloud providers for the `smart`
-  and `fast` roles, full-coverage summaries with verified quotes, and a
-  reliability/comprehensibility pass: plain-language settings (no implementation
-  jargon on screen), honest degraded states with a cause and a next step, account
-  data export from Settings, and no silent settings dead-ends.
+  that actually takes effect, optional admin-wide cloud providers whose own model
+  lists are fetched at runtime and offered for the `smart` and `fast` roles — with
+  the built-in catalog as the offline fallback and the Settings page saying so
+  whenever a list cannot be fetched — full-coverage summaries with verified
+  quotes, and a reliability/comprehensibility pass: plain-language settings (no
+  implementation jargon on screen), honest degraded states with a cause and a
+  next step, account data export from Settings, and no silent settings
+  dead-ends.
 - **Documentation site + user guide.** A published companion site with
   operator/developer docs and an end-user manual covering install through every
   capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction
