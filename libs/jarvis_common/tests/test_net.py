@@ -1,7 +1,7 @@
 """Tests for jarvis_common.net._reject_non_public_host (SSRF guard).
 
-Verifies that the helper raises ValueError for private, loopback, and
-link-local addresses (literal IPs and unresolvable hosts), and does NOT raise
+Verifies that the helper raises ValueError for private, loopback, link-local
+and CGNAT addresses (literal IPs and unresolvable hosts), and does NOT raise
 for a genuine public IP address.
 """
 
@@ -25,6 +25,7 @@ from jarvis_common.net import _MAX_RETRY_AFTER_S, _reject_non_public_host, parse
         "10.0.0.1",  # RFC-1918 private
         "169.254.169.254",  # link-local (cloud metadata endpoint)
         "127.0.0.1",  # loopback
+        "100.64.0.1",  # RFC-6598 CGNAT — not covered by is_private
     ],
 )
 async def test_rejects_private_and_special_ips(host: str) -> None:

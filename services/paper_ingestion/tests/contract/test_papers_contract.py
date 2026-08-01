@@ -41,8 +41,8 @@ pytestmark = [
 async def _pi_app_with_pool(contract_conn):
     """paper_ingestion app wired to the contract conn pool.
 
-    Removes the autouse ``current_user_id_strict_with_owner_override`` override so
-    that session-cookie auth works.  Forces embedder=None so list_papers takes the
+    Removes the autouse identity overrides so that session-cookie auth works.
+    Forces embedder=None so list_papers takes the
     BM25 path instead of the hybrid Qdrant path.
     """
     shared = SharedConnPool(contract_conn)

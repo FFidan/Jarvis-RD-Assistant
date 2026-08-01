@@ -96,11 +96,17 @@ def parse_retry_after(
     return result
 
 
+# RFC 6598 carrier-grade NAT space. ``is_private`` does not cover it on
+# Python 3.12, so an SMTP host resolving into a CGNAT range would otherwise
+# pass the guard and reach an operator's upstream network.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 async def _reject_non_public_host(host: str) -> None:
     """Resolve *host*; raise ``ValueError`` if it resolves to a non-public address.
 
-    Rejects private, loopback, link-local, reserved, multicast, and unspecified
-    addresses (SSRF guard).  The caller decides whether to apply the gate (e.g.
+    Rejects private, loopback, link-local, reserved, multicast, unspecified and
+    CGNAT addresses (SSRF guard).  The caller decides whether to apply the gate (e.g.
     gated by ``allow_private_smtp_host``); this helper only enforces the rule.
 
     Parameters
@@ -131,5 +137,6 @@ async def _reject_non_public_host(host: str) -> None:
             or ip.is_reserved
             or ip.is_multicast
             or ip.is_unspecified
+            or ip in _CGNAT_NETWORK
         ):
             raise ValueError("SMTP host resolves to a non-public address")

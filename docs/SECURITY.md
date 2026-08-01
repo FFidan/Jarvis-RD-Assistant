@@ -133,7 +133,7 @@ explicitly set in the environment. An explicit env var always wins.
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for automatic magic-link delivery. Without them, an administrator can still create a 24-hour invitation or 15-minute recovery link and share it privately. Explicit empty-string secret values are rejected; leave the fields unset when email is intentionally disabled. | Optional; recommended when users need self-service recovery |
 | `SMTP_REPLY_TO` | Optional Reply-To address for sign-in emails. When set, email clients route replies here instead of the From address. Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
 | `SMTP_FROM_NAME` | Optional sender display name shown in the From header (e.g. `JARVIS RD`). Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
-| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
+| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the Telegram bot's own pinned address as a `/32` (tracks `JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`; default `10.137.241.250`), so no other container on the bridge can send the header. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
 
 ### Cloud LLM Provider Settings at Rest
@@ -256,7 +256,7 @@ ingress as Cloudflare-owned. Direct and LAN callers cannot opt in by sending
 
 These values are numeric because uvicorn matches the immediate socket peer
 before applying `X-Forwarded-For`. Setup and update accept an IPv4 `/27` or
-larger network and derive the gateway and highest four usable addresses from
+larger network and derive the gateway and highest five usable addresses from
 `JARVIS_NET_SUBNET`; a custom subnet does not require Compose or nginx edits.
 Nginx also strips any browser-supplied `X-Owner-User-Id` header before proxying;
 only the container-internal caller that does not traverse nginx can set it.

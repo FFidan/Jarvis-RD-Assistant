@@ -24,7 +24,10 @@ pytestmark = [
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_admin(contract_conn):
     """PI app + require_admin bypassed for recompute-priorities (admin-gated)."""
-    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common import (
+        current_user_id_strict_with_owner_override,
+        get_current_user_id,
+    )
     from jarvis_common.auth import require_admin
     from jarvis_common.testing import SharedConnPool
     from paper_ingestion.main import app
@@ -33,10 +36,10 @@ async def _pi_app_admin(contract_conn):
     original_pool = getattr(app.state, "db_pool", None)
     app.state.db_pool = shared
 
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
+    removed_overrides = {
+        key: app.dependency_overrides.pop(key, None)
+        for key in (current_user_id_strict_with_owner_override, get_current_user_id)
+    }
 
     async def _allow_admin():
         return None
@@ -52,8 +55,9 @@ async def _pi_app_admin(contract_conn):
     else:
         app.state.db_pool = original_pool
 
-    if had_override:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
+    for key, removed in removed_overrides.items():
+        if removed is not None:
+            app.dependency_overrides[key] = removed
 
 
 # ---------------------------------------------------------------------------

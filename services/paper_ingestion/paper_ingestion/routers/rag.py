@@ -13,7 +13,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
-from jarvis_common.auth import get_current_user_id
+from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.event_log import log_event
 from jarvis_common.litellm_observer import observed_share
@@ -724,7 +724,7 @@ async def get_weekly_digest(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Generate a weekly research digest grouped by topic.
 

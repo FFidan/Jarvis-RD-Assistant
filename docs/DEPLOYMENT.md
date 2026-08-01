@@ -304,7 +304,7 @@ assert HTTPS.
 **Subnet collision:** if the default conflicts with another local network,
 `setup.sh --check` warns. Set `JARVIS_NET_SUBNET` to a free IPv4 `/27` or larger
 network and re-run setup. Setup and update derive the gateway and the highest
-four usable addresses; do not edit Compose or nginx.
+five usable addresses; do not edit Compose or nginx.
 
 **`TRUSTED_PROXY_CIDRS`** — Python-layer variable for the XFF walk. The standard
 stack trusts loopback and the derived dashboard `/32`. Add another CIDR only
@@ -689,12 +689,14 @@ existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
 **Telegram owner-override network.** The bot calls service endpoints with
 `X-Owner-User-Id` to make per-user requests, trusted only from
 `OWNER_OVERRIDE_ALLOWED_CIDRS`. The bundled compose stack sets this
-automatically to cover the jarvis bridge subnet (it tracks `JARVIS_NET_SUBNET`,
-default `10.137.241.0/24`), so no change is needed for the default stack. **If
-you override `JARVIS_NET_SUBNET`, the allowlist follows it** — only set
-`OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services from
-some other network. (The bare code default `127.0.0.0/8` is loopback-only and
-does *not* cover the jarvis bridge — the compose stack overrides it.)
+automatically to the bot's own pinned address as a `/32` (it tracks
+`JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`;
+default `10.137.241.250`), so no change is needed for the default stack and no
+other container on the bridge can send the header. **If you override
+`JARVIS_NET_SUBNET`, the bot's pin and the allowlist both follow it** — only
+set `OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services
+from some other network. (The bare code default `127.0.0.0/8` is loopback-only;
+the compose stack adds the bot's address to it.)
 
 **Ownership backfill.** The NULL-owner backfill for pre-existing product rows
 is part of the schema-101 baseline in `db/init.sql`, not a startup migration.

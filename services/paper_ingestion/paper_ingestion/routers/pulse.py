@@ -20,8 +20,9 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import (
     ErrorResponse,
-    current_user_id_strict_with_owner_override,
+    current_user_id_strict,
     get_current_user_id,
+    get_current_user_id_or_bot,
     log_audit,
     require_admin_or_api_key,
 )
@@ -80,7 +81,7 @@ router = APIRouter(
 async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    current_uid: int = Depends(get_current_user_id),
+    current_uid: int = Depends(get_current_user_id_or_bot),
     _admin: None = Depends(require_admin_or_api_key),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
@@ -150,7 +151,7 @@ async def generate_pulse(
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> PulseDeckResponse | None:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 
@@ -305,7 +306,7 @@ async def rate_card(
 async def explain_card(
     request: Request,
     card_id: int,
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseExplainResponse:
     """Return the reasoning + signal breakdown for a single Pulse card.

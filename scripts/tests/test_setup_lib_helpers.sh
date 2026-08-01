@@ -1262,11 +1262,11 @@ done
 # A custom bridge subnet must derive every pinned ingress address from one
 # source so Compose and nginx cannot drift apart.
 got="$(allocate_ingress_ips 10.88.40.0/24 2>/dev/null)" && rc=0 || rc=$?
-expect_eq "allocate_ingress_ips derives gateway and four edge addresses" \
-  "${got}/${rc}" "10.88.40.1 10.88.40.251 10.88.40.252 10.88.40.253 10.88.40.254/0"
+expect_eq "allocate_ingress_ips derives gateway and five edge addresses" \
+  "${got}/${rc}" "10.88.40.1 10.88.40.250 10.88.40.251 10.88.40.252 10.88.40.253 10.88.40.254/0"
 got="$(allocate_ingress_ips 10.0.0.0/8 2>/dev/null)" && rc=0 || rc=$?
 expect_eq "allocate_ingress_ips handles a large subnet without enumerating it" \
-  "${got}/${rc}" "10.0.0.1 10.255.255.251 10.255.255.252 10.255.255.253 10.255.255.254/0"
+  "${got}/${rc}" "10.0.0.1 10.255.255.250 10.255.255.251 10.255.255.252 10.255.255.253 10.255.255.254/0"
 allocate_ingress_ips 10.88.40.0/28 >/dev/null 2>&1 && rc=0 || rc=$?
 expect_eq "allocate_ingress_ips rejects a subnet too small for all service profiles" "$rc" "1"
 
@@ -3785,6 +3785,23 @@ if [ -n "$jarvis_ingress_line" ] && [ -n "$jarvis_compose_line" ] \
 else
   printf 'FAIL: jarvis-setup ingress-IP sync (%s) does not precede the first Compose pull/up (%s)\n' \
     "$jarvis_ingress_line" "$jarvis_compose_line" >&2
+  fail=1
+fi
+
+# === setup.sh consumes every address the allocator emits =====================
+# setup.sh reads allocate_ingress_ips into positional variables and persists
+# each one. A field added to the allocator without a matching variable here
+# silently shifts every later pin and collapses the trailing addresses into the
+# final variable, so the count is asserted against the allocator's real output.
+ingress_field_n="$(allocate_ingress_ips 10.88.40.0/24 2>/dev/null | wc -w)"
+setup_read_n="$(awk '/^read -r JARVIS_NET_GATEWAY_IP_VALUE/{c=1} c{print; if ($0 !~ /\\$/) exit}' \
+  "$SETUP_SCRIPT" | tr -d '\\' | sed 's/^read -r //; s/<<<.*//' | wc -w)"
+expect_eq "setup.sh reads every address allocate_ingress_ips emits" \
+  "$setup_read_n" "$ingress_field_n"
+if grep -qE '^upsert_env_var JARVIS_TELEGRAM_BOT_IP ' "$SETUP_SCRIPT"; then
+  pass "setup.sh persists the derived Telegram bot address"
+else
+  printf 'FAIL: setup.sh does not upsert JARVIS_TELEGRAM_BOT_IP\n' >&2
   fail=1
 fi
 

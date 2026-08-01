@@ -74,7 +74,11 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
 
     Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:323
     """
-    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from jarvis_common.auth import (
+        get_current_user_id,
+        get_current_user_id_or_bot,
+        verify_api_key,
+    )
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.routers.papers_lifecycle import router as lifecycle_router
 
@@ -87,6 +91,7 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
+    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
 
     with (
         patch(
@@ -125,7 +130,11 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
     """
     import asyncpg
 
-    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from jarvis_common.auth import (
+        get_current_user_id,
+        get_current_user_id_or_bot,
+        verify_api_key,
+    )
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.routers.papers_lifecycle import router as lifecycle_router
 
@@ -138,6 +147,7 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
+    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
 
     with (
         patch(

@@ -2632,8 +2632,9 @@ JARVIS_NET_SUBNET_VALUE="${JARVIS_NET_SUBNET:-$(existing_env_value JARVIS_NET_SU
 _INGRESS_IPS="$(allocate_ingress_ips "$JARVIS_NET_SUBNET_VALUE")" \
   || die "JARVIS_NET_SUBNET must be a valid IPv4 /27 or larger network." \
       "Use a network such as 10.137.241.0/24 so ingress and application services have enough addresses."
-read -r JARVIS_NET_GATEWAY_IP_VALUE JARVIS_CADDY_IP_VALUE JARVIS_CADDY_LOCAL_IP_VALUE \
-  JARVIS_DASHBOARD_IP_VALUE JARVIS_CLOUDFLARED_IP_VALUE <<< "$_INGRESS_IPS"
+read -r JARVIS_NET_GATEWAY_IP_VALUE JARVIS_TELEGRAM_BOT_IP_VALUE JARVIS_CADDY_IP_VALUE \
+  JARVIS_CADDY_LOCAL_IP_VALUE JARVIS_DASHBOARD_IP_VALUE JARVIS_CLOUDFLARED_IP_VALUE \
+  <<< "$_INGRESS_IPS"
 # -----------------------------------------------------------------------------
 # 7. Write .env (tempfile + mv, macOS-safe)
 # -----------------------------------------------------------------------------
@@ -2842,6 +2843,7 @@ upsert_env_var JARVIS_IMAGE_TAG "$SELECTED_IMAGE_TAG"
 export JARVIS_IMAGE_TAG="$SELECTED_IMAGE_TAG"
 upsert_env_var JARVIS_NET_SUBNET "$JARVIS_NET_SUBNET_VALUE"
 upsert_env_var JARVIS_NET_GATEWAY_IP "$JARVIS_NET_GATEWAY_IP_VALUE"
+upsert_env_var JARVIS_TELEGRAM_BOT_IP "$JARVIS_TELEGRAM_BOT_IP_VALUE"
 upsert_env_var JARVIS_CADDY_IP "$JARVIS_CADDY_IP_VALUE"
 upsert_env_var JARVIS_CADDY_LOCAL_IP "$JARVIS_CADDY_LOCAL_IP_VALUE"
 upsert_env_var JARVIS_DASHBOARD_IP "$JARVIS_DASHBOARD_IP_VALUE"

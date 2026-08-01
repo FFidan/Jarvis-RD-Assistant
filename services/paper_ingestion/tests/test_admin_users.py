@@ -350,6 +350,92 @@ async def test_send_sign_in_link_hides_link_when_deliverable(monkeypatch) -> Non
     assert result.sent_link is None
 
 
+def _send_link_stubs(monkeypatch, owner: OwnerIdentity):
+    """Wire send_sign_in_link for an owner-targeting case.
+
+    Returns ``(conn, audit)`` so a case can assert on the token INSERT and the
+    audit row as well as on the response.
+    """
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
+    conn.execute = AsyncMock()
+    monkeypatch.setattr(admin_router, "resolve_owner_identity", AsyncMock(return_value=owner))
+    monkeypatch.setattr(
+        admin_router, "send_magic_link", AsyncMock(return_value=MagicLinkDelivery.DELIVERED)
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(admin_router, "log_audit", audit)
+    return conn, audit
+
+
+@pytest.mark.asyncio
+async def test_send_link_for_the_owner_refused_for_another_admin(monkeypatch) -> None:
+    """A non-owner admin cannot obtain the owner's sign-in link.
+
+    The refusal must land before the token is minted: a 409 that still wrote a
+    magic_link_tokens row would let any admin mint owner login tokens at will,
+    and one that still wrote an audit row would record links nobody sent.
+    """
+    conn, audit = _send_link_stubs(
+        monkeypatch, OwnerIdentity(source="database", state="valid", user_id=5)
+    )
+    request = _build_request(_build_mock_pool(conn), user_id=1, user_role="admin")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.send_sign_in_link(5, request)
+
+    assert exc.value.status_code == 409
+    assert "owner" in exc.value.detail.lower()
+    conn.execute.assert_not_called()
+    audit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_link_for_the_owner_allowed_for_the_owner(monkeypatch) -> None:
+    conn, _audit = _send_link_stubs(
+        monkeypatch, OwnerIdentity(source="database", state="valid", user_id=5)
+    )
+    request = _build_request(_build_mock_pool(conn), user_id=5, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result.sent is True
+    conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_link_for_a_non_owner_target_is_unaffected(monkeypatch) -> None:
+    conn, _audit = _send_link_stubs(
+        monkeypatch, OwnerIdentity(source="database", state="valid", user_id=7)
+    )
+    request = _build_request(_build_mock_pool(conn), user_id=1, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result.sent is True
+    conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_link_not_refused_when_the_owner_config_is_stale(monkeypatch) -> None:
+    """A configured-but-unresolvable owner must fail OPEN.
+
+    ``user_id`` is populated even for an invalid owner target, so gating on it
+    directly would 409 the very recovery an admin needs when the owner setting
+    points at a non-admin or deleted user.
+    """
+    conn, _audit = _send_link_stubs(
+        monkeypatch, OwnerIdentity(source="database", state="non_admin_user", user_id=5)
+    )
+    request = _build_request(_build_mock_pool(conn), user_id=1, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result.sent is True
+    conn.execute.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_non_admin_cannot_send_link() -> None:
     conn = AsyncMock()

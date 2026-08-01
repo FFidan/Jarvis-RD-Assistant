@@ -39,6 +39,13 @@ class PITestAppOptions:
     """Explicit seams for a temporary Paper Ingestion test application."""
 
     remove_owner_override: bool
+    """Drop the autouse identity stubs so the app resolves identity for real.
+
+    Removes every seam that would otherwise hand routes a fixed user: both the
+    owner-override resolver and ``get_current_user_id``, which routes reach
+    through their own sub-dependant.
+    """
+
     override_db_dependency: bool = False
     disable_limiter: bool = False
     mock_http_client: bool = False
@@ -158,7 +165,7 @@ def patch_pi_test_app(
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common import current_user_id_strict_with_owner_override, get_current_user_id
 
     state = {"db_pool": pool, **dict(options.state_overrides)}
     if options.mock_http_client:
@@ -170,7 +177,9 @@ def patch_pi_test_app(
     if options.override_db_dependency:
         overrides[get_db_pool] = lambda: pool
     removals = (
-        {current_user_id_strict_with_owner_override} if options.remove_owner_override else set()
+        {current_user_id_strict_with_owner_override, get_current_user_id}
+        if options.remove_owner_override
+        else set()
     )
 
     limiter_was_enabled = limiter.enabled

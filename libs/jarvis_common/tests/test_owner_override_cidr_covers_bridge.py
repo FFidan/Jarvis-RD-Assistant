@@ -1,13 +1,14 @@
 """Config-integrity guard: the compose OWNER_OVERRIDE_ALLOWED_CIDRS default must
-cover the jarvis bridge subnet, or the Telegram bot's per-user (X-Owner-User-Id)
-service calls 403 on a default deploy.
+cover the Telegram bot's pinned address and NOTHING else on the jarvis bridge.
 
-Regression guard: the bare code default is now
-deny-by-default loopback-only (127.0.0.0/8), which does NOT cover the jarvis
-bridge (JARVIS_NET_SUBNET, default 10.137.241.0/24), so docker-compose.yml must
-set OWNER_OVERRIDE_ALLOWED_CIDRS to track JARVIS_NET_SUBNET. This test fails if
-that wiring is removed or stops tracking the subnet — a failure mode no
-integration test catches (they all monkeypatch the IP allowlist guard to True).
+The X-Owner-User-Id override lets its caller act as any user, so the only
+container entitled to send it is the bot. The bot has a pinned ipv4_address
+(JARVIS_TELEGRAM_BOT_IP, derived by setup from JARVIS_NET_SUBNET), and
+docker-compose.yml must set OWNER_OVERRIDE_ALLOWED_CIDRS to that address as a
+/32. This test fails if the wiring is removed, stops tracking the bot pin, or
+widens back to the whole bridge subnet — where any sibling container could
+impersonate any user. It is a failure mode no integration test catches (they
+all monkeypatch the IP allowlist guard to True).
 """
 
 from __future__ import annotations
@@ -29,10 +30,16 @@ def _net_subnet_default(text: str) -> str:
     return m.group(1)
 
 
-def _assert_compose_var_tracks_bridge_subnet(text: str, subnet: str, var_name: str) -> None:
+def _telegram_bot_ip_default(text: str) -> str:
+    m = re.search(r"JARVIS_TELEGRAM_BOT_IP:-([\d.]+)", text)
+    assert m, "JARVIS_TELEGRAM_BOT_IP default not found in docker-compose.yml"
+    return m.group(1)
+
+
+def _assert_compose_var_tracks_bot_pin(text: str, subnet: str, bot_ip: str, var_name: str) -> None:
     """Assert the compose default for `var_name` (a `${VAR:-a,b,c}` CIDR list)
-    references JARVIS_NET_SUBNET and, once resolved, actually covers the
-    jarvis bridge subnet — belt-and-suspenders against a malformed reference."""
+    references JARVIS_TELEGRAM_BOT_IP and, once resolved, covers the bot's
+    pinned address while leaving the rest of the jarvis bridge untrusted."""
     for line in text.splitlines():
         if f"{var_name}:" in line and "${" in line:
             var_line = line
@@ -40,49 +47,64 @@ def _assert_compose_var_tracks_bridge_subnet(text: str, subnet: str, var_name: s
     else:
         raise AssertionError(
             f"docker-compose.yml shared-env must set {var_name} "
-            "(absent → the bare code default applies, which does not cover the bridge)"
+            "(absent → the bare code default applies, which does not cover the bot)"
         )
 
-    # It must reference JARVIS_NET_SUBNET so the allowlist FOLLOWS the bridge
-    # subnet (including operator overrides of JARVIS_NET_SUBNET).
-    assert "JARVIS_NET_SUBNET" in var_line, (
-        f"{var_name} must track ${{JARVIS_NET_SUBNET}} so the bridge hop is "
+    # It must reference JARVIS_TELEGRAM_BOT_IP so the allowlist FOLLOWS the
+    # bot's pin (including operator overrides of JARVIS_NET_SUBNET, from which
+    # setup derives that pin).
+    assert "JARVIS_TELEGRAM_BOT_IP" in var_line, (
+        f"{var_name} must track ${{JARVIS_TELEGRAM_BOT_IP}} so the bot hop is "
         f"trusted regardless of the bridge subnet; got: {var_line.strip()}"
     )
 
-    # Belt-and-suspenders: resolve the default allowlist and prove the default
-    # bridge subnet is actually covered (catches a malformed reference).
-    resolved = var_line.replace("${JARVIS_NET_SUBNET:-" + subnet + "}", subnet)
+    # Resolve the nested ${JARVIS_TELEGRAM_BOT_IP:-...} default before the
+    # regex below, which stops at the first closing brace.
+    resolved = var_line.replace("${JARVIS_TELEGRAM_BOT_IP:-" + bot_ip + "}", bot_ip)
     m = re.search(rf"{var_name}:-([^}}]+)\}}", resolved)
     assert m, f"could not resolve the {var_name} default from: {var_line.strip()}"
     entries = [e.strip() for e in m.group(1).split(",") if e.strip()]
     allowlist = [ipaddress.IPv4Network(e) for e in entries]
 
+    bot = ipaddress.IPv4Address(bot_ip)
+    assert any(bot in net for net in allowlist), (
+        f"the Telegram bot's pinned address {bot_ip} is not covered by {var_name} "
+        f"{[str(n) for n in allowlist]} — its per-user calls would 403"
+    )
+
     bridge = ipaddress.IPv4Network(subnet)
-    assert any(bridge.subnet_of(net) for net in allowlist), (
-        f"jarvis bridge subnet {subnet} is not covered by {var_name} "
-        f"{[str(n) for n in allowlist]} — the bridge hop would not be trusted"
+    assert not any(bridge.subnet_of(net) for net in allowlist), (
+        f"jarvis bridge subnet {subnet} is covered by {var_name} "
+        f"{[str(n) for n in allowlist]} — any sibling container could act as any user"
     )
 
 
-def test_compose_owner_override_tracks_the_bridge_subnet() -> None:
+def test_compose_owner_override_tracks_the_bot_pin() -> None:
     text = _COMPOSE.read_text()
-    subnet = _net_subnet_default(text)
-    _assert_compose_var_tracks_bridge_subnet(text, subnet, "OWNER_OVERRIDE_ALLOWED_CIDRS")
+    _assert_compose_var_tracks_bot_pin(
+        text,
+        _net_subnet_default(text),
+        _telegram_bot_ip_default(text),
+        "OWNER_OVERRIDE_ALLOWED_CIDRS",
+    )
 
 
-def test_compose_resolved_allowlist_covers_a_bridge_ip(
+def test_compose_resolved_allowlist_trusts_only_the_bot_pin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With the compose-injected env (loopback + bridge), an IP inside the
-    bridge subnet is allowed — owner-override still works on a compose deploy."""
-    monkeypatch.setenv("OWNER_OVERRIDE_ALLOWED_CIDRS", "127.0.0.0/8,10.137.241.0/24")
+    """With the compose-injected env (loopback + the bot's /32), the bot's
+    pinned address is allowed and an ordinary bridge peer is not."""
+    monkeypatch.setenv("OWNER_OVERRIDE_ALLOWED_CIDRS", "127.0.0.0/8,10.137.241.250/32")
     monkeypatch.setattr(auth, "_CACHED_ALLOWED_NETWORKS", None)
     auth.refresh_allowed_networks_cache()
 
-    assert auth._ip_in_allowlist("10.137.241.5"), (
-        "a containerized bot on the jarvis bridge must be trusted when compose "
-        "injects the bridge subnet into OWNER_OVERRIDE_ALLOWED_CIDRS"
+    assert auth._ip_in_allowlist("10.137.241.250"), (
+        "the containerized bot must be trusted when compose injects its pinned "
+        "address into OWNER_OVERRIDE_ALLOWED_CIDRS"
+    )
+    assert not auth._ip_in_allowlist("10.137.241.5"), (
+        "another container on the jarvis bridge must NOT be able to send "
+        "X-Owner-User-Id — that is impersonation of any user"
     )
     assert auth._ip_in_allowlist("127.0.0.1")
 
@@ -143,9 +165,9 @@ def test_startup_warning_fires_for_loopback_only_default(
 def test_compose_trusted_proxy_hosts_pins_only_the_dashboard() -> None:
     """Proxy-header trust is the exact dashboard hop, not every bridge peer.
 
-    OWNER_OVERRIDE_ALLOWED_CIDRS still covers the bridge for direct bot calls;
-    TRUSTED_PROXY_HOSTS has a narrower purpose and must not let a sibling
-    container rewrite the client IP seen by the owner-override guard.
+    OWNER_OVERRIDE_ALLOWED_CIDRS pins the bot's own address for direct bot
+    calls; TRUSTED_PROXY_HOSTS has a different purpose and must not let a
+    sibling container rewrite the client IP seen by the owner-override guard.
     """
     text = _COMPOSE.read_text()
     line = next(

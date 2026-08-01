@@ -368,28 +368,25 @@ async def test_t9_check_matches_private_paper_in_library(
 
 
 async def test_t9_check_uses_owner_override_resolver(_pi_app_with_pool):
-    """Widen: check_tracked_authors resolves identity via the owner-override
-    resolver so the bot can call it with X-Owner-User-Id.
+    """check_tracked_authors resolves identity via the bot resolver so the bot
+    can call it with X-Owner-User-Id.
 
     Dependency-identity assert against the route's declared dependency.
     """
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.auth import get_current_user_id_or_bot
 
-    # Find the /api/authors/check route and confirm its handler closes over the
-    # owner-override resolver (called imperatively inside the body).
+    # Find the /api/authors/check route and confirm its handler declares the
+    # override-honouring resolver.
     import inspect
 
     from paper_ingestion.routers import authors as authors_mod
 
     src = inspect.getsource(authors_mod.check_tracked_authors)
-    assert "current_user_id_strict_with_owner_override" in src, (
-        "check_tracked_authors must resolve identity via current_user_id_strict_with_owner_override"
+    assert "get_current_user_id_or_bot" in src, (
+        "check_tracked_authors must resolve identity via get_current_user_id_or_bot"
     )
     # The symbol is imported into the router module namespace.
-    assert (
-        authors_mod.current_user_id_strict_with_owner_override
-        is current_user_id_strict_with_owner_override
-    )
+    assert authors_mod.get_current_user_id_or_bot is get_current_user_id_or_bot
 
 
 async def test_t9_check_enriches_matches_with_card_keys(

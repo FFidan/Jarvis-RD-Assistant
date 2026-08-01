@@ -59,10 +59,11 @@ x-shared-env: &shared-env
   PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
   # Source CIDRs allowed to use the X-Owner-User-Id override (the Telegram bot's
-  # per-user service calls). MUST include the jarvis bridge subnet so the bot is
-  # trusted; defaults track JARVIS_NET_SUBNET. If you override JARVIS_NET_SUBNET,
-  # this follows it. Loopback covers same-host calls.
-  OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
+  # per-user service calls). Trusts the bot's own pinned address only, NOT the
+  # whole jarvis bridge — any other container on the bridge would otherwise be
+  # able to act as any user. Defaults track JARVIS_TELEGRAM_BOT_IP, which setup
+  # derives from JARVIS_NET_SUBNET. Loopback covers same-host calls.
+  OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_TELEGRAM_BOT_IP:-10.137.241.250}/32}
   # Source CIDRs trusted as reverse-proxy hops when extracting the real client IP
   # from X-Forwarded-For (rate-limit keying). Trusts loopback plus only the
   # dashboard's pinned address. Empty in code falls back to loopback-only.
@@ -511,7 +512,8 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - jarvis
+      jarvis:
+        ipv4_address: ${JARVIS_TELEGRAM_BOT_IP:-10.137.241.250}
 
   dashboard:
     image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.2}}

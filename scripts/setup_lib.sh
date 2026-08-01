@@ -1913,10 +1913,12 @@ selected_https_is_verified() {
   [ "$1" = "none" ] || [ "$2" = "verified" ]
 }
 
-# allocate_ingress_ips SUBNET -> gateway, Caddy, local Caddy, dashboard, and
-# cloudflared addresses as one space-separated row. Docker keeps its usual low
-# dynamic addresses; trusted ingress peers use the highest four usable addresses
-# so existing networks can adopt the pins without an IPAM/network migration.
+# allocate_ingress_ips SUBNET -> gateway, Telegram bot, Caddy, local Caddy,
+# dashboard, and cloudflared addresses as one space-separated row. Docker keeps
+# its usual low dynamic addresses; pinned peers use the highest five usable
+# addresses so existing networks can adopt the pins without an IPAM/network
+# migration. The row is ordered lowest-to-highest after the gateway, so the
+# four addresses pinned before the bot keep the values they were assigned.
 allocate_ingress_ips() {
   python3 - "$1" <<'PY'
 import ipaddress
@@ -1929,7 +1931,7 @@ except ValueError:
 if network.version != 4 or network.prefixlen > 27:
     raise SystemExit(1)
 gateway = network.network_address + 1
-edges = [network.broadcast_address - offset for offset in range(4, 0, -1)]
+edges = [network.broadcast_address - offset for offset in range(5, 0, -1)]
 print(" ".join(str(address) for address in [gateway, *edges]))
 PY
 }
@@ -2176,17 +2178,18 @@ upsert_app_identity() {
 # after the durable .env has been corrected.
 sync_ingress_ips_from_env() {
   [ -f .env ] || return 0
-  local subnet resolved gateway caddy caddy_local dashboard cloudflared
+  local subnet resolved gateway bot caddy caddy_local dashboard cloudflared
   subnet="${JARVIS_NET_SUBNET:-}"
   if [ -z "$subnet" ]; then
     subnet="$(sed -n 's/^JARVIS_NET_SUBNET=//p' .env | head -n 1)"
   fi
   subnet="${subnet:-10.137.241.0/24}"
   resolved="$(allocate_ingress_ips "$subnet")" || return 1
-  read -r gateway caddy caddy_local dashboard cloudflared <<< "$resolved"
+  read -r gateway bot caddy caddy_local dashboard cloudflared <<< "$resolved"
 
   upsert_env_var JARVIS_NET_SUBNET "$subnet" || return 1
   upsert_env_var JARVIS_NET_GATEWAY_IP "$gateway" || return 1
+  upsert_env_var JARVIS_TELEGRAM_BOT_IP "$bot" || return 1
   upsert_env_var JARVIS_CADDY_IP "$caddy" || return 1
   upsert_env_var JARVIS_CADDY_LOCAL_IP "$caddy_local" || return 1
   upsert_env_var JARVIS_DASHBOARD_IP "$dashboard" || return 1
@@ -2194,6 +2197,7 @@ sync_ingress_ips_from_env() {
 
   export JARVIS_NET_SUBNET="$subnet"
   export JARVIS_NET_GATEWAY_IP="$gateway"
+  export JARVIS_TELEGRAM_BOT_IP="$bot"
   export JARVIS_CADDY_IP="$caddy"
   export JARVIS_CADDY_LOCAL_IP="$caddy_local"
   export JARVIS_DASHBOARD_IP="$dashboard"

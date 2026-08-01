@@ -760,7 +760,10 @@ async def _promotion_app(contract_conn):
     """Paper-ingestion app on the contract connection, with session-cookie auth active."""
     from unittest.mock import MagicMock
 
-    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common import (
+        current_user_id_strict_with_owner_override,
+        get_current_user_id,
+    )
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
     from paper_ingestion.main import app
@@ -775,7 +778,11 @@ async def _promotion_app(contract_conn):
             },
         ),
         patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+            app,
+            remove_overrides={
+                current_user_id_strict_with_owner_override,
+                get_current_user_id,
+            },
         ),
     ):
         yield app

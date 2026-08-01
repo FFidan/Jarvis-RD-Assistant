@@ -222,6 +222,13 @@ class TestMissingResolver:
                 "async def acknowledge_restore(request: Request):\n"
                 "    return None\n",
             ),
+            (
+                _REL,
+                "@router.put('/{paper_id}/save')\n"
+                "async def save(request: Request, "
+                "user_id: int = Depends(get_current_user_id_or_bot)):\n"
+                "    return {}\n",
+            ),
             (_REL, "async def helper(conn):\n    return 1\n"),
         ],
         ids=(
@@ -230,9 +237,27 @@ class TestMissingResolver:
             "route-dependency",
             "router-dependency",
             "allowlisted-route",
+            "bot-dependency",
             "non-route-function",
         ),
     )
     def test_resolved_or_exempt_handler_not_flagged(self, rel: str, src: str) -> None:
         """Handlers with a resolver or an explicit exemption are accepted."""
         assert _missing_resolver(_parse(src), rel) == []
+
+    def test_unknown_resolver_name_still_flagged(self) -> None:
+        """Only the named safe resolvers count — a look-alike does not.
+
+        Guards the gate against being widened by accident: accepting any
+        ``Depends(...)`` that resembles a resolver would green-light a route
+        that establishes no identity at all.
+        """
+        src = (
+            "@router.put('/{paper_id}/save')\n"
+            "async def save(request: Request, "
+            "user_id: int = Depends(get_current_user_id_or_anyone)):\n"
+            "    return {}\n"
+        )
+        hits = _missing_resolver(_parse(src), _REL)
+        assert len(hits) == 1
+        assert "PUT /{paper_id}/save" in hits[0][1]
