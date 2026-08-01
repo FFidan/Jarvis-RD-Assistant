@@ -32,8 +32,11 @@ on:
 permissions:
   contents: read
 
+# Keyed on the dispatch identity, not the ref alone: the per-source upgrade
+# checks are dispatched back to back and must not cancel each other. An
+# identical re-dispatch still supersedes the run it repeats.
 concurrency:
-  group: lifecycle-smoke-${{ github.ref }}
+  group: lifecycle-smoke-${{ github.ref }}-${{ inputs.leg }}-${{ inputs.update_from }}-${{ inputs.update_to }}-${{ inputs.update_mode }}
   cancel-in-progress: true
 
 jobs:

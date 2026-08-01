@@ -161,6 +161,35 @@ project_resource_ids() {
   esac
 }
 
+# capture_project_diagnostics [PROJECT...] — on failure, dump container state and
+# logs by compose-project label (never through `compose -p`: its service set
+# depends on the compose file in the CWD and on active profiles, and both are
+# wrong for the update leg's clone and for profile-gated services).
+# With arguments: exactly those projects. Without: every project still registered.
+capture_project_diagnostics() {
+  local project ids cid
+  local -a targets=()
+  if [ "$#" -gt 0 ]; then
+    targets=("$@")
+  else
+    targets=(${CREATED_PROJECTS[@]+"${CREATED_PROJECTS[@]}"})
+  fi
+  for project in ${targets[@]+"${targets[@]}"}; do
+    printf '=== diagnostics: project %s ===\n' "$project"
+    "$REAL_DOCKER" compose -p "$project" ps -a 2>&1 || true
+    if ! ids="$(project_resource_ids "$project" containers)"; then
+      printf 'diagnostics: could not list containers for %s\n' "$project"
+      continue
+    fi
+    for cid in $ids; do
+      printf -- '--- container %s ---\n' "$cid"
+      "$REAL_DOCKER" inspect --format \
+        '{{ .Name }} state={{ .State.Status }} exit={{ .State.ExitCode }}' "$cid" 2>&1 || true
+      "$REAL_DOCKER" logs --tail 300 "$cid" 2>&1 || true
+    done
+  done
+}
+
 project_resource_label() {
   local kind="$1" resource="$2"
   case "$kind" in
@@ -274,6 +303,13 @@ teardown() {
   local rc=$? project dir
   printf '\n'
   _tls_cleanup
+  # Last-resort snapshot only. A project reaches here just when its own
+  # cleanup_project failed, which is after `down -v` and `rm -f` already ran, so
+  # this rarely has logs left; its value is the leftover-resource view on an
+  # exit path the driver loop does not cover.
+  if [ "$rc" -ne 0 ] || [ "${#FAILED_LEGS[@]}" -ne 0 ]; then
+    capture_project_diagnostics
+  fi
   for project in ${CREATED_PROJECTS[@]+"${CREATED_PROJECTS[@]}"}; do
     cleanup_project "$project" || rc=1
   done
@@ -740,6 +776,11 @@ for leg in "${LEGS[@]}"; do
   leg_rc=0
   cleanup_rc=0
   "run_leg_${leg}" || leg_rc=$?
+  # The only point where a failed leg's containers still exist: the cleanup
+  # below destroys them before any later step or workflow could read them.
+  if [ "$leg_rc" -ne 0 ] && [ -n "$PROJECT" ]; then
+    capture_project_diagnostics "$PROJECT"
+  fi
   if [ -n "$PROJECT" ]; then
     cleanup_project "$PROJECT" || cleanup_rc=$?
     PROJECT=""
