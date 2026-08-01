@@ -25,7 +25,6 @@ They are never written to the YAML or any other file.
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +48,11 @@ from paper_ingestion.services.llm_provider_registry import (
     provider_for_prefix,
     provider_model_for_delivery,
     validate_custom_openai_base_url_for_outbound,
+)
+from paper_ingestion.services.model_identifiers import (
+    NAMESPACED_PROVIDER_KINDS,
+    validate_model_name,
+    validate_namespaced_model_suffix,
 )
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
@@ -187,46 +191,6 @@ async def get_provider_base_url(provider: str, db_pool: Any) -> str | None:
         return definition.default_base_url
     value = resolve_secret_row(row)
     return value or definition.default_base_url
-
-
-def _validate_model_name(ollama_model_name: str) -> None:
-    """Reject model names that contain path traversal or shell metacharacters.
-
-    The model name is sent to LiteLLM's admin API; a value like
-    ``../../etc/passwd`` or ``; rm -rf /`` must never reach a config surface.
-    Permit only ``[a-zA-Z0-9._:-]`` characters (covers all real Ollama IDs).
-    """
-    if not re.fullmatch(r"[a-zA-Z0-9._:\-]+", ollama_model_name):
-        raise ValueError(
-            f"Model name {ollama_model_name!r} contains disallowed characters. "
-            "Only alphanumerics and . _ : - are permitted."
-        )
-
-
-# Provider kinds whose model ids may carry a vendor namespace: routers serve
-# ``vendor/model`` and self-hosted endpoints serve the HF repo id ``org/model``
-# (or a bare name the endpoint chose). Every other kind keeps the strict
-# single-segment rule.
-_NAMESPACED_PROVIDER_KINDS = frozenset({"router", "self_hosted"})
-
-
-def _validate_namespaced_model_suffix(model_suffix: str) -> None:
-    """Validate a suffix carrying at most one vendor namespace: ``model`` or ``vendor/model``.
-
-    Both segments are held to the strict single-segment character rule, so the
-    only thing this permits beyond :func:`_validate_model_name` is ONE separator.
-    ``.`` is inside the character class, so a literal ``..`` segment would pass
-    the pattern alone; dot-only segments are rejected explicitly so no traversal
-    sequence survives the widening.
-    """
-    segments = model_suffix.split("/")
-    if len(segments) > 2 or any(
-        not re.fullmatch(r"[a-zA-Z0-9._:\-]+", seg) or seg.strip(".") == "" for seg in segments
-    ):
-        raise ValueError(
-            f"Model name {model_suffix!r} is not a valid namespaced model id. "
-            "These providers use at most one vendor prefix, like vendor/model-name."
-        )
 
 
 async def _get_thinking_disabled(
@@ -456,12 +420,12 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
         prefix, model_suffix = model_name.split("/", 1)
         provider = provider_for_prefix(prefix)
         cloud_provider = provider.id if provider is not None else None
-        if provider is not None and provider.kind in _NAMESPACED_PROVIDER_KINDS:
-            _validate_namespaced_model_suffix(model_suffix)
+        if provider is not None and provider.kind in NAMESPACED_PROVIDER_KINDS:
+            validate_namespaced_model_suffix(model_suffix)
         else:
-            _validate_model_name(model_suffix)
+            validate_model_name(model_suffix)
     else:
-        _validate_model_name(model_name)
+        validate_model_name(model_name)
     return _ModelTarget(new_name=model_name, suffix=model_suffix, cloud_provider=cloud_provider)
 
 
@@ -882,14 +846,14 @@ def _smart_fallback_normalize(fast_model: str) -> tuple[str, str | None]:
     if fast_model.endswith(":latest"):
         fast_model = fast_model[:-7]
     if "/" not in fast_model:
-        _validate_model_name(fast_model)
+        validate_model_name(fast_model)
         return fast_model, None
     prefix, suffix = fast_model.split("/", 1)
     provider = provider_for_prefix(prefix)
-    if provider is not None and provider.kind in _NAMESPACED_PROVIDER_KINDS:
-        _validate_namespaced_model_suffix(suffix)
+    if provider is not None and provider.kind in NAMESPACED_PROVIDER_KINDS:
+        validate_namespaced_model_suffix(suffix)
     else:
-        _validate_model_name(suffix)
+        validate_model_name(suffix)
     return fast_model, provider.id if provider is not None else None
 
 
