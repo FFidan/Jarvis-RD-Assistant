@@ -594,3 +594,87 @@ async def test_google_probe_uses_header_not_url_param(_app):
     assert req.headers.get("x-goog-api-key") == plaintext_key, (
         "Expected x-goog-api-key header with the API key"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live provider model lists on the /api/system/models response
+# ---------------------------------------------------------------------------
+
+
+def test_provider_lists_survives_the_models_response_model() -> None:
+    """Pydantic drops undeclared top-level keys silently — assert through the model."""
+    from paper_ingestion.routers.system import SystemModelsWithDeliveryResponse
+
+    result = {
+        "status": "ok",
+        "installed": [],
+        "hardware": {},
+        "current": {},
+        "issues": {},
+        "catalog": [],
+        "recommendations": {},
+        "provider_lists": {
+            "openrouter": {
+                "model_count": 2,
+                "fetched_at": "2026-08-01T00:00:00+00:00",
+                "error": None,
+                "truncated": False,
+                "excluded": {"non_chat": 1, "unknown": 0, "invalid": 0},
+            }
+        },
+    }
+
+    validated = SystemModelsWithDeliveryResponse.model_validate(result)
+
+    assert validated.provider_lists
+    assert validated.provider_lists["openrouter"]["model_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_key_presence_covers_every_registered_provider() -> None:
+    """Presence is read for all nine providers, not the three that once shipped."""
+    from paper_ingestion.routers.system import _cloud_key_presence
+    from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
+    from tests.test_provider_models import FakeConfigPool
+
+    presence = await _cloud_key_presence(FakeConfigPool({"llm.providers.deepseek.api_key": "key"}))
+
+    assert {provider.id for provider in PROVIDER_REGISTRY} == set(presence)
+    assert presence["deepseek"] is True
+    assert presence["anthropic"] is False
+
+
+@pytest.mark.asyncio
+async def test_models_response_offers_a_keyless_custom_endpoint_live_models() -> None:
+    """A provider reachable by base URL alone is fetched, merged, and recommended."""
+    from types import SimpleNamespace
+
+    from paper_ingestion.routers.system import _get_system_models_data
+    from paper_ingestion.services.provider_models import reset_provider_model_cache
+    from tests.test_provider_models import FakeConfigPool, mock_http_client
+
+    reset_provider_model_cache()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "org/model-y"}]})
+        return httpx.Response(404, json={})
+
+    async with mock_http_client(handler) as client:
+        pool = FakeConfigPool(
+            {"llm.providers.custom_openai_compatible.base_url": "http://localhost:8000/v1"}
+        )
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(http_client=client, db_pool=pool))
+        )
+        body = await _get_system_models_data(request)  # type: ignore[arg-type]
+
+    summary = body.provider_lists["custom_openai_compatible"]
+    assert summary["model_count"] == 1
+    assert summary["error"] is None
+
+    entry = next(item for item in body.catalog if item["id"] == "custom_openai/org/model-y")
+    assert entry["can_assign"] is True
+    assert entry["source"] == "provider"
+    assert entry["fetched_at"] == summary["fetched_at"]
+    assert any(item["id"] == "custom_openai/org/model-y" for item in body.recommendations["smart"])

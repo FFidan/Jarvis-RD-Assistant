@@ -909,11 +909,20 @@ def _warn_smart_fallback_pinned(fast_model: str, reason: str) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _CloudTarget:
+    """A cloud provider the fallback can actually reach, with its credentials."""
+
+    provider: str
+    api_key: str | None
+    api_base: str | None
+
+
 async def _smart_fallback_resolve_cloud_credentials(
     fast_model: str,
     cloud_provider: str | None,
     db_pool: Any,
-) -> tuple[str, str | None, str | None, str | None]:
+) -> tuple[str, _CloudTarget | None]:
     """Resolve delivery credentials for a cloud fast model, else pin the static default.
 
     A provider reachable through a stored endpoint URL delivers without a key --
@@ -925,7 +934,7 @@ async def _smart_fallback_resolve_cloud_credentials(
     empty for as long as the misconfiguration lasts.
     """
     if cloud_provider is None:
-        return fast_model, None, None, None
+        return fast_model, None
     api_key: str | None = None
     api_base: str | None = None
     if db_pool is not None:
@@ -935,20 +944,18 @@ async def _smart_fallback_resolve_cloud_credentials(
             _warn_smart_fallback_pinned(
                 fast_model, f"the {cloud_provider!r} endpoint is blocked by network policy"
             )
-            return _STATIC_FALLBACK_MODEL, None, None, None
+            return _STATIC_FALLBACK_MODEL, None
     if api_key is not None or api_base is not None:
-        return fast_model, cloud_provider, api_key, api_base
+        return fast_model, _CloudTarget(cloud_provider, api_key, api_base)
     _warn_smart_fallback_pinned(
         fast_model, f"no {cloud_provider!r} API key or endpoint URL is configured"
     )
-    return _STATIC_FALLBACK_MODEL, None, None, None
+    return _STATIC_FALLBACK_MODEL, None
 
 
 async def _smart_fallback_deliver_cloud(
     new_model: str,
-    cloud_provider: str,
-    api_key: str | None,
-    api_base: str | None,
+    target: _CloudTarget,
     db_entries: list[LiteLLMDeployment],
     yaml_entries: list[LiteLLMDeployment],
 ) -> bool:
@@ -958,7 +965,8 @@ async def _smart_fallback_deliver_cloud(
     delivery prefix and a configured ``api_base`` is carried, so the fallback
     reaches the same endpoint the primary alias does.
     """
-    delivery_model = _delivery_model_for(provider_for_id(cloud_provider), new_model)
+    api_key, api_base = target.api_key, target.api_base
+    delivery_model = _delivery_model_for(provider_for_id(target.provider), new_model)
     # Process-local fingerprint in the no-op check: a rotated key re-delivers
     # within one reconciler pass instead of riding the stale key forever.
     desired_cloud = (delivery_model, None, _key_fingerprint(api_key), api_base)
@@ -1037,7 +1045,7 @@ async def ensure_smart_fallback(
     failure.
     """
     fast_model, cloud_provider = _smart_fallback_normalize(fast_model)
-    fast_model, cloud_provider, api_key, api_base = await _smart_fallback_resolve_cloud_credentials(
+    fast_model, cloud_target = await _smart_fallback_resolve_cloud_credentials(
         fast_model, cloud_provider, db_pool
     )
     new_model = fast_model if "/" in fast_model else f"ollama_chat/{fast_model}"
@@ -1045,8 +1053,8 @@ async def ensure_smart_fallback(
     deployments = await get_litellm_deployments()
     db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")
 
-    if cloud_provider is not None:
+    if cloud_target is not None:
         return await _smart_fallback_deliver_cloud(
-            new_model, cloud_provider, api_key, api_base, db_entries, yaml_entries
+            new_model, cloud_target, db_entries, yaml_entries
         )
     return await _smart_fallback_deliver_local(new_model, db_entries, yaml_entries)
