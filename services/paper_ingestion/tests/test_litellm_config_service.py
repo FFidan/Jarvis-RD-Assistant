@@ -95,6 +95,14 @@ async def test_update_rejects_invalid_model_name():
         await update_litellm_model("llm.smart_model", "bad;rm -rf /")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [".", "..", "..."])
+async def test_update_rejects_dot_only_model_name(name: str):
+    """Dot-only names are traversal building blocks and never reach the admin API."""
+    with pytest.raises(ValueError, match="only of dots"):
+        await update_litellm_model("llm.smart_model", name)
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_update_replaces_db_deployment(monkeypatch):

@@ -183,7 +183,7 @@ async def test_hostile_ids_are_dropped_and_counted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_oversized_body_is_refused_and_nothing_is_cached() -> None:
+async def test_oversized_body_is_refused_and_never_cached_as_entries() -> None:
     # Valid JSON, so only the byte cap can refuse it.
     oversized = json.dumps({"pad": "x" * (2 * 1024 * 1024), "data": [{"id": "kimi-k2"}]})
     handler = Recorder(content=oversized.encode())
@@ -192,7 +192,10 @@ async def test_oversized_body_is_refused_and_nothing_is_cached() -> None:
 
     assert listing.entries == ()
     assert listing.error is not None and "size limit" in listing.error
-    assert provider_models._cache == {}
+    # The refusal itself is cached (failure TTL); the hostile payload never is.
+    cached = provider_models._cache["moonshot"][1]
+    assert cached.entries == ()
+    assert cached.error == listing.error
 
 
 @pytest.mark.asyncio
@@ -380,6 +383,28 @@ async def test_failure_serves_the_stale_list_with_its_original_timestamp(
 
     assert [entry.name for entry in stale.entries] == ["kimi-k2"]
     assert stale.fetched_at == first.fetched_at
+
+
+@pytest.mark.asyncio
+async def test_failure_is_cached_under_the_shorter_failure_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing provider is retried once per failure TTL, not on every page load."""
+    now = [1000.0]
+    monkeypatch.setattr(provider_models, "_cache_clock", lambda: now[0])
+    handler = Recorder(status=503)
+
+    async with mock_http_client(handler) as client:
+        pool = FakeConfigPool()
+        first = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+        cached = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+        assert len(handler.requests) == 1
+        assert cached.error == first.error
+
+        now[0] += provider_models._FAILURE_CACHE_TTL_SECONDS + 1
+        await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+
+    assert len(handler.requests) == 2
 
 
 @pytest.mark.asyncio

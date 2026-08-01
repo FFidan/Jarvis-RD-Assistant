@@ -17,9 +17,6 @@ from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.model_catalog import ModelCatalogEntry, Provider, Role
 
 from paper_ingestion.services.litellm_config import (
-    _NAMESPACED_PROVIDER_KINDS,
-    _validate_model_name,
-    _validate_namespaced_model_suffix,
     get_provider_api_key,
     get_provider_base_url,
 )
@@ -28,6 +25,11 @@ from paper_ingestion.services.llm_provider_registry import (
     provider_for_id,
     provider_for_prefix,
     validate_custom_openai_base_url_for_outbound,
+)
+from paper_ingestion.services.model_identifiers import (
+    NAMESPACED_PROVIDER_KINDS,
+    validate_model_name,
+    validate_namespaced_model_suffix,
 )
 from paper_ingestion.services.model_lifecycle import MODEL_CATALOG, normalize_model_tag
 from paper_ingestion.services.provider_test import _OPENAI_COMPATIBLE_MODEL_URLS
@@ -45,6 +47,11 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 300.0
+# Failures are cached too, under a much shorter TTL: an unreachable provider
+# would otherwise be retried on every models-page load, each retry costing up
+# to the fetch budget in page latency. Kept short so a provider whose operator
+# just fixed its key or endpoint looks broken for at most this long.
+_FAILURE_CACHE_TTL_SECONDS = 30.0
 _MAX_MODELS_PER_PROVIDER = 500
 _MAX_MODEL_ID_CHARS = 128
 # The first body-parsing path in this codebase: a hostile or misconfigured
@@ -159,6 +166,7 @@ class _ProviderListError(Exception):
     """Recoverable failure while reading one provider's model list."""
 
 
+# provider id -> (expiry deadline on the cache clock, listing)
 _cache: dict[str, tuple[float, ProviderModelList]] = {}
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -357,10 +365,10 @@ def _validation_error(provider: ProviderDefinition, model_id: str) -> str | None
     if len(model_id) > _MAX_MODEL_ID_CHARS:
         return "model id exceeds the maximum length"
     try:
-        if provider.kind in _NAMESPACED_PROVIDER_KINDS:
-            _validate_namespaced_model_suffix(model_id)
+        if provider.kind in NAMESPACED_PROVIDER_KINDS:
+            validate_namespaced_model_suffix(model_id)
         else:
-            _validate_model_name(model_id)
+            validate_model_name(model_id)
     except ValueError as exc:
         return str(exc)
     return None
@@ -482,8 +490,8 @@ def _fresh_cached(provider_id: str) -> ProviderModelList | None:
     cached = _cache.get(provider_id)
     if cached is None:
         return None
-    stored_at, listing = cached
-    return listing if _cache_clock() - stored_at < _CACHE_TTL_SECONDS else None
+    expires_at, listing = cached
+    return listing if _cache_clock() < expires_at else None
 
 
 def _fetch_failure_reason(exc: BaseException) -> str:
@@ -496,11 +504,20 @@ def _fetch_failure_reason(exc: BaseException) -> str:
 
 
 def _stale_or_error(provider_id: str, error: str) -> ProviderModelList:
-    """Serve the previous listing (with its original timestamp) or an error entry."""
+    """Serve the previous listing (with its original timestamp) or an error entry.
+
+    Either way the result is re-cached under the failure TTL, so a failing
+    provider is retried at most once per that window rather than on every
+    models-page load.
+    """
     stale = _cached(provider_id)
-    if stale is not None and stale.entries:
-        return stale
-    return ProviderModelList(provider=provider_id, error=error)
+    result = (
+        stale
+        if stale is not None and stale.entries
+        else ProviderModelList(provider=provider_id, error=error)
+    )
+    _cache[provider_id] = (_cache_clock() + _FAILURE_CACHE_TTL_SECONDS, result)
+    return result
 
 
 async def fetch_provider_models(
@@ -554,7 +571,7 @@ async def fetch_provider_models(
             truncated=truncated,
             excluded=excluded,
         )
-        _cache[provider_id] = (_cache_clock(), listing)
+        _cache[provider_id] = (_cache_clock() + _CACHE_TTL_SECONDS, listing)
         return listing
 
 

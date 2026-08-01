@@ -896,28 +896,6 @@ def recommendations_for_role(
     return entries
 
 
-async def model_assignment_error(
-    *,
-    model_id: str,
-    installed: list[dict[str, Any]],
-    cloud_api_keys: dict[str, bool],
-) -> str | None:
-    """Return a user-facing assignment error, or None if assignment is allowed."""
-    entry = catalog_entry_for_model(model_id)
-    if entry is None:
-        return f"Model {model_id!r} is not in the curated model catalog."
-    if not entry.assignable:
-        return entry.notes or "This model is tracked for evaluation but is not assignable yet."
-    if entry.provider == "ollama":
-        tag = normalize_model_tag(entry.ollama_tag or entry.id)
-        if tag not in _installed_by_name(installed):
-            return "Model not pulled. Pull it first."
-        return None
-    if not cloud_api_keys.get(entry.provider, False):
-        return f"Configure the {entry.provider} API key before assigning this model."
-    return None
-
-
 async def _stream_pull_progress(resp: httpx.Response, ctx: Any, last_message: str) -> str:
     """Forward Ollama pull progress events to the job stream; returns the latest status."""
     async for line in resp.aiter_lines():
