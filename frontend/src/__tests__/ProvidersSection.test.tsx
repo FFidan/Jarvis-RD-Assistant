@@ -282,7 +282,7 @@ describe('ProvidersSection', () => {
     vi.mocked(fetchSystemModels).mockResolvedValue({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+        anthropic: { fetched_at: null, error: 'provider request failed', truncated: false },
       },
     });
     const user = userEvent.setup();
@@ -296,6 +296,25 @@ describe('ProvidersSection', () => {
     expect(
       screen.getByText("No models available yet — JARVIS could not fetch this provider's model list"),
     ).toBeInTheDocument();
+  });
+
+  it('does not blame connectivity when the fetch succeeded but offered nothing usable', async () => {
+    // Every model a provider lists can be excluded or already bundled. Telling the
+    // operator to fix a working connection sends them after a problem they do not have.
+    vi.mocked(fetchSystemModels).mockResolvedValue({
+      catalog: [],
+      provider_lists: {
+        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+    renderSection();
+
+    expect(
+      await screen.findByText('No models available yet — this provider offered none JARVIS can use'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No models available yet — JARVIS could not fetch this provider's model list"),
+    ).not.toBeInTheDocument();
   });
 
   it('renders a tile and its availability line for a base-URL-only provider with no key', async () => {

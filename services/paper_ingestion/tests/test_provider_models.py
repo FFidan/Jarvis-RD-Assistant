@@ -206,6 +206,25 @@ async def test_overlong_model_id_is_dropped_and_counted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_one_oversized_page_is_reported_as_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Most providers return their whole list in one array with no pagination.
+
+    Deciding truncation from the absence of a next page calls such a list
+    complete while the cap silently drops its tail.
+    """
+    monkeypatch.setattr(provider_models, "_MAX_MODELS_PER_PROVIDER", 2)
+    handler = Recorder({"data": [{"id": "kimi-a"}, {"id": "kimi-b"}, {"id": "kimi-c"}]})
+
+    listing = await _fetch("moonshot", handler)
+
+    assert [entry.name for entry in listing.entries] == ["kimi-a", "kimi-b"]
+    assert listing.truncated is True
+    assert len(handler.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_pagination_is_followed_and_truncates_at_the_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

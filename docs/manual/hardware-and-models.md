@@ -139,11 +139,14 @@ What is deliberately left out or left unassignable:
 - **Self-hosted endpoints must not point into a private network.** The base URL has to be
   `http://localhost…` on the same host, or an HTTPS address that resolves to a public one. A
   literal private address such as `http://10.0.0.5…` or `http://192.168.1.20…` is refused the
-  moment you save it. A hostname is accepted when you save it and checked when it is used: if it
-  resolves to a private address, fetching the model list and routing a request both refuse it, so
-  the endpoint simply never works. Letting the server call into private networks on request is a
-  well-known way to reach systems that were never meant to be exposed, so the refusal is by design
-  and there is no override.
+  moment you save it. A hostname is accepted when you save it and resolved when it is used: if it
+  resolves to a private address, fetching the model list and setting the model up for use both
+  refuse it, so in practice the endpoint never becomes usable. Letting the server call into private
+  networks on request is a well-known way to reach systems that were never meant to be exposed, so
+  the refusal is by design and JARVIS offers no way to turn it off. Note the limit of any
+  name-based check: the address is resolved when it is checked and again when the connection is
+  made, so a name deliberately made to answer differently each time is not something this can
+  catch. Point the endpoint at an address you control.
 - **Only one vendor prefix.** OpenRouter and self-hosted endpoints publish ids like
   `vendor/model-name`. An id with more nesting than that is left out of the fetched list.
 - **Very long lists are capped.** If a provider offers more models than JARVIS lists at once, the

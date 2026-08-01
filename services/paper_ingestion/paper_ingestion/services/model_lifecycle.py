@@ -697,6 +697,24 @@ def provider_display_name(provider_id: str) -> str:
         return provider_id
 
 
+def provider_access_blocker(provider_id: str) -> str:
+    """Return the message telling an operator how to make *provider_id* reachable.
+
+    The picker and the assignment save path both refuse on the same condition, so
+    they say the same sentence: two wordings drift, and the operator who reads one
+    then hits the other has no way to tell which is authoritative. A provider that
+    can run on an endpoint URL alone is not necessarily waiting on a key.
+    """
+    try:
+        needs_url = provider_for_id(provider_id).base_url_config_key is not None
+    except ValueError:
+        needs_url = False
+    needed = "API key or endpoint URL" if needs_url else "API key"
+    return (
+        f"Configure the {provider_display_name(provider_id)} {needed} before assigning this model."
+    )
+
+
 def _assignability_for_entry(
     entry: ModelCatalogEntry,
     *,
@@ -718,13 +736,7 @@ def _assignability_for_entry(
             return False, "Model does not fit this machine."
         return False, "Pull this model first."
     can_assign = provider_key_present or active
-    assign_blocker = (
-        None
-        if can_assign
-        else f"Configure the {provider_display_name(entry.provider)} API key "
-        "before assigning this model."
-    )
-    return can_assign, assign_blocker
+    return can_assign, None if can_assign else provider_access_blocker(entry.provider)
 
 
 def _effective_num_ctx_for_entry(entry: ModelCatalogEntry, ctx_per_role: dict[str, int]) -> int:

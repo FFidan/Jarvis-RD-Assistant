@@ -82,8 +82,13 @@ function providerAvailabilityText(
   listStatus: ProviderModelListStatus | undefined,
 ): string | null {
   if (!listStatus) return null;
-  if (catalogCount === 0) {
+  // A successful fetch can still yield nothing usable, so the failure wording
+  // belongs to the error, not to the count.
+  if (listStatus.error) {
     return "No models available yet — JARVIS could not fetch this provider's model list";
+  }
+  if (catalogCount === 0) {
+    return 'No models available yet — this provider offered none JARVIS can use';
   }
   const fetchedLabel = listStatus.fetched_at
     ? formatDistanceToNow(new Date(listStatus.fetched_at), { addSuffix: true })

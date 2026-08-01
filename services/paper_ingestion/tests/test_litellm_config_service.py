@@ -1149,6 +1149,39 @@ async def test_smart_fallback_keyed_provider_without_key_still_pins_static_defau
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_smart_fallback_pins_static_default_when_the_endpoint_is_blocked():
+    """A stored endpoint that now resolves privately must not empty the fallback group.
+
+    Network policy refuses the URL on every reconciler pass. Letting that refusal
+    escape would leave the fallback with no deployment for as long as the
+    misconfiguration lasts -- precisely when the primary model is already failing.
+    """
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-pinned"})
+    )
+    blocked = AsyncMock(side_effect=ValueError("private address"))
+
+    key_patch, url_patch = _patch_credentials("sk-custom", _CUSTOM_BASE_URL)
+    with (
+        key_patch,
+        url_patch,
+        patch(
+            "paper_ingestion.services.litellm_config.validate_custom_openai_base_url_for_outbound",
+            new=blocked,
+        ),
+    ):
+        result = await ensure_smart_fallback(_CUSTOM_MODEL, db_pool=object())
+
+    assert result is True
+    blocked.assert_awaited_once_with(_CUSTOM_BASE_URL)
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama_chat/qwen3:4b"
+    assert params["api_base"] != _CUSTOM_BASE_URL
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_smart_fallback_router_model_delivered_verbatim():
     """OpenRouter has no separate delivery prefix, so translation is the identity
     and no endpoint URL is invented for it."""

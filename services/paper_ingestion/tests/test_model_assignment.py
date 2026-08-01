@@ -277,6 +277,25 @@ async def test_base_url_only_custom_endpoint_model_passes_the_save_gate() -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_cleared_base_url_does_not_count_as_configured() -> None:
+    """An emptied row must read as absent, because every reader already treats it so.
+
+    Counting it as present is the picker/save-gate divergence in a new place: the
+    model renders enabled, saves, and then has no endpoint to deliver to.
+    """
+    access = await provider_access_configured(
+        PROVIDER_REGISTRY,
+        FakeConfigPool(
+            {
+                _CUSTOM_BASE_URL_KEY: "",
+            }
+        ),
+    )
+
+    assert access["custom_openai_compatible"] is False
+
+
+@pytest.mark.asyncio
 async def test_base_url_only_custom_endpoint_model_renders_enabled_in_the_picker() -> None:
     """The picker's presence map is the same predicate the save gate uses."""
     access = await provider_access_configured(

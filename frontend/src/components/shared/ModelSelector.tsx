@@ -154,11 +154,16 @@ function providerGroupCaption(
   groupModelCount: number,
 ): string | null {
   if (!status) return null;
-  if (groupModelCount === 0) {
-    return 'Model list unavailable — add a working key or restore connectivity';
-  }
+  // Whether the fetch failed decides the wording, not how many models survived
+  // it: a successful list whose models were all excluded or already bundled is
+  // empty for reasons that adding a key or fixing the network cannot change.
   if (status.error) {
-    return 'Model list unavailable — showing built-in entries only';
+    return groupModelCount === 0
+      ? 'Model list unavailable — add a working key or restore connectivity'
+      : 'Model list unavailable — showing built-in entries only';
+  }
+  if (groupModelCount === 0) {
+    return 'This provider offered no models JARVIS can use for this role';
   }
   if (status.truncated) {
     return `Showing the first ${groupModelCount} — this provider has more`;

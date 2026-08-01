@@ -984,4 +984,26 @@ describe('ModelSelector', () => {
       screen.getByText('Model list unavailable — add a working key or restore connectivity'),
     ).toBeInTheDocument();
   });
+
+  it('does not call a successful but empty group unavailable', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      provider_lists: {
+        deepseek: { fetched_at: '2026-08-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('DeepSeek')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText('This provider offered no models JARVIS can use for this role'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Model list unavailable — add a working key or restore connectivity'),
+    ).not.toBeInTheDocument();
+  });
 });

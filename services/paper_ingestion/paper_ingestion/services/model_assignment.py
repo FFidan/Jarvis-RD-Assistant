@@ -14,7 +14,7 @@ from paper_ingestion.services.llm_provider_registry import ProviderDefinition, p
 from paper_ingestion.services.model_lifecycle import (
     catalog_entry_for_model,
     normalize_model_tag,
-    provider_display_name,
+    provider_access_blocker,
 )
 from paper_ingestion.services.provider_models import live_entry_for_model
 
@@ -74,8 +74,13 @@ async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bo
 
 
 def _config_row_present(row: Any) -> bool:
-    """A user_config row counts as present when either value column is set."""
-    return row.get("encrypted_value") is not None or row.get("value") is not None
+    """A user_config row counts as present when either value column holds content.
+
+    A row cleared to the empty string is absent, matching what the readers do:
+    ``get_provider_base_url`` returns the default for a falsy value, so counting
+    ``""`` as configured would let a model save and then never deliver.
+    """
+    return bool(row.get("encrypted_value")) or bool(row.get("value"))
 
 
 async def provider_access_configured(
@@ -173,10 +178,4 @@ async def validate_model_assignment(
     provider = provider_for_id(entry.provider)
     access = await provider_access_configured([provider], db_pool)
     if not access.get(provider.id, False):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Configure the {provider_display_name(provider.id)} API key "
-                "before assigning this model."
-            ),
-        )
+        raise HTTPException(status_code=422, detail=provider_access_blocker(provider.id))

@@ -53,6 +53,12 @@ _MAX_MODEL_ID_CHARS = 128
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_PAGES = 20
 _PER_PROVIDER_TIMEOUT_SECONDS = 8.0
+# httpx's timeout bounds each read, not the whole exchange, so a server dripping
+# bytes below that interval can stream for as long as it likes across as many
+# pages as the cap allows. One provider is fetched on its own for a single
+# assignment save, where the sweep's total budget does not apply, so the ceiling
+# has to live here.
+_PER_PROVIDER_BUDGET_SECONDS = 10.0
 _TOTAL_FETCH_BUDGET_SECONDS = 12.0
 
 _ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
@@ -88,6 +94,7 @@ _CHAT_ID_FAMILIES: Mapping[str, tuple[str, ...]] = {
         "mistral-",
         "ministral-",
         "magistral-",
+        "devstral-",
         "pixtral-",
         "codestral",
         "open-mistral",
@@ -424,7 +431,9 @@ async def _collect_items(
         items.extend(page_items)
         params = _next_page_params(payload)
         if len(items) >= _MAX_MODELS_PER_PROVIDER:
-            truncated = params is not None
+            # A single unpaginated page can overshoot the cap on its own, so the
+            # slice below drops models even when there is no next page to ask for.
+            truncated = params is not None or len(items) > _MAX_MODELS_PER_PROVIDER
             break
         if params is None:
             break
@@ -444,6 +453,15 @@ def _fresh_cached(provider_id: str) -> ProviderModelList | None:
         return None
     stored_at, listing = cached
     return listing if _cache_clock() - stored_at < _CACHE_TTL_SECONDS else None
+
+
+def _fetch_failure_reason(exc: BaseException) -> str:
+    """Describe a fetch failure in terms the operator sees beside the provider."""
+    if isinstance(exc, TimeoutError):
+        return "provider model list timed out"
+    if isinstance(exc, _ProviderListError):
+        return str(exc)
+    return "provider request failed"
 
 
 def _stale_or_error(provider_id: str, error: str) -> ProviderModelList:
@@ -487,15 +505,14 @@ async def fetch_provider_models(
 
         api_key = await get_provider_api_key(provider_id, db_pool)
         try:
-            items, truncated = await _collect_items(
-                http_client, url, headers=_auth_headers(provider, api_key)
-            )
-        except _ProviderListError as exc:
-            logger.warning("provider %s model list failed: %s", provider_id, exc)
-            return _stale_or_error(provider_id, str(exc))
-        except httpx.HTTPError:
-            logger.warning("provider %s model list request failed", provider_id, exc_info=True)
-            return _stale_or_error(provider_id, "provider request failed")
+            async with asyncio.timeout(_PER_PROVIDER_BUDGET_SECONDS):
+                items, truncated = await _collect_items(
+                    http_client, url, headers=_auth_headers(provider, api_key)
+                )
+        except (TimeoutError, _ProviderListError, httpx.HTTPError) as exc:
+            reason = _fetch_failure_reason(exc)
+            logger.warning("provider %s model list failed: %s", provider_id, reason, exc_info=True)
+            return _stale_or_error(provider_id, reason)
 
         fetched_at = datetime.now(UTC)
         entries, excluded = _build_entries(provider, items, fetched_at)

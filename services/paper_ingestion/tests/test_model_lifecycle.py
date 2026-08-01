@@ -878,6 +878,24 @@ def test_blocker_names_the_provider_display_name_not_its_registry_id() -> None:
     blocker = next(i for i in statuses if i["id"] == "custom_openai/org/model-y")["assign_blocker"]
 
     assert blocker == (
-        "Configure the Custom OpenAI-compatible endpoint API key before assigning this model."
+        "Configure the Custom OpenAI-compatible endpoint API key or endpoint URL "
+        "before assigning this model."
     )
     assert "custom_openai_compatible" not in str(blocker)
+
+
+def test_blocker_asks_only_for_a_key_where_a_key_is_the_only_way_in() -> None:
+    """A keyed provider has no endpoint URL to configure, so offering one misdirects."""
+    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+
+    statuses = build_model_statuses(
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={},
+        extra_entries=(entry,),
+    )
+    blocker = next(i for i in statuses if i["id"] == "openrouter/vendor/model-x")["assign_blocker"]
+
+    assert blocker == "Configure the OpenRouter API key before assigning this model."
