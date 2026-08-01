@@ -198,9 +198,14 @@ async def test_sweep_is_paused_resumed_and_cancelled_with_the_worker(
         app_factory._reclaim_stalled_jobs_forever(app), name="reclaim_stalled_jobs"
     )
 
+    paused = app.state.reclaim_task
+
     # A restore raises the sentinel: the sweep stops writing alongside the worker.
+    # Clearing the handle alone would leave an uncancelled task issuing job-table
+    # writes for the whole restore, so the task itself must be cancelled.
     soft.touch()
     assert await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=False) is True
+    assert paused.cancelled()
     assert app.state.reclaim_task is None
 
     # The restore clears: the sweep is running again, or nothing ever reclaims.

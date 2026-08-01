@@ -213,7 +213,7 @@ function RestorePointCard({
   onRestore: (
     timestamp: string,
     allowMissingPdfs: boolean,
-    allowUnknownSchema: boolean,
+    schemaUncheckable: boolean,
   ) => void;
   onDelete: (timestamp: string) => void;
   restoringTimestamp: string | null;
@@ -224,7 +224,7 @@ function RestorePointCard({
   const legacyMissingPdfs = !point.has_pdfs && point.legacy_missing_pdfs;
   // Backups taken while the database was unreachable recorded no usable schema
   // version, so the restore service cannot check compatibility and refuses
-  // without the operator's explicit acknowledgement.
+  // without the operator's explicit acknowledgement in the confirm dialog.
   const unknownSchema = point.schema_version == null || point.schema_version === 0;
   const missingCurrentPdfs = !point.has_pdfs && !point.legacy_missing_pdfs;
   const restoreDisabled =
@@ -376,7 +376,11 @@ export function AdminBackupsPage() {
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
   const [confirmSource, setConfirmSource] = useState<RestoreSource>('local');
   const [confirmAllowMissingPdfs, setConfirmAllowMissingPdfs] = useState(false);
-  const [confirmAllowUnknownSchema, setConfirmAllowUnknownSchema] = useState(false);
+  // Whether this restore point's database version can be checked before the
+  // restore runs, and whether the operator has accepted going ahead without that
+  // check. The acceptance is always the operator's own act — never derived.
+  const [confirmSchemaUncheckable, setConfirmSchemaUncheckable] = useState(false);
+  const [confirmSchemaAccepted, setConfirmSchemaAccepted] = useState(false);
   const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
   const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(
     recovery?.target_timestamp ?? null,
@@ -549,13 +553,13 @@ export function AdminBackupsPage() {
       setRestoringTimestamp(timestamp);
       setConfirmTs(null);
       setConfirmAllowMissingPdfs(false);
-      setConfirmAllowUnknownSchema(false);
+      setConfirmSchemaAccepted(false);
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not start the restore.');
       setConfirmTs(null);
       setConfirmAllowMissingPdfs(false);
-      setConfirmAllowUnknownSchema(false);
+      setConfirmSchemaAccepted(false);
     },
   });
 
@@ -689,11 +693,12 @@ export function AdminBackupsPage() {
     timestamp: string,
     source: RestoreSource,
     allowMissingPdfs: boolean,
-    allowUnknownSchema: boolean,
+    schemaUncheckable: boolean,
   ) => {
     setConfirmSource(source);
     setConfirmAllowMissingPdfs(allowMissingPdfs);
-    setConfirmAllowUnknownSchema(allowUnknownSchema);
+    setConfirmSchemaUncheckable(schemaUncheckable);
+    setConfirmSchemaAccepted(false);
     setConfirmTs(timestamp);
   };
   const showRestorePanel =
@@ -794,8 +799,8 @@ export function AdminBackupsPage() {
                 point={point}
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
-                onRestore={(ts, allowMissingPdfs, allowUnknownSchema) =>
-                  askRestore(ts, 'local', allowMissingPdfs, allowUnknownSchema)
+                onRestore={(ts, allowMissingPdfs, schemaUncheckable) =>
+                  askRestore(ts, 'local', allowMissingPdfs, schemaUncheckable)
                 }
                 onDelete={(ts) => setDeleteConfirmTs(ts)}
                 restoringTimestamp={restoringTimestamp}
@@ -811,13 +816,13 @@ export function AdminBackupsPage() {
         }
       />
 
-      {/* Staged off-host sets report no schema version, so this path never
-          acknowledges an unknown one on the operator's behalf. */}
+      {/* An off-host listing carries no database version, so the check is always
+          unavailable here and the confirm dialog always asks the operator. */}
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection
           points={inboxPoints}
           restoringTimestamp={restoringTimestamp}
-          onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs, false)}
+          onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs, true)}
         />
       )}
 
@@ -938,7 +943,7 @@ export function AdminBackupsPage() {
           if (!open) {
             setConfirmTs(null);
             setConfirmAllowMissingPdfs(false);
-            setConfirmAllowUnknownSchema(false);
+            setConfirmSchemaAccepted(false);
           }
         }}
         title={
@@ -949,11 +954,12 @@ export function AdminBackupsPage() {
         confirmLabel="Restore"
         description={
           <>
-            {confirmAllowUnknownSchema && (
+            {confirmSchemaUncheckable && (
               <span data-testid="restore-unknown-schema-warning">
-                This restore point predates schema recording, so JARVIS cannot check that it
-                fits this version — restore it anyway only if it is the restore point you
-                need.{' '}
+                {confirmSource === 'inbox'
+                  ? 'An off-host backup set carries no database version JARVIS can read up front, so it cannot check that this set fits this version before restoring.'
+                  : 'This restore point predates schema recording, so JARVIS cannot check that it fits this version.'}{' '}
+                Restore it anyway only if it is the restore point you need.{' '}
               </span>
             )}
             {confirmAllowMissingPdfs ? (
@@ -976,17 +982,33 @@ export function AdminBackupsPage() {
                 <span className="font-mono font-semibold">RESTORE</span> to confirm.
               </span>
             )}
+            {confirmSchemaUncheckable && (
+              <label className="mt-3 flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={confirmSchemaAccepted}
+                  onChange={(e) => setConfirmSchemaAccepted(e.target.checked)}
+                />
+                <span>Go ahead without a version check.</span>
+              </label>
+            )}
           </>
         }
         onConfirm={() => {
-          if (confirmTs) {
-            restoreMutation.mutate({
-              timestamp: confirmTs,
-              source: confirmSource,
-              allowMissingPdfs: confirmAllowMissingPdfs,
-              allowUnknownSchema: confirmAllowUnknownSchema,
-            });
+          if (!confirmTs) return;
+          if (confirmSchemaUncheckable && !confirmSchemaAccepted) {
+            toast.error(
+              'Tick "Go ahead without a version check" to restore a backup JARVIS cannot check.',
+            );
+            return;
           }
+          restoreMutation.mutate({
+            timestamp: confirmTs,
+            source: confirmSource,
+            allowMissingPdfs: confirmAllowMissingPdfs,
+            allowUnknownSchema: confirmSchemaAccepted,
+          });
         }}
       />
 

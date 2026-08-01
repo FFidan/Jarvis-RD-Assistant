@@ -911,9 +911,13 @@ async def get_current_user_id(
     Notes
     -----
     The default identity dependency for user-data routes. It deliberately does
-    NOT honour the ``X-Owner-User-Id`` override: only the routes the Telegram
-    bot actually calls declare :func:`get_current_user_id_or_bot`, so the
-    impersonation header resolves nothing anywhere else.
+    NOT honour the ``X-Owner-User-Id`` override: in ``paper_ingestion`` only the
+    routes the Telegram bot actually calls declare
+    :func:`get_current_user_id_or_bot`, and an exact-set test pins that surface.
+    ``learning_engine`` routes still declare
+    :func:`current_user_id_strict_with_owner_override` directly, so the header
+    resolves there on a wider surface than the bot uses; the address allowlist,
+    not this dependency, is what bounds it.
 
     """
     return user_id
