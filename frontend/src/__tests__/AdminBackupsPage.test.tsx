@@ -34,7 +34,8 @@ vi.mock('@/lib/api/backups', () => ({
     confirm: string,
     source?: string,
     allowMissingPdfs?: boolean,
-  ) => requestRestoreMock(timestamp, confirm, source, allowMissingPdfs),
+    allowUnknownSchema?: boolean,
+  ) => requestRestoreMock(timestamp, confirm, source, allowMissingPdfs, allowUnknownSchema),
   getRestoreStatus: (token?: string) => getRestoreStatusMock(token),
   acknowledgeRestore: (restoreId: string, source: string, confirm: string, token?: string) =>
     acknowledgeRestoreMock(restoreId, source, confirm, token),
@@ -304,6 +305,7 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'local',
         false,
+        false,
       ),
     );
   });
@@ -389,6 +391,37 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'local',
         true,
+        false,
+      ),
+    );
+  });
+
+  it('acknowledges a restore point that records no usable schema version', async () => {
+    getRestorePointsMock.mockResolvedValue({
+      ..._restorePoints,
+      restore_points: [
+        { ..._restorePoints.restore_points[0], schema_version: 0, compat: 'unknown' },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderPage();
+    const card = await screen.findByTestId('restore-point-card');
+    expect(within(card).getByText(/predates schema recording/i)).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: /restore to this point/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByTestId('restore-unknown-schema-warning')).toBeInTheDocument();
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20260617_120000',
+        'RESTORE',
+        'local',
+        false,
+        true,
       ),
     );
   });
@@ -456,6 +489,7 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'inbox',
         false,
+        false,
       ),
     );
   });
@@ -507,6 +541,7 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'inbox',
         true,
+        false,
       ),
     );
   });

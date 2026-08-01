@@ -216,7 +216,54 @@ async def test_request_restore_returns_token_and_writes_only_hash(tmp_path, monk
     assert request["restore_id"] == restore_id
     assert request["requested_at"] == persisted["requested_at"]
     assert request["allow_missing_pdfs"] is False
+    assert request["allow_unknown_schema"] is False
     assert f.name == ".restore_status_token.json"
+
+
+@pytest.mark.asyncio
+async def test_request_restore_forwards_unknown_schema_acknowledgement(
+    tmp_path, monkeypatch
+) -> None:
+    """The restore service refuses a set with no usable schema version without this."""
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    ts = "20260708_120000"
+    _seed_complete_point(backup_dir, ts)
+
+    monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
+    monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
+    monkeypatch.setattr(bk, "log_audit", AsyncMock())
+    monkeypatch.setattr(bk, "log_event", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/admin/backups/restore",
+                json={
+                    "timestamp": ts,
+                    "confirm": "RESTORE",
+                    "allow_unknown_schema": True,
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 202, resp.text
+    request = json.loads((trigger / ".restore_request.json").read_text())
+    assert request["allow_unknown_schema"] is True
 
 
 @pytest.mark.asyncio

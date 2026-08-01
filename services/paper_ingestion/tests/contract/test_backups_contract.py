@@ -407,6 +407,8 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     # The sentinel carries the source restore.sh keys its archive lookup on.
     assert written["source"] == "local"
     assert written["allow_missing_pdfs"] is False
+    # restore.sh refuses a set with no usable schema version unless this says otherwise.
+    assert written["allow_unknown_schema"] is False
     assert "requested_at" in written
     assert written["restore_id"] == body["restore_id"]
     # Only the token hash is stored, in a file separate from the restore request.

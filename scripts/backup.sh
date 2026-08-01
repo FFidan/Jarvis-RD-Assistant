@@ -765,11 +765,21 @@ write_manifest() {
   local schema_version app_version created_at manifest manifest_tmp
   local first f base sum size
   declare -A seen=()
-  schema_version="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
-    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
-    2>/dev/null || echo 0)"
+  # ~30s of retries: a postgres container restart is the failure this exists to
+  # survive, and a manifest write that fails discards the whole backup set.
+  local attempt
+  schema_version=""
+  for attempt in 1 2 3 4 5 6; do
+    schema_version="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
+      -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
+      2>/dev/null)" && break
+    schema_version=""
+    if [ "$attempt" -lt 6 ]; then sleep 5; fi
+  done
   case "$schema_version" in
-    ''|*[!0-9]*) schema_version=0 ;;
+    ''|*[!0-9]*)
+      echo "[$(date -Iseconds)] FATAL: could not read the database schema version; refusing to write a manifest that cannot gate a restore" >&2
+      return 1 ;;
   esac
   app_version="${JARVIS_VERSION:-unknown}"
   created_at="$(date -Iseconds)"

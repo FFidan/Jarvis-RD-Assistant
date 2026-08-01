@@ -123,6 +123,7 @@ DATA_KEYS_STAGED=0
 PDFS_STAGED=0
 PDF_RESTORE_RUN_ID=""
 ALLOW_MISSING_PDFS=0
+ALLOW_UNKNOWN_SCHEMA=0
 RESTORE_ID=""
 REQUESTED_AT=""
 VECTOR_VISIBILITY_GENERATION=""
@@ -421,6 +422,27 @@ parse_allow_missing_pdfs_request() {
   case "$value" in
     true) ALLOW_MISSING_PDFS=1 ;;
     false) ALLOW_MISSING_PDFS=0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_allow_unknown_schema_request() {
+  local content="$1" count value
+  ALLOW_UNKNOWN_SCHEMA=0
+  count="$(printf '%s' "$content" \
+    | grep -oE '"allow_unknown_schema"[[:space:]]*:' \
+    | wc -l | tr -d ' ')"
+  case "$count" in
+    0) return 0 ;;
+    1) ;;
+    *) return 1 ;;
+  esac
+  value="$(printf '%s' "$content" \
+    | grep -oE '"allow_unknown_schema"[[:space:]]*:[[:space:]]*(true|false)' \
+    | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || true)"
+  case "$value" in
+    true) ALLOW_UNKNOWN_SCHEMA=1 ;;
+    false) ALLOW_UNKNOWN_SCHEMA=0 ;;
     *) return 1 ;;
   esac
 }
@@ -1925,6 +1947,12 @@ parse_restore_identity_request "$REQ_CONTENT" \
 parse_allow_missing_pdfs_request "$REQ_CONTENT" \
   || fail_before_destruction "restore request has an invalid allow_missing_pdfs value"
 
+# Backups written while the database was unreachable could record no usable schema
+# version. Restoring one skips the compatibility check entirely, so it needs the same
+# strict, explicit acknowledgement as the missing-PDF path.
+parse_allow_unknown_schema_request "$REQ_CONTENT" \
+  || fail_before_destruction "restore request has an invalid allow_unknown_schema value"
+
 if outbound_quarantine_exists; then
   fail_before_destruction "restore is blocked until the current outbound credential review is acknowledged"
 fi
@@ -2042,11 +2070,20 @@ if [ -r "$MANIFEST" ]; then
 
   MANIFEST_SCHEMA="$(printf '%s' "$MANIFEST_CONTENT" \
     | grep -oE '"schema_version"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
+  # A manifest recording no usable schema version (absent, or the 0 older backups
+  # wrote when their schema query failed) leaves the comparison below with nothing
+  # to check, so restoring it takes an explicit acknowledgement in the request.
+  if [ -z "$MANIFEST_SCHEMA" ] || [ "$MANIFEST_SCHEMA" = "0" ]; then
+    if [ "$ALLOW_UNKNOWN_SCHEMA" != "1" ]; then
+      fail_before_destruction "backup ${TIMESTAMP} does not record a usable database schema version, so compatibility with this deployment cannot be checked; choose a restore point written by a healthy backup, or resubmit this restore with \"allow_unknown_schema\": true to accept the risk; nothing was changed"
+    fi
+    echo "[restore] WARNING: restoring backup ${TIMESTAMP} without a schema compatibility check on explicit operator acknowledgement" >&2
+  fi
   # Compare the backup schema with the maximum schema supported by the installed
   # code. A partial restore can leave the live database unavailable, while the
   # installed schema support remains readable. If there are no incremental
   # migration files, db/SCHEMA_VERSION supplies the baseline schema number.
-  if [ -n "$MANIFEST_SCHEMA" ]; then
+  if [ -n "$MANIFEST_SCHEMA" ] && [ "$MANIFEST_SCHEMA" != "0" ]; then
     MIG_DIR="${MIGRATIONS_DIR:-/app/db/migrations}"
     # Read the highest NNN_*.sql migration with a glob rather than parsing `ls`.
     # The 10# prefix treats a leading-zero migration number as base 10. Backups at

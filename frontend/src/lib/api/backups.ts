@@ -49,6 +49,7 @@ export interface RestoreRequest {
   confirm: string;
   source: RestoreSource;
   allow_missing_pdfs: boolean;
+  allow_unknown_schema: boolean;
 }
 
 /** One off-host restore point staged in the restore_inbox (sidecar-authored manifest). */
@@ -134,10 +135,12 @@ export async function downloadBackup(name: string): Promise<void> {
 /**
  * Start a restore from the named restore point. `confirm` authorizes the
  * destructive operation; `source` selects the local /backups set (default) or the off-host
- * inbox. `allowMissingPdfs` requests the older-backup compatibility path; the
- * restore service rechecks authenticity before changing data. Returns the
- * restore-session token and its exact server expiry so progress polling survives
- * replacement of the admin session (pass the token to
+ * inbox. `allowMissingPdfs` requests the older-backup compatibility path;
+ * `allowUnknownSchema` accepts a restore point that records no usable database
+ * schema version, which the restore service otherwise refuses because it cannot
+ * check compatibility. The restore service rechecks authenticity before changing
+ * data. Returns the restore-session token and its exact server expiry so progress
+ * polling survives replacement of the admin session (pass the token to
  * {@link getRestoreStatus}).
  */
 export const requestRestore = (
@@ -145,6 +148,7 @@ export const requestRestore = (
   confirm: string,
   source: RestoreSource = 'local',
   allowMissingPdfs = false,
+  allowUnknownSchema = false,
 ) =>
   apiFetch<RestoreRequestResponse>('/api/admin/backups/restore', {
     method: 'POST',
@@ -153,6 +157,7 @@ export const requestRestore = (
       confirm,
       source,
       allow_missing_pdfs: allowMissingPdfs,
+      allow_unknown_schema: allowUnknownSchema,
     } satisfies RestoreRequest),
   });
 

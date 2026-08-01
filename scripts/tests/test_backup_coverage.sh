@@ -370,6 +370,7 @@ man_out="$(
   BACKUP_DIR="$man_dir" TIMESTAMP="$man_ts" RUN_ID="$man_run_id" PGHOST=/nonexistent \
   bash -c '
     set -euo pipefail
+    psql() { printf "112\\n"; }
     BACKUP_ARCHIVES=(
       "${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz"
       "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz"
@@ -993,6 +994,35 @@ fi
 
 check "validates backup run IDs as exactly 32 lowercase hex characters" \
   '\^\[0-9a-f\]\{32\}\$|\^\[0-9a-f\]\{32\}'
+
+# A manifest that records schema_version 0 disarms the restore compatibility gate
+# silently, so an unreadable schema must refuse rather than coerce. sleep is stubbed
+# out because the retry budget is not what this case pins — the refusal is.
+sv_dir="$(mktemp -d)"
+sv_ts="20260801_120000"
+printf 'J' > "${sv_dir}/jarvis_${sv_ts}.sql.gz"
+sv_err="${sv_dir}/write_manifest.err"
+sv_rc=0
+BACKUP_DIR="$sv_dir" TIMESTAMP="$sv_ts" RUN_ID=0123456789abcdef0123456789abcdef \
+bash -c '
+  set -uo pipefail
+  psql() { return 1; }
+  sleep() { :; }
+  BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz")
+  '"$(sed -n '/^promote_new_file()/,/^}/p' "$BACKUP_SCRIPT")"'
+  '"$(sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT")"'
+  write_manifest
+' 2>"$sv_err" || sv_rc=$?
+if [ "$sv_rc" -eq 1 ] \
+   && grep -q 'could not read the database schema version' "$sv_err" \
+   && [ ! -e "${sv_dir}/manifest_${sv_ts}.json" ]; then
+  pass "an unreadable database schema version refuses the manifest instead of recording 0"
+else
+  printf 'FAIL: unreadable schema version did not refuse the manifest (rc=%s err=%s)\n' \
+    "$sv_rc" "$(cat "$sv_err" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -rf "$sv_dir"
 
 if [ "$fail" -ne 0 ]; then
   printf '\nbackup coverage: FAILED\n' >&2
