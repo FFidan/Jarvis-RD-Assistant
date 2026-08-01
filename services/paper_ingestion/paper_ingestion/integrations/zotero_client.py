@@ -84,7 +84,9 @@ async def refresh_configured_private_hosts(db_pool: Any) -> frozenset[str]:
     """
     try:
         rows = await db_pool.fetch(
-            "SELECT value FROM user_config WHERE key = $1",
+            # Scoped like every other system-key read: this key is admin-owned,
+            # so a per-user row must not be able to widen the allowlist.
+            "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
             BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
         )
     except Exception:  # noqa: BLE001

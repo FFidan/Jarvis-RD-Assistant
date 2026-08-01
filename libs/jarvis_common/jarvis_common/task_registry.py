@@ -43,10 +43,15 @@ _RESTORE_BLOCK_RETRY = procrastinate.RetryStrategy(
 # 30-second wait above is roughly an hour, after which the job fails visibly
 # instead of retrying silently forever. Restore maintenance keeps its unlimited
 # budget because it clears itself.
+#
+# The counter is the job's own attempt total, which also advances while restore
+# maintenance is active, so a job that waited out a long restore can reach the
+# bound on its first quarantine-classified attempt. The message therefore states
+# that retrying stopped, not how long it went on for.
 _QUARANTINE_MAX_ATTEMPTS = 120
 _QUARANTINE_GAVE_UP_MESSAGE = (
     "Outbound integrations are quarantined after a restore; acknowledge the restore"
-    " to resume. This job stopped retrying after an hour."
+    " to resume. This job has stopped retrying."
 )
 
 

@@ -1137,9 +1137,17 @@ retention_prune_age() {
     fi
     # A member of a surviving restore point stays with it; debris whose restore
     # point is already gone has nothing to keep it and is always collectable.
-    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$points" && ! grep -qxF "$ts" <<<"$doomed"; then
-      continue
-    fi
+    # A partial file from a killed dump carries a real timestamp but belongs to
+    # no restore point, so it must not inherit a survivor's protection and stay
+    # forever — it is the one thing here that only ages.
+    case "$base" in
+      *.tmp | *.raw) ;;
+      *)
+        if [ -n "$ts" ] && grep -qxF "$ts" <<<"$points" && ! grep -qxF "$ts" <<<"$doomed"; then
+          continue
+        fi
+        ;;
+    esac
     rm -f -- "${dir}/${base}"
   done <<<"$candidates"
 }
@@ -1203,7 +1211,16 @@ if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
       IN_FLIGHT_TIMESTAMPS="${IN_FLIGHT_TIMESTAMPS}${IN_FLIGHT_TIMESTAMPS:+$'\n'}${TIMESTAMP}"
     fi
     retention_prune_age "$BACKUP_DIR" "$RETENTION_DAYS" "$IN_FLIGHT_TIMESTAMPS"
-    echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+    # Report what the sweep actually did. It says nothing about age when age
+    # retention is off, and does not claim a completed sweep when the half-fleet
+    # guard refused one — that guard already logged what it kept.
+    if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+      echo "[$(date -Iseconds)] Age retention is off; no restore point was pruned by age"
+    elif [ "${RETENTION_BULK_REFUSED:-0}" -eq 1 ]; then
+      echo "[$(date -Iseconds)] Age retention pruned only the oldest half; rerun to continue"
+    else
+      echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+    fi
     if [ -n "${KEEP_LAST_N:-}" ]; then
       retention_keep_last_n "$BACKUP_DIR" "$KEEP_LAST_N" "$IN_FLIGHT_TIMESTAMPS"
       echo "[$(date -Iseconds)] keep-last-${KEEP_LAST_N} retention applied"

@@ -922,6 +922,22 @@ else
 fi
 rm -rf "$ra_dir"
 
+rd_dir="$(mktemp -d)"
+seed_restore_points "$rd_dir" now 20260101_000000
+: > "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp"
+touch -d '2000-01-01 00:00:00' "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp"
+run_age_sweep "$rd_dir" 7 1 >/dev/null
+if [ ! -f "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp" ] \
+   && [ -f "${rd_dir}/jarvis_20260101_000000.sql.gz" ]; then
+  pass "an aged partial file is swept even when its restore point survives"
+else
+  printf 'FAIL: partial-file debris outlived the sweep (tmp=%s, point=%s)\n' \
+    "$([ -f "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp" ] && echo kept || echo gone)" \
+    "$([ -f "${rd_dir}/jarvis_20260101_000000.sql.gz" ] && echo kept || echo gone)" >&2
+  fail=1
+fi
+rm -rf "$rd_dir"
+
 rs_dir="$(mktemp -d)"
 seed_restore_points "$rs_dir" '2000-01-01 00:00:00' 20000101_000000
 seed_restore_points "$rs_dir" now \

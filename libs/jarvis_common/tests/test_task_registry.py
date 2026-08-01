@@ -191,7 +191,7 @@ async def test_quarantine_fails_the_job_once_the_bound_is_passed(monkeypatch) ->
         await task.func(_context_with_attempts(120), job_id="job-1")
 
     assert "acknowledge the restore" in str(raised.value)
-    assert "stopped retrying after an hour" in str(raised.value)
+    assert "has stopped retrying" in str(raised.value)
     # JobError is absent from retry_exceptions, so this is a terminal outcome
     # whose text survives into the payload rather than collapsing to "Job failed".
     assert task.retry_strategy.retry_exceptions == {OutboundEgressBlockedError}
