@@ -983,6 +983,191 @@ async def test_parse_model_target_strips_latest_splits_cloud_and_validates():
         _parse_model_target("../../etc/passwd")
 
 
+async def test_parse_model_target_accepts_router_namespaced_id():
+    from paper_ingestion.services.litellm_config import _parse_model_target
+
+    routed = _parse_model_target("openrouter/anthropic/claude-sonnet-4.5")
+
+    assert routed.cloud_provider == "openrouter"
+    assert routed.suffix == "anthropic/claude-sonnet-4.5"
+    assert routed.new_name == "openrouter/anthropic/claude-sonnet-4.5"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "anthropic/claude-haiku-4-5",  # direct provider, single-segment suffix
+        "openrouter/anthropic/claude-sonnet-4.5",  # router namespace
+        # A self-hosted endpoint serves the HF repo id as its model id.
+        "custom_openai/mistralai/Mistral-7B-Instruct-v0.3",
+        # ...or a bare name it chose itself: accepting the namespace must not
+        # make the namespace mandatory for the endpoints already using this.
+        "custom_openai/local-model",
+    ],
+)
+def test_parse_model_target_accepts_supported_shapes(model_name):
+    from paper_ingestion.services.litellm_config import _parse_model_target
+
+    assert _parse_model_target(model_name).new_name == model_name
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "openrouter/../etc",  # dot-only vendor segment: traversal inside the namespace
+        "openrouter/a/b/c",  # three suffix segments: not a vendor namespace
+        "openrouter/..%2f/x",  # percent-encoded separator
+        "openrouter/anthropic/claude sonnet",  # whitespace in the model segment
+        "openrouter/anthropic/claude⁄sonnet",  # unicode fraction-slash confusable
+        "openrouter/anthropic/claude\x00sonnet",  # control character
+        "gemini/a/b",  # direct provider keeps the strict single-segment rule
+        "unknown-vendor/a/b",  # unrecognised prefix keeps the strict rule
+        "; rm -rf /",
+    ],
+)
+def test_parse_model_target_rejects_hostile_identifiers(model_name):
+    from paper_ingestion.services.litellm_config import _parse_model_target
+
+    with pytest.raises(ValueError):
+        _parse_model_target(model_name)
+
+
+def test_smart_fallback_normalize_matches_the_parse_direction_matrix():
+    """The fallback path resolves the prefix before validating, so it accepts the
+    same namespaced ids the assignment path does — and refuses the same traversal."""
+    from paper_ingestion.services.litellm_config import _smart_fallback_normalize
+
+    assert _smart_fallback_normalize("openrouter/qwen/qwen3-235b-a22b") == (
+        "openrouter/qwen/qwen3-235b-a22b",
+        "openrouter",
+    )
+    with pytest.raises(ValueError):
+        _smart_fallback_normalize("openrouter/../x")
+
+
+# ---------------------------------------------------------------------------
+# smart-fallback cloud delivery: prefix translation, api_base, keyless endpoints
+# ---------------------------------------------------------------------------
+
+_CUSTOM_MODEL = "custom_openai/org/model"
+_CUSTOM_BASE_URL = "http://127.0.0.1:8000/v1"
+_BASE_URL_PATCH_TARGET = "paper_ingestion.services.litellm_config.get_provider_base_url"
+
+
+def _patch_credentials(api_key: str | None, base_url: str | None):
+    return (
+        patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value=api_key)),
+        patch(_BASE_URL_PATCH_TARGET, new=AsyncMock(return_value=base_url)),
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_smart_fallback_custom_endpoint_translates_prefix_and_carries_base_url():
+    """A self-hosted fast model must reach the fallback group the way the primary
+    alias reaches it: delivery prefix, not the app-facing one, plus the endpoint URL.
+    Delivering ``custom_openai/`` verbatim gives LiteLLM a provider it does not know."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-custom"})
+    )
+
+    key_patch, url_patch = _patch_credentials("sk-custom", _CUSTOM_BASE_URL)
+    with key_patch, url_patch:
+        result = await ensure_smart_fallback(_CUSTOM_MODEL, db_pool=object())
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "openai/org/model"
+    assert params["api_base"] == _CUSTOM_BASE_URL
+    assert params["api_key"] == "sk-custom"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_smart_fallback_redelivers_when_only_the_endpoint_url_changes():
+    """An operator who moves the endpoint keeps the same model and key, so a no-op
+    check blind to the URL would leave the fallback pointed at the old host."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-custom"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    key_patch, url_patch = _patch_credentials("sk-custom", _CUSTOM_BASE_URL)
+    with key_patch, url_patch:
+        assert await ensure_smart_fallback(_CUSTOM_MODEL, db_pool=object()) is True
+
+    _mock_model_info([_entry("smart-fallback", {"model": "openai/org/model"}, dep_id="fb-custom")])
+    moved_url = "http://127.0.0.1:9000/v1"
+    key_patch, url_patch = _patch_credentials("sk-custom", moved_url)
+    with key_patch, url_patch:
+        assert await ensure_smart_fallback(_CUSTOM_MODEL, db_pool=object()) is True
+
+    assert _last_payload(new_route)["litellm_params"]["api_base"] == moved_url
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_smart_fallback_custom_endpoint_without_key_still_delivers():
+    """A base-URL-only custom endpoint is first-class: it needs no key, so pinning
+    the static default would strand a working self-hosted fallback."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-custom"})
+    )
+
+    key_patch, url_patch = _patch_credentials(None, _CUSTOM_BASE_URL)
+    with key_patch, url_patch:
+        result = await ensure_smart_fallback(_CUSTOM_MODEL, db_pool=object())
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "openai/org/model"
+    assert params["api_base"] == _CUSTOM_BASE_URL
+    assert params["api_key"] is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_smart_fallback_keyed_provider_without_key_still_pins_static_default():
+    """A provider that authenticates by key alone has nothing to fall back to."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-pinned"})
+    )
+
+    key_patch, url_patch = _patch_credentials(None, None)
+    with key_patch, url_patch:
+        result = await ensure_smart_fallback("openrouter/qwen/qwen3-235b-a22b", db_pool=object())
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama_chat/qwen3:4b"
+    assert "api_key" not in params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_smart_fallback_router_model_delivered_verbatim():
+    """OpenRouter has no separate delivery prefix, so translation is the identity
+    and no endpoint URL is invented for it."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-router"})
+    )
+
+    key_patch, url_patch = _patch_credentials("sk-or-test", None)
+    with key_patch, url_patch:
+        result = await ensure_smart_fallback("openrouter/qwen/qwen3-235b-a22b", db_pool=object())
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "openrouter/qwen/qwen3-235b-a22b"
+    assert params["api_key"] == "sk-or-test"
+    assert "api_base" not in params
+
+
 # ---------------------------------------------------------------------------
 # _key_fingerprint: PBKDF2-keyed delivery-change identity
 # ---------------------------------------------------------------------------
