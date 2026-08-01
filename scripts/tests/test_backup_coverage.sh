@@ -190,7 +190,7 @@ assert_valid_json() {
 }
 last_run_json() {
   # last_run_json <secrets> <qdrant> <manifest> <signature> <environment> <encrypt>
-  #               [retention_age_enabled] [retention_bulk_refused]
+  #               [retention_age_enabled] [retention_bulk_refused] [s3_complete]
   local lr_dir lr
   lr_dir="$(mktemp -d)"
   lr="$(
@@ -199,7 +199,7 @@ last_run_json() {
     JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE="$1" QDRANT_STATE="$2" \
     MANIFEST_STATE="$3" MANIFEST_SIGNATURE_STATE="$4" ENVIRONMENT="$5" \
     ENCRYPT="$6" RETENTION_DAYS=7 RETENTION_AGE_ENABLED="${7:-1}" \
-    RETENTION_BULK_REFUSED="${8:-0}" SKIPPED_MAINTENANCE=0 \
+    RETENTION_BULK_REFUSED="${8:-0}" s3_complete="${9:-true}" SKIPPED_MAINTENANCE=0 \
     bash -c '
       set -euo pipefail
       '"$COMPLETION_WLR"'
@@ -265,6 +265,74 @@ if printf '%s' "$lr_qdrant_failed" | grep -q '"succeeded":true'; then
   pass "Qdrant failure remains non-fatal to backup completion"
 else
   printf 'FAIL: optional Qdrant failure made backup unsuccessful (%s)\n' "$lr_qdrant_failed" >&2
+  fail=1
+fi
+
+# succeeded means "a complete restorable LOCAL set exists" and restore.sh gates
+# its safety pre-backup on it: a vector-store outage is frequently the very reason
+# an operator is restoring, so it must never reduce succeeded. The vector outcome
+# is reported separately instead, and "no vectors were captured" must be
+# distinguishable from "the store was reachable and had nothing to capture".
+if printf '%s' "$lr_qdrant_failed" | grep -q '"vectors_captured":false' \
+   && printf '%s' "$lr_qdrant_failed" | grep -q '"qdrant":"failed"'; then
+  pass "a failed vector snapshot is reported as vectors not captured"
+else
+  printf 'FAIL: a failed vector snapshot was not reported honestly (%s)\n' "$lr_qdrant_failed" >&2
+  fail=1
+fi
+
+lr_qdrant_unreachable="$(last_run_json ok unreachable ok ok development 1)"
+if printf '%s' "$lr_qdrant_unreachable" | grep -q '"succeeded":true' \
+   && printf '%s' "$lr_qdrant_unreachable" | grep -q '"vectors_captured":false' \
+   && printf '%s' "$lr_qdrant_unreachable" | grep -q '"qdrant":"unreachable"'; then
+  pass "an unreachable vector store is recorded without blocking recovery"
+else
+  printf 'FAIL: an unreachable vector store was not recorded honestly (%s)\n' "$lr_qdrant_unreachable" >&2
+  fail=1
+fi
+
+lr_qdrant_skipped="$(last_run_json ok skipped ok ok development 1)"
+if printf '%s' "$lr_qdrant_skipped" | grep -q '"succeeded":true' \
+   && printf '%s' "$lr_qdrant_skipped" | grep -q '"vectors_captured":false'; then
+  pass "a run with no collections to snapshot succeeds without claiming vectors"
+else
+  printf 'FAIL: a zero-collection run was misreported (%s)\n' "$lr_qdrant_skipped" >&2
+  fail=1
+fi
+
+lr_qdrant_ok="$(last_run_json ok ok ok ok development 1)"
+if printf '%s' "$lr_qdrant_ok" | grep -q '"vectors_captured":true'; then
+  pass "a complete vector snapshot is reported as vectors captured"
+else
+  printf 'FAIL: a complete vector snapshot was not reported as captured (%s)\n' "$lr_qdrant_ok" >&2
+  fail=1
+fi
+
+# Off-site completeness is initialised beside the per-store states, not in the
+# upload block: an install with no bucket configured never reaches that block, and
+# an unbound variable there would abort the EXIT trap, leave no .last_run.json at
+# all, and make the restore safety gate refuse every restore.
+S3_INIT_BLOCK="$(sed -n '/^ATTEMPTED_AT=/,/^# write_last_run/p' "$BACKUP_SCRIPT")"
+lr_nobucket_dir="$(mktemp -d)"
+lr_nobucket="$(
+  BACKUP_DIR="$lr_nobucket_dir" TIMESTAMP=t RUN_ID=0123456789abcdef0123456789abcdef \
+  ENCRYPT=1 ENVIRONMENT=development RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 \
+  bash -c '
+    set -euo pipefail
+    '"$S3_INIT_BLOCK"'
+    '"$COMPLETION_WLR"'
+    JARVIS_STATE=ok; LITELLM_STATE=ok; PDFS_STATE=ok; SECRETS_STATE=ok
+    MANIFEST_STATE=ok; MANIFEST_SIGNATURE_STATE=ok
+    write_last_run
+    cat "${BACKUP_DIR}/.last_run.json"
+  ' 2>/dev/null || true
+)"
+rm -rf "$lr_nobucket_dir"
+if [ -n "$lr_nobucket" ] && printf '%s' "$lr_nobucket" | grep -q '"s3_complete":true'; then
+  assert_valid_json ".last_run.json (no bucket configured)" "$lr_nobucket"
+  pass "an install with no off-site bucket still records a complete run"
+else
+  printf 'FAIL: no off-site bucket left the run record unwritten or incomplete (%s)\n' "$lr_nobucket" >&2
   fail=1
 fi
 
@@ -422,7 +490,7 @@ mf_rc=0
 BACKUP_DIR="$mf_dir" TIMESTAMP="$mf_ts" ATTEMPTED_AT=x RUN_ID=0123456789abcdef0123456789abcdef \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=skipped QDRANT_STATE=ok \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=skipped ENVIRONMENT=development \
-ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 \
+ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$mf_dir" MANIFEST_HMAC_MARKER="${mf_dir}/marker" \
 bash -c '
   set -uo pipefail
@@ -463,7 +531,7 @@ sf_rc=0
 BACKUP_DIR="$sf_dir" TIMESTAMP="$sf_ts" ATTEMPTED_AT=x RUN_ID=fedcba9876543210fedcba9876543210 \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
-ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$sf_dir" MANIFEST_HMAC_MARKER="${sf_dir}/marker" \
 bash -c '
   set -uo pipefail
@@ -502,7 +570,7 @@ rf_rc=0
 BACKUP_DIR="$rf_dir" TIMESTAMP="$rf_ts" ATTEMPTED_AT=x RUN_ID=00112233445566778899aabbccddeeff \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
-ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$rf_dir" MANIFEST_HMAC_MARKER="${rf_dir}/missing/marker" \
 bash -c '
   set -uo pipefail
@@ -898,6 +966,7 @@ replay_guard() {
     # ENCRYPT=1: the extracted span ends with the unconditional keyless refusal,
     # which would exit before the REACHED sentinel these cases key on.
     MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=1 RETENTION_DAYS=7 ENVIRONMENT=development
+    s3_complete=true
     LOCK_DIR="${BACKUP_DIR}/.lifecycle"
     BACKUP_LOCK="${LOCK_DIR}/backup.lock"
     UPDATE_LOCK="${LOCK_DIR}/update.lock"

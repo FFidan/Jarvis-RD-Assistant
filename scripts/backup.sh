@@ -419,10 +419,18 @@ if [ "$ENCRYPT" -eq 1 ]; then
 else
   MANIFEST_SIGNATURE_STATE="skipped"
 fi
+# Off-site capture is a claim about a copy nobody promised unless a bucket is
+# configured, so it starts true and only the upload block can falsify it. It must
+# be initialised HERE: write_last_run reads it on every exit path, including the
+# installs that never reach the upload block at all.
+s3_complete=true
 
 # write_last_run — emit ${BACKUP_DIR}/.last_run.json (a dotfile, NOT an archive,
 # so the router's allowlist/globs never match it).
 write_last_run() {
+  # FIRST statement: this runs as the EXIT trap, so $? is the script's exit
+  # status and any `local` declaration above would overwrite it.
+  local rc=$?
   [ "${SKIP_LAST_RUN_WRITE:-0}" = "1" ] && return 0
   local succeeded="false"
   # Keyless runs are refused before any archive is produced, so a complete set is
@@ -432,6 +440,15 @@ write_last_run() {
   [ "$SECRETS_STATE" = "ok" ] && secrets_complete="true"
   local signature_complete="false"
   [ "$MANIFEST_SIGNATURE_STATE" = "ok" ] && signature_complete="true"
+  # succeeded means exactly "a complete, restorable LOCAL set exists", and the
+  # per-store states below are its single source of truth. restore.sh consumes it
+  # as a hard gate on the safety pre-backup (safety_backup_is_fresh: it dies
+  # unless succeeded is true, and the restore aborts before any destruction), so
+  # adding a vector-store or off-site term here would block disaster recovery for
+  # a failure that left the local set intact — and a Qdrant container that is down
+  # is frequently the very reason an operator is restoring. Those outcomes are
+  # reported through vectors_captured / s3_complete instead, never through this
+  # chain.
   if [ "$JARVIS_STATE" = "ok" ] \
      && [ "$LITELLM_STATE" = "ok" ] \
      && [ "$PDFS_STATE" = "ok" ] \
@@ -457,9 +474,14 @@ write_last_run() {
   fi
   local bulk_refused="false"
   [ "${RETENTION_BULK_REFUSED:-0}" -eq 1 ] && bulk_refused="true"
+  # Vectors are captured only when every collection was snapshotted. "skipped"
+  # (nothing to snapshot) and "unreachable" both mean no vectors are in this set,
+  # so neither may read as captured.
+  local vectors_captured="false"
+  [ "$QDRANT_STATE" = "ok" ] && vectors_captured="true"
   local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
   cat > "$lr_tmp" <<JSON
-{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${retention},"retention_age_enabled":${age_enabled},"retention_bulk_refused":${bulk_refused},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"run_exit_code":${rc},"encrypted":${enc},"skipped_maintenance":${skipped},"vectors_captured":${vectors_captured},"s3_complete":${s3_complete},"retention_days":${retention},"retention_age_enabled":${age_enabled},"retention_bulk_refused":${bulk_refused},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
 JSON
   mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
 }
@@ -793,12 +815,16 @@ if collections_json="$(qdrant_http GET /collections 2>/dev/null)"; then
       echo "[$(date -Iseconds)] WARNING: failed to create Qdrant snapshot for '$col'; continuing" >&2
     fi
   done
-  # No snapshot failed and at least one collection was processed → ok. No
-  # collections (nothing to snapshot) or unreachable Qdrant stays skipped.
+  # No snapshot failed and at least one collection was processed → ok. Zero
+  # collections (nothing to snapshot) stays skipped.
   if [ "$QDRANT_STATE" = "skipped" ] && [ -n "$collections" ]; then
     QDRANT_STATE="ok"
   fi
 else
+  # A distinct state from "skipped": a fresh install with zero collections and a
+  # Qdrant container that was down both captured no vectors, but only the second
+  # is an outage the operator needs to see.
+  QDRANT_STATE="unreachable"
   echo "[$(date -Iseconds)] Qdrant unreachable at $QDRANT_URL; skipping vector snapshot (Postgres/secrets backups unaffected)" >&2
 fi
 
@@ -939,15 +965,42 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   if ! command -v aws >/dev/null 2>&1; then
     echo "[$(date -Iseconds)] aws CLI not available; skipping S3 upload (install awscli or use the amazon/aws-cli sidecar)"
   else
+    # The local set is already finalized and restorable at this point, so nothing
+    # in this block may change the script's exit status: restore.sh gates its
+    # safety pre-backup on the exit code BEFORE it ever reads succeeded, and an
+    # off-site outage that aborted the run would block disaster recovery from a
+    # perfectly good local set. Every command is guarded; the outcome is reported
+    # through s3_complete.
+    uploaded=()
     for f in "$JARVIS_BACKUP_FILE" "$LITELLM_BACKUP_FILE" "$PDFS_BACKUP_FILE" "$SECRETS_BACKUP_FILE" \
              "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json \
              "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json.hmac \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot.enc; do
       [ -n "$f" ] && [ -f "$f" ] || continue
-      aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/$(basename "$f")"
+      if aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/$(basename "$f")"; then
+        uploaded+=("$f")
+      else
+        s3_complete=false
+      fi
     done
-    echo "[$(date -Iseconds)] Uploaded backups to s3://${BACKUP_S3_BUCKET}/"
+    # A copy that uploaded is not yet a copy that arrived whole: compare the
+    # object's ContentLength to the local size, so a truncated transfer is not
+    # reported as an off-site copy.
+    for f in "${uploaded[@]}"; do
+      remote_size="$(aws s3api head-object --bucket "$BACKUP_S3_BUCKET" \
+        --key "$(basename "$f")" --query ContentLength --output text 2>/dev/null || true)"
+      local_size="$(wc -c < "$f" 2>/dev/null || true)"
+      if [ -z "$remote_size" ] || [ "$remote_size" != "$local_size" ]; then
+        s3_complete=false
+        echo "[$(date -Iseconds)] WARNING: off-site copy of $(basename "$f") does not match the local archive size" >&2
+      fi
+    done
+    if [ "$s3_complete" = "true" ]; then
+      echo "[$(date -Iseconds)] Uploaded backups to s3://${BACKUP_S3_BUCKET}/"
+    else
+      echo "[$(date -Iseconds)] FATAL: off-site upload incomplete; the S3 copy of ${TIMESTAMP} must not be trusted" >&2
+    fi
   fi
 fi
 

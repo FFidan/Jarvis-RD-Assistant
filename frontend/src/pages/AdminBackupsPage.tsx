@@ -674,6 +674,18 @@ export function AdminBackupsPage() {
   };
 
   const points = restore?.restore_points ?? [];
+  // A run succeeds when a complete restorable local set exists, which stays true
+  // when the vector store could not be snapshotted or the off-site copy failed.
+  // Those shortfalls have no other surface, so the status line has to name them.
+  const noVectors = status?.last_run_vectors_captured === false;
+  const noOffSite = status?.last_run_s3_complete === false;
+  const incompleteCapture = noVectors
+    ? noOffSite
+      ? 'vectors were not captured and the off-site copy is incomplete'
+      : 'vectors were not captured'
+    : noOffSite
+      ? 'the off-site copy is incomplete'
+      : null;
   const inboxPoints = inbox.data ?? [];
   const confirmPoint = confirmTs ? (points.find((p) => p.timestamp === confirmTs) ?? null) : null;
   const deleteConfirmPoint = deleteConfirmTs
@@ -734,6 +746,11 @@ export function AdminBackupsPage() {
             <span className="text-amber-700 dark:text-amber-400">
               Last backup attempt failed — check the backup service.
               {status.last_attempt_at ? ` (${formatAge(status.last_attempt_at)})` : ''}
+            </span>
+          ) : status?.last_run_succeeded && incompleteCapture ? (
+            <span className="text-amber-700 dark:text-amber-400">
+              {`Last backup completed, but ${incompleteCapture}.`}
+              {status.last_run_at ? ` (${formatAge(status.last_run_at)})` : ''}
             </span>
           ) : status?.last_run_at ? (
             `Last backup ${formatAge(status.last_run_at)} · ${points.length} restore point${points.length !== 1 ? 's' : ''}`

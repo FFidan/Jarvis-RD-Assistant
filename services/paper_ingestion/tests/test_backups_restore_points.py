@@ -238,9 +238,49 @@ def test_last_run_surfaces_failure_in_status_and_restore_points(backup_dir):
         attempted_at=run.get("attempted_at"),
         succeeded=run.get("succeeded"),
         stores=run.get("stores") or {},
+        vectors_captured=bk._last_run_flag(run, "vectors_captured"),
+        s3_complete=bk._last_run_flag(run, "s3_complete"),
     )
     assert last_run.succeeded is False
     assert last_run.stores["jarvis"] == "failed"
+    # This record predates the truthfulness fields, so both degrade to "unknown"
+    # rather than claiming a capture that was never recorded.
+    assert last_run.vectors_captured is None
+    assert last_run.s3_complete is None
+
+
+def test_status_surfaces_vector_and_off_site_capture_from_the_run_record(backup_dir):
+    # A run whose only failures were the vector store and the off-site copy still
+    # produced a complete restorable local set, so succeeded stays true — the two
+    # shortfalls have to reach /status on their own fields or they reach nobody.
+    (backup_dir / ".last_run.json").write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-06-24T03:00:00+00:00",
+                "succeeded": True,
+                "vectors_captured": False,
+                "s3_complete": False,
+                "stores": {"jarvis": "ok", "qdrant": "unreachable"},
+            }
+        )
+    )
+
+    run = bk._read_last_run()
+    assert bk._last_run_succeeded(run) is True
+    assert bk._last_run_flag(run, "vectors_captured") is False
+    assert bk._last_run_flag(run, "s3_complete") is False
+    assert run["stores"]["qdrant"] == "unreachable"
+
+
+def test_status_reports_unknown_capture_for_records_that_predate_the_fields(backup_dir):
+    (backup_dir / ".last_run.json").write_text(
+        json.dumps({"succeeded": True, "stores": {"jarvis": "ok"}})
+    )
+
+    run = bk._read_last_run()
+    assert bk._last_run_flag(run, "vectors_captured") is None
+    assert bk._last_run_flag(run, "s3_complete") is None
+    assert bk._last_run_flag(None, "vectors_captured") is None
 
 
 def test_read_last_run_returns_none_when_absent_or_malformed(backup_dir):
