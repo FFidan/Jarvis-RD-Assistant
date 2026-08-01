@@ -28,7 +28,7 @@ export function CitationGraphPage() {
   const [selectedPapers, setSelectedPapers] = useState<PaperBrief[]>([]);
   const [depth, setDepth] = useState(1);
   const [layout, setLayout] = useState<LayoutType>('cose');
-  const [stubPanelNode, setStubPanelNode] = useState<CytoscapeNode | null>(null);
+  const [stubPanelNodeId, setStubPanelNodeId] = useState<string | null>(null);
 
   const paperIds = selectedPapers.map((p) => p.id);
 
@@ -67,22 +67,26 @@ export function CitationGraphPage() {
     stub: '#cccccc',
   };
 
-  // Cytoscape's tap handler delivers node ids as strings; `nodes` above already
-  // converts each GraphNode.id (int) to that same string form, so this lookup is
-  // the one place the number/string boundary is crossed.
+  // Cytoscape's tap handler delivers node ids as strings; `nodes` above converts
+  // each GraphNode.id (int) to that same string form at `:47`, which is the one
+  // place the number/string boundary is crossed, so this lookup compares strings.
   const handleNodeClick = useCallback(
     (nodeId: string) => {
       const node = nodes.find((n) => n.id === nodeId);
       if (!node) return;
       if (node.type === 'stub') {
-        setStubPanelNode(node);
+        setStubPanelNodeId(node.id);
         return;
       }
-      setStubPanelNode(null);
+      setStubPanelNodeId(null);
       navigate(`/paper/${node.id}`);
     },
     [nodes, navigate],
   );
+
+  // Resolved every render so a stub panel cannot outlive the graph that holds it:
+  // changing the seed papers re-fetches `nodes`, and a node that is gone closes.
+  const stubPanelNode = nodes.find((n) => n.id === stubPanelNodeId) ?? null;
 
   const stats = graphData
     ? [
@@ -192,7 +196,7 @@ export function CitationGraphPage() {
                   size="icon"
                   className="h-6 w-6"
                   aria-label="Close"
-                  onClick={() => setStubPanelNode(null)}
+                  onClick={() => setStubPanelNodeId(null)}
                 >
                   <X className="h-4 w-4" />
                 </Button>

@@ -4,7 +4,7 @@
 
 The **Knowledge Graph** page at `/knowledge` displays an interactive concept-level graph of entities extracted from papers visible to you — public papers plus any papers in your own library — rendered using Cytoscape.js.
 
-<!-- screenshot: /knowledge — Cytoscape graph with EntityTypeFilter chips visible, coloured nodes, and GraphStats panel -->
+<!-- screenshot: /knowledge — Cytoscape graph with the Filters card (entity type dropdown and paper-count slider), coloured nodes, and GraphStats panel -->
 
 ---
 
@@ -57,15 +57,15 @@ A natural-language query box. Type a question such as "What methods are used on 
 
 ## Graph statistics
 
-**GraphStats** — a summary panel showing the total number of nodes and edges currently visible, broken down by entity type.
+**GraphStats** — a summary panel showing three totals for the graph currently on screen: the number of entities, the number of relationships, and how many distinct entity types are present.
 
-**EntityBreakdown** — a list or chart showing how many entities of each type exist in the full (unfiltered) graph, helping you understand the composition of your knowledge graph.
+**EntityBreakdown** — how many entities of each type are in the graph you are currently looking at. It follows the filters, so narrowing to a single entity type leaves one row; clear the filters to see the whole composition.
 
 ---
 
 ## Batch extraction
 
-If unprocessed papers exist, an admin-only **Batch Extract Entities** button appears on an otherwise empty graph. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities. The graph populates as extraction jobs complete.
+An admin-only **Batch Extract Entities** button appears whenever the graph comes back empty. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities, and reports how many it handled — if nothing has been summarized yet, that count is zero and the graph stays empty until summaries exist. The graph populates as extraction jobs complete.
 
 You can also trigger extraction for individual papers from the [Paper Detail](paper-detail.md) page (the Actions rail → Extract Entities).
 

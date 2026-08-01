@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { CitationGraphPage } from '@/pages/CitationGraphPage';
-import { fetchCitationsFromS2 } from '@/lib/api';
+import { fetchCitationsFromS2, getCitationGraph } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock cytoscape so jsdom doesn't choke on canvas. Capture registered tap
@@ -204,6 +204,35 @@ describe('CitationGraphPage', () => {
     expect(panel).toHaveTextContent('100 citations');
     expect(panel).toHaveTextContent('Jan 1, 2015');
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('closes the stub panel when the graph no longer contains that node', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectAttentionPaper(user);
+
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '10' } }));
+    await waitFor(() => {
+      expect(screen.getByTestId('citation-stub-panel')).toBeInTheDocument();
+    });
+
+    vi.mocked(getCitationGraph).mockResolvedValueOnce({
+      nodes: [
+        {
+          id: 2,
+          title: 'BERT: Pre-training of Deep Bidirectional Transformers',
+          citation_count: 40000,
+          published_date: '2018-10-01',
+          is_stub: false,
+        },
+      ],
+      edges: [],
+    });
+    await user.click(screen.getByText('BERT: Pre-training of Deep Bidirectional Transformers'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('citation-stub-panel')).not.toBeInTheDocument();
+    });
   });
 
   it('activates the same handler from the hidden keyboard list', async () => {

@@ -47,8 +47,10 @@ gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all \
 ```
 
 If the lifecycle run fails, download its `lifecycle-smoke-log` artifact before
-anything else and read the tail; the failure path in step 3 explains what that
-log contains.
+anything else and search it for `=== diagnostics: project` — a run covering
+every leg keeps going after one fails, so the failing leg's evidence is usually
+far from the end of the log. The failure path in step 3 explains what that
+block contains.
 
 This branch check selects the two newest published tags, which predate the
 candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
@@ -104,11 +106,15 @@ gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
 
 When a lifecycle run fails, start from its `lifecycle-smoke-log` artifact rather
 than the job page. For a failed leg that owns a Compose project — `tls`,
-`update`, or `uninstall` — the log tail carries that project's container
-listing, each container's state and exit code, and each container's own output,
-captured before the leg's resources were removed. The `restore` leg owns no
-Compose project; its evidence is the round-trip sub-script log, which the smoke
-echoes inline. Fix the cause, then re-dispatch only the check that failed:
+`update`, or `uninstall` — search the log for `=== diagnostics: project`, which
+opens that project's container listing, each container's state and exit code,
+and each container's own output, captured before the leg's resources were
+removed. A run covering every leg continues after a leg fails, so that block
+will not be at the end of the log. The smoke registers no Compose project for
+the `restore` leg, so it produces no such block; its evidence is the round-trip
+sub-script log, which the smoke echoes inline, and which names the separate
+project the sub-script creates for its fixture. Fix the cause, then re-dispatch
+only the check that failed:
 identical re-dispatches supersede each other, while runs differing in `leg`,
 `update_from`, `update_to`, or `update_mode` now run concurrently.
 
