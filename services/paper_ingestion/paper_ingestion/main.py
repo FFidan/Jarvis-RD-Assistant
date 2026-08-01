@@ -68,7 +68,12 @@ from paper_ingestion.ingestion.embedding_config import (
     EMBEDDING_MODEL_NAME,
 )
 from paper_ingestion.ingestion.payload_schema import run_visibility_reconciler
-from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
+from paper_ingestion.integrations.zotero_client import (
+    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+    BBTPrivateHostError,
+    refresh_configured_private_hosts,
+    validate_bbt_base_url,
+)
 
 # Re-exported so `from paper_ingestion.main import <name>` keeps resolving after
 # the LiteLLM reconciler moved to paper_ingestion.litellm_reconciler. main.py
@@ -125,8 +130,21 @@ async def _validate_bbt_url_hook(app: FastAPI) -> None:
 
     Must run before any Zotero integration touches the URL — the SSRF surface
     area is the BBT translator endpoint.
+
+    A private host is reported, not fatal: aborting the boot would lock the
+    operator out of the Settings page where the host is allowlisted, and the
+    Better BibTeX request path enforces the same policy per request. An
+    unsupported scheme is a configuration typo and still stops startup.
     """
-    validate_bbt_base_url()
+    await refresh_configured_private_hosts(app.state.db_pool)
+    try:
+        validate_bbt_base_url()
+    except BBTPrivateHostError as exc:
+        logger.warning(
+            "%s Add the host under %s in Settings to allow it.",
+            exc,
+            BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+        )
 
 
 async def _run_migrations_hook(app: FastAPI) -> None:

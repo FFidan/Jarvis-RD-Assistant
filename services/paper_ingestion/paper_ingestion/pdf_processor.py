@@ -40,6 +40,7 @@ __all__ = [
     "ALLOWED_PDF_DOMAINS",
     "MAX_PDF_PAGES",
     "MAX_PDF_SIZE",
+    "MAX_UPLOAD_PDF_SIZE",
     "SNAPSHOT_DPI",
     "SNAPSHOT_STORAGE_PATH",
     "check_pdf_path_safe",
@@ -53,7 +54,12 @@ _cfg = get_paper_ingestion_settings()
 PDF_STORAGE_PATH = _cfg.pdf_storage_path
 SNAPSHOT_STORAGE_PATH = _cfg.snapshot_storage_path
 SNAPSHOT_DPI = 150
-MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB — disk imports and remote downloads
+# Browser uploads additionally pass through the reverse proxy, whose per-location
+# `client_max_body_size 50m` (frontend/nginx.conf:357, server default at :103) is
+# the real cap on that path. Keeping the app limit in step means the rejection is
+# reported by the API instead of as an opaque proxy error.
+MAX_UPLOAD_PDF_SIZE = 50 * 1024 * 1024  # 50 MB
 MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)
 
 # CGNAT shared address space (RFC 6598) — not reachable from the public internet
@@ -461,7 +467,9 @@ async def _validate_pdf_url(url: str) -> None:
     if not hostname:
         raise ValueError("URL has no hostname")
 
-    if hostname not in ALLOWED_PDF_DOMAINS and hostname not in DEV_HTTP_ALLOWLIST:
+    # The dev hostnames widen the domain gate only in dev mode; in production the
+    # allowlist below is the single narrow domain set the rebinding note relies on.
+    if hostname not in ALLOWED_PDF_DOMAINS and not (dev_mode and hostname in DEV_HTTP_ALLOWLIST):
         raise ValueError(f"Domain '{hostname}' is not allowed for PDF downloads")
 
     # Resolve hostname and block private IPs

@@ -287,3 +287,62 @@ async def test_zotero_key_not_blocked_by_allowlist(_app, fernet_key):
         resp = await _put_config(app, key, value)
         assert resp.status_code == 200, f"Key {key!r} was blocked by allowlist: {resp.json()}"
         conn.execute.reset_mock()
+
+
+# ---------------------------------------------------------------------------
+# zotero.allowed_private_hosts — operator escape hatch for a LAN Better BibTeX
+# ---------------------------------------------------------------------------
+
+_ALLOWED_PRIVATE_HOSTS_KEY = "zotero.allowed_private_hosts"
+
+
+async def _put_admin_config(app, key: str, value):
+    """PUT as an admin browser session — the key is deployment-wide."""
+    from jarvis_common.testing import RoleMiddleware
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=RoleMiddleware(app, "admin")), base_url="http://test"
+    ) as client:
+        return await client.put(f"/api/config/{key}", json={"key": key, "value": value})
+
+
+@pytest.mark.asyncio
+async def test_allowed_private_hosts_round_trip(_app):
+    """A list of bare hostnames saves and comes back unchanged."""
+    app, _conn = _app
+    resp = await _put_admin_config(app, _ALLOWED_PRIVATE_HOSTS_KEY, ["zotero.lan", "192.168.1.50"])
+    assert resp.status_code == 200
+    assert resp.json()["value"] == ["zotero.lan", "192.168.1.50"]
+
+
+@pytest.mark.asyncio
+async def test_saving_the_allowlist_refreshes_the_client_cache(_app):
+    """The Better BibTeX client caches the allowlist, so a save must refresh it."""
+    from paper_ingestion.integrations import zotero_client
+
+    app, _conn = _app
+    zotero_client.set_configured_private_hosts(frozenset())
+    app.state.db_pool.fetch = AsyncMock(return_value=[{"value": ["zotero.lan"]}])
+    try:
+        resp = await _put_admin_config(app, _ALLOWED_PRIVATE_HOSTS_KEY, ["zotero.lan"])
+        assert resp.status_code == 200
+        assert "zotero.lan" in zotero_client.bbt_private_host_allowlist()
+    finally:
+        zotero_client.set_configured_private_hosts(frozenset())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        "zotero.lan",  # not a list
+        ["http://zotero.lan"],  # carries a scheme
+        ["zotero.lan/bbt"],  # carries a path
+        [f"host{n}.lan" for n in range(21)],  # over the twenty-entry cap
+    ],
+)
+async def test_allowed_private_hosts_rejects_unusable_entries(_app, value):
+    """Entries that could never match a parsed host are refused at the API."""
+    app, _conn = _app
+    resp = await _put_admin_config(app, _ALLOWED_PRIVATE_HOSTS_KEY, value)
+    assert resp.status_code == 400

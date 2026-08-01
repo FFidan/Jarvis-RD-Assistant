@@ -7,10 +7,15 @@ All tests are async (asyncio_mode = auto in pyproject.toml).
 from __future__ import annotations
 
 import json
+import logging
+import socket
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
+from paper_ingestion.integrations import zotero_client
 from paper_ingestion.integrations.zotero_client import (
     BBT_LOCAL_BASE,
     ZOTERO_API_BASE,
@@ -624,3 +629,143 @@ async def test_add_item_to_collections_noop_when_already_member(client):
     await client.add_item_to_collections(item_key, ["C1"])
 
     assert not patch_route.called
+
+
+# ---------------------------------------------------------------------------
+# Better BibTeX host policy — private hosts need an explicit allowlist entry
+# ---------------------------------------------------------------------------
+
+_LAN_BBT_BASE = "http://zotero.lan:23119"
+
+
+@pytest.fixture
+def _lan_bbt(monkeypatch):
+    """Point the client at a LAN hostname and start from an empty allowlist."""
+    monkeypatch.setattr(
+        zotero_client,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(bbt_base_url=_LAN_BBT_BASE),
+    )
+    zotero_client.set_configured_private_hosts(frozenset())
+    yield
+    zotero_client.set_configured_private_hosts(frozenset())
+
+
+def _resolves_to(address: str):
+    def _getaddrinfo(host, port, *args, **kwargs):
+        return [(2, 1, 6, "", (address, port or 0))]
+
+    return _getaddrinfo
+
+
+def _unresolvable(host, port, *args, **kwargs):
+    raise socket.gaierror("Name or service not known")
+
+
+@respx.mock
+@pytest.mark.usefixtures("_lan_bbt")
+async def test_private_resolving_host_issues_no_request(client, monkeypatch, caplog):
+    """A host resolving into private space is refused before anything goes out."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
+    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
+        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_client"):
+        result = await client.fetch_bbt_citation_key("ABCD1234")
+
+    assert result is None
+    # The observable: a refusal raised inside the client's blanket except would
+    # look identical, but the request would already have been issued.
+    assert not route.called
+    assert any("zotero.allowed_private_hosts" in r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+@pytest.mark.usefixtures("_lan_bbt")
+async def test_allowlisted_private_host_is_reached(client, monkeypatch):
+    """The same host is reachable once the operator allowlists it."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
+    zotero_client.set_configured_private_hosts(frozenset({"zotero.lan"}))
+    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
+        return_value=httpx.Response(200, json=[{"id": "Author2024xyz"}])
+    )
+
+    assert await client.fetch_bbt_citation_key("ABCD1234") == "Author2024xyz"
+    assert route.called
+
+
+@respx.mock
+@pytest.mark.usefixtures("_lan_bbt")
+@respx.mock
+@pytest.mark.usefixtures("_lan_bbt")
+async def test_host_resolving_to_a_scoped_address_is_refused(client, monkeypatch):
+    """A scoped IPv6 answer cannot be classified, so it must not reach the request."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("fe80::1%eth0"))
+    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
+        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
+    )
+
+    assert await client.fetch_bbt_citation_key("ABCD1234") is None
+    assert not route.called
+
+
+@respx.mock
+@pytest.mark.usefixtures("_lan_bbt")
+async def test_unresolvable_host_is_rechecked_and_still_refused(client, monkeypatch):
+    """A boot-time DNS outage must not become a permanent verdict either way."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _unresolvable)
+    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
+        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
+    )
+
+    assert await client.fetch_bbt_citation_key("ABCD1234") is None
+    assert not route.called
+
+    # DNS recovers, and now answers with a private address: still refused.
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("10.0.0.9"))
+    assert await client.fetch_bbt_citation_key("ABCD1234") is None
+    assert not route.called
+
+
+async def test_startup_hook_reports_a_private_host_without_aborting_boot(monkeypatch, caplog):
+    """Boot must survive a private BBT host — Settings is where it gets allowlisted."""
+    import paper_ingestion.main as main_module
+
+    monkeypatch.setattr(
+        zotero_client,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(bbt_base_url="http://192.168.1.50:23119"),
+    )
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[])
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.main"):
+        await main_module._validate_bbt_url_hook(app)  # must not raise
+
+    assert any("zotero.allowed_private_hosts" in r.getMessage() for r in caplog.records)
+
+
+async def test_startup_hook_still_aborts_on_an_unsupported_scheme(monkeypatch):
+    """A scheme typo is a configuration error, not a reachability policy."""
+    import paper_ingestion.main as main_module
+
+    monkeypatch.setattr(
+        zotero_client,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(bbt_base_url="file:///etc/passwd"),
+    )
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[])
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        await main_module._validate_bbt_url_hook(app)
+
+
+def test_validate_bbt_base_url_honours_a_configured_allowlist():
+    """A configured host clears the private-IP refusal for the startup check."""
+    validate_bbt_base_url(
+        "http://192.168.1.50:23119", allowed_private_hosts=frozenset({"192.168.1.50"})
+    )

@@ -16,6 +16,10 @@ from jarvis_common.crypto import encrypt_secret, mask_secret
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 from pydantic import BaseModel, model_serializer
 
+from paper_ingestion.integrations.zotero_client import (
+    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+    refresh_configured_private_hosts,
+)
 from paper_ingestion.services.config_db import _write_config_row
 from paper_ingestion.services.config_metadata import (
     _ENCRYPTED_KEYS,
@@ -554,6 +558,11 @@ async def write_config(
                 " AND key = 'zotero.last_library_version'",
                 row_user_id,
             )
+
+    # Better BibTeX host allowlist refresh — the client caches it, so without
+    # this the saved hosts would not take effect until the next restart.
+    if key == BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY:
+        await refresh_configured_private_hosts(db_pool)
 
     # Telegram nudge reload on timezone change
     if key == "user.timezone":

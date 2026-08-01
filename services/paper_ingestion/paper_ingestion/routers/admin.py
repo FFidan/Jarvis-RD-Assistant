@@ -552,6 +552,19 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                 user_id,
             )
 
+            # Revoking in the same transaction is what makes the deletion take
+            # effect: an unexpired session cookie would otherwise keep
+            # authenticating the account. Keyed on user_id so non-passkey
+            # sessions are covered, and scoped so no other user is signed out.
+            await conn.execute(
+                """
+                UPDATE sessions
+                SET revoked_at = NOW()
+                WHERE user_id = $1 AND revoked_at IS NULL
+                """,
+                user_id,
+            )
+
             # Soft delete only — the daily data_purge job hard-deletes after
             # the 30-day grace, when ownership is no longer attached to this row.
             await log_audit_strict(

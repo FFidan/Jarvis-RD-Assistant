@@ -689,3 +689,32 @@ async def test_get_pdf_rejects_traversal_path(monkeypatch):
         app.state.limiter.enabled = True
 
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_scan_local_pdfs_accepts_a_file_above_the_browser_upload_limit(tmp_path, monkeypatch):
+    """A 60 MB file imported from a local folder never passes through the proxy.
+
+    The browser-upload cap is a property of that one route; applying it here
+    would start rejecting folder imports that used to work.
+    """
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+
+    big_pdf = scan_dir / "thesis.pdf"
+    big_pdf.write_bytes(b"%PDF-1.7\n" + b"x" * (60 * 1024 * 1024))
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[None, FakeRecord(id=11)])
+    conn.execute = AsyncMock()
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    monkeypatch.setattr(local_pdfs, "LOCAL_PDF_SCAN_DIR", str(scan_dir))
+    monkeypatch.setattr(local_pdfs, "PDF_STORAGE_PATH", str(storage_dir))
+
+    result = await local_pdfs.scan_local_pdf_directory(pool)
+
+    assert result["imported"] == 1
+    assert result["skipped"] == 0

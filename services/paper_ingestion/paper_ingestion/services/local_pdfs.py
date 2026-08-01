@@ -83,7 +83,7 @@ async def scan_local_pdf_directory(
             continue
 
         file_hash = hashlib.sha256(content).hexdigest()
-        external_id = f"local:{file_hash[:16]}"
+        external_id = f"local:{file_hash}"
 
         async with db_pool.acquire() as file_conn:
             existing = await file_conn.fetchrow(
