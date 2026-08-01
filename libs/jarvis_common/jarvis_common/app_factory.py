@@ -45,6 +45,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from jarvis_common._ctx_shim import ProcrastinateJobContextShim
 from jarvis_common.auth import (
     RAW_CLIENT_SCOPE_KEY,
     invalidate_api_key_login_cache,
@@ -157,6 +158,76 @@ def _start_worker_task(app: FastAPI, queues: list[str]) -> None:
     )
 
 
+_STALLED_HEARTBEAT_SECONDS = 120  # tolerates 12 missed 10s heartbeats (procrastinate default)
+
+_RECLAIM_INTERVAL_SECONDS = _STALLED_HEARTBEAT_SECONDS + 30  # strictly greater than the
+# threshold so a dead worker's heartbeat has aged out by the first sweep after it
+
+_INTERRUPTED_JOB_ERROR = {
+    "message": (
+        "The service was interrupted while this job was running. Start it again to resume."
+    ),
+    "code": "JOB_INTERRUPTED",
+}
+
+
+async def _reclaim_stalled_jobs(app: FastAPI) -> int:
+    """Mark jobs abandoned by a dead worker as failed with a resumable message.
+
+    Runs at every worker start AND from a periodic sweep: the selecting
+    predicate is the WORKER row's heartbeat, so a job stranded by a fast
+    restart only becomes visible once that row ages past the threshold. It
+    also selects every ``doing`` job whose worker row is gone entirely
+    (``worker_id IS NULL``, no time condition) -- nothing else can ever reclaim
+    those; the cost is that a live worker whose row was pruned during a >30s
+    stall has its still-running job marked failed with a resumable message.
+    Both services run this against the shared job table; the per-job guard
+    below makes the resulting finish_job races benign.
+    """
+    from procrastinate.jobs import Status as ProcrastinateJobStatus  # noqa: PLC0415
+
+    procrastinate_app = getattr(app.state, "procrastinate_app", None)
+    if procrastinate_app is None:
+        return 0
+    db_pool = getattr(app.state, "db_pool", None)
+    try:
+        stalled = await procrastinate_app.job_manager.get_stalled_jobs(
+            seconds_since_heartbeat=_STALLED_HEARTBEAT_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 — reclamation must never block worker start
+        logger.warning("Stalled-job reclamation failed; starting worker anyway", exc_info=True)
+        return 0
+    count = 0
+    for job in stalled:
+        try:
+            await procrastinate_app.job_manager.finish_job(
+                job, status=ProcrastinateJobStatus.FAILED, delete_job=False
+            )
+            # Surface the reason through the channel the UI already reads.
+            jarvis_job_id = (job.task_kwargs or {}).get("job_id")
+            if jarvis_job_id and db_pool is not None:
+                await ProcrastinateJobContextShim(
+                    job_id=str(jarvis_job_id), pool=db_pool
+                ).record_terminal_outcome(error=_INTERRUPTED_JOB_ERROR, is_error=True)
+            count += 1
+        except Exception:  # noqa: BLE001 — the sibling service's sweep may have won this job
+            logger.debug("Job %s already reclaimed elsewhere; continuing", job.id, exc_info=True)
+    if count:
+        logger.warning("Reclaimed %d job(s) abandoned by an interrupted worker", count)
+    return count
+
+
+async def _reclaim_stalled_jobs_forever(app: FastAPI) -> None:
+    """Sweep for jobs abandoned by a dead worker until cancelled.
+
+    :func:`_reclaim_stalled_jobs` swallows its own exceptions, so a transient
+    database error cannot kill the loop.
+    """
+    while True:
+        await asyncio.sleep(_RECLAIM_INTERVAL_SECONDS)
+        await _reclaim_stalled_jobs(app)
+
+
 async def _pause_worker_task(app: FastAPI) -> None:
     """Cancel the worker loop but KEEP the connector open (distinct from shutdown).
 
@@ -171,6 +242,15 @@ async def _pause_worker_task(app: FastAPI) -> None:
             await task
     app.state.procrastinate_worker_task = None
 
+    # The reclamation sweep issues the same UPDATE procrastinate_jobs writes a
+    # restore must not observe, so it pauses with the worker loop.
+    reclaim_task = getattr(app.state, "reclaim_task", None)
+    if reclaim_task is not None:
+        reclaim_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await reclaim_task
+    app.state.reclaim_task = None
+
 
 async def shutdown_procrastinate_worker(app: FastAPI) -> None:
     """Cancel the procrastinate worker task and close the connector."""
@@ -179,6 +259,13 @@ async def shutdown_procrastinate_worker(app: FastAPI) -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+
+    reclaim_task = getattr(app.state, "reclaim_task", None)
+    if reclaim_task is not None:
+        reclaim_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await reclaim_task
+        app.state.reclaim_task = None
 
     procrastinate_app = getattr(app.state, "procrastinate_app", None)
     if procrastinate_app is not None:
@@ -600,7 +687,11 @@ def make_procrastinate_worker_hook(
         set_dependencies(app.state.db_pool, app.state.http_client)
 
         app.state.procrastinate_app = procrastinate_app
+        await _reclaim_stalled_jobs(app)
         _start_worker_task(app, queues)
+        app.state.reclaim_task = asyncio.create_task(
+            _reclaim_stalled_jobs_forever(app), name="reclaim_stalled_jobs"
+        )
 
     return _hook
 
@@ -619,7 +710,11 @@ async def _resume_after_maintenance(app: FastAPI, queues: list[str]) -> None:
     await run_migrations(app.state.db_pool)
     invalidate_api_key_login_cache()
     invalidate_effective_num_ctx_cache()
+    await _reclaim_stalled_jobs(app)
     _start_worker_task(app, queues)
+    app.state.reclaim_task = asyncio.create_task(
+        _reclaim_stalled_jobs_forever(app), name="reclaim_stalled_jobs"
+    )
     logger.info("maintenance: reconciled schema and resumed writers")
 
 
