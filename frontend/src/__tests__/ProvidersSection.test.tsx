@@ -18,6 +18,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...orig,
     fetchConfig: vi.fn(),
+    fetchSystemModels: vi.fn(),
     listProviders: vi.fn(),
     setConfig: vi.fn().mockResolvedValue({ key: '', value: null }),
     testProvider: vi.fn(),
@@ -36,8 +37,10 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
-const { fetchConfig, listProviders, setConfig, testProvider } = await import('@/lib/api');
+const { fetchConfig, fetchSystemModels, listProviders, setConfig, testProvider } = await import('@/lib/api');
 const { toast } = await import('sonner');
+
+const EMPTY_SYSTEM_MODELS = { catalog: [], provider_lists: {} };
 
 const PROVIDERS: ProviderMetadata[] = [
   {
@@ -104,6 +107,7 @@ describe('ProvidersSection', () => {
     vi.clearAllMocks();
     vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
     vi.mocked(listProviders).mockResolvedValue(PROVIDERS);
+    vi.mocked(fetchSystemModels).mockResolvedValue(EMPTY_SYSTEM_MODELS);
   });
 
   it('shows connected providers first without exposing every provider input', async () => {
@@ -237,5 +241,93 @@ describe('ProvidersSection', () => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
     });
     expect(screen.getByText('Configured, degraded: Invalid API key')).toBeInTheDocument();
+  });
+
+  it('shows model count and fetch staleness for a connected provider with a live list', async () => {
+    vi.mocked(fetchSystemModels).mockResolvedValue({
+      catalog: [
+        { provider: 'anthropic' },
+        { provider: 'anthropic' },
+      ],
+      provider_lists: {
+        anthropic: { fetched_at: new Date().toISOString(), error: null, truncated: false },
+      },
+    });
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByText(/2 models available/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Fetched/)).toBeInTheDocument();
+  });
+
+  it('shows the unavailable text for a connected provider whose live fetch errored', async () => {
+    vi.mocked(fetchSystemModels).mockResolvedValue({
+      catalog: [],
+      provider_lists: {
+        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: 'provider request failed', truncated: false },
+      },
+    });
+    renderSection();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("No models available yet — JARVIS could not fetch this provider's model list"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('shows both tested-connectivity and zero-models availability for the same tile', async () => {
+    vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
+    vi.mocked(fetchSystemModels).mockResolvedValue({
+      catalog: [],
+      provider_lists: {
+        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Configured and tested')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("No models available yet — JARVIS could not fetch this provider's model list"),
+    ).toBeInTheDocument();
+  });
+
+  it('renders a tile and its availability line for a base-URL-only provider with no key', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      ...PROVIDERS,
+      {
+        id: 'custom_openai_compatible2',
+        display_name: 'Second Custom Endpoint',
+        kind: 'self_hosted',
+        api_key_config_key: 'llm.providers.custom_openai_compatible2.api_key',
+        base_url_config_key: 'llm.providers.custom_openai_compatible2.base_url',
+        assignment_prefix: 'custom_openai2/',
+        litellm_prefix: 'openai/',
+        privacy_boundary: 'self_hosted',
+        best_for: 'A second self-hosted endpoint.',
+        data_note: 'Requests are sent to the configured endpoint.',
+        configured: false,
+        base_url_configured: true,
+        supports_assignment: true,
+      },
+    ]);
+    vi.mocked(fetchSystemModels).mockResolvedValue({
+      catalog: [{ provider: 'custom_openai_compatible2' }],
+      provider_lists: {
+        custom_openai_compatible2: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Second Custom Endpoint')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/1 model available/)).toBeInTheDocument();
   });
 });

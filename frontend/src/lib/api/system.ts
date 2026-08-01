@@ -78,6 +78,13 @@ export interface HardwareRecommendation {
   aliases: HardwareRecommendationAlias[];
 }
 
+/** Per-provider live model-list fetch status, keyed by provider id. */
+export interface ProviderModelListStatus {
+  fetched_at: string | null;
+  error: string | null;
+  truncated?: boolean;
+}
+
 // Canonical response shape for /api/system/models.
 // IngestionSection uses hardware/catalog/hardware_recommendation;
 // ModelSelector uses status/installed/current/issues/catalog/hardware.
@@ -111,6 +118,13 @@ export interface SystemModelsResponse {
    * Defaults to true when absent (older backends without T1.3).
    */
   consistent?: boolean;
+  /**
+   * Per-cloud-provider live model-list fetch status (fetched-at, error, truncation).
+   * Catalog entries carry no per-entry shape here, so this is the only place a
+   * provider whose fetch failed and which has no bundled catalog entries can be seen.
+   * Additive — absent on older backends.
+   */
+  provider_lists?: Record<string, ProviderModelListStatus>;
 }
 
 /**

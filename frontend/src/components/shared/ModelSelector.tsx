@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { formatDistanceToNow } from 'date-fns';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { ChevronDown, ChevronRight, Cpu, Download, Trash2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
@@ -91,6 +92,10 @@ interface ModelCatalogEntry {
   fit_detail?: ModelFitDetail;
   /** True for thinking-capable models (Qwen3 family). T3-A populates this. */
   supports_thinking?: boolean;
+  /** Where this entry came from. Absent (catalog) on older backends and on bundled entries. */
+  source?: 'catalog' | 'provider';
+  /** When a live-fetched entry's provider list was last fetched. Absent for catalog entries. */
+  fetched_at?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +141,32 @@ function roleFromConfigKey(configKey?: string): ModelRole | undefined {
 
 function providerGroup(entry: ModelCatalogEntry): string {
   return entry.provider === 'ollama' ? 'local' : entry.provider;
+}
+
+/**
+ * Muted caption shown under a cloud provider group's label, sourced from the
+ * provider's `provider_lists` fetch status rather than any per-entry field —
+ * catalog entries carry no `source`, and a provider present only in
+ * `provider_lists` (fetch failed, no bundled fallback) has no entries at all.
+ */
+function providerGroupCaption(
+  status: { fetched_at: string | null; error: string | null; truncated?: boolean } | undefined,
+  groupModelCount: number,
+): string | null {
+  if (!status) return null;
+  if (groupModelCount === 0) {
+    return 'Model list unavailable — add a working key or restore connectivity';
+  }
+  if (status.error) {
+    return 'Model list unavailable — showing built-in entries only';
+  }
+  if (status.truncated) {
+    return `Showing the first ${groupModelCount} — this provider has more`;
+  }
+  if (status.fetched_at) {
+    return `Fetched ${formatDistanceToNow(new Date(status.fetched_at), { addSuffix: true })}`;
+  }
+  return null;
 }
 
 function isLocalModel(entry: ModelCatalogEntry): boolean {
@@ -260,14 +291,18 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     return '';
   };
 
-  const groups = Array.from(new Set(allModels.map(providerGroup))).sort(compareModelProviders);
+  const providerLists = data?.provider_lists ?? {};
+  // Union with provider_lists keys: a configured cloud provider whose live fetch
+  // failed and which has no bundled catalog entries would otherwise have no
+  // group at all to hang its unavailable caption on.
+  const groups = Array.from(
+    new Set([...allModels.map(providerGroup), ...Object.keys(providerLists)]),
+  ).sort(compareModelProviders);
 
-  const groupedModels = groups
-    .map((group) => ({
-      group,
-      models: allModels.filter((model) => providerGroup(model) === group),
-    }))
-    .filter((group) => group.models.length > 0);
+  const groupedModels = groups.map((group) => ({
+    group,
+    models: allModels.filter((model) => providerGroup(model) === group),
+  }));
   const detectedHardware = hardwareSummary(data?.hardware);
   const pullableModels = allModels.filter(
     (entry) =>
@@ -388,16 +423,21 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
               {issue}
             </div>
           ))}
-          {allModels.length === 0 ? (
+          {groupedModels.length === 0 ? (
             <div className="px-2 py-4 text-center text-sm text-muted-foreground">
               <Cpu className="mx-auto mb-2 h-5 w-5" />
               {emptyStateContent}
             </div>
           ) : (
-            groupedModels.map(({ group, models: groupModels }, index) => (
+            groupedModels.map(({ group, models: groupModels }, index) => {
+              const groupCaption = providerGroupCaption(providerLists[group], groupModels.length);
+              return (
               <SelectGroup key={group}>
                 {index > 0 && <SelectSeparator />}
                 <SelectLabel>{modelProviderLabel(group)}</SelectLabel>
+                {groupCaption && (
+                  <div className="px-2 pb-1 text-xs text-muted-foreground">{groupCaption}</div>
+                )}
                 {groupModels.map((m) => {
                   const blocker = assignmentBlocker(m, currentRole);
                   const canAssign = blocker === null && isEntrySelectableForRole(m, currentRole);
@@ -495,7 +535,8 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                   return itemContent;
                 })}
               </SelectGroup>
-            ))
+              );
+            })
           )}
         </SelectContent>
       </Select>

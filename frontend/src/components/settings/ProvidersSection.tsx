@@ -1,8 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { formatDistanceToNow } from 'date-fns';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { compareCloudProviders, fetchConfig, listProviders, setConfig, testProvider } from '@/lib/api';
-import type { ProviderMetadata } from '@/lib/api';
+import {
+  compareCloudProviders,
+  fetchConfig,
+  fetchSystemModels,
+  listProviders,
+  setConfig,
+  testProvider,
+} from '@/lib/api';
+import type { ProviderMetadata, ProviderModelListStatus, SystemModelsResponse } from '@/lib/api';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,7 +58,7 @@ function providerStatus(provider: ProviderMetadata, maskedValue: string, result:
       className: 'text-destructive',
     };
   }
-  if (!maskedValue && !provider.configured) {
+  if (!maskedValue && !provider.configured && !provider.base_url_configured) {
     return {
       icon: CircleDashed,
       label: 'Not configured',
@@ -64,6 +72,26 @@ function providerStatus(provider: ProviderMetadata, maskedValue: string, result:
   };
 }
 
+/**
+ * Model-availability line for a provider tile, sourced from `provider_lists`
+ * (fetch freshness) plus the merged catalog's per-provider count — additive to
+ * `providerStatus`, which states connectivity, not model availability.
+ */
+function providerAvailabilityText(
+  catalogCount: number,
+  listStatus: ProviderModelListStatus | undefined,
+): string | null {
+  if (!listStatus) return null;
+  if (catalogCount === 0) {
+    return "No models available yet — JARVIS could not fetch this provider's model list";
+  }
+  const fetchedLabel = listStatus.fetched_at
+    ? formatDistanceToNow(new Date(listStatus.fetched_at), { addSuffix: true })
+    : null;
+  const countLabel = `${catalogCount} model${catalogCount === 1 ? '' : 's'} available`;
+  return fetchedLabel ? `${countLabel} · Fetched ${fetchedLabel}` : countLabel;
+}
+
 function providerGroupLabel(provider: ProviderMetadata): string {
   if (provider.kind === 'router') return 'Recommended routers';
   if (provider.kind === 'self_hosted') return 'Advanced endpoints';
@@ -73,6 +101,11 @@ function providerGroupLabel(provider: ProviderMetadata): string {
 function sortProviders(providers: ProviderMetadata[]): ProviderMetadata[] {
   return [...providers].sort((a, b) => compareCloudProviders(a.id, b.id) || a.display_name.localeCompare(b.display_name));
 }
+
+/** Narrowed system-models shape this section needs: per-entry provider id and fetch status. */
+type ProvidersModelsData = Omit<SystemModelsResponse, 'catalog'> & {
+  catalog?: Array<{ provider: string }>;
+};
 
 export function ProvidersSection() {
   const queryClient = useQueryClient();
@@ -95,6 +128,15 @@ export function ProvidersSection() {
     queryKey: ['settings', 'providers'],
     queryFn: listProviders,
   });
+  // Same query key IngestionSection registers for /api/system/models — TanStack
+  // dedupes by key, so this costs no extra request.
+  const { data: systemModels } = useQuery<ProvidersModelsData>({
+    queryKey: QUERY_KEYS.config.systemModels(),
+    queryFn: ({ signal }) => fetchSystemModels<ProvidersModelsData>(signal),
+    staleTime: 60_000,
+  });
+  const providerLists = systemModels?.provider_lists ?? {};
+  const modelCatalog = systemModels?.catalog ?? [];
 
   const loadError = configsError
     ? errorMessage(configsErrorValue, 'Could not load stored provider keys')
@@ -103,7 +145,10 @@ export function ProvidersSection() {
       : null;
   const providers = useMemo(() => sortProviders(providerRows), [providerRows]);
   const configuredProviders = providers.filter(
-    (provider) => provider.configured || getMaskedConfig(configs, provider.api_key_config_key),
+    (provider) =>
+      provider.configured ||
+      provider.base_url_configured ||
+      getMaskedConfig(configs, provider.api_key_config_key),
   );
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -227,6 +272,8 @@ export function ProvidersSection() {
                 const maskedValue = getMaskedConfig(configs, provider.api_key_config_key);
                 const status = providerStatus(provider, maskedValue, testResults[provider.id] ?? null);
                 const StatusIcon = status.icon;
+                const catalogCount = modelCatalog.filter((entry) => entry.provider === provider.id).length;
+                const availabilityText = providerAvailabilityText(catalogCount, providerLists[provider.id]);
                 return (
                   <button
                     key={provider.id}
@@ -240,6 +287,11 @@ export function ProvidersSection() {
                         <StatusIcon className="h-3 w-3" />
                         {status.label}
                       </span>
+                      {availabilityText && (
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          {availabilityText}
+                        </span>
+                      )}
                     </span>
                     <KeyRound className="h-4 w-4 text-muted-foreground" />
                   </button>
