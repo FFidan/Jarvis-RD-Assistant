@@ -476,6 +476,13 @@ _start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, qu
 _maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 
 
+async def _prune_job_history_hook(app: FastAPI) -> None:
+    """Prune job history once at boot so a fresh install does not wait for the daily run."""
+    from .scheduler import purge_job_history_task  # noqa: PLC0415
+
+    await purge_job_history_task(app)
+
+
 async def _shutdown_qdrant(app: FastAPI) -> None:
     """Cancel visibility reconciliation, then close Qdrant cleanly."""
     visibility_task = getattr(app.state, "vector_visibility_task", None)
@@ -526,6 +533,7 @@ _lifespan_config = ServiceLifespanConfig(
         _start_litellm_reconciler,
         _start_scheduler_hook,
         _start_procrastinate_worker,
+        _prune_job_history_hook,
         _maintenance_watcher,
         make_warmup_hook(
             lambda app: [
@@ -549,6 +557,7 @@ _lifespan_config = ServiceLifespanConfig(
         _shutdown_litellm_reconciler,  # _start_litellm_reconciler
         _shutdown_scheduler,  # _start_scheduler_hook
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        None,  # _prune_job_history_hook
         # Shutdown runs in reverse order, so the watcher stops before the worker
         # connector closes.
         shutdown_maintenance_watcher,  # _maintenance_watcher

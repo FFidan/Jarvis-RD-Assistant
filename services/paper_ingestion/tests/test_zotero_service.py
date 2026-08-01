@@ -3716,6 +3716,9 @@ async def test_zotero_sync_from_job_passes_partial_result_through_unchanged():
     from paper_ingestion.integrations.zotero_service import _zotero_sync_from_zotero_job
 
     pool = MagicMock()
+    # The job takes a per-user advisory lock, which checks out its own connection.
+    pool.acquire = AsyncMock(return_value=AsyncMock(fetchrow=AsyncMock(return_value={"got": True})))
+    pool.release = AsyncMock()
     http = AsyncMock(spec=httpx.AsyncClient)
     ctx = AsyncMock()
     sentinel = {

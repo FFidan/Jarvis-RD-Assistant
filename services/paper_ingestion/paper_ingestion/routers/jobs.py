@@ -20,7 +20,7 @@ from typing import Literal
 
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs_router import build_jobs_router, collect_handlers
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool, limiter
 
@@ -48,19 +48,24 @@ class PaperAnalyzePayload(BaseModel):
     paper_id: int
 
 
+# Same bound as the dedicated batch endpoints (models/papers.py ProcessBatchRequest):
+# one request may not enqueue an unbounded amount of per-paper work.
+_MAX_BATCH_PAPER_IDS = 50
+
+
 class PapersBatchProcessPayload(BaseModel):
     kind: Literal["papers.batch_process"]
-    paper_ids: list[int]
+    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
 
 
 class PapersBatchSummarizePayload(BaseModel):
     kind: Literal["papers.batch_summarize"]
-    paper_ids: list[int]
+    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
 
 
 class ExtractionBatchPayload(BaseModel):
     kind: Literal["extraction.batch"]
-    paper_ids: list[int]
+    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
 
 
 class NoopTestPayload(BaseModel):
