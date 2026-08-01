@@ -422,6 +422,64 @@ def test_production_backup_without_key_fails_before_any_dump(tmp_path: Path) -> 
     assert status["stores"]["litellm"] == "failed"
 
 
+def test_backup_without_key_refuses_outside_production_and_records_the_failure(
+    tmp_path: Path,
+) -> None:
+    """A set with no key cannot be restored, so no environment may report it as taken."""
+    backup_dir = tmp_path / "backups"
+    trigger_dir = tmp_path / "triggers"
+    host_secrets = tmp_path / "host-secrets"
+    secrets_dir = tmp_path / "secrets"
+    bin_dir = tmp_path / "bin"
+    for directory in (backup_dir, trigger_dir, host_secrets, secrets_dir, bin_dir):
+        directory.mkdir()
+
+    postgres_password = tmp_path / "postgres-password"
+    postgres_password.write_text("fixture-password", encoding="utf-8")
+    empty_backup_key = tmp_path / "empty-backup-key"
+    empty_backup_key.touch()
+    pg_dump_trace = tmp_path / "pg-dump-ran"
+    pg_dump_stub = bin_dir / "pg_dump"
+    pg_dump_stub.write_text(
+        f"#!/usr/bin/env bash\nprintf ran > {pg_dump_trace}\nprintf SQL\n",
+        encoding="utf-8",
+    )
+    pg_dump_stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(BACKUP_SH)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ENVIRONMENT": "development",
+            "POSTGRES_PASSWORD_FILE": str(postgres_password),
+            "BACKUP_ENCRYPT_KEYFILE": str(empty_backup_key),
+            "BACKUP_DIR": str(backup_dir),
+            "BACKUP_TRIGGER_DIR": str(trigger_dir),
+            "HOST_SECRETS_DIR": str(host_secrets),
+            "SECRETS_DIR": str(secrets_dir),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1
+    assert "a backup taken without a key cannot be restored" in result.stderr
+    assert str(empty_backup_key) in result.stderr
+    assert not pg_dump_trace.exists(), "pg_dump ran before the keyless refusal"
+    assert not list(backup_dir.glob("jarvis_*.sql.gz*"))
+    assert not list(backup_dir.glob("secrets_*.tar.gz*"))
+    # The refusal sits after the EXIT trap is installed: a run that cannot produce a
+    # restorable set must say so, not leave /status reporting the last success.
+    status = json.loads((backup_dir / ".last_run.json").read_text(encoding="utf-8"))
+    assert status["succeeded"] is False
+    assert status["encrypted"] is False
+    assert status["stores"]["secrets"] == "skipped"
+
+
 def test_restore_authenticates_the_manifest_before_the_checksum_gate(restore_src: str) -> None:
     assert restore_src.index("\ngate_manifest_signature\n") < restore_src.index("sha256sum -c")
 

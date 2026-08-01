@@ -365,7 +365,7 @@ requires restarting its service consumers.
 | `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
 | `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
 | `infra_ingest_key` | `INFRA_INGEST_KEY_FILE` | Shared key for the infrastructure ingestion endpoint |
-| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest |
+| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable |
 
 **Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
 `langfuse_init_pk`, `langfuse_init_sk` — Langfuse SDK keys injected into app services. `langfuse_pg_password`, `langfuse_nextauth_secret`, `langfuse_salt` — internal Langfuse service credentials.

@@ -22,10 +22,13 @@
 #     Alpine: apk add --no-cache aws-cli
 #     pip:    pip install awscli
 #
-# Encryption (optional, at-rest):
-#   Set BACKUP_ENCRYPT_KEYFILE to the path of a file containing the passphrase.
-#   When set and the file is non-empty, archives are piped through
-#   openssl enc -aes-256-cbc -pbkdf2 and saved with a .enc suffix.
+# Encryption (required, at-rest):
+#   BACKUP_ENCRYPT_KEYFILE must name a non-empty file containing the passphrase.
+#   Archives are piped through openssl enc -aes-256-cbc -pbkdf2 and saved with a
+#   .enc suffix. A run with no usable key is refused in every environment: the
+#   restore path requires an authenticated manifest, so a backup taken without a
+#   key could never be restored. Backup sets written by older releases without a
+#   key remain restorable.
 #
 # Decryption recipe:
 #   openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d -kfile "$BACKUP_ENCRYPT_KEYFILE" \
@@ -402,18 +405,13 @@ fi
 write_last_run() {
   [ "${SKIP_LAST_RUN_WRITE:-0}" = "1" ] && return 0
   local succeeded="false"
+  # Keyless runs are refused before any archive is produced, so a complete set is
+  # always an encrypted, signed one: a skipped secrets archive or signature is a
+  # gap in the restore path, never a legitimate unencrypted outcome.
   local secrets_complete="false"
-  if [ "$SECRETS_STATE" = "ok" ] \
-     || { [ "$SECRETS_STATE" = "skipped" ] \
-          && [ "$ENCRYPT" -eq 0 ] \
-          && [ "${ENVIRONMENT:-development}" != "production" ]; }; then
-    secrets_complete="true"
-  fi
+  [ "$SECRETS_STATE" = "ok" ] && secrets_complete="true"
   local signature_complete="false"
-  if { [ "$ENCRYPT" -eq 0 ] && [ "$MANIFEST_SIGNATURE_STATE" = "skipped" ]; } \
-     || { [ "$ENCRYPT" -eq 1 ] && [ "$MANIFEST_SIGNATURE_STATE" = "ok" ]; }; then
-    signature_complete="true"
-  fi
+  [ "$MANIFEST_SIGNATURE_STATE" = "ok" ] && signature_complete="true"
   if [ "$JARVIS_STATE" = "ok" ] \
      && [ "$LITELLM_STATE" = "ok" ] \
      && [ "$PDFS_STATE" = "ok" ] \
@@ -438,6 +436,10 @@ JSON
 trap write_last_run EXIT
 
 # --- Maintenance skip-guard + single-run mutex -------------------------------
+# This header down to the claim_backup_trigger call below is extracted verbatim and
+# replayed in isolation by the backup coverage suite, so moving a guard out of that
+# span silently drops it from the replay. Doing so is a deliberate decision, not a
+# refactor: update the suite's preamble in the same change.
 # A restore (restore.sh) raises the .maintenance / .destructive sentinels for its
 # whole run. A SCHEDULED or on-demand backup that fires in that window must NOT run
 # — dumping mid drop-swap would capture an inconsistent DB — so it SKIPS and tags
@@ -523,6 +525,15 @@ if [ "$ENVIRONMENT" = "production" ] && [ "$ENCRYPT" -ne 1 ]; then
   exit 1
 fi
 
+# Every environment refuses a keyless run, for a second reason: restore requires an
+# authenticated manifest, which only the key can produce, so an unencrypted set is
+# unrestorable however harmless its plaintext looks. The production refusal above
+# stays first and reachable for its more specific wording.
+if [ "$ENCRYPT" -eq 0 ]; then
+  echo "[$(date -Iseconds)] FATAL: no backup encryption key at ${ENC_KEYFILE:-<unset>}; a backup taken without a key cannot be restored (the restore path requires an authenticated manifest). The stock deployment generates this key; restore secrets/backup_encrypt_key.txt or re-run setup." >&2
+  exit 1
+fi
+
 # Every producer uses one mutex. BACKUP_FORCE bypasses only the restore's own
 # maintenance sentinel; it may never race another archive producer.
 if ! claim_backup_trigger || ! consume_claimed_backup_trigger; then
@@ -590,8 +601,8 @@ echo "[$(date -Iseconds)] Backup saved to $PDFS_BACKUP_FILE ($(du -h "$PDFS_BACK
 # --- secrets/ directory ------------------------------------------------------
 # Only keys coupled to restored data cross hosts. Service credentials belong to
 # the target host and are deliberately excluded.
-# When no key is set: refuse outright in production (plaintext secrets on disk
-# is unacceptable); silently skip in non-production with a clear warning.
+# A keyless run never reaches this point (it is refused above), so the archive is
+# always encrypted; the production refusal below is kept for its specific wording.
 SECRETS_BACKUP_FILE=""
 if [ -d "$SECRETS_DIR" ]; then
   if [ "$ENCRYPT" -eq 1 ]; then
@@ -629,9 +640,6 @@ if [ -d "$SECRETS_DIR" ]; then
   elif [ "$ENVIRONMENT" = "production" ]; then
     echo "FATAL: BACKUP_ENCRYPT_KEYFILE is unset in production — refusing to write a plaintext secrets archive. Set BACKUP_ENCRYPT_KEYFILE to a non-empty key file before running backups." >&2
     exit 1
-  else
-    SECRETS_STATE="skipped"
-    echo "[$(date -Iseconds)] WARNING: BACKUP_ENCRYPT_KEYFILE is unset — secrets archive skipped (plaintext keys will NOT be written to disk). Set BACKUP_ENCRYPT_KEYFILE to include secrets in the backup." >&2
   fi
 else
   echo "[$(date -Iseconds)] secrets dir $SECRETS_DIR not mounted; skipping secrets backup"

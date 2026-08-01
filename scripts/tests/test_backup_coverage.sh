@@ -133,51 +133,11 @@ rm -rf "$bac1q_dir"
 check "refuses plaintext secrets archive in production (FATAL exit 1)" \
   'BACKUP_ENCRYPT_KEYFILE.*plaintext|plaintext.*BACKUP_ENCRYPT_KEYFILE'
 
-# OPS-7: when ENCRYPT=0 outside production, backup.sh must SKIP the secrets
-# archive entirely (no plaintext tar.gz written) and emit a WARNING.
-check "skips secrets archive when ENCRYPT=0 outside production (no plaintext file)" \
+# A store whose archive was never attempted starts "skipped", so a crash before it
+# runs is not misreported as a failure. The refusal of keyless runs removed the
+# other producer of that state, leaving the startup default as its only source.
+check "defaults the secrets store to a not-yet-attempted state" \
   'SECRETS_STATE="skipped"'
-
-# OPS-7 (behavioral): run backup.sh with ENCRYPT=0 + non-production and confirm
-# it exits 0 and leaves NO plaintext secrets_*.tar.gz on disk.
-ops7_dir="$(mktemp -d)"
-ops7_secrets="${ops7_dir}/secrets"
-mkdir -p "$ops7_secrets"
-printf 'MY_SECRET' > "$ops7_secrets/postgres_password.txt"
-# Provide a minimal postgres_password Docker-secret stub so the script's FATAL
-# check (line 1: /run/secrets/postgres_password) can be side-stepped via env.
-ops7_secret_stub="${ops7_dir}/pg_password"
-printf 'STUB' > "$ops7_secret_stub"
-# Run a stripped invocation that skips the pg_dump/Qdrant steps by pointing
-# SECRETS_DIR to our fixture and overriding all net-dependent config vars.
-# We source backup.sh's ENCRYPT/ENVIRONMENT logic in a sub-shell to avoid
-# needing a real Postgres; instead we re-implement only the secrets branch.
-(
-  ENCRYPT=0
-  ENVIRONMENT=development
-  SECRETS_DIR="$ops7_secrets"
-  BACKUP_DIR="$ops7_dir"
-  TIMESTAMP=test
-  SECRETS_BACKUP_FILE=""
-  SECRETS_STATE="skipped"
-  # Replicate backup.sh's ENCRYPT=0 non-production branch logic:
-  if [ "$ENCRYPT" -eq 0 ] && [ "$ENVIRONMENT" != "production" ]; then
-    # must NOT write a plaintext archive
-    :
-  fi
-  # Verify no plaintext secrets archive was written
-  if ls "${BACKUP_DIR}"/secrets_*.tar.gz 2>/dev/null | grep -q .; then
-    echo "FAIL: plaintext secrets archive was written (ENCRYPT=0, non-production)" >&2
-    exit 1
-  fi
-  exit 0
-) 2>/dev/null
-if [ $? -eq 0 ]; then
-  pass "no plaintext secrets archive written when ENCRYPT=0 + non-production"
-else
-  printf 'FAIL: plaintext secrets archive written despite ENCRYPT=0 + non-production\n' >&2
-  fail=1
-fi
 
 # OPS-7 (behavioral): run the actual backup.sh secrets branch with ENCRYPT=0 +
 # ENVIRONMENT=production and confirm it exits non-zero.
@@ -198,7 +158,6 @@ else
   printf 'FAIL: backup did not exit non-zero for production + no encryption key\n' >&2
   fail=1
 fi
-rm -rf "$ops7_dir"
 
 # BAC (status): a FAILED run must be recorded — backup.sh writes .last_run.json
 # on EVERY exit via a trap, so /status can show "attempted + failed" instead of
@@ -257,10 +216,10 @@ else
 fi
 
 lr_dev_skipped="$(last_run_json skipped skipped ok skipped development 0)"
-if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":true'; then
-  pass "unencrypted non-production secrets=skipped may still be successful"
+if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":false'; then
+  pass "an unencrypted run can no longer be recorded as successful"
 else
-  printf 'FAIL: unencrypted non-production secrets=skipped was not successful (%s)\n' "$lr_dev_skipped" >&2
+  printf 'FAIL: an unencrypted run was recorded as successful (%s)\n' "$lr_dev_skipped" >&2
   fail=1
 fi
 
@@ -280,7 +239,7 @@ else
   fail=1
 fi
 
-lr_qdrant_failed="$(last_run_json ok failed ok skipped development 0)"
+lr_qdrant_failed="$(last_run_json ok failed ok ok development 1)"
 if printf '%s' "$lr_qdrant_failed" | grep -q '"succeeded":true'; then
   pass "Qdrant failure remains non-fatal to backup completion"
 else
@@ -726,7 +685,9 @@ replay_guard() {
     ATTEMPTED_AT=x TIMESTAMP=t RUN_ID=0123456789abcdef0123456789abcdef
     JARVIS_STATE=failed LITELLM_STATE=failed PDFS_STATE=failed
     SECRETS_STATE=skipped QDRANT_STATE=skipped MANIFEST_STATE=failed
-    MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=0 RETENTION_DAYS=7 ENVIRONMENT=development
+    # ENCRYPT=1: the extracted span ends with the unconditional keyless refusal,
+    # which would exit before the REACHED sentinel these cases key on.
+    MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=1 RETENTION_DAYS=7 ENVIRONMENT=development
     LOCK_DIR="${BACKUP_DIR}/.lifecycle"
     BACKUP_LOCK="${LOCK_DIR}/backup.lock"
     UPDATE_LOCK="${LOCK_DIR}/update.lock"
