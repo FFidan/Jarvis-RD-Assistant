@@ -408,6 +408,18 @@ async def _cancel(task) -> None:
         await task
 
 
+async def _cancel_reclaim_sweep(app: SimpleNamespace) -> None:
+    """Cancel the reclamation sweep the resume path created, proving it ran and stopped.
+
+    Resume-path tests own this task; cancelling it here keeps it from outliving
+    the test, and the final assertion fails if the cancellation is ever dropped.
+    """
+    sweep = app.state.reclaim_task
+    assert sweep is not None and not sweep.done()
+    await _cancel(sweep)
+    assert sweep.cancelled()
+
+
 async def test_watcher_step_pauses_worker_loop_on_activation(tmp_path, monkeypatch):
     """inactive→active cancels the whole worker task with no resume side-effects."""
     soft = _point_sentinels(tmp_path, monkeypatch)
@@ -451,6 +463,7 @@ async def test_watcher_step_reconciles_then_resumes_on_clear(tmp_path, monkeypat
     assert new_worker is not None and not new_worker.done()
     assert proc.run_worker_calls == [_QUEUES]
     await _cancel(new_worker)
+    await _cancel_reclaim_sweep(app)
 
 
 async def test_watcher_loop_survives_a_tick_exception(tmp_path, monkeypatch):
@@ -552,6 +565,7 @@ async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeyp
     await app_factory._maintenance_watcher_step(app2, _QUEUES, was_active=True, started_at=started)
     restart.assert_not_called()
     await _cancel(app2.state.procrastinate_worker_task)
+    await _cancel_reclaim_sweep(app2)
 
 
 async def test_watcher_step_self_restarts_even_when_migrations_would_fail(tmp_path, monkeypatch):
@@ -593,3 +607,4 @@ async def test_watcher_step_no_restart_when_started_at_absent(tmp_path, monkeypa
     await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True)
     restart.assert_not_called()
     await _cancel(app.state.procrastinate_worker_task)
+    await _cancel_reclaim_sweep(app)
