@@ -17,6 +17,11 @@ export interface BackupStatus {
   trigger_pending: boolean;
   last_attempt_at: string | null;
   last_run_succeeded: boolean | null;
+  // A succeeded run means a complete restorable local set exists; these stay
+  // separate because that remains true when the vector store was unreachable or
+  // the off-site copy failed. null = the run record predates the field.
+  last_run_vectors_captured: boolean | null;
+  last_run_s3_complete: boolean | null;
 }
 
 export interface RestorePointFile {
@@ -99,6 +104,8 @@ export interface RestoreLastRun {
   attempted_at: string | null;
   succeeded: boolean | null;
   stores: Record<string, string>;
+  vectors_captured: boolean | null;
+  s3_complete: boolean | null;
 }
 
 export interface RestorePointsResponse {

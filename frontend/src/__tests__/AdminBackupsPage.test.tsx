@@ -101,6 +101,8 @@ const _okStatus = {
   trigger_pending: false,
   last_attempt_at: new Date().toISOString(),
   last_run_succeeded: true,
+  last_run_vectors_captured: true,
+  last_run_s3_complete: true,
 };
 
 const _runningRestore = {
@@ -211,6 +213,35 @@ describe('AdminBackupsPage', () => {
       ),
     );
     expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(\d+m ago\)/);
+  });
+
+  it('warns that a succeeded run captured no vectors', async () => {
+    getBackupStatusMock.mockResolvedValue({ ..._okStatus, last_run_vectors_captured: false });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent(
+        'Last backup completed, but vectors were not captured.',
+      ),
+    );
+  });
+
+  it('warns that a succeeded run has an incomplete off-site copy', async () => {
+    getBackupStatusMock.mockResolvedValue({ ..._okStatus, last_run_s3_complete: false });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent(
+        'Last backup completed, but the off-site copy is incomplete.',
+      ),
+    );
+  });
+
+  it('does not warn about capture when a run captured everything it attempted', async () => {
+    getBackupStatusMock.mockResolvedValue(_okStatus);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent('restore point'),
+    );
+    expect(screen.getByTestId('backup-status')).not.toHaveTextContent('Last backup completed, but');
   });
 
   it('shows a degraded status (not "No backups yet.") when the status probe fails', async () => {

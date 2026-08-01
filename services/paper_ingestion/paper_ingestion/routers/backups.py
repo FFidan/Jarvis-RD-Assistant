@@ -170,6 +170,10 @@ class BackupStatus(BaseModel):
         Timestamp recorded by the most recent backup attempt.
     last_run_succeeded : bool or None
         Recorded outcome of that attempt, or ``None`` when unknown.
+    last_run_vectors_captured : bool or None
+        Whether that attempt captured the vector store, or ``None`` when unknown.
+    last_run_s3_complete : bool or None
+        Whether its off-site copy is complete, or ``None`` when unknown.
     trigger_pending : bool
         Whether an on-demand backup request awaits the sidecar.
 
@@ -180,6 +184,11 @@ class BackupStatus(BaseModel):
     last_run_at: datetime | None  # newest-archive mtime (last *success* proxy)
     last_attempt_at: datetime | None  # from .last_run.json; last run that was attempted
     last_run_succeeded: bool | None  # from .last_run.json; None when unknown
+    # A succeeded run still reports these separately: it means a complete restorable
+    # LOCAL set exists, which stays true when the vector store was unreachable or the
+    # off-site copy failed. Records written before these fields existed report None.
+    last_run_vectors_captured: bool | None
+    last_run_s3_complete: bool | None
     trigger_pending: bool
 
 
@@ -265,12 +274,18 @@ class RestoreLastRun(BaseModel):
         Restore outcome, or ``None`` when no trustworthy result exists.
     stores : dict[str, str]
         Per-store status labels without archive content or credentials.
+    vectors_captured : bool or None
+        Whether the vector store was captured, or ``None`` when unrecorded.
+    s3_complete : bool or None
+        Whether the off-site copy is complete, or ``None`` when unrecorded.
 
     """
 
     attempted_at: datetime | None
     succeeded: bool | None
     stores: dict[str, str]
+    vectors_captured: bool | None
+    s3_complete: bool | None
 
 
 class RestorePointsResponse(BaseModel):
@@ -520,6 +535,19 @@ def _last_run_succeeded(run: dict | None) -> bool | None:
     if run is None or run.get("skipped_maintenance"):
         return None
     return run.get("succeeded")
+
+
+def _last_run_flag(run: dict | None, key: str) -> bool | None:
+    """Read a boolean truthfulness field, degrading anything unrecorded to None.
+
+    Records written before a field existed simply omit it, and a non-boolean value
+    is no more trustworthy than a missing one, so both report "unknown" rather than
+    asserting a capture that may not have happened.
+    """
+    if run is None:
+        return None
+    value = run.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _read_manifest(ts: str) -> dict | None:
@@ -1017,6 +1045,8 @@ async def backup_status(request: Request) -> BackupStatus:
         last_run_at=last,
         last_attempt_at=run.get("attempted_at") if run else None,
         last_run_succeeded=_last_run_succeeded(run),
+        last_run_vectors_captured=_last_run_flag(run, "vectors_captured"),
+        last_run_s3_complete=_last_run_flag(run, "s3_complete"),
         trigger_pending=_TRIGGER_SENTINEL.exists(),
     )
 
@@ -1039,6 +1069,8 @@ async def list_restore_points(request: Request) -> RestorePointsResponse:
             attempted_at=run.get("attempted_at"),
             succeeded=run.get("succeeded"),
             stores=run.get("stores") or {},
+            vectors_captured=_last_run_flag(run, "vectors_captured"),
+            s3_complete=_last_run_flag(run, "s3_complete"),
         )
     await log_audit(
         request.app.state.db_pool,
