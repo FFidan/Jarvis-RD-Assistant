@@ -7,6 +7,7 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.jobs import ProgressContext
 
 from paper_ingestion.integrations._zotero_highlights import (
@@ -85,12 +86,26 @@ async def _zotero_sync_from_zotero_job(
 
     Polls the Zotero library for items added since the last known version and
     enqueues paper.process jobs for any new items not originating in JARVIS.
+
+    Serialised per user by a session advisory lock: the hourly cron and the
+    manual ``POST /api/zotero/poll`` defer the same kind, and two concurrent
+    polls of one library re-import the same items.  A duplicate returns without
+    contacting Zotero at all.
     """
-    await ctx.update_progress(0.1, "Starting Zotero library poll")
     # Thread caller user_id through so imported papers/state/annotations
     # are attributed correctly. NULL when scheduler-cron-invoked (system poll).
     polling_user_id = payload.get("user_id")
-    result = await poll_zotero_library(pool, http_client, polling_user_id=polling_user_id)
+    lock_key2 = int(polling_user_id) if polling_user_id is not None else 0
+    async with AdvisoryLock(
+        pool, key1=_kind_lock_key("zotero.sync_from_zotero"), key2=lock_key2
+    ) as locked:
+        if not locked:
+            await ctx.update_progress(
+                1.0, "A Zotero sync was already in progress; this duplicate did nothing."
+            )
+            return {"status": "blocked", "reason": "Zotero sync already running"}
+        await ctx.update_progress(0.1, "Starting Zotero library poll")
+        result = await poll_zotero_library(pool, http_client, polling_user_id=polling_user_id)
     status = str(result.get("status", "error"))
     headline = "Done" if status == "ok" else status.replace("_", " ").title()
     await ctx.update_progress(1.0, headline)

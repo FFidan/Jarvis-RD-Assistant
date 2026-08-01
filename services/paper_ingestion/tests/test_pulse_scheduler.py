@@ -271,8 +271,8 @@ async def test_start_scheduler_registers_classifier_and_weekly_jobs(scheduler_mo
 
 
 @pytest.mark.asyncio
-async def test_users_without_active_pulse_lock_filters_locked_users(scheduler_module):
-    """_users_without_active_pulse_lock returns only users whose lock is free.
+async def test_users_without_active_lock_filters_locked_users(scheduler_module):
+    """_users_without_active_lock returns only users whose lock is free.
 
     User A (id=1): pg_try_advisory_xact_lock returns False — lock held.
     User B (id=2): pg_try_advisory_xact_lock returns True  — lock free.
@@ -298,7 +298,7 @@ async def test_users_without_active_pulse_lock_filters_locked_users(scheduler_mo
     pool = MagicMock()
     pool.acquire.return_value = ctx
 
-    result = await scheduler_module._users_without_active_pulse_lock(pool, [1, 2])
+    result = await scheduler_module._users_without_active_lock(pool, [1, 2], kind="pulse.generate")
 
     assert result == [2]
     # xact-lock auto-releases — no explicit pg_advisory_unlock call.

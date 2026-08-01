@@ -2500,7 +2500,7 @@ async def test_pulse_routes_match_null_user_legacy_rows(contract_conn):
 # Verified: pulse/job.py:577-579 — AdvisoryLock(pool,
 #           key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero)
 #           session lock held for the whole pulse run.
-# Verified: scheduler.py:87-97 — _users_without_active_pulse_lock probes
+# Verified: scheduler.py:87-97 — _users_without_active_lock probes
 #           pg_try_advisory_xact_lock($1, $2) with the same key derivation.
 # Verified: advisory_lock.py:69-79 — pg_try_advisory_lock (session-level).
 
@@ -2516,7 +2516,7 @@ async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_p
     """
     from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 
-    from paper_ingestion.scheduler import _users_without_active_pulse_lock
+    from paper_ingestion.scheduler import _users_without_active_lock
 
     user_id = 99_424_242  # arbitrary; only feeds key2 — no users row required
 
@@ -2524,13 +2524,17 @@ async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_p
         _contract_pool, key1=_kind_lock_key("pulse.generate"), key2=user_id
     ) as locked:
         assert locked is True, "test session must win the initially-free lock"
-        free_while_held = await _users_without_active_pulse_lock(_contract_pool, [user_id])
+        free_while_held = await _users_without_active_lock(
+            _contract_pool, [user_id], kind="pulse.generate"
+        )
         assert free_while_held == [], (
             "pg_try_advisory_xact_lock probe must see the held session-level lock "
             "and exclude the user"
         )
 
-    free_after_release = await _users_without_active_pulse_lock(_contract_pool, [user_id])
+    free_after_release = await _users_without_active_lock(
+        _contract_pool, [user_id], kind="pulse.generate"
+    )
     assert free_after_release == [user_id], (
         "probe must report the user free once the session lock is released"
     )

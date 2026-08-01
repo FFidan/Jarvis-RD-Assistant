@@ -450,6 +450,82 @@ async def test_fresh_last_run_schedules_no_catch_up() -> None:
         scheduler.shutdown(wait=False)
 
 
+# ---------------------------------------------------------------------------
+# Job history stays bounded: a daily prune plus one at boot
+# ---------------------------------------------------------------------------
+
+
+def _app_with_procrastinate() -> tuple[SimpleNamespace, MagicMock, AsyncMock]:
+    """Fake app exposing a procrastinate app whose builtin prune task is recorded."""
+    from paper_ingestion.scheduler import _REMOVE_OLD_JOBS_TASK  # noqa: PLC0415
+
+    prune_task = MagicMock(defer_async=AsyncMock())
+    procrastinate_app = MagicMock(tasks={_REMOVE_OLD_JOBS_TASK: prune_task})
+    db_pool = MagicMock(execute=AsyncMock(return_value="DELETE 4"))
+    app = SimpleNamespace(
+        state=SimpleNamespace(db_pool=db_pool, procrastinate_app=procrastinate_app)
+    )
+    return app, prune_task, db_pool.execute
+
+
+async def test_the_builtin_prune_task_is_registered_under_the_expected_key() -> None:
+    """A procrastinate upgrade that renames the builtin task must fail loudly here.
+
+    Asserted against the process-wide app the service actually defers through:
+    ``add_tasks_from`` re-namespaces the shared builtin blueprint in place, so a
+    freshly constructed app carries a differently prefixed key.
+    """
+    from jarvis_common.task_registry import app as procrastinate_app  # noqa: PLC0415
+
+    from paper_ingestion.scheduler import _REMOVE_OLD_JOBS_TASK  # noqa: PLC0415
+
+    assert _REMOVE_OLD_JOBS_TASK in procrastinate_app.tasks
+
+
+async def test_a_periodic_job_history_prune_is_registered() -> None:
+    """Pruning once per boot never fires again on a long-running deployment."""
+    scheduler = await _start(_make_scheduler_app(), 5)
+    try:
+        job = scheduler.get_job("purge_job_history")
+        assert job is not None, "job history must be pruned on a schedule, not only at boot"
+        assert job.misfire_grace_time == 3600
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_prune_defers_the_builtin_task_once_and_purges_orphan_progress() -> None:
+    """One deferral per run, with the orphaned progress rows swept beside it."""
+    from paper_ingestion.scheduler import purge_job_history_task  # noqa: PLC0415
+
+    app, prune_task, execute = _app_with_procrastinate()
+
+    await purge_job_history_task(app)
+
+    prune_task.defer_async.assert_awaited_once()
+    kwargs = prune_task.defer_async.await_args.kwargs
+    assert kwargs["max_hours"] == 24 * 30
+    assert kwargs["remove_failed"] and kwargs["remove_cancelled"] and kwargs["remove_aborted"]
+    # Which rows the sweep spares is proven against a real schema in
+    # tests/contract/test_job_history_purge_contract.py. Here it is enough that
+    # the sweep runs beside the deferral, and runs the service's own statement.
+    from paper_ingestion.scheduler import ORPHANED_JOB_PROGRESS_PURGE  # noqa: PLC0415
+
+    execute.assert_awaited_once_with(ORPHANED_JOB_PROGRESS_PURGE)
+
+
+async def test_boot_prunes_job_history_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh install prunes immediately instead of waiting a day."""
+    import importlib  # noqa: PLC0415
+
+    monkeypatch.delitem(sys.modules, "paper_ingestion.main", raising=False)
+    main = importlib.import_module("paper_ingestion.main")
+    app, prune_task, _execute = _app_with_procrastinate()
+
+    await main._prune_job_history_hook(app)
+
+    prune_task.defer_async.assert_awaited_once()
+
+
 async def test_catch_up_never_adds_a_second_pipeline_job() -> None:
     """Two ids running one pipeline each carry their own max_instances, so a boot
     whose anchored fire lands in the catch-up window runs the pipeline twice."""
