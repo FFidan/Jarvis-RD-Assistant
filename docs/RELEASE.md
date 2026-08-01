@@ -46,6 +46,10 @@ gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all \
   -f update_mode=direct
 ```
 
+If the lifecycle run fails, download its `lifecycle-smoke-log` artifact before
+anything else and read the tail; the failure path in step 3 explains what that
+log contains.
+
 This branch check selects the two newest published tags, which predate the
 candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
 covered by the per-source upgrade checks in step 3, which pass explicit
@@ -97,6 +101,16 @@ gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
   -f update_from="$UPDATE_FROM" -f update_to="$MERGED_SHA" \
   -f update_mode="$UPDATE_MODE"
 ```
+
+When a lifecycle run fails, start from its `lifecycle-smoke-log` artifact rather
+than the job page. For a failed leg that owns a Compose project — `tls`,
+`update`, or `uninstall` — the log tail carries that project's container
+listing, each container's state and exit code, and each container's own output,
+captured before the leg's resources were removed. The `restore` leg owns no
+Compose project; its evidence is the round-trip sub-script log, which the smoke
+echoes inline. Fix the cause, then re-dispatch only the check that failed:
+identical re-dispatches supersede each other, while runs differing in `leg`,
+`update_from`, `update_to`, or `update_mode` now run concurrently.
 
 Run the upgrade check for each maintained source contract:
 
