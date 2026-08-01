@@ -581,6 +581,148 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
 
 
 # ---------------------------------------------------------------------------
+# Purpose-built failure messages survive to the caller
+# ---------------------------------------------------------------------------
+
+
+def _embedding_batch_error(**kwargs):
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
+    return EmbeddingBatchError("batch 1/5 failed immediately", **kwargs)
+
+
+# Every failure whose message was written for the requester rather than copied
+# from the upstream exception. Parameterised so a sixth such exit added later
+# without the marker type shows up here as a failure rather than as a message
+# that silently collapses to "Job failed" at the job boundary.
+_USER_FACING_PROCESS_FAILURES = [
+    pytest.param(
+        _embedding_batch_error(completed_chunks=[], completed_point_ids=[]),
+        "chunks saved",
+        id="partial-embedding-batch",
+    ),
+    pytest.param(
+        torch.OutOfMemoryError("simulated OOM"),
+        "GPU out-of-memory",
+        id="torch-oom",
+    ),
+    pytest.param(
+        RuntimeError("CUDA out of memory: tried to allocate 2 GiB"),
+        "GPU error",
+        id="cuda-runtime-error",
+    ),
+    pytest.param(
+        RuntimeError("embedding backend closed the connection"),
+        "Embedding service error",
+        id="generic-embedding-failure",
+    ),
+    pytest.param(
+        httpx.HTTPStatusError(
+            "503",
+            request=httpx.Request("POST", "http://litellm/embed"),
+            response=httpx.Response(503),
+        ),
+        "Embedding service error",
+        id="embedding-http-status",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("failure", "expected_text"), _USER_FACING_PROCESS_FAILURES)
+async def test_process_failures_carry_their_remediation_text(failure, expected_text):
+    """Each purpose-built failure leaves the workflow as the marker type, text intact."""
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError
+
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _fetchval_answers(0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(side_effect=failure)
+
+    with pytest.raises(PDFUserFacingError) as raised:
+        await run_process_pdf(
+            paper_id=91,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=MagicMock(),
+        )
+
+    assert expected_text in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_synchronous_process_route_still_answers_502_for_an_embedding_failure(
+    tmp_path, monkeypatch
+):
+    """The route sees a real workflow failure as a service error, not a crash.
+
+    Driven through the unmocked workflow on purpose: the message type is what
+    decides between the sanitized 502 and an unhandled 500, so a failure raised
+    as something the route's handler does not catch must surface here.
+    """
+    from unittest.mock import patch as mock_patch
+
+    import httpx
+    from fastapi import FastAPI
+    from jarvis_common.settings import CoreSettings
+    from jarvis_common import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
+    from paper_ingestion.routers import pdf as pdf_router
+    from tests.conftest import FakeRecord
+
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    paper_path = storage_dir / "1.pdf"
+    paper_path.write_bytes(b"%PDF-1.7\ncontent")
+
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _fetchval_answers(0)
+    paper_row = FakeRecord(
+        id=1,
+        pdf_downloaded=True,
+        pdf_local_path=str(paper_path),
+        is_visible=True,
+    )
+
+    async def _fetchrow(sql, *args):
+        if "pg_try_advisory_lock" in sql:
+            return {"acquired": True}
+        return paper_row
+
+    conn.fetchrow.side_effect = _fetchrow
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=RuntimeError("embedding backend closed the connection")
+    )
+    monkeypatch.setattr(pdf_router, "PDF_STORAGE_PATH", str(storage_dir))
+
+    app = FastAPI()
+    app.include_router(pdf_router.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_pdf_processor] = lambda: pdf_processor
+    app.dependency_overrides[get_embedder] = lambda: MagicMock()
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+
+    with mock_patch(
+        "paper_ingestion.routers.pdf.get_core_settings",
+        return_value=CoreSettings(dev_mode=True),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/process-pdf/1", params={"sync": True})
+
+    # Through the real route, so an error type the handler does not catch shows up
+    # as a 500 here rather than as a passing assertion on a hand-called function.
+    assert response.status_code == 502
+    assert "Embedding service error" in response.json()["detail"]["detail"]
+
+
+# ---------------------------------------------------------------------------
 # torch OOM / CUDA error differentiation
 # ---------------------------------------------------------------------------
 

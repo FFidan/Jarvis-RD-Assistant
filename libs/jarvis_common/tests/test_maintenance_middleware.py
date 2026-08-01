@@ -30,6 +30,7 @@ from jarvis_common.maintenance import (
     OutboundEgressBlockedError,
     ensure_outbound_egress_allowed,
     maintenance_active,
+    maintenance_skip_reason,
     secrets_rotated_since,
     skip_for_maintenance,
 )
@@ -217,6 +218,36 @@ def test_skip_for_maintenance_fails_closed_for_an_unreadable_quarantine(tmp_path
 
     quarantine.write_text("not json")
     assert skip_for_maintenance("pulse") is True
+
+
+def test_skip_reason_names_which_condition_paused_the_work(tmp_path, monkeypatch):
+    """The reason separates the self-clearing condition from the one awaiting a person."""
+    soft = tmp_path / ".maintenance"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    assert maintenance_skip_reason("pulse") is None
+
+    quarantine.write_text("not json")
+    assert maintenance_skip_reason("pulse") == "quarantine"
+
+    soft.touch()
+    assert maintenance_skip_reason("pulse") == "restore"
+
+
+def test_skip_for_maintenance_reports_every_reason_as_a_pause(tmp_path, monkeypatch):
+    """The bool guard stays exactly as wide as the reason it delegates to."""
+    soft = tmp_path / ".maintenance"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    for setup in (lambda: None, quarantine.touch, soft.touch):
+        setup()
+        assert skip_for_maintenance("pulse") is (maintenance_skip_reason("pulse") is not None)
 
 
 def test_outbound_egress_guard_fails_closed_for_existing_quarantine(tmp_path, monkeypatch):

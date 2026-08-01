@@ -109,29 +109,94 @@ def test_register_tasks_handler_closure() -> None:
     assert default_b is handler_b, "task_b should be bound to handler_b"
 
 
-@pytest.mark.asyncio
-async def test_registered_task_retries_without_running_handler_during_restore(monkeypatch) -> None:
-    """Every generated task wrapper fails closed before resolving dependencies."""
+def _blocked_task(monkeypatch, reason: str):
+    """Register one task whose maintenance check always reports *reason*."""
     import procrastinate
     from jarvis_common import task_registry
-    from jarvis_common.maintenance import OutboundEgressBlockedError
     from procrastinate.contrib.aiopg import AiopgConnector
 
     fresh_app = procrastinate.App(connector=AiopgConnector())
     handler = AsyncMock(return_value={"ok": True})
     registry = task_registry.TaskRegistry(fresh_app)
-    monkeypatch.setattr(task_registry, "skip_for_maintenance", lambda _label: True)
-
+    monkeypatch.setattr(task_registry, "maintenance_skip_reason", lambda _label: reason)
     registry.register_tasks({"test.egress": handler}, queue="test_queue")
-    task = fresh_app.tasks["test.egress"]
+    return fresh_app.tasks["test.egress"], handler
+
+
+def _context_with_attempts(attempts: int) -> SimpleNamespace:
+    """Return a JobContext-shaped stub carrying the attempt counter."""
+    return SimpleNamespace(job=SimpleNamespace(attempts=attempts))
+
+
+@pytest.mark.asyncio
+async def test_registered_task_retries_without_running_handler_during_restore(monkeypatch) -> None:
+    """Every generated task wrapper fails closed before resolving dependencies."""
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+
+    task, handler = _blocked_task(monkeypatch, "restore")
 
     with pytest.raises(OutboundEgressBlockedError, match="restore state"):
-        await task.func(SimpleNamespace(), job_id="job-1")
+        await task.func(_context_with_attempts(0), job_id="job-1")
 
     handler.assert_not_awaited()
     assert task.retry_strategy.max_attempts is None
     assert task.retry_strategy.wait == 30
     assert task.retry_strategy.retry_exceptions == {OutboundEgressBlockedError}
+
+
+@pytest.mark.asyncio
+async def test_restore_maintenance_still_retries_after_an_hour_of_attempts(monkeypatch) -> None:
+    """Restore maintenance clears itself, so its retry budget stays unlimited."""
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+
+    task, handler = _blocked_task(monkeypatch, "restore")
+
+    with pytest.raises(OutboundEgressBlockedError) as raised:
+        await task.func(_context_with_attempts(5000), job_id="job-1")
+
+    from jarvis_common.jobs import JobError
+
+    assert not isinstance(raised.value, JobError)
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_retries_while_inside_the_bound(monkeypatch) -> None:
+    """A quarantined task keeps retrying until the bound, under the retryable type."""
+    from jarvis_common.maintenance import (
+        OutboundEgressBlockedError,
+        OutboundQuarantineBlockedError,
+    )
+
+    task, handler = _blocked_task(monkeypatch, "quarantine")
+
+    with pytest.raises(OutboundQuarantineBlockedError) as raised:
+        await task.func(_context_with_attempts(119), job_id="job-1")
+
+    # The retry strategy matches by isinstance, so the subclass inherits the budget.
+    assert isinstance(raised.value, OutboundEgressBlockedError)
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_fails_the_job_once_the_bound_is_passed(monkeypatch) -> None:
+    """Past the bound the job goes terminal with the acknowledgement it is waiting on."""
+    from jarvis_common.jobs import JobError
+    from jarvis_common.maintenance import OutboundEgressBlockedError
+    from jarvis_common.task_registry import _terminal_error_payload
+
+    task, handler = _blocked_task(monkeypatch, "quarantine")
+
+    with pytest.raises(JobError) as raised:
+        await task.func(_context_with_attempts(120), job_id="job-1")
+
+    assert "acknowledge the restore" in str(raised.value)
+    assert "stopped retrying after an hour" in str(raised.value)
+    # JobError is absent from retry_exceptions, so this is a terminal outcome
+    # whose text survives into the payload rather than collapsing to "Job failed".
+    assert task.retry_strategy.retry_exceptions == {OutboundEgressBlockedError}
+    assert _terminal_error_payload(raised.value) == {"message": str(raised.value)}
+    handler.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -82,6 +83,15 @@ class OutboundEgressBlockedError(RuntimeError):
 
     Background tasks retry this error. Network sinks also raise it if quarantine
     becomes active after an earlier request or scheduler check.
+    """
+
+
+class OutboundQuarantineBlockedError(OutboundEgressBlockedError):
+    """Raised when quarantine — not restore maintenance — is what blocks the work.
+
+    Restore maintenance ends on its own; quarantine waits for a person to review
+    the restored credentials. Callers that retry both use this distinction to
+    stop retrying the quarantined case instead of waiting forever.
     """
 
 
@@ -282,6 +292,33 @@ def ensure_outbound_egress_allowed(operation_label: str) -> None:
     )
 
 
+def maintenance_skip_reason(job_label: str) -> Literal["restore", "quarantine"] | None:
+    """Return which condition pauses background work, or ``None`` if neither does.
+
+    Both conditions pause the same work, but they end differently: restore
+    maintenance clears itself, while quarantine waits for a person to review the
+    restored credentials. A caller that must bound its waiting reads the reason;
+    one that only needs to pause calls :func:`skip_for_maintenance`.
+
+    Parameters
+    ----------
+    job_label : str
+        Non-secret label included in the skip log.
+
+    Returns
+    -------
+    {"restore", "quarantine"} or None
+        The active condition, checked in that order.
+    """
+    if maintenance_active():
+        logger.info("skip %s: maintenance in progress", job_label)
+        return "restore"
+    if outbound_quarantine_active():
+        logger.info("skip %s: outbound quarantine awaiting restore review", job_label)
+        return "quarantine"
+    return None
+
+
 def skip_for_maintenance(job_label: str) -> bool:
     """Return whether background work must pause.
 
@@ -300,13 +337,7 @@ def skip_for_maintenance(job_label: str) -> bool:
     bool
         Whether the caller must return without doing background work.
     """
-    if maintenance_active():
-        logger.info("skip %s: maintenance in progress", job_label)
-        return True
-    if outbound_quarantine_active():
-        logger.info("skip %s: outbound quarantine awaiting restore review", job_label)
-        return True
-    return False
+    return maintenance_skip_reason(job_label) is not None
 
 
 class MaintenanceMiddleware:

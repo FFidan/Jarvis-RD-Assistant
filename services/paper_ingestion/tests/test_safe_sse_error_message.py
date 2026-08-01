@@ -28,3 +28,13 @@ def test_value_error_returns_message():
 def test_generic_exception_returns_safe_fallback():
     exc = RuntimeError("internal stack trace details")
     assert safe_sse_error_message(exc) == "Analysis failed. Please try again."
+
+
+def test_user_facing_pdf_error_keeps_its_remediation():
+    """The stream must not drop a message written for the person watching it."""
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError
+
+    exc = PDFUserFacingError(
+        "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or set TORCH_DEVICE=cpu."
+    )
+    assert safe_sse_error_message(exc) == str(exc)
