@@ -52,7 +52,7 @@ from paper_ingestion.models import (
 )
 from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
-from paper_ingestion.services.pdf_workflow import advisory_lock
+from paper_ingestion.services.pdf_workflow import advisory_lock, paper_locked_error
 from paper_ingestion.services.summarization_models import (
     CondensedDigest,
     ReduceSummary,
@@ -712,6 +712,9 @@ async def _find_cross_references(
     ]
 
 
+_SUMMARY_LOCK_TIMEOUT_SECONDS = 600
+
+
 async def _load_paper_for_summary(
     db_pool: asyncpg.Pool,
     *,
@@ -720,58 +723,62 @@ async def _load_paper_for_summary(
     force: bool,
 ) -> SummaryGenerationResult | SummaryInputs:
     """Load the paper inputs under an advisory lock, or the early result when idempotent."""
-    async with db_pool.acquire() as conn:
-        async with advisory_lock(conn, 2, paper_id):
-            if user_id is None:
-                paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
-            else:
-                paper_row = await conn.fetchrow(
-                    f"SELECT * FROM papers p WHERE p.id = $1 AND {paper_visible_sql(2)}",
-                    paper_id,
-                    user_id,
-                )
-            if not paper_row:
-                raise PaperNotFoundError(f"Paper {paper_id} not found")
-            content_generation = int(paper_row["content_generation"])
-
-            # Idempotency: return the caller's existing summary. Scoped by
-            # user_id — paper_summaries is per-user (UNIQUE (paper_id, user_id)),
-            # so an unscoped check would return another user's summary content.
-            # force=True skips this; the ON CONFLICT upsert makes re-runs safe.
-            if not force:
-                existing = await conn.fetchrow(
-                    "SELECT * FROM paper_summaries"
-                    " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2"
-                    " AND content_generation = $3",
-                    paper_id,
-                    user_id,
-                    content_generation,
-                )
-                if existing:
-                    current_cross_references = await filter_current_cross_references(
-                        conn, list(existing["cross_references"] or [])
+    try:
+        async with db_pool.acquire() as conn:
+            async with advisory_lock(conn, 2, paper_id, timeout_s=_SUMMARY_LOCK_TIMEOUT_SECONDS):
+                if user_id is None:
+                    paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+                else:
+                    paper_row = await conn.fetchrow(
+                        f"SELECT * FROM papers p WHERE p.id = $1 AND {paper_visible_sql(2)}",
+                        paper_id,
+                        user_id,
                     )
-                    return SummaryGenerationResult(
-                        summary=row_to_summary_response(
-                            existing, cross_references=current_cross_references
-                        ),
-                        coverage=1.0,
-                        passes=0,
+                if not paper_row:
+                    raise PaperNotFoundError(f"Paper {paper_id} not found")
+                content_generation = int(paper_row["content_generation"])
+
+                # Idempotency: return the caller's existing summary. Scoped by
+                # user_id — paper_summaries is per-user (UNIQUE (paper_id, user_id)),
+                # so an unscoped check would return another user's summary content.
+                # force=True skips this; the ON CONFLICT upsert makes re-runs safe.
+                if not force:
+                    existing = await conn.fetchrow(
+                        "SELECT * FROM paper_summaries"
+                        " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                        " AND content_generation = $3",
+                        paper_id,
+                        user_id,
+                        content_generation,
+                    )
+                    if existing:
+                        current_cross_references = await filter_current_cross_references(
+                            conn, list(existing["cross_references"] or [])
+                        )
+                        return SummaryGenerationResult(
+                            summary=row_to_summary_response(
+                                existing, cross_references=current_cross_references
+                            ),
+                            coverage=1.0,
+                            passes=0,
+                        )
+
+                chunk_rows = await conn.fetch(
+                    "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
+                    paper_id,
+                )
+                if not chunk_rows:
+                    raise EmptyChunksError(
+                        f"Paper {paper_id} has no processed chunks. Run process-pdf first."
                     )
 
-            chunk_rows = await conn.fetch(
-                "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
-            )
-            if not chunk_rows:
-                raise EmptyChunksError(
-                    f"Paper {paper_id} has no processed chunks. Run process-pdf first."
-                )
+                chunks = [row_to_chunk_response(r) for r in chunk_rows]
+                full_text = "\n".join(c.content for c in chunks)
 
-            chunks = [row_to_chunk_response(r) for r in chunk_rows]
-            full_text = "\n".join(c.content for c in chunks)
-
-            # Read model preference from user_config while connection is held
-            smart_model = get_smart_model()
+                # Read model preference from user_config while connection is held
+                smart_model = get_smart_model()
+    except asyncpg.exceptions.LockNotAvailableError as exc:
+        raise paper_locked_error(paper_id) from exc
     return SummaryInputs(
         paper_row=paper_row,
         chunks=chunks,

@@ -197,6 +197,75 @@ async def test_summary_idempotency_requires_the_current_content_generation():
     assert lookup.args[1:] == (7, 42, 1)
 
 
+def _summary_lock_conn(lock_error: BaseException | None = None) -> AsyncMock:
+    """Return a connection that records its statements and can refuse the lock.
+
+    Deliberately drives the real ``advisory_lock``: every other test here swaps
+    it for a no-op, which would make the timeout wiring unobservable.
+    """
+    conn = AsyncMock()
+    statements: list[str] = []
+
+    async def _execute(statement, *_args):
+        statements.append(statement)
+        if lock_error is not None and "pg_advisory_lock" in statement:
+            raise lock_error
+
+    conn.execute = AsyncMock(side_effect=_execute)
+    conn.statements = statements
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_summary_load_refuses_a_paper_whose_lock_never_frees():
+    """A summarize request bounded out of its lock wait names the paper, readably.
+
+    The refusal is the requester-facing type, so the synchronous route keeps
+    answering its sanitized service error rather than crashing.
+    """
+    import asyncpg
+
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError
+
+    conn = _summary_lock_conn(asyncpg.exceptions.LockNotAvailableError("canceled on lock timeout"))
+
+    with pytest.raises(PDFUserFacingError) as raised:
+        await summarization._load_paper_for_summary(
+            _make_pool(conn),
+            paper_id=7,
+            user_id=42,
+            force=False,
+        )
+
+    assert "Paper 7 is locked by another long-running operation" in str(raised.value)
+    assert conn.statements[0] == "SET lock_timeout = '600s'"
+    assert conn.statements[-1] == "SET lock_timeout = DEFAULT"
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_summary_load_proceeds_when_the_lock_arrives_in_time():
+    """The bounded wait is a bound, not a refusal: an available lock still loads."""
+    conn = _summary_lock_conn()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    conn.fetch.return_value = [_chunk_row()]
+
+    loaded = await summarization._load_paper_for_summary(
+        _make_pool(conn),
+        paper_id=7,
+        user_id=42,
+        force=False,
+    )
+
+    assert isinstance(loaded, summarization.SummaryInputs)
+    assert conn.statements == [
+        "SET lock_timeout = '600s'",
+        "SELECT pg_advisory_lock($1, $2)",
+        "SELECT pg_advisory_unlock($1, $2)",
+        "SET lock_timeout = DEFAULT",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_generate_paper_summary_idempotency_scoped_by_user_id():
     """The idempotency lookup must be scoped by user_id.

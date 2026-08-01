@@ -136,6 +136,38 @@ async def test_advisory_lock_unlocks_even_after_error():
 
     assert conn.execute.await_args_list[0].args == ("SELECT pg_advisory_lock($1, $2)", 3, 7)
     assert conn.execute.await_args_list[1].args == ("SELECT pg_advisory_unlock($1, $2)", 3, 7)
+    # Without a timeout the connection's session settings are left alone: the
+    # reconciliation callers share pooled connections and wait deliberately.
+    assert len(conn.execute.await_args_list) == 2
+
+
+@pytest.mark.asyncio
+async def test_advisory_lock_resets_its_timeout_after_the_wait_expires():
+    """A lock that never arrives still leaves the pooled session as it found it.
+
+    The reset has to survive the acquisition itself failing — that is the whole
+    reason it lives outside the try that guards the lock body.
+    """
+    import asyncpg
+
+    conn = AsyncMock()
+
+    async def _execute(statement, *_args):
+        if "pg_advisory_lock" in statement:
+            raise asyncpg.exceptions.LockNotAvailableError("canceled on lock timeout")
+
+    conn.execute = AsyncMock(side_effect=_execute)
+
+    with pytest.raises(asyncpg.exceptions.LockNotAvailableError):
+        async with advisory_lock(conn, 2, 7, timeout_s=600):
+            pytest.fail("the lock body must not run when the lock was never taken")
+
+    statements = [call_args.args[0] for call_args in conn.execute.await_args_list]
+    assert statements == [
+        "SET lock_timeout = '600s'",
+        "SELECT pg_advisory_lock($1, $2)",
+        "SET lock_timeout = DEFAULT",
+    ]
 
 
 class _SingleSlotProbePool:
@@ -233,6 +265,39 @@ async def test_paper_lock_cancellation_unlocks_and_releases_connection():
     async with asyncio.timeout(0.1):
         async with pool.acquire():
             assert pool.in_use == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_lock_probe_loop_gives_up_after_its_total_deadline(monkeypatch):
+    """A permanently held paper lock refuses the caller instead of probing forever.
+
+    The clock is faked so the real ten-minute deadline is exercised rather than a
+    shortened stand-in, and the outer timeout turns "waits forever" into a
+    failure instead of a hung suite.
+    """
+    pool = _SingleSlotProbePool(lock_available=False)
+    real_sleep = asyncio.sleep
+    slept: list[float] = []
+
+    async def _fake_sleep(delay, *args, **kwargs):
+        slept.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    with pytest.raises(pdf_workflow_module.PDFUserFacingError) as raised:
+        async with asyncio.timeout(30):
+            async with pdf_workflow_module._paper_mutation_connection(  # type: ignore[attr-defined]
+                pool,
+                77,  # type: ignore[arg-type]
+            ):
+                pytest.fail("the contended lock must never be reported as acquired")
+
+    assert "Paper 77 is locked by another long-running operation" in str(raised.value)
+    assert sum(slept) >= pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    # ... and not one probe earlier: the refusal waits out the whole budget.
+    assert sum(slept[:-1]) < pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    assert pool.release_count == 0
 
 
 @pytest.mark.asyncio
@@ -652,21 +717,14 @@ async def test_process_failures_carry_their_remediation_text(failure, expected_t
     assert expected_text in str(raised.value)
 
 
-@pytest.mark.asyncio
-async def test_synchronous_process_route_still_answers_502_for_an_embedding_failure(
-    tmp_path, monkeypatch
-):
-    """The route sees a real workflow failure as a service error, not a crash.
+def _process_route_app(tmp_path, monkeypatch, *, process_side_effect=None, lock_available=True):
+    """Wire the synchronous process route over the unmocked workflow.
 
-    Driven through the unmocked workflow on purpose: the message type is what
-    decides between the sanitized 502 and an unhandled 500, so a failure raised
-    as something the route's handler does not catch must surface here.
+    The route's handler is what decides between the sanitized 502 and an
+    unhandled 500, so failures have to be driven through it rather than asserted
+    on a hand-called function.
     """
-    from unittest.mock import patch as mock_patch
-
-    import httpx
     from fastapi import FastAPI
-    from jarvis_common.settings import CoreSettings
     from jarvis_common import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
     from paper_ingestion.routers import pdf as pdf_router
@@ -688,16 +746,14 @@ async def test_synchronous_process_route_still_answers_502_for_an_embedding_fail
 
     async def _fetchrow(sql, *args):
         if "pg_try_advisory_lock" in sql:
-            return {"acquired": True}
+            return {"acquired": lock_available}
         return paper_row
 
     conn.fetchrow.side_effect = _fetchrow
     pool, _ = make_pool_and_conn(conn=conn)
 
     pdf_processor = MagicMock()
-    pdf_processor.process = AsyncMock(
-        side_effect=RuntimeError("embedding backend closed the connection")
-    )
+    pdf_processor.process = AsyncMock(side_effect=process_side_effect)
     monkeypatch.setattr(pdf_router, "PDF_STORAGE_PATH", str(storage_dir))
 
     app = FastAPI()
@@ -706,6 +762,14 @@ async def test_synchronous_process_route_still_answers_502_for_an_embedding_fail
     app.dependency_overrides[get_pdf_processor] = lambda: pdf_processor
     app.dependency_overrides[get_embedder] = lambda: MagicMock()
     app.dependency_overrides[current_user_id_strict] = lambda: 1
+    return app
+
+
+async def _post_synchronous_process(app):
+    """Drive one synchronous process request against *app*."""
+    from unittest.mock import patch as mock_patch
+
+    from jarvis_common.settings import CoreSettings
 
     with mock_patch(
         "paper_ingestion.routers.pdf.get_core_settings",
@@ -714,12 +778,50 @@ async def test_synchronous_process_route_still_answers_502_for_an_embedding_fail
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post("/api/process-pdf/1", params={"sync": True})
+            return await client.post("/api/process-pdf/1", params={"sync": True})
+
+
+@pytest.mark.asyncio
+async def test_synchronous_process_route_still_answers_502_for_an_embedding_failure(
+    tmp_path, monkeypatch
+):
+    """The route sees a real workflow failure as a service error, not a crash."""
+    app = _process_route_app(
+        tmp_path,
+        monkeypatch,
+        process_side_effect=RuntimeError("embedding backend closed the connection"),
+    )
+
+    response = await _post_synchronous_process(app)
 
     # Through the real route, so an error type the handler does not catch shows up
     # as a 500 here rather than as a passing assertion on a hand-called function.
     assert response.status_code == 502
     assert "Embedding service error" in response.json()["detail"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_synchronous_process_route_answers_502_when_the_paper_lock_never_frees(
+    tmp_path, monkeypatch
+):
+    """Giving up on a contended lock is a service error too, not a crash.
+
+    A refusal raised as anything the route does not catch — a job-layer error,
+    for one — turns this sanitized 502 into an unhandled 500.
+    """
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(delay, *args, **kwargs):
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    app = _process_route_app(tmp_path, monkeypatch, lock_available=False)
+
+    async with asyncio.timeout(30):
+        response = await _post_synchronous_process(app)
+
+    assert response.status_code == 502
+    assert "locked by another long-running operation" in response.json()["detail"]["detail"]
 
 
 # ---------------------------------------------------------------------------
