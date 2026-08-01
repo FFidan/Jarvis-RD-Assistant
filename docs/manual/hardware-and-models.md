@@ -157,5 +157,11 @@ What is deliberately left out or left unassignable:
   embedding model is fixed separately, as described above. Models that are plainly not chat
   models — speech, image, moderation and similar families — are left out entirely.
 
+  Where a provider publishes what each model can do, JARVIS reads that directly. Some providers
+  publish only a list of names, and for those JARVIS recognises the model families they have
+  announced. A brand-new family from one of those providers can therefore show up as
+  not-assignable until a JARVIS update recognises it — you will see the model and the reason, not
+  a silently missing entry.
+
 !!! note "Privacy"
     When a cloud model is assigned to a role, the prompts and relevant paper excerpts for that role's requests are sent to the configured provider. Local models keep model inference on infrastructure controlled by the operator. The embedding model is separate: changing it requires a deliberate re-index workflow, not a runtime provider switch.

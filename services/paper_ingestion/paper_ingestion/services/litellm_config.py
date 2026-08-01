@@ -32,14 +32,10 @@ from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 
 from paper_ingestion.services.litellm_api import (
-    _HTTP_TIMEOUT,  # noqa: F401
     LiteLLMDeployment,
-    LiteLLMModelInfo,  # noqa: F401
     _key_fingerprint,
-    _parse_deployment,  # noqa: F401
     _post_model_delete,
     _post_model_new,
-    _redact_secret,  # noqa: F401
     get_litellm_deployments,
 )
 from paper_ingestion.services.llm_provider_registry import (

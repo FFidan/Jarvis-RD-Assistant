@@ -8,7 +8,8 @@
 * **<0.137** — ``iter_route_contexts`` is absent (``_iter_route_contexts is None``),
   ``router.routes`` is already a flat ``APIRoute`` list, so it iterates that directly.
 
-The live deployment runs FastAPI 0.136.3, which exercises ONLY the fallback path.
+The pinned deployment runs FastAPI 0.139.0, which exercises the ITERATOR path; the
+fallback covers the supported floor (``>=0.136.1``) and any rollback below 0.137.
 These tests assert BOTH paths yield the identical full handler-name set, guarding
 against the fallback silently returning an empty dict (which would KeyError at the
 service-router import site on an older / rolled-back FastAPI).
@@ -64,9 +65,10 @@ def _fake_iter_route_contexts(routes):
 def test_collect_handlers_fallback_branch_returns_full_set(monkeypatch):
     """<0.137 fallback (``_iter_route_contexts is None``) yields all handlers.
 
-    This is the branch the live FastAPI 0.136.3 deployment actually runs. A
-    regression that left ``router.routes`` un-iterated would return an empty dict
-    here and KeyError at the service jobs.py import.
+    This is the branch a deployment at the supported floor runs, and the one a
+    rollback below 0.137 lands on. A regression that left ``router.routes``
+    un-iterated would return an empty dict here and KeyError at the service
+    jobs.py import.
     """
     router = _build_real_router()
     monkeypatch.setattr("jarvis_common.jobs_router._iter_route_contexts", None)
@@ -84,9 +86,9 @@ def test_collect_handlers_fallback_branch_returns_full_set(monkeypatch):
 def test_collect_handlers_iterator_branch_returns_full_set(monkeypatch):
     """>=0.137 path (``_iter_route_contexts`` present) yields all handlers.
 
-    The live env has ``_iter_route_contexts is None`` (FastAPI 0.136.3), so we
-    install a faithful stand-in to force this branch and prove it is reachable
-    and complete — i.e. it survives a FastAPI >=0.137 upgrade.
+    This is the branch the pinned FastAPI 0.139.0 actually runs. The stand-in
+    keeps the test independent of the installed version, so both branches stay
+    proven across the whole supported range.
     """
     router = _build_real_router()
     monkeypatch.setattr(
