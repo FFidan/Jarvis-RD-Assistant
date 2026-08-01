@@ -180,7 +180,8 @@ describe('CitationGraphPage', () => {
     await selectAttentionPaper(user);
 
     // Simulate the cytoscape tap event, which delivers the node id as a string.
-    tapHandlers[tapHandlers.length - 1]({ target: { id: () => '1' } });
+    expect(tapHandlers.length).toBeGreaterThan(0);
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '1' } }));
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/paper/1');
@@ -192,7 +193,8 @@ describe('CitationGraphPage', () => {
     renderPage();
     await selectAttentionPaper(user);
 
-    tapHandlers[tapHandlers.length - 1]({ target: { id: () => '10' } });
+    expect(tapHandlers.length).toBeGreaterThan(0);
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '10' } }));
 
     await waitFor(() => {
       expect(screen.getByTestId('citation-stub-panel')).toBeInTheDocument();

@@ -275,7 +275,9 @@ describe('KnowledgeGraphPage — Reset filters', () => {
 
     // Pick an entity type other than "All" (the first combobox — EntityTypeFilter
     // precedes the layout selector in the Filters card).
-    await user.click(screen.getAllByRole('combobox')[0]);
+    const [entityTypeSelect] = screen.getAllByRole('combobox');
+    expect(entityTypeSelect).toBeDefined();
+    await user.click(entityTypeSelect as HTMLElement);
     await user.click(await screen.findByRole('option', { name: 'Method' }));
     await waitFor(() => {
       expect(vi.mocked(api.getKnowledgeGraph)).toHaveBeenLastCalledWith('method', 4);

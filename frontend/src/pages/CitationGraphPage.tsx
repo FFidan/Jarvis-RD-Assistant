@@ -18,13 +18,10 @@ import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { GitFork, X } from 'lucide-react';
 import type { PaperBrief } from '@/types';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
+import type { GraphNode } from '@/types/jobs';
 
 /** The subset of GraphNode fields the page stashes on each CytoscapeNode. */
-interface CitationNodeMetadata {
-  citation_count: number;
-  published_date: string | null;
-  is_stub: boolean;
-}
+type CitationNodeMetadata = Pick<GraphNode, 'citation_count' | 'published_date' | 'is_stub'>;
 
 export function CitationGraphPage() {
   const navigate = useNavigate();
