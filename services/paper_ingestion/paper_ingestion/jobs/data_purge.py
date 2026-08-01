@@ -67,10 +67,17 @@ _ANONYMIZE_AUDIT_LOG = (
 
 @dataclass(frozen=True, slots=True)
 class QdrantPurgeCounts:
-    """Counts of Qdrant points deleted or retained with redacted audit data."""
+    """Counts of Qdrant points deleted or retained with redacted audit data.
+
+    ``residual_points`` is how many points still carried the purged identifier
+    after both writes completed; anything above zero means the vector store and
+    the relational store disagree. It defaults so that callers constructing the
+    pre-existing two-field shape keep working.
+    """
 
     deleted: int
     redacted: int
+    residual_points: int = 0
 
 
 async def _anonymize_audit_log_for_users(conn: Any, uids: list[int]) -> int:
@@ -138,6 +145,10 @@ async def _purge_qdrant_for_user(
         if protected_paper_ids
         else None
     )
+    # Migration 0104: paper_chunks are canonical paper data, not user-owned
+    # records. A point is deleted only when its paper is neither public nor in a
+    # surviving user's library; every other point of the purged user is redacted,
+    # never deleted.
     delete_filter = Filter(
         must=[uid_condition],
         must_not=[protected_condition] if protected_condition is not None else None,
@@ -165,12 +176,34 @@ async def _purge_qdrant_for_user(
             wait=True,
         )
 
+    # A Qdrant filter carrying no conditions matches EVERY point, so a selector
+    # that lost its user scope would erase the whole shared collection.
+    if not delete_filter.must:
+        raise ValueError(
+            "refusing a match-all Qdrant delete: the purge selector lost its user condition"
+        )
     await qdrant.delete(
         collection_name=COLLECTION_NAME,
         points_selector=delete_filter,
         wait=True,
     )
-    return QdrantPurgeCounts(deleted=deleted, redacted=redacted)
+
+    # Both writes have landed, so no point should still carry the purged
+    # identifier: redacted points now hold ``user_id: None`` and the rest are
+    # gone. A non-zero count is the two stores disagreeing.
+    residual_result = await qdrant.count(
+        collection_name=COLLECTION_NAME,
+        count_filter=Filter(must=[uid_condition]),
+        exact=True,
+    )
+    residual_points = int(residual_result.count)
+    if residual_points:
+        logger.warning(
+            "data_purge: %d Qdrant point(s) still carry user %d after the purge",
+            residual_points,
+            uid,
+        )
+    return QdrantPurgeCounts(deleted=deleted, redacted=redacted, residual_points=residual_points)
 
 
 async def data_purge_task(app: Any) -> None:
@@ -200,6 +233,7 @@ async def data_purge_task(app: Any) -> None:
 
             qdrant_vectors_deleted: dict[int, int] = {}
             qdrant_vectors_redacted: dict[int, int] = {}
+            qdrant_points_residual: dict[int, int] = {}
             qdrant_errors: list[str] = []
             # Uids whose Qdrant purge failed — excluded from the hard DELETE so
             # their vectors are not orphaned.  They remain deleted_at-marked and
@@ -227,6 +261,7 @@ async def data_purge_task(app: Any) -> None:
                         )
                         qdrant_vectors_deleted[uid] = purge_counts.deleted
                         qdrant_vectors_redacted[uid] = purge_counts.redacted
+                        qdrant_points_residual[uid] = purge_counts.residual_points
                     except Exception as exc:
                         logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
                         qdrant_errors.append(f"uid={uid}: {exc!r}")
@@ -271,6 +306,7 @@ async def data_purge_task(app: Any) -> None:
             "users_deleted": deleted,
             "qdrant_vectors_deleted": qdrant_vectors_deleted,
             "qdrant_vectors_redacted": qdrant_vectors_redacted,
+            "qdrant_points_residual": qdrant_points_residual,
             "audit_rows_anonymized": audit_rows_anonymized,
         }
         if qdrant_errors:
