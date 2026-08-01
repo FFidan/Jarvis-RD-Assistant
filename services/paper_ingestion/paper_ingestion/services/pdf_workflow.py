@@ -127,6 +127,16 @@ class PDFSourceSupersededError(RuntimeError):
     """Raised when a paper's source URL moves away from the one a run derived content from."""
 
 
+class PDFUserFacingError(RuntimeError):
+    """Raised with a message written for the person who asked for the run.
+
+    Subclasses ``RuntimeError`` so the synchronous process route keeps
+    producing its sanitized 502; the job handler translates it into a
+    ``JobError`` so the remediation text survives into the job error payload
+    instead of collapsing to a generic failure.
+    """
+
+
 class PDFRebuildNotPermittedError(RuntimeError):
     """Raised when a run that discards derived content cannot name a holding requester."""
 
@@ -1451,9 +1461,10 @@ async def run_process_pdf(
 
     Raises
     ------
-    RuntimeError
-        If text extraction or embedding fails. The HTTP router translates this
-        service-level error; background callers can handle it directly.
+    PDFUserFacingError
+        If text extraction or embedding fails. The message is written for the
+        requester: the HTTP router sanitizes it into its 502, and job callers
+        translate it into a ``JobError`` so it reaches the job error payload.
     PDFSourceSupersededError
         If the paper does not reference ``pdf_path`` as its downloaded PDF when
         the run starts, or its ``pdf_url`` is replaced before the chunk commit,
@@ -1657,29 +1668,29 @@ async def _run_process_pdf_locked(
             # a run the commit fence rejects; the caller sees the message either
             # way, and both types are RuntimeError.
             raise PDFSourceSupersededError(_SUPERSEDED_SOURCE_MESSAGE) from exc
-        raise RuntimeError(
+        raise PDFUserFacingError(
             f"{_embedding_failure_message(exc)} "
             f"({saved_chunk_count} chunks saved — retry to resume)."
         ) from exc
     except RuntimeError as exc:
         if torch is not None and isinstance(exc, torch.OutOfMemoryError):
             logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, exc)
-            raise RuntimeError(
+            raise PDFUserFacingError(
                 "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
                 " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
             ) from exc
         message = str(exc)
         if "CUDA out of memory" in message or "CUDA error" in message:
             logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, exc)
-            raise RuntimeError(
+            raise PDFUserFacingError(
                 "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or"
                 " set TORCH_DEVICE=cpu."
             ) from exc
         logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
-        raise RuntimeError(_embedding_failure_message(exc)) from exc
+        raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
     except httpx.HTTPStatusError as exc:
         logger.error("Process PDF embedding HTTP failure for paper %d: %s", paper_id, exc)
-        raise RuntimeError(_embedding_failure_message(exc)) from exc
+        raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
 
     async with conn.transaction():
         await _require_unchanged_source_url(conn, paper_id, source_url)

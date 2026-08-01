@@ -33,11 +33,14 @@ def safe_sse_error_message(exc: Exception) -> str:
     """Return a safe error message that doesn't leak implementation details.
 
     Only passes through messages from known safe exception types (ValueError,
-    HTTPException, JobError). All other exceptions return a generic message.
+    HTTPException, JobError, PDFUserFacingError). All other exceptions return a
+    generic message.
     """
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError  # noqa: PLC0415
+
     if isinstance(exc, HTTPException):
         return str(exc.detail)
-    if isinstance(exc, ValueError | JobError):
+    if isinstance(exc, ValueError | JobError | PDFUserFacingError):
         return str(exc)
     return "Analysis failed. Please try again."
 

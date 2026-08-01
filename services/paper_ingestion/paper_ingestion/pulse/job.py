@@ -30,7 +30,7 @@ import httpx
 from jarvis_common import effective_num_ctx
 from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.event_log import log_event
-from jarvis_common.jobs import ProgressContext
+from jarvis_common.jobs import JobError, ProgressContext
 from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -177,6 +177,9 @@ async def run_pulse(
         "llm_calls": 0,
         "duration_s": 0.0,
         "last_error": None,
+        # Set only where the run produced no deck at all. A stage that degraded
+        # and carried on leaves this None, so a persisted deck stays a success.
+        "failed_stage": None,
         "degraded_reason": None,
         "source_diagnostics": {},
         "deck_date": None,
@@ -195,6 +198,7 @@ async def run_pulse(
         profile = await load_profile(db_pool, embedder=embedder, user_id=user_id)
     except Exception as exc:  # broad: touches DB + embedder; any failure is fatal for this run
         stats["last_error"] = f"load_profile: {exc}"
+        stats["failed_stage"] = "loading your profile"
         logger.exception("pulse.load_profile failed")
         stats["duration_s"] = time.monotonic() - start
         return stats
@@ -573,6 +577,7 @@ async def _persist_pipeline(
         return persisted
     except Exception as exc:  # broad: outer txn failure (DB unreachable); stats already captured
         stats["last_error"] = f"persist: {exc}"
+        stats["failed_stage"] = "saving your deck"
         logger.exception("pulse.persist failed")
         return 0
 
@@ -657,6 +662,9 @@ async def _pulse_generate_job(
         pool, key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero
     ) as locked:
         if not locked:
+            await ctx.update_progress(
+                1.0, "A Pulse run was already in progress; this duplicate did nothing."
+            )
             return {"status": "blocked", "reason": "Pulse already running"}
         services = get_services()
         stats = await run_pulse(
@@ -667,6 +675,15 @@ async def _pulse_generate_job(
             source_cache=services.sources,
             ctx=ctx,
             user_id=user_id,
+        )
+    failed_stage = stats.get("failed_stage")
+    if failed_stage:
+        # The raw failure text stays in stats for the log and the ledger; only
+        # the stage label reaches the user, so no connection string, hostname or
+        # upstream URL can travel out through the job error payload.
+        raise JobError(
+            f"The Pulse run stopped during {failed_stage} and no deck was generated. "
+            "Check the service log for details, then run it again."
         )
     return {
         "deck_date": stats.get("deck_date"),
