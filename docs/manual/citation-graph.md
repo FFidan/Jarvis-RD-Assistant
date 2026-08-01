@@ -55,7 +55,9 @@ Pan and zoom are available via mouse/trackpad directly on the canvas.
 | **Blue** | A paper that is in your library |
 | **Grey** (stub) | A cited paper that has been referenced in citation data but has not been fetched or saved to your library |
 
-Nodes are display-only and do not respond to clicks.
+Click a node to open it: a full paper navigates to its [Paper Detail](paper-detail.md) page; a
+stub opens an in-page panel listing its title, citation count, and published date. Nodes are also
+reachable from a keyboard-only hidden list on the page, activating the same handler as a click.
 
 ---
 
