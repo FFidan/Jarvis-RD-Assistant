@@ -98,6 +98,7 @@ gh workflow run first-run-smoke.yml --ref main \
   -f cold_install_version="$MERGED_SHA"
 
 UPDATE_FROM=vA.B.C
+# Per the table below: bootstrap for the older sources, direct for the newest.
 UPDATE_MODE=bootstrap
 gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
   -f update_from="$UPDATE_FROM" -f update_to="$MERGED_SHA" \
@@ -138,8 +139,11 @@ anonymously, build no application image, reach a healthy stack, and remove its
 isolated project resources. Each upgrade must start at the selected stable tag,
 recover from its supported interrupted-update state, finish at `MERGED_SHA`,
 and leave no pending journal or project resource behind.
-Every source loads the candidate's bootstrap before invoking the updater, so
-each check exercises the update path the candidate actually ships.
+The `bootstrap` rows load the candidate's bootstrap before invoking the updater.
+The `direct` row does not: it runs the source release's own installed command, so
+it is the only check that exercises the update transaction the candidate ships.
+Dispatch it with `UPDATE_MODE=direct`; running every row in bootstrap mode leaves
+that transaction unverified.
 
 ### 4. Tag the release and promote exact digests
 

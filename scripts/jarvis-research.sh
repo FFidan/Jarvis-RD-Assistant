@@ -2046,7 +2046,13 @@ cmd_restore_legacy() {
   # Note this is the running-only probe on purpose; the ownership check that
   # gates it accepts a stopped container, because `restore status` and
   # `restore request` genuinely do work while the stack is down.
-  [ -n "$(_backup_volume_compose ps -q postgres 2>/dev/null | head -1)" ] \
+  # Ownership is verified first and separately: its refusals are about the WRONG
+  # install, not a stopped one, and folding them into the message below would
+  # answer a mismatch with "start the database".
+  _backup_volume_compose ps -q postgres >/dev/null \
+    || die "This install's backup service could not be verified, so no restore was started." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  [ -n "$(_raw_backup_volume_compose ps -q postgres 2>/dev/null | head -1)" ] \
     || die "The database is not running, so there is nothing to restore into." \
       "Start it first, then retry: jarvis-research start"
   info "Restoring backup ${timestamp} on this host without manifest authentication."
