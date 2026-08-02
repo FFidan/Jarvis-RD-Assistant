@@ -2579,6 +2579,45 @@ install_cli_shim() {
   return 0
 }
 
+# warn_if_launcher_unreachable -> after installing the launcher, confirm a login
+# shell can actually find it, and offer to add the PATH line once. Installing a
+# command a shell cannot resolve is the same as not installing it.
+# Bare printf, not the caller's warn/ok: this library is presentation-free.
+# The prompt is offered only when the caller has a terminal to answer it with —
+# an unanswerable prompt in a piped or CI install must never edit a startup file.
+warn_if_launcher_unreachable() {
+  local bin_dir="${JARVIS_CLI_BIN_DIR:-${HOME}/.local/bin}" rc_file line reply=""
+  case ":$PATH:" in *":${bin_dir}:"*) return 0 ;; esac
+  line="export PATH=\"${bin_dir}:\$PATH\""
+  case "$(basename "${SHELL:-}")" in
+    zsh)  rc_file="${HOME}/.zshrc" ;;
+    bash) rc_file="${HOME}/.bashrc" ;;
+    *)    rc_file="" ;;
+  esac
+  printf 'The jarvis-research command was installed to %s, but that directory is not on your PATH, so the command will not be found.\n' \
+    "$bin_dir" >&2
+  if [ -n "$rc_file" ] && grep -qxF "$line" "$rc_file" 2>/dev/null; then
+    printf '%s already carries that PATH line. Open a new terminal (or run: source %s) and jarvis-research will work.\n' \
+      "$rc_file" "$rc_file" >&2
+    return 0
+  fi
+  if [ -n "$rc_file" ] && [ "${NON_INTERACTIVE:-0}" -eq 0 ] && [ -t 0 ]; then
+    read -rp "Add it to ${rc_file} now? (Y/n): " reply || reply=""
+    case "$reply" in
+      [nN]*) ;;
+      *)
+        if printf '\n%s\n' "$line" >> "$rc_file"; then
+          printf 'Added. Open a new terminal (or run: source %s) and jarvis-research will work.\n' \
+            "$rc_file" >&2
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  printf 'To fix it, add this line to your shell startup file and open a new terminal:\n  %s\n' \
+    "$line" >&2
+}
+
 # verify_release_manifests TARGET_REF [ACTIVE_PROFILE...] -> confirm every
 # registry-backed image a release needs already exists in the registry, closing
 # the window where a tag is visible but its images are not yet published.

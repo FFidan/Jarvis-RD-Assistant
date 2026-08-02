@@ -800,6 +800,7 @@ recover_interrupted_setup_transaction() {
   local _edge _service metadata_failed=0 owner_state=0
   local pending_q transaction_q recovery_tmp_base=/tmp recovery_base_physical
   local script_dir_physical
+  local staging_owner_pid staging_hold staging_hold_q reply
   printf -v pending_q '%q' "${transaction_dir}.pending"
   printf -v transaction_q '%q' "$transaction_dir"
   script_dir_physical="$(cd "$SCRIPT_DIR" && pwd -P)"
@@ -811,17 +812,62 @@ recover_interrupted_setup_transaction() {
   esac
   if [ -e "${transaction_dir}.pending" ] || [ -L "${transaction_dir}.pending" ]; then
     setup_transaction_owner_state "$transaction_dir" pending || owner_state=$?
-    if [ "$owner_state" -eq 0 ]; then
-      warn "Another setup process is still running and owns ${transaction_dir}.pending."
-      warn "Wait for it to finish, then re-run ./setup.sh."
-    else
-      warn "An abandoned or invalid setup staging path was retained: ${transaction_dir}.pending"
-      warn "It can contain private credential copies. Do not rename it inside this checkout."
-      warn "No installation mutation starts before staging is promoted. After confirming no setup process is active, delete exactly this abandoned staging path:"
-      warn "  rm -rf -- ${pending_q}"
-      warn "Then re-run ./setup.sh."
-    fi
-    return 1
+    # Moved aside, never deleted, and never inside the checkout: the staging
+    # directory holds credential copies, the parent directory is on the same
+    # filesystem (so the rename is atomic), and no ignore rule or build context
+    # covers a sibling of the checkout.
+    staging_hold="$(dirname "$SCRIPT_DIR")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
+    printf -v staging_hold_q '%q' "$staging_hold"
+    case "$owner_state" in
+      0)
+        warn "Another setup process is still running and owns ${transaction_dir}.pending."
+        warn "Wait for it to finish, then re-run ./setup.sh."
+        return 1
+        ;;
+      1)
+        # The owner record said the process is gone; confirm it is still gone at
+        # the moment of the rename. /proc, not kill -0: kill reports EPERM for a
+        # LIVE owner running under another user, which reads as death.
+        staging_owner_pid="$(cat "${transaction_dir}.pending/owner_pid" 2>/dev/null || true)"
+        if [ -z "$staging_owner_pid" ] || [ -e "/proc/${staging_owner_pid}" ]; then
+          warn "The setup process owning ${transaction_dir}.pending is running again; nothing was moved."
+          warn "Wait for it to finish, then re-run ./setup.sh."
+          return 1
+        fi
+        warn "An earlier setup was interrupted and left a locked staging folder: ${transaction_dir}.pending"
+        warn "It can contain private credential copies, so it is moved out of this checkout rather than deleted."
+        reply=""
+        if [ "${NON_INTERACTIVE:-0}" -eq 0 ] && [ -t 0 ]; then
+          read -rp "Move it aside safely? (Y/n): " reply || reply="n"
+        elif [ "${NON_INTERACTIVE:-0}" -eq 0 ]; then
+          warn "This run has no terminal to ask at, so the staging folder was left where it is."
+          reply="n"
+        fi
+        case "$reply" in
+          [nN]*)
+            warn "After confirming no setup process is active, move it aside yourself:"
+            warn "  mv -- ${pending_q} ${staging_hold_q}"
+            warn "Then re-run ./setup.sh."
+            return 1
+            ;;
+        esac
+        if ! mv -- "${transaction_dir}.pending" "$staging_hold"; then
+          warn "The staging folder could not be moved aside. Move it yourself, outside this checkout:"
+          warn "  mv -- ${pending_q} ${staging_hold_q}"
+          warn "Then re-run ./setup.sh."
+          return 1
+        fi
+        ok "The abandoned setup staging folder was moved out of the checkout: ${staging_hold}"
+        ;;
+      *)
+        warn "The retained setup staging path has an unreadable owner record: ${transaction_dir}.pending"
+        warn "Its owner may still be running, so it was neither moved nor deleted."
+        warn "It can contain private credential copies. After confirming no setup process is active, move it aside yourself:"
+        warn "  mv -- ${pending_q} ${staging_hold_q}"
+        warn "Then re-run ./setup.sh."
+        return 1
+        ;;
+    esac
   fi
   if [ ! -e "$transaction_dir" ] && [ ! -L "$transaction_dir" ]; then
     return 0
@@ -1888,6 +1934,8 @@ if [ -f .env ]; then
   elif [ "$NON_INTERACTIVE" -eq 1 ]; then
     info "Existing .env kept — pass --overwrite-env to rebuild."
   else
+    printf '  y - rebuild .env, carrying every existing value forward: no secret is rotated and no key you added is dropped.\n'
+    printf '  N - keep .env exactly as it is and start the stack with it.\n'
     read -rp "Overwrite? (y/N): " reply
     case "$reply" in
       [yY]|[yY][eE][sS]) _do_overwrite=1; info "Rebuilding .env — existing values are carried forward." ;;
@@ -2104,6 +2152,7 @@ if [ -f .env ]; then
 
     install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
     ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
+    warn_if_launcher_unreachable || true
     if ! selected_https_is_verified "$_keep_route_kind" "$_keep_edge_state"; then
       _keep_route_label="HTTPS"
       _keep_retry="./setup.sh"
@@ -3521,6 +3570,7 @@ DASHBOARD_URL="$SETUP_BROWSER_BASE"
 # convenience for the same reason: compose falls back to ./secrets without it.
 install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
 ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
+warn_if_launcher_unreachable || true
 
 printf '\n'
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"

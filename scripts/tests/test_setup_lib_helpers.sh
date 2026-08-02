@@ -1632,10 +1632,17 @@ case "$RECOVER_TRANSACTION_FN" in
     fail=1 ;;
 esac
 case "$RECOVER_TRANSACTION_FN" in
-  *'Move it aside'*)
-    printf 'FAIL: setup still gives vague in-checkout move guidance for secret snapshots\n' >&2
+  *'rm -rf'*)
+    printf 'FAIL: setup still teaches deleting a credential-bearing staging path\n' >&2
     fail=1 ;;
-  *) pass "setup never suggests a vague move for secret-bearing transaction paths" ;;
+  *) pass "setup never teaches deleting a credential-bearing staging path" ;;
+esac
+case "$RECOVER_TRANSACTION_FN" in
+  *'dirname "$SCRIPT_DIR"'*'jarvis-abandoned-staging-'*)
+    pass "abandoned staging is only ever moved outside the checkout" ;;
+  *)
+    printf 'FAIL: abandoned staging has no destination outside the checkout\n' >&2
+    fail=1 ;;
 esac
 HOSTILE_STATE_TX="${FIXTURES}/hostile-state/.jarvis-setup-transaction"
 SETUP_PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
@@ -1684,23 +1691,155 @@ else
   printf 'FAIL: abandoned setup transaction staging was deleted automatically\n' >&2
   fail=1
 fi
-out="$(
+# === abandoned setup staging is quarantined, never deleted ===================
+# The staging directory is the setup mutex and holds credential copies. A dead
+# owner's staging folder is renamed into the checkout's PARENT: the same
+# filesystem (so the rename is atomic), outside every ignore rule, build context
+# and repository-cleanliness fence. Every other owner state keeps refusing —
+# state 2 covers a live owner whose pid file is not written yet, and releasing
+# that mutex would let two setups interleave .env rewrites and secret rotation.
+new_staging_repo() {  # new_staging_repo NAME -> echoes a fresh git checkout path
+  local repo="${FIXTURES}/${1}/clone"
+  mkdir -p "$repo"
+  git init -q "$repo"
+  printf 'tracked\n' > "${repo}/README"
+  git -C "$repo" add README
+  git -C "$repo" -c user.email=setup@example.invalid -c user.name=setup \
+    commit -qm 'initial' >/dev/null
+  printf '%s' "$repo"
+}
+add_abandoned_staging() {  # add_abandoned_staging REPO [OWNER_PID]
+  local pending="${1}/.jarvis-setup-transaction.pending"
+  # Mirror acquire_setup_transaction_lock: the lock directory itself is 700.
+  mkdir -m 700 "$pending"
+  mkdir -m 700 "${pending}/secrets"
+  printf 'credential-copy' > "${pending}/secrets/smtp_pass.txt"
+  [ -z "${2:-}" ] || printf '%s' "$2" > "${pending}/owner_pid"
+}
+drive_recovery() {  # drive_recovery REPO NON_INTERACTIVE -> output, stdin closed
   (
     eval "$RECOVER_TRANSACTION_FN"
-    _SETUP_TRANSACTION_DIR="$SETUP_TX_DIR"
+    SCRIPT_DIR="$1"
+    _SETUP_TRANSACTION_DIR="${1}/.jarvis-setup-transaction"
+    NON_INTERACTIVE="$2"
     warn() { printf '%s\n' "$*"; }
+    info() { printf '%s\n' "$*"; }
+    ok()   { printf '%s\n' "$*"; }
+    rollback_access_runtime() { cp "${11}" "${12}" && printf 'ROLLBACK_CALLED\n'; }
+    cd "$1" || return 1
     recover_interrupted_setup_transaction
-  ) 2>&1
-)" && rc=0 || rc=$?
+  ) < /dev/null 2>&1
+}
+staging_hold_path() {  # staging_hold_path REPO -> the quarantined path, if any
+  find "$(dirname "$1")" -maxdepth 1 -name 'jarvis-abandoned-staging-*' 2>/dev/null \
+    | head -1
+}
+
+# A piped or CI install has no terminal to answer with, so it moves nothing and
+# prints the rename as the operator remedy. It must not abort under set -e.
+STAGE_PIPED="$(new_staging_repo staging-piped)"
+add_abandoned_staging "$STAGE_PIPED" 99999999
+out="$(drive_recovery "$STAGE_PIPED" 0)" && rc=0 || rc=$?
 expect_eq "an abandoned pending transaction stops setup" "$rc" "1"
 case "$out" in
-  *'private credential copies'*'Do not rename it inside this checkout'*'rm -rf -- '*'.jarvis-setup-transaction.pending'*)
-    pass "abandoned staging guidance names its secret boundary and exact safe deletion" ;;
+  *'private credential copies'*'no terminal to ask at'*'mv -- '*'.jarvis-setup-transaction.pending'*'jarvis-abandoned-staging-'*)
+    pass "a prompt-less install names the secret boundary and the exact rename remedy" ;;
   *)
-    printf 'FAIL: abandoned staging guidance is vague or can move secrets into the checkout\n%s\n' \
+    printf 'FAIL: abandoned staging guidance is vague, deletes, or can move secrets into the checkout\n%s\n' \
       "$out" >&2
     fail=1 ;;
 esac
+expect_eq "the staging folder a prompt-less install cannot ask about stays in place" \
+  "$([ -d "${STAGE_PIPED}/.jarvis-setup-transaction.pending" ] && printf present || printf gone)" \
+  "present"
+expect_eq "an unanswerable prompt never moves credential copies anywhere" \
+  "$(staging_hold_path "$STAGE_PIPED")" ""
+
+# --non-interactive is the operator asking for the safe default without a prompt.
+STAGE_HELD="$(new_staging_repo staging-held)"
+add_abandoned_staging "$STAGE_HELD" 99999999
+out="$(drive_recovery "$STAGE_HELD" 1)" && rc=0 || rc=$?
+expect_eq "quarantining an abandoned staging folder lets setup continue" "$rc" "0"
+STAGE_HOLD="$(staging_hold_path "$STAGE_HELD")"
+expect_eq "the quarantined folder lands in the checkout's parent directory" \
+  "$(dirname "$STAGE_HOLD")" "$(dirname "$STAGE_HELD")"
+case "${STAGE_HOLD}/" in
+  "${STAGE_HELD}"/*)
+    printf 'FAIL: quarantined staging stayed inside the checkout: %s\n' "$STAGE_HOLD" >&2
+    fail=1 ;;
+  *) pass "the quarantined folder is not under the checkout" ;;
+esac
+expect_eq "the quarantined folder keeps its 700 mode" \
+  "$(stat -c '%a' "$STAGE_HOLD")" "700"
+expect_eq "the credential copies move with it" \
+  "$(cat "${STAGE_HOLD}/secrets/smtp_pass.txt")" "credential-copy"
+expect_eq "the staging path is released so setup can lock again" \
+  "$([ -e "${STAGE_HELD}/.jarvis-setup-transaction.pending" ] && printf present || printf gone)" \
+  "gone"
+# git status must EXIT 0 and print nothing: outside a repository it fails, and a
+# bare command substitution would read that failure as cleanliness.
+staging_status="$(git -C "$STAGE_HELD" status --porcelain)" && rc=0 || rc=$?
+expect_eq "the checkout's git status command still succeeds" "$rc" "0"
+expect_eq "the quarantine leaves the checkout clean for the update fences" \
+  "$staging_status" ""
+
+# An unreadable owner record includes a LIVE owner: the lock directory exists
+# before its pid file is written. Releasing it there is a concurrent-setup bug.
+STAGE_NOPID="$(new_staging_repo staging-nopid)"
+add_abandoned_staging "$STAGE_NOPID"
+out="$(drive_recovery "$STAGE_NOPID" 1)" && rc=0 || rc=$?
+expect_eq "staging with no owner record stops setup instead of continuing" "$rc" "1"
+expect_eq "staging with no owner record is never moved aside" \
+  "$(staging_hold_path "$STAGE_NOPID")" ""
+case "$out" in
+  *'unreadable owner record'*'mv -- '*)
+    pass "an unreadable owner record is reported with a manual remedy" ;;
+  *)
+    printf 'FAIL: unreadable owner state lacks its refusal or remedy\n%s\n' "$out" >&2
+    fail=1 ;;
+esac
+
+# A live owner keeps the mutex it holds.
+STAGE_LIVE="$(new_staging_repo staging-live)"
+add_abandoned_staging "$STAGE_LIVE" "$$"
+out="$(drive_recovery "$STAGE_LIVE" 1)" && rc=0 || rc=$?
+expect_eq "a live owner's staging folder stops setup" "$rc" "1"
+expect_eq "a live owner's staging folder is never moved aside" \
+  "$(staging_hold_path "$STAGE_LIVE")" ""
+case "$out" in
+  *'Another setup process is still running'*)
+    pass "a live staging owner is reported as a concurrent setup" ;;
+  *)
+    printf 'FAIL: live staging owner refusal lacks concurrent-setup guidance\n%s\n' \
+      "$out" >&2
+    fail=1 ;;
+esac
+
+# Quarantining must CONTINUE the recovery, not end it: an interrupted recovery
+# leaves a dead-owner staging folder beside an unrecovered journal, and returning
+# early there would start setup against a half-mutated install.
+STAGE_BOTH="$(new_staging_repo staging-both)"
+printf 'old-env-bytes\n' > "${STAGE_BOTH}/old.env"
+mkdir -p "${STAGE_BOTH}/live-secrets"
+begin_setup_transaction "${STAGE_BOTH}/.jarvis-setup-transaction" \
+  "${STAGE_BOTH}/old.env" "${STAGE_BOTH}/live-secrets" \
+  tunnel tunnel 3017 https://old.example 3001 letsencrypt letsencrypt 3029
+printf '99999999' > "${STAGE_BOTH}/.jarvis-setup-transaction/owner_pid"
+add_abandoned_staging "$STAGE_BOTH" 99999999
+printf 'interrupted-env\n' > "${STAGE_BOTH}/.env"
+out="$(drive_recovery "$STAGE_BOTH" 1)" && rc=0 || rc=$?
+expect_eq "a quarantine followed by a live journal recovers it" "$rc" "0"
+case "$out" in
+  *'Restoring its previous configuration'*ROLLBACK_CALLED*)
+    pass "quarantining falls through to the interrupted journal's recovery" ;;
+  *)
+    printf 'FAIL: the interrupted journal was not recovered after the quarantine\n%s\n' \
+      "$out" >&2
+    fail=1 ;;
+esac
+expect_eq "the interrupted run's previous configuration is restored" \
+  "$(cat "${STAGE_BOTH}/.env")" "old-env-bytes"
+
 begin_setup_transaction "$SETUP_TX_DIR" "${FIXTURES}/old.env" \
   "$SETUP_TX_SECRETS" tunnel tunnel 3017 https://old.example 3001 \
   letsencrypt letsencrypt 3029 >/dev/null 2>&1 && rc=0 || rc=$?
@@ -3802,6 +3941,78 @@ XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_BAD" >/dev/null 2>&1 || rc=$
 expect_eq "ensure_state_dir fails rather than inventing a project name" "$rc" "1"
 expect_eq "setup.sh calls ensure_state_dir non-fatally at both launcher-install sites" \
   "$(grep -c '^ *ensure_state_dir "\$SCRIPT_DIR" || warn ' "$SETUP_SCRIPT")" "2"
+
+# === warn_if_launcher_unreachable (installed command must be findable) =======
+# A launcher a login shell cannot resolve is not installed. The check never
+# prompts without a terminal to answer at, and never edits a startup file it
+# could not ask about: a piped or CI install must finish silently and green.
+PATHCHK_HOME="$(mktemp -d "${FIXTURES}/pathchk.XXXXXX")"
+PATHCHK_BIN="${PATHCHK_HOME}/.local/bin"
+PATHCHK_LINE="export PATH=\"${PATHCHK_BIN}:\$PATH\""
+mkdir -p "$PATHCHK_BIN"
+
+out="$(
+  (
+    PATH="${PATHCHK_BIN}:${PATH}"
+    HOME="$PATHCHK_HOME" SHELL=/bin/bash JARVIS_CLI_BIN_DIR="$PATHCHK_BIN" \
+      NON_INTERACTIVE=0 warn_if_launcher_unreachable
+  ) < /dev/null 2>&1
+)" && rc=0 || rc=$?
+expect_eq "a launcher directory already on PATH says nothing" "${rc}|${out}" "0|"
+
+: > "${PATHCHK_HOME}/.bashrc"
+out="$(
+  (
+    HOME="$PATHCHK_HOME" SHELL=/bin/bash JARVIS_CLI_BIN_DIR="$PATHCHK_BIN" \
+      NON_INTERACTIVE=0 warn_if_launcher_unreachable
+  ) < /dev/null 2>&1
+)" && rc=0 || rc=$?
+expect_eq "an unreachable launcher warns without failing the install" "$rc" "0"
+case "$out" in
+  *'not on your PATH'*"$PATHCHK_LINE"*)
+    pass "an unreachable launcher names the directory and the exact PATH line" ;;
+  *)
+    printf 'FAIL: unreachable-launcher guidance lacks the directory or the PATH line\n%s\n' \
+      "$out" >&2
+    fail=1 ;;
+esac
+expect_eq "a prompt-less install never edits the shell startup file" \
+  "$(wc -c < "${PATHCHK_HOME}/.bashrc")" "0"
+
+out="$(
+  (
+    HOME="$PATHCHK_HOME" SHELL=/bin/bash JARVIS_CLI_BIN_DIR="$PATHCHK_BIN" \
+      NON_INTERACTIVE=1 warn_if_launcher_unreachable
+  ) 2>&1
+)" && rc=0 || rc=$?
+expect_eq "a non-interactive install still reports the unreachable launcher" \
+  "${rc}|$(wc -c < "${PATHCHK_HOME}/.bashrc")" "0|0"
+case "$out" in
+  *'Add it to '*)
+    printf 'FAIL: a non-interactive install prompted for the PATH line\n%s\n' "$out" >&2
+    fail=1 ;;
+  *) pass "a non-interactive install never prompts for the PATH line" ;;
+esac
+
+# A startup file that already carries the line is never given a second copy.
+printf '%s\n' "$PATHCHK_LINE" > "${PATHCHK_HOME}/.bashrc"
+out="$(
+  (
+    HOME="$PATHCHK_HOME" SHELL=/bin/bash JARVIS_CLI_BIN_DIR="$PATHCHK_BIN" \
+      NON_INTERACTIVE=0 warn_if_launcher_unreachable
+  ) < /dev/null 2>&1
+)" && rc=0 || rc=$?
+expect_eq "an already-recorded PATH line is reported, not appended again" \
+  "${rc}|$(grep -cxF "$PATHCHK_LINE" "${PATHCHK_HOME}/.bashrc")" "0|1"
+case "$out" in
+  *'already carries that PATH line'*)
+    pass "an already-recorded PATH line points at opening a new terminal" ;;
+  *)
+    printf 'FAIL: an already-recorded PATH line was not recognised\n%s\n' "$out" >&2
+    fail=1 ;;
+esac
+expect_eq "setup.sh checks launcher reachability non-fatally at both launcher-install sites" \
+  "$(grep -c '^ *warn_if_launcher_unreachable || true$' "$SETUP_SCRIPT")" "2"
 
 # The lifecycle CLI must record the directory on both update routes, and on the
 # resume route BEFORE the backup sidecar is recreated — compose reads the value

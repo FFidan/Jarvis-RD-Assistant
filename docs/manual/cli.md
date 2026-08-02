@@ -10,7 +10,8 @@ checkout and hands off to that repository's tracked script. An update therefore
 ships a newer command along with the rest of the code.
 
 If `jarvis-research` is not found after an install, make sure `~/.local/bin` is
-on your PATH.
+on your PATH. Setup verifies this at install time and prints the fix if your
+shell cannot see it.
 
 ## Commands
 
