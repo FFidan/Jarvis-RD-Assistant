@@ -119,7 +119,7 @@ require_managed_checkout() {
     printf '%s\n' "$dirt" | head -20 >&2
     [ "$(printf '%s\n' "$dirt" | wc -l)" -le 20 ] || printf '        ... and more\n' >&2
     die "The working tree has uncommitted changes." \
-      "Commit or stash them before updating. Leave ${marker_rel} in place; it is managed by the backup service."
+      "Restore or move the paths listed above, then retry. Leave ${marker_rel} in place; it is managed by the backup service."
   fi
 
   origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"

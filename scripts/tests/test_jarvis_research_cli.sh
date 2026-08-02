@@ -26,6 +26,7 @@ pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
 check_fail() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 has()  { printf '%s' "$1" | grep -q -- "$2"; }
+hasF() { printf '%s' "$1" | grep -qF -- "$2"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 :: missing /$2/ in <<<$1>>>"; fi; }
 lack() { if has "$1" "$2"; then check_fail "$3 :: unexpected /$2/ in <<<$1>>>"; else pass "$3"; fi; }
 
@@ -272,7 +273,17 @@ cat > "$STUB/git" <<'GIT'
 log() { [ -n "${STUB_LOG:-}" ] && printf 'git %s\n' "$*" >> "$STUB_LOG"; }
 case "${1:-} ${2:-}" in
   "symbolic-ref --short") printf '%s\n' "${STUB_BRANCH:-main}"; exit 0 ;;
-  "status --porcelain")   printf '%s' "${STUB_DIRTY:-}"; [ -n "${STUB_DIRTY:-}" ] && printf '\n'; exit 0 ;;
+  "status --porcelain")
+    # The updater's status query excludes one product-managed path. Honour that
+    # pathspec, so a checkout dirty with nothing else is observably clean here.
+    dirt="${STUB_DIRTY:-}"
+    for arg in "$@"; do
+      case "$arg" in
+        ":(top,exclude)"*)
+          dirt="$(printf '%s' "$dirt" | grep -vF -- "${arg#:(top,exclude)}" || true)" ;;
+      esac
+    done
+    printf '%s' "$dirt"; [ -n "$dirt" ] && printf '\n'; exit 0 ;;
   "remote get-url")       printf '%s\n' "${STUB_REMOTE:-git@github.com:limitcycle-oss/jarvis-rd-assistant.git}"; exit 0 ;;
 esac
 if [ "${1:-}" = -C ]; then
@@ -351,6 +362,11 @@ VE
       printf 'LIFECYCLE_GUARD_AT_MERGE=%s\n' "$(cat "$STUB_BACKUP_DIR/.lifecycle/update.guard")" >> "$STUB_LOG"
     fi
     log "$*"
+    # Simulate the CLI state directory losing write permission mid-update: the
+    # first transaction write has already landed, the next one cannot.
+    if [ -n "${STUB_FREEZE_STATE_DIR:-}" ] && [ -d "${STUB_FREEZE_STATE_DIR:-}" ]; then
+      chmod 500 "$STUB_FREEZE_STATE_DIR"
+    fi
     if [ "${STUB_MERGE_RC:-0}" = 0 ] || [ "${STUB_MERGE_CRASH:-0}" = 1 ]; then
       printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_HEAD_FILE"
       printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_REPO/.stub-head"
@@ -612,6 +628,7 @@ case "${1:-}" in
           exit 0
         fi
         # bare `ps` (status/doctor table)
+        [ "${STUB_COMPOSE_PS_FAIL:-0}" = 1 ] && exit 1
         printf 'NAME                 STATUS\n'
         printf 'jarvis-dashboard-1   Up 3 minutes (healthy)\n'
         exit 0 ;;
@@ -710,6 +727,7 @@ new_env() {
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
+        STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
         CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
@@ -773,6 +791,8 @@ run_cli() {
     "STUB_TARGET_BACKUP_RC=${STUB_TARGET_BACKUP_RC:-0}"
     "STUB_TARGET_BACKUP_SLEEP=${STUB_TARGET_BACKUP_SLEEP:-}"
     "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
+    "STUB_COMPOSE_PS_FAIL=${STUB_COMPOSE_PS_FAIL:-0}"
+    "STUB_FREEZE_STATE_DIR=${STUB_FREEZE_STATE_DIR:-}"
     "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
     "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
     "STUB_PSQL_INPUT_FILE=$STUB_PSQL_INPUT_FILE"
@@ -1866,13 +1886,34 @@ else
   check_fail "owner set database refusal: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) out=<<<$out>>>"
 fi
 
-new_env; register_repo
-out="$(run_cli owner set)"; rc=$?
-if [ "$rc" -eq 2 ] && has "$out" 'owner set <email>'; then
-  pass "owner_set_requires_one_email_argument"
-else
-  check_fail "owner set usage: rc=$rc out=<<<$out>>>"
-fi
+# Every usage refusal names the exact invocation to run instead of the generic
+# help pointer. Each site is driven on its own, so none can be silently skipped.
+# Fields: argv @@ the site's own message @@ the invocation it must name.
+USAGE_SITES=(
+  "update --frobnicate@@update: unknown option '--frobnicate'@@Run: jarvis-research update [--to <tag>] [--resume <tag>] [--yes]"
+  "owner set@@owner set takes exactly one email address.@@Run: jarvis-research owner set <email>"
+  "owner set not-an-email@@owner set requires one ordinary email address.@@Run: jarvis-research owner set <email>"
+  "owner status extra@@owner status takes no arguments.@@Run: jarvis-research owner status"
+  "owner bogus@@owner: unknown subcommand 'bogus'.@@Run: jarvis-research owner status   (or: jarvis-research owner set <email>)"
+  "restore acknowledge@@restore acknowledge takes exactly one restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
+  "restore acknowledge short@@restore acknowledge requires one lowercase 32-hex restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
+  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore acknowledge <restore-id>"
+)
+for entry in "${USAGE_SITES[@]}"; do
+  usage_argv="${entry%%@@*}"; usage_rest="${entry#*@@}"
+  usage_msg="${usage_rest%%@@*}"; usage_remedy="${usage_rest#*@@}"
+  new_env; register_repo
+  # shellcheck disable=SC2086  # a fixed, test-owned argument list
+  out="$(run_cli $usage_argv)"; rc=$?
+  if [ "$rc" -eq 2 ] \
+     && hasF "$out" "$usage_msg" \
+     && hasF "$out" "$usage_remedy" \
+     && ! hasF "$out" 'Run: jarvis-research help'; then
+    pass "usage_error_names_the_correct_invocation: ${usage_argv}"
+  else
+    check_fail "usage_error_names_the_correct_invocation ${usage_argv}: rc=$rc out=<<<$out>>>"
+  fi
+done
 
 # Restore acknowledgement binds typed confirmation to the exact quarantine,
 # consumes the restore-session token first, and never prints it.
@@ -2049,11 +2090,56 @@ fi
 new_env; register_repo; STUB_DIRTY=" M setup.sh"
 out="$(run_cli doctor)"; rc=$?
 unset STUB_DIRTY
+# The indentation proves the refusal reached the user through doctor's readiness
+# section rather than merely leaking from the guard's own stderr.
 if [ "$rc" -ne 0 ] && [ "$clean_rc" -eq 0 ] \
-   && has "$out" 'uncommitted changes' && has "$out" 'M setup.sh'; then
+   && hasF "$out" '  [ERROR] Your working tree has uncommitted changes' \
+   && has "$out" 'M setup.sh'; then
   pass "doctor_reports_unupdatable_checkout: refusal reported and exit turns non-zero"
 else
   check_fail "doctor_reports_unupdatable_checkout: rc=$rc clean_rc=$clean_rc out=<<<$out>>>"
+fi
+
+# The signed-manifest marker is exempt from the readiness query, so a checkout
+# holding nothing else still reports ready and the marker is never named.
+new_env; register_repo; STUB_DIRTY="?? secrets/manifest-hmac-required"
+out="$(run_cli doctor)"; rc=$?
+unset STUB_DIRTY
+if [ "$rc" -eq 0 ] && has "$out" 'ready to update' \
+   && ! has "$out" 'uncommitted changes' \
+   && ! has "$out" 'manifest-hmac-required'; then
+  pass "doctor_reports_marker_only_checkout_ready: the marker is never reported"
+else
+  check_fail "doctor_reports_marker_only_checkout_ready: rc=$rc out=<<<$out>>>"
+fi
+
+# A repairable doctor warning names the product command that repairs it.
+new_env; register_repo; STUB_COMPOSE_PS_FAIL=1
+out="$(run_cli doctor)"; rc=$?
+unset STUB_COMPOSE_PS_FAIL
+if has "$out" 'Could not query container status' \
+   && hasF "$out" 'jarvis-research repair'; then
+  pass "doctor_container_warning_names_repair: the warning names its recovery command"
+else
+  check_fail "doctor_container_warning_names_repair: rc=$rc out=<<<$out>>>"
+fi
+
+# A transaction-journal write that fails after the update has already started
+# must stop cleanly and name the record it could not write, rather than letting
+# the failure surface later as an unrelated error.
+new_staged_update_env
+STUB_FREEZE_STATE_DIR="$CFG"
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+chmod 700 "$CFG"
+unset STUB_FREEZE_STATE_DIR
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'Could not record the update' \
+   && hasF "$out" "$PENDING_FILE" \
+   && ! has "$(cat "$STUB_LOG")" 'compose pull'; then
+  pass "update_dies_cleanly_when_the_journal_cannot_be_written"
+else
+  check_fail "mid-flow journal write failure: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # Recovery honesty: a migration-bearing update that fails health identifies the

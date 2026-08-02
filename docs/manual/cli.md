@@ -10,7 +10,7 @@ checkout and hands off to that repository's tracked script. An update therefore
 ships a newer command along with the rest of the code.
 
 If `jarvis-research` is not found after an install, make sure `~/.local/bin` is
-on your PATH, or run `./setup.sh` again from your checkout.
+on your PATH.
 
 ## Commands
 
@@ -142,15 +142,13 @@ apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
 Your installed command may refuse first with `Your working tree has uncommitted
-changes; refusing to update.`, which does not say which path it means. Run `git
-status`. If the only path listed is `secrets/manifest-hmac-required`, that is
-expected and the bootstrap above is the way forward — it knows to leave that file
-alone.
+changes; refusing to update.` Run the bootstrap above anyway: it knows about the
+backup service's `secrets/manifest-hmac-required` file and leaves it alone, and if
+anything else is blocking the update it names the exact paths.
 
-Do not act on the "commit or stash" advice for this one file. It is untracked, so
-`git stash` will not move it, and deleting it would let a later restore accept an
-unsigned backup manifest. The backup service creates it to record that this
-installation requires a signed one.
+Never delete `secrets/manifest-hmac-required`. The backup service creates it to
+record that this installation requires a signed backup manifest, and removing it
+would let a later restore accept an unsigned one.
 
 Installations already running v1.2.2 or later update normally with
 `jarvis-research update`.

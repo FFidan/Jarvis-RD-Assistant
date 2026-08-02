@@ -50,7 +50,14 @@ die() {
   printf '        %s%s%s\n' "$C_YELLOW" "$2" "$C_RESET" >&2
   exit 1
 }
-usage_error() { err "$1"; printf '        %sRun: jarvis-research help%s\n' "$C_YELLOW" "$C_RESET" >&2; exit 2; }
+# usage_error MSG [NEXT] — a misuse. Same two-line shape as die: what was wrong +
+# the correct invocation. Callers with no single correct invocation to name fall
+# back to the general help pointer.
+usage_error() {
+  err "$1"
+  printf '        %s%s%s\n' "$C_YELLOW" "${2:-Run: jarvis-research help}" "$C_RESET" >&2
+  exit 2
+}
 env_die() {
   err "$1"
   printf '        %s%s%s\n' "$C_YELLOW" "$2" "$C_RESET" >&2
@@ -444,13 +451,13 @@ _require_managed_install() {
   fi
   if [ "$registered" -ne 1 ]; then
     die "This JARVIS install is not registered with jarvis-research." \
-        "Run: jarvis-research register   (or update by hand: git pull && ./update.sh)"
+        "Run: jarvis-research register   (then: jarvis-research update)"
   fi
   want="${JARVIS_RESEARCH_REMOTE:-limitcycle-oss/jarvis-rd-assistant}"
   origin="$(git remote get-url origin 2>/dev/null || true)"
   if ! printf '%s' "$origin" | tr '[:upper:]' '[:lower:]' | grep -qF "$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')"; then
     die "Origin (${origin:-none}) is not the managed JARVIS repository." \
-        "Update by hand: git pull && ./update.sh   (or set JARVIS_RESEARCH_REMOTE for a fork)"
+        "Set JARVIS_RESEARCH_REMOTE for a fork, or update this checkout the way you installed it."
   fi
 }
 
@@ -530,7 +537,7 @@ _require_clean_main_checkout() {
     printf '%s\n' "$dirt" | head -20 >&2
     [ "$(printf '%s\n' "$dirt" | wc -l)" -le 20 ] || printf '        ... and more\n' >&2
     die "Your working tree has uncommitted changes; refusing to update." \
-        "Commit or stash them, then re-run: jarvis-research update. Leave ${marker_rel} in place; it is managed by the backup service."
+        "Restore or move the paths listed above, then re-run: jarvis-research update. Leave ${marker_rel} in place; it is managed by the backup service."
   fi
 }
 
@@ -1313,7 +1320,9 @@ _resume_pending_merge() {
   head="$(git rev-parse HEAD 2>/dev/null || true)"
   [ "$head" = "$TXN_TARGET_SHA" ] || die "Git returned success but HEAD is not the recorded update target." \
     "Stop here and run: jarvis-research doctor"
-  _txn_update_phase pull
+  _txn_update_phase pull \
+    || die "Could not record the update's progress in its journal." \
+      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
   exec bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$TXN_TARGET" --yes
 }
 
@@ -1329,7 +1338,8 @@ cmd_update() {
       --resume)   resume_ref="${2:-}"; shift 2 ;;
       --resume=*) resume_ref="${1#--resume=}"; shift ;;
       --yes|-y)   shift ;;   # accepted for symmetry; the flow is non-interactive
-      *)          usage_error "update: unknown option '$1'" ;;
+      *)          usage_error "update: unknown option '$1'" \
+                    "Run: jarvis-research update [--to <tag>] [--resume <tag>] [--yes]" ;;
     esac
   done
 
@@ -1368,7 +1378,9 @@ cmd_update() {
       merge_pending)
         head="$(git rev-parse HEAD 2>/dev/null || true)"
         if [ "$head" = "$TXN_TARGET_SHA" ]; then
-          _txn_update_phase pull
+          _txn_update_phase pull \
+            || die "Could not record the update's progress in its journal." \
+              "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
         else
           die "The pending update has not advanced to ${TXN_TARGET} yet; explicit post-merge resume is unsafe." \
             "Run without --resume: jarvis-research update"
@@ -1398,7 +1410,9 @@ cmd_update() {
         head="$(git rev-parse HEAD 2>/dev/null || true)"
         if [ "$head" = "$TXN_TARGET_SHA" ]; then
           info "The checkout reached ${TXN_TARGET}; resuming its pending service update."
-          _txn_update_phase pull
+          _txn_update_phase pull \
+            || die "Could not record the update's progress in its journal." \
+              "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
           _resume_transaction "$TXN_TARGET"
           return
         fi
@@ -1435,7 +1449,7 @@ cmd_update() {
 
   if ! git merge-base --is-ancestor HEAD "$target_ref" 2>/dev/null; then
     die "Your checkout has diverged from ${target_ref}; a fast-forward update is not possible." \
-        "Reconcile by hand (git pull --ff-only) or reinstall; then run: jarvis-research doctor"
+        "Reinstall this release into a fresh checkout, then run: jarvis-research doctor"
   fi
   # Release tags are annotated, so the tag name resolves to the tag object, not
   # the commit it points at; peel it or this never matches.
@@ -1497,7 +1511,9 @@ cmd_update() {
   head="$(git rev-parse HEAD 2>/dev/null || true)"
   [ "$head" = "$target_sha" ] || die "Git returned success but HEAD is not the recorded update target." \
     "Stop here and run: jarvis-research doctor"
-  _txn_update_phase pull
+  _txn_update_phase pull \
+    || die "Could not record the update's progress in its journal." \
+      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
   ensure_state_dir "$REPO" || warn "Could not record the durable state directory (non-fatal)."
   local -a resume_cmd=(bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$target_ref" --yes)
   exec "${resume_cmd[@]}"
@@ -1517,7 +1533,9 @@ _resume_transaction() {
   fi
 
   install_cli_shim "$REPO" >/dev/null 2>&1 || true             # (9)
-  _txn_update_phase pull
+  _txn_update_phase pull \
+    || die "Could not record the update's progress in its journal." \
+      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
 
   info "Applying ${target_ref} — pulling images and recreating services..."  # (10)
   if ! _verify_recorded_update_backup; then
@@ -1535,7 +1553,9 @@ _resume_transaction() {
     exit 1
   fi
 
-  _txn_update_phase committed                                  # (11)
+  _txn_update_phase committed \
+    || die "Could not record the update's completion in its journal." \
+      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"   # (11)
   if ! _clear_update_backup_pin; then
     die "The update completed, but its recovery-backup retention pin could not be cleared safely." \
       "The transaction remains recorded as committed. Inspect the backup-trigger volume, then re-run: jarvis-research update"
@@ -1841,11 +1861,13 @@ cmd_owner_status() {
 
 cmd_owner_set() {
   [ "$#" -eq 1 ] \
-    || usage_error "Usage: jarvis-research owner set <email>"
+    || usage_error "owner set takes exactly one email address." \
+      "Run: jarvis-research owner set <email>"
   local email="$1" environment_value confirmation
   if [ "${#email}" -gt 320 ] \
      || ! printf '%s' "$email" | grep -Eq '^[^[:space:]@]+@[^[:space:]@]+$'; then
-    usage_error "owner set requires one ordinary email address"
+    usage_error "owner set requires one ordinary email address." \
+      "Run: jarvis-research owner set <email>"
   fi
 
   _require_docker_daemon
@@ -1883,10 +1905,12 @@ cmd_owner() {
   fi
   case "$owner_command" in
     status)
-      [ "$#" -eq 0 ] || usage_error "Usage: jarvis-research owner status"
+      [ "$#" -eq 0 ] || usage_error "owner status takes no arguments." \
+        "Run: jarvis-research owner status"
       cmd_owner_status ;;
     set) cmd_owner_set "$@" ;;
-    *) usage_error "Usage: jarvis-research owner status | owner set <email>" ;;
+    *) usage_error "owner: unknown subcommand '${owner_command}'." \
+         "Run: jarvis-research owner status   (or: jarvis-research owner set <email>)" ;;
   esac
 }
 
@@ -1895,10 +1919,12 @@ cmd_owner() {
 # -----------------------------------------------------------------------------
 cmd_restore_acknowledge() {
   [ "$#" -eq 1 ] \
-    || usage_error "Usage: jarvis-research restore acknowledge <restore-id>"
+    || usage_error "restore acknowledge takes exactly one restore ID." \
+      "Run: jarvis-research restore acknowledge <restore-id>"
   local restore_id="$1" confirmation
   printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$' \
-    || usage_error "restore acknowledge requires one lowercase 32-hex restore ID"
+    || usage_error "restore acknowledge requires one lowercase 32-hex restore ID." \
+      "Run: jarvis-research restore acknowledge <restore-id>"
 
   _require_docker_daemon
   if ! _backup_volume_helper inspect-quarantine "$restore_id" >/dev/null 2>&1; then
@@ -1931,7 +1957,8 @@ cmd_restore() {
   fi
   case "$restore_command" in
     acknowledge) cmd_restore_acknowledge "$@" ;;
-    *) usage_error "Usage: jarvis-research restore acknowledge <restore-id>" ;;
+    *) usage_error "restore: unknown subcommand '${restore_command}'." \
+         "Run: jarvis-research restore acknowledge <restore-id>" ;;
   esac
 }
 
@@ -1977,7 +2004,8 @@ cmd_doctor() {
     ( cd "$REPO" && ./setup.sh --check ) || rc=1
   fi
   printf '\n%s-- containers --%s\n' "$C_BOLD" "$C_RESET"
-  docker compose ps 2>/dev/null || warn "Could not query container status."
+  docker compose ps 2>/dev/null \
+    || warn "Could not query container status (recover with: jarvis-research repair)."
   local disk; disk="$(preflight_disk_lib 1 2>/dev/null || true)"
   printf '\n%s-- disk --%s  free ~%s GB on the Docker data root\n' "$C_BOLD" "$C_RESET" "${disk%% *}"
   if [ -f "$INSTALLS_FILE" ] && grep -qxF "$REPO" "$INSTALLS_FILE"; then
