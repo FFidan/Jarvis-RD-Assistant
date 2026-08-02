@@ -632,6 +632,9 @@ case "${1:-}" in
           *"> /backup-trigger/.restore_request.json"*)
             cat > "$STUB_TRIGGER_DIR/.restore_request.json"
             exit 0 ;;
+          *"rm -f /backup-trigger/.restore_request.json"*)
+            rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+            exit 0 ;;
           *"cat /backup-trigger/.restore_status.json"*)
             cat "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null || printf '{}\n'
             exit 0 ;;
@@ -641,8 +644,15 @@ case "${1:-}" in
         fi
         exit 0 ;;
       ps)
+        if [ "${2:-}" = "-a" ] && [ "${3:-}" = "-q" ]; then
+          # -a includes stopped containers, so only an install whose containers
+          # were never created resolves nothing.
+          [ "${STUB_NO_CONTAINERS:-0}" = 1 ] && exit 0
+          printf 'cid-%s\n' "${4:-}"
+          exit 0
+        fi
         if [ "${2:-}" = "-q" ]; then
-          # A stopped stack resolves no container ids at all.
+          # A stopped stack resolves no RUNNING container ids at all.
           [ "${STUB_STACK_DOWN:-0}" = 1 ] && exit 0
           if [ "${3:-}" = postgres-backup ]; then
             [ "$(sidecar_state)" = absent ] || printf '%s\n' "$BACKUP_CID"
@@ -752,7 +762,7 @@ new_env() {
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
         STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
-        STUB_STACK_DOWN STUB_RESTORE_LEGACY_RC BACKUP_COMPOSE_TIMEOUT_SECONDS \
+        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC BACKUP_COMPOSE_TIMEOUT_SECONDS \
         CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
@@ -818,6 +828,7 @@ run_cli() {
     "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
     "STUB_COMPOSE_PS_FAIL=${STUB_COMPOSE_PS_FAIL:-0}"
     "STUB_STACK_DOWN=${STUB_STACK_DOWN:-0}"
+    "STUB_NO_CONTAINERS=${STUB_NO_CONTAINERS:-0}"
     "STUB_RESTORE_LEGACY_RC=${STUB_RESTORE_LEGACY_RC:-0}"
     "STUB_FREEZE_STATE_DIR=${STUB_FREEZE_STATE_DIR:-}"
     "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
@@ -2123,6 +2134,15 @@ else
   check_fail "restore legacy failure resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
+# ...and clears the request first, so the resumed service cannot consume a
+# request the operator abandoned and report a failure they never started.
+if [ ! -e "$TRIG/.restore_request.json" ] \
+   && grep -q 'rm -f /backup-trigger/.restore_request.json' "$STUB_LOG"; then
+  pass "restore_legacy_clears_an_unconsumed_request_before_resuming_the_service"
+else
+  check_fail "restore legacy request cleanup: log=$(cat "$STUB_LOG")"
+fi
+
 # restore status reads the sidecar's status file through its own one-off.
 new_env; register_repo
 printf '{"state":"failed","current_step":"Restoring database","steps":[],"safety_backup_ts":"20260101_000000","started_at":"1","finished_at":null,"error":"pg_restore failed","drop_started":true,"manual_steps_required":true,"phase":"destructive"}\n' \
@@ -2142,19 +2162,43 @@ else
   check_fail "restore status read: rc=$rc argv=<<<$status_argv>>> out=<<<$out>>>"
 fi
 
-# With the stack down the ownership check cannot resolve this install's Postgres
-# container. That check is the fence keeping these commands on this install, so
-# the command reports what to do instead of bypassing it.
+# The recovery commands exist for the disaster where the database will not start,
+# so a stopped stack must NOT lock them out: the ownership check reads the labels
+# of the stopped container and the command proceeds through its own one-off.
 new_env; register_repo
 STUB_STACK_DOWN=1
+printf '{"state":"failed","current_step":"Restoring database","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":"pg_restore failed","drop_started":false,"manual_steps_required":false,"phase":"pre"}\n' \
+  > "$TRIG/.restore_status.json"
+out="$(run_cli restore status)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'failed' \
+   && grep -q 'compose-run' "$STUB_LOG"; then
+  pass "restore_status_still_reads_its_report_when_the_stack_is_stopped"
+else
+  check_fail "restore status stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+STUB_STACK_DOWN=1
+out="$(run_cli restore legacy 20260101_010101)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'compose stop postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_is_reachable_when_the_database_is_not_running"
+else
+  check_fail "restore legacy stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# An install whose containers were never created cannot be ownership-checked at
+# all. That fence stays up, and the refusal names the cause and the remedy.
+new_env; register_repo
+STUB_NO_CONTAINERS=1
 out="$(run_cli restore status)"; rc=$?
 if [ "$rc" -eq 1 ] \
-   && has "$out" 'stack is not running' \
+   && has "$out" 'no Postgres container' \
    && has "$out" 'jarvis-research start' \
    && ! grep -q 'compose-run' "$STUB_LOG"; then
-  pass "restore_status_refuses_actionably_when_the_stack_is_down"
+  pass "recovery_refuses_actionably_when_the_containers_do_not_exist"
 else
-  check_fail "restore status stack down: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+  check_fail "restore status no containers: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # The off-host request is printed for the operator to submit AFTER the archives
@@ -2162,7 +2206,7 @@ fi
 new_env; register_repo
 out="$(run_cli restore request 20260101_010101)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && hasF "$out" 'docker compose cp ./offsite/. postgres-backup:/restore-inbox/' \
+   && hasF "$out" 'cp ./offsite/. postgres-backup:/restore-inbox/' \
    && hasF "$out" 'postgres-backup:/restore-inbox/operator_key' \
    && hasF "$out" '"source":"inbox"' \
    && hasF "$out" '"timestamp":"20260101_010101"' \
@@ -2171,6 +2215,20 @@ if [ "$rc" -eq 0 ] \
   pass "restore_request_prints_the_off_host_procedure_and_submits_nothing"
 else
   check_fail "restore request: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# The printed commands run in the operator's own shell, outside the ownership
+# check. Every one of them must therefore name this install's project and files;
+# a bare `docker compose` would obey a stray COMPOSE_PROJECT_NAME instead.
+request_cmds="$(printf '%s\n' "$out" | grep -E 'docker compose|postgres-backup' | grep -v '^ *jarvis-research')"
+request_unscoped="$(printf '%s\n' "$request_cmds" | grep -E '(^|\| *) *docker compose ' | grep -vF -- '-p ' || true)"
+if [ -n "$request_cmds" ] && [ -z "$request_unscoped" ] \
+   && hasF "$out" "--project-directory" \
+   && hasF "$out" "--env-file" \
+   && [ "$(printf '%s\n' "$request_cmds" | grep -cF -- '-p ')" -eq 3 ]; then
+  pass "restore_request_scopes_every_printed_command_to_this_install"
+else
+  check_fail "restore request scoping: unscoped=<<<$request_unscoped>>> cmds=<<<$request_cmds>>>"
 fi
 
 # Managed CLI commands are install-scoped even when the invoking shell exports

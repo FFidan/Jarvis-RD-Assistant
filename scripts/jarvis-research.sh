@@ -441,6 +441,17 @@ _txn_update_phase() {
   _txn_persist
 }
 
+# _txn_phase_or_die PHASE — record a phase the update must not continue past.
+# The five update routes share one wording so the journal advice cannot drift
+# between them under a later edit. The two failure-path calls in
+# _resume_transaction deliberately warn instead: dying there would skip the
+# epilogue that tells the operator how to roll back.
+_txn_phase_or_die() {
+  _txn_update_phase "$1" \
+    || die "Could not record the update's progress in its journal." \
+      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+}
+
 # -----------------------------------------------------------------------------
 # Update-flow guards.
 # -----------------------------------------------------------------------------
@@ -641,8 +652,16 @@ _raw_backup_volume_compose() {
 _verify_backup_volume_compose_owner() {
   local cid labels project workdir configs
   [ "$BACKUP_COMPOSE_VERIFIED" -eq 0 ] || return 0
-  cid="$(_raw_backup_volume_compose ps -q postgres 2>/dev/null | head -1 || true)"
-  [ -n "$cid" ] || { err "Cannot verify this install's running Postgres container."; return 1; }
+  # -a, not a running-only probe: the recovery commands exist for the disaster
+  # where Postgres will not start, and a stopped container carries the same
+  # compose labels this check reads. Requiring a RUNNING one made break-glass
+  # unreachable in the case it was written for.
+  cid="$(_raw_backup_volume_compose ps -a -q postgres 2>/dev/null | head -1 || true)"
+  if [ -z "$cid" ]; then
+    err "This install has no Postgres container, so the backup service's ownership cannot be verified."
+    err "Start the stack once so its containers exist, then retry: jarvis-research start"
+    return 1
+  fi
   labels="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "com.docker.compose.project.working_dir" }}|{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$cid" 2>/dev/null || true)"
   IFS='|' read -r project workdir configs <<< "$labels"
   if [ "$project" != "$BACKUP_COMPOSE_PROJECT" ] \
@@ -1323,9 +1342,7 @@ _resume_pending_merge() {
   head="$(git rev-parse HEAD 2>/dev/null || true)"
   [ "$head" = "$TXN_TARGET_SHA" ] || die "Git returned success but HEAD is not the recorded update target." \
     "Stop here and run: jarvis-research doctor"
-  _txn_update_phase pull \
-    || die "Could not record the update's progress in its journal." \
-      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+  _txn_phase_or_die pull
   exec bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$TXN_TARGET" --yes
 }
 
@@ -1381,9 +1398,7 @@ cmd_update() {
       merge_pending)
         head="$(git rev-parse HEAD 2>/dev/null || true)"
         if [ "$head" = "$TXN_TARGET_SHA" ]; then
-          _txn_update_phase pull \
-            || die "Could not record the update's progress in its journal." \
-              "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+          _txn_phase_or_die pull
         else
           die "The pending update has not advanced to ${TXN_TARGET} yet; explicit post-merge resume is unsafe." \
             "Run without --resume: jarvis-research update"
@@ -1413,9 +1428,7 @@ cmd_update() {
         head="$(git rev-parse HEAD 2>/dev/null || true)"
         if [ "$head" = "$TXN_TARGET_SHA" ]; then
           info "The checkout reached ${TXN_TARGET}; resuming its pending service update."
-          _txn_update_phase pull \
-            || die "Could not record the update's progress in its journal." \
-              "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+          _txn_phase_or_die pull
           _resume_transaction "$TXN_TARGET"
           return
         fi
@@ -1514,9 +1527,7 @@ cmd_update() {
   head="$(git rev-parse HEAD 2>/dev/null || true)"
   [ "$head" = "$target_sha" ] || die "Git returned success but HEAD is not the recorded update target." \
     "Stop here and run: jarvis-research doctor"
-  _txn_update_phase pull \
-    || die "Could not record the update's progress in its journal." \
-      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+  _txn_phase_or_die pull
   ensure_state_dir "$REPO" || warn "Could not record the durable state directory (non-fatal)."
   local -a resume_cmd=(bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$target_ref" --yes)
   exec "${resume_cmd[@]}"
@@ -1536,22 +1547,24 @@ _resume_transaction() {
   fi
 
   install_cli_shim "$REPO" >/dev/null 2>&1 || true             # (9)
-  _txn_update_phase pull \
-    || die "Could not record the update's progress in its journal." \
-      "Check ${PENDING_FILE_PATH}, then run: jarvis-research doctor"
+  _txn_phase_or_die pull
 
   info "Applying ${target_ref} — pulling images and recreating services..."  # (10)
   if ! _verify_recorded_update_backup; then
     die "The pending update's recovery backup is no longer authenticated, complete, and pinned." \
       "No services were recreated. Repair the recorded restore point, then re-run: jarvis-research update --resume ${target_ref}"
   fi
+  # The journal write is best-effort HERE and only here: this path is already
+  # failing, and the epilogue that follows is what tells the operator how to roll
+  # back. An unguarded call would abort the script under `set -e` the moment the
+  # journal became unwritable, taking the epilogue with it.
   if ! _activate_selected_backup_sidecar; then
-    _txn_update_phase health
+    _txn_update_phase health || warn "The update's journal could not be marked as failed; ${PENDING_FILE_PATH} may name an earlier phase."
     _failure_epilogue "$target_ref"
     exit 1
   fi
   if ! _run_update_sh; then
-    _txn_update_phase health
+    _txn_update_phase health || warn "The update's journal could not be marked as failed; ${PENDING_FILE_PATH} may name an earlier phase."
     _failure_epilogue "$target_ref"
     exit 1
   fi
@@ -1955,9 +1968,13 @@ cmd_restore_acknowledge() {
 
 # -----------------------------------------------------------------------------
 # Recovery: same-host break-glass restore, restore progress, and the off-host
-# request an operator submits by hand. Every one of these reaches the backup
-# service through _backup_volume_compose, whose ownership check is what stops a
-# caller-supplied .env from pointing these commands at a sibling project.
+# request an operator submits by hand.
+#
+# The two commands that TOUCH the backup service (legacy, status) reach it
+# through _backup_volume_compose, whose ownership check is what stops a
+# caller-supplied .env from pointing them at a sibling project. `request` makes
+# no compose call at all — it only prints a procedure — so it cannot rely on
+# that fence and instead prints commands already scoped to this install.
 # -----------------------------------------------------------------------------
 # Paths inside the backup service's trigger volume (see docker-compose.yml).
 RESTORE_REQUEST_PATH="/backup-trigger/.restore_request.json"
@@ -1999,6 +2016,16 @@ _restore_legacy_resume_sidecar() {
   local rc=$?
   trap - EXIT
   set +e
+  # A run that died before restore.sh consumed the request leaves it in the
+  # trigger volume, and the service resumed below would pick it up and fail it
+  # non-interactively — an outcome the operator never asked for and would then
+  # find in `restore status`. restore.sh unlinks the request itself, so after
+  # any later failure this is already a no-op.
+  if [ "$rc" -ne 0 ]; then
+    _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+      -c "rm -f ${RESTORE_REQUEST_PATH}" >/dev/null 2>&1 \
+      || warn "An unconsumed restore request may remain. Check: jarvis-research restore status"
+  fi
   _backup_volume_compose start postgres-backup >/dev/null 2>&1 \
     || warn "The backup service did not restart. Run: jarvis-research start"
   exit "$rc"
@@ -2094,8 +2121,20 @@ cmd_restore_request() {
   [ "$#" -eq 1 ] \
     || usage_error "restore request takes exactly one backup timestamp." \
       "Run: jarvis-research restore request <timestamp>"
-  local timestamp="$1" restore_id requested_at request
+  local timestamp="$1" restore_id requested_at request compose_prefix file
+  local -a compose_argv=()
   _restore_timestamp_or_usage request "$timestamp"
+  # The operator runs these by hand in their own shell, where COMPOSE_PROJECT_NAME
+  # or COMPOSE_FILE may point somewhere else entirely. A bare `docker compose` in
+  # printed disaster instructions would silently address whatever that shell is
+  # pointing at, so every printed command carries this install's own scope.
+  _init_backup_volume_compose \
+    || die "This install's compose project could not be resolved, so no procedure was printed." \
+      "Run this from the installation directory, then retry: jarvis-research doctor"
+  compose_argv=(docker compose --project-directory "$REPO" --env-file "$REPO/.env" -p "$BACKUP_COMPOSE_PROJECT")
+  for file in "${BACKUP_COMPOSE_FILES[@]}"; do compose_argv+=(-f "$file"); done
+  compose_prefix="$(printf '%q ' "${compose_argv[@]}")"
+  compose_prefix="${compose_prefix% }"
   restore_id="$(_restore_new_request_id)" \
     || die "A restore identifier could not be generated." \
       "Nothing was changed. Run: jarvis-research doctor"
@@ -2109,18 +2148,21 @@ Recovering this host from another installation's backup set is a manual,
 ordered procedure. This command only prints it: nothing was submitted, no file
 was written, and no archive was moved.
 
+Each command below is already scoped to this installation. Run them as printed,
+from any directory.
+
 1. Copy the complete archive set into the restore inbox:
 
-     docker compose cp ./offsite/. postgres-backup:/restore-inbox/
+     ${compose_prefix} cp ./offsite/. postgres-backup:/restore-inbox/
 
 2. Copy the matching encryption key under its required one-time name:
 
-     docker compose cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
+     ${compose_prefix} cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
 
 3. Only once both copies are in place, submit the request below. The backup
    service acts on it within seconds, and an empty inbox fails the restore:
 
-     printf '%s' '${request}' | docker compose exec -T postgres-backup sh -c 'cat > ${RESTORE_REQUEST_PATH}'
+     printf '%s' '${request}' | ${compose_prefix} exec -T postgres-backup sh -c 'cat > ${RESTORE_REQUEST_PATH}'
 
 Keep the restore identifier ${restore_id}. After the restore you type it back to
 release outbound quarantine:

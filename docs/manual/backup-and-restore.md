@@ -269,7 +269,7 @@ For the genuine disaster where an unsigned set is all that is left, an operator 
 jarvis-research restore legacy <timestamp>
 ```
 
-The command explains that the set cannot be verified, stops the backup service so it cannot pick the request up first, and runs the restore interactively so the prompt reaches you. You must type the phrase `I-ACCEPT-UNVERIFIED-BACKUP` before anything is changed; nothing else — no flag, no browser button — can take the override. The restore then logs a permanent warning that its archives were never verified, and the backup service resumes afterwards either way. Follow the outcome with `jarvis-research restore status`.
+It works with the stack stopped, which is the usual state in this kind of disaster; it only needs this install's containers to exist. The command explains that the set cannot be verified, stops the backup service so it cannot pick the request up first, and runs the restore interactively so the prompt reaches you. You must type the phrase `I-ACCEPT-UNVERIFIED-BACKUP` before anything is changed; nothing else — no flag, no browser button — can take the override. The restore then logs a permanent warning that its archives were never verified, and the backup service resumes afterwards either way. Follow the outcome with `jarvis-research restore status`.
 
 This is same-host recovery only. An off-site set is refused outright regardless of the override, because on a fresh host there is nothing to check the archives against.
 
