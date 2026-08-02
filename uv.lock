@@ -798,14 +798,14 @@ wheels = [
 
 [[package]]
 name = "docling"
-version = "2.111.0"
+version = "2.115.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docling-slim", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/36/19e52116628a888b05c3861997e16ab81d86baa661b819b026b48a1c4afa/docling-2.111.0.tar.gz", hash = "sha256:c8fdbf7e456cc0918dad117351debf9f314bfe8888f62fc4ec760a97824f75d2", size = 8956, upload-time = "2026-07-08T11:26:32.71Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/31/1901a67e35abd97868cff08c57d8cbebfeafb8045413340f3746a1a5f249/docling-2.115.0.tar.gz", hash = "sha256:99f6fb72293f3270f42514711808a766d4d7305152278171532fd59eb6bf55a3", size = 9015, upload-time = "2026-07-23T14:47:20.597Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/85/e8034dabd04698ed8c69b4ecf1e755ec66fddbc2ea88e49e9a321fc8f5d4/docling-2.111.0-py3-none-any.whl", hash = "sha256:6bc7f3bcd881f0a1c2a7aa85fe2021c2f33878601e84e730858b78012104d590", size = 5118, upload-time = "2026-07-08T11:26:31.389Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/fc/c8110cbab5703e6b17b5daf287e646b5389533bbf44b2cc8830e00b9c3fe/docling-2.115.0-py3-none-any.whl", hash = "sha256:1a3d9bdf2f82610e97085a1a1b53cf259d1bd7aff97651ff2decc3b2b105123c", size = 5179, upload-time = "2026-07-23T14:47:19.379Z" },
 ]
 
 [package.optional-dependencies]
@@ -907,7 +907,7 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.111.0"
+version = "2.115.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -919,9 +919,9 @@ dependencies = [
     { name = "requests" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/10/2ac03b68d2c5be3578651b04eb7b097dbb39dc500778159b9416d7b73fce/docling_slim-2.111.0.tar.gz", hash = "sha256:c46d801582a299730b36ba779c2e4465207e38f7b1062ae4112fcdd439b68d3a", size = 512496, upload-time = "2026-07-08T11:25:12.82Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/b8/c78b8c9a07f20325176299d6a58ee8a0dcf088815ddc45590b29fc6c671a/docling_slim-2.115.0.tar.gz", hash = "sha256:4440eb2118e64e14df45eabf5f927a01eda2c37dcaa50435a708e31c19f8b7f3", size = 549486, upload-time = "2026-07-23T14:45:53.797Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/73/4f94187f574844c5a55022b9c0fc900a7e1fd61ce150da94047dd3bddde6/docling_slim-2.111.0-py3-none-any.whl", hash = "sha256:58683696e1342380d1a4676100a33493a61d3243c322f73286799435ca7e7b9e", size = 644787, upload-time = "2026-07-08T11:25:10.699Z" },
+    { url = "https://files.pythonhosted.org/packages/40/a3/f8acf83bde1343728091d4362a9795a8ccf3bdd9737121833159ab2d1770/docling_slim-2.115.0-py3-none-any.whl", hash = "sha256:affa089efd112c88330af91b84a6a6d600731221c21e0971cd67a21a30448643", size = 684027, upload-time = "2026-07-23T14:45:51.9Z" },
 ]
 
 [package.optional-dependencies]
@@ -1006,7 +1006,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.139.0"
+version = "0.140.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -1015,9 +1015,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d3/af/a5f50ccfa659ec1802cb4ca842c23f06d906a8cc9aef6016a2caeea3d4ed/fastapi-0.139.0.tar.gz", hash = "sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145", size = 423016, upload-time = "2026-07-01T16:35:33.436Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/cb/7a4d2c2eb5a5d8a91763c05b7383d72917862e32f780daa0e27ffbb34cc6/fastapi-0.140.13.tar.gz", hash = "sha256:500172a08cf1459901f90b05c37d93060dada3b573fec8f0862445db52ba6b4b", size = 424843, upload-time = "2026-07-28T15:37:00.805Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/7c/8e3c6ad324ea5cb36604fc3f968554887891c316d9dfde57761611d907ad/fastapi-0.139.0-py3-none-any.whl", hash = "sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189", size = 130339, upload-time = "2026-07-01T16:35:32.19Z" },
+    { url = "https://files.pythonhosted.org/packages/84/4e/f9e8c762ef5e05c40482131e3d5e8b36bca13fa127578261f1d6b35a25d4/fastapi-0.140.13-py3-none-any.whl", hash = "sha256:8b017110e1e9f30a95e8bdb8f71fbe2f0fe3af5717109e5b14f9e069df54f6d4", size = 131222, upload-time = "2026-07-28T15:37:02.124Z" },
 ]
 
 [[package]]
@@ -1756,9 +1756,9 @@ dev = [
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "bibtexparser", specifier = ">=2.0.0b9,<3.0" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.112.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
     { name = "genanki", specifier = ">=0.13.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
@@ -1805,7 +1805,7 @@ jarvis-common = [
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
@@ -1827,7 +1827,7 @@ learning-engine = [
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
     { name = "genanki", specifier = ">=0.13.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
@@ -1854,9 +1854,9 @@ paper-ingestion = [
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.112.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
@@ -1892,9 +1892,9 @@ paper-ingestion-base = [
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.112.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
@@ -1930,9 +1930,9 @@ paper-ingestion-cpu = [
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.112.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
@@ -1983,7 +1983,7 @@ telegram-bot = [
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "email-validator", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.136.1,<0.140.0" },
+    { name = "fastapi", specifier = ">=0.136.1,<0.141.0" },
     { name = "gitpython", specifier = ">=3.1.55" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },

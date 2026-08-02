@@ -28,7 +28,7 @@ jarvis-common = [
     "asyncpg>=0.30.0,<0.32.0",
     "cryptography>=48.0.1",  # >=48.0.1 clears GHSA-537c-gmf6-5ccf
     "email-validator>=2.0",  # backs pydantic EmailStr
-    "fastapi>=0.136.1,<0.140.0",
+    "fastapi>=0.136.1,<0.141.0",
     "gitpython>=3.1.55",  # >=3.1.55 clears GHSA-94p4-4cq8-9g67 and prior GitPython advisories
     "httpx>=0.27.0",
     "idna>=3.15",
@@ -52,18 +52,22 @@ paper-ingestion-base = [
     "apscheduler>=3.10.0",
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.140.0",
+    "fastapi>=0.136.1,<0.141.0",
     "httpx>=0.27.0",
     "lxml>=6.1.0",
-    "docling[rapidocr]>=2.96.0,<2.112.0",
+    "docling[rapidocr]>=2.96.0,<2.116.0",
     "markdownify>=0.14.1",
     "pydantic>=2.0,<3.0.0",
     "pypdfium2>=4.30.0",
     "pillow>=12.3.0",  # >=12.3.0 clears PYSEC-2026-2253..2257
     "python-multipart>=0.0.31",  # >=0.0.31 clears CVE-2026-53538/53539/53540
     "pyyaml>=6.0",
-    # Keep the client within one minor of the persisted Qdrant 1.13.x runtime.
-    # Upgrade both sides together; newer clients reject this server pairing.
+    # Keep the client within one minor of the persisted Qdrant 1.13.x runtime
+    # (docker-compose.yml pins qdrant/qdrant:v1.13.2). The client enforces this
+    # itself: past a one-minor gap it warns on every connection that the pairing
+    # is unsupported. Widening this range without moving the server ships that
+    # warning to every install, so the two move together in a change that can
+    # exercise a running server.
     "qdrant-client>=1.14.3,<1.15.0",
     "rapidfuzz>=3.0.0",
     "rispy>=0.9,<1.0",  # RIS citation export
@@ -108,7 +112,7 @@ learning-engine = [
     { include-group = "jarvis-common" },
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.140.0",
+    "fastapi>=0.136.1,<0.141.0",
     "fsrs>=4.0.0,<6.0.0",
     "genanki>=0.13.0",
     "httpx>=0.27.0",
@@ -121,7 +125,7 @@ telegram-bot = [
     { include-group = "jarvis-common" },
     "apscheduler>=3.10.0",
     "asyncpg>=0.30.0,<0.32.0",
-    "fastapi>=0.136.1,<0.140.0",
+    "fastapi>=0.136.1,<0.141.0",
     "httpx>=0.27.0",
     "python-telegram-bot>=21.0",
     "uvicorn>=0.30.0",
