@@ -1638,7 +1638,9 @@ case "$RECOVER_TRANSACTION_FN" in
   *) pass "setup never teaches deleting a credential-bearing staging path" ;;
 esac
 case "$RECOVER_TRANSACTION_FN" in
-  *'dirname "$SCRIPT_DIR"'*'jarvis-abandoned-staging-'*)
+  # The PHYSICAL parent, not the symlinked one: a rename off the checkout's own
+  # filesystem is a copy, which leaves credential bytes behind on a failure.
+  *'dirname "$script_dir_physical"'*'jarvis-abandoned-staging-'*)
     pass "abandoned staging is only ever moved outside the checkout" ;;
   *)
     printf 'FAIL: abandoned staging has no destination outside the checkout\n' >&2
@@ -1782,6 +1784,28 @@ staging_status="$(git -C "$STAGE_HELD" status --porcelain)" && rc=0 || rc=$?
 expect_eq "the checkout's git status command still succeeds" "$rc" "0"
 expect_eq "the quarantine leaves the checkout clean for the update fences" \
   "$staging_status" ""
+
+# A destination that already exists must stop the rename: mv would move the
+# staging folder INSIDE it, hiding credential copies a level deeper than every
+# message here says they are.
+STAGE_TAKEN="$(new_staging_repo staging-taken)"
+add_abandoned_staging "$STAGE_TAKEN" 99999999
+TAKEN_HOLD="$(dirname "$STAGE_TAKEN")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
+mkdir -p "$TAKEN_HOLD"
+out="$(drive_recovery "$STAGE_TAKEN" 1)" && rc=0 || rc=$?
+expect_eq "a taken quarantine name stops setup instead of nesting the folder" "$rc" "1"
+expect_eq "the staging folder stays where it is when the name is taken" \
+  "$([ -d "${STAGE_TAKEN}/.jarvis-setup-transaction.pending" ] && printf present || printf gone)" \
+  "present"
+expect_eq "nothing is nested inside the existing quarantine" \
+  "$([ -e "${TAKEN_HOLD}/.jarvis-setup-transaction.pending" ] && printf nested || printf clean)" \
+  "clean"
+case "$out" in
+  *'already holds that name'*) pass "the taken-name refusal names the path to resolve" ;;
+  *)
+    printf 'FAIL: a taken quarantine name produced no actionable message\n%s\n' "$out" >&2
+    fail=1 ;;
+esac
 
 # An unreadable owner record includes a LIVE owner: the lock directory exists
 # before its pid file is written. Releasing it there is a concurrent-setup bug.

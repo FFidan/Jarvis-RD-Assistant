@@ -813,10 +813,12 @@ recover_interrupted_setup_transaction() {
   if [ -e "${transaction_dir}.pending" ] || [ -L "${transaction_dir}.pending" ]; then
     setup_transaction_owner_state "$transaction_dir" pending || owner_state=$?
     # Moved aside, never deleted, and never inside the checkout: the staging
-    # directory holds credential copies, the parent directory is on the same
-    # filesystem (so the rename is atomic), and no ignore rule or build context
-    # covers a sibling of the checkout.
-    staging_hold="$(dirname "$SCRIPT_DIR")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
+    # directory holds credential copies, and no ignore rule or build context
+    # covers a sibling of the checkout. The destination is derived from the
+    # PHYSICAL path, so a checkout reached through a symlink still lands beside
+    # its real parent and the rename stays on one filesystem — a copy across
+    # filesystems would leave credential bytes behind on a partial failure.
+    staging_hold="$(dirname "$script_dir_physical")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
     printf -v staging_hold_q '%q' "$staging_hold"
     case "$owner_state" in
       0)
@@ -851,6 +853,14 @@ recover_interrupted_setup_transaction() {
             return 1
             ;;
         esac
+        # Refuse rather than rename INTO an existing directory of that name:
+        # mv would move the staging folder inside it, hiding credential copies
+        # one level deeper than every message here says they are.
+        if [ -e "$staging_hold" ] || [ -L "$staging_hold" ]; then
+          warn "A previous quarantine already holds that name: ${staging_hold}"
+          warn "Move or remove it after confirming what it contains, then re-run ./setup.sh."
+          return 1
+        fi
         if ! mv -- "${transaction_dir}.pending" "$staging_hold"; then
           warn "The staging folder could not be moved aside. Move it yourself, outside this checkout:"
           warn "  mv -- ${pending_q} ${staging_hold_q}"

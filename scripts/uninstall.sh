@@ -477,6 +477,7 @@ _step() {
 # Preview (human-readable) — shown before the real gates.
 # -----------------------------------------------------------------------------
 _preview() {
+  local _preview_state_dir
   info "Uninstall plan for ${REPO} (tier ${TIER} — ${TIER_NAME[$TIER]}):"
   printf '  containers + network: docker compose down%s\n' "$([ "$TIER" -ge 3 ] && printf -- ' --volumes')" >&2
   # The whole branch is skipped under --keep-images, heading included: with no
@@ -491,6 +492,11 @@ _preview() {
       printf '  third-party images (each confirmed individually):\n' >&2; _third_party_image_pins | sed 's/^/    /' >&2
     fi
     printf '  files: %s/.env, %s/secrets, %s/shared, and the clone directory\n' "$REPO" "$REPO" "$REPO" >&2
+    # The state directory lives OUTSIDE the clone, so a preview that stopped at
+    # "the clone directory" would remove a path the operator was never shown.
+    _preview_state_dir="$(recorded_state_dir "$REPO")"
+    [ -z "$_preview_state_dir" ] \
+      || printf '  durable state directory (outside the clone): %s\n' "$_preview_state_dir" >&2
   fi
 }
 
@@ -696,24 +702,25 @@ _self_delete_clone() {
 # shared by sibling installs and is never a removal target.
 _purge_state_dir() {
   local state_dir state_canon ns_canon
-  state_dir="$(sed -n 's/^JARVIS_STATE_DIR=//p' "$REPO/.env" 2>/dev/null | head -1)"
-  case "$state_dir" in
-    \"*\") state_dir="${state_dir#\"}"; state_dir="${state_dir%\"}" ;;
-    \'*\') state_dir="${state_dir#\'}"; state_dir="${state_dir%\'}" ;;
-  esac
+  state_dir="$(recorded_state_dir "$REPO")"
   # An install predating the state directory has no line at all; canonicalising an
   # empty value would yield the current directory, so skip silently.
   [ -n "$state_dir" ] || return 0
   state_canon="$(canonical_path_portable "$state_dir")" || state_canon=""
   ns_canon="$(canonical_path_portable "${XDG_STATE_HOME:-${HOME}/.local/state}/jarvis-research")" || ns_canon=""
-  if [ -n "$state_canon" ] && [ -n "$ns_canon" ] && [ "$state_canon" != "$ns_canon" ]; then
+  if [ -z "$state_canon" ] || [ -z "$ns_canon" ]; then
+    warn "Could not resolve ${state_dir}; it was left in place. Remove it manually."
+    return 0
+  fi
+  if [ "$state_canon" != "$ns_canon" ]; then
     case "$state_canon/" in
       "$ns_canon"/*)
         # Docker creates a missing bind-mount source as root:root, so removal can
         # legitimately fail for a host user. Name it; never abort the uninstall.
         _step "state ${state_canon}" rm -rf -- "$state_canon" \
           || warn "Could not remove ${state_canon}; remove it manually." ;;
-      *) warn "Refusing to remove ${state_dir}: outside the JARVIS state namespace" ;;
+      *) warn "Refusing to remove ${state_dir}: outside the JARVIS state namespace"
+         warn "It was left in place. If it is this install's, remove it manually." ;;
     esac
   fi
 }

@@ -2509,6 +2509,21 @@ exec "${repo}/scripts/jarvis-research.sh" --repo "$repo" "$@"
 SHIM
 }
 
+# recorded_state_dir [REPO_DIR] -> the JARVIS_STATE_DIR value recorded in .env,
+# empty when the file or the line is absent. The quote strip is the same
+# untrusted-value idiom the other .env readers use; it lives here once so the
+# creating side (ensure_state_dir) and the removing side (uninstall) can never
+# disagree about which path was recorded.
+recorded_state_dir() {
+  local value
+  value="$(sed -n 's/^JARVIS_STATE_DIR=//p' "${1:-$PWD}/.env" 2>/dev/null | head -1)"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 # ensure_state_dir [REPO_DIR] -> create the durable lifecycle-state directory and
 # record it in .env as JARVIS_STATE_DIR. Idempotent; never moves existing state;
 # prints one line when it writes something. Compose bind-mounts this path into the
@@ -2518,11 +2533,7 @@ SHIM
 # one, or compose would mount a path this never created.
 ensure_state_dir() {
   local repo="${1:-$PWD}" project state_dir recorded
-  recorded="$(sed -n 's/^JARVIS_STATE_DIR=//p' "$repo/.env" 2>/dev/null | head -1)"
-  case "$recorded" in
-    \"*\") recorded="${recorded#\"}"; recorded="${recorded%\"}" ;;
-    \'*\') recorded="${recorded#\'}"; recorded="${recorded%\'}" ;;
-  esac
+  recorded="$(recorded_state_dir "$repo")"
   if [ -n "$recorded" ]; then
     mkdir -p "$recorded" || return 1
     chmod 700 "$recorded" 2>/dev/null || true
@@ -2579,9 +2590,13 @@ install_cli_shim() {
   return 0
 }
 
-# warn_if_launcher_unreachable -> after installing the launcher, confirm a login
-# shell can actually find it, and offer to add the PATH line once. Installing a
-# command a shell cannot resolve is the same as not installing it.
+# warn_if_launcher_unreachable -> after installing the launcher, confirm THIS
+# shell can find it, and offer to add the PATH line once. Installing a command a
+# shell cannot resolve is the same as not installing it. The check reads the
+# setup process's own PATH, which is the honest limit of what it can observe: a
+# run under a temporarily augmented PATH passes here while a fresh login shell
+# may still not resolve the command, so the message says "will not be found",
+# never "is now permanently on your PATH".
 # Bare printf, not the caller's warn/ok: this library is presentation-free.
 # The prompt is offered only when the caller has a terminal to answer it with —
 # an unanswerable prompt in a piped or CI install must never edit a startup file.
