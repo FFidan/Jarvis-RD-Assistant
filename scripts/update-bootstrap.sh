@@ -96,6 +96,7 @@ require_managed_checkout() {
   # The exemption is for one product-managed regular file. A directory or symlink
   # at that path is not it: the pathspec below excludes a prefix, so without this
   # fence any content beneath it would be laundered.
+  # Transitional: tolerates the pre-relocation marker in secrets/; deletable when no supported update source predates the durable state directory.
   marker_rel="secrets/manifest-hmac-required"
   marker="${repo}/${marker_rel}"
   if { [ -e "$marker" ] || [ -L "$marker" ]; } && { [ ! -f "$marker" ] || [ -L "$marker" ]; }; then

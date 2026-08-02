@@ -492,6 +492,7 @@ JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=skipped QDRANT_STAT
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=skipped ENVIRONMENT=development \
 ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$mf_dir" MANIFEST_HMAC_MARKER="${mf_dir}/marker" \
+BACKUP_STATE_DIR="$mf_dir" MANIFEST_HMAC_MARKER_DURABLE="${mf_dir}/durable-marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz" "${BACKUP_DIR}/qdrant_kg_entities_${TIMESTAMP}.snapshot")
@@ -533,6 +534,7 @@ JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=ski
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
 ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$sf_dir" MANIFEST_HMAC_MARKER="${sf_dir}/marker" \
+BACKUP_STATE_DIR="$sf_dir" MANIFEST_HMAC_MARKER_DURABLE="${sf_dir}/durable-marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz.enc")
@@ -572,6 +574,7 @@ JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=ski
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
 ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$rf_dir" MANIFEST_HMAC_MARKER="${rf_dir}/missing/marker" \
+BACKUP_STATE_DIR="${rf_dir}/missing" MANIFEST_HMAC_MARKER_DURABLE="${rf_dir}/missing/marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz.enc")
@@ -597,6 +600,102 @@ else
   fail=1
 fi
 rm -rf "$rf_dir"
+
+# The durable second copy of the signed-restore marker is written BESIDE the
+# authoritative one and is best-effort by design: during an update the new script
+# runs inside the OLD container, where the durable mount does not exist yet. A
+# fatal path there would send finalize_backup to discard_current_backup and
+# destroy every backup taken in that window.
+#
+# run_publish_fixture DIR TS HOST_SECRETS_DIR STATE_DIR DURABLE_MARKER — finalize a
+# complete encrypted run and print its output; the caller reads the exit status.
+run_publish_fixture() {
+  BACKUP_DIR="$1" TIMESTAMP="$2" ATTEMPTED_AT=x RUN_ID=aabbccddeeff00112233445566778899 \
+  JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
+  MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
+  ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
+  HOST_SECRETS_DIR="$3" MANIFEST_HMAC_MARKER="${3}/manifest-hmac-required" \
+  BACKUP_STATE_DIR="$4" MANIFEST_HMAC_MARKER_DURABLE="$5" \
+  bash -c '
+    set -uo pipefail
+    BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc")
+    sign_manifest() { printf "signed\n" > "${1}.hmac"; }
+    '"$COMPLETION_WLR"'
+    '"$FINALIZE_PROMOTE"'
+    '"$FINALIZE_DISCARD"'
+    '"$FINALIZE_MANIFEST"'
+    '"$FINALIZE_PUBLISH"'
+    '"$FINALIZE_BACKUP"'
+    finalize_backup
+    rc=$?
+    write_last_run
+    exit "$rc"
+  ' 2>&1
+}
+make_publish_fixture() {  # make_publish_fixture DIR TS
+  mkdir -p "$1"
+  printf 'J' > "${1}/jarvis_${2}.sql.gz.enc"
+  printf 'L' > "${1}/litellm_${2}.sql.gz.enc"
+}
+
+# (i) The update window: the durable directory does not exist yet. The run must
+#     complete and keep its archives, or an interrupted update destroys them.
+uw_root="$(mktemp -d)"; uw_ts="20260720_150000"
+make_publish_fixture "${uw_root}/backups" "$uw_ts"
+mkdir -p "${uw_root}/secrets"
+uw_rc=0
+uw_out="$(run_publish_fixture "${uw_root}/backups" "$uw_ts" "${uw_root}/secrets" \
+  "${uw_root}/absent" "${uw_root}/absent/manifest-hmac-required")" || uw_rc=$?
+if [ "$uw_rc" -eq 0 ] \
+   && [ -f "${uw_root}/backups/jarvis_${uw_ts}.sql.gz.enc" ] \
+   && [ -e "${uw_root}/secrets/manifest-hmac-required" ] \
+   && [ ! -e "${uw_root}/absent" ] \
+   && grep -q '"succeeded":true' "${uw_root}/backups/.last_run.json"; then
+  pass "an absent durable state directory leaves the backup complete and the marker armed"
+else
+  printf 'FAIL: absent durable state dir did not leave the backup complete (rc=%s out=<<<%s>>>)\n' \
+    "$uw_rc" "$uw_out" >&2
+  fail=1
+fi
+rm -rf "$uw_root"
+
+# (ii) The directory exists but the durable write cannot succeed. The run must
+#      still complete, and it must say so rather than failing silently.
+dw_root="$(mktemp -d)"; dw_ts="20260720_160000"
+make_publish_fixture "${dw_root}/backups" "$dw_ts"
+mkdir -p "${dw_root}/secrets" "${dw_root}/state/manifest-hmac-required"
+dw_rc=0
+dw_out="$(run_publish_fixture "${dw_root}/backups" "$dw_ts" "${dw_root}/secrets" \
+  "${dw_root}/state" "${dw_root}/state/manifest-hmac-required")" || dw_rc=$?
+if [ "$dw_rc" -eq 0 ] \
+   && [ -f "${dw_root}/backups/jarvis_${dw_ts}.sql.gz.enc" ] \
+   && [ -e "${dw_root}/secrets/manifest-hmac-required" ] \
+   && printf '%s' "$dw_out" | grep -q 'could not write the durable signed-restore marker'; then
+  pass "an unwritable durable marker warns and still completes the backup"
+else
+  printf 'FAIL: unwritable durable marker was not best-effort (rc=%s out=<<<%s>>>)\n' \
+    "$dw_rc" "$dw_out" >&2
+  fail=1
+fi
+rm -rf "$dw_root"
+
+# An un-migrated .env mounts ./secrets at both paths, so one host directory is
+# reached by two path strings. Writing the same file twice is harmless.
+sd_root="$(mktemp -d)"; sd_ts="20260720_170000"
+make_publish_fixture "${sd_root}/backups" "$sd_ts"
+mkdir -p "${sd_root}/secrets"
+ln -s "${sd_root}/secrets" "${sd_root}/alias"
+sd_rc=0
+sd_out="$(run_publish_fixture "${sd_root}/backups" "$sd_ts" "${sd_root}/secrets" \
+  "${sd_root}/alias" "${sd_root}/alias/manifest-hmac-required")" || sd_rc=$?
+if [ "$sd_rc" -eq 0 ] && [ -e "${sd_root}/secrets/manifest-hmac-required" ]; then
+  pass "one directory reached by two paths keeps the marker and exits 0"
+else
+  printf 'FAIL: same-directory publish did not keep the marker (rc=%s out=<<<%s>>>)\n' \
+    "$sd_rc" "$sd_out" >&2
+  fail=1
+fi
+rm -rf "$sd_root"
 
 # DATA-RESTORE-PRUNE-RACE: the retention prune at the tail must be gated on
 # BACKUP_SKIP_PRUNE so restore.sh's safety pre-backup cannot delete the very

@@ -454,8 +454,21 @@ SHIM
   chmod +x "${dir}/docker"
 }
 
+# recorded_state_dir CLONE — the durable state directory .env records, quotes
+# stripped. .env is install-owned data: read it, never source it.
+recorded_state_dir() {
+  local value
+  value="$(sed -n 's/^JARVIS_STATE_DIR=//p' "${1}/.env" 2>/dev/null | head -1)"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 run_leg_update() {
   local project scratch clone state shim previous latest rc=0
+  local durable_before=0 marker_before=0 state_dir_before="" state_dir_after=""
   local from_commit to_commit head_before pending
   local bootstrap bootstrap_mode
   local -a pending_candidates=() update_command=()
@@ -498,7 +511,9 @@ run_leg_update() {
     err "The requested update target no longer resolves to ${UPDATE_TO}."
     return 1
   fi
-  ( cd "$clone" && timeout "$TIMEOUT_SECONDS" \
+  # Scope the durable lifecycle-state directory into the scratch: it otherwise
+  # defaults under the invoking user's $HOME and would leave one directory per run.
+  ( cd "$clone" && XDG_STATE_HOME="${scratch}/xdg-state" timeout "$TIMEOUT_SECONDS" \
       ./setup.sh --non-interactive --profile=dev ) || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "Cold install at ${previous} exited non-zero (rc=${rc})."
@@ -539,7 +554,7 @@ run_leg_update() {
   local injected_log="${scratch}/update-injected.log"
   rc=0
   ( cd "$clone" && PATH="${shim}:${PATH}" JARVIS_CLI_CONFIG_DIR="$state" \
-      COMPOSE_PROJECT_NAME="$project" \
+      COMPOSE_PROJECT_NAME="$project" XDG_STATE_HOME="${scratch}/xdg-state" \
       "${update_command[@]}" ) > "$injected_log" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     err "The update succeeded despite the injected pull failure — the fault was not injected."
@@ -594,10 +609,23 @@ run_leg_update() {
   fi
   ok "The interrupted checkout carries no unexpected dirty paths."
 
+  # Capture the signed-restore state the interrupted update leaves behind, so the
+  # post-resume checks can prove the resume never removed a copy. When the source
+  # release predates the durable state directory nothing has recorded one yet, and
+  # both flags stay 0 — the post-resume assertions are conditional on that.
+  state_dir_before="$(recorded_state_dir "$clone")"
+  if [ -n "$state_dir_before" ] && [ -e "${state_dir_before}/manifest-hmac-required" ]; then
+    durable_before=1
+  fi
+  if [ -e "$marker" ]; then
+    marker_before=1
+  fi
+
   info "Retrying the update with pulls restored..."
   local resume_log="${scratch}/update-resumed.log"
   rc=0
   ( cd "$clone" && JARVIS_CLI_CONFIG_DIR="$state" COMPOSE_PROJECT_NAME="$project" \
+      XDG_STATE_HOME="${scratch}/xdg-state" \
       "${update_command[@]}" ) > "$resume_log" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
     err "The resumed update failed (rc=${rc}) — an interrupted update is not recoverable:"
@@ -624,6 +652,23 @@ run_leg_update() {
     err "The resumed update did not advance the checkout to ${latest}."
     return 1
   fi
+  # Both update modes reach the new tree's resume path, which records the durable
+  # state directory before recreating the backup sidecar. This is where an
+  # interrupted-then-resumed update would otherwise skip the migration entirely.
+  state_dir_after="$(recorded_state_dir "$clone")"
+  if [ -z "$state_dir_after" ] || [ ! -d "$state_dir_after" ]; then
+    err "The resumed update left no usable durable state directory (recorded: '${state_dir_after}')."
+    return 1
+  fi
+  if [ "$durable_before" -eq 1 ] && [ ! -e "${state_dir_before}/manifest-hmac-required" ]; then
+    err "The resumed update removed the durable signed-restore marker."
+    return 1
+  fi
+  if [ "$marker_before" -eq 1 ] && [ ! -e "$marker" ]; then
+    err "The resumed update removed the checkout's signed-restore marker."
+    return 1
+  fi
+  ok "Resumed update recorded ${state_dir_after} and removed no signed-restore marker."
   ok "Resumed update completed, advanced to ${latest}, and cleared the transaction."
   return 0
 }

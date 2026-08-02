@@ -2103,6 +2103,7 @@ if [ -f .env ]; then
     fi
 
     install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
+    ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
     if ! selected_https_is_verified "$_keep_route_kind" "$_keep_edge_state"; then
       _keep_route_label="HTTPS"
       _keep_retry="./setup.sh"
@@ -3516,8 +3517,10 @@ DASHBOARD_URL="$SETUP_BROWSER_BASE"
 
 # Register this checkout with the jarvis-research lifecycle CLI only after the
 # successful finish-link gate. This is non-fatal: a launcher-install failure
-# must not turn a healthy dashboard into a failed setup.
+# must not turn a healthy dashboard into a failed setup. The state directory is a
+# convenience for the same reason: compose falls back to ./secrets without it.
 install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
+ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
 
 printf '\n'
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"

@@ -505,6 +505,7 @@ _require_clean_main_checkout() {
   # The exemption is for one product-managed regular file. A directory or symlink
   # at that path is not it: the pathspec below excludes a prefix, so without this
   # fence any content beneath it would be laundered.
+  # Transitional: tolerates the pre-relocation marker in secrets/; deletable when no supported update source predates the durable state directory.
   marker_rel="secrets/manifest-hmac-required"
   if { [ -e "$marker_rel" ] || [ -L "$marker_rel" ]; } \
      && { [ ! -f "$marker_rel" ] || [ -L "$marker_rel" ]; }; then
@@ -1497,6 +1498,7 @@ cmd_update() {
   [ "$head" = "$target_sha" ] || die "Git returned success but HEAD is not the recorded update target." \
     "Stop here and run: jarvis-research doctor"
   _txn_update_phase pull
+  ensure_state_dir "$REPO" || warn "Could not record the durable state directory (non-fatal)."
   local -a resume_cmd=(bash "${REPO}/scripts/jarvis-research.sh" --repo "$REPO" update --resume "$target_ref" --yes)
   exec "${resume_cmd[@]}"
 }
@@ -1504,6 +1506,10 @@ cmd_update() {
 # _resume_transaction TARGET_REF — the post-merge half (phases 9-12). Never
 # fetches, guards-mutates, merges, or re-execs.
 _resume_transaction() {
+  # First, and above all before the sidecar is recreated below: compose reads
+  # JARVIS_STATE_DIR from .env to bind-mount the durable state directory, and every
+  # resume path reaches here without passing the fresh-update call site.
+  ensure_state_dir "$REPO" || warn "Could not record the durable state directory (non-fatal)."
   local target_ref="$1"
   MIGRATIONS_RAN="${MIGRATIONS_RAN:-0}"
   if [ -f "$PENDING_FILE_PATH" ] && [ -n "$(_txn_field backup_id)" ]; then

@@ -1408,6 +1408,75 @@ bcheck "the S3 pull is gated on BACKUP_PULL_TS (default backup unchanged)" 'BACK
 bcheck "the S3 pull downloads the timestamp's archive set from the bucket" \
   'aws s3 cp "s3://\$\{BACKUP_S3_BUCKET\}/"'
 
+# === Signed-restore ratchet: two locations, never taken back =================
+# The requirement may only ever be ADDED. Either copy arms it, so no lifecycle
+# state — a replaced checkout, a cleaned host state directory, a resumed update —
+# may move a restore back from "signature required" to "not required".
+RATCHET_FN="$(sed -n '/^manifest_signature_required()/,/^}/p' "$RESTORE_SCRIPT")"
+PUBLISH_FN="$(sed -n '/^publish_manifest_signature()/,/^}/p' "$BACKUP_SCRIPT")"
+
+# ratchet_answer OLD_DIR DURABLE_DIR -> "required" | "not-required"
+ratchet_answer() {
+  SOURCE=local HOST_SECRETS_DIR="$1" BACKUP_STATE_DIR="$2" bash -c '
+    set -euo pipefail
+    MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+    MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
+    '"$RATCHET_FN"'
+    if manifest_signature_required; then echo required; else echo not-required; fi
+  '
+}
+rt_root="$(mktemp -d)"
+mkdir -p "${rt_root}"/{old,new,empty-old,empty-new}
+: > "${rt_root}/old/manifest-hmac-required"
+: > "${rt_root}/new/manifest-hmac-required"
+ratchet_case() {  # ratchet_case <description> <old-dir> <durable-dir> <want>
+  local got; got="$(ratchet_answer "$2" "$3")"
+  if [ "$got" = "$4" ]; then pass "$1"; else
+    printf 'FAIL: %s (got=%s want=%s)\n' "$1" "$got" "$4" >&2; fail=1; fi
+}
+ratchet_case "ratchet: the pre-relocation copy alone still requires a signature" \
+  "${rt_root}/old" "${rt_root}/empty-new" required
+ratchet_case "ratchet: the durable copy alone requires a signature" \
+  "${rt_root}/empty-old" "${rt_root}/new" required
+ratchet_case "ratchet: both copies require a signature" \
+  "${rt_root}/old" "${rt_root}/new" required
+ratchet_case "ratchet: a fresh install with neither copy does not require one" \
+  "${rt_root}/empty-old" "${rt_root}/empty-new" not-required
+
+# Lifecycle: a run that publishes a signature on an install armed by an earlier
+# release must leave BOTH copies present. Nothing removes either one.
+lc_root="$(mktemp -d)"; lc_ts="20260801_090000"
+mkdir -p "${lc_root}/old" "${lc_root}/new" "${lc_root}/backups"
+: > "${lc_root}/old/manifest-hmac-required"
+printf '{}' > "${lc_root}/backups/manifest_${lc_ts}.json"
+lc_rc=0
+BACKUP_DIR="${lc_root}/backups" TIMESTAMP="$lc_ts" ENCRYPT=1 \
+HOST_SECRETS_DIR="${lc_root}/old" MANIFEST_HMAC_MARKER="${lc_root}/old/manifest-hmac-required" \
+BACKUP_STATE_DIR="${lc_root}/new" MANIFEST_HMAC_MARKER_DURABLE="${lc_root}/new/manifest-hmac-required" \
+bash -c '
+  set -uo pipefail
+  sign_manifest() { printf "signed\n" > "${1}.hmac"; }
+  '"$PUBLISH_FN"'
+  publish_manifest_signature
+' 2>/dev/null || lc_rc=$?
+if [ "$lc_rc" -eq 0 ] \
+   && [ -e "${lc_root}/old/manifest-hmac-required" ] \
+   && [ -e "${lc_root}/new/manifest-hmac-required" ] \
+   && [ "$(ratchet_answer "${lc_root}/old" "${lc_root}/new")" = required ]; then
+  pass "ratchet: publishing a signature leaves both marker copies in place"
+else
+  printf 'FAIL: publishing a signature did not leave both copies (rc=%s old=%s durable=%s)\n' \
+    "$lc_rc" "$([ -e "${lc_root}/old/manifest-hmac-required" ] && echo yes || echo no)" \
+    "$([ -e "${lc_root}/new/manifest-hmac-required" ] && echo yes || echo no)" >&2
+  fail=1
+fi
+# A state cleaner, a changed HOME, or a differing XDG_STATE_HOME can take the
+# durable copy away. The requirement must survive on the pre-relocation copy.
+rm -f "${lc_root}/new/manifest-hmac-required"
+ratchet_case "ratchet: losing only the durable copy still requires a signature" \
+  "${lc_root}/old" "${lc_root}/new" required
+rm -rf "$rt_root" "$lc_root"
+
 # === Compose wiring ==========================================================
 
 cmp_check() {
@@ -1415,6 +1484,8 @@ cmp_check() {
     printf 'FAIL: %s (pattern: %s)\n' "$1" "$2" >&2; fail=1; fi
 }
 cmp_check "sidecar mounts restore.sh" 'restore\.sh:/usr/local/bin/restore\.sh:ro'
+cmp_check "sidecar mounts the durable state dir, falling back to ./secrets when unrecorded" \
+  '\$\{JARVIS_STATE_DIR:-\./secrets\}:/backup-state:rw'
 cmp_check "sidecar env stamps JARVIS_VERSION (manifest app_version)" 'JARVIS_VERSION: \$\{JARVIS_VERSION'
 cmp_check "entrypoint runs restore.sh on a restore request" \
   'restore_request\.json.*restore\.sh|if \[ -f /backup-trigger/\.restore_request\.json'

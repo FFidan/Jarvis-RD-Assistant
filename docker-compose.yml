@@ -607,6 +607,7 @@ services:
       - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
       - ./secrets:/secrets:ro
       - ./secrets:/host-secrets:rw  # rw: restore installs only the three data-coupled keys; target-host credentials remain unchanged
+      - ${JARVIS_STATE_DIR:-./secrets}:/backup-state:rw  # durable lifecycle state; ./secrets fallback keeps un-migrated installs on the old marker location
       - ./shared/pdf_storage:/pdf-storage:rw  # stable bind root used for PDF backup and crash-safe in-place restore
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears

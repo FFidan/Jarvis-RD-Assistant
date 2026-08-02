@@ -668,6 +668,39 @@ _self_delete_clone() {
   exec bash "$remover"
 }
 
+# _purge_state_dir — tier 4 only: remove the durable lifecycle-state directory this
+# install recorded in .env. Tier 3 deliberately keeps it; that is the signed-restore
+# ratchet surviving `down -v`. Must run before .env is removed, since .env is where
+# the path is recorded.
+#
+# .env is caller-supplied and untrusted, so it is read with sed rather than sourced,
+# and the containment check runs on CANONICAL paths: a prefix glob on the raw value
+# is escapable by traversal, and this is an rm -rf. The namespace root itself is
+# shared by sibling installs and is never a removal target.
+_purge_state_dir() {
+  local state_dir state_canon ns_canon
+  state_dir="$(sed -n 's/^JARVIS_STATE_DIR=//p' "$REPO/.env" 2>/dev/null | head -1)"
+  case "$state_dir" in
+    \"*\") state_dir="${state_dir#\"}"; state_dir="${state_dir%\"}" ;;
+    \'*\') state_dir="${state_dir#\'}"; state_dir="${state_dir%\'}" ;;
+  esac
+  # An install predating the state directory has no line at all; canonicalising an
+  # empty value would yield the current directory, so skip silently.
+  [ -n "$state_dir" ] || return 0
+  state_canon="$(canonical_path_portable "$state_dir")" || state_canon=""
+  ns_canon="$(canonical_path_portable "${XDG_STATE_HOME:-${HOME}/.local/state}/jarvis-research")" || ns_canon=""
+  if [ -n "$state_canon" ] && [ -n "$ns_canon" ] && [ "$state_canon" != "$ns_canon" ]; then
+    case "$state_canon/" in
+      "$ns_canon"/*)
+        # Docker creates a missing bind-mount source as root:root, so removal can
+        # legitimately fail for a host user. Name it; never abort the uninstall.
+        _step "state ${state_canon}" rm -rf -- "$state_canon" \
+          || warn "Could not remove ${state_canon}; remove it manually." ;;
+      *) warn "Refusing to remove ${state_dir}: outside the JARVIS state namespace" ;;
+    esac
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Execution: run the selected tier's steps (highest tier includes the lower).
 # -----------------------------------------------------------------------------
@@ -709,6 +742,7 @@ _run_tier() {
   # Purge: confirmed third-party images, files, registry line, shim, clone.
   if [ "$TIER" -ge 4 ]; then
     for ref in ${TP_CONFIRMED[@]+"${TP_CONFIRMED[@]}"}; do _step "image ${ref}" _rmi_ref "$ref"; done
+    _purge_state_dir
     _step "file ${REPO}/.env"    rm -f  "$REPO/.env"
     _step "file ${REPO}/secrets" rm -rf "$REPO/secrets"
     _step "file ${REPO}/shared"  rm -rf "$REPO/shared"

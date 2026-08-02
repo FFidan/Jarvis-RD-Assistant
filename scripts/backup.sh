@@ -268,6 +268,13 @@ PDF_STORAGE_DIR="${PDF_STORAGE_DIR:-/pdf-storage}"
 # downgrade a later restore back to unsigned.
 HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
 MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+# A durable host state directory outside the checkout, bind-mounted into THIS sidecar
+# only — not into any app container and never under BACKUP_DIR, which is the property
+# the marker's threat model actually needs. It carries a second copy of the marker so
+# the requirement survives a checkout that is re-created or replaced. Installs whose
+# .env predates it mount ./secrets here, making both paths the same directory.
+BACKUP_STATE_DIR="${BACKUP_STATE_DIR:-/backup-state}"
+MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
 TIMESTAMP=""
 RUN_ID=""
 
@@ -909,7 +916,8 @@ write_manifest() {
 # publish_manifest_signature — sign the manifest this run wrote, then arm the ratchet.
 # Deployments with no backup key have nothing to sign with and are skipped here; STEP 2
 # of restore.sh skips the verification symmetrically. The marker is written only after
-# a signature exists, so the requirement can never arm without one.
+# a signature exists, so the requirement can never arm without one. Two independent
+# copies are written and neither is ever removed: the requirement may only be added.
 publish_manifest_signature() {
   local manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
   [ "$ENCRYPT" -eq 1 ] || return 0
@@ -929,6 +937,14 @@ publish_manifest_signature() {
   if [ ! -e "$MANIFEST_HMAC_MARKER" ] && ! : > "$MANIFEST_HMAC_MARKER" 2>/dev/null; then
     echo "[$(date -Iseconds)] FATAL: could not require signed manifests in ${HOST_SECRETS_DIR}" >&2
     return 1
+  fi
+  # Durable second copy. Best-effort by design: during an update the new script runs
+  # inside the OLD container, where /backup-state does not exist yet. A failure here
+  # must never reach finalize_backup -> discard_current_backup, which would destroy
+  # every backup taken in that window.
+  if [ -d "$BACKUP_STATE_DIR" ]; then
+    : > "$MANIFEST_HMAC_MARKER_DURABLE" 2>/dev/null \
+      || echo "[$(date -Iseconds)] WARNING: could not write the durable signed-restore marker at ${MANIFEST_HMAC_MARKER_DURABLE}; the marker in ${HOST_SECRETS_DIR} remains authoritative" >&2
   fi
   return 0
 }

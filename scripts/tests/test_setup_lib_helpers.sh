@@ -3732,6 +3732,95 @@ expect_eq "upsert_env_var never duplicates an existing key" "$got" "1"
 got="$(cd "$UPSERT_DIR"; grep '^JARVIS_API_KEY=' .env)"
 expect_eq "upsert_env_var rewrites the existing value in place" "$got" "JARVIS_API_KEY=feedface"
 
+# === ensure_state_dir (durable lifecycle-state directory) ====================
+# Compose bind-mounts JARVIS_STATE_DIR into the backup sidecar, so the directory
+# this helper creates and the path .env records must always be the same one.
+STATE_HOME="$(mktemp -d "${FIXTURES}/statehome.XXXXXX")"
+new_state_repo() {  # new_state_repo NAME -> a fresh repo dir carrying an .env
+  local dir="${FIXTURES}/${1}"
+  mkdir -p "$dir"
+  printf 'KEEP=1\n' > "${dir}/.env"
+  printf '%s' "$dir"
+}
+
+ESD_REPO="$(new_state_repo esd-fresh)"
+got="$(XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_REPO")"
+recorded="$(sed -n 's/^JARVIS_STATE_DIR=//p' "${ESD_REPO}/.env")"
+expect_eq "ensure_state_dir records the project-scoped state directory" \
+  "$recorded" "${STATE_HOME}/jarvis-research/esd-fresh"
+expect_eq "ensure_state_dir creates that directory mode 700" \
+  "$(stat -c '%a' "$recorded")" "700"
+expect_eq "ensure_state_dir reports the directory it recorded" \
+  "$got" "Recorded durable state directory: ${recorded}"
+XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_REPO" >/dev/null
+expect_eq "ensure_state_dir never writes a second JARVIS_STATE_DIR line" \
+  "$(grep -c '^JARVIS_STATE_DIR=' "${ESD_REPO}/.env")" "1"
+
+# A recorded path that no longer exists — a sibling uninstall, a state cleaner —
+# must be recreated AS RECORDED. Creating the computed path instead leaves
+# compose's real bind source missing, and Docker then creates it root-owned.
+ESD_MOVED="$(new_state_repo esd-moved)"
+MOVED_STATE="${FIXTURES}/moved-state-dir"
+printf 'JARVIS_STATE_DIR=%s\n' "$MOVED_STATE" >> "${ESD_MOVED}/.env"
+XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_MOVED" >/dev/null
+if [ -d "$MOVED_STATE" ] && [ ! -e "${STATE_HOME}/jarvis-research/esd-moved" ]; then
+  pass "ensure_state_dir recreates the recorded path and not the computed one"
+else
+  printf 'FAIL: ensure_state_dir ignored the recorded path (recorded=%s computed=%s)\n' \
+    "$([ -d "$MOVED_STATE" ] && echo present || echo missing)" \
+    "$([ -e "${STATE_HOME}/jarvis-research/esd-moved" ] && echo present || echo missing)" >&2
+  fail=1
+fi
+expect_eq "ensure_state_dir hardens a recreated recorded directory to 700" \
+  "$(stat -c '%a' "$MOVED_STATE")" "700"
+
+# .env values may be quoted; a literal quoted name is not the path compose mounts.
+ESD_QUOTED="$(new_state_repo esd-quoted)"
+QUOTED_STATE="${FIXTURES}/quoted-state-dir"
+printf 'JARVIS_STATE_DIR="%s"\n' "$QUOTED_STATE" >> "${ESD_QUOTED}/.env"
+XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_QUOTED" >/dev/null
+if [ -d "$QUOTED_STATE" ] && [ ! -e "${FIXTURES}/\"quoted-state-dir\"" ]; then
+  pass "ensure_state_dir unquotes a recorded value instead of taking it literally"
+else
+  printf 'FAIL: ensure_state_dir treated a quoted recorded value literally\n' >&2
+  fail=1
+fi
+
+# Two clones on one host must never share a state directory: a purge of the first
+# would otherwise delete the second's signed-restore ratchet.
+ESD_OTHER="$(new_state_repo esd-other-clone)"
+XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_OTHER" >/dev/null
+expect_eq "two clones resolve to different state directories" \
+  "$(sed -n 's/^JARVIS_STATE_DIR=//p' "${ESD_OTHER}/.env")" \
+  "${STATE_HOME}/jarvis-research/esd-other-clone"
+
+# A clone whose sanitized basename is not a valid Compose project fails rather
+# than inventing a shared name — and both callers must survive that failure.
+ESD_BAD="$(new_state_repo _esd-invalid)"
+rc=0
+XDG_STATE_HOME="$STATE_HOME" ensure_state_dir "$ESD_BAD" >/dev/null 2>&1 || rc=$?
+expect_eq "ensure_state_dir fails rather than inventing a project name" "$rc" "1"
+expect_eq "setup.sh calls ensure_state_dir non-fatally at both launcher-install sites" \
+  "$(grep -c '^ *ensure_state_dir "\$SCRIPT_DIR" || warn ' "$SETUP_SCRIPT")" "2"
+
+# The lifecycle CLI must record the directory on both update routes, and on the
+# resume route BEFORE the backup sidecar is recreated — compose reads the value
+# from .env at that moment, so a call placed after it would mount nothing.
+LIFECYCLE_CLI="${SCRIPT_DIR}/../jarvis-research.sh"
+expect_eq "the update command records the state directory on both routes" \
+  "$(grep -c '^ *ensure_state_dir "\$REPO" || warn ' "$LIFECYCLE_CLI")" "2"
+esd_line="$(grep -n '^ *ensure_state_dir "\$REPO" || warn ' "$LIFECYCLE_CLI" | tail -1 | cut -d: -f1)"
+sidecar_line="$(grep -n '_activate_selected_backup_sidecar; then' "$LIFECYCLE_CLI" | head -1 | cut -d: -f1)"
+resume_line="$(grep -n '^_resume_transaction() {' "$LIFECYCLE_CLI" | head -1 | cut -d: -f1)"
+if [ -n "$esd_line" ] && [ -n "$sidecar_line" ] && [ -n "$resume_line" ] \
+   && [ "$resume_line" -lt "$esd_line" ] && [ "$esd_line" -lt "$sidecar_line" ]; then
+  pass "the resumed update records the state directory before recreating the sidecar"
+else
+  printf 'FAIL: state-dir recording is not between the resume entry (%s) and the sidecar recreate (%s): %s\n' \
+    "$resume_line" "$sidecar_line" "$esd_line" >&2
+  fail=1
+fi
+
 # The version and image selector form one identity pair. Their dedicated writer
 # replaces duplicate legacy rows through one final rename and rejects invalid
 # input without changing the file.

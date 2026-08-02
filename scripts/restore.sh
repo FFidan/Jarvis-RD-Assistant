@@ -56,6 +56,11 @@ ROTATION_RESERVATION="${LOCK_DIR}/rotation.reservation"
 # from the host secrets dir instead, which an attacker who only controls BACKUP_DIR
 # cannot touch. Mirrors backup.sh's marker path.
 MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+# The same ratchet, second copy: a durable host state directory outside the checkout,
+# bind-mounted into this sidecar only. Either copy arms the requirement, so a checkout
+# that is replaced or re-created between backup and restore cannot disarm it.
+BACKUP_STATE_DIR="${BACKUP_STATE_DIR:-/backup-state}"
+MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
 # Mirror of backup.sh's domain label; both sides must agree byte-for-byte.
 MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
 # The phrase the operator must type to restore a backup set that has no authenticated
@@ -259,10 +264,11 @@ verify_manifest_signature_with_key() (
 # is present by construction, the archives are the least trusted, and a fresh-host
 # restore is the decisive DR path — so off-host recovery needs a backup set taken by a
 # version that signs. Same-host sets require one once the out-of-band ratchet marker
-# exists.
+# exists — in EITHER of its two locations, since the requirement may only ever be
+# added and a copy missing from one location is not evidence that it was never armed.
 manifest_signature_required() {
   [ "$SOURCE" = "inbox" ] && return 0
-  [ -e "$MANIFEST_HMAC_MARKER" ]
+  [ -e "$MANIFEST_HMAC_MARKER_DURABLE" ] || [ -e "$MANIFEST_HMAC_MARKER" ]
 }
 
 # break_glass_accepted — the ONLY escape from the signature requirement, for the

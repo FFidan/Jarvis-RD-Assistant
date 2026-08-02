@@ -327,7 +327,8 @@ run_un() {
     "STUB_LIFECYCLE_VOLUME_PROJECT=${STUB_LIFECYCLE_VOLUME_PROJECT:-}" \
     "STUB_BACKUP_DIR=$BK" \
     "STUB_FAIL_REQUESTER_STOP_ONCE_FILE=${STUB_FAIL_REQUESTER_STOP_ONCE_FILE:-}" \
-    "HOME=$HOMEDIR" "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$BIN" \
+    "HOME=$HOMEDIR" "XDG_STATE_HOME=$HOMEDIR/.local/state" \
+    "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$BIN" \
     bash "$UNINSTALL" "$@" <<<"$stdin_data" 2>&1
 }
 
@@ -833,6 +834,95 @@ if [ "$rc" -eq 0 ] && has "$out" "not present, skipping: ${APP_REFS[0]}" && [ ! 
   pass "rmi_missing_image_completes_teardown: absent image skipped, teardown finishes (clone removed), exit 0"
 else
   check_fail "rmi_missing_image_completes_teardown: rc=$rc clone=$([ -d "$CLONE" ] && echo present) out=<<<$out>>>"
+fi
+
+# =============================================================================
+# 6b. Purge tier also removes the durable state directory — contained, never
+#     beyond the JARVIS namespace, and never fatal.
+# =============================================================================
+STATE_NS="$HOMEDIR/.local/state/jarvis-research"
+mkdir -p "$STATE_NS"
+
+# state_purge_run [RECORDED_VALUE] -> run a full tier-4 purge with that .env line
+# (omit the argument for a pre-migration install that has no line at all).
+state_purge_run() {
+  local proj
+  new_env
+  [ "$#" -eq 1 ] && printf 'JARVIS_STATE_DIR=%s\n' "$1" >> "$CLONE/.env"
+  proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+  run_un --stdin "$(printf '%s\n%s\nn\nn\nn\nn' "$proj" "$ROOT/statekey.$RANDOM")" \
+    --repo "$CLONE" --tier 4 --yes
+}
+
+IN_NS="$STATE_NS/contained-install"
+mkdir -p "$IN_NS"; : > "$IN_NS/manifest-hmac-required"
+out="$(state_purge_run "$IN_NS")"
+if [ ! -e "$IN_NS" ] && has "$out" "DONE state $IN_NS"; then
+  pass "tier4_removes_contained_state_dir: the recorded state directory is removed"
+else
+  check_fail "tier4_removes_contained_state_dir: still=$([ -e "$IN_NS" ] && echo present) out=<<<$out>>>"
+fi
+
+out="$(state_purge_run /etc)"
+if [ -d /etc ] && has "$out" 'Refusing to remove /etc'; then
+  pass "tier4_refuses_state_dir_outside_namespace: /etc refused and intact"
+else
+  check_fail "tier4_refuses_state_dir_outside_namespace: out=<<<$out>>>"
+fi
+
+# The refusal must survive a value that only LOOKS contained. A prefix match on
+# the RAW string accepts this, and rm -rf then resolves it outside the namespace.
+# The decoy is what the traversal actually reaches, so its survival is the proof.
+DECOY="$ROOT/traversal-decoy"
+mkdir -p "$DECOY"; : > "$DECOY/keep-me"
+TRAVERSAL="$STATE_NS/../../../../traversal-decoy"
+out="$(state_purge_run "$TRAVERSAL")"
+if [ -e "$DECOY/keep-me" ] && has "$out" 'Refusing to remove'; then
+  pass "tier4_refuses_traversal_out_of_namespace: ../-escaping value refused, target intact"
+else
+  check_fail "tier4_refuses_traversal_out_of_namespace: decoy=$([ -e "$DECOY/keep-me" ] && echo present) out=<<<$out>>>"
+fi
+
+# The namespace root itself is shared by sibling installs.
+out="$(state_purge_run "$STATE_NS")"
+if [ -d "$STATE_NS" ] && ! has "$out" "DONE state $STATE_NS"; then
+  pass "tier4_never_removes_the_shared_namespace_root"
+else
+  check_fail "tier4_never_removes_the_shared_namespace_root: out=<<<$out>>>"
+fi
+
+QUOTED_NS="$STATE_NS/quoted-install"
+mkdir -p "$QUOTED_NS"
+out="$(state_purge_run "\"$QUOTED_NS\"")"
+if [ ! -e "$QUOTED_NS" ]; then
+  pass "tier4_unquotes_the_recorded_state_dir: a quoted value resolves to the real path"
+else
+  check_fail "tier4_unquotes_the_recorded_state_dir: out=<<<$out>>>"
+fi
+
+# The normal case for every install that predates the state directory: no line,
+# so no path to contain — and no security-shaped refusal printed at an operator.
+out="$(state_purge_run)"
+if ! has "$out" 'Refusing to remove'; then
+  pass "tier4_pre_migration_install_prints_no_refusal: no JARVIS_STATE_DIR line, no refusal"
+else
+  check_fail "tier4_pre_migration_install_prints_no_refusal: out=<<<$out>>>"
+fi
+
+# Docker creates a missing bind-mount source as root:root, so a host-user removal
+# can legitimately fail. It must be named, never fatal.
+if [ "$(id -u)" -eq 0 ]; then
+  printf 'SKIP: unremovable-state-dir case needs a non-root user\n' >&2
+else
+  STUCK_NS="$STATE_NS/stuck-install"
+  mkdir -p "$STUCK_NS/locked"; : > "$STUCK_NS/locked/held"; chmod 500 "$STUCK_NS/locked"
+  out="$(state_purge_run "$STUCK_NS")"; rc=$?
+  chmod 700 "$STUCK_NS/locked"; rm -rf "$STUCK_NS"
+  if [ "$rc" -eq 0 ] && has "$out" "Could not remove $STUCK_NS"; then
+    pass "tier4_unremovable_state_dir_warns_without_aborting"
+  else
+    check_fail "tier4_unremovable_state_dir_warns_without_aborting: rc=$rc out=<<<$out>>>"
+  fi
 fi
 
 # =============================================================================

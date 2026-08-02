@@ -2509,6 +2509,35 @@ exec "${repo}/scripts/jarvis-research.sh" --repo "$repo" "$@"
 SHIM
 }
 
+# ensure_state_dir [REPO_DIR] -> create the durable lifecycle-state directory and
+# record it in .env as JARVIS_STATE_DIR. Idempotent; never moves existing state;
+# prints one line when it writes something. Compose bind-mounts this path into the
+# backup sidecar, so the mkdir runs unconditionally and BEFORE any early return: a
+# missing bind-mount source is created by Docker as root:root, which a later
+# host-user removal could not unlink. A RECORDED value always wins over the computed
+# one, or compose would mount a path this never created.
+ensure_state_dir() {
+  local repo="${1:-$PWD}" project state_dir recorded
+  recorded="$(sed -n 's/^JARVIS_STATE_DIR=//p' "$repo/.env" 2>/dev/null | head -1)"
+  case "$recorded" in
+    \"*\") recorded="${recorded#\"}"; recorded="${recorded%\"}" ;;
+    \'*\') recorded="${recorded#\'}"; recorded="${recorded%\'}" ;;
+  esac
+  if [ -n "$recorded" ]; then
+    mkdir -p "$recorded" || return 1
+    chmod 700 "$recorded" 2>/dev/null || true
+    return 0
+  fi
+  project="$(_lifecycle_compose_project_name "$repo")" || return 1
+  state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/jarvis-research/${project}"
+  mkdir -p "$state_dir" || return 1
+  chmod 700 "$state_dir" 2>/dev/null || true
+  # upsert_env_var rewrites ./.env through a colocated temp, so it must run with the
+  # repo as the working directory.
+  ( cd "$repo" && upsert_env_var JARVIS_STATE_DIR "$state_dir" ) || return 1
+  printf 'Recorded durable state directory: %s\n' "$state_dir"
+}
+
 # install_cli_shim [REPO_DIR] -> install/refresh the jarvis-research launcher and
 # register REPO_DIR (default: $PWD) at the TOP of the installs registry, so the
 # shim always targets the most recently installed repo. Idempotent: a re-run with
