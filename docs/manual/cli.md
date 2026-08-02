@@ -27,6 +27,9 @@ shell cannot see it.
 | `repair` | Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service. |
 | `owner status` | Show whether instance ownership comes from the host environment or database and whether it resolves to a live administrator. |
 | `owner set <email>` | Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again. |
+| `restore status` | Report what the backup service's last or current restore did: state, current step, error, whether manual follow-up is required, and the safety backup to restore if it is. |
+| `restore legacy <timestamp>` | Restore a backup taken on this host before manifest signing. The set cannot be checked for tampering, so the acceptance phrase must be typed at the prompt. Off-site sets are never eligible. See [Backup & Restore](backup-and-restore.md#if-your-only-surviving-backup-is-an-older-unsigned-one). |
+| `restore request <timestamp>` | Print the ordered steps and the ready-made request for recovering this host from another installation's backup set. It submits nothing. |
 | `restore acknowledge <restore-id>` | After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again. |
 | `register` | Record the current checkout as the managed install and refresh the launcher. |
 | `uninstall [--dry-run] [--tier N] [--keep-data] [--keep-images] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
@@ -162,9 +165,13 @@ previous version and pull those images.
 
 If a data-changing migration already ran, **image rollback alone is not
 schema-safe** — the new database schema stays in place. To return to the
-pre-update state, restore the backup taken before the update (the WebUI Backup
-panel → Restore, or `scripts/restore.sh`); that rolls the database back together
-with the images. See [Backup & Restore](backup-and-restore.md).
+pre-update state, restore the backup taken before the update; that rolls the
+database back together with the images. Use the WebUI Backup panel → Restore,
+and follow it with `jarvis-research restore status`. If the surviving set
+predates manifest signing, `jarvis-research restore legacy <timestamp>` accepts
+it deliberately; to recover from another installation's set,
+`jarvis-research restore request <timestamp>` prints the procedure. See
+[Backup & Restore](backup-and-restore.md).
 
 ### Release-candidate tags are throwaway
 

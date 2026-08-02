@@ -278,6 +278,8 @@ manifest_signature_required() {
 # non-interactive restore can never reach it. It applies ONLY to an ABSENT signature:
 # one that fails to verify is evidence of tampering, not of loss.
 break_glass_accepted() {
+  # Off-host sets are refused unconditionally; break-glass exists only for the disaster where the sole SAME-HOST backup predates signing.
+  [ "$SOURCE" != "inbox" ] || return 1
   [ "${JARVIS_RESTORE_ALLOW_LEGACY:-}" = "1" ] || return 1
   [ -t 0 ] || return 1
   local reply=""

@@ -1033,3 +1033,87 @@ async def test_upload_grant_endpoint_returns_token_once_and_audits(tmp_path, mon
     assert token not in grant_file.read_text()
     audit.assert_awaited_once()
     assert audit.await_args.kwargs["action"] == "backup.upload_grant"
+
+
+_DELETE_STATUS_PATH = "/api/admin/backups/delete-status"
+
+
+async def _get_delete_status(*, admin: bool):
+    """Drive the delete-status route, optionally without an administrator session."""
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    app.state.limiter.enabled = False
+    app.dependency_overrides[verify_api_key] = lambda: None
+    if admin:
+        app.dependency_overrides[require_admin] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get(_DELETE_STATUS_PATH)
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+
+@pytest.mark.asyncio
+async def test_delete_status_parses_the_sidecars_outcome_record(tmp_path, monkeypatch) -> None:
+    """``skipped`` entries are "<timestamp> (<reason>)" strings, not objects."""
+    outcome = tmp_path / ".last_delete.json"
+    outcome.write_text(
+        json.dumps(
+            {
+                "deleted": ["jarvis_20260101_010101.sql.gz"],
+                "skipped": ["20260102_020202 (in-flight restore or update)"],
+                "at": "2026-01-03T04:05:06+00:00",
+                "reason": None,
+                "remaining_restore_points": 2,
+            }
+        )
+    )
+    monkeypatch.setattr(bk, "_LAST_DELETE", outcome)
+
+    resp = await _get_delete_status(admin=True)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "recorded"
+    assert body["deleted"] == ["jarvis_20260101_010101.sql.gz"]
+    assert body["skipped"] == ["20260102_020202 (in-flight restore or update)"]
+    assert body["at"] == "2026-01-03T04:05:06+00:00"
+    assert body["reason"] is None
+    assert body["remaining_restore_points"] == 2
+
+
+@pytest.mark.asyncio
+async def test_delete_status_reports_no_deletions_when_no_prune_has_run(
+    tmp_path, monkeypatch
+) -> None:
+    """A fresh install has no outcome file; that is a state, not a server error."""
+    monkeypatch.setattr(bk, "_LAST_DELETE", tmp_path / "absent.json")
+
+    resp = await _get_delete_status(admin=True)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "no_deletions_recorded"
+    assert body["deleted"] == []
+    assert body["skipped"] == []
+    assert body["remaining_restore_points"] is None
+
+
+@pytest.mark.asyncio
+async def test_delete_status_refuses_a_caller_without_an_admin_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Which restore points were destroyed is admin-only inventory."""
+    outcome = tmp_path / ".last_delete.json"
+    outcome.write_text(json.dumps({"deleted": ["jarvis_20260101_010101.sql.gz"], "skipped": []}))
+    monkeypatch.setattr(bk, "_LAST_DELETE", outcome)
+
+    resp = await _get_delete_status(admin=False)
+
+    assert resp.status_code == 403, resp.text
+    assert "jarvis_20260101_010101" not in resp.text

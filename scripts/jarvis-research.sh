@@ -10,6 +10,9 @@
 #   update [--to <tag>] [--resume <tag>] [--yes]   transactional, DB-safe upgrade
 #   status | start | stop | restart | logs         day-to-day container control
 #   owner status | owner set <email>               owner inspection and recovery
+#   restore status                                 report restore progress
+#   restore legacy <timestamp>                     accept an unsigned same-host set
+#   restore request <timestamp>                    print the off-host restore steps
 #   restore acknowledge <restore-id>               release off-host quarantine
 #   doctor                                          read-only health + preflight
 #   repair                                          bounded, non-destructive recovery
@@ -1950,6 +1953,182 @@ cmd_restore_acknowledge() {
   ok "Acknowledged off-host restore ${restore_id}; outbound access is released."
 }
 
+# -----------------------------------------------------------------------------
+# Recovery: same-host break-glass restore, restore progress, and the off-host
+# request an operator submits by hand. Every one of these reaches the backup
+# service through _backup_volume_compose, whose ownership check is what stops a
+# caller-supplied .env from pointing these commands at a sibling project.
+# -----------------------------------------------------------------------------
+# Paths inside the backup service's trigger volume (see docker-compose.yml).
+RESTORE_REQUEST_PATH="/backup-trigger/.restore_request.json"
+RESTORE_STATUS_PATH="/backup-trigger/.restore_status.json"
+
+_restore_timestamp_or_usage() {
+  local subcommand="$1" timestamp="$2"
+  printf '%s' "$timestamp" | grep -Eq '^[0-9]{8}_[0-9]{6}$' \
+    || usage_error "restore ${subcommand} requires one backup timestamp in YYYYMMDD_HHMMSS form." \
+      "Run: jarvis-research restore ${subcommand} <timestamp>"
+}
+
+_restore_new_request_id() {
+  local id
+  id="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')" \
+    && printf '%s' "$id" | grep -Eq '^[0-9a-f]{32}$' \
+    || return 1
+  printf '%s' "$id"
+}
+
+_restore_request_json() {
+  printf '{"source":"%s","timestamp":"%s","restore_id":"%s","requested_at":"%s"}' \
+    "$1" "$2" "$3" "$4"
+}
+
+# _restore_status_field JSON FIELD — the value of a flat top-level string field,
+# empty when the field is absent or JSON null.
+_restore_status_field() {
+  printf '%s' "$1" | grep -oE "\"${2}\":\"[^\"]*\"" 2>/dev/null | head -1 \
+    | sed -E "s/\"${2}\":\"([^\"]*)\"/\1/" || true
+}
+
+# _restore_status_flag JSON FIELD — whether a flat top-level boolean field is true.
+_restore_status_flag() {
+  printf '%s' "$1" | grep -qE "\"${2}\":true"
+}
+
+_restore_legacy_resume_sidecar() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  _backup_volume_compose start postgres-backup >/dev/null 2>&1 \
+    || warn "The backup service did not restart. Run: jarvis-research start"
+  exit "$rc"
+}
+
+cmd_restore_legacy() {
+  [ "$#" -eq 1 ] \
+    || usage_error "restore legacy takes exactly one backup timestamp." \
+      "Run: jarvis-research restore legacy <timestamp>"
+  local timestamp="$1" restore_id requested_at
+  _restore_timestamp_or_usage legacy "$timestamp"
+
+  _require_docker_daemon
+  info "Restoring backup ${timestamp} on this host without manifest authentication."
+  info "This set carries no signature, so it cannot be checked for tampering: its archive checksums are self-reported."
+  info "The restore asks you to type the acceptance phrase before it changes anything."
+
+  restore_id="$(_restore_new_request_id)" \
+    || die "A restore identifier could not be generated." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    || die "The current time could not be read." \
+      "Nothing was changed. Run: jarvis-research doctor"
+
+  # The backup service polls the trigger volume every five seconds and consumes a
+  # restore request before anything else, so it is stopped BEFORE the request is
+  # written. Writing first hands the set to a non-interactive service that refuses
+  # it and deletes the request out from under this run.
+  _backup_volume_compose stop postgres-backup >/dev/null \
+    || die "The backup service could not be stopped, so no restore was started." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  trap _restore_legacy_resume_sidecar EXIT
+
+  _restore_request_json local "$timestamp" "$restore_id" "$requested_at" \
+    | _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+        -c "cat > ${RESTORE_REQUEST_PATH}" \
+    || die "The restore request could not be written." \
+      "Nothing was changed. Run: jarvis-research doctor"
+
+  # No Compose flag forces a pseudo-terminal, so this run deliberately relies on
+  # stdin auto-detection; a -T here would make the acceptance prompt unreachable
+  # and refuse every unsigned restore. The compose timeout is held unset so
+  # nothing can kill the prompt while the operator is reading it.
+  BACKUP_COMPOSE_TIMEOUT_SECONDS="" \
+    _backup_volume_compose run --rm --no-deps -i \
+      -e JARVIS_RESTORE_ALLOW_LEGACY=1 \
+      --entrypoint /usr/local/bin/restore.sh postgres-backup \
+    || die "The restore did not complete." \
+      "Check what it reported: jarvis-research restore status"
+  ok "The restore of backup ${timestamp} finished."
+  info "Review the outcome with: jarvis-research restore status"
+}
+
+cmd_restore_status() {
+  [ "$#" -eq 0 ] \
+    || usage_error "restore status takes no arguments." \
+      "Run: jarvis-research restore status"
+  _require_docker_daemon
+  local report state step error safety
+  report="$(_backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+    -c "cat ${RESTORE_STATUS_PATH} 2>/dev/null || echo '{}'")" \
+    || die "The stack is not running, so the restore status file cannot be read." \
+      "Start it with: jarvis-research start"
+
+  state="$(_restore_status_field "$report" state)"
+  if [ -z "$state" ]; then
+    info "No restore has been recorded on this installation."
+    return 0
+  fi
+  step="$(_restore_status_field "$report" current_step)"
+  error="$(_restore_status_field "$report" error)"
+  safety="$(_restore_status_field "$report" safety_backup_ts)"
+
+  case "$state" in
+    running) info "A restore is in progress." ;;
+    done)    ok "The last restore completed." ;;
+    failed)  err "The last restore failed." ;;
+    *)       info "The backup service reports restore state '${state}'." ;;
+  esac
+  [ -z "$step" ]  || printf 'Current step:  %s\n' "$step"
+  [ -z "$error" ] || printf 'Error:         %s\n' "$error"
+  if _restore_status_flag "$report" manual_steps_required; then
+    printf 'Manual steps:  required — the restore stopped after it had started changing data.\n'
+    [ -z "$safety" ] \
+      || printf 'Safety backup: %s — restore this point to return to the pre-restore state.\n' "$safety"
+  else
+    printf 'Manual steps:  none.\n'
+    [ -z "$safety" ] || printf 'Safety backup: %s\n' "$safety"
+  fi
+}
+
+cmd_restore_request() {
+  [ "$#" -eq 1 ] \
+    || usage_error "restore request takes exactly one backup timestamp." \
+      "Run: jarvis-research restore request <timestamp>"
+  local timestamp="$1" restore_id requested_at request
+  _restore_timestamp_or_usage request "$timestamp"
+  restore_id="$(_restore_new_request_id)" \
+    || die "A restore identifier could not be generated." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    || die "The current time could not be read." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  request="$(_restore_request_json inbox "$timestamp" "$restore_id" "$requested_at")"
+
+  cat <<REQUEST
+Recovering this host from another installation's backup set is a manual,
+ordered procedure. This command only prints it: nothing was submitted, no file
+was written, and no archive was moved.
+
+1. Copy the complete archive set into the restore inbox:
+
+     docker compose cp ./offsite/. postgres-backup:/restore-inbox/
+
+2. Copy the matching encryption key under its required one-time name:
+
+     docker compose cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
+
+3. Only once both copies are in place, submit the request below. The backup
+   service acts on it within seconds, and an empty inbox fails the restore:
+
+     printf '%s' '${request}' | docker compose exec -T postgres-backup sh -c 'cat > ${RESTORE_REQUEST_PATH}'
+
+Keep the restore identifier ${restore_id}. After the restore you type it back to
+release outbound quarantine:
+
+     jarvis-research restore acknowledge ${restore_id}
+REQUEST
+}
+
 cmd_restore() {
   local restore_command="${1:-}"
   if [ "$#" -gt 0 ]; then
@@ -1957,8 +2136,11 @@ cmd_restore() {
   fi
   case "$restore_command" in
     acknowledge) cmd_restore_acknowledge "$@" ;;
+    legacy)      cmd_restore_legacy "$@" ;;
+    status)      cmd_restore_status "$@" ;;
+    request)     cmd_restore_request "$@" ;;
     *) usage_error "restore: unknown subcommand '${restore_command}'." \
-         "Run: jarvis-research restore acknowledge <restore-id>" ;;
+         "Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)" ;;
   esac
 }
 
@@ -2098,6 +2280,17 @@ Commands:
   owner set <email>  Repair a missing or invalid database owner on this host.
                      A valid owner transfers in Admin Users; OWNER_USER_ID stays
                      host-managed. The email must be typed again to confirm.
+  restore status     Report what the backup service's last or current restore
+                     did, including whether manual follow-up is required.
+  restore legacy <timestamp>
+                     Restore a same-host backup taken before manifest signing.
+                     The set cannot be checked for tampering, so the acceptance
+                     phrase must be typed at the prompt. Off-host sets are never
+                     eligible.
+  restore request <timestamp>
+                     Print the ordered steps and the ready-made request for
+                     recovering this host from another installation's backup
+                     set. It submits nothing.
   restore acknowledge <restore-id>
                      After reviewing restored credentials, release outbound
                      quarantine for that exact off-host restore. The restore ID

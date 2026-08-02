@@ -745,7 +745,10 @@ fi
 #     reload keys while every target-host credential stays authoritative.
 check "lifts maintenance on any clean restore (inbox self-recovers)" \
   '\[ "\$RESTORE_CLEAN" = "1" \] \|\| \[ "\$DROP_STARTED" = "0" \]'
-if grep -Eq '!= "inbox"' "$RESTORE_SCRIPT"; then
+# Scoped to the cleanup handler that owns the gate. Elsewhere in the script an
+# off-host source is legitimately excluded — the unsigned-set override is
+# same-host only — so a whole-file grep would read that refusal as this hold.
+if sed -n '/^_cleanup()/,/^}/p' "$RESTORE_SCRIPT" | grep -Eq '!= "inbox"'; then
   printf 'FAIL: the lift gate still excludes inbox (the self-restart contract removed that hold)\n' >&2
   fail=1
 else
@@ -1476,6 +1479,52 @@ rm -f "${lc_root}/new/manifest-hmac-required"
 ratchet_case "ratchet: losing only the durable copy still requires a signature" \
   "${lc_root}/old" "${lc_root}/new" required
 rm -rf "$rt_root" "$lc_root"
+
+# === Break-glass is same-host only ===========================================
+# The override exists for the disaster where the sole SAME-HOST set predates
+# signing. An off-host set has nothing on the fresh host to check it against, so
+# it is refused outright — and terminal access must not take that refusal back.
+GLASS_FN="$(sed -n '/^break_glass_accepted()/,/^}/p' "$RESTORE_SCRIPT")"
+glass_first="$(printf '%s\n' "$GLASS_FN" | sed -n '2,$p' \
+  | grep -vE '^[[:space:]]*(#|$)' | head -1 | sed -E 's/^[[:space:]]+//')"
+if [ "$glass_first" = '[ "$SOURCE" != "inbox" ] || return 1' ]; then
+  pass "break-glass refuses an off-host source as its very first check"
+else
+  printf 'FAIL: break_glass_accepted does not open with the off-host refusal (first statement: %s)\n' \
+    "$glass_first" >&2
+  fail=1
+fi
+
+# Behavioural proof. The gate also requires a real terminal, so the two cases run
+# under a pseudo-terminal with the acceptance phrase typed: identical input, and
+# only the source differs.
+if command -v script >/dev/null 2>&1; then
+  glass_harness="$(mktemp)"
+  {
+    printf 'set -uo pipefail\n'
+    printf 'BREAK_GLASS_PHRASE="I-ACCEPT-UNVERIFIED-BACKUP"\n'
+    printf '%s\n' "$GLASS_FN"
+    printf 'if break_glass_accepted; then printf "GLASS-ACCEPTED\\n"; else printf "GLASS-REFUSED\\n"; fi\n'
+  } > "$glass_harness"
+  glass_answer() {  # glass_answer <source> -> GLASS-ACCEPTED | GLASS-REFUSED
+    printf 'I-ACCEPT-UNVERIFIED-BACKUP\n' \
+      | SOURCE="$1" JARVIS_RESTORE_ALLOW_LEGACY=1 \
+        script -qec "bash ${glass_harness}" /dev/null 2>/dev/null \
+      | tr -d '\r' | grep -oE 'GLASS-(ACCEPTED|REFUSED)' | tail -1
+  }
+  glass_local="$(glass_answer local)"
+  glass_inbox="$(glass_answer inbox)"
+  if [ "$glass_local" = GLASS-ACCEPTED ] && [ "$glass_inbox" = GLASS-REFUSED ]; then
+    pass "break-glass accepts a typed same-host override and still refuses an off-host one"
+  else
+    printf 'FAIL: break-glass source gate (local=%s inbox=%s; both should differ)\n' \
+      "$glass_local" "$glass_inbox" >&2
+    fail=1
+  fi
+  rm -f "$glass_harness"
+else
+  printf 'SKIP: `script` is unavailable, so the break-glass terminal gate cannot be driven\n' >&2
+fi
 
 # === Compose wiring ==========================================================
 

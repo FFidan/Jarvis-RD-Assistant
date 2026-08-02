@@ -81,6 +81,8 @@ _DELETE_SENTINEL = (
 _RETENTION_CONFIG = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".retention.json"
 )
+# Outcome of the sidecar's last prune run (``scripts/prune.sh`` writes it).
+_LAST_DELETE = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".last_delete.json"
 # The backup sidecar writes an inbox inventory containing names and booleans,
 # without paths or key contents. The application reads it from the existing
 # trigger volume and does not mount the restore inbox.
@@ -459,6 +461,35 @@ class RetentionConfig(BaseModel):
 
     keep_last_n: int | None = Field(default=None, ge=0)
     max_age_days: int | None = Field(default=None, ge=0)
+
+
+class DeleteOutcome(BaseModel):
+    """Outcome of the sidecar's last prune run, read from ``.last_delete.json``.
+
+    Attributes
+    ----------
+    state : {"recorded", "no_deletions_recorded"}
+        Whether an outcome record exists and could be parsed.
+    deleted : list of str
+        Archive filenames the sidecar removed.
+    skipped : list of str
+        Human-readable ``"<timestamp> (<reason>)"`` lines for restore points the
+        sidecar kept. The sidecar writes strings, not structured entries.
+    at : str or None
+        When the prune ran.
+    reason : str or None
+        Why the run refused or limited itself, when it did.
+    remaining_restore_points : int or None
+        Complete restore points still held after the run.
+
+    """
+
+    state: Literal["recorded", "no_deletions_recorded"]
+    deleted: list[str] = []
+    skipped: list[str] = []
+    at: str | None = None
+    reason: str | None = None
+    remaining_restore_points: int | None = None
 
 
 def _classify(name: str) -> str:
@@ -1988,6 +2019,30 @@ async def request_delete_restore_point(
             ),
         ) from exc
     return {"status": "scheduled"}
+
+
+@router.get("/delete-status", response_model=DeleteOutcome, dependencies=[Depends(require_admin)])
+@limiter.limit("30/minute")
+async def delete_status(request: Request) -> DeleteOutcome:
+    """Report what the sidecar's last prune run deleted, skipped, and kept.
+
+    Admin-gated like the backup listing: which restore points were destroyed is
+    inventory, not restore progress, so the restore status bearer cannot read it.
+
+    A missing, unreadable, or malformed outcome file reports
+    ``no_deletions_recorded`` rather than failing — no prune has recorded an
+    outcome on a fresh install.
+    """
+    try:
+        data = json.loads(_LAST_DELETE.read_text())
+    except (OSError, ValueError):
+        return DeleteOutcome(state="no_deletions_recorded")
+    if not isinstance(data, dict):
+        return DeleteOutcome(state="no_deletions_recorded")
+    try:
+        return DeleteOutcome.model_validate({**data, "state": "recorded"})
+    except ValidationError:
+        return DeleteOutcome(state="no_deletions_recorded")
 
 
 @router.get("/retention", response_model=RetentionConfig, dependencies=[Depends(require_admin)])
