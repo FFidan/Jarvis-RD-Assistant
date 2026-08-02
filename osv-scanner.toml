@@ -1,10 +1,8 @@
 # Vulnerability suppressions for the osv-scanner CI job (.github/workflows/security.yml).
 # Keep entries in sync with the pip-audit --ignore-vuln flags in that workflow.
-
-[[IgnoredVulns]]
-id = "GHSA-rrmf-rvhw-rf47"
-reason = "torch CVE-2025-3000: no compatible patched wheel yet (last_affected=2.12.0); re-evaluate at next torch bump"
-
-[[IgnoredVulns]]
-id = "PYSEC-2026-3447"
-reason = "setuptools CVE-2026-59890 (CVSS 6.1, fixed in 83.0.0): torch 2.11.0 requires setuptools<82, so the fix is not installable until torch bumps; setuptools is a build-time dependency only. Re-evaluate at next torch bump."
+#
+# There are currently no suppressions. The two this file used to carry were both
+# tied to torch 2.11.0 and were removed when torch moved to 2.13.0: that release
+# is past the last affected version of GHSA-rrmf-rvhw-rf47, and it no longer caps
+# setuptools below 83.0.0, which is where PYSEC-2026-3447 is fixed. Both scanners
+# now run unsuppressed, so a regression on either one fails the build.
