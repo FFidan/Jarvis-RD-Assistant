@@ -2261,12 +2261,19 @@ def test_an_unencrypted_deployment_skips_verification_symmetrically(tmp_path: Pa
 # --- Break-glass --------------------------------------------------------------------
 
 
+# The override exists for ONE disaster: on this host, signing has arrived (the
+# marker is present, so a signature is required) and the only surviving set
+# predates it. Every case below is therefore same-host with the marker present.
+# An off-host set is refused before the override is even considered, which the
+# last test in this block pins.
+
+
 def test_break_glass_refuses_on_the_environment_variable_alone(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
     out = _gate(
         signed_set,
-        source="inbox",
-        marker=False,
+        source="local",
+        marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed="\n",
     )
@@ -2276,7 +2283,7 @@ def test_break_glass_refuses_on_the_environment_variable_alone(signed_set: Path)
 
 def test_break_glass_refuses_on_the_typed_phrase_alone(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
-    out = _gate(signed_set, source="inbox", marker=False, typed=f"{BREAK_GLASS_PHRASE}\n")
+    out = _gate(signed_set, source="local", marker=True, typed=f"{BREAK_GLASS_PHRASE}\n")
     assert "PROCEED" not in out
     assert "to restore it anyway" not in out, "the prompt must not appear without the override"
 
@@ -2285,8 +2292,8 @@ def test_break_glass_proceeds_with_a_warning_when_both_are_supplied(signed_set: 
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
     out = _gate(
         signed_set,
-        source="inbox",
-        marker=False,
+        source="local",
+        marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed=f"{BREAK_GLASS_PHRASE}\n",
     )
@@ -2298,7 +2305,7 @@ def test_break_glass_never_excuses_a_failed_verification(signed_set: Path) -> No
     (signed_set / f"manifest_{TS}.json.hmac").write_text("0" * 64 + "\n")
     out = _gate(
         signed_set,
-        source="inbox",
+        source="local",
         marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed=f"{BREAK_GLASS_PHRASE}\n",
@@ -2309,6 +2316,21 @@ def test_break_glass_never_excuses_a_failed_verification(signed_set: Path) -> No
 
 def test_break_glass_is_unreachable_without_an_interactive_terminal(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
-    out = _gate(signed_set, source="inbox", marker=False, env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"})
+    out = _gate(signed_set, source="local", marker=True, env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"})
+    assert "PROCEED" not in out
+    assert "no authenticated manifest" in out
+
+
+def test_break_glass_never_accepts_an_off_host_set(signed_set: Path) -> None:
+    """On a fresh host there is nothing to check the archives against, so the
+    override is refused even when both of its halves are supplied."""
+    (signed_set / f"manifest_{TS}.json.hmac").unlink()
+    out = _gate(
+        signed_set,
+        source="inbox",
+        marker=False,
+        env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
+        typed=f"{BREAK_GLASS_PHRASE}\n",
+    )
     assert "PROCEED" not in out
     assert "no authenticated manifest" in out
