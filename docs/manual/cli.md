@@ -29,7 +29,7 @@ shell cannot see it.
 | `owner set <email>` | Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again. |
 | `restore acknowledge <restore-id>` | After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again. |
 | `register` | Record the current checkout as the managed install and refresh the launcher. |
-| `uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
+| `uninstall [--dry-run] [--tier N] [--keep-data] [--keep-images] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
 | `version` | Print the command name and the installed `JARVIS_VERSION`. |
 | `help` | Print usage. |
 
@@ -217,13 +217,26 @@ jarvis-research uninstall --dry-run --all
 | `--dry-run` | Enumerate everything the chosen tier would remove and exit without changing anything. |
 | `--tier N` | Run tier `N` (1–4) directly instead of the interactive menu. |
 | `--keep-data` | Cap the run at tier 2, so the data volumes and on-disk files are always preserved. |
-| `--all` | Select tier 4 (full purge). |
-| `--yes` | Skip the ordinary per-tier `[y/N]` prompt. Requires an explicit `--tier N` (or `--all`). |
+| `--keep-images` | Remove everything the selected tier covers **except images**: no application image is removed, no third-party image is confirmed or removed, and the plan lists none. Because no image ref has to be built, the run also proceeds when the installed version in `.env` is missing or invalid — which is otherwise a refusal at tier 2 and above. |
+| `--all` | Select tier 4 (full purge). It selects a tier and nothing else: the ordinary prompts below still run. |
+| `--yes` | Skip the two ordinary `[y/N]` prompts (the proceed confirmation and, at tier 3 and above, the backup offer). Requires an explicit `--tier N` (or `--all`). |
+
+### What a purge asks, in order
+
+A tier-4 run asks two ordinary `[y/N]` prompts and then three mandatory gates:
+
+1. Proceed with this uninstall? (ordinary — suppressed by `--yes`)
+2. Capture a backup before deleting the volumes? (ordinary, and only when the
+   stack is running — suppressed by `--yes`)
+3. Type the compose project name. (mandatory)
+4. Export the backup encryption key, or type the acknowledgement phrase. (mandatory)
+5. Confirm each third-party image. (mandatory; not asked under `--keep-images`,
+   which removes none of them)
 
 ### The destructive gates require typed confirmation
 
-`--yes` and `--all` skip only the ordinary confirmation. They can never satisfy the
-destructive gates, each of which reads a typed confirmation from stdin:
+`--yes` skips only the two ordinary confirmations. Neither it nor `--all` can
+satisfy the mandatory gates, each of which reads a typed confirmation from stdin:
 
 - **Tier 3** requires typing the compose project name before any volume is deleted.
   When the stack is running, an interactive run first offers to take a backup
@@ -239,7 +252,12 @@ destructive gates, each of which reads a typed confirmation from stdin:
   individually, since those images may be shared with other projects on the host.
 
 A run with no controlling terminal (closed stdin) therefore cannot complete tier 3
-or tier 4 — the typed gates refuse and the install is left untouched.
+or tier 4 — the install is left untouched. **Mind the exit code when you script
+this:** without `--yes` the run stops at the proceed confirmation, prints
+`Aborted; nothing was done.` and exits **0**, because declining is not an error.
+With `--yes` it reaches a mandatory typed gate, which refuses and exits 1. A
+wrapper that only checks the exit status will read the first case as a completed
+uninstall, so check the output — or pass `--yes` and drive the typed gates.
 
 ### When Docker is not running
 

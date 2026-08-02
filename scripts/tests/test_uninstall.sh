@@ -663,8 +663,8 @@ new_env
 printf 'JARVIS_VERSION=not-a-version\nTORCH_VARIANT_SUFFIX=-cuda\n' > "$CLONE/.env"
 out="$(run_un --repo "$CLONE" --dry-run --tier 2 --yes)"; rc=$?
 if [ "$rc" -ne 0 ] && has "$out" 'application version is missing or invalid' \
-   && ! has "$out" '^PLAN '; then
-  pass "invalid_application_version_refuses_before_uninstall_plan"
+   && has "$out" 're-run with --keep-images' && ! has "$out" '^PLAN '; then
+  pass "invalid_application_version_refuses_before_uninstall_plan: refusal names the image-free alternative"
 else
   check_fail "invalid_application_version_refusal: rc=$rc out=<<<$out>>>"
 fi
@@ -802,26 +802,32 @@ else
   check_fail "purge_key_export_resolves_outside_symlink_into_clone_without_gnu_realpath: rc=$rc out=<<<$out>>>"
 fi
 
-# --all with a closed stdin cannot satisfy the typed purge gate -> refuse.
+# --all --yes with a closed stdin cannot satisfy the typed purge gate -> refuse.
+# --yes is what suppresses the ordinary prompts; --all only selects the tier.
 new_env
-out="$(run_un --repo "$CLONE" --all)"; rc=$?   # empty stdin
-if [ "$rc" -ne 0 ] && [ -f "$CLONE/secrets/backup_encrypt_key.txt" ] && ! log_has 'rmi -f postgres'; then
+out="$(run_un --repo "$CLONE" --all --yes)"; rc=$?   # empty stdin
+if [ "$rc" -ne 0 ] && [ -f "$CLONE/secrets/backup_encrypt_key.txt" ] && ! log_has 'rmi -f postgres' \
+   && ! has "$out" 'Proceed with'; then
   pass "yes_all_still_requires_typed_purge_confirmation: closed stdin -> refuse, secrets intact"
 else
-  check_fail "yes_all_still_requires_typed_purge_confirmation: rc=$rc secrets=$([ -f "$CLONE/secrets/backup_encrypt_key.txt" ] && echo yes)"
+  check_fail "yes_all_still_requires_typed_purge_confirmation: rc=$rc secrets=$([ -f "$CLONE/secrets/backup_encrypt_key.txt" ] && echo yes) out=<<<$out>>>"
 fi
 
-# --all never auto-confirms the per-image third-party removals: with the typed
-# gates satisfied but the confirms hitting EOF, no third-party image is removed.
+# --all never auto-confirms the per-image third-party removals: with the ordinary
+# and typed gates satisfied but the confirms hitting EOF, no third-party image is
+# removed — and the ordinary proceed prompt comes before the typed project name.
 new_env
 proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
 EXPORT2="$ROOT/exported2.$RANDOM.key"
-out="$(run_un --stdin "$(printf '%s\n%s' "$proj" "$EXPORT2")" --repo "$CLONE" --all)"; rc=$?
+out="$(run_un --stdin "$(printf 'y\n%s\n%s' "$proj" "$EXPORT2")" --repo "$CLONE" --all)"; rc=$?
+proceed_idx="$(printf '%s\n' "$out" | grep -n 'Proceed with' | head -1 | cut -d: -f1)"
+typed_idx="$(printf '%s\n' "$out" | grep -n 'Type the compose project name' | head -1 | cut -d: -f1)"
 if ! printf '%s\n' "$(cat "$DOCKER_LOG")" | grep -qE 'rmi -f (postgres|ollama|qdrant|caddy)' \
-   && has "$out" 'Keeping shared third-party'; then
-  pass "yes_all_never_skips_third_party_image_confirms: unconfirmed third-party images kept, named"
+   && has "$out" 'Keeping shared third-party' \
+   && [ -n "$proceed_idx" ] && [ -n "$typed_idx" ] && [ "$proceed_idx" -lt "$typed_idx" ]; then
+  pass "yes_all_never_skips_third_party_image_confirms: proceed prompt precedes the typed gate, unconfirmed images kept"
 else
-  check_fail "yes_all_never_skips_third_party_image_confirms: log=$(grep rmi "$DOCKER_LOG"); out=<<<$out>>>"
+  check_fail "yes_all_never_skips_third_party_image_confirms: proceed=$proceed_idx typed=$typed_idx log=$(grep rmi "$DOCKER_LOG"); out=<<<$out>>>"
 fi
 
 # a missing image during rmi (partial prior run, or a declared-but-never-pulled
@@ -923,6 +929,151 @@ else
   else
     check_fail "tier4_unremovable_state_dir_warns_without_aborting: rc=$rc out=<<<$out>>>"
   fi
+fi
+
+# =============================================================================
+# 6c. --all selects a tier without answering any prompt; --keep-images finishes a
+#     teardown without touching images; the teardown reports its own ending.
+# =============================================================================
+# --all alone restores both ordinary prompts (proceed, then the backup offer)
+# ahead of the unchanged mandatory gates.
+new_env
+proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+EXPORT_ALL="$ROOT/exported-all.$RANDOM.key"
+out="$(STUB_STACK_UP=1 run_un --stdin "$(printf 'y\ny\n%s\n%s\nn\nn\nn\nn' "$proj" "$EXPORT_ALL")" \
+  --repo "$CLONE" --all)"; rc=$?
+backup_line="$(grep 'compose .* run ' "$DOCKER_LOG" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] && has "$out" 'Capture a backup with scripts/backup.sh' \
+   && printf '%s' "$backup_line" | grep -q -- '--entrypoint /usr/local/bin/backup.sh' \
+   && [ ! -d "$CLONE" ]; then
+  pass "all_alone_offers_a_backup_before_deleting_the_volumes"
+else
+  check_fail "all_alone_offers_a_backup_before_deleting_the_volumes: rc=$rc backup=<<<$backup_line>>> out=<<<$out>>>"
+fi
+
+# The exit semantics of a non-interactive bare --all: it aborts at the proceed
+# confirmation and exits 0, so a wrapper reading $? sees a run that did nothing.
+new_env
+out="$(run_un --repo "$CLONE" --all)"; rc=$?   # empty stdin
+if [ "$rc" -eq 0 ] && has "$out" 'Aborted; nothing was done' \
+   && [ -f "$CLONE/secrets/backup_encrypt_key.txt" ] && ! log_has 'rmi ' \
+   && ! log_has 'compose .* down'; then
+  pass "all_with_closed_stdin_aborts_at_the_proceed_confirm_and_exits_zero"
+else
+  check_fail "all_with_closed_stdin_aborts_at_the_proceed_confirm_and_exits_zero: rc=$rc log=$(cat "$DOCKER_LOG") out=<<<$out>>>"
+fi
+
+# --keep-images bypasses the version refusal. The version stays unresolved, so the
+# run must still reach its gates: a preview that only hid the heading would leave
+# the image lookup's failure as the preview's own status and end the run silently.
+new_env
+proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+EXPORT_KI="$ROOT/exported-keepimages.$RANDOM.key"
+printf 'JARVIS_VERSION=not-a-version\nTORCH_VARIANT_SUFFIX=-cuda\n' > "$CLONE/.env"
+out="$(run_un --stdin "$(printf '%s\n%s\n' "$proj" "$EXPORT_KI")" \
+  --repo "$CLONE" --tier 4 --keep-images --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && ! has "$out" 'application version is missing or invalid'; then
+  pass "keep_images_bypasses_the_version_refusal: an unresolvable version no longer stops the teardown"
+else
+  check_fail "keep_images_bypasses_the_version_refusal: rc=$rc out=<<<$out>>>"
+fi
+if has "$out" 'Type the compose project name' && [ ! -d "$CLONE" ]; then
+  pass "keep_images_without_a_resolvable_version_reaches_the_gates_and_completes"
+else
+  check_fail "keep_images_without_a_resolvable_version_reaches_the_gates_and_completes: rc=$rc clone=$([ -d "$CLONE" ] && echo present) out=<<<$out>>>"
+fi
+
+# With a perfectly resolvable version, --keep-images still removes no image, plans
+# none, and asks no third-party confirmation.
+new_env
+proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+EXPORT_KI2="$ROOT/exported-keepimages2.$RANDOM.key"
+out="$(run_un --stdin "$(printf '%s\n%s\n' "$proj" "$EXPORT_KI2")" \
+  --repo "$CLONE" --tier 4 --keep-images --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && ! log_has 'rmi '; then
+  pass "keep_images_removes_no_image: neither application nor third-party refs reach docker rmi"
+else
+  check_fail "keep_images_removes_no_image: rc=$rc log=$(cat "$DOCKER_LOG") out=<<<$out>>>"
+fi
+if [ "$rc" -eq 0 ] && ! has "$out" 'application images:'; then
+  pass "keep_images_previews_no_application_images"
+else
+  check_fail "keep_images_previews_no_application_images: rc=$rc out=<<<$out>>>"
+fi
+if [ "$rc" -eq 0 ] && ! has "$out" 'Remove third-party image'; then
+  pass "keep_images_asks_no_third_party_image_confirmation"
+else
+  check_fail "keep_images_asks_no_third_party_image_confirmation: rc=$rc out=<<<$out>>>"
+fi
+if [ "$rc" -eq 0 ] && ! has "$out" 'third-party images' && has "$out" '  files: '; then
+  pass "keep_images_previews_no_third_party_images_but_still_previews_files"
+else
+  check_fail "keep_images_previews_no_third_party_images_but_still_previews_files: rc=$rc out=<<<$out>>>"
+fi
+
+# Dry-run parity: the preview may never promise an image removal the real run skips.
+new_env
+out="$(run_un --repo "$CLONE" --dry-run --all --keep-images)"; rc=$?
+if [ "$rc" -eq 0 ] && has "$out" '^PLAN file ' && ! has "$out" '^PLAN image '; then
+  pass "keep_images_dry_run_plans_no_image_removal"
+else
+  check_fail "keep_images_dry_run_plans_no_image_removal: rc=$rc out=<<<$out>>>"
+fi
+
+# --keep-images is an image switch, never a containment switch: the Compose
+# ownership refusal must be identical with and without it.
+new_env
+out="$(STUB_REVERIFY_FOREIGN=1 run_un --repo "$CLONE" --tier 2 --yes)"; plain_rc=$?
+plain_refusal="$(printf '%s\n' "$out" | grep -F -A1 'Compose ownership changed before teardown' || true)"
+plain_down="$(grep -c 'compose .* down' "$DOCKER_LOG" 2>/dev/null || true)"
+new_env
+out="$(STUB_REVERIFY_FOREIGN=1 run_un --repo "$CLONE" --tier 2 --keep-images --yes)"; keep_rc=$?
+keep_refusal="$(printf '%s\n' "$out" | grep -F -A1 'Compose ownership changed before teardown' || true)"
+keep_down="$(grep -c 'compose .* down' "$DOCKER_LOG" 2>/dev/null || true)"
+if [ "$plain_rc" -ne 0 ] && [ "$keep_rc" -eq "$plain_rc" ] && [ -n "$plain_refusal" ] \
+   && [ "$keep_refusal" = "$plain_refusal" ] && [ "$plain_down" -eq 0 ] && [ "$keep_down" -eq 0 ]; then
+  pass "keep_images_leaves_the_compose_ownership_refusal_identical"
+else
+  check_fail "keep_images_leaves_the_compose_ownership_refusal_identical: plain_rc=$plain_rc keep_rc=$keep_rc plain=<<<$plain_refusal>>> keep=<<<$keep_refusal>>> downs=$plain_down/$keep_down"
+fi
+
+# The teardown execs a remover as its last act, so the remover's own output is the
+# only place the operator can learn whether the clone actually went away.
+new_env
+proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+EXPORT_R="$ROOT/exported-remover.$RANDOM.key"
+out="$(run_un --stdin "$(printf '%s\n%s\nn\nn\nn\nn' "$proj" "$EXPORT_R")" \
+  --repo "$CLONE" --tier 4 --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -d "$CLONE" ] \
+   && has "$out" "Removing the installation directory $CLONE" \
+   && has "$out" "Uninstall complete: $CLONE removed."; then
+  pass "tier4_announces_the_clone_removal_and_reports_it_done"
+else
+  check_fail "tier4_announces_the_clone_removal_and_reports_it_done: rc=$rc clone=$([ -d "$CLONE" ] && echo present) out=<<<$out>>>"
+fi
+
+# A clone the remover cannot delete must say so rather than claim completion.
+if [ "$(id -u)" -eq 0 ]; then
+  printf 'SKIP: undeletable-clone case needs a non-root user\n' >&2
+else
+  new_env
+  RO_PARENT="$ROOT/readonly-parent.$RANDOM"
+  mkdir -p "$RO_PARENT"
+  mv "$CLONE" "$RO_PARENT/clone"
+  CLONE="$RO_PARENT/clone"
+  proj="$(basename "$CLONE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+  EXPORT_RF="$ROOT/exported-remover-fail.$RANDOM.key"
+  chmod 500 "$RO_PARENT"
+  out="$(run_un --stdin "$(printf '%s\n%s\nn\nn\nn\nn' "$proj" "$EXPORT_RF")" \
+    --repo "$CLONE" --tier 4 --yes)"; rc=$?
+  chmod 700 "$RO_PARENT"
+  if [ -d "$CLONE" ] && has "$out" "WARNING: could not fully remove $CLONE" \
+     && ! has "$out" 'Uninstall complete'; then
+    pass "tier4_remover_warns_when_the_clone_survives"
+  else
+    check_fail "tier4_remover_warns_when_the_clone_survives: rc=$rc clone=$([ -d "$CLONE" ] && echo present) out=<<<$out>>>"
+  fi
+  rm -rf "$RO_PARENT"
 fi
 
 # =============================================================================

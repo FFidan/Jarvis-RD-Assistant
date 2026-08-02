@@ -206,9 +206,15 @@ tier and confirms before acting. Preview the full plan first:
 jarvis-research uninstall --dry-run --all   # enumerate a full teardown, change nothing
 ```
 
-Data and purge tiers are irreversible. Their typed confirmations cannot be
-bypassed by `--yes`, and a purge offers to export the backup encryption key
-first. Read [Uninstalling](docs/manual/cli.md#uninstalling) before selecting one.
+Data and purge tiers are irreversible. `--all` only selects the purge tier: the
+ordinary confirmation and the backup offer still run, and only `--yes` suppresses
+those two. The typed confirmations cannot be bypassed by either flag, and a purge
+offers to export the backup encryption key first. `--keep-images` removes
+everything the tier covers except images, which also lets a teardown finish when
+the recorded version cannot be read. A non-interactive run without `--yes` stops
+at the first confirmation and exits 0 having changed nothing, so check its output
+rather than only its exit status. Read
+[Uninstalling](docs/manual/cli.md#uninstalling) before selecting a tier.
 
 ## Security
 

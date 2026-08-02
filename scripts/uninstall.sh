@@ -15,9 +15,11 @@
 # mutation. Every deletion names its exact resource — there is no bulk `prune`.
 #
 # Flags: --dry-run (enumerate only), --tier N, --yes (skip ordinary [y/N] prompts
-# only), --keep-data (cap at tier 2), --all (tier 4). The destructive gates — the
-# data project-name entry, the purge phrase, the per-image third-party confirms —
-# stay mandatory interactive prompts that --yes/--all can never satisfy.
+# only), --keep-data (cap at tier 2), --all (tier 4), --keep-images (remove
+# everything the selected tier covers except images, so a teardown still finishes
+# when the installed version cannot be resolved). The destructive gates — the data
+# project-name entry, the purge phrase, the per-image third-party confirms — stay
+# mandatory interactive prompts that --yes/--all can never satisfy.
 #
 # Exit codes: 0 ok · 1 refused/failed · 2 usage · 3 environment (no docker).
 set -euo pipefail
@@ -47,14 +49,15 @@ TIER_NAME=(unused stop app data purge)
 # -----------------------------------------------------------------------------
 # Argument parsing.
 # -----------------------------------------------------------------------------
-DRY_RUN=0; SKIP_ORDINARY=0; KEEP_DATA=0; TIER=0; REPO_OVERRIDE=""
+DRY_RUN=0; SKIP_ORDINARY=0; KEEP_DATA=0; KEEP_IMAGES=0; TIER=0; REPO_OVERRIDE=""
 KEY_EXPORT_TARGET=""; TP_CONFIRMED=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)   DRY_RUN=1; shift ;;
     --yes|-y)    SKIP_ORDINARY=1; shift ;;
     --keep-data) KEEP_DATA=1; shift ;;
-    --all)       TIER=4; SKIP_ORDINARY=1; shift ;;
+    --keep-images) KEEP_IMAGES=1; shift ;;
+    --all)       TIER=4; shift ;;
     --tier)      TIER="${2:-}"; shift 2 ;;
     --tier=*)    TIER="${1#--tier=}"; shift ;;
     --repo)      REPO_OVERRIDE="${2:-}"; shift 2 ;;
@@ -449,10 +452,12 @@ if [ "$KEEP_DATA" -eq 1 ] && [ "$TIER" -gt 2 ]; then
   TIER=2
 fi
 
-if [ "$TIER" -ge 2 ]; then
+# --keep-images skips every image removal, so an unresolvable version must not
+# stop a teardown that is no longer going to use it.
+if [ "$TIER" -ge 2 ] && [ "$KEEP_IMAGES" -ne 1 ]; then
   if ! JARVIS_APP_VERSION="$(_resolve_installed_app_version)"; then
     die "The installed application version is missing or invalid." \
-        "Set JARVIS_VERSION in ${REPO}/.env to a valid version, then re-run the uninstall."
+        "Set JARVIS_VERSION in ${REPO}/.env to a valid version and re-run, or re-run with --keep-images to remove everything except images."
   fi
 fi
 
@@ -474,10 +479,17 @@ _step() {
 _preview() {
   info "Uninstall plan for ${REPO} (tier ${TIER} — ${TIER_NAME[$TIER]}):"
   printf '  containers + network: docker compose down%s\n' "$([ "$TIER" -ge 3 ] && printf -- ' --volumes')" >&2
-  if [ "$TIER" -ge 2 ]; then printf '  application images:\n' >&2; _jarvis_image_refs | sed 's/^/    /' >&2; fi
+  # The whole branch is skipped under --keep-images, heading included: with no
+  # resolved version _jarvis_image_refs fails, and under pipefail that failure
+  # would become _preview's status and end the run without a message.
+  if [ "$TIER" -ge 2 ] && [ "$KEEP_IMAGES" -ne 1 ]; then printf '  application images:\n' >&2; _jarvis_image_refs | sed 's/^/    /' >&2; fi
   if [ "$TIER" -ge 3 ]; then printf '  data volumes (DELETED — irreversible):\n' >&2; _project_volumes | sed 's/^/    /' >&2; fi
   if [ "$TIER" -ge 4 ]; then
-    printf '  third-party images (each confirmed individually):\n' >&2; _third_party_image_pins | sed 's/^/    /' >&2
+    # Under --keep-images none of these is confirmed or removed, so listing them
+    # would promise a removal the run will not perform.
+    if [ "$KEEP_IMAGES" -ne 1 ]; then
+      printf '  third-party images (each confirmed individually):\n' >&2; _third_party_image_pins | sed 's/^/    /' >&2
+    fi
     printf '  files: %s/.env, %s/secrets, %s/shared, and the clone directory\n' "$REPO" "$REPO" "$REPO" >&2
   fi
 }
@@ -567,7 +579,8 @@ _run_gates() {
   fi
   if [ "$TIER" -ge 4 ]; then
     _purge_key_gate
-    _collect_third_party_confirms
+    # Confirming images that --keep-images will not remove only misleads.
+    if [ "$KEEP_IMAGES" -ne 1 ]; then _collect_third_party_confirms; fi
   fi
 }
 
@@ -658,10 +671,14 @@ _remove_shim_if_last() {
 _self_delete_clone() {
   local target="$1" remover
   remover="$(mktemp)"
+  info "Removing the installation directory ${target}. Your shell is still inside it - run: cd ~"
   {
     printf '#!/usr/bin/env bash\n'
     printf 'cd / 2>/dev/null || true\n'
-    printf 'rm -rf -- %q\n' "$target"
+    # The remover inherits this stdout, so its verdict reaches the operator's
+    # terminal after the exec — the only place the outcome can still be reported.
+    printf 'if rm -rf -- %q; then printf "Uninstall complete: %%s removed.\\n" %q; else printf "WARNING: could not fully remove %%s - remove it manually.\\n" %q; fi\n' \
+      "$target" "$target" "$target"
     printf 'rm -f -- %q\n' "$remover"
   } > "$remover"
   chmod +x "$remover"
@@ -736,12 +753,15 @@ _run_tier() {
     _step "lifecycle-state-clear" _clear_retained_uninstall_lifecycle
   fi
   # Application images by exact ref (an absent image is skipped, never fatal).
-  if [ "$TIER" -ge 2 ]; then
+  if [ "$TIER" -ge 2 ] && [ "$KEEP_IMAGES" -ne 1 ]; then
     while IFS= read -r ref; do [ -n "$ref" ] && _step "image ${ref}" _rmi_ref "$ref"; done < <(_jarvis_image_refs)
   fi
-  # Purge: confirmed third-party images, files, registry line, shim, clone.
+  # Purge: confirmed third-party images, files, registry line, shim, clone. Only
+  # the image loop answers to --keep-images; everything below it still runs.
   if [ "$TIER" -ge 4 ]; then
-    for ref in ${TP_CONFIRMED[@]+"${TP_CONFIRMED[@]}"}; do _step "image ${ref}" _rmi_ref "$ref"; done
+    if [ "$KEEP_IMAGES" -ne 1 ]; then
+      for ref in ${TP_CONFIRMED[@]+"${TP_CONFIRMED[@]}"}; do _step "image ${ref}" _rmi_ref "$ref"; done
+    fi
     _purge_state_dir
     _step "file ${REPO}/.env"    rm -f  "$REPO/.env"
     _step "file ${REPO}/secrets" rm -rf "$REPO/secrets"
