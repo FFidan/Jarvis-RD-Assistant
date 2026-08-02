@@ -22,14 +22,14 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
-    assert changelog.count("## v1.2.2 (2026-07-31)") == 1
+    assert changelog.count("## v1.2.3 (2026-08-02)") == 1
+    assert "## v1.2.2 (2026-07-31)" in changelog
     assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
-    assert "## v1.1.3 (2026-07-19)" in changelog
+    assert changelog.index("## v1.2.3") < changelog.index("## v1.2.2")
     assert changelog.index("## v1.2.2") < changelog.index("## v1.2.1")
     assert changelog.index("## v1.2.1") < changelog.index("## v1.2.0")
     assert changelog.index("## v1.2.0") < changelog.index("## v1.1.3")
-    assert changelog.index("## v1.1.3") < changelog.index("## v1.1.2")
 
 
 def test_roadmap_lists_the_export_slice_only_once() -> None:
