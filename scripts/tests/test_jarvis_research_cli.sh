@@ -2178,11 +2178,16 @@ else
   check_fail "restore status stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
+# A restore replays into a RUNNING database, so a stopped stack is refused at the
+# start, by name, and nothing is stopped or written on the way out.
 new_env; register_repo
 STUB_STACK_DOWN=1
 out="$(run_cli restore legacy 20260101_010101)"; rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'compose stop postgres-backup' "$STUB_LOG"; then
-  pass "restore_legacy_is_reachable_when_the_database_is_not_running"
+if [ "$rc" -ne 0 ] \
+   && has "$out" 'database is not running' \
+   && has "$out" 'jarvis-research start' \
+   && ! grep -q 'compose stop postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_refuses_by_name_when_the_database_is_not_running"
 else
   check_fail "restore legacy stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi

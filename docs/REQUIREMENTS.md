@@ -57,7 +57,7 @@ bash scripts/check-python-deps.sh            # verify parity
 ```
 
 Groups: `jarvis-common` (shared), `paper-ingestion`, `paper-ingestion-optional`,
-`learning-engine`, `telegram-bot` (plus `-cpu` conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned `>=0.136.1,<0.141.0`.
+`learning-engine`, `telegram-bot` (plus `-cpu` conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned `>=0.137.0,<0.141.0`.
 
 Frontend (`frontend/package.json`): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,

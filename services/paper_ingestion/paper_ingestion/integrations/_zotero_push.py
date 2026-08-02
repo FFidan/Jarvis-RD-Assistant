@@ -18,6 +18,10 @@ from paper_ingestion.integrations._zotero_config import (
 
 logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
 
+# A push is a handful of Zotero API calls; anything waiting longer than this is
+# queued behind a stuck holder and is better failed than left holding a slot.
+_PUSH_LOCK_TIMEOUT_SECONDS = 60
+
 
 @asynccontextmanager
 async def _session_push_lock(conn: Any, paper_id: int, owner_id: int):
@@ -36,11 +40,20 @@ async def _session_push_lock(conn: Any, paper_id: int, owner_id: int):
     has already failed in that case), which is acceptable.
     """
     key = _kind_lock_key(f"zotero.push:{paper_id}:{owner_id}")
-    await conn.execute("SELECT pg_advisory_lock($1)", key)
+    # Bounded like every other blocking advisory wait in the service: an
+    # unbounded one holds a pooled connection and a worker slot for as long as
+    # the holder runs. The lock is taken outside a transaction, so SET LOCAL
+    # would be a no-op and the outer finally resets the session setting - which
+    # must also happen on the path where the acquire itself timed out.
+    await conn.execute(f"SET lock_timeout = '{int(_PUSH_LOCK_TIMEOUT_SECONDS)}s'")
     try:
-        yield
+        await conn.execute("SELECT pg_advisory_lock($1)", key)
+        try:
+            yield
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1)", key)
     finally:
-        await conn.execute("SELECT pg_advisory_unlock($1)", key)
+        await conn.execute("SET lock_timeout = DEFAULT")
 
 
 async def _resolve_project_collection_keys(

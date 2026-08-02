@@ -262,6 +262,19 @@ async def data_purge_task(app: Any) -> None:
                         qdrant_vectors_deleted[uid] = purge_counts.deleted
                         qdrant_vectors_redacted[uid] = purge_counts.redacted
                         qdrant_points_residual[uid] = purge_counts.residual_points
+                        if purge_counts.residual_points:
+                            # The two stores disagree: points still carry this
+                            # identifier. Hard-deleting the row now would strand
+                            # them with no row left to attribute or retry from,
+                            # so the row stays soft-deleted and the next cycle
+                            # tries again. Measuring this without acting on it
+                            # would leave identifiable vectors behind a job that
+                            # reported success.
+                            qdrant_errors.append(
+                                f"uid={uid}: {purge_counts.residual_points} point(s)"
+                                " still carry this user after the purge"
+                            )
+                            failed_uids.add(uid)
                     except Exception as exc:
                         logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
                         qdrant_errors.append(f"uid={uid}: {exc!r}")

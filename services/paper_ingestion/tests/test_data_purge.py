@@ -107,3 +107,53 @@ async def test_purge_qdrant_is_idempotent_once_the_user_is_gone():
     counts = await data_purge._purge_qdrant_for_user(qdrant, uid=42, protected_paper_ids=[101])
 
     assert counts == data_purge.QdrantPurgeCounts(deleted=0, redacted=0, residual_points=0)
+
+
+def _expired_row(uid: int) -> dict[str, int]:
+    return {"id": uid}
+
+
+async def _run_task_with_residual(residual: int) -> tuple[AsyncMock, list]:
+    """Drive the purge job for one expired user whose purge leaves *residual* points."""
+    from types import SimpleNamespace
+
+    from jarvis_common.testing import make_pool_and_conn
+
+    pool, conn = make_pool_and_conn()
+    # First fetch: the expired users. Second: the protected papers.
+    conn.fetch = AsyncMock(side_effect=[[_expired_row(42)], []])
+    conn.execute = AsyncMock(return_value="DELETE 1")
+
+    qdrant = AsyncMock()
+    # No protected papers here, so the redaction count is skipped: the helper
+    # counts what it will delete, then what is still left carrying the user.
+    qdrant.count.side_effect = [_count(4), _count(residual)]
+
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool, qdrant_client=qdrant))
+    await data_purge.data_purge_task(app)
+    return conn, [c for c in conn.execute.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_purge_defers_the_hard_delete_when_points_are_left_behind():
+    """Measuring a disagreement is not enough: the row must survive to be retried.
+
+    Deleting the row while points still carry the identifier strands them with
+    nothing left to attribute or retry them from, behind a job reporting success.
+    """
+    _conn, executes = await _run_task_with_residual(3)
+
+    delete_calls = [c for c in executes if "DELETE" in str(c.args[0]).upper()]
+    assert delete_calls, "the job never issued its hard delete"
+    excluded = delete_calls[0].args[1]
+    assert 42 in excluded, "a user whose vectors survived was still hard-deleted"
+
+
+@pytest.mark.asyncio
+async def test_purge_hard_deletes_when_no_points_are_left_behind():
+    """The clean case still deletes, so the guard above cannot pass vacuously."""
+    _conn, executes = await _run_task_with_residual(0)
+
+    delete_calls = [c for c in executes if "DELETE" in str(c.args[0]).upper()]
+    assert delete_calls, "the job never issued its hard delete"
+    assert delete_calls[0].args[1] == [], "a clean purge must not defer the row"

@@ -23,11 +23,13 @@ honestly described.
   older unsigned backup on the same host, checking a restore's progress, and
   preparing an off-site restore request no longer require assembling container
   commands by hand. Accepting an unverified backup still requires typing the
-  acceptance phrase at a prompt, and an off-site set is refused outright. These
-  work while the stack is stopped, which is the usual state when they are needed.
+  acceptance phrase at a prompt, and an off-site set is refused outright.
+  Checking progress and preparing a request work while the stack is stopped;
+  restoring replays into a running database, and says so instead of failing part
+  way through.
 - **The models each provider actually offers.** Provider configuration lists the
   models the provider reports, with an indication of how fresh that list is,
-  instead of a fixed built-in set. Vendor-namespaced identifiers from routers and
+  rather than only a fixed built-in set. Vendor-namespaced identifiers from routers and
   self-hosted endpoints are accepted, and a provider that fails to answer is
   retried at a paced interval rather than on every request.
 - **The citation graph opens what it shows.** Selecting a paper opens it;
@@ -44,7 +46,8 @@ honestly described.
   version cannot be checked requires an explicit acknowledgement. Vector and
   off-site capture are reported honestly without blocking recovery.
 - **Background work that reports the truth.** Jobs abandoned by an interrupted
-  worker are recovered, job outcomes reflect what actually happened, advisory
+  worker no longer sit as running forever: they are marked failed with an
+  instruction to start them again. Job outcomes reflect what actually happened, advisory
   waits and batch sizes are bounded, duplicate scheduling is prevented, and
   periodic work stays on schedule across restarts.
 - **Account deletion revokes that user's sessions** without disturbing anyone
@@ -70,12 +73,18 @@ honestly described.
   such. Misuse of a command now names the correct invocation.
 - **Dependencies updated within their supported ranges**, including the machine
   learning stack, and the hosted checks now run on a supported Node release. Two
-  vulnerability exceptions expired with these updates and were removed, so those
-  scans run unsuppressed again.
+  vulnerability exceptions in the Python dependency scan expired with these
+  updates and were removed, so that scan runs with no exceptions at all.
+- **The upload area states the size limit it enforces.** Single-file uploads
+  accept up to 50 MB; whole-folder imports are unchanged.
+- **A provider whose host resolves to a private address can be allowed
+  deliberately**, through a setting listing the hostnames permitted, rather than
+  by disabling the protection.
+- The first-run tour no longer offers the topic step to signed-in users who
+  cannot act on it.
 - Documentation corrected where it described behavior inaccurately: cloud
-  provider support, the knowledge graph controls, the scheduler's overlap
-  between catch-up and interval runs, and the framework version named in the
-  background-jobs notes.
+  provider support, the knowledge graph controls, and how the scheduler treats a
+  catch-up run that coincides with an interval run.
 
 ## v1.2.2 (2026-07-31)
 

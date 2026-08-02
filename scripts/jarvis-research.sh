@@ -2039,6 +2039,16 @@ cmd_restore_legacy() {
   _restore_timestamp_or_usage legacy "$timestamp"
 
   _require_docker_daemon
+  # A restore replays into a RUNNING database: restore.sh drives psql against the
+  # postgres service, and --no-deps below deliberately starts nothing. Checked
+  # here so a stopped stack is named at the start, instead of surfacing as the
+  # safety backup failing several steps later with no mention of the cause.
+  # Note this is the running-only probe on purpose; the ownership check that
+  # gates it accepts a stopped container, because `restore status` and
+  # `restore request` genuinely do work while the stack is down.
+  [ -n "$(_backup_volume_compose ps -q postgres 2>/dev/null | head -1)" ] \
+    || die "The database is not running, so there is nothing to restore into." \
+      "Start it first, then retry: jarvis-research start"
   info "Restoring backup ${timestamp} on this host without manifest authentication."
   info "This set carries no signature, so it cannot be checked for tampering: its archive checksums are self-reported."
   info "The restore asks you to type the acceptance phrase before it changes anything."
@@ -2128,6 +2138,11 @@ cmd_restore_request() {
   # or COMPOSE_FILE may point somewhere else entirely. A bare `docker compose` in
   # printed disaster instructions would silently address whatever that shell is
   # pointing at, so every printed command carries this install's own scope.
+  # No ownership check and no compose call: this command only prints, and the
+  # scope it prints is read from THIS install's .env rather than the environment,
+  # so an exported COMPOSE_PROJECT_NAME cannot redirect the printed procedure at
+  # a sibling install. Keeping it call-free also means it still works for an
+  # operator whose Docker daemon is down, which is when the procedure is needed.
   _init_backup_volume_compose \
     || die "This install's compose project could not be resolved, so no procedure was printed." \
       "Run this from the installation directory, then retry: jarvis-research doctor"

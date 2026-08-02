@@ -125,6 +125,12 @@ Run the upgrade check for each maintained source contract:
 | `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
+| `v1.2.2` | `direct` | `current-merge-pending` |
+
+The `direct` row is the path essentially every existing installation takes, and
+it exercises the update transaction itself rather than the bootstrap. Do not skip
+it because the bootstrap rows passed: they enter through different code, and a
+release that changes the update transaction is only covered by this row.
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull

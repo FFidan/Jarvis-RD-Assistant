@@ -139,7 +139,8 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
       >
         <Upload className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
         <p className="text-sm font-medium">Drop PDF files here or click to browse</p>
-        <p className="mt-1 text-xs text-muted-foreground">Multiple files supported &middot; Max 100 MB each</p>
+        {/* Must match MAX_UPLOAD_PDF_SIZE, the per-file cap this upload route enforces. */}
+        <p className="mt-1 text-xs text-muted-foreground">Multiple files supported &middot; Max 50 MB each</p>
         <input ref={inputRef} type="file" accept=".pdf" multiple className="hidden" onChange={handleInput} />
       </div>
 
