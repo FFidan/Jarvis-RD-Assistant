@@ -708,19 +708,21 @@ async def test_paper_ingestion_qdrant_timeout_stays_within_outer_health_budget(
     import jarvis_common.health as health
     import paper_ingestion.main as pi_main
 
-    # What matters is the ORDER inner timeout < probe duration < outer budget, not
-    # the absolute values. Only the inner timeout has to fire for this case to mean
-    # anything; the outer budget is here purely as the thing that must NOT fire, so
-    # it is set far above any delay a loaded machine can introduce. Keeping it close
-    # to the probe duration made the case a coin flip under a full parallel suite.
-    async def slow_probe(_collection_name: str) -> bool:
-        await asyncio.sleep(0.2)
+    # The probe never finishes on its own, so the ONLY way out is the inner
+    # timeout, which is what this case is about. An earlier version slept slightly
+    # longer than that timeout and was decided by a race: it passed alone and
+    # failed in a full run, where the sleep can return early because another
+    # module replaces asyncio.sleep. Blocking forever removes the race and the
+    # dependency on how busy the machine is. The outer budget is generous and is
+    # here only as the thing that must NOT fire first.
+    async def never_completes(_collection_name: str) -> bool:
+        await asyncio.Event().wait()
         return True
 
     app = _wire_pi_app()
-    monkeypatch.setattr(health, "_PROBE_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(health, "_PROBE_TIMEOUT_S", 5.0)
     monkeypatch.setattr(pi_main, "_QDRANT_HEALTH_TIMEOUT_S", 0.1)
-    app.state.qdrant_client.collection_exists = AsyncMock(side_effect=slow_probe)
+    app.state.qdrant_client.collection_exists = AsyncMock(side_effect=never_completes)
     _clear_sweep_memo(app)
 
     try:
