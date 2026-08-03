@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../" class="md-tabs__link">
+        <a href="../quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1502,6 +1530,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#what-a-purge-asks-in-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a purge asks, in order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-destructive-gates-require-typed-confirmation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2027,6 +2066,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#what-a-purge-asks-in-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a purge asks, in order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-destructive-gates-require-typed-confirmation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2082,7 +2132,10 @@ install, so you can run day-to-day operations from any directory.</p>
 checkout and hands off to that repository's tracked script. An update therefore
 ships a newer command along with the rest of the code.</p>
 <p>If <code>jarvis-research</code> is not found after an install, make sure <code>~/.local/bin</code> is
-on your PATH, or run <code>./setup.sh</code> again from your checkout.</p>
+on your PATH. Setup checks this against the shell it runs in and prints the fix
+if that shell cannot see the directory. A new terminal reads your startup files
+instead, so if the command is missing there, add the PATH line to your shell's
+startup file.</p>
 <h2 id="commands">Commands<a class="headerlink" href="#commands" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2133,6 +2186,18 @@ on your PATH, or run <code>./setup.sh</code> again from your checkout.</p>
 <td>Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again.</td>
 </tr>
 <tr>
+<td><code>restore status</code></td>
+<td>Report what the backup service's last or current restore did: state, current step, error, whether manual follow-up is required, and the safety backup to restore if it is.</td>
+</tr>
+<tr>
+<td><code>restore legacy &lt;timestamp&gt; [--allow-unknown-schema]</code></td>
+<td>Restore a backup taken on this host before manifest signing. The set cannot be checked for tampering, so the acceptance phrase must be typed at the prompt. Add <code>--allow-unknown-schema</code> only when the chosen backup recorded no usable database schema version (it was written while the database was unreachable) and the restore refuses it for that reason. Off-site sets are never eligible. See <a href="../backup-and-restore/#if-your-only-surviving-backup-is-an-older-unsigned-one">Backup &amp; Restore</a>.</td>
+</tr>
+<tr>
+<td><code>restore request &lt;timestamp&gt;</code></td>
+<td>Print the ordered steps and the ready-made request for recovering this host from another installation's backup set. It submits nothing.</td>
+</tr>
+<tr>
 <td><code>restore acknowledge &lt;restore-id&gt;</code></td>
 <td>After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again.</td>
 </tr>
@@ -2141,7 +2206,7 @@ on your PATH, or run <code>./setup.sh</code> again from your checkout.</p>
 <td>Record the current checkout as the managed install and refresh the launcher.</td>
 </tr>
 <tr>
-<td><code>uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]</code></td>
+<td><code>uninstall [--dry-run] [--tier N] [--keep-data] [--keep-images] [--all] [--yes]</code></td>
 <td>Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with <code>--dry-run</code>. See <a href="#uninstalling">Uninstalling</a>.</td>
 </tr>
 <tr>
@@ -2268,14 +2333,12 @@ containing both databases, uploaded PDFs and data-coupled secrets before it can
 apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.</p>
 <p>Your installed command may refuse first with <code>Your working tree has uncommitted
-changes; refusing to update.</code>, which does not say which path it means. Run <code>git
-status</code>. If the only path listed is <code>secrets/manifest-hmac-required</code>, that is
-expected and the bootstrap above is the way forward — it knows to leave that file
-alone.</p>
-<p>Do not act on the "commit or stash" advice for this one file. It is untracked, so
-<code>git stash</code> will not move it, and deleting it would let a later restore accept an
-unsigned backup manifest. The backup service creates it to record that this
-installation requires a signed one.</p>
+changes; refusing to update.</code> Run the bootstrap above anyway: it knows about the
+backup service's <code>secrets/manifest-hmac-required</code> file and leaves it alone, and if
+anything else is blocking the update it names the exact paths.</p>
+<p>Never delete <code>secrets/manifest-hmac-required</code>. The backup service creates it to
+record that this installation requires a signed backup manifest, and removing it
+would let a later restore accept an unsigned one.</p>
 <p>Installations already running v1.2.2 or later update normally with
 <code>jarvis-research update</code>.</p>
 <h3 id="rolling-back">Rolling back<a class="headerlink" href="#rolling-back" title="Permanent link">&para;</a></h3>
@@ -2284,9 +2347,13 @@ changed, it prints the exact commands to pin <code>JARVIS_VERSION</code> back to
 previous version and pull those images.</p>
 <p>If a data-changing migration already ran, <strong>image rollback alone is not
 schema-safe</strong> — the new database schema stays in place. To return to the
-pre-update state, restore the backup taken before the update (the WebUI Backup
-panel → Restore, or <code>scripts/restore.sh</code>); that rolls the database back together
-with the images. See <a href="../backup-and-restore/">Backup &amp; Restore</a>.</p>
+pre-update state, restore the backup taken before the update; that rolls the
+database back together with the images. Use the WebUI Backup panel → Restore,
+and follow it with <code>jarvis-research restore status</code>. If the surviving set
+predates manifest signing, <code>jarvis-research restore legacy &lt;timestamp&gt;</code> accepts
+it deliberately; to recover from another installation's set,
+<code>jarvis-research restore request &lt;timestamp&gt;</code> prints the procedure. See
+<a href="../backup-and-restore/">Backup &amp; Restore</a>.</p>
 <h3 id="release-candidate-tags-are-throwaway">Release-candidate tags are throwaway<a class="headerlink" href="#release-candidate-tags-are-throwaway" title="Permanent link">&para;</a></h3>
 <p>An operator who checks out a release candidate with <code>--to &lt;rc-tag&gt;</code> is on a
 scratch checkout. Because a release squash-merges its work, the stable tag lands
@@ -2366,18 +2433,33 @@ teardown first, which mutates nothing:</p>
 <td>Cap the run at tier 2, so the data volumes and on-disk files are always preserved.</td>
 </tr>
 <tr>
+<td><code>--keep-images</code></td>
+<td>Remove everything the selected tier covers <strong>except images</strong>: no application image is removed, no third-party image is confirmed or removed, and the plan lists none. Because no image ref has to be built, the run also proceeds when the installed version in <code>.env</code> is missing or invalid — which is otherwise a refusal at tier 2 and above.</td>
+</tr>
+<tr>
 <td><code>--all</code></td>
-<td>Select tier 4 (full purge).</td>
+<td>Select tier 4 (full purge). It selects a tier and nothing else: the ordinary prompts below still run.</td>
 </tr>
 <tr>
 <td><code>--yes</code></td>
-<td>Skip the ordinary per-tier <code>[y/N]</code> prompt. Requires an explicit <code>--tier N</code> (or <code>--all</code>).</td>
+<td>Skip the two ordinary <code>[y/N]</code> prompts (the proceed confirmation and, at tier 3 and above, the backup offer). Requires an explicit <code>--tier N</code> (or <code>--all</code>).</td>
 </tr>
 </tbody>
 </table>
+<h3 id="what-a-purge-asks-in-order">What a purge asks, in order<a class="headerlink" href="#what-a-purge-asks-in-order" title="Permanent link">&para;</a></h3>
+<p>A tier-4 run asks two ordinary <code>[y/N]</code> prompts and then three mandatory gates:</p>
+<ol>
+<li>Proceed with this uninstall? (ordinary — suppressed by <code>--yes</code>)</li>
+<li>Capture a backup before deleting the volumes? (ordinary, and only when the
+   stack is running — suppressed by <code>--yes</code>)</li>
+<li>Type the compose project name. (mandatory)</li>
+<li>Export the backup encryption key, or type the acknowledgement phrase. (mandatory)</li>
+<li>Confirm each third-party image. (mandatory; not asked under <code>--keep-images</code>,
+   which removes none of them)</li>
+</ol>
 <h3 id="the-destructive-gates-require-typed-confirmation">The destructive gates require typed confirmation<a class="headerlink" href="#the-destructive-gates-require-typed-confirmation" title="Permanent link">&para;</a></h3>
-<p><code>--yes</code> and <code>--all</code> skip only the ordinary confirmation. They can never satisfy the
-destructive gates, each of which reads a typed confirmation from stdin:</p>
+<p><code>--yes</code> skips only the two ordinary confirmations. Neither it nor <code>--all</code> can
+satisfy the mandatory gates, each of which reads a typed confirmation from stdin:</p>
 <ul>
 <li><strong>Tier 3</strong> requires typing the compose project name before any volume is deleted.
   When the stack is running, an interactive run first offers to take a backup
@@ -2393,7 +2475,12 @@ destructive gates, each of which reads a typed confirmation from stdin:</p>
   individually, since those images may be shared with other projects on the host.</li>
 </ul>
 <p>A run with no controlling terminal (closed stdin) therefore cannot complete tier 3
-or tier 4 — the typed gates refuse and the install is left untouched.</p>
+or tier 4 — the install is left untouched. <strong>Mind the exit code when you script
+this:</strong> without <code>--yes</code> the run stops at the proceed confirmation, prints
+<code>Aborted; nothing was done.</code> and exits <strong>0</strong>, because declining is not an error.
+With <code>--yes</code> it reaches a mandatory typed gate, which refuses and exits 1. A
+wrapper that only checks the exit status will read the first case as a completed
+uninstall, so check the output — or pass <code>--yes</code> and drive the typed gates.</p>
 <h3 id="when-docker-is-not-running">When Docker is not running<a class="headerlink" href="#when-docker-is-not-running" title="Permanent link">&para;</a></h3>
 <p>Every tier needs the Docker daemon. If it is unreachable, <code>uninstall</code> refuses with
 exit code 3 and prints an inventory of the orphaned containers, volumes, network,

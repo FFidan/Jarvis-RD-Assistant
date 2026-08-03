@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../manual/" class="md-tabs__link">
+        <a href="../manual/quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1693,7 +1721,7 @@
 <p>This directory is the ledger for incremental schema migrations applied on top of <code>db/init.sql</code>.</p>
 <p>The repository's squashed baseline schema version is <code>101</code>; it is fully captured
 in <code>db/init.sql</code>. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is <code>110</code>, also recorded in
+incremental files below. The current schema version is <code>111</code>, also recorded in
 <code>db/SCHEMA_VERSION</code>.</p>
 <p>New migrations land here numbered sequentially (<code>0102_&lt;descriptive&gt;.sql</code> and up)
 and are applied via <code>run_migrations</code>
@@ -1751,6 +1779,11 @@ and are applied via <code>run_migrations</code>
 <td><code>0110</code></td>
 <td><code>0110_require_contradiction_owner.sql</code></td>
 <td>Preserve historical contradiction evidence while requiring ownership for new writes and separating evidence produced from different paper generations.</td>
+</tr>
+<tr>
+<td><code>0111</code></td>
+<td><code>0111_full_digest_local_ids.sql</code></td>
+<td>Identify locally uploaded papers by their full content digest, deriving the new identifier from the stored source URL where the short form is unambiguous.</td>
 </tr>
 </tbody>
 </table>

@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../manual/" class="md-tabs__link">
+        <a href="../manual/quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2290,6 +2318,12 @@
 <blockquote>
 <p>A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.</p>
 </blockquote>
+<p><strong>Why it's different:</strong></p>
+<ul>
+<li><strong>Local-first</strong> — runs on your own hardware with Ollama; your library and your questions never have to leave the machine.</li>
+<li><strong>Source-verified</strong> — every generated claim links back to the retrieved text it came from, so you can check the evidence, not just trust the model.</li>
+<li><strong>Discover, understand, retain</strong> — a daily ranked feed (Pulse), cross-paper Q&amp;A with citations (Ask), and spaced-repetition Cards form one loop from finding a paper to remembering it.</li>
+</ul>
 <p>JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.</p>
 <p><strong>Docs:</strong> https://limitcycle-oss.github.io/jarvis-rd-assistant/ &nbsp;·&nbsp; <strong>Releases:</strong> https://github.com/limitcycle-oss/jarvis-rd-assistant/releases &nbsp;·&nbsp; <strong>Security:</strong> <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md">SECURITY.md</a></p>
 <p><a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/limitcycle-oss/jarvis-rd-assistant/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
@@ -2338,30 +2372,22 @@
 </table>
 </details>
 <h2 id="quickstart">Quickstart<a class="headerlink" href="#quickstart" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/limitcycle-oss/jarvis-rd-assistant.git
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>jarvis-rd-assistant
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>./setup.sh
+</code></pre></div>
+<p>New here? The <strong><a href="../manual/quickstart/">Quick start guide</a></strong> walks you from clone to your first analyzed paper in one screen. The <strong><a href="../DEPLOYMENT/">Deployment guide</a></strong> covers GPUs, remote and family access, and non-interactive installs in full.</p>
 <p><strong>Before you start:</strong></p>
 <ul>
 <li>Docker Engine 24+ with Compose v2.24.4+, Python 3, <code>openssl</code>, <code>curl</code>, <code>git</code></li>
 <li><strong>~27–54 GB free disk space</strong> for a default first install — a one-time peak, not the ongoing footprint. The exact figure depends on the tier-selected model and whether images are pulled prebuilt or built locally; custom models may require more. See <a href="../REQUIREMENTS/#disk-budget">Disk budget</a>.</li>
 <li>GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default <code>setup.sh</code> <strong>pulls</strong> prebuilt application images from <code>ghcr.io/limitcycle-oss/jarvis-*</code> (no local build), then downloads the Ollama model set for your hardware tier (roughly 7 GB on the smallest tier, up to 23 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with <code>./setup.sh --build-local</code>.</li>
-<li>AMD ROCm is selected only when <code>/dev/kfd</code> is available. Other AMD and
-  Intel hosts stay on the supported CPU path unless Vulkan is selected
-  explicitly with <code>./setup.sh --gpu vulkan</code>. Both ROCm and Vulkan remain
-  experimental, and PDF parsing and reranking stay on CPU. See the <a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/">hardware
-  support matrix</a>.</li>
+<li>AMD ROCm is selected only when <code>/dev/kfd</code> is available. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is selected explicitly with <code>./setup.sh --gpu vulkan</code>. Both ROCm and Vulkan remain experimental, and PDF parsing and reranking stay on CPU. See the <a href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/">hardware support matrix</a>.</li>
 <li>On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</li>
-<li>Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On
-  supported hosts it can install missing packages after showing the commands and
-  asking permission. <code>./setup.sh --check</code> runs the same preflight without making
-  changes.</li>
+<li>Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On supported hosts it can install missing packages after showing the commands and asking permission. <code>./setup.sh --check</code> runs the same preflight without making changes.</li>
 <li><strong>Windows:</strong> use WSL2 + Docker Desktop</li>
-<li><strong>Non-interactive installs:</strong> use <code>./setup.sh --non-interactive</code> for the full
-  installer. <code>scripts/jarvis-setup.sh</code> is a local-only compatibility bootstrap
-  for older CI jobs; it does not configure TLS or remote access.</li>
+<li><strong>Non-interactive installs:</strong> use <code>./setup.sh --non-interactive</code> for the full installer. <code>scripts/jarvis-setup.sh</code> is a local-only compatibility bootstrap for older CI jobs; it does not configure TLS or remote access.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/limitcycle-oss/jarvis-rd-assistant.git
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>jarvis-rd-assistant
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>./setup.sh
-</code></pre></div>
 <p><code>setup.sh</code> generates the repository-controlled secrets and configuration, pulls
 the selected images and Ollama models, waits for the services, and prints one
 finish-setup link. Its access chooser covers this computer, a guided private
@@ -2471,9 +2497,15 @@ complete update procedure and its repair-only manual fallback.</p>
 tier and confirms before acting. Preview the full plan first:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>jarvis-research<span class="w"> </span>uninstall<span class="w"> </span>--dry-run<span class="w"> </span>--all<span class="w">   </span><span class="c1"># enumerate a full teardown, change nothing</span>
 </code></pre></div>
-<p>Data and purge tiers are irreversible. Their typed confirmations cannot be
-bypassed by <code>--yes</code>, and a purge offers to export the backup encryption key
-first. Read <a href="../manual/cli/#uninstalling">Uninstalling</a> before selecting one.</p>
+<p>Data and purge tiers are irreversible. <code>--all</code> only selects the purge tier: the
+ordinary confirmation and the backup offer still run, and only <code>--yes</code> suppresses
+those two. The typed confirmations cannot be bypassed by either flag, and a purge
+offers to export the backup encryption key first. <code>--keep-images</code> removes
+everything the tier covers except images, which also lets a teardown finish when
+the recorded version cannot be read. A non-interactive run without <code>--yes</code> stops
+at the first confirmation and exits 0 having changed nothing, so check its output
+rather than only its exit status. Read
+<a href="../manual/cli/#uninstalling">Uninstalling</a> before selecting a tier.</p>
 <h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
 <p>JARVIS applies user scoping at the application and query layers. The operations
 API key can bootstrap a session only for the configured instance owner; it is

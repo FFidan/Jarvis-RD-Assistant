@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../manual/" class="md-tabs__link">
+        <a href="../manual/quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2053,6 +2081,11 @@ branch:</p>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_BRANCH</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>all<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span>direct
 </code></pre></div>
+<p>If the lifecycle run fails, download its <code>lifecycle-smoke-log</code> artifact before
+anything else and search it for <code>=== diagnostics: project</code> — a run covering
+every leg keeps going after one fails, so the failing leg's evidence is usually
+far from the end of the log. The failure path in step 3 explains what that
+block contains.</p>
 <p>This branch check selects the two newest published tags, which predate the
 candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
 covered by the per-source upgrade checks in step 3, which pass explicit
@@ -2085,11 +2118,25 @@ checks:</p>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">cold_install_version</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nv">UPDATE_FROM</span><span class="o">=</span>vA.B.C
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nv">UPDATE_MODE</span><span class="o">=</span>bootstrap
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>update<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_from</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_FROM</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">update_to</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_MODE</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Per the table below: bootstrap for the older sources, direct for the newest.</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nv">UPDATE_MODE</span><span class="o">=</span>bootstrap
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>update<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_from</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_FROM</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">update_to</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_MODE</span><span class="s2">&quot;</span>
 </code></pre></div>
+<p>When a lifecycle run fails, start from its <code>lifecycle-smoke-log</code> artifact rather
+than the job page. For a failed leg that owns a Compose project — <code>tls</code>,
+<code>update</code>, or <code>uninstall</code> — search the log for <code>=== diagnostics: project</code>, which
+opens that project's container listing, each container's state and exit code,
+and each container's own output, captured before the leg's resources were
+removed. A run covering every leg continues after a leg fails, so that block
+will not be at the end of the log. The smoke registers no Compose project for
+the <code>restore</code> leg, so it produces no such block; its evidence is the round-trip
+sub-script log, which the smoke echoes inline, and which names the separate
+project the sub-script creates for its fixture. Fix the cause, then re-dispatch
+only the check that failed:
+identical re-dispatches supersede each other, while runs differing in <code>leg</code>,
+<code>update_from</code>, <code>update_to</code>, or <code>update_mode</code> now run concurrently.</p>
 <p>Run the upgrade check for each maintained source contract:</p>
 <table>
 <thead>
@@ -2115,16 +2162,28 @@ checks:</p>
 <td><code>bootstrap</code></td>
 <td><code>current-merge-pending</code></td>
 </tr>
+<tr>
+<td><code>v1.2.2</code></td>
+<td><code>direct</code></td>
+<td><code>current-merge-pending</code></td>
+</tr>
 </tbody>
 </table>
+<p>The <code>direct</code> row is the path essentially every existing installation takes, and
+it exercises the update transaction itself rather than the bootstrap. Do not skip
+it because the bootstrap rows passed: they enter through different code, and a
+release that changes the update transaction is only covered by this row.</p>
 <p>The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
 anonymously, build no application image, reach a healthy stack, and remove its
 isolated project resources. Each upgrade must start at the selected stable tag,
 recover from its supported interrupted-update state, finish at <code>MERGED_SHA</code>,
 and leave no pending journal or project resource behind.
-Every source loads the candidate's bootstrap before invoking the updater, so
-each check exercises the update path the candidate actually ships.</p>
+The <code>bootstrap</code> rows load the candidate's bootstrap before invoking the updater.
+The <code>direct</code> row does not: it runs the source release's own installed command, so
+it is the only check that exercises the update transaction the candidate ships.
+Dispatch it with <code>UPDATE_MODE=direct</code>; running every row in bootstrap mode leaves
+that transaction unverified.</p>
 <h3 id="4-tag-the-release-and-promote-exact-digests">4. Tag the release and promote exact digests<a class="headerlink" href="#4-tag-the-release-and-promote-exact-digests" title="Permanent link">&para;</a></h3>
 <p>After the SHA-based checks pass, record that exact successful workflow run in
 the annotated tag:</p>

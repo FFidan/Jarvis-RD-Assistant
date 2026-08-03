@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../manual/" class="md-tabs__link">
+        <a href="../manual/quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2512,7 +2540,7 @@ explicitly set in the environment. An explicit env var always wins.</p>
 </tr>
 <tr>
 <td><code>OWNER_OVERRIDE_ALLOWED_CIDRS</code></td>
-<td>Comma-separated CIDR allowlist for the <code>X-Owner-User-Id</code> header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks <code>JARVIS_NET_SUBNET</code>, default <code>10.137.241.0/24</code>) so the bot is trusted. The bare code default (<code>127.0.0.0/8</code>) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly.</td>
+<td>Comma-separated CIDR allowlist for the <code>X-Owner-User-Id</code> header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the Telegram bot's own pinned address as a <code>/32</code> (tracks <code>JARVIS_TELEGRAM_BOT_IP</code>, which setup derives from <code>JARVIS_NET_SUBNET</code>; default <code>10.137.241.250</code>), so no other container on the bridge can send the header. The bare code default (<code>127.0.0.0/8</code>) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly.</td>
 <td>No (compose default is correct)</td>
 </tr>
 <tr>
@@ -2648,7 +2676,7 @@ ingress as Cloudflare-owned. Direct and LAN callers cannot opt in by sending
 </table>
 <p>These values are numeric because uvicorn matches the immediate socket peer
 before applying <code>X-Forwarded-For</code>. Setup and update accept an IPv4 <code>/27</code> or
-larger network and derive the gateway and highest four usable addresses from
+larger network and derive the gateway and highest five usable addresses from
 <code>JARVIS_NET_SUBNET</code>; a custom subnet does not require Compose or nginx edits.
 Nginx also strips any browser-supplied <code>X-Owner-User-Id</code> header before proxying;
 only the container-internal caller that does not traverse nginx can set it.

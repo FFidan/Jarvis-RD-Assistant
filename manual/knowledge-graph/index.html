@@ -267,7 +267,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+        <a href="../quickstart/" class="md-tabs__link">
           
   
   
@@ -474,6 +474,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -929,10 +957,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#entitytypefilter" class="md-nav__link">
+  <a href="#entity-type" class="md-nav__link">
     <span class="md-ellipsis">
       
-        EntityTypeFilter
+        Entity type
       
     </span>
   </a>
@@ -955,6 +983,28 @@
     <span class="md-ellipsis">
       
         GraphControls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reset-filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reset filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node selection
       
     </span>
   </a>
@@ -1838,10 +1888,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#entitytypefilter" class="md-nav__link">
+  <a href="#entity-type" class="md-nav__link">
     <span class="md-ellipsis">
       
-        EntityTypeFilter
+        Entity type
       
     </span>
   </a>
@@ -1864,6 +1914,28 @@
     <span class="md-ellipsis">
       
         GraphControls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reset-filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reset filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node selection
       
     </span>
   </a>
@@ -1943,7 +2015,7 @@
 
 <h1 id="knowledge-graph">Knowledge Graph<a class="headerlink" href="#knowledge-graph" title="Permanent link">&para;</a></h1>
 <p>The <strong>Knowledge Graph</strong> page at <code>/knowledge</code> displays an interactive concept-level graph of entities extracted from papers visible to you — public papers plus any papers in your own library — rendered using Cytoscape.js.</p>
-<!-- screenshot: /knowledge — Cytoscape graph with EntityTypeFilter chips visible, coloured nodes, and GraphStats panel -->
+<!-- screenshot: /knowledge — Cytoscape graph with the Filters card (entity type dropdown and paper-count slider), coloured nodes, and GraphStats panel -->
 
 <hr />
 <h2 id="entity-types-and-colours">Entity types and colours<a class="headerlink" href="#entity-types-and-colours" title="Permanent link">&para;</a></h2>
@@ -1984,22 +2056,28 @@
 </table>
 <hr />
 <h2 id="controls">Controls<a class="headerlink" href="#controls" title="Permanent link">&para;</a></h2>
-<h3 id="entitytypefilter">EntityTypeFilter<a class="headerlink" href="#entitytypefilter" title="Permanent link">&para;</a></h3>
-<p>A row of filter chips along the top of the graph panel lets you show or hide entity types. Selecting <strong>All</strong> resets the filter to show every type. Deselecting a type removes those nodes (and their edges) from the visible graph.</p>
+<h3 id="entity-type">Entity type<a class="headerlink" href="#entity-type" title="Permanent link">&para;</a></h3>
+<p>A dropdown in the Filters card selects one entity type at a time. The graph is re-fetched for the
+type you pick, so only entities of that type and the edges between them are returned. Choosing
+<strong>All</strong> removes the restriction and shows every type again.</p>
 <h3 id="min-paper-count-slider">Min-paper-count slider<a class="headerlink" href="#min-paper-count-slider" title="Permanent link">&para;</a></h3>
 <p>A slider with a range of <strong>1–10</strong> filters nodes by how many papers they appear in. Dragging the slider to the right hides entities that appear in fewer papers, reducing clutter and surfacing the most widely-attested concepts across the papers visible to you.</p>
 <h3 id="graphcontrols">GraphControls<a class="headerlink" href="#graphcontrols" title="Permanent link">&para;</a></h3>
 <p>A <strong>Layout</strong> dropdown selects one of four layout algorithms: <strong>Force-directed</strong> (cose), <strong>Breadth-first</strong>, <strong>Circle</strong>, or <strong>Concentric</strong>.</p>
 <p>Pan and zoom are available via mouse or trackpad gestures directly on the graph canvas.</p>
+<h3 id="reset-filters">Reset filters<a class="headerlink" href="#reset-filters" title="Permanent link">&para;</a></h3>
+<p>A <strong>Reset filters</strong> button, beside the layout selector, clears the entity-type filter, the min-paper-count threshold, and the current node selection back to their defaults in one click.</p>
+<h3 id="node-selection">Node selection<a class="headerlink" href="#node-selection" title="Permanent link">&para;</a></h3>
+<p>Click a node to open a details panel beside the graph showing its name, type, canonical name (if different), how many papers it appears in, its description, and its relationships to other visible entities. A <strong>Clear selection</strong> button in the panel header closes the detail view. Selecting a node does not navigate away from the page.</p>
 <h3 id="kgqueryinput">KGQueryInput<a class="headerlink" href="#kgqueryinput" title="Permanent link">&para;</a></h3>
 <p>A natural-language query box. Type a question such as "What methods are used on ImageNet?" and submit it to search the knowledge graph; matching relationships, comparisons, or entities come back as a list of result cards below the input, rather than as a filter or highlight applied to the graph itself. If nothing matches, a "No results found for this query" message is shown instead.</p>
 <hr />
 <h2 id="graph-statistics">Graph statistics<a class="headerlink" href="#graph-statistics" title="Permanent link">&para;</a></h2>
-<p><strong>GraphStats</strong> — a summary panel showing the total number of nodes and edges currently visible, broken down by entity type.</p>
-<p><strong>EntityBreakdown</strong> — a list or chart showing how many entities of each type exist in the full (unfiltered) graph, helping you understand the composition of your knowledge graph.</p>
+<p><strong>GraphStats</strong> — a summary panel showing three totals for the graph currently on screen: the number of entities, the number of relationships, and how many distinct entity types are present.</p>
+<p><strong>EntityBreakdown</strong> — how many entities of each type are in the graph you are currently looking at. It follows the filters, so narrowing to a single entity type leaves one row; clear the filters to see the whole composition.</p>
 <hr />
 <h2 id="batch-extraction">Batch extraction<a class="headerlink" href="#batch-extraction" title="Permanent link">&para;</a></h2>
-<p>If unprocessed papers exist, an admin-only <strong>Batch Extract Entities</strong> button appears on an otherwise empty graph. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities. The graph populates as extraction jobs complete.</p>
+<p>An admin-only <strong>Batch Extract Entities</strong> button appears whenever the graph comes back empty. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities, and reports how many it handled — if nothing has been summarized yet, that count is zero and the graph stays empty until summaries exist. The graph populates as extraction jobs complete.</p>
 <p>You can also trigger extraction for individual papers from the <a href="../paper-detail/">Paper Detail</a> page (the Actions rail → Extract Entities).</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>

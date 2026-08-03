@@ -265,7 +265,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../manual/" class="md-tabs__link">
+        <a href="../manual/quickstart/" class="md-tabs__link">
           
   
   
@@ -469,6 +469,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1402,6 +1430,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#amd-and-intel-gpus-experimental" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AMD and Intel GPUs (experimental)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#vllm-overlay-optional-manual" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2305,6 +2344,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#amd-and-intel-gpus-experimental" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AMD and Intel GPUs (experimental)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#vllm-overlay-optional-manual" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2873,6 +2923,8 @@ the first-run wizard or Settings after the stack starts.</p>
 </code></pre></div>
 <p><strong>Makefile targets (<code>make up</code>, <code>make profile-stack-up</code>) always run CPU-only.</strong> They do not include the GPU overlay, regardless of hardware. Use the explicit <code>-f</code> form or the <code>.env</code> <code>COMPOSE_FILE</code> setting for GPU acceleration outside of <code>setup.sh</code>.</p>
 <p>The <code>./setup.sh --check</code> command reports GPU toolkit availability as an informational item.</p>
+<h3 id="amd-and-intel-gpus-experimental">AMD and Intel GPUs (experimental)<a class="headerlink" href="#amd-and-intel-gpus-experimental" title="Permanent link">&para;</a></h3>
+<p>AMD ROCm is selected only when <code>/dev/kfd</code> is present. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is chosen explicitly with <code>./setup.sh --gpu vulkan</code>. Both ROCm and Vulkan are experimental, and PDF parsing and reranking stay on CPU regardless of the acceleration path. See the <a href="../manual/hardware-support-matrix/">hardware support matrix</a> for vendor status and how to report your hardware.</p>
 <h3 id="vllm-overlay-optional-manual">vLLM overlay (optional, manual)<a class="headerlink" href="#vllm-overlay-optional-manual" title="Permanent link">&para;</a></h3>
 <p>vLLM is a <strong>separate, optional overlay</strong> — it is not auto-started by <code>setup.sh</code>. Use it to serve large models locally at higher throughput than Ollama.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.gpu.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.vllm.yml<span class="w"> </span>--profile<span class="w"> </span>vllm<span class="w"> </span>up<span class="w"> </span>-d
@@ -3125,7 +3177,7 @@ assert HTTPS.</p>
 <p><strong>Subnet collision:</strong> if the default conflicts with another local network,
 <code>setup.sh --check</code> warns. Set <code>JARVIS_NET_SUBNET</code> to a free IPv4 <code>/27</code> or larger
 network and re-run setup. Setup and update derive the gateway and the highest
-four usable addresses; do not edit Compose or nginx.</p>
+five usable addresses; do not edit Compose or nginx.</p>
 <p><strong><code>TRUSTED_PROXY_CIDRS</code></strong> — Python-layer variable for the XFF walk. The standard
 stack trusts loopback and the derived dashboard <code>/32</code>. Add another CIDR only
 when an external proxy with that exact source address reaches the services.</p>
@@ -3218,7 +3270,7 @@ requires restarting its service consumers.</p>
 <tr>
 <td><code>backup_encrypt_key</code></td>
 <td><code>BACKUP_ENCRYPT_KEYFILE</code></td>
-<td>Encrypts backup archives at rest</td>
+<td>Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable</td>
 </tr>
 </tbody>
 </table>
@@ -3496,12 +3548,14 @@ existing <code>TELEGRAM_CHAT_ID</code> value can be removed from <code>.env</cod
 <p><strong>Telegram owner-override network.</strong> The bot calls service endpoints with
 <code>X-Owner-User-Id</code> to make per-user requests, trusted only from
 <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code>. The bundled compose stack sets this
-automatically to cover the jarvis bridge subnet (it tracks <code>JARVIS_NET_SUBNET</code>,
-default <code>10.137.241.0/24</code>), so no change is needed for the default stack. <strong>If
-you override <code>JARVIS_NET_SUBNET</code>, the allowlist follows it</strong> — only set
-<code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> explicitly if the bot reaches the services from
-some other network. (The bare code default <code>127.0.0.0/8</code> is loopback-only and
-does <em>not</em> cover the jarvis bridge — the compose stack overrides it.)</p>
+automatically to the bot's own pinned address as a <code>/32</code> (it tracks
+<code>JARVIS_TELEGRAM_BOT_IP</code>, which setup derives from <code>JARVIS_NET_SUBNET</code>;
+default <code>10.137.241.250</code>), so no change is needed for the default stack and no
+other container on the bridge can send the header. <strong>If you override
+<code>JARVIS_NET_SUBNET</code>, the bot's pin and the allowlist both follow it</strong> — only
+set <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> explicitly if the bot reaches the services
+from some other network. (The bare code default <code>127.0.0.0/8</code> is loopback-only;
+the compose stack adds the bot's address to it.)</p>
 <p><strong>Ownership backfill.</strong> The NULL-owner backfill for pre-existing product rows
 is part of the schema-101 baseline in <code>db/init.sql</code>, not a startup migration.
 The only startup ownership migration is 0105, described next.</p>

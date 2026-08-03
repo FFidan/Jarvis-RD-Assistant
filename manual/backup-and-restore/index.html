@@ -267,7 +267,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../" class="md-tabs__link">
+        <a href="../quickstart/" class="md-tabs__link">
           
   
   
@@ -474,6 +474,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2176,6 +2204,8 @@ exists without sending the key through an untrusted channel.</p>
 </tbody>
 </table>
 <p>Leave a field blank to use the default. Older or excess restore points are pruned automatically by the backup service — you never need to clean up by hand. Click <strong>Save retention policy</strong> to apply changes.</p>
+<p>Automatic pruning has two floors you cannot switch off. Your last restore point is never removed, however old it is; and a single automatic run never removes more than half of your restore points, because a server clock that jumps forward makes every archive look old at once. When that happens the run removes only the oldest half and says so, and normal runs converge on the window you asked for over the following days. Deleting a restore point yourself from the Backups panel is not subject to either floor — that is what the typed <strong>DELETE</strong> confirmation is for — and each delete records how many restore points are left.</p>
+<p>If you set the <code>BACKUP_RETENTION_DAYS</code> environment variable, <code>0</code> means <em>no age limit</em>; earlier releases read <code>0</code> as "remove anything older than about a day". The <strong>Keep most recent</strong> cap still applies either way.</p>
 <hr />
 <h2 id="one-click-restore">One-click restore<a class="headerlink" href="#one-click-restore" title="Permanent link">&para;</a></h2>
 <p>You can roll the whole instance back to any listed restore point without leaving the browser.</p>
@@ -2281,42 +2311,41 @@ Replace <code>&lt;timestamp&gt;</code> with the restore point timestamp in <code
 format.</p>
 <ol>
 <li>Start the fresh stack with <code>./setup.sh</code>.</li>
-<li>Copy the complete archive set into the restore inbox:</li>
+<li>Print the procedure for the restore point you want:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>request<span class="w"> </span>&lt;timestamp&gt;
 </code></pre></div>
-<p>If the set is in the configured S3 bucket, pull only that timestamp instead:</p>
+<p>The command generates the restore identifier and request timestamp the
+   backup service requires, fills in the real paths, and prints the three steps
+   below. It submits nothing and moves nothing.</p>
+<ol>
+<li>Follow the printed steps <strong>in order</strong>: copy the archive set into the restore
+   inbox, then the matching encryption key under its required one-time name,
+   and only then submit the printed request. The backup service acts on a
+   submitted request within seconds, so submitting it first fails the restore
+   against an empty inbox.</li>
+</ol>
+<p>If the set is in the configured S3 bucket, pull only that timestamp instead
+   of copying the archives by hand:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;timestamp&gt;<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
 </code></pre></div>
 <ol>
-<li>Copy the matching encryption key under the required one-time name, then
-   submit the restore request:</li>
+<li>Follow the restore:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>postgres-backup:/restore-inbox/operator_key
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">RESTORE_ID</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">16</span><span class="k">)</span><span class="s2">&quot;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nv">REQUESTED_AT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y-%m-%dT%H:%M:%SZ<span class="k">)</span><span class="s2">&quot;</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="s2">&quot;printf &#39;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;timestamp&gt;\&quot;,\&quot;restore_id\&quot;:\&quot;</span><span class="si">${</span><span class="nv">RESTORE_ID</span><span class="si">}</span><span class="s2">\&quot;,\&quot;requested_at\&quot;:\&quot;</span><span class="si">${</span><span class="nv">REQUESTED_AT</span><span class="si">}</span><span class="s2">\&quot;}&#39; &gt; /backup-trigger/.restore_request.json&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>status
 </code></pre></div>
-<p>The request is rejected before anything is touched unless it carries both
-   <code>restore_id</code> (32 lowercase hex characters) and <code>requested_at</code> (an
-   ISO-8601 timestamp with a timezone). Keep the <code>RESTORE_ID</code> value — it is
-   the same id you type back in step 5 to acknowledge the restore.</p>
+<p>It reports the state, the current step, any error, whether manual follow-up
+   is required, and the safety backup to restore if it is. The WebUI Backup
+   panel shows the same status, and <code>docker compose logs -f postgres-backup</code>
+   shows the raw progress. The one-time key and decrypted secrets staging are
+   removed when the restore exits.</p>
 <ol>
-<li>Follow <code>docker compose logs -f postgres-backup</code>, or run:</li>
-</ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>cat<span class="w"> </span>/backup-trigger/.restore_status.json
-</code></pre></div>
-<p>The one-time key and decrypted secrets staging are removed when the restore
-   exits.</p>
-<ol>
-<li>Review the restored outbound settings, note the <code>restore_id</code> in the status,
-   and run <code>jarvis-research restore acknowledge &lt;restore-id&gt;</code>. The command
-   requires the exact ID and a second typed confirmation before it releases
-   quarantine.</li>
+<li>Review the restored outbound settings and run
+   <code>jarvis-research restore acknowledge &lt;restore-id&gt;</code> with the restore
+   identifier step 2 printed. The command requires the exact ID and a second
+   typed confirmation before it releases quarantine.</li>
 </ol>
 <p>A failure before the database swap lifts maintenance because live data was not
 replaced. A later failure keeps the service at HTTP 503. Do not remove the
@@ -2329,7 +2358,11 @@ databases and services have been checked.</p>
 <hr />
 <h2 id="if-your-only-surviving-backup-is-an-older-unsigned-one">If your only surviving backup is an older, unsigned one<a class="headerlink" href="#if-your-only-surviving-backup-is-an-older-unsigned-one" title="Permanent link">&para;</a></h2>
 <p>Backup points taken before signature support carry no signature. On the original server they keep restoring normally — with a warning that they cannot be checked — right up until this version takes its <strong>first</strong> backup there. From that first signed backup onwards the server requires a signature on every restore, so those older unsigned points stop restoring too unless you take the deliberate override below. The switch is the arrival of signing on that server, not the age of the point you pick, so take a fresh backup after updating and keep it as your working restore point. Recovering a <strong>fresh server</strong> from an unsigned off-site set is refused outright, because on a new host there is nothing else to check the archives against.</p>
-<p>For the genuine disaster where an unsigned set is all that is left, an operator with terminal access on the server can accept it deliberately. It cannot be done from the browser and cannot be done by setting a flag alone: the restore must be run interactively, with <code>JARVIS_RESTORE_ALLOW_LEGACY=1</code> set <strong>and</strong> the phrase <code>I-ACCEPT-UNVERIFIED-BACKUP</code> typed at the prompt. The restore then logs a permanent warning that its archives were never verified.</p>
+<p>For the genuine disaster where an unsigned set is all that is left, an operator with terminal access on the server can accept it deliberately:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>legacy<span class="w"> </span>&lt;timestamp&gt;
+</code></pre></div>
+<p>A restore replays into a running database, so start the stack first if it is down (<code>jarvis-research start</code>); the command says so rather than failing part way. The command explains that the set cannot be verified, stops the backup service so it cannot pick the request up first, and runs the restore interactively so the prompt reaches you. You must type the phrase <code>I-ACCEPT-UNVERIFIED-BACKUP</code> before anything is changed; nothing else — no flag, no browser button — can take the override. The restore then logs a permanent warning that its archives were never verified, and the backup service resumes afterwards either way. Follow the outcome with <code>jarvis-research restore status</code>.</p>
+<p>This is same-host recovery only. An off-site set is refused outright regardless of the override, because on a fresh host there is nothing to check the archives against.</p>
 <p>This override applies <strong>only</strong> when a signature is absent. It never applies to a restore point whose signature fails to verify — that is evidence of tampering, not of loss, and is always refused.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
