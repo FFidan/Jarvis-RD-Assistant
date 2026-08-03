@@ -17,8 +17,8 @@ dependencies = [
     # Matches the services. The route-table walk this package ships needs the
     # 0.137 routing API, and below it the check that pins the impersonation
     # route set degrades to a silent skip.
-    "fastapi>=0.137.0",
-    "gitpython>=3.1.55",  # >=3.1.55 clears GHSA-94p4-4cq8-9g67 and prior GitPython advisories
+    "fastapi>=0.137.0,<0.141.0",
+    "gitpython>=3.1.57",  # >=3.1.57 clears GHSA-3f7w-8rr8-f37f and prior GitPython advisories
     "httpx>=0.27.0",
     "idna>=3.15",
     "instructor>=1.15.0",
