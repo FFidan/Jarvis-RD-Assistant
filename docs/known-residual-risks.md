@@ -203,7 +203,7 @@ These document intentional deviations from the container-hardening sweep, each w
 
 **Finding:** `osv-scanner` / `npm audit` flag `react-router` 7.18.2 (pulled by `react-router-dom`) under GHSA-qwww-vcr4-c8h2 — a CSRF bypass that can execute a router action before a 400 response is returned, in React Router's RSC (React Server Components) mode.
 
-**Why accepted:** the frontend is a client-only SPA that uses declarative routing exclusively. The RSC packages, server-action pipeline, and the APIs the advisory concerns are never imported or configured, so the vulnerable code path is unreachable in this deployment. The advisory's fixed range begins at react-router 8.3.0; adopting the v8 major line is a migration deferred beyond v1.2.3. The suppression is scoped to this one advisory id in `frontend/osv-scanner.toml`.
+**Why accepted:** the frontend is a client-only SPA that uses `react-router-dom` declarative routing exclusively. The RSC packages, server-action pipeline, and the APIs the advisory concerns are never imported or configured, so the vulnerable code path is unreachable in this deployment. No compatible fix is installable either: the advisory is patched in react-router core 8.3.0, but `react-router-dom` — the app's actual routing dependency — has published no v8 release, so it cannot pull the patched core, and downgrading below 7.12.0 drops required features. The suppression is scoped to this one advisory id in `frontend/osv-scanner.toml`.
 
 **Reopen / removal trigger:** remove the suppression and this entry when the frontend adopts react-router >= 8.3.0 (or a back-ported patched v7 release appears), or immediately if the app ever introduces React Router RSC mode or server actions. Suppression review date: 2026-10-15.
 

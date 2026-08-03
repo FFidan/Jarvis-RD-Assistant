@@ -330,6 +330,27 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     assert "npm ls --prefix frontend js-yaml brace-expansion eslint --all" in security_workflow
     assert "python3 scripts/check_npm_audit.py" in security_workflow
 
+    # Offline, advisory-DB-independent floor: every resolved brace-expansion node in the
+    # lockfile must sit at or above its patched version, so a transitive bump cannot
+    # reintroduce the advisory between hosted npm-audit runs. brace-expansion needs no
+    # audit exception precisely because these floors hold.
+    lock = json.loads(_read("frontend/package-lock.json"))
+    brace_floors = {1: (1, 1, 17), 2: (2, 0, 2), 5: (5, 0, 8)}
+    seen_brace = 0
+    for lock_path, node in lock["packages"].items():
+        if not lock_path.endswith("node_modules/brace-expansion"):
+            continue
+        parts = tuple(int(part) for part in node["version"].split("."))
+        floor = brace_floors.get(parts[0])
+        assert floor is not None, (
+            f"unexpected brace-expansion major in {lock_path}: {node['version']}"
+        )
+        assert parts >= floor, (
+            f"brace-expansion {node['version']} is below its patched floor in {lock_path}"
+        )
+        seen_brace += 1
+    assert seen_brace, "no brace-expansion nodes found in the lockfile"
+
 
 def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None:
     """The maintainer checklist must name each release-critical CI class."""
