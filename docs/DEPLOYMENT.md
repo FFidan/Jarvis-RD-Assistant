@@ -102,6 +102,10 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
 
 The `./setup.sh --check` command reports GPU toolkit availability as an informational item.
 
+### AMD and Intel GPUs (experimental)
+
+AMD ROCm is selected only when `/dev/kfd` is present. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is chosen explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan are experimental, and PDF parsing and reranking stay on CPU regardless of the acceleration path. See the [hardware support matrix](manual/hardware-support-matrix.md) for vendor status and how to report your hardware.
+
 ### vLLM overlay (optional, manual)
 
 vLLM is a **separate, optional overlay** — it is not auto-started by `setup.sh`. Use it to serve large models locally at higher throughput than Ollama.
