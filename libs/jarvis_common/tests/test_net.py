@@ -12,7 +12,12 @@ from email.utils import format_datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from jarvis_common.net import _MAX_RETRY_AFTER_S, _reject_non_public_host, parse_retry_after
+from jarvis_common.net import (
+    _MAX_RETRY_AFTER_S,
+    _reject_non_public_host,
+    is_non_public_address,
+    parse_retry_after,
+)
 
 # ---------------------------------------------------------------------------
 # Rejects private / loopback / link-local literal IPs
@@ -43,6 +48,35 @@ async def test_allows_public_ip() -> None:
     """A public IP (8.8.8.8) must NOT raise."""
     # 8.8.8.8 resolves to itself — public address — so no ValueError.
     await _reject_non_public_host("8.8.8.8")
+
+
+def test_is_non_public_address_covers_every_class() -> None:
+    """The shared predicate refuses all seven non-public classes and admits public IPs.
+
+    CGNAT (100.64.0.0/10) and multicast are the classes the historical
+    private/loopback/link-local guard missed; each is non-public ONLY through its
+    own clause here, so this pins them independently of the is_private overlap that
+    already subsumes reserved/unspecified on IPv4.
+    """
+    from ipaddress import ip_address
+
+    non_public = [
+        "10.0.0.1",  # private
+        "127.0.0.1",  # loopback
+        "169.254.0.1",  # link-local
+        "240.0.0.1",  # reserved
+        "224.0.0.1",  # multicast (v4) — only is_multicast catches this
+        "0.0.0.0",  # unspecified
+        "100.64.0.1",  # CGNAT — only the CGNAT clause catches this
+        "::1",  # loopback (v6)
+        "fe80::1",  # link-local (v6)
+        "ff02::1",  # multicast (v6)
+    ]
+    for addr in non_public:
+        assert is_non_public_address(ip_address(addr)) is True, addr
+
+    for public in ("8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"):
+        assert is_non_public_address(ip_address(public)) is False, public
 
 
 # ---------------------------------------------------------------------------

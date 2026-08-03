@@ -425,13 +425,13 @@ def test_validate_bbt_base_url_rejects_ftp_scheme():
 
 def test_validate_bbt_base_url_rejects_private_ip():
     """Private IP addresses not in the allow-list are rejected."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://192.168.1.1:23119")
 
 
 def test_validate_bbt_base_url_rejects_loopback_ip():
     """Loopback IP 127.0.0.1 is rejected (not the docker alias)."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://127.0.0.1:23119")
 
 
@@ -448,25 +448,25 @@ def test_validate_bbt_base_url_accepts_https_public_host():
 
 def test_validate_bbt_base_url_rejects_cgnat_ip():
     """CGNAT space (100.64.0.0/10) is non-public and must be refused (SSRF guard)."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://100.64.0.1:23119")
 
 
 def test_validate_bbt_base_url_rejects_reserved_ip():
     """Reserved space (240.0.0.0/4) is non-public and must be refused (SSRF guard)."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://240.0.0.1:23119")
 
 
 def test_validate_bbt_base_url_rejects_multicast_ip():
     """Multicast space (224.0.0.0/4) is non-public and must be refused (SSRF guard)."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://224.0.0.1:23119")
 
 
 def test_validate_bbt_base_url_rejects_unspecified_ip():
     """0.0.0.0 (unspecified) is non-public and must be refused (SSRF guard)."""
-    with pytest.raises(ValueError, match="private/loopback"):
+    with pytest.raises(ValueError, match="non-public"):
         validate_bbt_base_url("http://0.0.0.0:23119")
 
 

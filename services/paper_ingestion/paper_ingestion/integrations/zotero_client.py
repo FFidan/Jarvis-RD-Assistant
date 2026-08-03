@@ -257,7 +257,7 @@ def validate_bbt_base_url(
         addr = ipaddress.ip_address(hostname)
         if is_non_public_address(addr):
             raise BBTPrivateHostError(
-                f"BBT_BASE_URL hostname {hostname!r} resolves to a private/loopback address "
+                f"BBT_BASE_URL hostname {hostname!r} resolves to a non-public address "
                 f"which is not explicitly allowed. Add it to "
                 f"{BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY} if it is intentional. Got: {url!r}"
             )
