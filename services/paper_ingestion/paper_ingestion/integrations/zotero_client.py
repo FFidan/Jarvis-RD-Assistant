@@ -20,7 +20,7 @@ from jarvis_common.maintenance import ensure_outbound_egress_allowed
 # re-export so call sites can keep doing
 # `from paper_ingestion.integrations.zotero_client import _MAX_RETRY_AFTER_SECONDS`.
 from jarvis_common.net import _MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS
-from jarvis_common.net import parse_retry_after
+from jarvis_common.net import is_non_public_address, parse_retry_after
 
 from paper_ingestion.config import get_paper_ingestion_settings
 
@@ -48,12 +48,6 @@ BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY = "zotero.allowed_private_hosts"
 # empty cache only means the builtin allowlist applies, never a boot failure.
 _configured_private_hosts: frozenset[str] = frozenset()
 
-# (base_url, allowlist) pairs whose host already resolved to a permitted address.
-# Only successes are memoised, so a host that was unresolvable at one call is
-# re-checked at the next instead of being permanently trusted or permanently
-# refused.
-_bbt_host_checked: set[tuple[str, frozenset[str]]] = set()
-
 
 class BBTPrivateHostError(ValueError):
     """The Better BibTeX host is private and not in the effective allowlist.
@@ -69,10 +63,9 @@ def bbt_private_host_allowlist() -> frozenset[str]:
 
 
 def set_configured_private_hosts(hosts: frozenset[str]) -> None:
-    """Replace the cached operator-configured allowlist and drop stale decisions."""
+    """Replace the cached operator-configured allowlist."""
     global _configured_private_hosts
     _configured_private_hosts = hosts
-    _bbt_host_checked.clear()
 
 
 async def refresh_configured_private_hosts(db_pool: Any) -> frozenset[str]:
@@ -112,17 +105,15 @@ async def bbt_host_permitted(bbt_base: str) -> bool:
     """Whether a request may be issued to *bbt_base*.
 
     Resolves DNS names off the event loop and refuses when any resolved address
-    is private, loopback or link-local and the host is not allowlisted.
+    is non-public (:func:`jarvis_common.net.is_non_public_address`) and the host
+    is not allowlisted. Every call re-resolves and re-checks — a host is never
+    permanently trusted, so DNS that later points into a blocked range is
+    refused on the next call.
     """
     allowlist = bbt_private_host_allowlist()
-    cache_key = (bbt_base, allowlist)
-    if cache_key in _bbt_host_checked:
-        return True
-
     parsed = urlparse(bbt_base)
     hostname = parsed.hostname or ""
     if hostname in allowlist:
-        _bbt_host_checked.add(cache_key)
         return True
     if not hostname:
         logger.warning("Better BibTeX base URL %r has no host; request refused", bbt_base)
@@ -139,15 +130,14 @@ async def bbt_host_permitted(bbt_base: str) -> bool:
             return False
         addresses = [ipaddress.ip_address(entry[4][0]) for entry in addr_info]
 
-    if any(addr.is_private or addr.is_loopback or addr.is_link_local for addr in addresses):
+    if any(is_non_public_address(addr) for addr in addresses):
         logger.warning(
-            "Better BibTeX host %r resolves to a private address not in %s; request refused",
+            "Better BibTeX host %r resolves to a non-public address not in %s; request refused",
             hostname,
             BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
         )
         return False
 
-    _bbt_host_checked.add(cache_key)
     return True
 
 
@@ -262,10 +252,10 @@ def validate_bbt_base_url(
     if hostname in allowed_private_hosts:
         return
 
-    # Block private / loopback IP addresses (SSRF guard).
+    # Block non-public IP addresses (SSRF guard).
     try:
         addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local:
+        if is_non_public_address(addr):
             raise BBTPrivateHostError(
                 f"BBT_BASE_URL hostname {hostname!r} resolves to a private/loopback address "
                 f"which is not explicitly allowed. Add it to "

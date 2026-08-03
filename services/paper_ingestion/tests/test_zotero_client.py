@@ -446,6 +446,30 @@ def test_validate_bbt_base_url_accepts_https_public_host():
     validate_bbt_base_url("https://my-zotero-bbt.example.com:23119")
 
 
+def test_validate_bbt_base_url_rejects_cgnat_ip():
+    """CGNAT space (100.64.0.0/10) is non-public and must be refused (SSRF guard)."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://100.64.0.1:23119")
+
+
+def test_validate_bbt_base_url_rejects_reserved_ip():
+    """Reserved space (240.0.0.0/4) is non-public and must be refused (SSRF guard)."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://240.0.0.1:23119")
+
+
+def test_validate_bbt_base_url_rejects_multicast_ip():
+    """Multicast space (224.0.0.0/4) is non-public and must be refused (SSRF guard)."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://224.0.0.1:23119")
+
+
+def test_validate_bbt_base_url_rejects_unspecified_ip():
+    """0.0.0.0 (unspecified) is non-public and must be refused (SSRF guard)."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://0.0.0.0:23119")
+
+
 # ---------------------------------------------------------------------------
 # str BYTEA variant in _get_zotero_config
 # ---------------------------------------------------------------------------
@@ -726,6 +750,24 @@ async def test_unresolvable_host_is_rechecked_and_still_refused(client, monkeypa
     monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("10.0.0.9"))
     assert await client.fetch_bbt_citation_key("ABCD1234") is None
     assert not route.called
+
+
+@pytest.mark.usefixtures("_lan_bbt")
+@pytest.mark.parametrize("blocked", ["100.64.0.1", "240.0.0.1", "224.0.0.1", "0.0.0.0"])
+async def test_bbt_host_permitted_refuses_non_public_ranges(monkeypatch, blocked):
+    """CGNAT, reserved, multicast and unspecified answers are refused like private ones."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to(blocked))
+    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is False
+
+
+@pytest.mark.usefixtures("_lan_bbt")
+async def test_bbt_host_permitted_re_evaluates_after_a_public_success(monkeypatch):
+    """A host trusted once is re-resolved: a later private answer is still refused."""
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("8.8.8.8"))
+    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is True
+
+    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
+    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is False
 
 
 async def test_startup_hook_reports_a_private_host_without_aborting_boot(monkeypatch, caplog):
