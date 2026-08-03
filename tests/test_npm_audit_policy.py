@@ -1,4 +1,4 @@
-"""Regression tests for the expiring frontend audit exceptions."""
+"""Regression tests for the expiring frontend audit exception."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ sys.modules.setdefault(_spec.name, _audit_policy)
 _spec.loader.exec_module(_audit_policy)
 
 AuditPolicyError = _audit_policy.AuditPolicyError
-BRACE_EXPANSION_ADVISORY = _audit_policy.BRACE_EXPANSION_ADVISORY
 REACT_ROUTER_RSC_ADVISORY = _audit_policy.REACT_ROUTER_RSC_ADVISORY
 evaluate_reports = _audit_policy.evaluate_reports
 
@@ -39,7 +38,6 @@ def _advisory(advisory_id: str, dependency: str) -> dict[str, object]:
 
 def _report(
     *,
-    include_brace: bool = False,
     include_router: bool = True,
     extra_advisory: str | None = None,
 ) -> dict[str, object]:
@@ -57,19 +55,6 @@ def _report(
                 },
             }
         )
-    if include_brace:
-        vulnerabilities.update(
-            {
-                "brace-expansion": {
-                    "severity": "high",
-                    "via": [_advisory(BRACE_EXPANSION_ADVISORY, "brace-expansion")],
-                },
-                "eslint": {
-                    "severity": "high",
-                    "via": ["brace-expansion"],
-                },
-            }
-        )
     if extra_advisory is not None:
         vulnerabilities["unexpected-package"] = {
             "severity": "high",
@@ -81,12 +66,7 @@ def _report(
     }
 
 
-def _stage_frontend(
-    tmp_path: Path,
-    *,
-    rsc_dependency: bool = False,
-    brace_version: str = "5.0.8",
-) -> Path:
+def _stage_frontend(tmp_path: Path, *, rsc_dependency: bool = False) -> Path:
     frontend = tmp_path / "frontend"
     source = frontend / "src"
     source.mkdir(parents=True)
@@ -94,25 +74,11 @@ def _stage_frontend(
     if rsc_dependency:
         dependencies["@react-router/dev"] = "^7.18.1"
     (frontend / "package.json").write_text(
-        json.dumps(
-            {
-                "dependencies": dependencies,
-                "devDependencies": {},
-                "overrides": {"brace-expansion@^5": "5.0.8"},
-            }
-        ),
+        json.dumps({"dependencies": dependencies, "devDependencies": {}}),
         encoding="utf-8",
     )
     (frontend / "package-lock.json").write_text(
-        json.dumps(
-            {
-                "lockfileVersion": 3,
-                "packages": {
-                    "": {},
-                    "node_modules/brace-expansion": {"version": brace_version},
-                },
-            }
-        ),
+        json.dumps({"lockfileVersion": 3, "packages": {"": {}}}),
         encoding="utf-8",
     )
     (source / "app.tsx").write_text(
@@ -122,8 +88,8 @@ def _stage_frontend(
     return tmp_path
 
 
-def test_expected_runtime_and_dev_advisories_pass(tmp_path: Path) -> None:
-    """Only the checked RSC advisory may pass; the brace-expansion advisory is patched."""
+def test_the_react_router_exception_passes(tmp_path: Path) -> None:
+    """The one checked RSC advisory is accepted; brace-expansion is patched, not excepted."""
     root = _stage_frontend(tmp_path)
 
     entries = evaluate_reports(
@@ -144,7 +110,7 @@ def test_unexpected_high_advisory_fails(tmp_path: Path) -> None:
     with pytest.raises(AuditPolicyError, match="unaccepted high-severity"):
         evaluate_reports(
             _report(extra_advisory="GHSA-1111-2222-3333"),
-            _report(include_brace=False, extra_advisory="GHSA-1111-2222-3333"),
+            _report(extra_advisory="GHSA-1111-2222-3333"),
             repo_root=root,
             policy_path=POLICY_PATH,
             today=date(2026, 7, 28),
@@ -158,7 +124,7 @@ def test_malformed_audit_report_fails(tmp_path: Path) -> None:
     with pytest.raises(AuditPolicyError, match="auditReportVersion 2"):
         evaluate_reports(
             {"error": "registry unavailable"},
-            _report(include_brace=False),
+            _report(),
             repo_root=root,
             policy_path=POLICY_PATH,
             today=date(2026, 7, 28),
@@ -180,7 +146,7 @@ def test_resolved_advisory_requires_exception_removal(tmp_path: Path) -> None:
 
 
 def test_expired_exception_fails(tmp_path: Path) -> None:
-    """Expiry forces the two upstream conditions to be reviewed again."""
+    """Expiry forces the upstream condition to be reviewed again."""
     root = _stage_frontend(tmp_path)
 
     with pytest.raises(AuditPolicyError, match="exception expired"):
@@ -200,7 +166,7 @@ def test_rsc_dependency_invalidates_router_exception(tmp_path: Path) -> None:
     with pytest.raises(AuditPolicyError, match="direct packages"):
         evaluate_reports(
             _report(),
-            _report(include_brace=False),
+            _report(),
             repo_root=root,
             policy_path=POLICY_PATH,
             today=date(2026, 7, 28),
@@ -218,21 +184,7 @@ def test_rsc_usage_outside_src_invalidates_router_exception(tmp_path: Path) -> N
     with pytest.raises(AuditPolicyError, match="RSC usage"):
         evaluate_reports(
             _report(),
-            _report(include_brace=False),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
-
-
-def test_unpatched_brace_v5_invalidates_dev_only_exception(tmp_path: Path) -> None:
-    """The dev-only exception still requires the available v5 patch."""
-    root = _stage_frontend(tmp_path, brace_version="5.0.7")
-
-    with pytest.raises(AuditPolicyError, match="brace-expansion v5"):
-        evaluate_reports(
             _report(),
-            _report(include_brace=False),
             repo_root=root,
             policy_path=POLICY_PATH,
             today=date(2026, 7, 28),
