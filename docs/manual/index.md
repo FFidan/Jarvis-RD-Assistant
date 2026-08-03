@@ -34,6 +34,7 @@ These documents are part of the repository and are available in the **Get Starte
 
 | Page | What it covers |
 |------|---------------|
+| [Quick start](quickstart.md) | The one-screen happy path: install, create an admin, and analyze your first paper |
 | [First sign-in and setup](getting-started.md) | Create the first administrator, invite family, and add the first paper |
 | [Access from other devices](access-modes.md) | Choose localhost, private HTTPS, LAN diagnostics, Cloudflare, or your own domain |
 | [Passkeys](passkeys.md) | Add, remove, use, and recover from passkeys with or without email |
