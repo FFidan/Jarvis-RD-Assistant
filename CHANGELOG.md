@@ -97,6 +97,8 @@ honestly described.
 - **The frontend dependency scan was reassessed**: development-only advisories
   were cleared by in-range patches, and a remaining routing-library advisory is
   tracked with a dated removal trigger and does not affect a running instance.
+- **Dependency floors were raised to their patched releases**, so a fresh
+  install resolves no dependency version carrying a known advisory.
 
 ## v1.2.2 (2026-07-31)
 
