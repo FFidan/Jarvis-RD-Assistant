@@ -56,19 +56,19 @@ the applicable NVIDIA terms when building or distributing GPU images. They are
 not part of CPU-only deployments.
 
   cuda-bindings          13.2.0    — LicenseRef-NVIDIA-SOFTWARE-LICENSE
-  cuda-toolkit           13.0.2    — NVIDIA CUDA Toolkit (EULA)
-  nvidia-cublas          13.1.0.3  — LicenseRef-NVIDIA-Proprietary
+  cuda-toolkit           13.0.3.0  — NVIDIA CUDA Toolkit (EULA)
+  nvidia-cublas          13.1.1.3  — LicenseRef-NVIDIA-Proprietary
   nvidia-cuda-cupti      13.0.85   — NVIDIA Proprietary
   nvidia-cuda-nvrtc      13.0.88   — NVIDIA Proprietary
   nvidia-cuda-runtime    13.0.96   — LicenseRef-NVIDIA-Proprietary
-  nvidia-cudnn-cu13      9.19.0.56 — LicenseRef-NVIDIA-Proprietary
+  nvidia-cudnn-cu13      9.20.0.48 — LicenseRef-NVIDIA-Proprietary
   nvidia-cufft           12.0.0.61 — NVIDIA Proprietary
   nvidia-cufile          1.15.1.6  — NVIDIA Proprietary
   nvidia-curand          10.4.0.35 — NVIDIA Proprietary
   nvidia-cusolver        12.0.4.66 — NVIDIA Proprietary
   nvidia-cusparse        12.6.3.3  — NVIDIA Proprietary
   nvidia-cusparselt-cu13 0.8.0     — NVIDIA Proprietary Software
-  nvidia-nccl-cu13       2.28.9    — LicenseRef-NVIDIA-Proprietary
+  nvidia-nccl-cu13       2.29.7    — LicenseRef-NVIDIA-Proprietary
   nvidia-nvjitlink       13.0.88   — NVIDIA Proprietary
   nvidia-nvshmem-cu13    3.4.5     — LicenseRef-NVIDIA-Proprietary
   nvidia-nvtx            13.0.85   — NVIDIA Proprietary

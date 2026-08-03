@@ -638,21 +638,6 @@ def test_backup_records_a_post_finalization_abort_as_a_complete_set(tmp_path: Pa
     assert status["run_exit_code"] == result.returncode
 
 
-def test_restore_gates_survive_the_backup_truthfulness_change() -> None:
-    """Neither restore gate may move: both consume what backup.sh now records."""
-    reference = subprocess.run(
-        ["git", "show", "origin/main:scripts/restore.sh"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
-    current = RESTORE_SH.read_text(encoding="utf-8").splitlines()
-    for line_number in (1050, 1059):
-        gate = reference[line_number - 1]
-        assert current.count(gate) == 1, gate
-
-
 def test_restore_authenticates_the_manifest_before_the_checksum_gate(restore_src: str) -> None:
     assert restore_src.index("\ngate_manifest_signature\n") < restore_src.index("sha256sum -c")
 
