@@ -13,7 +13,7 @@ license = "Apache-2.0"
 dependencies = [
     "asyncpg>=0.30.0",
     "asyncpg-listen>=0.0.9",
-    "cryptography>=48.0.1",
+    "cryptography>=50.0.0",
     # Matches the services. The route-table walk this package ships needs the
     # 0.137 routing API, and below it the check that pins the impersonation
     # route set degrades to a silent skip.
