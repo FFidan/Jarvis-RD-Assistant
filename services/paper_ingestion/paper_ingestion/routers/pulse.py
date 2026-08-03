@@ -20,8 +20,9 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import (
     ErrorResponse,
-    current_user_id_strict_with_owner_override,
+    current_user_id_strict,
     get_current_user_id,
+    get_current_user_id_or_bot,
     log_audit,
     require_admin_or_api_key,
 )
@@ -80,7 +81,7 @@ router = APIRouter(
 async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    current_uid: int = Depends(get_current_user_id),
+    current_uid: int = Depends(get_current_user_id_or_bot),
     _admin: None = Depends(require_admin_or_api_key),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
@@ -95,22 +96,28 @@ async def generate_pulse(
     multi-minute pipeline run.
     """
     key1 = _kind_lock_key("pulse.generate")
+    enqueue_key1 = _kind_lock_key("pulse.generate.enqueue")
     key2 = current_uid or 0
 
-    async with db_pool.acquire() as probe_conn:
-        row = await probe_conn.fetchrow(
-            "SELECT pg_try_advisory_lock($1, $2) AS got",
-            key1,
-            key2,
-        )
-        if row["got"]:
-            # Free immediately — we only probed; the actual job holds its own lock
-            await probe_conn.execute("SELECT pg_advisory_unlock($1, $2)", key1, key2)
-        else:
-            # Lock is held — find the caller's own in-flight job for the response
-            # body (best-effort). Scoped to current_uid so the 409 never discloses
-            # another user's job id.
-            in_flight = await probe_conn.fetchrow(
+    async with db_pool.acquire() as conn:
+        # Held across the whole check-then-act window below, on a key of its own:
+        # holding the run lock here would block the in-process worker that picks
+        # up the very job we are about to defer.
+        if not await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", enqueue_key1, key2):
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "already_running", "in_flight_job_id": None},
+            )
+        try:
+            row = await conn.fetchrow("SELECT pg_try_advisory_lock($1, $2) AS got", key1, key2)
+            running = not row["got"]
+            if not running:
+                # Free immediately — we only probed; the actual job holds its own lock
+                await conn.execute("SELECT pg_advisory_unlock($1, $2)", key1, key2)
+            # The run lock says nothing about a job still waiting in the queue, so
+            # a queued job is a duplicate too. Scoped to current_uid so the 409
+            # never discloses another user's job id.
+            in_flight = await conn.fetchrow(
                 "SELECT id FROM procrastinate_jobs"
                 " WHERE task_name LIKE '%pulse.generate%'"
                 " AND status IN ('doing', 'todo')"
@@ -118,19 +125,25 @@ async def generate_pulse(
                 " ORDER BY id DESC LIMIT 1",
                 str(current_uid),
             )
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "already_running",
-                    "in_flight_job_id": in_flight["id"] if in_flight else None,
-                },
-            )
+            if running or in_flight is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "reason": "already_running",
+                        "in_flight_job_id": in_flight["id"] if in_flight else None,
+                    },
+                )
 
-    logger.info("pulse.generate: enqueueing job")
-    jarvis_job_id = str(uuid.uuid4())
-    # Pass caller user_id so the resulting deck is owned by the user that
-    # clicked "generate Pulse".
-    await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=current_uid)
+            logger.info("pulse.generate: enqueueing job")
+            jarvis_job_id = str(uuid.uuid4())
+            # Pass caller user_id so the resulting deck is owned by the user that
+            # clicked "generate Pulse".
+            await KIND_TO_TASK["pulse.generate"].defer_async(
+                job_id=jarvis_job_id, user_id=current_uid
+            )
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1, $2)", enqueue_key1, key2)
+
     await log_audit(
         db_pool,
         action="pulse_generate_enqueued",
@@ -150,7 +163,7 @@ async def generate_pulse(
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> PulseDeckResponse | None:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 
@@ -305,7 +318,7 @@ async def rate_card(
 async def explain_card(
     request: Request,
     card_id: int,
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseExplainResponse:
     """Return the reasoning + signal breakdown for a single Pulse card.

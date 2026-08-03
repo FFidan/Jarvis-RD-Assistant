@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -906,3 +907,126 @@ class TestStatusCaseSql:
             f"_STATUS_CASE_SQL has {when_count} WHEN clauses but "
             f"PROCRASTINATE_STATUS_MAP has {len(PROCRASTINATE_STATUS_MAP)} entries."
         )
+
+
+# ---------------------------------------------------------------------------
+# Stalled-job reclamation
+# ---------------------------------------------------------------------------
+
+
+def _stalled_job(job_id: int, jarvis_job_id: str = "jarvis-job-1") -> SimpleNamespace:
+    """A procrastinate Job stand-in; ``id`` is read by the race-guard log line."""
+    return SimpleNamespace(id=job_id, task_kwargs={"job_id": jarvis_job_id})
+
+
+def _reclaim_app(
+    get_stalled_jobs: AsyncMock, finish_job: AsyncMock | None = None
+) -> tuple[SimpleNamespace, AsyncMock, MagicMock]:
+    """Return (app, finish_job, pool) wired the way _reclaim_stalled_jobs reads them.
+
+    The pool's ``execute`` is an AsyncMock: the shim swallows the TypeError a
+    plain MagicMock would raise, so a MagicMock pool would let an assertion on
+    the write pass while nothing was written.
+    """
+    finish_job = finish_job or AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.execute = AsyncMock()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            procrastinate_app=SimpleNamespace(
+                job_manager=SimpleNamespace(
+                    get_stalled_jobs=get_stalled_jobs, finish_job=finish_job
+                )
+            ),
+            db_pool=pool,
+        )
+    )
+    return app, finish_job, pool
+
+
+async def test_reclamation_fails_the_job_and_records_the_interruption() -> None:
+    """A stalled job is failed (not deleted) and its reason reaches job_progress."""
+    from jarvis_common.app_factory import _STALLED_HEARTBEAT_SECONDS, _reclaim_stalled_jobs
+    from procrastinate.jobs import Status
+
+    get_stalled_jobs = AsyncMock(return_value=[_stalled_job(11)])
+    app, finish_job, pool = _reclaim_app(get_stalled_jobs)
+
+    assert await _reclaim_stalled_jobs(app) == 1
+
+    # Selection uses the worker-heartbeat predicate, never the deprecated
+    # wall-time-in-doing one, which would reclaim healthy long-running jobs.
+    kwargs = get_stalled_jobs.await_args.kwargs
+    assert kwargs["seconds_since_heartbeat"] == _STALLED_HEARTBEAT_SECONDS
+    assert "nb_seconds" not in kwargs
+
+    finish_job.assert_awaited_once()
+    assert finish_job.await_args.kwargs["status"] is Status.FAILED
+    assert finish_job.await_args.kwargs["delete_job"] is False
+
+    pool.execute.assert_awaited_once()
+    _sql, jarvis_job_id, result, error, is_error = pool.execute.await_args.args
+    assert jarvis_job_id == "jarvis-job-1"
+    assert result is None
+    assert error["code"] == "JOB_INTERRUPTED"
+    assert "interrupted" in error["message"]
+    assert is_error is True
+
+
+async def test_reclamation_without_stalled_jobs_writes_nothing() -> None:
+    """No stalled jobs means no finish_job call and no job_progress write."""
+    from jarvis_common.app_factory import _reclaim_stalled_jobs
+
+    app, finish_job, pool = _reclaim_app(AsyncMock(return_value=[]))
+
+    assert await _reclaim_stalled_jobs(app) == 0
+    finish_job.assert_not_awaited()
+    pool.execute.assert_not_awaited()
+
+
+async def test_reclamation_failure_never_blocks_the_worker_start() -> None:
+    """A failing lookup is swallowed so the caller can still start the worker."""
+    from jarvis_common.app_factory import _reclaim_stalled_jobs
+
+    app, finish_job, _pool = _reclaim_app(AsyncMock(side_effect=RuntimeError("db down")))
+
+    assert await _reclaim_stalled_jobs(app) == 0
+    finish_job.assert_not_awaited()
+
+
+async def test_a_lost_reclamation_race_does_not_abandon_the_remaining_jobs() -> None:
+    """Both services sweep the same table, so losing a job to a sibling is normal."""
+    from jarvis_common.app_factory import _reclaim_stalled_jobs
+
+    jobs = [_stalled_job(11, "jarvis-job-1"), _stalled_job(12, "jarvis-job-2")]
+    finish_job = AsyncMock(side_effect=[RuntimeError("already finished"), None])
+    app, finish_job, pool = _reclaim_app(AsyncMock(return_value=jobs), finish_job)
+
+    assert await _reclaim_stalled_jobs(app) == 1
+    assert finish_job.await_count == 2
+    pool.execute.assert_awaited_once()
+    assert pool.execute.await_args.args[1] == "jarvis-job-2"
+
+
+async def test_reclamation_reports_a_failed_outcome_write_without_undercounting(caplog) -> None:
+    """finish_job succeeds but the interrupted-outcome write fails.
+
+    The job IS reclaimed, so it stays counted; the lost UI row is surfaced as a
+    distinct warning rather than swallowed as the benign sweep race; and the
+    remaining jobs are still processed.
+    """
+    import logging
+
+    from jarvis_common.app_factory import _reclaim_stalled_jobs
+
+    jobs = [_stalled_job(11, "jarvis-job-1"), _stalled_job(12, "jarvis-job-2")]
+    app, finish_job, pool = _reclaim_app(AsyncMock(return_value=jobs))
+    pool.execute = AsyncMock(side_effect=RuntimeError("job_progress write failed"))
+
+    with caplog.at_level(logging.WARNING):
+        assert await _reclaim_stalled_jobs(app) == 2
+
+    assert finish_job.await_count == 2
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert sum("interrupted-outcome record could not be written" in m for m in warnings) == 2
+    assert not any("already reclaimed elsewhere" in m for m in warnings)

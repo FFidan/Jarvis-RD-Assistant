@@ -463,4 +463,26 @@ describe('streamAnalyze', () => {
     expect(typeof snippet).toBe('string');
     expect(snippet.length).toBeLessThanOrEqual(120);
   });
+
+  it('parses a skipped step event and carries its reason', async () => {
+    const stream = createMockReadableStream([
+      'data: {"type":"step","step":"downloading","status":"skipped","reason":"local paper"}\n\n',
+      'data: [DONE]\n\n',
+    ]);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+
+    const events: AnalyzeEvent[] = [];
+    for await (const event of streamAnalyze(42)) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    const ev = events[0];
+    if (!ev || ev.type !== 'step') throw new Error('test fixture: expected 1 step event');
+    expect(ev.status).toBe('skipped');
+    expect(ev.reason).toBe('local paper');
+  });
 });

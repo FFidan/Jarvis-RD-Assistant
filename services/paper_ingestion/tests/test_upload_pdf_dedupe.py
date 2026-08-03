@@ -21,17 +21,22 @@ from paper_ingestion.routers import pdf  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
 
+# sha256 of the bytes _make_upload_file() produces: local uploads are keyed
+# by the full content digest, so the canonical row carries exactly this id.
+_UPLOAD_DIGEST = "75c0cbb1b1c35c5eaaa70c9065aa308903f8d893c1dfb830531a514b51ab4e85"
+
+
 def _existing_paper_row(**overrides) -> FakeRecord:
     """Build a FakeRecord that looks like a canonical local-PDF paper row."""
     defaults = dict(
         id=73,
-        external_id="local:435299cc42b75f9a",
+        external_id=f"local:{_UPLOAD_DIGEST}",
         source_type="local",
         title="Neural ODEs",
         authors=["Chen", "Rubanova"],
         abstract="An ODE-based approach to neural networks.",
         published_date=None,
-        url="local://435299cc42b75f9a",
+        url=f"local://{_UPLOAD_DIGEST}",
         pdf_url=None,
         pdf_local_path="/data/pdfs/73.pdf",
         pdf_downloaded=True,
@@ -60,7 +65,7 @@ def _make_upload_file() -> object:
 async def test_upload_pdf_dedupe_adds_existing_paper_to_callers_library(tmp_path, monkeypatch):
     """User B re-uploading a PDF already in the corpus gets 200, not 409.
 
-    The canonical paper (id=73, external_id local:435299cc42b75f9a) was
+    The canonical paper (id=73, keyed by the full content digest) was
     previously uploaded by user A.  User B uploads the same bytes.  After
     the fix:
       - add_to_library is called for user B (user_id=99) on paper_id=73
@@ -92,7 +97,7 @@ async def test_upload_pdf_dedupe_adds_existing_paper_to_callers_library(tmp_path
 
     # Must NOT raise 409 — returns the existing paper with status 200
     assert response.id == 73
-    assert response.external_id == "local:435299cc42b75f9a"
+    assert response.external_id == f"local:{_UPLOAD_DIGEST}"
 
     # add_to_library must be called for the caller (user B) on the existing paper
     add_to_library_mock.assert_awaited_once_with(
@@ -173,3 +178,17 @@ async def test_upload_pdf_dedupe_no_library_write_when_unauthenticated(tmp_path,
 
     assert response.id == 73
     add_to_library_mock.assert_not_awaited()
+
+
+def test_browser_uploads_are_capped_below_the_shared_pdf_limit():
+    """The upload route has its own cap; disk imports and downloads keep theirs.
+
+    Lowering the shared constant instead would start failing local folder
+    imports and remote downloads between the two figures. The refusal itself is
+    exercised through the route in
+    tests/contract/test_pi_pdf_contract.py.
+    """
+    from paper_ingestion.pdf_processor import MAX_PDF_SIZE, MAX_UPLOAD_PDF_SIZE  # noqa: PLC0415
+
+    assert MAX_UPLOAD_PDF_SIZE == 50 * 1024 * 1024
+    assert MAX_PDF_SIZE == 100 * 1024 * 1024, "disk imports and downloads keep the larger cap"

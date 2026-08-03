@@ -21,7 +21,7 @@ import subprocess
 import tarfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -420,6 +420,222 @@ def test_production_backup_without_key_fails_before_any_dump(tmp_path: Path) -> 
     assert status["succeeded"] is False
     assert status["stores"]["jarvis"] == "failed"
     assert status["stores"]["litellm"] == "failed"
+
+
+def test_backup_without_key_refuses_outside_production_and_records_the_failure(
+    tmp_path: Path,
+) -> None:
+    """A set with no key cannot be restored, so no environment may report it as taken."""
+    backup_dir = tmp_path / "backups"
+    trigger_dir = tmp_path / "triggers"
+    host_secrets = tmp_path / "host-secrets"
+    secrets_dir = tmp_path / "secrets"
+    bin_dir = tmp_path / "bin"
+    for directory in (backup_dir, trigger_dir, host_secrets, secrets_dir, bin_dir):
+        directory.mkdir()
+
+    postgres_password = tmp_path / "postgres-password"
+    postgres_password.write_text("fixture-password", encoding="utf-8")
+    empty_backup_key = tmp_path / "empty-backup-key"
+    empty_backup_key.touch()
+    pg_dump_trace = tmp_path / "pg-dump-ran"
+    pg_dump_stub = bin_dir / "pg_dump"
+    pg_dump_stub.write_text(
+        f"#!/usr/bin/env bash\nprintf ran > {pg_dump_trace}\nprintf SQL\n",
+        encoding="utf-8",
+    )
+    pg_dump_stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(BACKUP_SH)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ENVIRONMENT": "development",
+            "POSTGRES_PASSWORD_FILE": str(postgres_password),
+            "BACKUP_ENCRYPT_KEYFILE": str(empty_backup_key),
+            "BACKUP_DIR": str(backup_dir),
+            "BACKUP_TRIGGER_DIR": str(trigger_dir),
+            "HOST_SECRETS_DIR": str(host_secrets),
+            "SECRETS_DIR": str(secrets_dir),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1
+    assert "a backup taken without a key cannot be restored" in result.stderr
+    assert str(empty_backup_key) in result.stderr
+    assert not pg_dump_trace.exists(), "pg_dump ran before the keyless refusal"
+    assert not list(backup_dir.glob("jarvis_*.sql.gz*"))
+    assert not list(backup_dir.glob("secrets_*.tar.gz*"))
+    # The refusal sits after the EXIT trap is installed: a run that cannot produce a
+    # restorable set must say so, not leave /status reporting the last success.
+    status = json.loads((backup_dir / ".last_run.json").read_text(encoding="utf-8"))
+    assert status["succeeded"] is False
+    assert status["encrypted"] is False
+    assert status["stores"]["secrets"] == "skipped"
+
+
+def _complete_backup_run(
+    tmp_path: Path,
+    *,
+    aws_stub: str | None,
+    env: dict[str, str] | None = None,
+    before_run: Callable[[Path], None] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Drive backup.sh end to end over stubbed tools and return its result plus backup dir.
+
+    Only the vector store is absent (nothing listens on the Qdrant URL), so the run
+    produces a complete local set and reaches the off-site upload block. ``aws_stub``
+    is the body of a fake ``aws`` executable, or ``None`` to leave the CLI missing.
+    ``before_run`` seeds the backup directory before the script starts.
+    """
+    backup_dir = tmp_path / "backups"
+    trigger_dir = tmp_path / "triggers"
+    host_secrets = tmp_path / "host-secrets"
+    secrets_dir = tmp_path / "secrets"
+    pdf_dir = tmp_path / "pdfs"
+    bin_dir = tmp_path / "bin"
+    for directory in (backup_dir, trigger_dir, host_secrets, secrets_dir, pdf_dir, bin_dir):
+        directory.mkdir()
+
+    postgres_password = tmp_path / "postgres-password"
+    postgres_password.write_text("fixture-password", encoding="utf-8")
+    backup_key = tmp_path / "backup-key"
+    backup_key.write_text("fixture-backup-key", encoding="utf-8")
+    for data_key in (
+        "jarvis_config_key.txt",
+        "jarvis_model_hmac_key.txt",
+        "litellm_salt_key.txt",
+    ):
+        (secrets_dir / data_key).write_text("fixture-key-material", encoding="utf-8")
+    (pdf_dir / "1.pdf").write_text("%PDF-fixture", encoding="utf-8")
+
+    if before_run is not None:
+        before_run(backup_dir)
+
+    for name, body in (
+        ("pg_dump", "#!/usr/bin/env bash\nprintf 'SQL FIXTURE DUMP\\n'\n"),
+        ("psql", "#!/usr/bin/env bash\nprintf '102\\n'\n"),
+    ):
+        stub = bin_dir / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+    if aws_stub is not None:
+        stub = bin_dir / "aws"
+        stub.write_text(aws_stub, encoding="utf-8")
+        stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(BACKUP_SH)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ENVIRONMENT": "development",
+            "POSTGRES_PASSWORD_FILE": str(postgres_password),
+            "BACKUP_ENCRYPT_KEYFILE": str(backup_key),
+            "BACKUP_DIR": str(backup_dir),
+            "BACKUP_TRIGGER_DIR": str(trigger_dir),
+            "HOST_SECRETS_DIR": str(host_secrets),
+            "SECRETS_DIR": str(secrets_dir),
+            "PDF_STORAGE_DIR": str(pdf_dir),
+            # No Qdrant listens here, so the run records an unreachable vector store.
+            "QDRANT_URL": "http://127.0.0.1:1",
+            "BACKUP_SKIP_PRUNE": "1",
+            **(env or {}),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return result, backup_dir
+
+
+def _last_run(backup_dir: Path) -> dict:
+    return json.loads((backup_dir / ".last_run.json").read_text(encoding="utf-8"))
+
+
+def test_backup_records_an_unreachable_vector_store_without_failing_the_run(
+    tmp_path: Path,
+) -> None:
+    """A vector outage is frequently why an operator restores; it must not block one."""
+    result, backup_dir = _complete_backup_run(tmp_path, aws_stub=None)
+
+    assert result.returncode == 0, result.stderr
+    status = _last_run(backup_dir)
+    assert status["succeeded"] is True
+    assert status["run_exit_code"] == 0
+    assert status["stores"]["qdrant"] == "unreachable"
+    assert status["vectors_captured"] is False
+    # No bucket is configured, so nothing was promised off-site and nothing failed.
+    assert status["s3_complete"] is True
+
+
+def test_backup_reports_a_failed_off_site_upload_without_changing_its_exit_status(
+    tmp_path: Path,
+) -> None:
+    """restore.sh gates the safety pre-backup on this exit code before reading succeeded."""
+    counter = tmp_path / "aws-calls"
+    aws_stub = (
+        "#!/usr/bin/env bash\n"
+        f"printf x >> {counter}\n"
+        f'if [ "$(wc -c < {counter})" -eq 2 ]; then exit 1; fi\n'
+        'if [ "$1" = "s3api" ]; then printf 0\\\\n; fi\n'
+        "exit 0\n"
+    )
+    result, backup_dir = _complete_backup_run(
+        tmp_path, aws_stub=aws_stub, env={"BACKUP_S3_BUCKET": "fixture-bucket"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "off-site copy incomplete" in result.stderr
+    assert "local backup" in result.stderr and "complete and usable" in result.stderr
+    assert "FATAL" not in result.stderr
+    status = _last_run(backup_dir)
+    assert status["succeeded"] is True
+    assert status["s3_complete"] is False
+
+
+def test_backup_refuses_to_call_a_truncated_off_site_copy_complete(tmp_path: Path) -> None:
+    """An upload that reported success but arrived short is not an off-site copy."""
+    aws_stub = '#!/usr/bin/env bash\nif [ "$1" = "s3api" ]; then printf \'1\\n\'; fi\nexit 0\n'
+    result, backup_dir = _complete_backup_run(
+        tmp_path, aws_stub=aws_stub, env={"BACKUP_S3_BUCKET": "fixture-bucket"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "does not match the local archive size" in result.stderr
+    status = _last_run(backup_dir)
+    assert status["succeeded"] is True
+    assert status["s3_complete"] is False
+
+
+def test_backup_records_a_post_finalization_abort_as_a_complete_set(tmp_path: Path) -> None:
+    """The archives are already restorable, so the honest record is success plus the error."""
+
+    def block_the_retention_lock(backup_dir: Path) -> None:
+        # A directory where the retention lock file belongs aborts the run during
+        # cleanup, after finalize_backup has published the whole restore point.
+        (backup_dir / ".lifecycle" / "update.lock").mkdir(parents=True)
+
+    result, backup_dir = _complete_backup_run(
+        tmp_path,
+        aws_stub=None,
+        env={"BACKUP_SKIP_PRUNE": ""},
+        before_run=block_the_retention_lock,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert list(backup_dir.glob("manifest_*.json.hmac"))
+    status = _last_run(backup_dir)
+    assert status["succeeded"] is True
+    assert status["run_exit_code"] == result.returncode
 
 
 def test_restore_authenticates_the_manifest_before_the_checksum_gate(restore_src: str) -> None:
@@ -2032,12 +2248,19 @@ def test_an_unencrypted_deployment_skips_verification_symmetrically(tmp_path: Pa
 # --- Break-glass --------------------------------------------------------------------
 
 
+# The override exists for ONE disaster: on this host, signing has arrived (the
+# marker is present, so a signature is required) and the only surviving set
+# predates it. Every case below is therefore same-host with the marker present.
+# An off-host set is refused before the override is even considered, which the
+# last test in this block pins.
+
+
 def test_break_glass_refuses_on_the_environment_variable_alone(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
     out = _gate(
         signed_set,
-        source="inbox",
-        marker=False,
+        source="local",
+        marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed="\n",
     )
@@ -2047,7 +2270,7 @@ def test_break_glass_refuses_on_the_environment_variable_alone(signed_set: Path)
 
 def test_break_glass_refuses_on_the_typed_phrase_alone(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
-    out = _gate(signed_set, source="inbox", marker=False, typed=f"{BREAK_GLASS_PHRASE}\n")
+    out = _gate(signed_set, source="local", marker=True, typed=f"{BREAK_GLASS_PHRASE}\n")
     assert "PROCEED" not in out
     assert "to restore it anyway" not in out, "the prompt must not appear without the override"
 
@@ -2056,8 +2279,8 @@ def test_break_glass_proceeds_with_a_warning_when_both_are_supplied(signed_set: 
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
     out = _gate(
         signed_set,
-        source="inbox",
-        marker=False,
+        source="local",
+        marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed=f"{BREAK_GLASS_PHRASE}\n",
     )
@@ -2069,7 +2292,7 @@ def test_break_glass_never_excuses_a_failed_verification(signed_set: Path) -> No
     (signed_set / f"manifest_{TS}.json.hmac").write_text("0" * 64 + "\n")
     out = _gate(
         signed_set,
-        source="inbox",
+        source="local",
         marker=True,
         env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
         typed=f"{BREAK_GLASS_PHRASE}\n",
@@ -2080,6 +2303,21 @@ def test_break_glass_never_excuses_a_failed_verification(signed_set: Path) -> No
 
 def test_break_glass_is_unreachable_without_an_interactive_terminal(signed_set: Path) -> None:
     (signed_set / f"manifest_{TS}.json.hmac").unlink()
-    out = _gate(signed_set, source="inbox", marker=False, env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"})
+    out = _gate(signed_set, source="local", marker=True, env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"})
+    assert "PROCEED" not in out
+    assert "no authenticated manifest" in out
+
+
+def test_break_glass_never_accepts_an_off_host_set(signed_set: Path) -> None:
+    """On a fresh host there is nothing to check the archives against, so the
+    override is refused even when both of its halves are supplied."""
+    (signed_set / f"manifest_{TS}.json.hmac").unlink()
+    out = _gate(
+        signed_set,
+        source="inbox",
+        marker=False,
+        env={"JARVIS_RESTORE_ALLOW_LEGACY": "1"},
+        typed=f"{BREAK_GLASS_PHRASE}\n",
+    )
     assert "PROCEED" not in out
     assert "no authenticated manifest" in out

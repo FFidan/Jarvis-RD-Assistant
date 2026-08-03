@@ -229,7 +229,7 @@ if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; th
 fi
 
 # Derive and persist the trusted ingress peer addresses (the subnet plus the
-# gateway, Caddy, local Caddy, dashboard, and cloudflared IPs) from the
+# gateway, Telegram bot, Caddy, local Caddy, dashboard, and cloudflared IPs) from the
 # effective JARVIS_NET_SUBNET before Compose reads .env. setup.sh does this
 # inline via allocate_ingress_ips; this wrapper leg never runs that path, so a
 # fresh .env would otherwise reach `compose up` missing the JARVIS_*_IP pins the

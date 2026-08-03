@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +13,7 @@ from paper_ingestion.services.model_lifecycle import (
     MODEL_CATALOG,
     NUM_CTX_LADDER,
     HardwareInfo,
+    ModelStatusDict,
     _DEFAULT_KV_CACHE_BYTES_PER_TOKEN,
     _model_pull_job,
     _probe_macos_vram,
@@ -25,6 +27,7 @@ from paper_ingestion.services.model_lifecycle import (
     recommendations_for_role,
     safe_num_ctx,
 )
+from paper_ingestion.services.provider_models import live_model_entry
 
 
 def _hardware(tier: int = 1) -> HardwareInfo:
@@ -778,3 +781,121 @@ def test_fits_with_embed_reserve_uses_fallback_weights_and_kv() -> None:
     assert fits_with_embed_reserve(entry, _hw_with_vram(8.0), reserve, num_ctx=16384) is True
     # vram=6.0 → budget 4.8 < 6.0084 → does not fit.
     assert fits_with_embed_reserve(entry, _hw_with_vram(6.0), reserve, num_ctx=16384) is False
+
+
+# ---------------------------------------------------------------------------
+# Live provider entries merged through the same status machinery
+# ---------------------------------------------------------------------------
+
+_STATUS_KEYS = frozenset(ModelStatusDict.__annotations__)
+_UNKNOWN_NOTES = (
+    "This provider did not say what this model can do, so JARVIS will not offer it for a role."
+)
+
+
+def _live_entry(
+    provider: str,
+    model_id: str,
+    *,
+    prefix: str,
+    capability: str = "chat",
+) -> ModelCatalogEntry:
+    return live_model_entry(
+        provider,  # type: ignore[arg-type]
+        model_id,
+        assignment_id=f"{prefix}{model_id}",
+        fetched_at=datetime(2026, 8, 1, tzinfo=UTC),
+        capability=capability,  # type: ignore[arg-type]
+    )
+
+
+def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
+    """A live entry must reach the picker as a complete status entry, not a partial dict."""
+    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+
+    statuses = build_model_statuses(
+        installed=[],
+        current={"smart_model": "openrouter/vendor/model-x"},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={"openrouter": True},
+        extra_entries=(entry,),
+    )
+    item = next(i for i in statuses if i["id"] == "openrouter/vendor/model-x")
+
+    assert len(_STATUS_KEYS) == 29
+    assert set(item) == _STATUS_KEYS
+    assert item["name"] == "vendor/model-x"
+    assert item["can_assign"] is True
+    assert item["status"] == "cloud_active"
+
+
+def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> None:
+    entry = _live_entry("openai", "sora-2", prefix="openai/", capability="unknown")
+
+    statuses = build_model_statuses(
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={"openai": True},
+        extra_entries=(entry,),
+    )
+    item = next(i for i in statuses if i["id"] == "openai/sora-2")
+
+    assert item["can_assign"] is False
+    assert item["assign_blocker"] == _UNKNOWN_NOTES
+
+
+def test_extra_entries_reach_role_recommendations() -> None:
+    """Catalog and recommendations cannot disagree about which models exist."""
+    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+
+    recommendations = recommendations_for_role(
+        "smart",
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={"openrouter": True},
+        extra_entries=(entry,),
+    )
+
+    assert any(item["id"] == "openrouter/vendor/model-x" for item in recommendations)
+
+
+def test_blocker_names_the_provider_display_name_not_its_registry_id() -> None:
+    entry = _live_entry("custom_openai_compatible", "org/model-y", prefix="custom_openai/")
+
+    statuses = build_model_statuses(
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={},
+        extra_entries=(entry,),
+    )
+    blocker = next(i for i in statuses if i["id"] == "custom_openai/org/model-y")["assign_blocker"]
+
+    assert blocker == (
+        "Configure the Custom OpenAI-compatible endpoint API key or endpoint URL "
+        "before assigning this model."
+    )
+    assert "custom_openai_compatible" not in str(blocker)
+
+
+def test_blocker_asks_only_for_a_key_where_a_key_is_the_only_way_in() -> None:
+    """A keyed provider has no endpoint URL to configure, so offering one misdirects."""
+    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+
+    statuses = build_model_statuses(
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=0),
+        cloud_api_keys={},
+        extra_entries=(entry,),
+    )
+    blocker = next(i for i in statuses if i["id"] == "openrouter/vendor/model-x")["assign_blocker"]
+
+    assert blocker == "Configure the OpenRouter API key before assigning this model."

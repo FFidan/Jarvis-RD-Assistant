@@ -62,6 +62,7 @@ def _install_stubs(monkeypatch):
     # reloads pdf_workflow, which rebinds its classes, and a handler can only
     # catch the class its own import resolves.
     _workflow_stub.PDFRebuildNotPermittedError = _real_pdf_workflow.PDFRebuildNotPermittedError
+    _workflow_stub.PDFUserFacingError = _real_pdf_workflow.PDFUserFacingError
     _workflow_stub.download_and_store_pdf = AsyncMock()
 
     monkeypatch.setitem(sys.modules, "paper_ingestion.pdf_processor", _pdf_proc_stub)
@@ -474,6 +475,192 @@ async def test_papers_batch_summarize_job_cancelled_mid_run_is_not_unqualified_s
     assert result["summarized"] == 1
     terminal_message = ctx.update_progress.await_args_list[-1].args[1]
     assert "Done" not in terminal_message
+
+
+_REMEDIATION_TEXT = (
+    "Embedding service error: the backend closed the connection. "
+    "Check LiteLLM/Ollama health. (3 chunks saved — retry to resume)."
+)
+
+
+def _summarization_stub(monkeypatch, *, side_effect=None):
+    """Install a stubbed summarization module and return it."""
+    stub = MagicMock()
+    result = MagicMock()
+    result.summary.id = 1
+    stub.generate_paper_summary = AsyncMock(return_value=result, side_effect=side_effect)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", stub)
+    return stub
+
+
+def _process_job_pool(tmp_path, monkeypatch, failure):
+    """Wire a downloaded-paper process job whose workflow call raises *failure*."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+    pool = _make_pool({"id": 42, "pdf_downloaded": True, "pdf_local_path": str(pdf_file)})
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+
+    failing = AsyncMock(side_effect=failure)
+    _workflow_stub.run_process_pdf = failing
+    monkeypatch.setattr(pj, "run_process_pdf", failing, raising=False)
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_process_job_preserves_the_workflow_remediation_text(tmp_path, monkeypatch):
+    """A message written for the requester survives the job handoff intact."""
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job  # noqa: PLC0415
+
+    pool = _process_job_pool(
+        tmp_path, monkeypatch, _real_pdf_workflow.PDFUserFacingError(_REMEDIATION_TEXT)
+    )
+
+    with pytest.raises(JobError) as raised:
+        await _paper_process_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 42, "force": False},
+            ctx=_make_ctx(),
+        )
+
+    assert str(raised.value) == _REMEDIATION_TEXT
+
+
+@pytest.mark.asyncio
+async def test_process_job_does_not_widen_to_arbitrary_runtime_errors(tmp_path, monkeypatch):
+    """An unclassified failure still collapses to the generic payload.
+
+    This is the property the marker type exists to keep narrow: without it the
+    translation would have to catch ``RuntimeError``, and every internal detail
+    would reach the user.
+    """
+    from jarvis_common.task_registry import _terminal_error_payload  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job  # noqa: PLC0415
+
+    pool = _process_job_pool(
+        tmp_path, monkeypatch, RuntimeError("asyncpg refused the pooled connection")
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await _paper_process_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 42, "force": False},
+            ctx=_make_ctx(),
+        )
+
+    assert _terminal_error_payload(raised.value) == {"message": "Job failed", "code": "JOB_FAILED"}
+
+
+@pytest.mark.asyncio
+async def test_analyze_job_preserves_a_summarize_step_remediation(tmp_path, monkeypatch):
+    """The analyze chain's summarize step is covered too, not only its process step."""
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_analyze_job  # noqa: PLC0415
+
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+    pool = _make_pool(
+        {
+            "id": 7,
+            "source_type": "local",
+            "pdf_url": None,
+            "pdf_downloaded": True,
+            "pdf_local_path": str(pdf_file),
+        }
+    )
+
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    _workflow_stub.run_process_pdf = AsyncMock(
+        return_value={"paper_id": 7, "chunk_count": 5, "status": "processed"}
+    )
+    _summarization_stub(
+        monkeypatch, side_effect=_real_pdf_workflow.PDFUserFacingError(_REMEDIATION_TEXT)
+    )
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+
+    with pytest.raises(JobError) as raised:
+        await _paper_analyze_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 7},
+            ctx=_make_ctx(),
+        )
+
+    assert str(raised.value) == _REMEDIATION_TEXT
+
+
+@pytest.mark.asyncio
+async def test_summarize_job_preserves_the_remediation_text(monkeypatch):
+    """The single-paper summarize job translates the same failure the same way."""
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_summarize_job  # noqa: PLC0415
+
+    _summarization_stub(
+        monkeypatch, side_effect=_real_pdf_workflow.PDFUserFacingError(_REMEDIATION_TEXT)
+    )
+    pool = _make_pool({"id": 7, "is_visible": True})
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.verifier = MagicMock()
+    svc.embedder = MagicMock()
+
+    with pytest.raises(JobError) as raised:
+        await _paper_summarize_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 7},
+            ctx=_make_ctx(),
+        )
+
+    assert str(raised.value) == _REMEDIATION_TEXT
+
+
+@pytest.mark.asyncio
+async def test_batch_summarize_keeps_reporting_partial_results(monkeypatch):
+    """One paper's purpose-built failure must not abort the whole batch.
+
+    On batch paths the per-paper error string IS the user-facing truth, so
+    translating there would turn "one failed, the rest fine" into a failed job.
+    """
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job  # noqa: PLC0415
+
+    _summarization_stub(
+        monkeypatch,
+        side_effect=[None, _real_pdf_workflow.PDFUserFacingError(_REMEDIATION_TEXT), None],
+    )
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.verifier = MagicMock()
+    svc.embedder = MagicMock()
+
+    result = await _papers_batch_summarize_job(
+        pool=MagicMock(),
+        http_client=MagicMock(),
+        payload={"paper_ids": [1, 2, 3]},
+        ctx=_make_ctx(),
+    )
+
+    assert result["summarized"] == 2
+    assert result["failed"] == 1
+    assert any("Paper 2" in message for message in result["errors"])
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ EXPECTED_PUBLIC_EXPORTS = frozenset(
         "fetch_papers_by_source",
         "fetch_papers_by_status",
         "migrate_plaintext_secrets",
+        "provider_access_configured",
         "reload_telegram_nudges",
         "test_provider_connectivity",
         "validate_custom_openai_base_url",

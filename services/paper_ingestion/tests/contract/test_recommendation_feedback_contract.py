@@ -158,7 +158,7 @@ async def test_get_recommendation_feedback_paper_id_filter(
 
 # ---------------------------------------------------------------------------
 # §A110-03 — GET /api/recommendation_feedback: 401 without session
-# Verified: auth.py:468 (get_current_user_id → current_user_id_strict_with_owner_override)
+# Verified: jarvis_common.auth (get_current_user_id → current_user_id_strict)
 # ---------------------------------------------------------------------------
 
 
@@ -166,7 +166,7 @@ async def test_get_recommendation_feedback_requires_auth(_pi_app, _configure_api
     """A110: GET without a valid session cookie returns 401.
 
     The route uses Depends(get_current_user_id) which resolves through
-    current_user_id_strict_with_owner_override — no cookie → 401.
+    current_user_id_strict — no cookie → 401.
     """
     async with _client(_pi_app, None) as c:
         resp = await c.get("/api/recommendation_feedback")
@@ -270,7 +270,7 @@ async def test_delete_recommendation_feedback_owner_deletes_own_only(
 
 # ---------------------------------------------------------------------------
 # §A111-02 — DELETE /api/recommendation_feedback: 401 without session
-# Verified: auth.py:468 (get_current_user_id → current_user_id_strict_with_owner_override)
+# Verified: jarvis_common.auth (get_current_user_id → current_user_id_strict)
 # ---------------------------------------------------------------------------
 
 

@@ -41,6 +41,7 @@ SAFE_NAMES = frozenset(
         "current_user_id_strict",
         "current_user_id_strict_with_owner_override",
         "get_current_user_id",
+        "get_current_user_id_or_bot",
         "require_admin",
         "require_admin_or_api_key",
     }

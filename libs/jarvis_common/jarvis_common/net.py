@@ -11,7 +11,7 @@ import ipaddress
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
-__all__ = ["_reject_non_public_host", "parse_retry_after"]
+__all__ = ["_reject_non_public_host", "is_non_public_address", "parse_retry_after"]
 
 # Default ceiling for a parsed Retry-After delay: one hour.  Caps absurdly large
 # header values (e.g. ``Retry-After: 99999999999``) so a poller never blocks for
@@ -96,11 +96,40 @@ def parse_retry_after(
     return result
 
 
+# RFC 6598 carrier-grade NAT space. ``is_private`` does not cover it on
+# Python 3.12, so an SMTP host resolving into a CGNAT range would otherwise
+# pass the guard and reach an operator's upstream network.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_non_public_address(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return ``True`` when *ip* is not a routable public address (SSRF guard).
+
+    Refuses seven non-public classes: private, loopback, link-local, reserved,
+    multicast, unspecified, and RFC 6598 carrier-grade NAT (``100.64.0.0/10``,
+    which ``is_private`` does not include). This is the single predicate every
+    outbound guard shares, so the SMTP, provider and Better BibTeX paths all
+    refuse the same address space. A non-CGNAT ``IPv6Address`` is never in the
+    IPv4 ``_CGNAT_NETWORK`` (``ipaddress`` returns ``False`` across versions).
+    """
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip in _CGNAT_NETWORK
+    )
+
+
 async def _reject_non_public_host(host: str) -> None:
     """Resolve *host*; raise ``ValueError`` if it resolves to a non-public address.
 
-    Rejects private, loopback, link-local, reserved, multicast, and unspecified
-    addresses (SSRF guard).  The caller decides whether to apply the gate (e.g.
+    Rejects private, loopback, link-local, reserved, multicast, unspecified and
+    CGNAT addresses (SSRF guard).  The caller decides whether to apply the gate (e.g.
     gated by ``allow_private_smtp_host``); this helper only enforces the rule.
 
     Parameters
@@ -124,12 +153,5 @@ async def _reject_non_public_host(host: str) -> None:
         sockaddr = info[4]
         # sockaddr[0] is the address string for both AF_INET and AF_INET6
         ip = ipaddress.ip_address(sockaddr[0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
+        if is_non_public_address(ip):
             raise ValueError("SMTP host resolves to a non-public address")

@@ -139,7 +139,7 @@ async def test_zotero_wrapper_uses_per_user_readiness_without_global_poll_row(
     task_registry_mocks,
 ):
     """A missing NULL-user poll_enabled row must not suppress ready personal configs."""
-    pool = MagicMock()
+    pool, _conn = _pool_with_users([42])
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
     with (
@@ -161,6 +161,104 @@ async def test_zotero_wrapper_uses_per_user_readiness_without_global_poll_row(
         task_registry_mocks["zotero.sync_from_zotero"].defer_async.await_args.kwargs["user_id"]
         == 42
     )
+
+
+@pytest.mark.asyncio
+async def test_zotero_wrapper_skips_users_with_a_sync_already_running(task_registry_mocks):
+    """A user whose sync lock is held gets no second job; the others still do."""
+    pool, conn = _pool_with_users([7, 8])
+    # probe order follows the user list: user 7 locked, user 8 free
+    conn.fetchval = AsyncMock(side_effect=[False, True])
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with patch.object(
+        scheduler,
+        "_list_zotero_polling_users",
+        AsyncMock(return_value=[7, 8]),
+    ):
+        await scheduler.run_zotero_sync_wrapper(app)
+
+    defer = task_registry_mocks["zotero.sync_from_zotero"].defer_async
+    defer.assert_awaited_once()
+    assert defer.await_args.kwargs["user_id"] == 8
+
+
+@pytest.mark.asyncio
+async def test_zotero_sync_job_blocked_by_a_running_sync_never_polls_zotero():
+    """The duplicate returns blocked without contacting Zotero at all."""
+    from paper_ingestion.integrations import _zotero_jobs
+
+    poll = AsyncMock()
+    lock = MagicMock()
+    lock.__aenter__ = AsyncMock(return_value=False)  # another sync holds it
+    lock.__aexit__ = AsyncMock(return_value=None)
+    ctx = MagicMock(update_progress=AsyncMock())
+
+    with (
+        patch.object(_zotero_jobs, "AdvisoryLock", MagicMock(return_value=lock)),
+        patch.object(_zotero_jobs, "poll_zotero_library", poll),
+    ):
+        result = await _zotero_jobs._zotero_sync_from_zotero_job(
+            pool=MagicMock(),
+            http_client=MagicMock(),
+            payload={"user_id": 7},
+            ctx=ctx,
+        )
+
+    assert result["status"] == "blocked"
+    poll.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zotero_sync_job_polls_when_it_wins_the_lock():
+    """The uncontended run still polls and reports the poll's own status."""
+    from paper_ingestion.integrations import _zotero_jobs
+
+    poll = AsyncMock(return_value={"status": "ok", "imported": 3})
+    lock = MagicMock()
+    lock.__aenter__ = AsyncMock(return_value=True)
+    lock.__aexit__ = AsyncMock(return_value=None)
+    ctx = MagicMock(update_progress=AsyncMock())
+
+    with (
+        patch.object(_zotero_jobs, "AdvisoryLock", MagicMock(return_value=lock)),
+        patch.object(_zotero_jobs, "poll_zotero_library", poll),
+    ):
+        result = await _zotero_jobs._zotero_sync_from_zotero_job(
+            pool=MagicMock(),
+            http_client=MagicMock(),
+            payload={"user_id": 7},
+            ctx=ctx,
+        )
+
+    assert result == {"status": "ok", "imported": 3}
+    poll.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_zotero_sync_job_locks_on_its_own_kind_and_user():
+    """The job and the scheduler probe must agree on the key, or neither dedupes."""
+    from jarvis_common.advisory_lock import _kind_lock_key
+    from paper_ingestion.integrations import _zotero_jobs
+
+    lock = MagicMock()
+    lock.__aenter__ = AsyncMock(return_value=False)
+    lock.__aexit__ = AsyncMock(return_value=None)
+    lock_factory = MagicMock(return_value=lock)
+
+    with (
+        patch.object(_zotero_jobs, "AdvisoryLock", lock_factory),
+        patch.object(_zotero_jobs, "poll_zotero_library", AsyncMock()),
+    ):
+        await _zotero_jobs._zotero_sync_from_zotero_job(
+            pool=MagicMock(),
+            http_client=MagicMock(),
+            payload={"user_id": 7},
+            ctx=MagicMock(update_progress=AsyncMock()),
+        )
+
+    assert lock_factory.call_args.kwargs["key1"] == _kind_lock_key("zotero.sync_from_zotero")
+    assert lock_factory.call_args.kwargs["key2"] == 7
 
 
 @pytest.mark.asyncio

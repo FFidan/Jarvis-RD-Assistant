@@ -6,6 +6,7 @@ import re
 import shutil
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,8 @@ from paper_ingestion.routers.system_readiness import (  # noqa: F401
     ReadinessStatus,
     get_system_readiness,
 )
+from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
+from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
     async_get_cached_hardware,
@@ -59,6 +62,7 @@ from paper_ingestion.services.model_lifecycle import (
     recommendations_for_role,
 )
 from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+from paper_ingestion.services.provider_models import ProviderModelList, fetch_all_provider_models
 
 logger = logging.getLogger(__name__)
 
@@ -132,15 +136,6 @@ class SetupStatus(BaseModel):
     telegram_configured: bool
     telegram_paired: bool
     model_warnings: list[str] = Field(default_factory=list)
-
-
-def _record_get(row: Any, key: str) -> Any:
-    if hasattr(row, "get"):
-        return row.get(key)
-    try:
-        return row[key]
-    except Exception:
-        return None
 
 
 def _strip_latest(model: str) -> str:
@@ -312,35 +307,16 @@ async def _compute_model_warnings() -> list[str]:
 
 
 async def _cloud_key_presence(pool: asyncpg.Pool) -> dict[str, bool]:
-    """Return whether each cloud provider has a stored API key without decrypting it."""
-    keys = {
-        "anthropic": "llm.anthropic.api_key",
-        "openai": "llm.openai.api_key",
-        "google": "llm.google.api_key",
-    }
+    """Return whether each registered provider has usable access configured.
+
+    Delegates to the one shared access predicate, so the picker's presence map
+    and the assignment save gate can never disagree about a provider.
+    """
     try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT key, value, encrypted_value FROM user_config
-                   WHERE key = ANY($1::text[]) AND user_id IS NULL""",
-                list(keys.values()),
-            )
+        return await provider_access_configured(PROVIDER_REGISTRY, pool)
     except Exception:
         logger.warning("Could not load cloud provider key presence", exc_info=True)
-        return {provider: False for provider in keys}
-
-    row_by_key = {row["key"]: row for row in rows}
-    presence: dict[str, bool] = {}
-    for provider, config_key in keys.items():
-        row = row_by_key.get(config_key)
-        presence[provider] = bool(
-            row is not None
-            and (
-                _record_get(row, "encrypted_value") is not None
-                or _record_get(row, "value") is not None
-            )
-        )
-    return presence
+        return {provider.id: False for provider in PROVIDER_REGISTRY}
 
 
 @router.get("/setup-status", response_model=SetupStatus, dependencies=[Depends(require_admin)])
@@ -405,11 +381,19 @@ class SystemModelsWithDeliveryResponse(SystemModelsResponse):
     also has a matching ``routing`` entry. Roles without a stored intent are
     not considered. False when LiteLLM is unreachable and there is stored
     intent that cannot be verified.
+
+    ``provider_lists`` carries one summary per configured provider — how many
+    live models were listed, when, whether the listing was cut short, what was
+    excluded, and any error — so the UI can say what is not being shown instead
+    of presenting a short list as complete. It must stay declared here:
+    Pydantic drops undeclared top-level keys silently at both the
+    ``model_validate`` call and the route's ``response_model`` filter.
     """
 
     delivery: dict[str, str] = Field(default_factory=dict)
     routing: dict[str, str] = Field(default_factory=dict)
     consistent: bool = True
+    provider_lists: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 async def _load_current_model_assignments(
@@ -575,6 +559,27 @@ async def _load_num_ctx_overrides(db_pool: asyncpg.Pool, machine_id: str | None)
     return num_ctx_per_role
 
 
+def _stamp_live_provenance(
+    entries: Iterable[Any], provider_lists: dict[str, ProviderModelList]
+) -> None:
+    """Mark entries that came from a provider's live list with their origin.
+
+    ``source`` and ``fetched_at`` are not ``ModelStatusDict`` keys, so they are
+    added to the payload dicts after the status machinery has run rather than
+    forced into that shape.
+    """
+    fetched_at_by_id: dict[str, str | None] = {
+        entry.id: (listing.fetched_at.isoformat() if listing.fetched_at else None)
+        for listing in provider_lists.values()
+        for entry in listing.entries
+    }
+    for item in entries:
+        model_id = str(item["id"])
+        if model_id in fetched_at_by_id:
+            item["source"] = "provider"
+            item["fetched_at"] = fetched_at_by_id[model_id]
+
+
 async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryResponse:
     """Inner logic for /models — no auth check; callers must enforce admin gate."""
     ollama_url = get_paper_ingestion_settings().ollama_base_url
@@ -625,6 +630,16 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
 
     num_ctx_per_role = await _load_num_ctx_overrides(request.app.state.db_pool, hardware.machine_id)
 
+    provider_lists = await fetch_all_provider_models(
+        [provider.id for provider in PROVIDER_REGISTRY if cloud_api_keys.get(provider.id)],
+        db_pool=request.app.state.db_pool,
+        http_client=http,
+    )
+    extra_entries = tuple(entry for listing in provider_lists.values() for entry in listing.entries)
+    result["provider_lists"] = {
+        provider_id: listing.summary() for provider_id, listing in provider_lists.items()
+    }
+
     result["catalog"] = build_model_statuses(
         installed=result["installed"],
         current=result["current"],
@@ -632,6 +647,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         hardware=hardware,
         cloud_api_keys=cloud_api_keys,
         num_ctx_per_role=num_ctx_per_role,
+        extra_entries=extra_entries,
     )
     result["recommendations"] = {
         role: recommendations_for_role(
@@ -641,9 +657,13 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
             embedding_model_name=EMBEDDING_MODEL_NAME,
             hardware=hardware,
             cloud_api_keys=cloud_api_keys,
+            extra_entries=extra_entries,
         )
         for role in ("smart", "fast", "embed")
     }
+    _stamp_live_provenance(result["catalog"], provider_lists)
+    for entries in result["recommendations"].values():
+        _stamp_live_provenance(entries, provider_lists)
     # Advisory per-VRAM default-model recommendation.  Convert vram_gb → MiB
     # for recommend_models(); pass None when the probe reported 0 (CPU-only /
     # probe failure) so the None-path safe-default logic fires rather than
@@ -692,21 +712,14 @@ async def get_model_recommendations(
     request: Request,
     role: Role = "smart",
 ) -> dict[str, Any]:
-    """Return catalog-backed model recommendations for one role."""
+    """Return catalog-backed model recommendations for one role.
+
+    Reuses the models response's own recommendations rather than recomputing
+    them, so this endpoint cannot disagree with the picker about which models
+    exist.
+    """
     models = await _get_system_models_data(request)
-    hardware = await async_get_cached_hardware(request.app.state)
-    cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
-    return {
-        "role": role,
-        "recommendations": recommendations_for_role(
-            role,
-            installed=models.installed,
-            current=models.current,
-            embedding_model_name=EMBEDDING_MODEL_NAME,
-            hardware=hardware,
-            cloud_api_keys=cloud_api_keys,
-        ),
-    }
+    return {"role": role, "recommendations": models.recommendations.get(role, [])}
 
 
 @router.post(

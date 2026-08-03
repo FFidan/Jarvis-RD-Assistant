@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { errorMessage } from '@/lib/errors';
+import { formatDate } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { getCitationGraph } from '@/lib/api';
@@ -11,15 +13,22 @@ import { FetchCitationsButton } from '@/components/citation/FetchCitationsButton
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { GitFork } from 'lucide-react';
+import { GitFork, X } from 'lucide-react';
 import type { PaperBrief } from '@/types';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
+import type { GraphNode } from '@/types/jobs';
+
+/** The subset of GraphNode fields the page stashes on each CytoscapeNode. */
+type CitationNodeMetadata = Pick<GraphNode, 'citation_count' | 'published_date' | 'is_stub'>;
 
 export function CitationGraphPage() {
+  const navigate = useNavigate();
   const [selectedPapers, setSelectedPapers] = useState<PaperBrief[]>([]);
   const [depth, setDepth] = useState(1);
   const [layout, setLayout] = useState<LayoutType>('cose');
+  const [stubPanelNodeId, setStubPanelNodeId] = useState<string | null>(null);
 
   const paperIds = selectedPapers.map((p) => p.id);
 
@@ -57,6 +66,27 @@ export function CitationGraphPage() {
     paper: '#1f77b4',
     stub: '#cccccc',
   };
+
+  // Cytoscape's tap handler delivers node ids as strings; `nodes` above converts
+  // each GraphNode.id (int) to that same string form at `:47`, which is the one
+  // place the number/string boundary is crossed, so this lookup compares strings.
+  const handleNodeClick = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      if (node.type === 'stub') {
+        setStubPanelNodeId(node.id);
+        return;
+      }
+      setStubPanelNodeId(null);
+      navigate(`/paper/${node.id}`);
+    },
+    [nodes, navigate],
+  );
+
+  // Resolved every render so a stub panel cannot outlive the graph that holds it:
+  // changing the seed papers re-fetches `nodes`, and a node that is gone closes.
+  const stubPanelNode = nodes.find((n) => n.id === stubPanelNodeId) ?? null;
 
   const stats = graphData
     ? [
@@ -138,14 +168,56 @@ export function CitationGraphPage() {
 
       {nodes.length > 0 && (
         <>
+          {/* Keyboard-reachable mirror of the graph's mouse-only tap activation. */}
+          <ul className="sr-only" aria-label="Citation graph nodes">
+            {nodes.map((n) => (
+              <li key={n.id}>
+                <button type="button" onClick={() => handleNodeClick(n.id)}>
+                  Open {n.label}
+                </button>
+              </li>
+            ))}
+          </ul>
           <CytoscapeGraph
             nodes={nodes}
             edges={edges}
             layout={layout}
             colorMap={citationColorMap}
             height={500}
+            onNodeClick={handleNodeClick}
           />
           <GraphStats stats={stats} />
+          {stubPanelNode && (
+            <Card className="rounded-md border-hair shadow-none" data-testid="citation-stub-panel">
+              <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
+                <CardTitle className="text-sm">{stubPanelNode.label}</CardTitle>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  aria-label="Close"
+                  onClick={() => setStubPanelNodeId(null)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                {(() => {
+                  const metadata = stubPanelNode.metadata as CitationNodeMetadata;
+                  return (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        {metadata.citation_count} citations
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDate(metadata.published_date)}
+                      </p>
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

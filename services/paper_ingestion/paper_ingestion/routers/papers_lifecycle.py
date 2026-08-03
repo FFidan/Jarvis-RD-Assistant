@@ -6,7 +6,7 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import ErrorResponse
-from jarvis_common.auth import get_current_user_id
+from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
 from jarvis_common.paper_state import assert_paper_in_states as _assert_paper_in_states
 from jarvis_common.paper_state import restore_paper as _restore_paper
 from jarvis_common.paper_state import trash_paper as _trash_paper
@@ -51,7 +51,7 @@ async def save_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Save a paper to the Reading List (``state := 'to_read'``)."""
     already_processed = False
@@ -108,7 +108,7 @@ async def skip_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Skip a paper from the Inbox (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
@@ -129,7 +129,7 @@ async def reading_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Mark a paper as currently being read (``state := 'reading'``)."""
     async with db_pool.acquire() as conn:
@@ -176,7 +176,7 @@ async def done_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Mark a paper as done (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
@@ -196,7 +196,7 @@ async def star_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Set ``starred = TRUE``. Does not change reading state.
 
@@ -267,7 +267,7 @@ async def unstar_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Set ``starred = FALSE``. Does not change reading state."""
     async with db_pool.acquire() as conn:
@@ -287,7 +287,7 @@ async def trash_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
     async with db_pool.acquire() as conn:
@@ -307,7 +307,7 @@ async def restore_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Restore a paper from Trash to its prior state."""
     async with db_pool.acquire() as conn:

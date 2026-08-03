@@ -22,10 +22,13 @@
 #     Alpine: apk add --no-cache aws-cli
 #     pip:    pip install awscli
 #
-# Encryption (optional, at-rest):
-#   Set BACKUP_ENCRYPT_KEYFILE to the path of a file containing the passphrase.
-#   When set and the file is non-empty, archives are piped through
-#   openssl enc -aes-256-cbc -pbkdf2 and saved with a .enc suffix.
+# Encryption (required, at-rest):
+#   BACKUP_ENCRYPT_KEYFILE must name a non-empty file containing the passphrase.
+#   Archives are piped through openssl enc -aes-256-cbc -pbkdf2 and saved with a
+#   .enc suffix. A run with no usable key is refused in every environment: the
+#   restore path requires an authenticated manifest, so a backup taken without a
+#   key could never be restored. Backup sets written by older releases without a
+#   key remain restorable.
 #
 # Decryption recipe:
 #   openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d -kfile "$BACKUP_ENCRYPT_KEYFILE" \
@@ -224,6 +227,26 @@ export PGPASSWORD
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+case "$RETENTION_DAYS" in
+  ''|*[!0-9]*)
+    echo "[$(date -Iseconds)] WARNING: BACKUP_RETENTION_DAYS='${BACKUP_RETENTION_DAYS:-}' is not a number; using 7" >&2
+    RETENTION_DAYS=7 ;;
+esac
+
+# set_retention_age_enabled — whether the age window prunes at all. 0 days means
+# "no age limit", NOT "delete everything older than a day", and keeping that
+# decision in its own flag is what lets RETENTION_DAYS stay a number the status
+# record can always emit. Called again once the UI window has had its say, so an
+# install that later configures a window re-enables the sweep.
+set_retention_age_enabled() {
+  RETENTION_AGE_ENABLED=1
+  [ "$RETENTION_DAYS" -eq 0 ] 2>/dev/null && RETENTION_AGE_ENABLED=0
+  return 0
+}
+set_retention_age_enabled
+# Set by the age sweep when it refuses to take more than half the restore points
+# at once; recorded in .last_run.json so the refusal is visible, not silent.
+RETENTION_BULK_REFUSED=0
 ENVIRONMENT="${ENVIRONMENT:-development}"
 # When set (e.g. by restore.sh's safety pre-backup) the retention prune at the
 # tail is skipped, so a pre-restore safety backup can never delete the very
@@ -245,6 +268,13 @@ PDF_STORAGE_DIR="${PDF_STORAGE_DIR:-/pdf-storage}"
 # downgrade a later restore back to unsigned.
 HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
 MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+# A durable host state directory outside the checkout, bind-mounted into THIS sidecar
+# only — not into any app container and never under BACKUP_DIR, which is the property
+# the marker's threat model actually needs. It carries a second copy of the marker so
+# the requirement survives a checkout that is re-created or replaced. Installs whose
+# .env predates it mount ./secrets here, making both paths the same directory.
+BACKUP_STATE_DIR="${BACKUP_STATE_DIR:-/backup-state}"
+MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
 TIMESTAMP=""
 RUN_ID=""
 
@@ -396,24 +426,36 @@ if [ "$ENCRYPT" -eq 1 ]; then
 else
   MANIFEST_SIGNATURE_STATE="skipped"
 fi
+# Off-site capture is a claim about a copy nobody promised unless a bucket is
+# configured, so it starts true and only the upload block can falsify it. It must
+# be initialised HERE: write_last_run reads it on every exit path, including the
+# installs that never reach the upload block at all.
+s3_complete=true
 
 # write_last_run — emit ${BACKUP_DIR}/.last_run.json (a dotfile, NOT an archive,
 # so the router's allowlist/globs never match it).
 write_last_run() {
+  # FIRST statement: this runs as the EXIT trap, so $? is the script's exit
+  # status and any `local` declaration above would overwrite it.
+  local rc=$?
   [ "${SKIP_LAST_RUN_WRITE:-0}" = "1" ] && return 0
   local succeeded="false"
+  # Keyless runs are refused before any archive is produced, so a complete set is
+  # always an encrypted, signed one: a skipped secrets archive or signature is a
+  # gap in the restore path, never a legitimate unencrypted outcome.
   local secrets_complete="false"
-  if [ "$SECRETS_STATE" = "ok" ] \
-     || { [ "$SECRETS_STATE" = "skipped" ] \
-          && [ "$ENCRYPT" -eq 0 ] \
-          && [ "${ENVIRONMENT:-development}" != "production" ]; }; then
-    secrets_complete="true"
-  fi
+  [ "$SECRETS_STATE" = "ok" ] && secrets_complete="true"
   local signature_complete="false"
-  if { [ "$ENCRYPT" -eq 0 ] && [ "$MANIFEST_SIGNATURE_STATE" = "skipped" ]; } \
-     || { [ "$ENCRYPT" -eq 1 ] && [ "$MANIFEST_SIGNATURE_STATE" = "ok" ]; }; then
-    signature_complete="true"
-  fi
+  [ "$MANIFEST_SIGNATURE_STATE" = "ok" ] && signature_complete="true"
+  # succeeded means exactly "a complete, restorable LOCAL set exists", and the
+  # per-store states below are its single source of truth. restore.sh consumes it
+  # as a hard gate on the safety pre-backup (safety_backup_is_fresh: it dies
+  # unless succeeded is true, and the restore aborts before any destruction), so
+  # adding a vector-store or off-site term here would block disaster recovery for
+  # a failure that left the local set intact — and a Qdrant container that is down
+  # is frequently the very reason an operator is restoring. Those outcomes are
+  # reported through vectors_captured / s3_complete instead, never through this
+  # chain.
   if [ "$JARVIS_STATE" = "ok" ] \
      && [ "$LITELLM_STATE" = "ok" ] \
      && [ "$PDFS_STATE" = "ok" ] \
@@ -429,15 +471,34 @@ write_last_run() {
   # backup failure, so /status can word the two differently.
   local skipped="false"
   [ "${SKIPPED_MAINTENANCE:-0}" = "1" ] && skipped="true"
+  # With no age limit configured there is no number of days to report, so the
+  # field is null rather than a 0 the status surface would render as "kept for
+  # 0 days". retention_age_enabled makes the disabled state queryable.
+  local retention="$RETENTION_DAYS" age_enabled="true"
+  if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+    retention="null"
+    age_enabled="false"
+  fi
+  local bulk_refused="false"
+  [ "${RETENTION_BULK_REFUSED:-0}" -eq 1 ] && bulk_refused="true"
+  # Vectors are captured only when every collection was snapshotted. "skipped"
+  # (nothing to snapshot) and "unreachable" both mean no vectors are in this set,
+  # so neither may read as captured.
+  local vectors_captured="false"
+  [ "$QDRANT_STATE" = "ok" ] && vectors_captured="true"
   local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
   cat > "$lr_tmp" <<JSON
-{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"encrypted":${enc},"skipped_maintenance":${skipped},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","run_id":"${RUN_ID}","succeeded":${succeeded},"run_exit_code":${rc},"encrypted":${enc},"skipped_maintenance":${skipped},"vectors_captured":${vectors_captured},"s3_complete":${s3_complete},"retention_days":${retention},"retention_age_enabled":${age_enabled},"retention_bulk_refused":${bulk_refused},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","pdfs":"${PDFS_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}","manifest":"${MANIFEST_STATE}","manifest_signature":"${MANIFEST_SIGNATURE_STATE}"}}
 JSON
   mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
 }
 trap write_last_run EXIT
 
 # --- Maintenance skip-guard + single-run mutex -------------------------------
+# This header down to the claim_backup_trigger call below is extracted verbatim and
+# replayed in isolation by the backup coverage suite, so moving a guard out of that
+# span silently drops it from the replay. Doing so is a deliberate decision, not a
+# refactor: update the suite's preamble in the same change.
 # A restore (restore.sh) raises the .maintenance / .destructive sentinels for its
 # whole run. A SCHEDULED or on-demand backup that fires in that window must NOT run
 # — dumping mid drop-swap would capture an inconsistent DB — so it SKIPS and tags
@@ -523,6 +584,15 @@ if [ "$ENVIRONMENT" = "production" ] && [ "$ENCRYPT" -ne 1 ]; then
   exit 1
 fi
 
+# Every environment refuses a keyless run, for a second reason: restore requires an
+# authenticated manifest, which only the key can produce, so an unencrypted set is
+# unrestorable however harmless its plaintext looks. The production refusal above
+# stays first and reachable for its more specific wording.
+if [ "$ENCRYPT" -eq 0 ]; then
+  echo "[$(date -Iseconds)] FATAL: no backup encryption key at ${ENC_KEYFILE:-<unset>}; a backup taken without a key cannot be restored (the restore path requires an authenticated manifest). The stock deployment generates this key; restore secrets/backup_encrypt_key.txt or re-run setup." >&2
+  exit 1
+fi
+
 # Every producer uses one mutex. BACKUP_FORCE bypasses only the restore's own
 # maintenance sentinel; it may never race another archive producer.
 if ! claim_backup_trigger || ! consume_claimed_backup_trigger; then
@@ -568,10 +638,31 @@ dump_db() {
   printf '%s' "$out"
 }
 
+# capture_schema_version — read the applied migration version into SCHEMA_VERSION,
+# for the manifest to record against the dump taken next. It is read HERE rather
+# than at manifest time because a migration landing during the rest of the run
+# would otherwise leave the manifest describing a schema its dump does not carry;
+# reading immediately before pg_dump can only ever understate the version, which
+# is the conservative direction for restore.sh's compatibility gate. Postgres is
+# about to be dumped, so an unreadable version here is a real failure rather than
+# a restart to wait out.
+capture_schema_version() {
+  SCHEMA_VERSION="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
+    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
+    2>/dev/null || true)"
+  case "$SCHEMA_VERSION" in
+    ''|*[!0-9]*)
+      echo "[$(date -Iseconds)] FATAL: could not read the database schema version; refusing to take a backup that cannot gate a restore" >&2
+      return 1 ;;
+  esac
+  return 0
+}
+
 echo "[$(date -Iseconds)] Starting backup..."
 BACKUP_ARCHIVES=()
 
 # --- PostgreSQL: jarvis (primary) + litellm (API keys / virtual keys / spend) -
+capture_schema_version
 JARVIS_BACKUP_FILE="$(dump_db "${PGDATABASE:-jarvis}" jarvis)"
 JARVIS_STATE="ok"
 BACKUP_ARCHIVES+=("$JARVIS_BACKUP_FILE")
@@ -590,8 +681,8 @@ echo "[$(date -Iseconds)] Backup saved to $PDFS_BACKUP_FILE ($(du -h "$PDFS_BACK
 # --- secrets/ directory ------------------------------------------------------
 # Only keys coupled to restored data cross hosts. Service credentials belong to
 # the target host and are deliberately excluded.
-# When no key is set: refuse outright in production (plaintext secrets on disk
-# is unacceptable); silently skip in non-production with a clear warning.
+# A keyless run never reaches this point (it is refused above), so the archive is
+# always encrypted; the production refusal below is kept for its specific wording.
 SECRETS_BACKUP_FILE=""
 if [ -d "$SECRETS_DIR" ]; then
   if [ "$ENCRYPT" -eq 1 ]; then
@@ -629,9 +720,6 @@ if [ -d "$SECRETS_DIR" ]; then
   elif [ "$ENVIRONMENT" = "production" ]; then
     echo "FATAL: BACKUP_ENCRYPT_KEYFILE is unset in production — refusing to write a plaintext secrets archive. Set BACKUP_ENCRYPT_KEYFILE to a non-empty key file before running backups." >&2
     exit 1
-  else
-    SECRETS_STATE="skipped"
-    echo "[$(date -Iseconds)] WARNING: BACKUP_ENCRYPT_KEYFILE is unset — secrets archive skipped (plaintext keys will NOT be written to disk). Set BACKUP_ENCRYPT_KEYFILE to include secrets in the backup." >&2
   fi
 else
   echo "[$(date -Iseconds)] secrets dir $SECRETS_DIR not mounted; skipping secrets backup"
@@ -734,12 +822,16 @@ if collections_json="$(qdrant_http GET /collections 2>/dev/null)"; then
       echo "[$(date -Iseconds)] WARNING: failed to create Qdrant snapshot for '$col'; continuing" >&2
     fi
   done
-  # No snapshot failed and at least one collection was processed → ok. No
-  # collections (nothing to snapshot) or unreachable Qdrant stays skipped.
+  # No snapshot failed and at least one collection was processed → ok. Zero
+  # collections (nothing to snapshot) stays skipped.
   if [ "$QDRANT_STATE" = "skipped" ] && [ -n "$collections" ]; then
     QDRANT_STATE="ok"
   fi
 else
+  # A distinct state from "skipped": a fresh install with zero collections and a
+  # Qdrant container that was down both captured no vectors, but only the second
+  # is an outage the operator needs to see.
+  QDRANT_STATE="unreachable"
   echo "[$(date -Iseconds)] Qdrant unreachable at $QDRANT_URL; skipping vector snapshot (Postgres/secrets backups unaffected)" >&2
 fi
 
@@ -762,14 +854,16 @@ discard_current_backup() {
 # secrets); it is not matched by the router's archive globs, so it is never
 # listed or downloaded as a backup.
 write_manifest() {
-  local schema_version app_version created_at manifest manifest_tmp
+  local app_version created_at manifest manifest_tmp
   local first f base sum size
   declare -A seen=()
-  schema_version="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
-    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
-    2>/dev/null || echo 0)"
+  # Captured beside the dump this manifest describes, never re-read here: the two
+  # must agree, and a value read now would describe a schema that may have moved.
+  local schema_version="${SCHEMA_VERSION:-}"
   case "$schema_version" in
-    ''|*[!0-9]*) schema_version=0 ;;
+    ''|*[!0-9]*)
+      echo "[$(date -Iseconds)] FATAL: could not read the database schema version; refusing to write a manifest that cannot gate a restore" >&2
+      return 1 ;;
   esac
   app_version="${JARVIS_VERSION:-unknown}"
   created_at="$(date -Iseconds)"
@@ -822,7 +916,8 @@ write_manifest() {
 # publish_manifest_signature — sign the manifest this run wrote, then arm the ratchet.
 # Deployments with no backup key have nothing to sign with and are skipped here; STEP 2
 # of restore.sh skips the verification symmetrically. The marker is written only after
-# a signature exists, so the requirement can never arm without one.
+# a signature exists, so the requirement can never arm without one. Two independent
+# copies are written and neither is ever removed: the requirement may only be added.
 publish_manifest_signature() {
   local manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
   [ "$ENCRYPT" -eq 1 ] || return 0
@@ -842,6 +937,14 @@ publish_manifest_signature() {
   if [ ! -e "$MANIFEST_HMAC_MARKER" ] && ! : > "$MANIFEST_HMAC_MARKER" 2>/dev/null; then
     echo "[$(date -Iseconds)] FATAL: could not require signed manifests in ${HOST_SECRETS_DIR}" >&2
     return 1
+  fi
+  # Durable second copy. Best-effort by design: during an update the new script runs
+  # inside the OLD container, where /backup-state does not exist yet. A failure here
+  # must never reach finalize_backup -> discard_current_backup, which would destroy
+  # every backup taken in that window.
+  if [ -d "$BACKUP_STATE_DIR" ]; then
+    : > "$MANIFEST_HMAC_MARKER_DURABLE" 2>/dev/null \
+      || echo "[$(date -Iseconds)] WARNING: could not write the durable signed-restore marker at ${MANIFEST_HMAC_MARKER_DURABLE}; the marker in ${HOST_SECRETS_DIR} remains authoritative" >&2
   fi
   return 0
 }
@@ -878,15 +981,42 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   if ! command -v aws >/dev/null 2>&1; then
     echo "[$(date -Iseconds)] aws CLI not available; skipping S3 upload (install awscli or use the amazon/aws-cli sidecar)"
   else
+    # The local set is already finalized and restorable at this point, so nothing
+    # in this block may change the script's exit status: restore.sh gates its
+    # safety pre-backup on the exit code BEFORE it ever reads succeeded, and an
+    # off-site outage that aborted the run would block disaster recovery from a
+    # perfectly good local set. Every command is guarded; the outcome is reported
+    # through s3_complete.
+    uploaded=()
     for f in "$JARVIS_BACKUP_FILE" "$LITELLM_BACKUP_FILE" "$PDFS_BACKUP_FILE" "$SECRETS_BACKUP_FILE" \
              "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json \
              "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json.hmac \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot.enc; do
       [ -n "$f" ] && [ -f "$f" ] || continue
-      aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/$(basename "$f")"
+      if aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/$(basename "$f")"; then
+        uploaded+=("$f")
+      else
+        s3_complete=false
+      fi
     done
-    echo "[$(date -Iseconds)] Uploaded backups to s3://${BACKUP_S3_BUCKET}/"
+    # A copy that uploaded is not yet a copy that arrived whole: compare the
+    # object's ContentLength to the local size, so a truncated transfer is not
+    # reported as an off-site copy.
+    for f in "${uploaded[@]}"; do
+      remote_size="$(aws s3api head-object --bucket "$BACKUP_S3_BUCKET" \
+        --key "$(basename "$f")" --query ContentLength --output text 2>/dev/null || true)"
+      local_size="$(wc -c < "$f" 2>/dev/null || true)"
+      if [ -z "$remote_size" ] || [ "$remote_size" != "$local_size" ]; then
+        s3_complete=false
+        echo "[$(date -Iseconds)] WARNING: off-site copy of $(basename "$f") does not match the local archive size" >&2
+      fi
+    done
+    if [ "$s3_complete" = "true" ]; then
+      echo "[$(date -Iseconds)] Uploaded backups to s3://${BACKUP_S3_BUCKET}/"
+    else
+      echo "[$(date -Iseconds)] ERROR: off-site copy incomplete; local backup ${TIMESTAMP} is complete and usable, but its S3 copy must not be trusted" >&2
+    fi
   fi
 fi
 
@@ -922,6 +1052,9 @@ if [ -f "$RETENTION_FILE" ]; then
   ui_keep_n="$(grep -oE '"keep_last_n"[[:space:]]*:[[:space:]]*[0-9]+' "$RETENTION_FILE" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)"
   [ -n "${ui_keep_n:-}" ] && KEEP_LAST_N="$ui_keep_n"
 fi
+# RETENTION_DAYS is final here: re-decide the age policy so a configured UI window
+# turns the sweep back on for an install whose env var says 0.
+set_retention_age_enabled
 
 # prune_in_flight_ts — every timestamp a present restore or update is using, one
 # per line, so neither age nor keep-last-N pruning can remove a rollback point.
@@ -955,19 +1088,35 @@ prune_in_flight_ts() {
 # Apply the age window one exact file at a time so in-flight restore/update
 # timestamps survive as complete sets. Dot-directories used for staged restore
 # safety copies do not match these archive names and are never considered.
+#
+# Two floors bound what one automatic sweep may take, because an age window is a
+# policy about old backups and never a licence to leave an install with nothing
+# to restore from:
+#   * one complete restore point always survives, however old every point is; and
+#   * a sweep that would take more than half of a fleet of more than two points is
+#     read as a symptom — a forward clock jump ages every archive at once — and
+#     takes only the oldest half, so a genuine window change still converges over
+#     the next few runs. BACKUP_ALLOW_BULK_PRUNE=1 sweeps fully in one pass.
+# Both count distinct dump timestamps (restore points), never files: one point is
+# six to twelve files, so a file count trips on an ordinary steady-state day.
 retention_prune_age() {
-  local dir="$1" days="$2" in_flight="$3" path base ts
-  [ "$days" -ge 0 ] 2>/dev/null || return 1
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    base="$(basename "$path")"
-    ts="$(printf '%s' "$base" | grep -oE '[0-9]{8}_[0-9]{6}' | tail -1 || true)"
-    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$in_flight"; then
-      echo "[$(date -Iseconds)] age-${days}: not pruning ${ts} (in-flight restore/update)"
-      continue
-    fi
-    rm -f -- "$path"
-  done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) \( \
+  local dir="$1" days="$2" in_flight="$3" base ts
+  local points candidates aged_points doomed
+  local total=0 aged=0 allowed=0
+  if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+    echo "[$(date -Iseconds)] Age retention disabled; keeping every restore point"
+    return 0
+  fi
+  [ -n "$days" ] && [ "$days" -ge 1 ] 2>/dev/null || return 0
+
+  # One jarvis dump == one restore point, derived exactly as retention_keep_last_n
+  # derives it below.
+  points="$(find "$dir" -maxdepth 1 -type f \
+        \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) -printf '%f\n' 2>/dev/null \
+      | grep -oE '[0-9]{8}_[0-9]{6}' | sort -u || true)"
+  [ -n "$points" ] && total="$(printf '%s\n' "$points" | wc -l)"
+
+  candidates="$(find "$dir" -maxdepth 1 \( -type f -o -type l \) \( \
       -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \
       -o -name 'litellm_*.sql.gz' -o -name 'litellm_*.sql.gz.enc' \
       -o -name 'pdfs_*.tar.gz' -o -name 'pdfs_*.tar.gz.enc' \
@@ -975,7 +1124,48 @@ retention_prune_age() {
       -o -name 'qdrant_*.snapshot' -o -name 'qdrant_*.snapshot.enc' \
       -o -name 'manifest_*.json' -o -name 'manifest_*.json.hmac' \
       -o -name '*.tmp' -o -name '*.raw' \
-    \) -mtime "+${days}" -print)
+    \) -mtime "+${days}" -printf '%f\n')"
+
+  # The restore points whose own dump has aged out, oldest first (timestamps sort
+  # chronologically), so both bounds trim from the oldest end.
+  aged_points="$(printf '%s\n' "$candidates" \
+      | grep -oE '^jarvis_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?$' \
+      | grep -oE '[0-9]{8}_[0-9]{6}' | sort -u || true)"
+  [ -n "$aged_points" ] && aged="$(printf '%s\n' "$aged_points" | wc -l)"
+
+  allowed="$aged"
+  if [ "${BACKUP_ALLOW_BULK_PRUNE:-}" != "1" ] \
+     && [ "$total" -gt 2 ] && [ $((aged * 2)) -gt "$total" ]; then
+    allowed=$((aged / 2))
+    RETENTION_BULK_REFUSED=1
+    echo "[$(date -Iseconds)] WARNING: retention sweep would delete ${aged} of ${total} restore points in one pass; deleting the oldest ${allowed} only (set BACKUP_ALLOW_BULK_PRUNE=1 to sweep fully)" >&2
+  fi
+  [ "$allowed" -gt $((total - 1)) ] && allowed=$((total - 1))
+  [ "$allowed" -lt 0 ] && allowed=0
+  doomed="$(printf '%s\n' "$aged_points" | head -n "$allowed")"
+
+  while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    ts="$(printf '%s' "$base" | grep -oE '[0-9]{8}_[0-9]{6}' | tail -1 || true)"
+    if [ -n "$ts" ] && grep -qxF "$ts" <<<"$in_flight"; then
+      echo "[$(date -Iseconds)] age-${days}: not pruning ${ts} (in-flight restore/update)"
+      continue
+    fi
+    # A member of a surviving restore point stays with it; debris whose restore
+    # point is already gone has nothing to keep it and is always collectable.
+    # A partial file from a killed dump carries a real timestamp but belongs to
+    # no restore point, so it must not inherit a survivor's protection and stay
+    # forever — it is the one thing here that only ages.
+    case "$base" in
+      *.tmp | *.raw) ;;
+      *)
+        if [ -n "$ts" ] && grep -qxF "$ts" <<<"$points" && ! grep -qxF "$ts" <<<"$doomed"; then
+          continue
+        fi
+        ;;
+    esac
+    rm -f -- "${dir}/${base}"
+  done <<<"$candidates"
 }
 
 # retention_keep_last_n <backup_dir> <keep_n> <in_flight_ts_newline_list>
@@ -1037,7 +1227,16 @@ if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
       IN_FLIGHT_TIMESTAMPS="${IN_FLIGHT_TIMESTAMPS}${IN_FLIGHT_TIMESTAMPS:+$'\n'}${TIMESTAMP}"
     fi
     retention_prune_age "$BACKUP_DIR" "$RETENTION_DAYS" "$IN_FLIGHT_TIMESTAMPS"
-    echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+    # Report what the sweep actually did. It says nothing about age when age
+    # retention is off, and does not claim a completed sweep when the half-fleet
+    # guard refused one — that guard already logged what it kept.
+    if [ "${RETENTION_AGE_ENABLED:-1}" -eq 0 ]; then
+      echo "[$(date -Iseconds)] Age retention is off; no restore point was pruned by age"
+    elif [ "${RETENTION_BULK_REFUSED:-0}" -eq 1 ]; then
+      echo "[$(date -Iseconds)] Age retention pruned only the oldest half; rerun to continue"
+    else
+      echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+    fi
     if [ -n "${KEEP_LAST_N:-}" ]; then
       retention_keep_last_n "$BACKUP_DIR" "$KEEP_LAST_N" "$IN_FLIGHT_TIMESTAMPS"
       echo "[$(date -Iseconds)] keep-last-${KEEP_LAST_N} retention applied"

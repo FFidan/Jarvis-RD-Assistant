@@ -80,6 +80,10 @@ The **Retention policy** section controls how long backups are kept. Two indepen
 
 Leave a field blank to use the default. Older or excess restore points are pruned automatically by the backup service — you never need to clean up by hand. Click **Save retention policy** to apply changes.
 
+Automatic pruning has two floors you cannot switch off. Your last restore point is never removed, however old it is; and a single automatic run never removes more than half of your restore points, because a server clock that jumps forward makes every archive look old at once. When that happens the run removes only the oldest half and says so, and normal runs converge on the window you asked for over the following days. Deleting a restore point yourself from the Backups panel is not subject to either floor — that is what the typed **DELETE** confirmation is for — and each delete records how many restore points are left.
+
+If you set the `BACKUP_RETENTION_DAYS` environment variable, `0` means *no age limit*; earlier releases read `0` as "remove anything older than about a day". The **Keep most recent** cap still applies either way.
+
 ---
 
 ## One-click restore
@@ -201,13 +205,24 @@ Replace `<timestamp>` with the restore point timestamp in `YYYYMMDD_HHMMSS`
 format.
 
 1. Start the fresh stack with `./setup.sh`.
-2. Copy the complete archive set into the restore inbox:
+2. Print the procedure for the restore point you want:
 
    ```bash
-   docker compose cp ./offsite/. postgres-backup:/restore-inbox/
+   jarvis-research restore request <timestamp>
    ```
 
-   If the set is in the configured S3 bucket, pull only that timestamp instead:
+   The command generates the restore identifier and request timestamp the
+   backup service requires, fills in the real paths, and prints the three steps
+   below. It submits nothing and moves nothing.
+
+3. Follow the printed steps **in order**: copy the archive set into the restore
+   inbox, then the matching encryption key under its required one-time name,
+   and only then submit the printed request. The backup service acts on a
+   submitted request within seconds, so submitting it first fails the restore
+   against an empty inbox.
+
+   If the set is in the configured S3 bucket, pull only that timestamp instead
+   of copying the archives by hand:
 
    ```bash
    docker compose exec -e BACKUP_PULL_TS=<timestamp> \
@@ -215,36 +230,22 @@ format.
      postgres-backup /usr/local/bin/backup.sh
    ```
 
-3. Copy the matching encryption key under the required one-time name, then
-   submit the restore request:
+4. Follow the restore:
 
    ```bash
-   docker compose cp /path/to/backup_encrypt_key.txt \
-     postgres-backup:/restore-inbox/operator_key
-   RESTORE_ID="$(openssl rand -hex 16)"
-   REQUESTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-   docker compose exec postgres-backup sh -c \
-     "printf '{\"source\":\"inbox\",\"timestamp\":\"<timestamp>\",\"restore_id\":\"${RESTORE_ID}\",\"requested_at\":\"${REQUESTED_AT}\"}' > /backup-trigger/.restore_request.json"
+   jarvis-research restore status
    ```
 
-   The request is rejected before anything is touched unless it carries both
-   `restore_id` (32 lowercase hex characters) and `requested_at` (an
-   ISO-8601 timestamp with a timezone). Keep the `RESTORE_ID` value — it is
-   the same id you type back in step 5 to acknowledge the restore.
+   It reports the state, the current step, any error, whether manual follow-up
+   is required, and the safety backup to restore if it is. The WebUI Backup
+   panel shows the same status, and `docker compose logs -f postgres-backup`
+   shows the raw progress. The one-time key and decrypted secrets staging are
+   removed when the restore exits.
 
-4. Follow `docker compose logs -f postgres-backup`, or run:
-
-   ```bash
-   docker compose exec postgres-backup cat /backup-trigger/.restore_status.json
-   ```
-
-   The one-time key and decrypted secrets staging are removed when the restore
-   exits.
-
-5. Review the restored outbound settings, note the `restore_id` in the status,
-   and run `jarvis-research restore acknowledge <restore-id>`. The command
-   requires the exact ID and a second typed confirmation before it releases
-   quarantine.
+5. Review the restored outbound settings and run
+   `jarvis-research restore acknowledge <restore-id>` with the restore
+   identifier step 2 printed. The command requires the exact ID and a second
+   typed confirmation before it releases quarantine.
 
 A failure before the database swap lifts maintenance because live data was not
 replaced. A later failure keeps the service at HTTP 503. Do not remove the
@@ -262,7 +263,15 @@ Remove the copied archive set from the restore inbox after recovery is confirmed
 
 Backup points taken before signature support carry no signature. On the original server they keep restoring normally — with a warning that they cannot be checked — right up until this version takes its **first** backup there. From that first signed backup onwards the server requires a signature on every restore, so those older unsigned points stop restoring too unless you take the deliberate override below. The switch is the arrival of signing on that server, not the age of the point you pick, so take a fresh backup after updating and keep it as your working restore point. Recovering a **fresh server** from an unsigned off-site set is refused outright, because on a new host there is nothing else to check the archives against.
 
-For the genuine disaster where an unsigned set is all that is left, an operator with terminal access on the server can accept it deliberately. It cannot be done from the browser and cannot be done by setting a flag alone: the restore must be run interactively, with `JARVIS_RESTORE_ALLOW_LEGACY=1` set **and** the phrase `I-ACCEPT-UNVERIFIED-BACKUP` typed at the prompt. The restore then logs a permanent warning that its archives were never verified.
+For the genuine disaster where an unsigned set is all that is left, an operator with terminal access on the server can accept it deliberately:
+
+```bash
+jarvis-research restore legacy <timestamp>
+```
+
+A restore replays into a running database, so start the stack first if it is down (`jarvis-research start`); the command says so rather than failing part way. The command explains that the set cannot be verified, stops the backup service so it cannot pick the request up first, and runs the restore interactively so the prompt reaches you. You must type the phrase `I-ACCEPT-UNVERIFIED-BACKUP` before anything is changed; nothing else — no flag, no browser button — can take the override. The restore then logs a permanent warning that its archives were never verified, and the backup service resumes afterwards either way. Follow the outcome with `jarvis-research restore status`.
+
+This is same-host recovery only. An off-site set is refused outright regardless of the override, because on a fresh host there is nothing to check the archives against.
 
 This override applies **only** when a signature is absent. It never applies to a restore point whose signature fails to verify — that is evidence of tampering, not of loss, and is always refused.
 

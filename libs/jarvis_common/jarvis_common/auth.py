@@ -894,14 +894,14 @@ async def current_user_id_strict_with_owner_override(
 
 
 async def get_current_user_id(
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> int:
-    """Return the caller identity resolved by the declared FastAPI dependency.
+    """Return the session-authenticated caller identity, or raise 401.
 
     Parameters
     ----------
     user_id : int
-        Identity supplied by :func:`current_user_id_strict_with_owner_override`.
+        Identity supplied by :func:`current_user_id_strict`.
 
     Returns
     -------
@@ -910,8 +910,41 @@ async def get_current_user_id(
 
     Notes
     -----
-    Declaring this wrapper through ``Depends`` exposes the API-key security
-    scheme in OpenAPI while preserving session and owner-override resolution.
+    The default identity dependency for user-data routes. It deliberately does
+    NOT honour the ``X-Owner-User-Id`` override: in ``paper_ingestion`` only the
+    routes the Telegram bot actually calls declare
+    :func:`get_current_user_id_or_bot`, and an exact-set test pins that surface.
+    ``learning_engine`` routes still declare
+    :func:`current_user_id_strict_with_owner_override` directly, so the header
+    resolves there on a wider surface than the bot uses; the address allowlist,
+    not this dependency, is what bounds it.
+
+    """
+    return user_id
+
+
+async def get_current_user_id_or_bot(
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> int:
+    """Return the caller identity, honouring the ``X-Owner-User-Id`` override.
+
+    Parameters
+    ----------
+    user_id : int
+        Identity supplied by
+        :func:`current_user_id_strict_with_owner_override`.
+
+    Returns
+    -------
+    int
+        Authenticated caller identity — possibly the user the
+        service-authenticated Telegram bot is acting for.
+
+    Notes
+    -----
+    Reserved for the routes the Telegram bot calls on a user's behalf.
+    Declaring it through ``Depends`` exposes the API-key security scheme in
+    OpenAPI while preserving session and owner-override resolution.
 
     """
     return user_id

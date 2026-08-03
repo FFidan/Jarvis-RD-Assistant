@@ -127,6 +127,29 @@ else
 fi
 rm -rf "$d" "$b"
 
+# 1b) The operator delete executor is deliberately NOT floored — it already needs a
+#     typed DELETE confirmation — so it records how many restore points are left,
+#     making "you just deleted your last one" a visible outcome instead of a silent
+#     one. The count is per restore point, not per file.
+d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
+seed_backups "$b" 20260101_010101 20260202_020202
+printf '{"timestamps": ["20260101_010101"], "confirm": "DELETE", "version": 1}' \
+  > "${d}/.delete_request.json"
+run_prune "$d" "$b" >/dev/null 2>&1
+rr_first="$(cat "${d}/.last_delete.json" 2>/dev/null || true)"
+printf '{"timestamps": ["20260202_020202"], "confirm": "DELETE", "version": 1}' \
+  > "${d}/.delete_request.json"
+run_prune "$d" "$b" >/dev/null 2>&1
+rr_second="$(cat "${d}/.last_delete.json" 2>/dev/null || true)"
+if printf '%s' "$rr_first" | grep -q '"remaining_restore_points":1' \
+   && printf '%s' "$rr_second" | grep -q '"remaining_restore_points":0'; then
+  pass "each delete outcome records how many restore points remain, including none"
+else
+  printf 'FAIL: delete outcome did not record the remaining restore points (first=%s second=%s)\n' \
+    "$rr_first" "$rr_second" >&2; fail=1
+fi
+rm -rf "$d" "$b"
+
 # 2) A timestamp named by a present .restore_request.json is REFUSED.
 d="$(mktemp -d)"; b="$(mktemp -d)"; mkdir -p "${b}/.lifecycle"
 seed_backups "$b" 20260101_010101

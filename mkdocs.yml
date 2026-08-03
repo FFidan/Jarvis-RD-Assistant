@@ -93,6 +93,7 @@ nav:
   - Home: index.md
   - Methods and limitations: METHODS_AND_LIMITATIONS.md
   - User Guide:
+      - Quick start: manual/quickstart.md
       - Overview: manual/index.md
       - First sign-in and setup: manual/getting-started.md
       - Access from other devices: manual/access-modes.md

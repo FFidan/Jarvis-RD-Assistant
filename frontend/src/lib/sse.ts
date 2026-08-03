@@ -50,7 +50,8 @@ export interface StreamEvent {
 export interface AnalyzeStepEvent {
   type: 'step';
   step: 'downloading' | 'processing' | 'summarizing';
-  status: 'started' | 'completed' | 'failed';
+  status: 'started' | 'completed' | 'skipped' | 'failed';
+  reason?: string;
   chunk_count?: number;
   message?: string;
 }

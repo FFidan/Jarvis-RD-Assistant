@@ -102,6 +102,10 @@ COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
 
 The `./setup.sh --check` command reports GPU toolkit availability as an informational item.
 
+### AMD and Intel GPUs (experimental)
+
+AMD ROCm is selected only when `/dev/kfd` is present. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is chosen explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan are experimental, and PDF parsing and reranking stay on CPU regardless of the acceleration path. See the [hardware support matrix](manual/hardware-support-matrix.md) for vendor status and how to report your hardware.
+
 ### vLLM overlay (optional, manual)
 
 vLLM is a **separate, optional overlay** — it is not auto-started by `setup.sh`. Use it to serve large models locally at higher throughput than Ollama.
@@ -304,7 +308,7 @@ assert HTTPS.
 **Subnet collision:** if the default conflicts with another local network,
 `setup.sh --check` warns. Set `JARVIS_NET_SUBNET` to a free IPv4 `/27` or larger
 network and re-run setup. Setup and update derive the gateway and the highest
-four usable addresses; do not edit Compose or nginx.
+five usable addresses; do not edit Compose or nginx.
 
 **`TRUSTED_PROXY_CIDRS`** — Python-layer variable for the XFF walk. The standard
 stack trusts loopback and the derived dashboard `/32`. Add another CIDR only
@@ -365,7 +369,7 @@ requires restarting its service consumers.
 | `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
 | `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
 | `infra_ingest_key` | `INFRA_INGEST_KEY_FILE` | Shared key for the infrastructure ingestion endpoint |
-| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest |
+| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable |
 
 **Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
 `langfuse_init_pk`, `langfuse_init_sk` — Langfuse SDK keys injected into app services. `langfuse_pg_password`, `langfuse_nextauth_secret`, `langfuse_salt` — internal Langfuse service credentials.
@@ -689,12 +693,14 @@ existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
 **Telegram owner-override network.** The bot calls service endpoints with
 `X-Owner-User-Id` to make per-user requests, trusted only from
 `OWNER_OVERRIDE_ALLOWED_CIDRS`. The bundled compose stack sets this
-automatically to cover the jarvis bridge subnet (it tracks `JARVIS_NET_SUBNET`,
-default `10.137.241.0/24`), so no change is needed for the default stack. **If
-you override `JARVIS_NET_SUBNET`, the allowlist follows it** — only set
-`OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services from
-some other network. (The bare code default `127.0.0.0/8` is loopback-only and
-does *not* cover the jarvis bridge — the compose stack overrides it.)
+automatically to the bot's own pinned address as a `/32` (it tracks
+`JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`;
+default `10.137.241.250`), so no change is needed for the default stack and no
+other container on the bridge can send the header. **If you override
+`JARVIS_NET_SUBNET`, the bot's pin and the allowlist both follow it** — only
+set `OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services
+from some other network. (The bare code default `127.0.0.0/8` is loopback-only;
+the compose stack adds the bot's address to it.)
 
 **Ownership backfill.** The NULL-owner backfill for pre-existing product rows
 is part of the schema-101 baseline in `db/init.sql`, not a startup migration.

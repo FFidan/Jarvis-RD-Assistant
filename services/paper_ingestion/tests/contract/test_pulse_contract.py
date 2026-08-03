@@ -1878,8 +1878,8 @@ async def test_pulse_generate_non_admin_returns_403(
 
 
 # POST /api/pulse/generate: ops API-key caller (no admin session) passes the auth gate
-# Verified: routers/pulse.py generate_pulse — Depends(require_admin_or_api_key)
-# Verified: libs/jarvis_common/jarvis_common/auth.py:281-294 (session role absent → admitted)
+# Verified: routers/pulse.py generate_pulse depends on get_current_user_id_or_bot
+# and require_admin_or_api_key (auth.py:551-553 admits when the session role is absent).
 
 
 async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
@@ -1891,23 +1891,26 @@ async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
 
     The bot and cron reach this endpoint with an API key and no browser session,
     so request.state.user_role is absent. The gate must be require_admin_or_api_key,
-    which admits a session-less ops caller; require_admin rejected it with 403.
+    which admits a session-less ops caller. Identity resolves through
+    get_current_user_id_or_bot, so that is the dependency the override supplies.
     """
     from unittest.mock import AsyncMock, patch
 
-    from jarvis_common import get_current_user_id
+    from jarvis_common import get_current_user_id_or_bot
     from jarvis_common.task_registry import _TASK_MAP
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
 
-    _pi_pulse_app.dependency_overrides[get_current_user_id] = lambda: contract_two_users.user_a_id
+    _pi_pulse_app.dependency_overrides[get_current_user_id_or_bot] = lambda: (
+        contract_two_users.user_a_id
+    )
     try:
         with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
             async with _client(_pi_pulse_app, None) as c:
                 resp = await c.post("/api/pulse/generate")
     finally:
-        _pi_pulse_app.dependency_overrides.pop(get_current_user_id, None)
+        _pi_pulse_app.dependency_overrides.pop(get_current_user_id_or_bot, None)
 
     assert resp.status_code not in (401, 403), (
         f"Session-less ops API-key caller must pass the auth gate on "
@@ -2500,7 +2503,7 @@ async def test_pulse_routes_match_null_user_legacy_rows(contract_conn):
 # Verified: pulse/job.py:577-579 — AdvisoryLock(pool,
 #           key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero)
 #           session lock held for the whole pulse run.
-# Verified: scheduler.py:87-97 — _users_without_active_pulse_lock probes
+# Verified: scheduler.py:87-97 — _users_without_active_lock probes
 #           pg_try_advisory_xact_lock($1, $2) with the same key derivation.
 # Verified: advisory_lock.py:69-79 — pg_try_advisory_lock (session-level).
 
@@ -2516,7 +2519,7 @@ async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_p
     """
     from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 
-    from paper_ingestion.scheduler import _users_without_active_pulse_lock
+    from paper_ingestion.scheduler import _users_without_active_lock
 
     user_id = 99_424_242  # arbitrary; only feeds key2 — no users row required
 
@@ -2524,13 +2527,17 @@ async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_p
         _contract_pool, key1=_kind_lock_key("pulse.generate"), key2=user_id
     ) as locked:
         assert locked is True, "test session must win the initially-free lock"
-        free_while_held = await _users_without_active_pulse_lock(_contract_pool, [user_id])
+        free_while_held = await _users_without_active_lock(
+            _contract_pool, [user_id], kind="pulse.generate"
+        )
         assert free_while_held == [], (
             "pg_try_advisory_xact_lock probe must see the held session-level lock "
             "and exclude the user"
         )
 
-    free_after_release = await _users_without_active_pulse_lock(_contract_pool, [user_id])
+    free_after_release = await _users_without_active_lock(
+        _contract_pool, [user_id], kind="pulse.generate"
+    )
     assert free_after_release == [user_id], (
         "probe must report the user free once the session lock is released"
     )

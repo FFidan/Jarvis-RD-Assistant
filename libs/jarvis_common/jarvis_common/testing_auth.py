@@ -57,7 +57,10 @@ def _apply_default_authenticated_user(app: Any, routers_pkg: ModuleType):
     import pkgutil
     from unittest.mock import AsyncMock
 
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.auth import (
+        current_user_id_strict_with_owner_override,
+        get_current_user_id,
+    )
 
     resolver_names = (
         "current_user_id_strict",
@@ -71,13 +74,19 @@ def _apply_default_authenticated_user(app: Any, routers_pkg: ModuleType):
                 saved.append((module, name, getattr(module, name)))
                 setattr(module, name, AsyncMock(return_value=1))
 
-    override_added = current_user_id_strict_with_owner_override not in app.dependency_overrides
-    if override_added:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
+    # dependency_overrides is keyed by the resolver OBJECT, and FastAPI resolves
+    # it per sub-dependant. Overriding get_current_user_id intercepts exactly the
+    # routes that declare it; routes wired straight to current_user_id_strict
+    # keep resolving for real, so a test wanting a specific identity there must
+    # still say so itself.
+    override_keys = (current_user_id_strict_with_owner_override, get_current_user_id)
+    added = [key for key in override_keys if key not in app.dependency_overrides]
+    for key in added:
+        app.dependency_overrides[key] = lambda: 1
     try:
         yield
     finally:
         for module, name, original in saved:
             setattr(module, name, original)
-        if override_added:
-            app.dependency_overrides.pop(current_user_id_strict_with_owner_override, None)
+        for key in added:
+            app.dependency_overrides.pop(key, None)

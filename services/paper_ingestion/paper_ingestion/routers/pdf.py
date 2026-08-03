@@ -30,7 +30,7 @@ from paper_ingestion.models import (
     PaperResponse,
 )
 from paper_ingestion.pdf_processor import (
-    MAX_PDF_SIZE,
+    MAX_UPLOAD_PDF_SIZE,
     PDF_STORAGE_PATH,
     PDFProcessor,
     PDFPublishBlockedError,
@@ -371,16 +371,16 @@ async def upload_pdf(
                             detail="File does not appear to be a valid PDF",
                         )
                 total_size += len(chunk)
-                if total_size > MAX_PDF_SIZE:
+                if total_size > MAX_UPLOAD_PDF_SIZE:
                     raise HTTPException(
                         status_code=400,
-                        detail="File exceeds 100 MB size limit",
+                        detail="File exceeds 50 MB size limit",
                     )
                 hasher.update(chunk)
                 _f.write(chunk)
 
         file_hash = hasher.hexdigest()
-        external_id = f"local:{file_hash[:16]}"
+        external_id = f"local:{file_hash}"
 
         # Check for duplicate
         async with db_pool.acquire() as conn:

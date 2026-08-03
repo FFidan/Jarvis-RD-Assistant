@@ -3,16 +3,29 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { CitationGraphPage } from '@/pages/CitationGraphPage';
-import { fetchCitationsFromS2 } from '@/lib/api';
+import { fetchCitationsFromS2, getCitationGraph } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
-// Mock cytoscape so jsdom doesn't choke on canvas
+// Mock cytoscape so jsdom doesn't choke on canvas. Capture registered tap
+// handlers so a test can simulate a node click the way cytoscape delivers it.
+const tapHandlers: Array<(evt: { target: { id: () => string } }) => void> = [];
 vi.mock('cytoscape', () => {
   const mockCy = {
-    on: vi.fn(),
+    on: vi.fn((event: string, selectorOrCb: unknown, cb?: unknown) => {
+      if (event === 'tap' && typeof cb === 'function') {
+        tapHandlers.push(cb as (evt: { target: { id: () => string } }) => void);
+      }
+    }),
+    fit: vi.fn(),
     destroy: vi.fn(),
   };
   return { default: vi.fn(() => mockCy) };
+});
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('react-router-dom')>();
+  return { ...orig, useNavigate: () => mockNavigate };
 });
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -51,9 +64,23 @@ function renderPage() {
   );
 }
 
+/** Selects the "Attention Is All You Need" seed paper and waits for the graph to render. */
+async function selectAttentionPaper(user: ReturnType<typeof userEvent.setup>) {
+  const searchInput = screen.getByPlaceholderText('Search papers to add to citation graph...');
+  await user.type(searchInput, 'Attention');
+  await waitFor(() => {
+    expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+  });
+  await user.click(screen.getByText('Attention Is All You Need'));
+  await waitFor(() => {
+    expect(tapHandlers.length).toBeGreaterThan(0);
+  });
+}
+
 describe('CitationGraphPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    tapHandlers.length = 0;
   });
 
   it('renders the page title', () => {
@@ -145,5 +172,78 @@ describe('CitationGraphPage', () => {
       expect(fetchCitationsFromS2).toHaveBeenCalledWith(1);
     });
     expect(fetchCitationsFromS2).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates to the paper route when a full-paper node is tapped', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectAttentionPaper(user);
+
+    // Simulate the cytoscape tap event, which delivers the node id as a string.
+    expect(tapHandlers.length).toBeGreaterThan(0);
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '1' } }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/paper/1');
+    });
+  });
+
+  it('opens the stub panel with only the model fields when a stub node is tapped', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectAttentionPaper(user);
+
+    expect(tapHandlers.length).toBeGreaterThan(0);
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '10' } }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('citation-stub-panel')).toBeInTheDocument();
+    });
+    const panel = screen.getByTestId('citation-stub-panel');
+    expect(panel).toHaveTextContent('Some Referenced Paper');
+    expect(panel).toHaveTextContent('100 citations');
+    expect(panel).toHaveTextContent('Jan 1, 2015');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('closes the stub panel when the graph no longer contains that node', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectAttentionPaper(user);
+
+    tapHandlers.forEach((cb) => cb({ target: { id: () => '10' } }));
+    await waitFor(() => {
+      expect(screen.getByTestId('citation-stub-panel')).toBeInTheDocument();
+    });
+
+    vi.mocked(getCitationGraph).mockResolvedValueOnce({
+      nodes: [
+        {
+          id: 2,
+          title: 'BERT: Pre-training of Deep Bidirectional Transformers',
+          citation_count: 40000,
+          published_date: '2018-10-01',
+          is_stub: false,
+        },
+      ],
+      edges: [],
+    });
+    await user.click(screen.getByText('BERT: Pre-training of Deep Bidirectional Transformers'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('citation-stub-panel')).not.toBeInTheDocument();
+    });
+  });
+
+  it('activates the same handler from the hidden keyboard list', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await selectAttentionPaper(user);
+
+    await user.click(screen.getByRole('button', { name: 'Open Attention Is All You Need' }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/paper/1');
+    });
   });
 });

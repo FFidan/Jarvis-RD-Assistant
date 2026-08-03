@@ -17,12 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_ROOT = REPO_ROOT / "frontend"
 POLICY_PATH = FRONTEND_ROOT / "osv-scanner.toml"
 
-BRACE_EXPANSION_ADVISORY = "GHSA-mh99-v99m-4gvg"
 REACT_ROUTER_RSC_ADVISORY = "GHSA-qwww-vcr4-c8h2"
-SUPPORTED_EXCEPTIONS = {
-    BRACE_EXPANSION_ADVISORY,
-    REACT_ROUTER_RSC_ADVISORY,
-}
+SUPPORTED_EXCEPTIONS = {REACT_ROUTER_RSC_ADVISORY}
 FAIL_SEVERITIES = {"high", "critical"}
 GHSA_URL_PATTERN = re.compile(r"/(GHSA-[0-9A-Za-z-]+)$")
 RSC_USAGE_PATTERN = re.compile(
@@ -196,41 +192,6 @@ def _validate_rsc_absent(repo_root: Path) -> None:
             )
 
 
-def _validate_brace_expansion_patched(repo_root: Path) -> None:
-    frontend = repo_root / "frontend"
-    package = _load_json_mapping(frontend / "package.json", "frontend/package.json")
-    overrides = _as_mapping(package.get("overrides"), "frontend/package.json overrides")
-    if overrides.get("brace-expansion@^5") != "5.0.8":
-        raise AuditPolicyError("brace-expansion v5 override must remain pinned to 5.0.8")
-
-    lock = _load_json_mapping(frontend / "package-lock.json", "frontend/package-lock.json")
-    packages = _as_mapping(lock.get("packages"), "frontend/package-lock.json packages")
-    seen_v5 = False
-    for package_path, value in packages.items():
-        if not isinstance(package_path, str) or not (
-            package_path == "node_modules/brace-expansion"
-            or package_path.endswith("/node_modules/brace-expansion")
-        ):
-            continue
-        package_entry = _as_mapping(value, f"package-lock entry {package_path}")
-        version = package_entry.get("version")
-        if not isinstance(version, str):
-            raise AuditPolicyError(f"{package_path} has no brace-expansion version")
-        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
-        if match is None:
-            raise AuditPolicyError(f"{package_path} has unsupported version {version}")
-        parsed = tuple(int(part) for part in match.groups())
-        if parsed[0] != 5:
-            continue
-        seen_v5 = True
-        if parsed < (5, 0, 8):
-            raise AuditPolicyError(
-                f"brace-expansion v5 remains unpatched at {version} in {package_path}"
-            )
-    if not seen_v5:
-        raise AuditPolicyError("frontend/package-lock.json has no brace-expansion v5 node")
-
-
 def evaluate_reports(
     full_report: object,
     production_report: object,
@@ -252,10 +213,6 @@ def evaluate_reports(
     if stale:
         raise AuditPolicyError("remove resolved audit exceptions: " + ", ".join(stale))
 
-    if BRACE_EXPANSION_ADVISORY in production_ids:
-        raise AuditPolicyError(
-            "brace-expansion exception is no longer confined to dev dependencies"
-        )
     if REACT_ROUTER_RSC_ADVISORY not in production_ids:
         raise AuditPolicyError("React Router RSC exception is not present in the production audit")
     unexpected_production = sorted(production_ids - {REACT_ROUTER_RSC_ADVISORY})
@@ -265,7 +222,6 @@ def evaluate_reports(
         )
 
     _validate_rsc_absent(repo_root)
-    _validate_brace_expansion_patched(repo_root)
     return tuple(policy[key] for key in sorted(policy))
 
 

@@ -26,6 +26,7 @@ pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
 check_fail() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
 has()  { printf '%s' "$1" | grep -q -- "$2"; }
+hasF() { printf '%s' "$1" | grep -qF -- "$2"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 :: missing /$2/ in <<<$1>>>"; fi; }
 lack() { if has "$1" "$2"; then check_fail "$3 :: unexpected /$2/ in <<<$1>>>"; else pass "$3"; fi; }
 
@@ -272,7 +273,17 @@ cat > "$STUB/git" <<'GIT'
 log() { [ -n "${STUB_LOG:-}" ] && printf 'git %s\n' "$*" >> "$STUB_LOG"; }
 case "${1:-} ${2:-}" in
   "symbolic-ref --short") printf '%s\n' "${STUB_BRANCH:-main}"; exit 0 ;;
-  "status --porcelain")   printf '%s' "${STUB_DIRTY:-}"; [ -n "${STUB_DIRTY:-}" ] && printf '\n'; exit 0 ;;
+  "status --porcelain")
+    # The updater's status query excludes one product-managed path. Honour that
+    # pathspec, so a checkout dirty with nothing else is observably clean here.
+    dirt="${STUB_DIRTY:-}"
+    for arg in "$@"; do
+      case "$arg" in
+        ":(top,exclude)"*)
+          dirt="$(printf '%s' "$dirt" | grep -vF -- "${arg#:(top,exclude)}" || true)" ;;
+      esac
+    done
+    printf '%s' "$dirt"; [ -n "$dirt" ] && printf '\n'; exit 0 ;;
   "remote get-url")       printf '%s\n' "${STUB_REMOTE:-git@github.com:limitcycle-oss/jarvis-rd-assistant.git}"; exit 0 ;;
 esac
 if [ "${1:-}" = -C ]; then
@@ -351,6 +362,11 @@ VE
       printf 'LIFECYCLE_GUARD_AT_MERGE=%s\n' "$(cat "$STUB_BACKUP_DIR/.lifecycle/update.guard")" >> "$STUB_LOG"
     fi
     log "$*"
+    # Simulate the CLI state directory losing write permission mid-update: the
+    # first transaction write has already landed, the next one cannot.
+    if [ -n "${STUB_FREEZE_STATE_DIR:-}" ] && [ -d "${STUB_FREEZE_STATE_DIR:-}" ]; then
+      chmod 500 "$STUB_FREEZE_STATE_DIR"
+    fi
     if [ "${STUB_MERGE_RC:-0}" = 0 ] || [ "${STUB_MERGE_CRASH:-0}" = 1 ]; then
       printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_HEAD_FILE"
       printf '%s\n' "${STUB_TARGET_SHA:-2222222222222222222222222222222222222222}" > "$STUB_REPO/.stub-head"
@@ -602,8 +618,42 @@ case "${1:-}" in
             exit 1 ;;
           *) exit 1 ;;
         esac ;;
+      run)
+        # Record the whole invocation, plus whether the compose timeout wrapper
+        # was armed around it (the interactive restore leg must run without one).
+        log "compose-run timeout=${BACKUP_COMPOSE_TIMEOUT_SECONDS-<unset>} ${raw_args[*]}"
+        run_script=""
+        for ((i=0; i<${#raw_args[@]}; i++)); do
+          [ "${raw_args[$i]}" = -c ] || continue
+          run_script="${raw_args[$((i + 1))]:-}"
+          break
+        done
+        case "$run_script" in
+          *"> /backup-trigger/.restore_request.json"*)
+            cat > "$STUB_TRIGGER_DIR/.restore_request.json"
+            exit 0 ;;
+          *"rm -f /backup-trigger/.restore_request.json"*)
+            rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+            exit 0 ;;
+          *"cat /backup-trigger/.restore_status.json"*)
+            cat "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null || printf '{}\n'
+            exit 0 ;;
+        esac
+        if printf '%s\n' "${raw_args[@]}" | grep -qx -- '/usr/local/bin/restore.sh'; then
+          exit "${STUB_RESTORE_LEGACY_RC:-0}"
+        fi
+        exit 0 ;;
       ps)
+        if [ "${2:-}" = "-a" ] && [ "${3:-}" = "-q" ]; then
+          # -a includes stopped containers, so only an install whose containers
+          # were never created resolves nothing.
+          [ "${STUB_NO_CONTAINERS:-0}" = 1 ] && exit 0
+          printf 'cid-%s\n' "${4:-}"
+          exit 0
+        fi
         if [ "${2:-}" = "-q" ]; then
+          # A stopped stack resolves no RUNNING container ids at all.
+          [ "${STUB_STACK_DOWN:-0}" = 1 ] && exit 0
           if [ "${3:-}" = postgres-backup ]; then
             [ "$(sidecar_state)" = absent ] || printf '%s\n' "$BACKUP_CID"
           elif running_svc "${3:-}"; then
@@ -612,6 +662,7 @@ case "${1:-}" in
           exit 0
         fi
         # bare `ps` (status/doctor table)
+        [ "${STUB_COMPOSE_PS_FAIL:-0}" = 1 ] && exit 1
         printf 'NAME                 STATUS\n'
         printf 'jarvis-dashboard-1   Up 3 minutes (healthy)\n'
         exit 0 ;;
@@ -637,7 +688,7 @@ case "${1:-}" in
         log "compose $*"
         printf 'running\n' > "$STUB_SIDECAR_STATE_FILE"
         exit 0 ;;
-      stop|restart|logs) log "compose $*"; exit 0 ;;
+      start|stop|restart|logs) log "compose $*"; exit 0 ;;
       *) exit 0 ;;
     esac ;;
   *) exit 0 ;;
@@ -710,6 +761,8 @@ new_env() {
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
+        STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
+        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC BACKUP_COMPOSE_TIMEOUT_SECONDS \
         CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
@@ -773,6 +826,11 @@ run_cli() {
     "STUB_TARGET_BACKUP_RC=${STUB_TARGET_BACKUP_RC:-0}"
     "STUB_TARGET_BACKUP_SLEEP=${STUB_TARGET_BACKUP_SLEEP:-}"
     "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
+    "STUB_COMPOSE_PS_FAIL=${STUB_COMPOSE_PS_FAIL:-0}"
+    "STUB_STACK_DOWN=${STUB_STACK_DOWN:-0}"
+    "STUB_NO_CONTAINERS=${STUB_NO_CONTAINERS:-0}"
+    "STUB_RESTORE_LEGACY_RC=${STUB_RESTORE_LEGACY_RC:-0}"
+    "STUB_FREEZE_STATE_DIR=${STUB_FREEZE_STATE_DIR:-}"
     "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
     "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
     "STUB_PSQL_INPUT_FILE=$STUB_PSQL_INPUT_FILE"
@@ -1866,13 +1924,40 @@ else
   check_fail "owner set database refusal: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) out=<<<$out>>>"
 fi
 
-new_env; register_repo
-out="$(run_cli owner set)"; rc=$?
-if [ "$rc" -eq 2 ] && has "$out" 'owner set <email>'; then
-  pass "owner_set_requires_one_email_argument"
-else
-  check_fail "owner set usage: rc=$rc out=<<<$out>>>"
-fi
+# Every usage refusal names the exact invocation to run instead of the generic
+# help pointer. Each site is driven on its own, so none can be silently skipped.
+# Fields: argv @@ the site's own message @@ the invocation it must name.
+USAGE_SITES=(
+  "update --frobnicate@@update: unknown option '--frobnicate'@@Run: jarvis-research update [--to <tag>] [--resume <tag>] [--yes]"
+  "owner set@@owner set takes exactly one email address.@@Run: jarvis-research owner set <email>"
+  "owner set not-an-email@@owner set requires one ordinary email address.@@Run: jarvis-research owner set <email>"
+  "owner status extra@@owner status takes no arguments.@@Run: jarvis-research owner status"
+  "owner bogus@@owner: unknown subcommand 'bogus'.@@Run: jarvis-research owner status   (or: jarvis-research owner set <email>)"
+  "restore acknowledge@@restore acknowledge takes exactly one restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
+  "restore acknowledge short@@restore acknowledge requires one lowercase 32-hex restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
+  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)"
+  "restore legacy@@restore legacy takes exactly one backup timestamp.@@Run: jarvis-research restore legacy <timestamp>"
+  "restore legacy nonsense@@restore legacy requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore legacy <timestamp>"
+  "restore legacy --bogus@@restore legacy: unknown option '--bogus'.@@Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
+  "restore request@@restore request takes exactly one backup timestamp.@@Run: jarvis-research restore request <timestamp>"
+  "restore request nonsense@@restore request requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore request <timestamp>"
+  "restore status extra@@restore status takes no arguments.@@Run: jarvis-research restore status"
+)
+for entry in "${USAGE_SITES[@]}"; do
+  usage_argv="${entry%%@@*}"; usage_rest="${entry#*@@}"
+  usage_msg="${usage_rest%%@@*}"; usage_remedy="${usage_rest#*@@}"
+  new_env; register_repo
+  # shellcheck disable=SC2086  # a fixed, test-owned argument list
+  out="$(run_cli $usage_argv)"; rc=$?
+  if [ "$rc" -eq 2 ] \
+     && hasF "$out" "$usage_msg" \
+     && hasF "$out" "$usage_remedy" \
+     && ! hasF "$out" 'Run: jarvis-research help'; then
+    pass "usage_error_names_the_correct_invocation: ${usage_argv}"
+  else
+    check_fail "usage_error_names_the_correct_invocation ${usage_argv}: rc=$rc out=<<<$out>>>"
+  fi
+done
 
 # Restore acknowledgement binds typed confirmation to the exact quarantine,
 # consumes the restore-session token first, and never prints it.
@@ -1979,6 +2064,196 @@ else
   check_fail "restore acknowledge foreign lifecycle: rc=$rc state=$(cat "$BK/.lifecycle/operation.state" 2>/dev/null) log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
+# =============================================================================
+# Recovery commands: break-glass restore, restore progress, off-host request.
+# =============================================================================
+# The backup service polls the trigger volume every five seconds and consumes a
+# restore request before anything else, so the request may only be written after
+# the service has been stopped. The ordering IS the correctness property here.
+new_env; register_repo
+out="$(BACKUP_COMPOSE_TIMEOUT_SECONDS=7 run_cli restore legacy 20260101_010101)"; rc=$?
+legacy_stop="$(grep -n 'compose stop postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_write="$(grep -n 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_run="$(grep -n 'compose-run .*restore\.sh' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_start="$(grep -n 'compose start postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_write_argv="$(grep 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1)"
+legacy_run_argv="$(grep 'compose-run .*restore\.sh' "$STUB_LOG" | head -1)"
+legacy_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] \
+   && [ -n "$legacy_stop" ] && [ -n "$legacy_write" ] \
+   && [ -n "$legacy_run" ] && [ -n "$legacy_start" ] \
+   && [ "$legacy_stop" -lt "$legacy_write" ] \
+   && [ "$legacy_write" -lt "$legacy_run" ] \
+   && [ "$legacy_run" -lt "$legacy_start" ]; then
+  pass "restore_legacy_stops_the_backup_service_before_it_writes_the_request"
+else
+  check_fail "restore legacy ordering: rc=$rc stop=$legacy_stop write=$legacy_write run=$legacy_run start=$legacy_start log=$(cat "$STUB_LOG")"
+fi
+
+# Both one-offs must skip the dependency chain and override the service's own
+# entrypoint (an infinite poll loop that takes no command arguments).
+if hasF "$legacy_write_argv" '--no-deps' && hasF "$legacy_write_argv" '--entrypoint sh' \
+   && hasF "$legacy_run_argv" '--no-deps' \
+   && hasF "$legacy_run_argv" '--entrypoint /usr/local/bin/restore.sh'; then
+  pass "restore_legacy_one_offs_skip_dependencies_and_override_the_poll_entrypoint"
+else
+  check_fail "restore legacy one-off flags: write=<<<$legacy_write_argv>>> run=<<<$legacy_run_argv>>>"
+fi
+
+# No Compose flag forces a pseudo-terminal, so the interactive leg must not carry
+# -T (which would make the acceptance prompt unreachable) and must not run under
+# the compose timeout wrapper (which would kill the operator mid-prompt). The
+# request write is the opposite: its stdin is a pipe, so -T belongs there.
+if hasF "$legacy_write_argv" ' -T ' \
+   && hasF "$legacy_write_argv" 'compose-run timeout=7 ' \
+   && ! hasF "$legacy_run_argv" ' -T ' \
+   && hasF "$legacy_run_argv" 'compose-run timeout= '; then
+  pass "restore_legacy_pins_T_to_the_request_write_and_runs_the_prompt_untimed"
+else
+  check_fail "restore legacy tty/timeout policy: write=<<<$legacy_write_argv>>> run=<<<$legacy_run_argv>>>"
+fi
+
+if printf '%s' "$legacy_request" | grep -Eq '"source":"local"' \
+   && printf '%s' "$legacy_request" | grep -Eq '"timestamp":"20260101_010101"' \
+   && printf '%s' "$legacy_request" | grep -Eq '"restore_id":"[0-9a-f]{32}"' \
+   && printf '%s' "$legacy_request" | grep -Eq '"requested_at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"'; then
+  pass "restore_legacy_writes_a_well_formed_same_host_restore_request"
+else
+  check_fail "restore legacy request json: <<<$legacy_request>>>"
+fi
+
+# The unknown-schema acknowledgement is off unless the operator opts in, so the
+# schema-0 refusal's "--allow-unknown-schema" advice is followable from the CLI.
+if printf '%s' "$legacy_request" | grep -q 'allow_unknown_schema'; then
+  check_fail "restore legacy default request must NOT acknowledge unknown schema: <<<$legacy_request>>>"
+else
+  pass "restore_legacy_default_request_does_not_acknowledge_unknown_schema"
+fi
+new_env; register_repo
+run_cli restore legacy 20260101_010101 --allow-unknown-schema >/dev/null 2>&1
+legacy_ack_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+if printf '%s' "$legacy_ack_request" | grep -Eq '"allow_unknown_schema":true' \
+   && printf '%s' "$legacy_ack_request" | grep -Eq '"timestamp":"20260101_010101"'; then
+  pass "restore_legacy_allow_unknown_schema_flag_sets_the_acknowledgement"
+else
+  check_fail "restore legacy --allow-unknown-schema request: <<<$legacy_ack_request>>>"
+fi
+
+# The service loop must resume even when the restore itself fails, or a failed
+# break-glass attempt leaves the install with no scheduled backups.
+new_env; register_repo
+STUB_RESTORE_LEGACY_RC=1
+out="$(run_cli restore legacy 20260101_010101)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'restore status' \
+   && grep -q 'compose start postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_resumes_the_backup_service_after_a_failed_restore"
+else
+  check_fail "restore legacy failure resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# ...and clears the request first, so the resumed service cannot consume a
+# request the operator abandoned and report a failure they never started.
+if [ ! -e "$TRIG/.restore_request.json" ] \
+   && grep -q 'rm -f /backup-trigger/.restore_request.json' "$STUB_LOG"; then
+  pass "restore_legacy_clears_an_unconsumed_request_before_resuming_the_service"
+else
+  check_fail "restore legacy request cleanup: log=$(cat "$STUB_LOG")"
+fi
+
+# restore status reads the sidecar's status file through its own one-off.
+new_env; register_repo
+printf '{"state":"failed","current_step":"Restoring database","steps":[],"safety_backup_ts":"20260101_000000","started_at":"1","finished_at":null,"error":"pg_restore failed","drop_started":true,"manual_steps_required":true,"phase":"destructive"}\n' \
+  > "$TRIG/.restore_status.json"
+out="$(run_cli restore status)"; rc=$?
+status_argv="$(grep 'compose-run .*restore_status\.json' "$STUB_LOG" | head -1)"
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'failed' \
+   && has "$out" 'pg_restore failed' \
+   && has "$out" 'Restoring database' \
+   && has "$out" '20260101_000000' \
+   && has "$out" 'required' \
+   && hasF "$status_argv" '--no-deps' \
+   && hasF "$status_argv" '--entrypoint sh'; then
+  pass "restore_status_reports_state_error_manual_steps_and_the_safety_point"
+else
+  check_fail "restore status read: rc=$rc argv=<<<$status_argv>>> out=<<<$out>>>"
+fi
+
+# The recovery commands exist for the disaster where the database will not start,
+# so a stopped stack must NOT lock them out: the ownership check reads the labels
+# of the stopped container and the command proceeds through its own one-off.
+new_env; register_repo
+STUB_STACK_DOWN=1
+printf '{"state":"failed","current_step":"Restoring database","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":"pg_restore failed","drop_started":false,"manual_steps_required":false,"phase":"pre"}\n' \
+  > "$TRIG/.restore_status.json"
+out="$(run_cli restore status)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'failed' \
+   && grep -q 'compose-run' "$STUB_LOG"; then
+  pass "restore_status_still_reads_its_report_when_the_stack_is_stopped"
+else
+  check_fail "restore status stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# A restore replays into a RUNNING database, so a stopped stack is refused at the
+# start, by name, and nothing is stopped or written on the way out.
+new_env; register_repo
+STUB_STACK_DOWN=1
+out="$(run_cli restore legacy 20260101_010101)"; rc=$?
+if [ "$rc" -ne 0 ] \
+   && has "$out" 'database is not running' \
+   && has "$out" 'jarvis-research start' \
+   && ! grep -q 'compose stop postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_refuses_by_name_when_the_database_is_not_running"
+else
+  check_fail "restore legacy stopped stack: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# An install whose containers were never created cannot be ownership-checked at
+# all. That fence stays up, and the refusal names the cause and the remedy.
+new_env; register_repo
+STUB_NO_CONTAINERS=1
+out="$(run_cli restore status)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'no Postgres container' \
+   && has "$out" 'jarvis-research start' \
+   && ! grep -q 'compose-run' "$STUB_LOG"; then
+  pass "recovery_refuses_actionably_when_the_containers_do_not_exist"
+else
+  check_fail "restore status no containers: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# The off-host request is printed for the operator to submit AFTER the archives
+# and the one-time key are in place. Submitting it early fails the restore.
+new_env; register_repo
+out="$(run_cli restore request 20260101_010101)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && hasF "$out" 'cp ./offsite/. postgres-backup:/restore-inbox/' \
+   && hasF "$out" 'postgres-backup:/restore-inbox/operator_key' \
+   && hasF "$out" '"source":"inbox"' \
+   && hasF "$out" '"timestamp":"20260101_010101"' \
+   && [ ! -e "$TRIG/.restore_request.json" ] \
+   && [ ! -s "$STUB_LOG" ]; then
+  pass "restore_request_prints_the_off_host_procedure_and_submits_nothing"
+else
+  check_fail "restore request: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+# The printed commands run in the operator's own shell, outside the ownership
+# check. Every one of them must therefore name this install's project and files;
+# a bare `docker compose` would obey a stray COMPOSE_PROJECT_NAME instead.
+request_cmds="$(printf '%s\n' "$out" | grep -E 'docker compose|postgres-backup' | grep -v '^ *jarvis-research')"
+request_unscoped="$(printf '%s\n' "$request_cmds" | grep -E '(^|\| *) *docker compose ' | grep -vF -- '-p ' || true)"
+if [ -n "$request_cmds" ] && [ -z "$request_unscoped" ] \
+   && hasF "$out" "--project-directory" \
+   && hasF "$out" "--env-file" \
+   && [ "$(printf '%s\n' "$request_cmds" | grep -cF -- '-p ')" -eq 3 ]; then
+  pass "restore_request_scopes_every_printed_command_to_this_install"
+else
+  check_fail "restore request scoping: unscoped=<<<$request_unscoped>>> cmds=<<<$request_cmds>>>"
+fi
+
 # Managed CLI commands are install-scoped even when the invoking shell exports
 # Compose selectors for a different checkout or project.
 new_env; register_repo
@@ -2049,11 +2324,56 @@ fi
 new_env; register_repo; STUB_DIRTY=" M setup.sh"
 out="$(run_cli doctor)"; rc=$?
 unset STUB_DIRTY
+# The indentation proves the refusal reached the user through doctor's readiness
+# section rather than merely leaking from the guard's own stderr.
 if [ "$rc" -ne 0 ] && [ "$clean_rc" -eq 0 ] \
-   && has "$out" 'uncommitted changes' && has "$out" 'M setup.sh'; then
+   && hasF "$out" '  [ERROR] Your working tree has uncommitted changes' \
+   && has "$out" 'M setup.sh'; then
   pass "doctor_reports_unupdatable_checkout: refusal reported and exit turns non-zero"
 else
   check_fail "doctor_reports_unupdatable_checkout: rc=$rc clean_rc=$clean_rc out=<<<$out>>>"
+fi
+
+# The signed-manifest marker is exempt from the readiness query, so a checkout
+# holding nothing else still reports ready and the marker is never named.
+new_env; register_repo; STUB_DIRTY="?? secrets/manifest-hmac-required"
+out="$(run_cli doctor)"; rc=$?
+unset STUB_DIRTY
+if [ "$rc" -eq 0 ] && has "$out" 'ready to update' \
+   && ! has "$out" 'uncommitted changes' \
+   && ! has "$out" 'manifest-hmac-required'; then
+  pass "doctor_reports_marker_only_checkout_ready: the marker is never reported"
+else
+  check_fail "doctor_reports_marker_only_checkout_ready: rc=$rc out=<<<$out>>>"
+fi
+
+# A repairable doctor warning names the product command that repairs it.
+new_env; register_repo; STUB_COMPOSE_PS_FAIL=1
+out="$(run_cli doctor)"; rc=$?
+unset STUB_COMPOSE_PS_FAIL
+if has "$out" 'Could not query container status' \
+   && hasF "$out" 'jarvis-research repair'; then
+  pass "doctor_container_warning_names_repair: the warning names its recovery command"
+else
+  check_fail "doctor_container_warning_names_repair: rc=$rc out=<<<$out>>>"
+fi
+
+# A transaction-journal write that fails after the update has already started
+# must stop cleanly and name the record it could not write, rather than letting
+# the failure surface later as an unrelated error.
+new_staged_update_env
+STUB_FREEZE_STATE_DIR="$CFG"
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+chmod 700 "$CFG"
+unset STUB_FREEZE_STATE_DIR
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'Could not record the update' \
+   && hasF "$out" "$PENDING_FILE" \
+   && ! has "$(cat "$STUB_LOG")" 'compose pull'; then
+  pass "update_dies_cleanly_when_the_journal_cannot_be_written"
+else
+  check_fail "mid-flow journal write failure: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # Recovery honesty: a migration-bearing update that fails health identifies the

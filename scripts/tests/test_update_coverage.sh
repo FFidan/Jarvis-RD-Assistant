@@ -540,6 +540,7 @@ printf 'JARVIS_NET_SUBNET=10.42.8.0/24\n' >> "$FX/.env"
 out="$(run_update --yes)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -qx 'JARVIS_NET_GATEWAY_IP=10.42.8.1' "$FX/.env" \
+   && grep -qx 'JARVIS_TELEGRAM_BOT_IP=10.42.8.250' "$FX/.env" \
    && grep -qx 'JARVIS_CADDY_IP=10.42.8.251' "$FX/.env" \
    && grep -qx 'JARVIS_CADDY_LOCAL_IP=10.42.8.252' "$FX/.env" \
    && grep -qx 'JARVIS_DASHBOARD_IP=10.42.8.253' "$FX/.env" \

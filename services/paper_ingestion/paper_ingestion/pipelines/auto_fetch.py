@@ -48,6 +48,16 @@ _DEFAULT_QUERY_TOPIC_ID = 0
 # every discovery query to the bare topic name.
 _DISCOVERY_TOPICS_SQL = "SELECT id, name, query_terms FROM topics"
 
+# System-scoped ``user_config`` key holding the last successful pipeline run.
+# The scheduler keeps jobs in memory only, so a fire due while the service was
+# down is lost; this stamp is what lets the next boot notice and catch up.
+AUTO_PIPELINE_LAST_RUN_KEY = "scheduler.auto_pipeline.last_run"
+
+_LAST_RUN_UPSERT_SQL = (
+    "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
+    "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
+)
+
 
 def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str, list[str]]]:
     """Coerce raw ``topics`` rows into ``(topic_id, name, query_terms)`` triples.
@@ -383,6 +393,15 @@ async def run_auto_pipeline(app) -> None:
         await _process_pending_papers(app, db_pool, sem)
 
         logger.info("auto_pipeline: run complete")
+
+        # Only a run that reached this point counts: a failed run leaves the
+        # stamp where it was so the next boot still schedules a catch-up.
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                _LAST_RUN_UPSERT_SQL,
+                AUTO_PIPELINE_LAST_RUN_KEY,
+                datetime.now(UTC).isoformat(),
+            )
 
     except Exception as e:
         logger.error("auto_pipeline: unhandled error: %s", e, exc_info=True)

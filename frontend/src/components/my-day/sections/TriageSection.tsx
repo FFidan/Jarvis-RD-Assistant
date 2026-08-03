@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -156,6 +157,7 @@ export function TriageSection() {
       }
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.analytics.missingFoundational() });
     },
+    onError: (err: Error) => toast.error(`Could not add the paper: ${err.message ?? 'unknown error'}`),
   });
 
   // "Process all" counts action items where pdf is downloaded and no job running
@@ -169,7 +171,9 @@ export function TriageSection() {
   const handleProcessAll = useCallback(async () => {
     await Promise.all(
       processableItems.map((p) =>
-        startJob('paper.process', { paper_id: p.id }).catch(() => {}),
+        startJob('paper.process', { paper_id: p.id }).catch((err: Error) =>
+          toast.error(`Could not start processing: ${err.message ?? 'unknown error'}`),
+        ),
       ),
     );
     queryClient.invalidateQueries({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
@@ -177,7 +181,9 @@ export function TriageSection() {
 
   const handleProcess = useCallback(
     (paper: FeedPaper) => {
-      startJob('paper.process', { paper_id: paper.id }).catch(() => {});
+      startJob('paper.process', { paper_id: paper.id }).catch((err: Error) =>
+        toast.error(`Could not start processing: ${err.message ?? 'unknown error'}`),
+      );
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
     },
     [startJob, queryClient],

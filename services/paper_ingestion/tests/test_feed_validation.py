@@ -38,7 +38,11 @@ def api_client():
         app.dependency_overrides[get_embedder] = lambda: mock_embedder
         app.state.limiter.enabled = False
 
-        from jarvis_common import get_current_user_id, verify_api_key
+        from jarvis_common import (
+            get_current_user_id,
+            get_current_user_id_or_bot,
+            verify_api_key,
+        )
         from jarvis_common.auth import current_user_id_strict
 
         app.dependency_overrides[verify_api_key] = lambda: None
@@ -47,6 +51,7 @@ def api_client():
         # so the converted ``Depends(get_current_user_id)`` routes still default
         # to user 1 (identical to the pre-conversion symbol-stub behaviour).
         app.dependency_overrides[get_current_user_id] = lambda: 1
+        app.dependency_overrides[get_current_user_id_or_bot] = lambda: 1
         # PR5-T8: /api/discover now resolves identity via ``Depends(current_user_id_strict)``
         # (was an imperative in-body call). Override it too so this "auth disabled"
         # fixture keeps exercising the paper_ids cap (422) rather than the auth gate (401).

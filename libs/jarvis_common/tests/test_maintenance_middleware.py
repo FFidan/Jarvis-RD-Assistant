@@ -30,6 +30,7 @@ from jarvis_common.maintenance import (
     OutboundEgressBlockedError,
     ensure_outbound_egress_allowed,
     maintenance_active,
+    maintenance_skip_reason,
     secrets_rotated_since,
     skip_for_maintenance,
 )
@@ -217,6 +218,36 @@ def test_skip_for_maintenance_fails_closed_for_an_unreadable_quarantine(tmp_path
 
     quarantine.write_text("not json")
     assert skip_for_maintenance("pulse") is True
+
+
+def test_skip_reason_names_which_condition_paused_the_work(tmp_path, monkeypatch):
+    """The reason separates the self-clearing condition from the one awaiting a person."""
+    soft = tmp_path / ".maintenance"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    assert maintenance_skip_reason("pulse") is None
+
+    quarantine.write_text("not json")
+    assert maintenance_skip_reason("pulse") == "quarantine"
+
+    soft.touch()
+    assert maintenance_skip_reason("pulse") == "restore"
+
+
+def test_skip_for_maintenance_reports_every_reason_as_a_pause(tmp_path, monkeypatch):
+    """The bool guard stays exactly as wide as the reason it delegates to."""
+    soft = tmp_path / ".maintenance"
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
+    monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+
+    for setup in (lambda: None, quarantine.touch, soft.touch):
+        setup()
+        assert skip_for_maintenance("pulse") is (maintenance_skip_reason("pulse") is not None)
 
 
 def test_outbound_egress_guard_fails_closed_for_existing_quarantine(tmp_path, monkeypatch):
@@ -408,6 +439,18 @@ async def _cancel(task) -> None:
         await task
 
 
+async def _cancel_reclaim_sweep(app: SimpleNamespace) -> None:
+    """Cancel the reclamation sweep the resume path created, proving it ran and stopped.
+
+    Resume-path tests own this task; cancelling it here keeps it from outliving
+    the test, and the final assertion fails if the cancellation is ever dropped.
+    """
+    sweep = app.state.reclaim_task
+    assert sweep is not None and not sweep.done()
+    await _cancel(sweep)
+    assert sweep.cancelled()
+
+
 async def test_watcher_step_pauses_worker_loop_on_activation(tmp_path, monkeypatch):
     """inactive→active cancels the whole worker task with no resume side-effects."""
     soft = _point_sentinels(tmp_path, monkeypatch)
@@ -451,6 +494,7 @@ async def test_watcher_step_reconciles_then_resumes_on_clear(tmp_path, monkeypat
     assert new_worker is not None and not new_worker.done()
     assert proc.run_worker_calls == [_QUEUES]
     await _cancel(new_worker)
+    await _cancel_reclaim_sweep(app)
 
 
 async def test_watcher_loop_survives_a_tick_exception(tmp_path, monkeypatch):
@@ -552,6 +596,7 @@ async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeyp
     await app_factory._maintenance_watcher_step(app2, _QUEUES, was_active=True, started_at=started)
     restart.assert_not_called()
     await _cancel(app2.state.procrastinate_worker_task)
+    await _cancel_reclaim_sweep(app2)
 
 
 async def test_watcher_step_self_restarts_even_when_migrations_would_fail(tmp_path, monkeypatch):
@@ -593,3 +638,4 @@ async def test_watcher_step_no_restart_when_started_at_absent(tmp_path, monkeypa
     await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True)
     restart.assert_not_called()
     await _cancel(app.state.procrastinate_worker_task)
+    await _cancel_reclaim_sweep(app)

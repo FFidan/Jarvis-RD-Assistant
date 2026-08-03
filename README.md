@@ -2,6 +2,12 @@
 
 > A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.
 
+**Why it's different:**
+
+- **Local-first** — runs on your own hardware with Ollama; your library and your questions never have to leave the machine.
+- **Source-verified** — every generated claim links back to the retrieved text it came from, so you can check the evidence, not just trust the model.
+- **Discover, understand, retain** — a daily ranked feed (Pulse), cross-paper Q&A with citations (Ask), and spaced-repetition Cards form one loop from finding a paper to remembering it.
+
 JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It defaults to local Ollama inference on infrastructure you control, uses source-linked retrieval so generated claims can be traced back to papers in the researcher's library, and can optionally use cloud models through LiteLLM when an administrator configures them.
 
 **Docs:** https://limitcycle-oss.github.io/jarvis-rd-assistant/ &nbsp;·&nbsp; **Releases:** https://github.com/limitcycle-oss/jarvis-rd-assistant/releases &nbsp;·&nbsp; **Security:** [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/SECURITY.md)
@@ -35,31 +41,24 @@ JARVIS RD Assistant helps researchers discover, organize, and interrogate scient
 
 ## Quickstart
 
-**Before you start:**
-
-- Docker Engine 24+ with Compose v2.24.4+, Python 3, `openssl`, `curl`, `git`
-- **~27–54 GB free disk space** for a default first install — a one-time peak, not the ongoing footprint. The exact figure depends on the tier-selected model and whether images are pulled prebuilt or built locally; custom models may require more. See [Disk budget](docs/REQUIREMENTS.md#disk-budget).
-- GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 7 GB on the smallest tier, up to 23 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
-- AMD ROCm is selected only when `/dev/kfd` is available. Other AMD and
-  Intel hosts stay on the supported CPU path unless Vulkan is selected
-  explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan remain
-  experimental, and PDF parsing and reranking stay on CPU. See the [hardware
-  support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/).
-- On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
-- Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On
-  supported hosts it can install missing packages after showing the commands and
-  asking permission. `./setup.sh --check` runs the same preflight without making
-  changes.
-- **Windows:** use WSL2 + Docker Desktop
-- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full
-  installer. `scripts/jarvis-setup.sh` is a local-only compatibility bootstrap
-  for older CI jobs; it does not configure TLS or remote access.
-
 ```bash
 git clone https://github.com/limitcycle-oss/jarvis-rd-assistant.git
 cd jarvis-rd-assistant
 ./setup.sh
 ```
+
+New here? The **[Quick start guide](docs/manual/quickstart.md)** walks you from clone to your first analyzed paper in one screen. The **[Deployment guide](docs/DEPLOYMENT.md)** covers GPUs, remote and family access, and non-interactive installs in full.
+
+**Before you start:**
+
+- Docker Engine 24+ with Compose v2.24.4+, Python 3, `openssl`, `curl`, `git`
+- **~27–54 GB free disk space** for a default first install — a one-time peak, not the ongoing footprint. The exact figure depends on the tier-selected model and whether images are pulled prebuilt or built locally; custom models may require more. See [Disk budget](docs/REQUIREMENTS.md#disk-budget).
+- GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 7 GB on the smallest tier, up to 23 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
+- AMD ROCm is selected only when `/dev/kfd` is available. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is selected explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan remain experimental, and PDF parsing and reranking stay on CPU. See the [hardware support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/).
+- On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
+- Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On supported hosts it can install missing packages after showing the commands and asking permission. `./setup.sh --check` runs the same preflight without making changes.
+- **Windows:** use WSL2 + Docker Desktop
+- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full installer. `scripts/jarvis-setup.sh` is a local-only compatibility bootstrap for older CI jobs; it does not configure TLS or remote access.
 
 `setup.sh` generates the repository-controlled secrets and configuration, pulls
 the selected images and Ollama models, waits for the services, and prints one
@@ -206,9 +205,15 @@ tier and confirms before acting. Preview the full plan first:
 jarvis-research uninstall --dry-run --all   # enumerate a full teardown, change nothing
 ```
 
-Data and purge tiers are irreversible. Their typed confirmations cannot be
-bypassed by `--yes`, and a purge offers to export the backup encryption key
-first. Read [Uninstalling](docs/manual/cli.md#uninstalling) before selecting one.
+Data and purge tiers are irreversible. `--all` only selects the purge tier: the
+ordinary confirmation and the backup offer still run, and only `--yes` suppresses
+those two. The typed confirmations cannot be bypassed by either flag, and a purge
+offers to export the backup encryption key first. `--keep-images` removes
+everything the tier covers except images, which also lets a teardown finish when
+the recorded version cannot be read. A non-interactive run without `--yes` stops
+at the first confirmation and exits 0 having changed nothing, so check its output
+rather than only its exit status. Read
+[Uninstalling](docs/manual/cli.md#uninstalling) before selecting a tier.
 
 ## Security
 

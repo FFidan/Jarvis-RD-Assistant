@@ -132,6 +132,13 @@ describe('OnboardingWizard', () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     resetAuthState();
+    // Every `authed=true` fixture in this file represents a signed-in admin
+    // (the wizard's original assumption before topic-step gating existed);
+    // individual tests override the role where the gating itself is under test.
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 1, email: 'admin@example.com', role: 'admin' },
+    });
     useJobStore.getState()._reset();
     vi.mocked(api.getFirstRunStatus).mockResolvedValue({ configured: false, setup_completed: false });
     vi.mocked(api.getSetupStatus).mockResolvedValue({
@@ -400,6 +407,72 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Automation schedule')).toBeInTheDocument();
     // The advance button reads "Next" because config is already persisted.
     expect(await screen.findByRole('button', { name: /^next$/i })).toBeInTheDocument();
+  });
+
+  // (F3) a partial save (cron persisted, enabling Pulse failed) reports the
+  // truth: the config query still refreshes, but neither the green indicator
+  // nor the footer's "Next" flip may claim a save that did not fully happen.
+  it('automation step: partial save invalidates config but withholds the saved indicator', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.setConfig).mockImplementation((key: string, value: unknown) =>
+      key === 'pulse.enabled'
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve({ key, value } as never),
+    );
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=5');
+    expect(await screen.findByText('Automation schedule')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /save schedule/i }));
+
+    expect(await screen.findByText(/enabling pulse failed/i)).toBeInTheDocument();
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /skip for now/i })).toBeInTheDocument();
+    // The config query still refetches even though the save was only partial.
+    await waitFor(() => {
+      expect(api.fetchConfig).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // A clean save shows the green indicator with no partial warning.
+  it('automation step: a clean save shows the saved indicator and no warning', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.setConfig).mockResolvedValue({ key: 'pulse.cron', value: '0 4 * * *' });
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=5');
+    expect(await screen.findByText('Automation schedule')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /save schedule/i }));
+
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+    expect(screen.queryByText(/enabling pulse failed/i)).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^next$/i })).toBeInTheDocument();
+  });
+
+  // Task 19 (F4): the topic step's admin-only API means an authenticated
+  // non-admin's wizard must not offer it.
+  it('hides the topic step for an authenticated non-admin', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 2, email: 'member@example.com', role: 'user' },
+    });
+    // Topic would be step 4 if offered; without it, step 4 is automation.
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=4');
+    expect(await screen.findByText('Automation schedule')).toBeInTheDocument();
+    expect(screen.queryByText('Your first research topic')).not.toBeInTheDocument();
+  });
+
+  it('shows the topic step for an authenticated admin', async () => {
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=4');
+    expect(await screen.findByText('Your first research topic')).toBeInTheDocument();
+  });
+
+  // The !authed term: during first run the operator is not yet authenticated,
+  // so the wizard must still offer the topic step to the admin-to-be.
+  it('shows the topic step for an unauthenticated first-run wizard', async () => {
+    // No session exists yet — a real first-run visitor, not the admin default
+    // this file's beforeEach seeds for the authed=true fixtures.
+    resetAuthState();
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=5');
+    expect(await screen.findByText('Your first research topic')).toBeInTheDocument();
   });
 
   // GAP-2: markSetupCompleted rejects → Done step renders error UI + retry calls it again.

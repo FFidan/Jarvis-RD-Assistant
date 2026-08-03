@@ -204,6 +204,45 @@ else
   fail=1
 fi
 
+# 5d-bis. The probe distinguishes a MISSING key from a wrong/corrupt one: a keyless
+#     host meeting an encrypted (.enc) archive is told the key is absent, not sent
+#     chasing a rotation or corruption it does not have. The probe block and its
+#     decrypt helper are run for real against fixture archives with a stubbed refusal.
+decrypt_fn="$(sed -n '/^decrypt_or_passthrough() {/,/^}/p' "$RESTORE_SCRIPT")"
+probe_block="$(sed -n '/^for arch in "\$JARVIS_ARCHIVE" "\$LITELLM_ARCHIVE"; do$/,/^done$/p' "$RESTORE_SCRIPT")"
+run_probe() {
+  # run_probe <archive path> <ENC_KEYFILE>
+  bash -c '
+    set -euo pipefail
+    fail_before_destruction() { printf "REFUSED %s" "$1"; exit 9; }
+    JARVIS_ARCHIVE="$1"
+    LITELLM_ARCHIVE="$1"
+    ENC_KEYFILE="$2"
+    '"$decrypt_fn"'
+    '"$probe_block"'
+    printf "PROCEEDED"
+  ' _ "$1" "$2" 2>/dev/null
+}
+probe_tmp="$(mktemp -d)"
+printf 'not a gzip stream' > "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc"
+printf 'not a gzip stream' > "${probe_tmp}/jarvis_20260801_120000.sql.gz"
+printf 'a-real-looking-key' > "${probe_tmp}/key"
+missing_key_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc" '' || true)"
+wrong_key_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc" "${probe_tmp}/key" || true)"
+plain_corrupt_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz" '' || true)"
+rm -rf "$probe_tmp"
+if [ -n "$probe_block" ] \
+   && printf '%s' "$missing_key_refusal" | grep -q 'no usable backup encryption key' \
+   && printf '%s' "$wrong_key_refusal" | grep -q 'wrong encryption key or corrupt' \
+   && ! printf '%s' "$wrong_key_refusal" | grep -q 'no usable backup encryption key' \
+   && printf '%s' "$plain_corrupt_refusal" | grep -q 'wrong encryption key or corrupt'; then
+  pass "the decrypt probe names a missing key, and still reports wrong-key/corrupt otherwise"
+else
+  printf 'FAIL: probe messages wrong (missing=<<<%s>>> wrong=<<<%s>>> plain=<<<%s>>>)\n' \
+    "$missing_key_refusal" "$wrong_key_refusal" "$plain_corrupt_refusal" >&2
+  fail=1
+fi
+
 # 6. NEVER-RE-EXPOSE: the EXIT trap lifts .maintenance on a clean restore OR a
 #    failure BEFORE the first DROP (DROP_STARTED=0, nothing destroyed); a
 #    post-DROP failure (DROP_STARTED=1, not clean) MUST keep the stack 503.
@@ -270,8 +309,8 @@ fi
 
 # 6c. PRESENT-but-NO-CHECKSUMS manifest rejected BEFORE the DROP
 #     (fail_before_destruction, nothing destroyed); the ABSENT-manifest WARN+proceed
-#     back-compat path is unchanged (a present-valid manifest lacking only
-#     schema_version still proceeds — NOT rejected).
+#     back-compat path is unchanged. A present manifest that records no usable
+#     schema version is refused unless the request acknowledges it (6e below).
 check "rejects a present-but-corrupt manifest (no archive checksums)" \
   'present but corrupt or incomplete \(no archive checksums\)'
 corrupt_line="$(line_of 'present but corrupt or incomplete \(no archive checksums\)')"
@@ -296,6 +335,44 @@ else
 fi
 check "still refuses a newer-than-code backup before destruction" \
   'backup is newer than this deployment'
+
+# 6e. A manifest that records no usable schema version (absent, or the 0 written by
+#     older backups whose schema query failed) leaves the compat gate with nothing to
+#     check. Restoring one is only allowed when the request says so explicitly, so the
+#     gate block is run for real against fixture manifests with a stubbed refusal.
+schema_gate_block="$(sed -n \
+  '/MANIFEST_SCHEMA="\$(printf/,/^  if \[ "\$MANIFEST_AUTHENTICATED" = "1" \]; then$/p' \
+  "$RESTORE_SCRIPT" | sed '$d')"
+run_schema_gate() {
+  # run_schema_gate <manifest json> <ALLOW_UNKNOWN_SCHEMA>
+  bash -c '
+    set -euo pipefail
+    fail_before_destruction() { printf "REFUSED %s" "$1"; exit 9; }
+    MANIFEST_CONTENT="$1"
+    ALLOW_UNKNOWN_SCHEMA="$2"
+    TIMESTAMP="20260801_120000"
+    MIGRATIONS_DIR="$3"
+    '"$schema_gate_block"'
+    printf "PROCEEDED"
+  ' _ "$1" "$2" "${SCRIPT_DIR}/../../db/migrations" 2>/dev/null
+}
+schema_zero_refused="$(run_schema_gate '{"schema_version":0}' 0 || true)"
+schema_zero_allowed="$(run_schema_gate '{"schema_version":0}' 1 || true)"
+schema_absent_refused="$(run_schema_gate '{"app_version":"1.0.0"}' 0 || true)"
+schema_known_proceeds="$(run_schema_gate '{"schema_version":1}' 0 || true)"
+if [ -n "$schema_gate_block" ] \
+   && case "$schema_zero_refused" in REFUSED*) true ;; *) false ;; esac \
+   && printf '%s' "$schema_zero_refused" | grep -q 'allow_unknown_schema' \
+   && [ "$schema_zero_allowed" = "PROCEEDED" ] \
+   && case "$schema_absent_refused" in REFUSED*) true ;; *) false ;; esac \
+   && [ "$schema_known_proceeds" = "PROCEEDED" ]; then
+  pass "a manifest without a usable schema version is refused unless the request acknowledges it"
+else
+  printf 'FAIL: unusable-schema gate wrong (zero=%s allowed=%s absent=%s known=%s)\n' \
+    "$schema_zero_refused" "$schema_zero_allowed" "$schema_absent_refused" \
+    "$schema_known_proceeds" >&2
+  fail=1
+fi
 
 # === Rename-swap: preflight, swap-state file, sole gate, deterministic recovery =
 
@@ -707,7 +784,10 @@ fi
 #     reload keys while every target-host credential stays authoritative.
 check "lifts maintenance on any clean restore (inbox self-recovers)" \
   '\[ "\$RESTORE_CLEAN" = "1" \] \|\| \[ "\$DROP_STARTED" = "0" \]'
-if grep -Eq '!= "inbox"' "$RESTORE_SCRIPT"; then
+# Scoped to the cleanup handler that owns the gate. Elsewhere in the script an
+# off-host source is legitimately excluded — the unsigned-set override is
+# same-host only — so a whole-file grep would read that refusal as this hold.
+if sed -n '/^_cleanup()/,/^}/p' "$RESTORE_SCRIPT" | grep -Eq '!= "inbox"'; then
   printf 'FAIL: the lift gate still excludes inbox (the self-restart contract removed that hold)\n' >&2
   fail=1
 else
@@ -927,6 +1007,28 @@ else
   fail=1
 fi
 rm -rf "$pdf_dir"
+
+# I10b. The unknown-schema acknowledgement is parsed with the same strictness as the
+#       missing-PDF one: absent and false are safe defaults, duplicate or non-boolean
+#       values are refused rather than read as consent.
+run_schema_consent() {
+  bash -c '
+    set -euo pipefail
+    source "$1" --functions-only
+    if parse_allow_unknown_schema_request "$2"; then parsed=OK; else parsed=BAD; fi
+    printf "%s:%s" "$parsed" "$ALLOW_UNKNOWN_SCHEMA"
+  ' _ "$RESTORE_SCRIPT" "$1" 2>/dev/null
+}
+if [ "$(run_schema_consent '{}')" = "OK:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":true}')" = "OK:1" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":false}')" = "OK:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":true,"allow_unknown_schema":false}')" = "BAD:0" ] \
+   && [ "$(run_schema_consent '{"allow_unknown_schema":"true"}')" = "BAD:0" ]; then
+  pass "the unknown-schema acknowledgement defaults to off and refuses malformed values"
+else
+  printf 'FAIL: unknown-schema acknowledgement parsing accepted an unsafe request\n' >&2
+  fail=1
+fi
 
 # I11. The decrypted plaintext secret bundle is shredded (not just rm'd) on exit.
 check "shreds the staged plaintext secret files (not a bare rm)" \
@@ -1348,6 +1450,121 @@ bcheck "the S3 pull is gated on BACKUP_PULL_TS (default backup unchanged)" 'BACK
 bcheck "the S3 pull downloads the timestamp's archive set from the bucket" \
   'aws s3 cp "s3://\$\{BACKUP_S3_BUCKET\}/"'
 
+# === Signed-restore ratchet: two locations, never taken back =================
+# The requirement may only ever be ADDED. Either copy arms it, so no lifecycle
+# state — a replaced checkout, a cleaned host state directory, a resumed update —
+# may move a restore back from "signature required" to "not required".
+RATCHET_FN="$(sed -n '/^manifest_signature_required()/,/^}/p' "$RESTORE_SCRIPT")"
+PUBLISH_FN="$(sed -n '/^publish_manifest_signature()/,/^}/p' "$BACKUP_SCRIPT")"
+
+# ratchet_answer OLD_DIR DURABLE_DIR -> "required" | "not-required"
+ratchet_answer() {
+  SOURCE=local HOST_SECRETS_DIR="$1" BACKUP_STATE_DIR="$2" bash -c '
+    set -euo pipefail
+    MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+    MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
+    '"$RATCHET_FN"'
+    if manifest_signature_required; then echo required; else echo not-required; fi
+  '
+}
+rt_root="$(mktemp -d)"
+mkdir -p "${rt_root}"/{old,new,empty-old,empty-new}
+: > "${rt_root}/old/manifest-hmac-required"
+: > "${rt_root}/new/manifest-hmac-required"
+ratchet_case() {  # ratchet_case <description> <old-dir> <durable-dir> <want>
+  local got; got="$(ratchet_answer "$2" "$3")"
+  if [ "$got" = "$4" ]; then pass "$1"; else
+    printf 'FAIL: %s (got=%s want=%s)\n' "$1" "$got" "$4" >&2; fail=1; fi
+}
+ratchet_case "ratchet: the pre-relocation copy alone still requires a signature" \
+  "${rt_root}/old" "${rt_root}/empty-new" required
+ratchet_case "ratchet: the durable copy alone requires a signature" \
+  "${rt_root}/empty-old" "${rt_root}/new" required
+ratchet_case "ratchet: both copies require a signature" \
+  "${rt_root}/old" "${rt_root}/new" required
+ratchet_case "ratchet: a fresh install with neither copy does not require one" \
+  "${rt_root}/empty-old" "${rt_root}/empty-new" not-required
+
+# Lifecycle: a run that publishes a signature on an install armed by an earlier
+# release must leave BOTH copies present. Nothing removes either one.
+lc_root="$(mktemp -d)"; lc_ts="20260801_090000"
+mkdir -p "${lc_root}/old" "${lc_root}/new" "${lc_root}/backups"
+: > "${lc_root}/old/manifest-hmac-required"
+printf '{}' > "${lc_root}/backups/manifest_${lc_ts}.json"
+lc_rc=0
+BACKUP_DIR="${lc_root}/backups" TIMESTAMP="$lc_ts" ENCRYPT=1 \
+HOST_SECRETS_DIR="${lc_root}/old" MANIFEST_HMAC_MARKER="${lc_root}/old/manifest-hmac-required" \
+BACKUP_STATE_DIR="${lc_root}/new" MANIFEST_HMAC_MARKER_DURABLE="${lc_root}/new/manifest-hmac-required" \
+bash -c '
+  set -uo pipefail
+  sign_manifest() { printf "signed\n" > "${1}.hmac"; }
+  '"$PUBLISH_FN"'
+  publish_manifest_signature
+' 2>/dev/null || lc_rc=$?
+if [ "$lc_rc" -eq 0 ] \
+   && [ -e "${lc_root}/old/manifest-hmac-required" ] \
+   && [ -e "${lc_root}/new/manifest-hmac-required" ] \
+   && [ "$(ratchet_answer "${lc_root}/old" "${lc_root}/new")" = required ]; then
+  pass "ratchet: publishing a signature leaves both marker copies in place"
+else
+  printf 'FAIL: publishing a signature did not leave both copies (rc=%s old=%s durable=%s)\n' \
+    "$lc_rc" "$([ -e "${lc_root}/old/manifest-hmac-required" ] && echo yes || echo no)" \
+    "$([ -e "${lc_root}/new/manifest-hmac-required" ] && echo yes || echo no)" >&2
+  fail=1
+fi
+# A state cleaner, a changed HOME, or a differing XDG_STATE_HOME can take the
+# durable copy away. The requirement must survive on the pre-relocation copy.
+rm -f "${lc_root}/new/manifest-hmac-required"
+ratchet_case "ratchet: losing only the durable copy still requires a signature" \
+  "${lc_root}/old" "${lc_root}/new" required
+rm -rf "$rt_root" "$lc_root"
+
+# === Break-glass is same-host only ===========================================
+# The override exists for the disaster where the sole SAME-HOST set predates
+# signing. An off-host set has nothing on the fresh host to check it against, so
+# it is refused outright — and terminal access must not take that refusal back.
+GLASS_FN="$(sed -n '/^break_glass_accepted()/,/^}/p' "$RESTORE_SCRIPT")"
+glass_first="$(printf '%s\n' "$GLASS_FN" | sed -n '2,$p' \
+  | grep -vE '^[[:space:]]*(#|$)' | head -1 | sed -E 's/^[[:space:]]+//')"
+if [ "$glass_first" = '[ "$SOURCE" != "inbox" ] || return 1' ]; then
+  pass "break-glass refuses an off-host source as its very first check"
+else
+  printf 'FAIL: break_glass_accepted does not open with the off-host refusal (first statement: %s)\n' \
+    "$glass_first" >&2
+  fail=1
+fi
+
+# Behavioural proof. The gate also requires a real terminal, so the two cases run
+# under a pseudo-terminal with the acceptance phrase typed: identical input, and
+# only the source differs.
+if command -v script >/dev/null 2>&1; then
+  glass_harness="$(mktemp)"
+  {
+    printf 'set -uo pipefail\n'
+    printf 'BREAK_GLASS_PHRASE="I-ACCEPT-UNVERIFIED-BACKUP"\n'
+    printf '%s\n' "$GLASS_FN"
+    printf 'if break_glass_accepted; then printf "GLASS-ACCEPTED\\n"; else printf "GLASS-REFUSED\\n"; fi\n'
+  } > "$glass_harness"
+  glass_answer() {  # glass_answer <source> -> GLASS-ACCEPTED | GLASS-REFUSED
+    printf 'I-ACCEPT-UNVERIFIED-BACKUP\n' \
+      | SOURCE="$1" JARVIS_RESTORE_ALLOW_LEGACY=1 \
+        script -qec "bash ${glass_harness}" /dev/null 2>/dev/null \
+      | tr -d '\r' | grep -oE 'GLASS-(ACCEPTED|REFUSED)' | tail -1
+  }
+  glass_local="$(glass_answer local)"
+  glass_inbox="$(glass_answer inbox)"
+  if [ "$glass_local" = GLASS-ACCEPTED ] && [ "$glass_inbox" = GLASS-REFUSED ]; then
+    pass "break-glass accepts a typed same-host override and still refuses an off-host one"
+  else
+    printf 'FAIL: break-glass source gate (local=%s inbox=%s; both should differ)\n' \
+      "$glass_local" "$glass_inbox" >&2
+    fail=1
+  fi
+  rm -f "$glass_harness"
+else
+  printf 'SKIP: `script` is unavailable, so the break-glass terminal gate cannot be driven\n' >&2
+fi
+
 # === Compose wiring ==========================================================
 
 cmp_check() {
@@ -1355,6 +1572,8 @@ cmp_check() {
     printf 'FAIL: %s (pattern: %s)\n' "$1" "$2" >&2; fail=1; fi
 }
 cmp_check "sidecar mounts restore.sh" 'restore\.sh:/usr/local/bin/restore\.sh:ro'
+cmp_check "sidecar mounts the durable state dir, falling back to ./secrets when unrecorded" \
+  '\$\{JARVIS_STATE_DIR:-\./secrets\}:/backup-state:rw'
 cmp_check "sidecar env stamps JARVIS_VERSION (manifest app_version)" 'JARVIS_VERSION: \$\{JARVIS_VERSION'
 cmp_check "entrypoint runs restore.sh on a restore request" \
   'restore_request\.json.*restore\.sh|if \[ -f /backup-trigger/\.restore_request\.json'

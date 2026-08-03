@@ -22,7 +22,11 @@ from jarvis_common._ctx_shim import make_ctx_shim
 from jarvis_common.event_log import log_event
 from jarvis_common.jobs import JobError, queue_for_kind
 from jarvis_common.logging_config import correlation_id_var
-from jarvis_common.maintenance import OutboundEgressBlockedError, skip_for_maintenance
+from jarvis_common.maintenance import (
+    OutboundEgressBlockedError,
+    OutboundQuarantineBlockedError,
+    maintenance_skip_reason,
+)
 from jarvis_common.settings import get_jobs_settings
 
 if TYPE_CHECKING:
@@ -34,6 +38,20 @@ _RESTORE_BLOCK_RETRY = procrastinate.RetryStrategy(
     max_attempts=None,
     wait=30,
     retry_exceptions={OutboundEgressBlockedError},
+)
+# Quarantine waits for a person, so its retries are bounded: 120 attempts at the
+# 30-second wait above is roughly an hour, after which the job fails visibly
+# instead of retrying silently forever. Restore maintenance keeps its unlimited
+# budget because it clears itself.
+#
+# The counter is the job's own attempt total, which also advances while restore
+# maintenance is active, so a job that waited out a long restore can reach the
+# bound on its first quarantine-classified attempt. The message therefore states
+# that retrying stopped, not how long it went on for.
+_QUARANTINE_MAX_ATTEMPTS = 120
+_QUARANTINE_GAVE_UP_MESSAGE = (
+    "Outbound integrations are quarantined after a restore; acknowledge the restore"
+    " to resume. This job has stopped retrying."
 )
 
 
@@ -142,8 +160,11 @@ class TaskRegistry:
         Each wrapper checks maintenance and outbound quarantine before resolving
         runtime dependencies. ``OutboundEgressBlockedError`` alone receives an
         unlimited retry budget with a 30-second wait; the task is never treated
-        as successfully completed while egress remains prohibited. Generated
-        task objects are stored in ``kind_to_task`` for API dispatch.
+        as successfully completed while egress remains prohibited. Quarantine
+        raises a subclass of it, so it shares that budget until roughly an hour
+        of attempts has passed and the wrapper fails the job with a message
+        naming the acknowledgement that would release it. Generated task objects
+        are stored in ``kind_to_task`` for API dispatch.
         """
         for kind, handler in mapping.items():
             # Capture handler in default arg to avoid late-binding closure bugs.
@@ -159,7 +180,14 @@ class TaskRegistry:
                 _task_kind: str = kind,
                 **payload: Any,
             ) -> dict[str, Any]:
-                if skip_for_maintenance(f"task {_task_kind}"):
+                reason = maintenance_skip_reason(f"task {_task_kind}")
+                if reason == "quarantine":
+                    if context.job.attempts >= _QUARANTINE_MAX_ATTEMPTS:
+                        raise JobError(_QUARANTINE_GAVE_UP_MESSAGE)
+                    raise OutboundQuarantineBlockedError(
+                        "background task is blocked by temporary restore state"
+                    )
+                if reason is not None:
                     raise OutboundEgressBlockedError(
                         "background task is blocked by temporary restore state"
                     )

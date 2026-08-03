@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
+import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { ModelSelector } from '@/components/shared/ModelSelector';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
@@ -882,5 +882,128 @@ describe('ModelSelector', () => {
     expect(screen.queryByRole('button', { name: /pull model gpt-4o/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete model gpt-4o/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Install & manage models')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Live provider-fetched entries (Task 9)
+  // -------------------------------------------------------------------------
+
+  it('renders a live provider-sourced entry as selectable inside its provider group', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      catalog: [
+        ...defaultModels.catalog,
+        {
+          ...defaultModels.catalog[4], // anthropic/claude-haiku-4-5 shape
+          id: 'anthropic/claude-live-model',
+          name: 'Claude Live Model',
+          status: 'cloud_active',
+          provider_key_present: true,
+          can_assign: true,
+          assign_blocker: null,
+          source: 'provider',
+          fetched_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+      provider_lists: {
+        anthropic: { fetched_at: '2026-08-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Claude Live Model')).toBeInTheDocument();
+    });
+
+    const option = screen.getByTestId('select-item-anthropic/claude-live-model');
+    expect(option).not.toHaveAttribute('aria-disabled', 'true');
+    expect(within(option).queryByText(/API key/)).not.toBeInTheDocument();
+
+    fireEvent.click(option);
+    expect(onChange).toHaveBeenCalledWith('anthropic/claude-live-model');
+  });
+
+  it('renders a display-only unknown-capability entry as disabled with its blocker notes', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      catalog: [
+        ...defaultModels.catalog,
+        {
+          ...defaultModels.catalog[4],
+          id: 'anthropic/claude-mystery-model',
+          name: 'Claude Mystery Model',
+          status: 'cloud_required',
+          provider_key_present: true,
+          can_assign: false,
+          assign_blocker: 'This provider did not say what this model can do, so JARVIS will not offer it for a role.',
+          source: 'provider',
+          fetched_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+      provider_lists: {
+        anthropic: { fetched_at: '2026-08-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Claude Mystery Model')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText('This provider did not say what this model can do, so JARVIS will not offer it for a role.'),
+    ).toBeInTheDocument();
+
+    const option = screen.getByTestId('select-item-anthropic/claude-mystery-model');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('renders a provider-lists-only group label with the unavailable caption when the catalog has no entry for it', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      // No 'deepseek' entry anywhere in catalog — only provider_lists carries it.
+      provider_lists: {
+        deepseek: { fetched_at: null, error: 'provider request failed', truncated: false },
+      },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('DeepSeek')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText('Model list unavailable — add a working key or restore connectivity'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not call a successful but empty group unavailable', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      provider_lists: {
+        deepseek: { fetched_at: '2026-08-01T00:00:00Z', error: null, truncated: false },
+      },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('DeepSeek')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText('This provider offered no models JARVIS can use for this role'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Model list unavailable — add a working key or restore connectivity'),
+    ).not.toBeInTheDocument();
   });
 });

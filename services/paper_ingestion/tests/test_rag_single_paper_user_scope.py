@@ -467,3 +467,84 @@ async def test_load_paper_for_summary_scopes_paper_to_caller(
 
     with pytest.raises(EmptyChunksError):
         await _load_paper_for_summary(pool, paper_id=private_id, user_id=user_a, force=True)
+
+
+# ---------------------------------------------------------------------------
+# Shared-corpus (public) branch of the reused predicate. The negative cases
+# above exercise the caller-library disjunct; these pin the
+# ``visibility_scope = 'public'`` disjunct so a refactor that dropped it —
+# over-restricting the globally-shared corpus — is caught here rather than
+# silently narrowing every caller to only their own library.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_prepare_single_paper_rag_admits_public_shared_corpus_paper(
+    contract_two_users,
+    contract_conn,
+):
+    """A public shared-corpus paper stays visible to a non-discovering caller.
+
+    A system paper (``discovered_by IS NULL``, public scope) that no user
+    shelved must pass the visibility gate for any caller, so the downstream
+    empty-chunk condition — not PaperNotFoundError — surfaces.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+
+    non_discoverer = contract_two_users.user_b_id
+    public_id = await _seed_paper(
+        contract_conn,
+        "single-public",
+        visibility_scope="public",
+        discovered_by=None,
+    )
+
+    pool = SharedConnPool(contract_conn)
+    embedder = AsyncMock()
+    embedder.search_chunks_in_paper = AsyncMock(return_value=[])
+    embedder.rerank_chunks = AsyncMock(return_value=[])
+
+    with pytest.raises(NoRelevantChunksError):
+        await prepare_single_paper_rag(
+            embedder,
+            pool,
+            paper_id=public_id,
+            body=AskRequest(question="How does attention work?", max_chunks=3),
+            http_client=AsyncMock(),
+            user_id=non_discoverer,
+        )
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_load_paper_for_summary_admits_public_shared_corpus_paper(
+    contract_two_users,
+    contract_conn,
+):
+    """_load_paper_for_summary keeps a public shared-corpus paper visible.
+
+    The public disjunct must admit a non-discovering caller: a system paper
+    (``discovered_by IS NULL``, public scope) reaches the downstream
+    empty-chunks condition rather than PaperNotFoundError.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.exceptions import EmptyChunksError
+    from paper_ingestion.services.summarization import _load_paper_for_summary
+
+    non_discoverer = contract_two_users.user_b_id
+    public_id = await _seed_paper(
+        contract_conn,
+        "summary-public",
+        visibility_scope="public",
+        discovered_by=None,
+    )
+
+    pool = SharedConnPool(contract_conn)
+
+    with pytest.raises(EmptyChunksError):
+        await _load_paper_for_summary(pool, paper_id=public_id, user_id=non_discoverer, force=True)

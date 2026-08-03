@@ -10,6 +10,7 @@ import platform
 import re
 import socket
 import subprocess
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypedDict
@@ -24,6 +25,7 @@ from jarvis_common.model_catalog import (
     warn_if_catalog_stale,
 )
 
+from paper_ingestion.services.llm_provider_registry import provider_for_id
 from paper_ingestion.services.model_prefixes import strip_ollama_prefix
 
 logger = logging.getLogger(__name__)
@@ -682,6 +684,37 @@ def _status_for_entry(
     return status, pulled, installed_payload or {}
 
 
+def provider_display_name(provider_id: str) -> str:
+    """Return the operator-facing provider name, falling back to the raw id.
+
+    Blocker copy is user-facing, so it must never show a registry id like
+    ``custom_openai_compatible``. Ollama and any drifted id have no registry
+    entry; those keep the raw value rather than failing the status surface.
+    """
+    try:
+        return provider_for_id(provider_id).display_name
+    except ValueError:
+        return provider_id
+
+
+def provider_access_blocker(provider_id: str) -> str:
+    """Return the message telling an operator how to make *provider_id* reachable.
+
+    The picker and the assignment save path both refuse on the same condition, so
+    they say the same sentence: two wordings drift, and the operator who reads one
+    then hits the other has no way to tell which is authoritative. A provider that
+    can run on an endpoint URL alone is not necessarily waiting on a key.
+    """
+    try:
+        needs_url = provider_for_id(provider_id).base_url_config_key is not None
+    except ValueError:
+        needs_url = False
+    needed = "API key or endpoint URL" if needs_url else "API key"
+    return (
+        f"Configure the {provider_display_name(provider_id)} {needed} before assigning this model."
+    )
+
+
 def _assignability_for_entry(
     entry: ModelCatalogEntry,
     *,
@@ -703,12 +736,7 @@ def _assignability_for_entry(
             return False, "Model does not fit this machine."
         return False, "Pull this model first."
     can_assign = provider_key_present or active
-    assign_blocker = (
-        None
-        if can_assign
-        else f"Configure the {entry.provider} API key before assigning this model."
-    )
-    return can_assign, assign_blocker
+    return can_assign, None if can_assign else provider_access_blocker(entry.provider)
 
 
 def _effective_num_ctx_for_entry(entry: ModelCatalogEntry, ctx_per_role: dict[str, int]) -> int:
@@ -731,6 +759,7 @@ def build_model_statuses(
     hardware: HardwareInfo | None = None,
     cloud_api_keys: dict[str, bool] | None = None,
     num_ctx_per_role: dict[str, int] | None = None,
+    extra_entries: Sequence[ModelCatalogEntry] = (),
 ) -> list[ModelStatusDict]:
     """Combine catalog, installed Ollama models, active assignments, and hardware.
 
@@ -741,6 +770,11 @@ def build_model_statuses(
         ``"embed"``).  When provided, ``fit_detail`` is computed at the
         user's chosen context length; absent roles fall back to the catalog
         default.  Pass ``None`` (default) to always use catalog defaults.
+    extra_entries:
+        Entries synthesized outside the bundled catalog (a provider's live
+        model list).  They run through exactly the same status, fit and
+        assignability machinery, so every runtime key is computed by the code
+        that owns it.
     """
     hw = hardware or detect_hardware()
     cloud_keys = cloud_api_keys or {}
@@ -749,7 +783,7 @@ def build_model_statuses(
     active_ids = _active_model_ids(current, embedding_model_name)
 
     statuses: list[ModelStatusDict] = []
-    for entry in MODEL_CATALOG:
+    for entry in (*MODEL_CATALOG, *extra_entries):
         payload = entry.to_dict()
         active = normalize_model_tag(entry.id) in active_ids or (
             entry.ollama_tag is not None and normalize_model_tag(entry.ollama_tag) in active_ids
@@ -803,6 +837,7 @@ def recommendations_for_role(
     embedding_model_name: str,
     hardware: HardwareInfo | None = None,
     cloud_api_keys: dict[str, bool] | None = None,
+    extra_entries: Sequence[ModelCatalogEntry] = (),
 ) -> list[ModelStatusDict]:
     """Return catalog entries for one role, ranked by fit and readiness.
 
@@ -822,6 +857,9 @@ def recommendations_for_role(
         Probed hardware info.  Detected fresh when ``None``.
     cloud_api_keys : dict[str, bool] | None
         Mapping of provider name → key-present flag.  Empty dict assumed when ``None``.
+    extra_entries : Sequence[ModelCatalogEntry]
+        Live provider entries merged alongside the bundled catalog, so the
+        catalog and the recommendations for a role cannot disagree.
 
     Returns
     -------
@@ -844,6 +882,7 @@ def recommendations_for_role(
             embedding_model_name=embedding_model_name,
             hardware=hardware,
             cloud_api_keys=cloud_api_keys,
+            extra_entries=extra_entries,
         )
         if role in item["roles"]
     ]
@@ -855,28 +894,6 @@ def recommendations_for_role(
         )
     )
     return entries
-
-
-async def model_assignment_error(
-    *,
-    model_id: str,
-    installed: list[dict[str, Any]],
-    cloud_api_keys: dict[str, bool],
-) -> str | None:
-    """Return a user-facing assignment error, or None if assignment is allowed."""
-    entry = catalog_entry_for_model(model_id)
-    if entry is None:
-        return f"Model {model_id!r} is not in the curated model catalog."
-    if not entry.assignable:
-        return entry.notes or "This model is tracked for evaluation but is not assignable yet."
-    if entry.provider == "ollama":
-        tag = normalize_model_tag(entry.ollama_tag or entry.id)
-        if tag not in _installed_by_name(installed):
-            return "Model not pulled. Pull it first."
-        return None
-    if not cloud_api_keys.get(entry.provider, False):
-        return f"Configure the {entry.provider} API key before assigning this model."
-    return None
 
 
 async def _stream_pull_progress(resp: httpx.Response, ctx: Any, last_message: str) -> str:

@@ -10,6 +10,94 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.3 (2026-08-03)
+
+This release closes the gap between what the product says and what it does.
+Several features were documented, offered in the interface, or described in the
+manual while behaving differently in practice; each is now either true or
+honestly described.
+
+### Added
+
+- **Every documented recovery procedure is a command you can run.** Restoring an
+  older unsigned backup on the same host, checking a restore's progress, and
+  preparing an off-site restore request no longer require assembling container
+  commands by hand. Accepting an unverified backup still requires typing the
+  acceptance phrase at a prompt, and an off-site set is refused outright.
+  Checking progress and preparing a request work while the stack is stopped;
+  restoring replays into a running database, and says so instead of failing part
+  way through.
+- **The models each provider actually offers.** Provider configuration lists the
+  models the provider reports, with an indication of how fresh that list is,
+  rather than only a fixed built-in set. Vendor-namespaced identifiers from routers and
+  self-hosted endpoints are accepted, and a provider that fails to answer is
+  retried at a paced interval rather than on every request.
+- **The citation graph opens what it shows.** Selecting a paper opens it;
+  selecting a reference the library does not hold shows what is known about it.
+- **A durable second copy of the signed-restore requirement**, so an update
+  cannot silently return an installation to accepting unauthenticated backups.
+- **A one-screen quick-start guide** — clone, run setup, and analyze a first
+  paper — alongside the full deployment guide for anything non-standard.
+- **Accepting a backup whose database version cannot be checked is now a flag on
+  the same-host recovery command** (`restore legacy … --allow-unknown-schema`),
+  so the guidance the restore prints is one you can actually run.
+
+### Fixed
+
+- **Backups that can actually restore.** A backup is refused when its encryption
+  key is absent, when its manifest cannot gate a restore, and when a database
+  dump is incomplete. Retention can no longer delete every restore point, a
+  sweep reports what it really did, and restoring a backup whose database
+  version cannot be checked requires an explicit acknowledgement. Vector and
+  off-site capture are reported honestly without blocking recovery.
+- **Background work that reports the truth.** Jobs abandoned by an interrupted
+  worker no longer sit as running forever: they are marked failed with an
+  instruction to start them again. Job outcomes reflect what actually happened, advisory
+  waits and batch sizes are bounded, duplicate scheduling is prevented, and
+  periodic work stays on schedule across restarts.
+- **Account deletion revokes that user's sessions** without disturbing anyone
+  else's, and a departed user's stored vectors and rows are verified to agree
+  after a purge. Service impersonation is scoped to the address that may use it.
+- **Uninstall shows every removal it will perform**, including a directory
+  outside the installation folder, keeps the backup offer when removing
+  everything, and reports whether the final removal succeeded.
+- **Setup verifies the installed command can be found**, and an interrupted
+  install's staging folder — which can hold credential copies — is moved aside
+  rather than deleted, and only when its owner is provably gone.
+- **A failed update always explains how to roll back**, even when it cannot
+  record its own progress.
+- **Local uploads are identified by their full content**, so distinct documents
+  are no longer treated as the same paper.
+- **Automation settings report partial saves honestly**, and a skipped download
+  is no longer shown as a failed step.
+
+### Changed
+
+- **Git is no longer part of the supported operations path.** The manual
+  describes product commands throughout; repair-only fallbacks are labelled as
+  such. Misuse of a command now names the correct invocation.
+- **Dependencies updated within their supported ranges**, including the machine
+  learning stack, and the hosted checks now run on a supported Node release. Two
+  vulnerability exceptions in the Python dependency scan expired with these
+  updates and were removed, so that scan runs with no exceptions at all.
+- **The upload area states the size limit it enforces.** Single-file uploads
+  accept up to 50 MB; whole-folder imports are unchanged.
+- **A provider whose host resolves to a private address can be allowed
+  deliberately**, through a setting listing the hostnames permitted, rather than
+  by disabling the protection.
+- The first-run tour no longer offers the topic step to signed-in users who
+  cannot act on it.
+- Documentation corrected where it described behavior inaccurately: cloud
+  provider support, the knowledge graph controls, and how the scheduler treats a
+  catch-up run that coincides with an interval run.
+- **The Better BibTeX (Zotero) connection applies the same address policy as
+  every other outbound path** — carrier-grade-NAT, reserved, multicast, and
+  unspecified destinations are refused, and each request re-checks the host
+  rather than trusting one indefinitely.
+- **The frontend dependency scan was reassessed**: development-only advisories
+  were cleared by in-range patches, and a remaining routing-library advisory is
+  tracked with a dated removal trigger and does not affect a running instance.
+
 ## v1.2.2 (2026-07-31)
 
 ### Fixed

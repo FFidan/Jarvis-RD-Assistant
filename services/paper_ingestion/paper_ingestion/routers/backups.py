@@ -81,6 +81,8 @@ _DELETE_SENTINEL = (
 _RETENTION_CONFIG = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".retention.json"
 )
+# Outcome of the sidecar's last prune run (``scripts/prune.sh`` writes it).
+_LAST_DELETE = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".last_delete.json"
 # The backup sidecar writes an inbox inventory containing names and booleans,
 # without paths or key contents. The application reads it from the existing
 # trigger volume and does not mount the restore inbox.
@@ -170,6 +172,10 @@ class BackupStatus(BaseModel):
         Timestamp recorded by the most recent backup attempt.
     last_run_succeeded : bool or None
         Recorded outcome of that attempt, or ``None`` when unknown.
+    last_run_vectors_captured : bool or None
+        Whether that attempt captured the vector store, or ``None`` when unknown.
+    last_run_s3_complete : bool or None
+        Whether its off-site copy is complete, or ``None`` when unknown.
     trigger_pending : bool
         Whether an on-demand backup request awaits the sidecar.
 
@@ -180,6 +186,11 @@ class BackupStatus(BaseModel):
     last_run_at: datetime | None  # newest-archive mtime (last *success* proxy)
     last_attempt_at: datetime | None  # from .last_run.json; last run that was attempted
     last_run_succeeded: bool | None  # from .last_run.json; None when unknown
+    # A succeeded run still reports these separately: it means a complete restorable
+    # LOCAL set exists, which stays true when the vector store was unreachable or the
+    # off-site copy failed. Records written before these fields existed report None.
+    last_run_vectors_captured: bool | None
+    last_run_s3_complete: bool | None
     trigger_pending: bool
 
 
@@ -265,12 +276,18 @@ class RestoreLastRun(BaseModel):
         Restore outcome, or ``None`` when no trustworthy result exists.
     stores : dict[str, str]
         Per-store status labels without archive content or credentials.
+    vectors_captured : bool or None
+        Whether the vector store was captured, or ``None`` when unrecorded.
+    s3_complete : bool or None
+        Whether the off-site copy is complete, or ``None`` when unrecorded.
 
     """
 
     attempted_at: datetime | None
     succeeded: bool | None
     stores: dict[str, str]
+    vectors_captured: bool | None
+    s3_complete: bool | None
 
 
 class RestorePointsResponse(BaseModel):
@@ -321,6 +338,9 @@ class RestoreRequest(BaseModel):
         Read-only local archive store or staged off-host inbox.
     allow_missing_pdfs : bool
         Explicit consent for eligible legacy sets without saved PDFs.
+    allow_unknown_schema : bool
+        Explicit consent for sets that record no usable database schema
+        version, whose compatibility therefore cannot be checked.
 
     """
 
@@ -331,6 +351,7 @@ class RestoreRequest(BaseModel):
     # The default keeps every existing caller/test valid.
     source: Literal["local", "inbox"] = "local"
     allow_missing_pdfs: bool = False
+    allow_unknown_schema: bool = False
 
 
 class RestoreAcknowledgement(BaseModel):
@@ -442,6 +463,35 @@ class RetentionConfig(BaseModel):
     max_age_days: int | None = Field(default=None, ge=0)
 
 
+class DeleteOutcome(BaseModel):
+    """Outcome of the sidecar's last prune run, read from ``.last_delete.json``.
+
+    Attributes
+    ----------
+    state : {"recorded", "no_deletions_recorded"}
+        Whether an outcome record exists and could be parsed.
+    deleted : list of str
+        Archive filenames the sidecar removed.
+    skipped : list of str
+        Human-readable ``"<timestamp> (<reason>)"`` lines for restore points the
+        sidecar kept. The sidecar writes strings, not structured entries.
+    at : str or None
+        When the prune ran.
+    reason : str or None
+        Why the run refused or limited itself, when it did.
+    remaining_restore_points : int or None
+        Complete restore points still held after the run.
+
+    """
+
+    state: Literal["recorded", "no_deletions_recorded"]
+    deleted: list[str] = []
+    skipped: list[str] = []
+    at: str | None = None
+    reason: str | None = None
+    remaining_restore_points: int | None = None
+
+
 def _classify(name: str) -> str:
     """Map a validated archive filename to its store type."""
     if name.startswith("jarvis_"):
@@ -516,6 +566,19 @@ def _last_run_succeeded(run: dict | None) -> bool | None:
     if run is None or run.get("skipped_maintenance"):
         return None
     return run.get("succeeded")
+
+
+def _last_run_flag(run: dict | None, key: str) -> bool | None:
+    """Read a boolean truthfulness field, degrading anything unrecorded to None.
+
+    Records written before a field existed simply omit it, and a non-boolean value
+    is no more trustworthy than a missing one, so both report "unknown" rather than
+    asserting a capture that may not have happened.
+    """
+    if run is None:
+        return None
+    value = run.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _read_manifest(ts: str) -> dict | None:
@@ -1013,6 +1076,8 @@ async def backup_status(request: Request) -> BackupStatus:
         last_run_at=last,
         last_attempt_at=run.get("attempted_at") if run else None,
         last_run_succeeded=_last_run_succeeded(run),
+        last_run_vectors_captured=_last_run_flag(run, "vectors_captured"),
+        last_run_s3_complete=_last_run_flag(run, "s3_complete"),
         trigger_pending=_TRIGGER_SENTINEL.exists(),
     )
 
@@ -1035,6 +1100,8 @@ async def list_restore_points(request: Request) -> RestorePointsResponse:
             attempted_at=run.get("attempted_at"),
             succeeded=run.get("succeeded"),
             stores=run.get("stores") or {},
+            vectors_captured=_last_run_flag(run, "vectors_captured"),
+            s3_complete=_last_run_flag(run, "s3_complete"),
         )
     await log_audit(
         request.app.state.db_pool,
@@ -1404,6 +1471,7 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
                         "confirm": "RESTORE",
                         "source": req.source,
                         "allow_missing_pdfs": req.allow_missing_pdfs,
+                        "allow_unknown_schema": req.allow_unknown_schema,
                         "requested_at": requested_at,
                         "restore_id": restore_id,
                     }
@@ -1951,6 +2019,30 @@ async def request_delete_restore_point(
             ),
         ) from exc
     return {"status": "scheduled"}
+
+
+@router.get("/delete-status", response_model=DeleteOutcome, dependencies=[Depends(require_admin)])
+@limiter.limit("30/minute")
+async def delete_status(request: Request) -> DeleteOutcome:
+    """Report what the sidecar's last prune run deleted, skipped, and kept.
+
+    Admin-gated like the backup listing: which restore points were destroyed is
+    inventory, not restore progress, so the restore status bearer cannot read it.
+
+    A missing, unreadable, or malformed outcome file reports
+    ``no_deletions_recorded`` rather than failing — no prune has recorded an
+    outcome on a fresh install.
+    """
+    try:
+        data = json.loads(_LAST_DELETE.read_text())
+    except (OSError, ValueError):
+        return DeleteOutcome(state="no_deletions_recorded")
+    if not isinstance(data, dict):
+        return DeleteOutcome(state="no_deletions_recorded")
+    try:
+        return DeleteOutcome.model_validate({**data, "state": "recorded"})
+    except ValidationError:
+        return DeleteOutcome(state="no_deletions_recorded")
 
 
 @router.get("/retention", response_model=RetentionConfig, dependencies=[Depends(require_admin)])

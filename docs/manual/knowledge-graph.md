@@ -4,7 +4,7 @@
 
 The **Knowledge Graph** page at `/knowledge` displays an interactive concept-level graph of entities extracted from papers visible to you — public papers plus any papers in your own library — rendered using Cytoscape.js.
 
-<!-- screenshot: /knowledge — Cytoscape graph with EntityTypeFilter chips visible, coloured nodes, and GraphStats panel -->
+<!-- screenshot: /knowledge — Cytoscape graph with the Filters card (entity type dropdown and paper-count slider), coloured nodes, and GraphStats panel -->
 
 ---
 
@@ -25,9 +25,11 @@ The graph visualises six categories of entity, each with a distinct node colour:
 
 ## Controls
 
-### EntityTypeFilter
+### Entity type
 
-A row of filter chips along the top of the graph panel lets you show or hide entity types. Selecting **All** resets the filter to show every type. Deselecting a type removes those nodes (and their edges) from the visible graph.
+A dropdown in the Filters card selects one entity type at a time. The graph is re-fetched for the
+type you pick, so only entities of that type and the edges between them are returned. Choosing
+**All** removes the restriction and shows every type again.
 
 ### Min-paper-count slider
 
@@ -39,6 +41,14 @@ A **Layout** dropdown selects one of four layout algorithms: **Force-directed** 
 
 Pan and zoom are available via mouse or trackpad gestures directly on the graph canvas.
 
+### Reset filters
+
+A **Reset filters** button, beside the layout selector, clears the entity-type filter, the min-paper-count threshold, and the current node selection back to their defaults in one click.
+
+### Node selection
+
+Click a node to open a details panel beside the graph showing its name, type, canonical name (if different), how many papers it appears in, its description, and its relationships to other visible entities. A **Clear selection** button in the panel header closes the detail view. Selecting a node does not navigate away from the page.
+
 ### KGQueryInput
 
 A natural-language query box. Type a question such as "What methods are used on ImageNet?" and submit it to search the knowledge graph; matching relationships, comparisons, or entities come back as a list of result cards below the input, rather than as a filter or highlight applied to the graph itself. If nothing matches, a "No results found for this query" message is shown instead.
@@ -47,15 +57,15 @@ A natural-language query box. Type a question such as "What methods are used on 
 
 ## Graph statistics
 
-**GraphStats** — a summary panel showing the total number of nodes and edges currently visible, broken down by entity type.
+**GraphStats** — a summary panel showing three totals for the graph currently on screen: the number of entities, the number of relationships, and how many distinct entity types are present.
 
-**EntityBreakdown** — a list or chart showing how many entities of each type exist in the full (unfiltered) graph, helping you understand the composition of your knowledge graph.
+**EntityBreakdown** — how many entities of each type are in the graph you are currently looking at. It follows the filters, so narrowing to a single entity type leaves one row; clear the filters to see the whole composition.
 
 ---
 
 ## Batch extraction
 
-If unprocessed papers exist, an admin-only **Batch Extract Entities** button appears on an otherwise empty graph. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities. The graph populates as extraction jobs complete.
+An admin-only **Batch Extract Entities** button appears whenever the graph comes back empty. Clicking it processes up to 50 summarized papers per run that do not yet have extracted entities, and reports how many it handled — if nothing has been summarized yet, that count is zero and the graph stays empty until summaries exist. The graph populates as extraction jobs complete.
 
 You can also trigger extraction for individual papers from the [Paper Detail](paper-detail.md) page (the Actions rail → Extract Entities).
 

@@ -10,7 +10,10 @@ checkout and hands off to that repository's tracked script. An update therefore
 ships a newer command along with the rest of the code.
 
 If `jarvis-research` is not found after an install, make sure `~/.local/bin` is
-on your PATH, or run `./setup.sh` again from your checkout.
+on your PATH. Setup checks this against the shell it runs in and prints the fix
+if that shell cannot see the directory. A new terminal reads your startup files
+instead, so if the command is missing there, add the PATH line to your shell's
+startup file.
 
 ## Commands
 
@@ -26,9 +29,12 @@ on your PATH, or run `./setup.sh` again from your checkout.
 | `repair` | Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service. |
 | `owner status` | Show whether instance ownership comes from the host environment or database and whether it resolves to a live administrator. |
 | `owner set <email>` | Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again. |
+| `restore status` | Report what the backup service's last or current restore did: state, current step, error, whether manual follow-up is required, and the safety backup to restore if it is. |
+| `restore legacy <timestamp> [--allow-unknown-schema]` | Restore a backup taken on this host before manifest signing. The set cannot be checked for tampering, so the acceptance phrase must be typed at the prompt. Add `--allow-unknown-schema` only when the chosen backup recorded no usable database schema version (it was written while the database was unreachable) and the restore refuses it for that reason. Off-site sets are never eligible. See [Backup & Restore](backup-and-restore.md#if-your-only-surviving-backup-is-an-older-unsigned-one). |
+| `restore request <timestamp>` | Print the ordered steps and the ready-made request for recovering this host from another installation's backup set. It submits nothing. |
 | `restore acknowledge <restore-id>` | After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again. |
 | `register` | Record the current checkout as the managed install and refresh the launcher. |
-| `uninstall [--dry-run] [--tier N] [--keep-data] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
+| `uninstall [--dry-run] [--tier N] [--keep-data] [--keep-images] [--all] [--yes]` | Tiered, contained teardown of a managed install: stop (1), remove application images (2), delete data volumes (3), or full purge (4). Lead with `--dry-run`. See [Uninstalling](#uninstalling). |
 | `version` | Print the command name and the installed `JARVIS_VERSION`. |
 | `help` | Print usage. |
 
@@ -142,15 +148,13 @@ apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
 Your installed command may refuse first with `Your working tree has uncommitted
-changes; refusing to update.`, which does not say which path it means. Run `git
-status`. If the only path listed is `secrets/manifest-hmac-required`, that is
-expected and the bootstrap above is the way forward — it knows to leave that file
-alone.
+changes; refusing to update.` Run the bootstrap above anyway: it knows about the
+backup service's `secrets/manifest-hmac-required` file and leaves it alone, and if
+anything else is blocking the update it names the exact paths.
 
-Do not act on the "commit or stash" advice for this one file. It is untracked, so
-`git stash` will not move it, and deleting it would let a later restore accept an
-unsigned backup manifest. The backup service creates it to record that this
-installation requires a signed one.
+Never delete `secrets/manifest-hmac-required`. The backup service creates it to
+record that this installation requires a signed backup manifest, and removing it
+would let a later restore accept an unsigned one.
 
 Installations already running v1.2.2 or later update normally with
 `jarvis-research update`.
@@ -163,9 +167,13 @@ previous version and pull those images.
 
 If a data-changing migration already ran, **image rollback alone is not
 schema-safe** — the new database schema stays in place. To return to the
-pre-update state, restore the backup taken before the update (the WebUI Backup
-panel → Restore, or `scripts/restore.sh`); that rolls the database back together
-with the images. See [Backup & Restore](backup-and-restore.md).
+pre-update state, restore the backup taken before the update; that rolls the
+database back together with the images. Use the WebUI Backup panel → Restore,
+and follow it with `jarvis-research restore status`. If the surviving set
+predates manifest signing, `jarvis-research restore legacy <timestamp>` accepts
+it deliberately; to recover from another installation's set,
+`jarvis-research restore request <timestamp>` prints the procedure. See
+[Backup & Restore](backup-and-restore.md).
 
 ### Release-candidate tags are throwaway
 
@@ -218,13 +226,26 @@ jarvis-research uninstall --dry-run --all
 | `--dry-run` | Enumerate everything the chosen tier would remove and exit without changing anything. |
 | `--tier N` | Run tier `N` (1–4) directly instead of the interactive menu. |
 | `--keep-data` | Cap the run at tier 2, so the data volumes and on-disk files are always preserved. |
-| `--all` | Select tier 4 (full purge). |
-| `--yes` | Skip the ordinary per-tier `[y/N]` prompt. Requires an explicit `--tier N` (or `--all`). |
+| `--keep-images` | Remove everything the selected tier covers **except images**: no application image is removed, no third-party image is confirmed or removed, and the plan lists none. Because no image ref has to be built, the run also proceeds when the installed version in `.env` is missing or invalid — which is otherwise a refusal at tier 2 and above. |
+| `--all` | Select tier 4 (full purge). It selects a tier and nothing else: the ordinary prompts below still run. |
+| `--yes` | Skip the two ordinary `[y/N]` prompts (the proceed confirmation and, at tier 3 and above, the backup offer). Requires an explicit `--tier N` (or `--all`). |
+
+### What a purge asks, in order
+
+A tier-4 run asks two ordinary `[y/N]` prompts and then three mandatory gates:
+
+1. Proceed with this uninstall? (ordinary — suppressed by `--yes`)
+2. Capture a backup before deleting the volumes? (ordinary, and only when the
+   stack is running — suppressed by `--yes`)
+3. Type the compose project name. (mandatory)
+4. Export the backup encryption key, or type the acknowledgement phrase. (mandatory)
+5. Confirm each third-party image. (mandatory; not asked under `--keep-images`,
+   which removes none of them)
 
 ### The destructive gates require typed confirmation
 
-`--yes` and `--all` skip only the ordinary confirmation. They can never satisfy the
-destructive gates, each of which reads a typed confirmation from stdin:
+`--yes` skips only the two ordinary confirmations. Neither it nor `--all` can
+satisfy the mandatory gates, each of which reads a typed confirmation from stdin:
 
 - **Tier 3** requires typing the compose project name before any volume is deleted.
   When the stack is running, an interactive run first offers to take a backup
@@ -240,7 +261,12 @@ destructive gates, each of which reads a typed confirmation from stdin:
   individually, since those images may be shared with other projects on the host.
 
 A run with no controlling terminal (closed stdin) therefore cannot complete tier 3
-or tier 4 — the typed gates refuse and the install is left untouched.
+or tier 4 — the install is left untouched. **Mind the exit code when you script
+this:** without `--yes` the run stops at the proceed confirmation, prints
+`Aborted; nothing was done.` and exits **0**, because declining is not an error.
+With `--yes` it reaches a mandatory typed gate, which refuses and exits 1. A
+wrapper that only checks the exit status will read the first case as a completed
+uninstall, so check the output — or pass `--yes` and drive the typed gates.
 
 ### When Docker is not running
 

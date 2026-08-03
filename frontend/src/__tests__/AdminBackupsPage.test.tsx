@@ -34,7 +34,8 @@ vi.mock('@/lib/api/backups', () => ({
     confirm: string,
     source?: string,
     allowMissingPdfs?: boolean,
-  ) => requestRestoreMock(timestamp, confirm, source, allowMissingPdfs),
+    allowUnknownSchema?: boolean,
+  ) => requestRestoreMock(timestamp, confirm, source, allowMissingPdfs, allowUnknownSchema),
   getRestoreStatus: (token?: string) => getRestoreStatusMock(token),
   acknowledgeRestore: (restoreId: string, source: string, confirm: string, token?: string) =>
     acknowledgeRestoreMock(restoreId, source, confirm, token),
@@ -100,6 +101,8 @@ const _okStatus = {
   trigger_pending: false,
   last_attempt_at: new Date().toISOString(),
   last_run_succeeded: true,
+  last_run_vectors_captured: true,
+  last_run_s3_complete: true,
 };
 
 const _runningRestore = {
@@ -212,6 +215,35 @@ describe('AdminBackupsPage', () => {
     expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(\d+m ago\)/);
   });
 
+  it('warns that a succeeded run captured no vectors', async () => {
+    getBackupStatusMock.mockResolvedValue({ ..._okStatus, last_run_vectors_captured: false });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent(
+        'Last backup completed, but vectors were not captured.',
+      ),
+    );
+  });
+
+  it('warns that a succeeded run has an incomplete off-site copy', async () => {
+    getBackupStatusMock.mockResolvedValue({ ..._okStatus, last_run_s3_complete: false });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent(
+        'Last backup completed, but the off-site copy is incomplete.',
+      ),
+    );
+  });
+
+  it('does not warn about capture when a run captured everything it attempted', async () => {
+    getBackupStatusMock.mockResolvedValue(_okStatus);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('backup-status')).toHaveTextContent('restore point'),
+    );
+    expect(screen.getByTestId('backup-status')).not.toHaveTextContent('Last backup completed, but');
+  });
+
   it('shows a degraded status (not "No backups yet.") when the status probe fails', async () => {
     getBackupStatusMock.mockRejectedValue(new Error('status down'));
     renderPage();
@@ -304,6 +336,7 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'local',
         false,
+        false,
       ),
     );
   });
@@ -389,8 +422,60 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'local',
         true,
+        false,
       ),
     );
+  });
+
+  const _unknownSchemaPoints = {
+    ..._restorePoints,
+    restore_points: [
+      { ..._restorePoints.restore_points[0], schema_version: 0, compat: 'unknown' },
+    ],
+  };
+
+  it('accepts a restore point that records no usable schema version once the operator ticks the box', async () => {
+    getRestorePointsMock.mockResolvedValue(_unknownSchemaPoints);
+    const user = userEvent.setup();
+
+    renderPage();
+    const card = await screen.findByTestId('restore-point-card');
+    expect(within(card).getByText(/predates schema recording/i)).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: /restore to this point/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByTestId('restore-unknown-schema-warning')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() =>
+      expect(requestRestoreMock).toHaveBeenCalledWith(
+        '20260617_120000',
+        'RESTORE',
+        'local',
+        false,
+        true,
+      ),
+    );
+  });
+
+  it('starts no restore at all when the version check is unavailable and the box is unticked', async () => {
+    getRestorePointsMock.mockResolvedValue(_unknownSchemaPoints);
+    const user = userEvent.setup();
+
+    renderPage();
+    const card = await screen.findByTestId('restore-point-card');
+    await user.click(within(card).getByRole('button', { name: /restore to this point/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByRole('checkbox', { name: /without a version check/i })).not
+      .toBeChecked();
+    await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
+    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+
+    expect(requestRestoreMock).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/without a version check/i));
   });
 
   it('polls getRestoreStatus and renders persona-friendly progress steps after starting', async () => {
@@ -447,6 +532,13 @@ describe('AdminBackupsPage', () => {
     // The complete + keyed point restores through the shared typed-RESTORE confirm.
     const ready = items[0]!;
     await user.click(within(ready).getByRole('button', { name: /restore to this point/i }));
+    // An off-host set carries no readable database version, so the acknowledgement
+    // is reachable here — without it disaster recovery could not be completed.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByTestId('restore-unknown-schema-warning')).toHaveTextContent(
+      /off-host backup set carries no database version/i,
+    );
+    await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
     await user.click(screen.getByRole('button', { name: /^restore$/i }));
 
@@ -456,6 +548,7 @@ describe('AdminBackupsPage', () => {
         'RESTORE',
         'inbox',
         false,
+        true,
       ),
     );
   });
@@ -498,6 +591,7 @@ describe('AdminBackupsPage', () => {
     await user.click(within(section).getByRole('button', { name: /restore to this point/i }));
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText(/remove the PDF files currently stored/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
     await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
 
@@ -506,6 +600,7 @@ describe('AdminBackupsPage', () => {
         '20250501_030000',
         'RESTORE',
         'inbox',
+        true,
         true,
       ),
     );

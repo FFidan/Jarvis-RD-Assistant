@@ -133,51 +133,11 @@ rm -rf "$bac1q_dir"
 check "refuses plaintext secrets archive in production (FATAL exit 1)" \
   'BACKUP_ENCRYPT_KEYFILE.*plaintext|plaintext.*BACKUP_ENCRYPT_KEYFILE'
 
-# OPS-7: when ENCRYPT=0 outside production, backup.sh must SKIP the secrets
-# archive entirely (no plaintext tar.gz written) and emit a WARNING.
-check "skips secrets archive when ENCRYPT=0 outside production (no plaintext file)" \
+# A store whose archive was never attempted starts "skipped", so a crash before it
+# runs is not misreported as a failure. The refusal of keyless runs removed the
+# other producer of that state, leaving the startup default as its only source.
+check "defaults the secrets store to a not-yet-attempted state" \
   'SECRETS_STATE="skipped"'
-
-# OPS-7 (behavioral): run backup.sh with ENCRYPT=0 + non-production and confirm
-# it exits 0 and leaves NO plaintext secrets_*.tar.gz on disk.
-ops7_dir="$(mktemp -d)"
-ops7_secrets="${ops7_dir}/secrets"
-mkdir -p "$ops7_secrets"
-printf 'MY_SECRET' > "$ops7_secrets/postgres_password.txt"
-# Provide a minimal postgres_password Docker-secret stub so the script's FATAL
-# check (line 1: /run/secrets/postgres_password) can be side-stepped via env.
-ops7_secret_stub="${ops7_dir}/pg_password"
-printf 'STUB' > "$ops7_secret_stub"
-# Run a stripped invocation that skips the pg_dump/Qdrant steps by pointing
-# SECRETS_DIR to our fixture and overriding all net-dependent config vars.
-# We source backup.sh's ENCRYPT/ENVIRONMENT logic in a sub-shell to avoid
-# needing a real Postgres; instead we re-implement only the secrets branch.
-(
-  ENCRYPT=0
-  ENVIRONMENT=development
-  SECRETS_DIR="$ops7_secrets"
-  BACKUP_DIR="$ops7_dir"
-  TIMESTAMP=test
-  SECRETS_BACKUP_FILE=""
-  SECRETS_STATE="skipped"
-  # Replicate backup.sh's ENCRYPT=0 non-production branch logic:
-  if [ "$ENCRYPT" -eq 0 ] && [ "$ENVIRONMENT" != "production" ]; then
-    # must NOT write a plaintext archive
-    :
-  fi
-  # Verify no plaintext secrets archive was written
-  if ls "${BACKUP_DIR}"/secrets_*.tar.gz 2>/dev/null | grep -q .; then
-    echo "FAIL: plaintext secrets archive was written (ENCRYPT=0, non-production)" >&2
-    exit 1
-  fi
-  exit 0
-) 2>/dev/null
-if [ $? -eq 0 ]; then
-  pass "no plaintext secrets archive written when ENCRYPT=0 + non-production"
-else
-  printf 'FAIL: plaintext secrets archive written despite ENCRYPT=0 + non-production\n' >&2
-  fail=1
-fi
 
 # OPS-7 (behavioral): run the actual backup.sh secrets branch with ENCRYPT=0 +
 # ENVIRONMENT=production and confirm it exits non-zero.
@@ -198,7 +158,6 @@ else
   printf 'FAIL: backup did not exit non-zero for production + no encryption key\n' >&2
   fail=1
 fi
-rm -rf "$ops7_dir"
 
 # BAC (status): a FAILED run must be recorded — backup.sh writes .last_run.json
 # on EVERY exit via a trap, so /status can show "attempted + failed" instead of
@@ -211,8 +170,27 @@ check "records per-store outcome in .last_run.json" '"stores":\{"jarvis":'
 # secrets may be skipped only for an unencrypted non-production run. Qdrant
 # remains best-effort.
 COMPLETION_WLR="$(sed -n '/^write_last_run()/,/^}/p' "$BACKUP_SCRIPT")"
+# assert_valid_json <label> <text> — .last_run.json is the entire status surface's
+# only input and is read with json.loads: a single unquoted empty field turns every
+# other field into "no data", silently and until the next successful run. Every
+# record this suite produces is parsed here.
+assert_valid_json() {
+  local label="$1" text="$2"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$text" | python3 -m json.tool >/dev/null 2>&1 && return 0
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s' "$text" | jq -e . >/dev/null 2>&1 && return 0
+  else
+    printf 'FAIL: no JSON parser available to validate %s\n' "$label" >&2
+    fail=1
+    return 0
+  fi
+  printf 'FAIL: %s is not parseable JSON (%s)\n' "$label" "$text" >&2
+  fail=1
+}
 last_run_json() {
   # last_run_json <secrets> <qdrant> <manifest> <signature> <environment> <encrypt>
+  #               [retention_age_enabled] [retention_bulk_refused] [s3_complete]
   local lr_dir lr
   lr_dir="$(mktemp -d)"
   lr="$(
@@ -220,7 +198,8 @@ last_run_json() {
     RUN_ID=0123456789abcdef0123456789abcdef \
     JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE="$1" QDRANT_STATE="$2" \
     MANIFEST_STATE="$3" MANIFEST_SIGNATURE_STATE="$4" ENVIRONMENT="$5" \
-    ENCRYPT="$6" RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 \
+    ENCRYPT="$6" RETENTION_DAYS=7 RETENTION_AGE_ENABLED="${7:-1}" \
+    RETENTION_BULK_REFUSED="${8:-0}" s3_complete="${9:-true}" SKIPPED_MAINTENANCE=0 \
     bash -c '
       set -euo pipefail
       '"$COMPLETION_WLR"'
@@ -229,6 +208,7 @@ last_run_json() {
     '
   )"
   rm -rf "$lr_dir"
+  assert_valid_json ".last_run.json" "$lr"
   printf '%s' "$lr"
 }
 
@@ -257,10 +237,10 @@ else
 fi
 
 lr_dev_skipped="$(last_run_json skipped skipped ok skipped development 0)"
-if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":true'; then
-  pass "unencrypted non-production secrets=skipped may still be successful"
+if printf '%s' "$lr_dev_skipped" | grep -q '"succeeded":false'; then
+  pass "an unencrypted run can no longer be recorded as successful"
 else
-  printf 'FAIL: unencrypted non-production secrets=skipped was not successful (%s)\n' "$lr_dev_skipped" >&2
+  printf 'FAIL: an unencrypted run was recorded as successful (%s)\n' "$lr_dev_skipped" >&2
   fail=1
 fi
 
@@ -280,11 +260,117 @@ else
   fail=1
 fi
 
-lr_qdrant_failed="$(last_run_json ok failed ok skipped development 0)"
+lr_qdrant_failed="$(last_run_json ok failed ok ok development 1)"
 if printf '%s' "$lr_qdrant_failed" | grep -q '"succeeded":true'; then
   pass "Qdrant failure remains non-fatal to backup completion"
 else
   printf 'FAIL: optional Qdrant failure made backup unsuccessful (%s)\n' "$lr_qdrant_failed" >&2
+  fail=1
+fi
+
+# succeeded means "a complete restorable LOCAL set exists" and restore.sh gates
+# its safety pre-backup on it: a vector-store outage is frequently the very reason
+# an operator is restoring, so it must never reduce succeeded. The vector outcome
+# is reported separately instead, and "no vectors were captured" must be
+# distinguishable from "the store was reachable and had nothing to capture".
+if printf '%s' "$lr_qdrant_failed" | grep -q '"vectors_captured":false' \
+   && printf '%s' "$lr_qdrant_failed" | grep -q '"qdrant":"failed"'; then
+  pass "a failed vector snapshot is reported as vectors not captured"
+else
+  printf 'FAIL: a failed vector snapshot was not reported honestly (%s)\n' "$lr_qdrant_failed" >&2
+  fail=1
+fi
+
+lr_qdrant_unreachable="$(last_run_json ok unreachable ok ok development 1)"
+if printf '%s' "$lr_qdrant_unreachable" | grep -q '"succeeded":true' \
+   && printf '%s' "$lr_qdrant_unreachable" | grep -q '"vectors_captured":false' \
+   && printf '%s' "$lr_qdrant_unreachable" | grep -q '"qdrant":"unreachable"'; then
+  pass "an unreachable vector store is recorded without blocking recovery"
+else
+  printf 'FAIL: an unreachable vector store was not recorded honestly (%s)\n' "$lr_qdrant_unreachable" >&2
+  fail=1
+fi
+
+lr_qdrant_skipped="$(last_run_json ok skipped ok ok development 1)"
+if printf '%s' "$lr_qdrant_skipped" | grep -q '"succeeded":true' \
+   && printf '%s' "$lr_qdrant_skipped" | grep -q '"vectors_captured":false'; then
+  pass "a run with no collections to snapshot succeeds without claiming vectors"
+else
+  printf 'FAIL: a zero-collection run was misreported (%s)\n' "$lr_qdrant_skipped" >&2
+  fail=1
+fi
+
+lr_qdrant_ok="$(last_run_json ok ok ok ok development 1)"
+if printf '%s' "$lr_qdrant_ok" | grep -q '"vectors_captured":true'; then
+  pass "a complete vector snapshot is reported as vectors captured"
+else
+  printf 'FAIL: a complete vector snapshot was not reported as captured (%s)\n' "$lr_qdrant_ok" >&2
+  fail=1
+fi
+
+# Off-site completeness is initialised beside the per-store states, not in the
+# upload block: an install with no bucket configured never reaches that block, and
+# an unbound variable there would abort the EXIT trap, leave no .last_run.json at
+# all, and make the restore safety gate refuse every restore.
+S3_INIT_BLOCK="$(sed -n '/^ATTEMPTED_AT=/,/^# write_last_run/p' "$BACKUP_SCRIPT")"
+lr_nobucket_dir="$(mktemp -d)"
+lr_nobucket="$(
+  BACKUP_DIR="$lr_nobucket_dir" TIMESTAMP=t RUN_ID=0123456789abcdef0123456789abcdef \
+  ENCRYPT=1 ENVIRONMENT=development RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 \
+  bash -c '
+    set -euo pipefail
+    '"$S3_INIT_BLOCK"'
+    '"$COMPLETION_WLR"'
+    JARVIS_STATE=ok; LITELLM_STATE=ok; PDFS_STATE=ok; SECRETS_STATE=ok
+    MANIFEST_STATE=ok; MANIFEST_SIGNATURE_STATE=ok
+    write_last_run
+    cat "${BACKUP_DIR}/.last_run.json"
+  ' 2>/dev/null || true
+)"
+rm -rf "$lr_nobucket_dir"
+if [ -n "$lr_nobucket" ] && printf '%s' "$lr_nobucket" | grep -q '"s3_complete":true'; then
+  assert_valid_json ".last_run.json (no bucket configured)" "$lr_nobucket"
+  pass "an install with no off-site bucket still records a complete run"
+else
+  printf 'FAIL: no off-site bucket left the run record unwritten or incomplete (%s)\n' "$lr_nobucket" >&2
+  fail=1
+fi
+
+# An off-site (S3) copy that failed or truncated leaves the LOCAL backup complete
+# and the run exiting 0, so its message must not read as a fatal/data-loss outcome.
+check "off-site incompleteness states the local backup is complete and usable" \
+  'off-site copy incomplete; local backup .* is complete and usable'
+if grep -Eq 'FATAL: off-site' "$BACKUP_SCRIPT"; then
+  printf 'FAIL: off-site incompleteness is still labelled FATAL on a run that exits 0\n' >&2
+  fail=1
+else
+  pass "off-site incompleteness is not labelled FATAL on a run that exits 0"
+fi
+
+# With an age limit configured the record reports its number of days; with none
+# configured it reports no number at all, because a 0 there renders in the UI as
+# "Kept for 0 days" — a policy claim the install is not applying.
+lr_age_on="$(last_run_json ok skipped ok ok development 1)"
+if printf '%s' "$lr_age_on" | grep -q '"retention_days":7,"retention_age_enabled":true'; then
+  pass "a configured age window is reported with its number of days"
+else
+  printf 'FAIL: configured age retention was not reported (%s)\n' "$lr_age_on" >&2
+  fail=1
+fi
+
+lr_age_off="$(last_run_json ok skipped ok ok development 1 0)"
+if printf '%s' "$lr_age_off" | grep -q '"retention_days":null,"retention_age_enabled":false'; then
+  pass "no age limit is reported as no window rather than as zero days"
+else
+  printf 'FAIL: disabled age retention was not reported as null (%s)\n' "$lr_age_off" >&2
+  fail=1
+fi
+
+lr_bulk_refused="$(last_run_json ok skipped ok ok development 1 1 1)"
+if printf '%s' "$lr_bulk_refused" | grep -q '"retention_bulk_refused":true'; then
+  pass "a refused bulk sweep is recorded in the run outcome"
+else
+  printf 'FAIL: a refused bulk sweep was not recorded (%s)\n' "$lr_bulk_refused" >&2
   fail=1
 fi
 
@@ -367,7 +453,7 @@ printf 'attacker' > "${man_dir}/qdrant_unrelated_${man_ts}.snapshot"
 # Extract write_manifest's body from backup.sh and run it in isolation with the
 # fixture env (single source of truth — a change to the builder is exercised here).
 man_out="$(
-  BACKUP_DIR="$man_dir" TIMESTAMP="$man_ts" RUN_ID="$man_run_id" PGHOST=/nonexistent \
+  BACKUP_DIR="$man_dir" TIMESTAMP="$man_ts" RUN_ID="$man_run_id" SCHEMA_VERSION=112 \
   bash -c '
     set -euo pipefail
     BACKUP_ARCHIVES=(
@@ -380,7 +466,7 @@ man_out="$(
     '"$(sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT")"'
     write_manifest || true
     cat "${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
-  ' 2>/dev/null
+  ' 2>/dev/null || true
 )"
 if printf '%s' "$man_out" | grep -q '"filename":"jarvis_'"${man_ts}"'.sql.gz"' \
    && printf '%s' "$man_out" | grep -q '"filename":"qdrant_kg_entities_'"${man_ts}"'.snapshot"' \
@@ -415,12 +501,12 @@ mf_rc=0
 BACKUP_DIR="$mf_dir" TIMESTAMP="$mf_ts" ATTEMPTED_AT=x RUN_ID=0123456789abcdef0123456789abcdef \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=skipped QDRANT_STATE=ok \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=skipped ENVIRONMENT=development \
-ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+ENCRYPT=0 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$mf_dir" MANIFEST_HMAC_MARKER="${mf_dir}/marker" \
+BACKUP_STATE_DIR="$mf_dir" MANIFEST_HMAC_MARKER_DURABLE="${mf_dir}/durable-marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz" "${BACKUP_DIR}/qdrant_kg_entities_${TIMESTAMP}.snapshot")
-  psql() { printf "102\\n"; }
   sha256sum() { return 1; }
   sign_manifest() { return 0; }
   '"$COMPLETION_WLR"'
@@ -457,12 +543,12 @@ sf_rc=0
 BACKUP_DIR="$sf_dir" TIMESTAMP="$sf_ts" ATTEMPTED_AT=x RUN_ID=fedcba9876543210fedcba9876543210 \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
-ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$sf_dir" MANIFEST_HMAC_MARKER="${sf_dir}/marker" \
+BACKUP_STATE_DIR="$sf_dir" MANIFEST_HMAC_MARKER_DURABLE="${sf_dir}/durable-marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz.enc")
-  psql() { printf "102\\n"; }
   sign_manifest() { return 1; }
   '"$COMPLETION_WLR"'
   '"$FINALIZE_PROMOTE"'
@@ -497,12 +583,12 @@ rf_rc=0
 BACKUP_DIR="$rf_dir" TIMESTAMP="$rf_ts" ATTEMPTED_AT=x RUN_ID=00112233445566778899aabbccddeeff \
 JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
 MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
-ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 PGHOST=/nonexistent \
+ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
 HOST_SECRETS_DIR="$rf_dir" MANIFEST_HMAC_MARKER="${rf_dir}/missing/marker" \
+BACKUP_STATE_DIR="${rf_dir}/missing" MANIFEST_HMAC_MARKER_DURABLE="${rf_dir}/missing/marker" \
 bash -c '
   set -uo pipefail
   BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz.enc")
-  psql() { printf "102\\n"; }
   sign_manifest() { printf "signed\\n" > "${1}.hmac"; }
   '"$COMPLETION_WLR"'
   '"$FINALIZE_PROMOTE"'
@@ -526,6 +612,102 @@ else
 fi
 rm -rf "$rf_dir"
 
+# The durable second copy of the signed-restore marker is written BESIDE the
+# authoritative one and is best-effort by design: during an update the new script
+# runs inside the OLD container, where the durable mount does not exist yet. A
+# fatal path there would send finalize_backup to discard_current_backup and
+# destroy every backup taken in that window.
+#
+# run_publish_fixture DIR TS HOST_SECRETS_DIR STATE_DIR DURABLE_MARKER — finalize a
+# complete encrypted run and print its output; the caller reads the exit status.
+run_publish_fixture() {
+  BACKUP_DIR="$1" TIMESTAMP="$2" ATTEMPTED_AT=x RUN_ID=aabbccddeeff00112233445566778899 \
+  JARVIS_STATE=ok LITELLM_STATE=ok PDFS_STATE=ok SECRETS_STATE=ok QDRANT_STATE=skipped \
+  MANIFEST_STATE=failed MANIFEST_SIGNATURE_STATE=failed ENVIRONMENT=production \
+  ENCRYPT=1 RETENTION_DAYS=7 SKIPPED_MAINTENANCE=0 SCHEMA_VERSION=102 s3_complete=true \
+  HOST_SECRETS_DIR="$3" MANIFEST_HMAC_MARKER="${3}/manifest-hmac-required" \
+  BACKUP_STATE_DIR="$4" MANIFEST_HMAC_MARKER_DURABLE="$5" \
+  bash -c '
+    set -uo pipefail
+    BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc" "${BACKUP_DIR}/litellm_${TIMESTAMP}.sql.gz.enc")
+    sign_manifest() { printf "signed\n" > "${1}.hmac"; }
+    '"$COMPLETION_WLR"'
+    '"$FINALIZE_PROMOTE"'
+    '"$FINALIZE_DISCARD"'
+    '"$FINALIZE_MANIFEST"'
+    '"$FINALIZE_PUBLISH"'
+    '"$FINALIZE_BACKUP"'
+    finalize_backup
+    rc=$?
+    write_last_run
+    exit "$rc"
+  ' 2>&1
+}
+make_publish_fixture() {  # make_publish_fixture DIR TS
+  mkdir -p "$1"
+  printf 'J' > "${1}/jarvis_${2}.sql.gz.enc"
+  printf 'L' > "${1}/litellm_${2}.sql.gz.enc"
+}
+
+# (i) The update window: the durable directory does not exist yet. The run must
+#     complete and keep its archives, or an interrupted update destroys them.
+uw_root="$(mktemp -d)"; uw_ts="20260720_150000"
+make_publish_fixture "${uw_root}/backups" "$uw_ts"
+mkdir -p "${uw_root}/secrets"
+uw_rc=0
+uw_out="$(run_publish_fixture "${uw_root}/backups" "$uw_ts" "${uw_root}/secrets" \
+  "${uw_root}/absent" "${uw_root}/absent/manifest-hmac-required")" || uw_rc=$?
+if [ "$uw_rc" -eq 0 ] \
+   && [ -f "${uw_root}/backups/jarvis_${uw_ts}.sql.gz.enc" ] \
+   && [ -e "${uw_root}/secrets/manifest-hmac-required" ] \
+   && [ ! -e "${uw_root}/absent" ] \
+   && grep -q '"succeeded":true' "${uw_root}/backups/.last_run.json"; then
+  pass "an absent durable state directory leaves the backup complete and the marker armed"
+else
+  printf 'FAIL: absent durable state dir did not leave the backup complete (rc=%s out=<<<%s>>>)\n' \
+    "$uw_rc" "$uw_out" >&2
+  fail=1
+fi
+rm -rf "$uw_root"
+
+# (ii) The directory exists but the durable write cannot succeed. The run must
+#      still complete, and it must say so rather than failing silently.
+dw_root="$(mktemp -d)"; dw_ts="20260720_160000"
+make_publish_fixture "${dw_root}/backups" "$dw_ts"
+mkdir -p "${dw_root}/secrets" "${dw_root}/state/manifest-hmac-required"
+dw_rc=0
+dw_out="$(run_publish_fixture "${dw_root}/backups" "$dw_ts" "${dw_root}/secrets" \
+  "${dw_root}/state" "${dw_root}/state/manifest-hmac-required")" || dw_rc=$?
+if [ "$dw_rc" -eq 0 ] \
+   && [ -f "${dw_root}/backups/jarvis_${dw_ts}.sql.gz.enc" ] \
+   && [ -e "${dw_root}/secrets/manifest-hmac-required" ] \
+   && printf '%s' "$dw_out" | grep -q 'could not write the durable signed-restore marker'; then
+  pass "an unwritable durable marker warns and still completes the backup"
+else
+  printf 'FAIL: unwritable durable marker was not best-effort (rc=%s out=<<<%s>>>)\n' \
+    "$dw_rc" "$dw_out" >&2
+  fail=1
+fi
+rm -rf "$dw_root"
+
+# An un-migrated .env mounts ./secrets at both paths, so one host directory is
+# reached by two path strings. Writing the same file twice is harmless.
+sd_root="$(mktemp -d)"; sd_ts="20260720_170000"
+make_publish_fixture "${sd_root}/backups" "$sd_ts"
+mkdir -p "${sd_root}/secrets"
+ln -s "${sd_root}/secrets" "${sd_root}/alias"
+sd_rc=0
+sd_out="$(run_publish_fixture "${sd_root}/backups" "$sd_ts" "${sd_root}/secrets" \
+  "${sd_root}/alias" "${sd_root}/alias/manifest-hmac-required")" || sd_rc=$?
+if [ "$sd_rc" -eq 0 ] && [ -e "${sd_root}/secrets/manifest-hmac-required" ]; then
+  pass "one directory reached by two paths keeps the marker and exits 0"
+else
+  printf 'FAIL: same-directory publish did not keep the marker (rc=%s out=<<<%s>>>)\n' \
+    "$sd_rc" "$sd_out" >&2
+  fail=1
+fi
+rm -rf "$sd_root"
+
 # DATA-RESTORE-PRUNE-RACE: the retention prune at the tail must be gated on
 # BACKUP_SKIP_PRUNE so restore.sh's safety pre-backup cannot delete the very
 # archive being restored (a `local` target older than RETENTION_DAYS).
@@ -548,15 +730,18 @@ else
   sp_dir="$(mktemp -d)"
   mkdir -p "${sp_dir}/trigger"
   touch -d '2000-01-01 00:00:00' "${sp_dir}/jarvis_20000101_000000.sql.gz"
-  BACKUP_DIR="$sp_dir" TRIGGER_DIR="${sp_dir}/trigger" RETENTION_DAYS=7 BACKUP_SKIP_PRUNE=1 \
+  BACKUP_DIR="$sp_dir" TRIGGER_DIR="${sp_dir}/trigger" RETENTION_DAYS=7 RETENTION_AGE_ENABLED=1 BACKUP_SKIP_PRUNE=1 \
     bash -c 'set -euo pipefail; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n'"$PRUNE_KEEP_FN"$'\n'"$prune_block" >/dev/null 2>&1 || true
   sp_kept=0; [ -f "${sp_dir}/jarvis_20000101_000000.sql.gz" ] && sp_kept=1
   rm -rf "$sp_dir"
-  # (b) gate UNSET -> the same over-retention archive is pruned.
+  # (b) gate UNSET -> the same over-retention archive is pruned. A second, fresh
+  #     restore point satisfies the never-delete-the-last-point floor, so this case
+  #     keeps pinning the gate rather than the floor.
   np_dir="$(mktemp -d)"
   mkdir -p "${np_dir}/trigger"
   touch -d '2000-01-01 00:00:00' "${np_dir}/jarvis_20000101_000000.sql.gz"
-  BACKUP_DIR="$np_dir" TRIGGER_DIR="${np_dir}/trigger" RETENTION_DAYS=7 \
+  touch "${np_dir}/jarvis_$(date +%Y%m%d_%H%M%S).sql.gz"
+  BACKUP_DIR="$np_dir" TRIGGER_DIR="${np_dir}/trigger" RETENTION_DAYS=7 RETENTION_AGE_ENABLED=1 \
     bash -c 'set -euo pipefail; unset BACKUP_SKIP_PRUNE; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n'"$PRUNE_KEEP_FN"$'\n'"$prune_block" >/dev/null 2>&1 || true
   np_deleted=0; [ -f "${np_dir}/jarvis_20000101_000000.sql.gz" ] || np_deleted=1
   rm -rf "$np_dir"
@@ -582,7 +767,7 @@ for ts in "$jc_ts" "$jc_future"; do
   : > "${jc_dir}/manifest_${ts}.json"
   : > "${jc_dir}/manifest_${ts}.json.hmac"
 done
-BACKUP_DIR="$jc_dir" TRIGGER_DIR="${jc_dir}/trigger" RETENTION_DAYS=99999 KEEP_LAST_N=1 TIMESTAMP="$jc_ts" \
+BACKUP_DIR="$jc_dir" TRIGGER_DIR="${jc_dir}/trigger" RETENTION_DAYS=99999 RETENTION_AGE_ENABLED=1 KEEP_LAST_N=1 TIMESTAMP="$jc_ts" \
   bash -c 'set -euo pipefail; unset BACKUP_SKIP_PRUNE; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n'"$PRUNE_KEEP_FN"$'\n'"$prune_block" \
   >/dev/null 2>&1 || true
 if [ -f "${jc_dir}/jarvis_${jc_ts}.sql.gz.enc" ]; then
@@ -612,7 +797,7 @@ lr_holder=$!
 for _ in $(seq 1 40); do [ -f "${lr_dir}/.lifecycle-held" ] && break; sleep 0.05; done
 lr_locked_rc=0
 lr_locked_out="$(
-BACKUP_DIR="$lr_dir" TRIGGER_DIR="$lr_trig" RETENTION_DAYS=99999 KEEP_LAST_N=1 \
+BACKUP_DIR="$lr_dir" TRIGGER_DIR="$lr_trig" RETENTION_DAYS=99999 RETENTION_AGE_ENABLED=1 KEEP_LAST_N=1 \
 TIMESTAMP="$lr_current" \
   timeout 1 bash -c 'set -euo pipefail; unset BACKUP_SKIP_PRUNE; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n'"$PRUNE_KEEP_FN"$'\n'"$prune_block" 2>&1
 )" || lr_locked_rc=$?
@@ -620,7 +805,7 @@ lr_kept_while_locked=0
 [ -f "${lr_dir}/jarvis_${lr_rollback}.sql.gz.enc" ] && lr_kept_while_locked=1
 kill "$lr_holder" 2>/dev/null || true; wait "$lr_holder" 2>/dev/null || true
 lr_unlocked_rc=0
-BACKUP_DIR="$lr_dir" TRIGGER_DIR="$lr_trig" RETENTION_DAYS=99999 KEEP_LAST_N=1 \
+BACKUP_DIR="$lr_dir" TRIGGER_DIR="$lr_trig" RETENTION_DAYS=99999 RETENTION_AGE_ENABLED=1 KEEP_LAST_N=1 \
 TIMESTAMP="$lr_current" \
   bash -c 'set -euo pipefail; unset BACKUP_SKIP_PRUNE; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n'"$PRUNE_KEEP_FN"$'\n'"$prune_block" \
   >/dev/null 2>&1 || lr_unlocked_rc=$?
@@ -654,9 +839,12 @@ if [ -n "$PRUNE_IN_FLIGHT_FN" ] && [ -n "$PRUNE_AGE_FN" ] && [ -n "$PRUNE_KEEP_F
               "manifest_${pin_ts}.json.hmac"; do
     : > "${pa_dir}/${stem}"; touch -d '2000-01-02 00:00:00' "${pa_dir}/${stem}"
   done
+  # A second, fresh restore point, so the pinned point survives because it is
+  # pinned and not merely because it is the last one standing.
+  touch "${pa_dir}/jarvis_$(date +%Y%m%d_%H%M%S).sql.gz.enc"
   printf '{"timestamp":"%s","run_id":"%s"}\n' "$pin_ts" "$pin_run" \
     > "${pa_trig}/.update_backup_pin.json"
-  BACKUP_DIR="$pa_dir" TRIGGER_DIR="$pa_trig" RETENTION_DAYS=7 \
+  BACKUP_DIR="$pa_dir" TRIGGER_DIR="$pa_trig" RETENTION_DAYS=7 RETENTION_AGE_ENABLED=1 \
     bash -c 'set -euo pipefail; RESTORE_REQUEST_FILE="$TRIGGER_DIR/.restore_request.json"; RESTORE_STATUS_FILE="$TRIGGER_DIR/.restore_status.json"; UPDATE_PIN_FILE="$TRIGGER_DIR/.update_backup_pin.json"; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n''retention_prune_age "$BACKUP_DIR" "$RETENTION_DAYS" "$(prune_in_flight_ts)"' \
     >/dev/null 2>&1 || true
   age_pin_kept=0; [ -f "${pa_dir}/jarvis_${pin_ts}.sql.gz.enc" ] && age_pin_kept=1
@@ -681,9 +869,12 @@ if [ -n "$PRUNE_IN_FLIGHT_FN" ] && [ -n "$PRUNE_AGE_FN" ] && [ -n "$PRUNE_KEEP_F
   pm_dir="$(mktemp -d)"; pm_trig="${pm_dir}/trigger"; mkdir -p "$pm_trig"
   : > "${pm_dir}/jarvis_${pin_ts}.sql.gz.enc"
   touch -d '2000-01-02 00:00:00' "${pm_dir}/jarvis_${pin_ts}.sql.gz.enc"
+  # A second, fresh restore point, so the malformed pin's point is deleted for
+  # being unprotected rather than kept by the last-point floor.
+  touch "${pm_dir}/jarvis_$(date +%Y%m%d_%H%M%S).sql.gz.enc"
   printf '{"timestamp":"%s","run_id":"not-a-run-id"}\n' "$pin_ts" \
     > "${pm_trig}/.update_backup_pin.json"
-  BACKUP_DIR="$pm_dir" TRIGGER_DIR="$pm_trig" RETENTION_DAYS=7 \
+  BACKUP_DIR="$pm_dir" TRIGGER_DIR="$pm_trig" RETENTION_DAYS=7 RETENTION_AGE_ENABLED=1 \
     bash -c 'set -euo pipefail; RESTORE_REQUEST_FILE="$TRIGGER_DIR/.restore_request.json"; RESTORE_STATUS_FILE="$TRIGGER_DIR/.restore_status.json"; UPDATE_PIN_FILE="$TRIGGER_DIR/.update_backup_pin.json"; '"$PRUNE_IN_FLIGHT_FN"$'\n'"$PRUNE_AGE_FN"$'\n''retention_prune_age "$BACKUP_DIR" "$RETENTION_DAYS" "$(prune_in_flight_ts)"' \
     >/dev/null 2>&1 || true
   malformed_deleted=0; [ -f "${pm_dir}/jarvis_${pin_ts}.sql.gz.enc" ] || malformed_deleted=1
@@ -701,6 +892,179 @@ else
   printf 'FAIL: update-pin-aware retention helpers are missing\n' >&2
   fail=1
 fi
+
+# RETENTION FLOORS: an age window is a policy about old backups, never a licence to
+# leave an install with nothing to restore from. The env var is kept numeric, 0 means
+# "no age limit", one restore point always survives, and a sweep that would take most
+# of the fleet in one pass is read as a clock jump rather than obeyed.
+RETENTION_NORMALIZE="$(awk '/^RETENTION_DAYS=/{f=1} f{print} f && /^esac$/{exit}' "$BACKUP_SCRIPT")"
+SET_AGE_ENABLED_FN="$(sed -n '/^set_retention_age_enabled()/,/^}/p' "$BACKUP_SCRIPT")"
+if [ -z "$RETENTION_NORMALIZE" ] || [ -z "$SET_AGE_ENABLED_FN" ]; then
+  printf 'FAIL: could not extract the retention env normalisation from backup.sh\n' >&2
+  fail=1
+else
+  retention_policy() {
+    # retention_policy <BACKUP_RETENTION_DAYS> -> "<days> <age_enabled>" (warnings on stderr)
+    BACKUP_RETENTION_DAYS="$1" bash -c '
+      set -euo pipefail
+      '"$RETENTION_NORMALIZE"'
+      '"$SET_AGE_ENABLED_FN"'
+      set_retention_age_enabled
+      printf "%s %s\n" "$RETENTION_DAYS" "$RETENTION_AGE_ENABLED"
+    '
+  }
+  rp_bad_err="$(mktemp)"
+  rp_zero="$(retention_policy 0 2>/dev/null)"
+  rp_ok="$(retention_policy 30 2>/dev/null)"
+  rp_bad="$(retention_policy 'seven days' 2>"$rp_bad_err")"
+  if [ "$rp_zero" = "0 0" ] && [ "$rp_ok" = "30 1" ] && [ "$rp_bad" = "7 1" ] \
+     && grep -q 'is not a number' "$rp_bad_err"; then
+    pass "the retention window stays numeric: 0 disables it, a non-number warns and falls back"
+  else
+    printf 'FAIL: retention env normalisation wrong (zero=[%s] ok=[%s] bad=[%s] warning=%s)\n' \
+      "$rp_zero" "$rp_ok" "$rp_bad" "$(cat "$rp_bad_err" 2>/dev/null || true)" >&2
+    fail=1
+  fi
+  rm -f "$rp_bad_err"
+fi
+
+seed_restore_points() {
+  # seed_restore_points <dir> <mtime|now> <ts>... — a full archive set per timestamp,
+  # so a guard that counts files instead of restore points is visibly wrong.
+  local dir="$1" when="$2" ts f
+  shift 2
+  for ts in "$@"; do
+    for f in "jarvis_${ts}.sql.gz" "litellm_${ts}.sql.gz" "pdfs_${ts}.tar.gz" \
+             "secrets_${ts}.tar.gz" "qdrant_kg_entities_${ts}.snapshot" \
+             "manifest_${ts}.json"; do
+      : > "${dir}/${f}"
+      [ "$when" = "now" ] || touch -d "$when" "${dir}/${f}"
+    done
+  done
+}
+count_restore_points() {
+  find "$1" -maxdepth 1 -type f \( -name 'jarvis_*.sql.gz' -o -name 'jarvis_*.sql.gz.enc' \) \
+    -printf '%f\n' | wc -l
+}
+run_age_sweep() {
+  # run_age_sweep <dir> <days> <age_enabled> [allow_bulk] — sweep log then bulk_refused=<0|1>
+  BACKUP_DIR="$1" RETENTION_DAYS="$2" RETENTION_AGE_ENABLED="$3" \
+  BACKUP_ALLOW_BULK_PRUNE="${4:-}" \
+  bash -c '
+    set -euo pipefail
+    '"$PRUNE_AGE_FN"'
+    retention_prune_age "$BACKUP_DIR" "$RETENTION_DAYS" ""
+    printf "bulk_refused=%s\n" "${RETENTION_BULK_REFUSED:-0}"
+  ' 2>&1
+}
+
+rz_dir="$(mktemp -d)"
+seed_restore_points "$rz_dir" '2000-01-01 00:00:00' 20000101_000000 20000102_000000 20000103_000000
+run_age_sweep "$rz_dir" 0 0 >/dev/null
+if [ "$(count_restore_points "$rz_dir")" -eq 3 ]; then
+  pass "no age limit prunes nothing, however old every restore point is"
+else
+  printf 'FAIL: a disabled age window still pruned (%s remain)\n' \
+    "$(count_restore_points "$rz_dir")" >&2
+  fail=1
+fi
+rm -rf "$rz_dir"
+
+rl_dir="$(mktemp -d)"
+seed_restore_points "$rl_dir" '2000-01-01 00:00:00' 20000101_000000
+run_age_sweep "$rl_dir" 7 1 >/dev/null
+if [ -f "${rl_dir}/jarvis_20000101_000000.sql.gz" ] \
+   && [ -f "${rl_dir}/manifest_20000101_000000.json" ]; then
+  pass "the age sweep never deletes the last restore point"
+else
+  printf 'FAIL: the age sweep deleted the only restore point (%s)\n' \
+    "$(ls "$rl_dir" | tr '\n' ' ')" >&2
+  fail=1
+fi
+rm -rf "$rl_dir"
+
+rb_dir="$(mktemp -d)"
+seed_restore_points "$rb_dir" '2000-01-01 00:00:00' 20000101_000000 20000102_000000
+rb_out="$(run_age_sweep "$rb_dir" 7 1)"
+if [ "$(count_restore_points "$rb_dir")" -eq 1 ] \
+   && [ -f "${rb_dir}/jarvis_20000102_000000.sql.gz" ] \
+   && printf '%s' "$rb_out" | grep -q 'bulk_refused=0' \
+   && ! printf '%s' "$rb_out" | grep -q 'would delete'; then
+  pass "a two-point install is bounded by the last-point floor, not by the bulk guard"
+else
+  printf 'FAIL: two-point sweep wrong (%s remain, out=%s)\n' \
+    "$(count_restore_points "$rb_dir")" "$rb_out" >&2
+  fail=1
+fi
+rm -rf "$rb_dir"
+
+rc_dir="$(mktemp -d)"
+seed_restore_points "$rc_dir" '2000-01-01 00:00:00' \
+  20000101_000000 20000102_000000 20000103_000000 20000104_000000 \
+  20000105_000000 20000106_000000 20000107_000000 20000108_000000
+rc_out="$(run_age_sweep "$rc_dir" 7 1)"
+if [ "$(count_restore_points "$rc_dir")" -eq 4 ] \
+   && [ ! -f "${rc_dir}/jarvis_20000104_000000.sql.gz" ] \
+   && [ -f "${rc_dir}/jarvis_20000105_000000.sql.gz" ] \
+   && printf '%s' "$rc_out" | grep -q 'would delete 8 of 8 restore points' \
+   && printf '%s' "$rc_out" | grep -q 'bulk_refused=1'; then
+  pass "a sweep that would take the whole fleet at once takes only the oldest half"
+else
+  printf 'FAIL: bulk sweep guard wrong (%s remain, out=%s)\n' \
+    "$(count_restore_points "$rc_dir")" "$rc_out" >&2
+  fail=1
+fi
+rm -rf "$rc_dir"
+
+ra_dir="$(mktemp -d)"
+seed_restore_points "$ra_dir" '2000-01-01 00:00:00' \
+  20000101_000000 20000102_000000 20000103_000000 20000104_000000 \
+  20000105_000000 20000106_000000 20000107_000000 20000108_000000
+ra_out="$(run_age_sweep "$ra_dir" 7 1 1)"
+if [ "$(count_restore_points "$ra_dir")" -eq 1 ] \
+   && [ -f "${ra_dir}/jarvis_20000108_000000.sql.gz" ] \
+   && printf '%s' "$ra_out" | grep -q 'bulk_refused=0'; then
+  pass "BACKUP_ALLOW_BULK_PRUNE=1 sweeps in one pass, still leaving one restore point"
+else
+  printf 'FAIL: allowed bulk sweep wrong (%s remain, out=%s)\n' \
+    "$(count_restore_points "$ra_dir")" "$ra_out" >&2
+  fail=1
+fi
+rm -rf "$ra_dir"
+
+rd_dir="$(mktemp -d)"
+seed_restore_points "$rd_dir" now 20260101_000000
+: > "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp"
+touch -d '2000-01-01 00:00:00' "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp"
+run_age_sweep "$rd_dir" 7 1 >/dev/null
+if [ ! -f "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp" ] \
+   && [ -f "${rd_dir}/jarvis_20260101_000000.sql.gz" ]; then
+  pass "an aged partial file is swept even when its restore point survives"
+else
+  printf 'FAIL: partial-file debris outlived the sweep (tmp=%s, point=%s)\n' \
+    "$([ -f "${rd_dir}/jarvis_20260101_000000.sql.gz.tmp" ] && echo kept || echo gone)" \
+    "$([ -f "${rd_dir}/jarvis_20260101_000000.sql.gz" ] && echo kept || echo gone)" >&2
+  fail=1
+fi
+rm -rf "$rd_dir"
+
+rs_dir="$(mktemp -d)"
+seed_restore_points "$rs_dir" '2000-01-01 00:00:00' 20000101_000000
+seed_restore_points "$rs_dir" now \
+  20260101_000000 20260102_000000 20260103_000000 20260104_000000 \
+  20260105_000000 20260106_000000 20260107_000000
+rs_out="$(run_age_sweep "$rs_dir" 7 1)"
+if [ "$(count_restore_points "$rs_dir")" -eq 7 ] \
+   && [ ! -f "${rs_dir}/jarvis_20000101_000000.sql.gz" ] \
+   && printf '%s' "$rs_out" | grep -q 'bulk_refused=0' \
+   && ! printf '%s' "$rs_out" | grep -q 'would delete'; then
+  pass "an ordinary day (one point aging out of eight) does not trip the bulk guard"
+else
+  printf 'FAIL: steady-state sweep tripped the bulk guard (%s remain, out=%s)\n' \
+    "$(count_restore_points "$rs_dir")" "$rs_out" >&2
+  fail=1
+fi
+rm -rf "$rs_dir"
 
 # RESTORE-BACKUP-RACE: a scheduled/on-demand backup must STAND DOWN while a restore
 # holds the maintenance sentinel (dumping mid drop-swap captures an inconsistent DB),
@@ -725,7 +1089,10 @@ replay_guard() {
     ATTEMPTED_AT=x TIMESTAMP=t RUN_ID=0123456789abcdef0123456789abcdef
     JARVIS_STATE=failed LITELLM_STATE=failed PDFS_STATE=failed
     SECRETS_STATE=skipped QDRANT_STATE=skipped MANIFEST_STATE=failed
-    MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=0 RETENTION_DAYS=7 ENVIRONMENT=development
+    # ENCRYPT=1: the extracted span ends with the unconditional keyless refusal,
+    # which would exit before the REACHED sentinel these cases key on.
+    MANIFEST_SIGNATURE_STATE=skipped ENCRYPT=1 RETENTION_DAYS=7 ENVIRONMENT=development
+    s3_complete=true
     LOCK_DIR="${BACKUP_DIR}/.lifecycle"
     BACKUP_LOCK="${LOCK_DIR}/backup.lock"
     UPDATE_LOCK="${LOCK_DIR}/update.lock"
@@ -993,6 +1360,68 @@ fi
 
 check "validates backup run IDs as exactly 32 lowercase hex characters" \
   '\^\[0-9a-f\]\{32\}\$|\^\[0-9a-f\]\{32\}'
+
+# The manifest's schema version describes the dump beside it, so it is read at dump
+# time. A value read after the run would disagree with its own dump whenever a
+# migration lands mid-run — and reading it there is what made a retry loop look
+# necessary in the first place.
+if awk '/^capture_schema_version$/{c=NR} /^JARVIS_BACKUP_FILE=/{d=NR} END{exit !(c && d && c<d)}' \
+     "$BACKUP_SCRIPT"; then
+  pass "the schema version is captured before the database dump it describes"
+else
+  printf 'FAIL: the schema version is not captured before the jarvis dump\n' >&2
+  fail=1
+fi
+if sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT" | grep -q 'psql'; then
+  printf 'FAIL: write_manifest re-reads the schema version instead of recording the captured one\n' >&2
+  fail=1
+else
+  pass "write_manifest records the captured schema version instead of re-reading it"
+fi
+
+# A manifest that records schema_version 0 disarms the restore compatibility gate
+# silently, so an unreadable schema must refuse rather than coerce — at the capture
+# site, before any archive exists, and again at the manifest that would record it.
+sc_err="$(mktemp)"
+sc_rc=0
+bash -c '
+  set -uo pipefail
+  psql() { return 1; }
+  '"$(sed -n '/^capture_schema_version()/,/^}/p' "$BACKUP_SCRIPT")"'
+  capture_schema_version
+' 2>"$sc_err" || sc_rc=$?
+if [ "$sc_rc" -eq 1 ] && grep -q 'could not read the database schema version' "$sc_err"; then
+  pass "an unreadable database schema version refuses the run before any archive is produced"
+else
+  printf 'FAIL: unreadable schema version did not refuse the capture (rc=%s err=%s)\n' \
+    "$sc_rc" "$(cat "$sc_err" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -f "$sc_err"
+
+sv_dir="$(mktemp -d)"
+sv_ts="20260801_120000"
+printf 'J' > "${sv_dir}/jarvis_${sv_ts}.sql.gz"
+sv_err="${sv_dir}/write_manifest.err"
+sv_rc=0
+BACKUP_DIR="$sv_dir" TIMESTAMP="$sv_ts" RUN_ID=0123456789abcdef0123456789abcdef \
+bash -c '
+  set -uo pipefail
+  BACKUP_ARCHIVES=("${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz")
+  '"$(sed -n '/^promote_new_file()/,/^}/p' "$BACKUP_SCRIPT")"'
+  '"$(sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT")"'
+  write_manifest
+' 2>"$sv_err" || sv_rc=$?
+if [ "$sv_rc" -eq 1 ] \
+   && grep -q 'could not read the database schema version' "$sv_err" \
+   && [ ! -e "${sv_dir}/manifest_${sv_ts}.json" ]; then
+  pass "an uncaptured database schema version refuses the manifest instead of recording 0"
+else
+  printf 'FAIL: uncaptured schema version did not refuse the manifest (rc=%s err=%s)\n' \
+    "$sv_rc" "$(cat "$sv_err" 2>/dev/null || true)" >&2
+  fail=1
+fi
+rm -rf "$sv_dir"
 
 if [ "$fail" -ne 0 ]; then
   printf '\nbackup coverage: FAILED\n' >&2

@@ -800,6 +800,7 @@ recover_interrupted_setup_transaction() {
   local _edge _service metadata_failed=0 owner_state=0
   local pending_q transaction_q recovery_tmp_base=/tmp recovery_base_physical
   local script_dir_physical
+  local staging_owner_pid staging_hold staging_hold_q reply
   printf -v pending_q '%q' "${transaction_dir}.pending"
   printf -v transaction_q '%q' "$transaction_dir"
   script_dir_physical="$(cd "$SCRIPT_DIR" && pwd -P)"
@@ -811,17 +812,72 @@ recover_interrupted_setup_transaction() {
   esac
   if [ -e "${transaction_dir}.pending" ] || [ -L "${transaction_dir}.pending" ]; then
     setup_transaction_owner_state "$transaction_dir" pending || owner_state=$?
-    if [ "$owner_state" -eq 0 ]; then
-      warn "Another setup process is still running and owns ${transaction_dir}.pending."
-      warn "Wait for it to finish, then re-run ./setup.sh."
-    else
-      warn "An abandoned or invalid setup staging path was retained: ${transaction_dir}.pending"
-      warn "It can contain private credential copies. Do not rename it inside this checkout."
-      warn "No installation mutation starts before staging is promoted. After confirming no setup process is active, delete exactly this abandoned staging path:"
-      warn "  rm -rf -- ${pending_q}"
-      warn "Then re-run ./setup.sh."
-    fi
-    return 1
+    # Moved aside, never deleted, and never inside the checkout: the staging
+    # directory holds credential copies, and no ignore rule or build context
+    # covers a sibling of the checkout. The destination is derived from the
+    # PHYSICAL path, so a checkout reached through a symlink still lands beside
+    # its real parent and the rename stays on one filesystem — a copy across
+    # filesystems would leave credential bytes behind on a partial failure.
+    staging_hold="$(dirname "$script_dir_physical")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
+    printf -v staging_hold_q '%q' "$staging_hold"
+    case "$owner_state" in
+      0)
+        warn "Another setup process is still running and owns ${transaction_dir}.pending."
+        warn "Wait for it to finish, then re-run ./setup.sh."
+        return 1
+        ;;
+      1)
+        # The owner record said the process is gone; confirm it is still gone at
+        # the moment of the rename. /proc, not kill -0: kill reports EPERM for a
+        # LIVE owner running under another user, which reads as death.
+        staging_owner_pid="$(cat "${transaction_dir}.pending/owner_pid" 2>/dev/null || true)"
+        if [ -z "$staging_owner_pid" ] || [ -e "/proc/${staging_owner_pid}" ]; then
+          warn "The setup process owning ${transaction_dir}.pending is running again; nothing was moved."
+          warn "Wait for it to finish, then re-run ./setup.sh."
+          return 1
+        fi
+        warn "An earlier setup was interrupted and left a locked staging folder: ${transaction_dir}.pending"
+        warn "It can contain private credential copies, so it is moved out of this checkout rather than deleted."
+        reply=""
+        if [ "${NON_INTERACTIVE:-0}" -eq 0 ] && [ -t 0 ]; then
+          read -rp "Move it aside safely? (Y/n): " reply || reply="n"
+        elif [ "${NON_INTERACTIVE:-0}" -eq 0 ]; then
+          warn "This run has no terminal to ask at, so the staging folder was left where it is."
+          reply="n"
+        fi
+        case "$reply" in
+          [nN]*)
+            warn "After confirming no setup process is active, move it aside yourself:"
+            warn "  mv -- ${pending_q} ${staging_hold_q}"
+            warn "Then re-run ./setup.sh."
+            return 1
+            ;;
+        esac
+        # Refuse rather than rename INTO an existing directory of that name:
+        # mv would move the staging folder inside it, hiding credential copies
+        # one level deeper than every message here says they are.
+        if [ -e "$staging_hold" ] || [ -L "$staging_hold" ]; then
+          warn "A previous quarantine already holds that name: ${staging_hold}"
+          warn "Move or remove it after confirming what it contains, then re-run ./setup.sh."
+          return 1
+        fi
+        if ! mv -- "${transaction_dir}.pending" "$staging_hold"; then
+          warn "The staging folder could not be moved aside. Move it yourself, outside this checkout:"
+          warn "  mv -- ${pending_q} ${staging_hold_q}"
+          warn "Then re-run ./setup.sh."
+          return 1
+        fi
+        ok "The abandoned setup staging folder was moved out of the checkout: ${staging_hold}"
+        ;;
+      *)
+        warn "The retained setup staging path has an unreadable owner record: ${transaction_dir}.pending"
+        warn "Its owner may still be running, so it was neither moved nor deleted."
+        warn "It can contain private credential copies. After confirming no setup process is active, move it aside yourself:"
+        warn "  mv -- ${pending_q} ${staging_hold_q}"
+        warn "Then re-run ./setup.sh."
+        return 1
+        ;;
+    esac
   fi
   if [ ! -e "$transaction_dir" ] && [ ! -L "$transaction_dir" ]; then
     return 0
@@ -1888,6 +1944,8 @@ if [ -f .env ]; then
   elif [ "$NON_INTERACTIVE" -eq 1 ]; then
     info "Existing .env kept — pass --overwrite-env to rebuild."
   else
+    printf '  y - rebuild .env, carrying every existing value forward: no secret is rotated and no key you added is dropped.\n'
+    printf '  N - keep .env exactly as it is and start the stack with it.\n'
     read -rp "Overwrite? (y/N): " reply
     case "$reply" in
       [yY]|[yY][eE][sS]) _do_overwrite=1; info "Rebuilding .env — existing values are carried forward." ;;
@@ -2103,6 +2161,8 @@ if [ -f .env ]; then
     fi
 
     install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
+    ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
+    warn_if_launcher_unreachable || true
     if ! selected_https_is_verified "$_keep_route_kind" "$_keep_edge_state"; then
       _keep_route_label="HTTPS"
       _keep_retry="./setup.sh"
@@ -2632,8 +2692,9 @@ JARVIS_NET_SUBNET_VALUE="${JARVIS_NET_SUBNET:-$(existing_env_value JARVIS_NET_SU
 _INGRESS_IPS="$(allocate_ingress_ips "$JARVIS_NET_SUBNET_VALUE")" \
   || die "JARVIS_NET_SUBNET must be a valid IPv4 /27 or larger network." \
       "Use a network such as 10.137.241.0/24 so ingress and application services have enough addresses."
-read -r JARVIS_NET_GATEWAY_IP_VALUE JARVIS_CADDY_IP_VALUE JARVIS_CADDY_LOCAL_IP_VALUE \
-  JARVIS_DASHBOARD_IP_VALUE JARVIS_CLOUDFLARED_IP_VALUE <<< "$_INGRESS_IPS"
+read -r JARVIS_NET_GATEWAY_IP_VALUE JARVIS_TELEGRAM_BOT_IP_VALUE JARVIS_CADDY_IP_VALUE \
+  JARVIS_CADDY_LOCAL_IP_VALUE JARVIS_DASHBOARD_IP_VALUE JARVIS_CLOUDFLARED_IP_VALUE \
+  <<< "$_INGRESS_IPS"
 # -----------------------------------------------------------------------------
 # 7. Write .env (tempfile + mv, macOS-safe)
 # -----------------------------------------------------------------------------
@@ -2842,6 +2903,7 @@ upsert_env_var JARVIS_IMAGE_TAG "$SELECTED_IMAGE_TAG"
 export JARVIS_IMAGE_TAG="$SELECTED_IMAGE_TAG"
 upsert_env_var JARVIS_NET_SUBNET "$JARVIS_NET_SUBNET_VALUE"
 upsert_env_var JARVIS_NET_GATEWAY_IP "$JARVIS_NET_GATEWAY_IP_VALUE"
+upsert_env_var JARVIS_TELEGRAM_BOT_IP "$JARVIS_TELEGRAM_BOT_IP_VALUE"
 upsert_env_var JARVIS_CADDY_IP "$JARVIS_CADDY_IP_VALUE"
 upsert_env_var JARVIS_CADDY_LOCAL_IP "$JARVIS_CADDY_LOCAL_IP_VALUE"
 upsert_env_var JARVIS_DASHBOARD_IP "$JARVIS_DASHBOARD_IP_VALUE"
@@ -3514,8 +3576,11 @@ DASHBOARD_URL="$SETUP_BROWSER_BASE"
 
 # Register this checkout with the jarvis-research lifecycle CLI only after the
 # successful finish-link gate. This is non-fatal: a launcher-install failure
-# must not turn a healthy dashboard into a failed setup.
+# must not turn a healthy dashboard into a failed setup. The state directory is a
+# convenience for the same reason: compose falls back to ./secrets without it.
 install_cli_shim "$SCRIPT_DIR" || warn "Could not install the jarvis-research launcher (non-fatal)."
+ensure_state_dir "$SCRIPT_DIR" || warn "Could not record the durable state directory (non-fatal)."
+warn_if_launcher_unreachable || true
 
 printf '\n'
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"

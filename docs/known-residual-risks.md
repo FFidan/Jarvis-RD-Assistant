@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-07-22_
+_Last updated: 2026-08-03_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -194,6 +194,20 @@ These document intentional deviations from the container-hardening sweep, each w
 - **vLLM user `1000:1000` write access to the HF cache** (`docker-compose.vllm.yml`). The vLLM service runs as `user: "1000:1000"` with `HF_HOME` on a named volume. If that volume was previously populated as root, the first non-root startup may fail with a permissions error; remove the volume before the first non-root run so Docker re-creates it owned by uid 1000. One-time operator action; document in the setup runbook if vLLM is promoted to production.
 - **`requirements-optional.txt` floor-pins are informational only.** The hashed security boundary lives in `constraints-optional.txt`, pinned with sha256 hashes verified at install (`pip install --require-hashes`). `requirements-optional.txt` is auto-generated from `pyproject.toml` and may not be hand-edited (the `check-python-deps` pre-commit hook enforces parity).
 - **Vector `docker.sock` access; `cap_drop: [ALL]` is defense-in-depth only.** The vector log shipper mounts `/var/run/docker.sock:ro`; `cap_drop: [ALL]` removes Linux capabilities but socket access is governed by uid/gid, so vector can still `docker inspect` other containers. The proper fix is structural (swap `docker.sock` for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.
+
+---
+
+## Frontend supply-chain advisories
+
+### react-router RSC-mode CSRF (GHSA-qwww-vcr4-c8h2) — not reachable
+
+**Finding:** `osv-scanner` / `npm audit` flag `react-router` 7.18.2 (pulled by `react-router-dom`) under GHSA-qwww-vcr4-c8h2 — a CSRF bypass that can execute a router action before a 400 response is returned, in React Router's RSC (React Server Components) mode.
+
+**Why accepted:** the frontend is a client-only SPA that uses `react-router-dom` declarative routing exclusively. The RSC packages, server-action pipeline, and the APIs the advisory concerns are never imported or configured, so the vulnerable code path is unreachable in this deployment. No compatible fix is installable either: the advisory is patched in react-router core 8.3.0, but `react-router-dom` — the app's actual routing dependency — has published no v8 release, so it cannot pull the patched core, and downgrading below 7.12.0 drops required features. The suppression is scoped to this one advisory id in `frontend/osv-scanner.toml`.
+
+**Reopen / removal trigger:** remove the suppression and this entry when the frontend adopts react-router >= 8.3.0 (or a back-ported patched v7 release appears), or immediately if the app ever introduces React Router RSC mode or server actions. Suppression review date: 2026-10-15.
+
+_The companion brace-expansion advisory (GHSA-mh99-v99m-4gvg), previously suppressed here, was resolved in v1.2.3 by pinning the transitive dev-only v1 line to 1.1.17; its suppression is removed._
 
 ---
 

@@ -7,8 +7,9 @@ import hashlib
 import ipaddress
 import logging
 import os
+import socket
 import urllib.parse
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -19,7 +20,7 @@ from jarvis_common.maintenance import ensure_outbound_egress_allowed
 # re-export so call sites can keep doing
 # `from paper_ingestion.integrations.zotero_client import _MAX_RETRY_AFTER_SECONDS`.
 from jarvis_common.net import _MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS
-from jarvis_common.net import parse_retry_after
+from jarvis_common.net import is_non_public_address, parse_retry_after
 
 from paper_ingestion.config import get_paper_ingestion_settings
 
@@ -35,8 +36,110 @@ def __getattr__(name: str) -> str:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Hostnames that are intentionally private/docker-internal and explicitly allowed.
+# Hostnames that are intentionally private/docker-internal and always allowed.
 _BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
+
+# The config key operators use to reach a Better BibTeX service on their own
+# network. Named in every refusal so the remedy is discoverable from the log.
+BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY = "zotero.allowed_private_hosts"
+
+# Cache of the operator-configured hosts, refreshed at startup and whenever the
+# setting is saved. A convenience over re-reading user_config per request — an
+# empty cache only means the builtin allowlist applies, never a boot failure.
+_configured_private_hosts: frozenset[str] = frozenset()
+
+
+class BBTPrivateHostError(ValueError):
+    """The Better BibTeX host is private and not in the effective allowlist.
+
+    A dedicated type so the startup hook can treat reachability policy (which
+    an operator fixes from Settings) differently from a malformed URL.
+    """
+
+
+def bbt_private_host_allowlist() -> frozenset[str]:
+    """Hosts permitted to be private: the builtin ones plus the configured ones."""
+    return _BBT_ALLOWED_PRIVATE_HOSTS | _configured_private_hosts
+
+
+def set_configured_private_hosts(hosts: frozenset[str]) -> None:
+    """Replace the cached operator-configured allowlist."""
+    global _configured_private_hosts
+    _configured_private_hosts = hosts
+
+
+async def refresh_configured_private_hosts(db_pool: Any) -> frozenset[str]:
+    """Reload the configured allowlist from ``user_config``.
+
+    Returns the effective allowlist. A read failure keeps the previous cache and
+    logs — this runs on the startup path, where the database may still be
+    migrating, and must never prevent the service from booting.
+    """
+    try:
+        rows = await db_pool.fetch(
+            # Scoped like every other system-key read: this key is admin-owned,
+            # so a per-user row must not be able to widen the allowlist.
+            "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+            BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not read %s; the builtin allowlist applies",
+            BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+            exc_info=True,
+        )
+        return bbt_private_host_allowlist()
+
+    hosts = {
+        host
+        for row in rows
+        if isinstance(row["value"], list)
+        for host in row["value"]
+        if isinstance(host, str) and host
+    }
+    set_configured_private_hosts(frozenset(hosts))
+    return bbt_private_host_allowlist()
+
+
+async def bbt_host_permitted(bbt_base: str) -> bool:
+    """Whether a request may be issued to *bbt_base*.
+
+    Resolves DNS names off the event loop and refuses when any resolved address
+    is non-public (:func:`jarvis_common.net.is_non_public_address`) and the host
+    is not allowlisted. Every call re-resolves and re-checks — a host is never
+    permanently trusted, so DNS that later points into a blocked range is
+    refused on the next call.
+    """
+    allowlist = bbt_private_host_allowlist()
+    parsed = urlparse(bbt_base)
+    hostname = parsed.hostname or ""
+    if hostname in allowlist:
+        return True
+    if not hostname:
+        logger.warning("Better BibTeX base URL %r has no host; request refused", bbt_base)
+        return False
+
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        loop = asyncio.get_running_loop()
+        try:
+            addr_info = await loop.run_in_executor(None, socket.getaddrinfo, hostname, parsed.port)
+        except socket.gaierror:
+            logger.warning("Better BibTeX host %r could not be resolved; request refused", hostname)
+            return False
+        addresses = [ipaddress.ip_address(entry[4][0]) for entry in addr_info]
+
+    if any(is_non_public_address(addr) for addr in addresses):
+        logger.warning(
+            "Better BibTeX host %r resolves to a non-public address not in %s; request refused",
+            hostname,
+            BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+        )
+        return False
+
+    return True
+
 
 # Defensive cap on the number of items fetched by any paginator.  A Zotero
 # library with more than 10 000 items in a single list is almost certainly a
@@ -102,28 +205,39 @@ async def _zotero_request_with_retry(
     return await http.request(method, url, **kwargs)
 
 
-def validate_bbt_base_url(url: str | None = None) -> None:
-    """Validate BBT_BASE_URL at startup to block unsafe schemes or private IPs.
+def validate_bbt_base_url(
+    url: str | None = None,
+    allowed_private_hosts: frozenset[str] | None = None,
+) -> None:
+    """Validate BBT_BASE_URL to block unsafe schemes or unallowed private IPs.
 
     Parameters
     ----------
     url : str or None
         The BBT base URL to validate. Defaults to ``bbt_base_url`` from
         settings (resolved lazily at call time, not at import time).
+    allowed_private_hosts : frozenset of str or None
+        Hosts permitted to be private. ``None`` uses the effective allowlist —
+        the builtin hosts plus whatever the operator configured.
 
     Raises
     ------
     ValueError
-        If the URL scheme is unsupported or the host is a private IP not in
-        the explicit allowlist.
+        If the URL scheme is unsupported.
+    BBTPrivateHostError
+        If the host is a private IP literal outside the allowlist. Callers on
+        the startup path treat this as a warning: refusing to boot would lock
+        the operator out of the Settings page that adds the host.
 
     Notes
     -----
-    ``host.docker.internal`` is explicitly allowed so a container can reach a
+    ``host.docker.internal`` is always allowed so a container can reach a
     Zotero Better BibTeX service running on its Docker Desktop host.
     """
     if url is None:
         url = get_paper_ingestion_settings().bbt_base_url
+    if allowed_private_hosts is None:
+        allowed_private_hosts = bbt_private_host_allowlist()
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     if scheme not in ("http", "https"):
@@ -134,18 +248,18 @@ def validate_bbt_base_url(url: str | None = None) -> None:
 
     hostname = parsed.hostname or ""
 
-    # Explicitly allow-listed docker hostnames are safe to skip IP checks.
-    if hostname in _BBT_ALLOWED_PRIVATE_HOSTS:
+    # Explicitly allow-listed hostnames are safe to skip IP checks.
+    if hostname in allowed_private_hosts:
         return
 
-    # Block private / loopback IP addresses (SSRF guard).
+    # Block non-public IP addresses (SSRF guard).
     try:
         addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local:
-            raise ValueError(
-                f"BBT_BASE_URL hostname {hostname!r} resolves to a private/loopback address "
-                f"which is not explicitly allowed. Add it to _BBT_ALLOWED_PRIVATE_HOSTS if "
-                f"it is intentional. Got: {url!r}"
+        if is_non_public_address(addr):
+            raise BBTPrivateHostError(
+                f"BBT_BASE_URL hostname {hostname!r} resolves to a non-public address "
+                f"which is not explicitly allowed. Add it to "
+                f"{BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY} if it is intentional. Got: {url!r}"
             )
     except ValueError as exc:
         # ip_address() raises ValueError for non-IP hostnames (e.g. "example.com") —
@@ -452,12 +566,17 @@ class ZoteroClient:
         -------
         str or None
             Citation key when available. Missing BBT, request failures, invalid
-            responses, and outbound quarantine all map to ``None``.
+            responses, a refused host, and outbound quarantine all map to ``None``.
         """
+        bbt_base = get_paper_ingestion_settings().bbt_base_url
+        # Ahead of the blanket ``except`` below: a refusal raised inside it would
+        # be swallowed into the indistinguishable "BBT unavailable" answer, and
+        # the request would already have gone out.
+        if not await bbt_host_permitted(bbt_base):
+            return None
         try:
             ensure_outbound_egress_allowed("Better BibTeX request")
             encoded_key = urllib.parse.quote(item_key, safe="")
-            bbt_base = get_paper_ingestion_settings().bbt_base_url
             resp = await self._http.get(
                 f"{bbt_base}/better-bibtex/export/item?itemKey={encoded_key}&translator=csljson",
                 timeout=3.0,

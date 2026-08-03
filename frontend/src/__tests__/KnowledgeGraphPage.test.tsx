@@ -1,10 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import { screen, waitFor, act, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { KnowledgeGraphPage } from '@/pages/KnowledgeGraphPage';
 import { useAuthStore } from '@/stores/auth-store';
 import * as api from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+
+// Radix UI Select uses pointer-capture and scrollIntoView APIs not present in jsdom.
+beforeAll(() => {
+  if (!window.HTMLElement.prototype.hasPointerCapture) {
+    window.HTMLElement.prototype.hasPointerCapture = () => false;
+  }
+  if (!window.HTMLElement.prototype.setPointerCapture) {
+    window.HTMLElement.prototype.setPointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.releasePointerCapture) {
+    window.HTMLElement.prototype.releasePointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.scrollIntoView) {
+    window.HTMLElement.prototype.scrollIntoView = () => {};
+  }
+});
 
 // Mock cytoscape so jsdom doesn't choke on canvas. Capture registered tap
 // handlers so a test can simulate a node click.
@@ -211,6 +228,75 @@ describe('KnowledgeGraphPage — Batch Extract admin gate', () => {
     renderAsRole('admin');
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Batch Extract Entities/i })).toBeInTheDocument();
+    });
+  });
+
+  it('hides "Batch Extract Entities" from admins once entities exist', async () => {
+    vi.mocked(api.getKnowledgeGraph).mockResolvedValue(WITH_ENTITIES);
+    renderAsRole('admin');
+    await waitFor(() => {
+      expect(screen.getByTestId('cytoscape-container')).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole('button', { name: /Batch Extract Entities/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('KnowledgeGraphPage — Reset filters', () => {
+  beforeEach(() => {
+    tapHandlers.length = 0;
+    vi.mocked(api.getKnowledgeGraph).mockClear();
+    vi.mocked(api.getKnowledgeGraph).mockResolvedValue(WITH_ENTITIES);
+  });
+
+  it('drives the server query when the Min Paper Count slider moves', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('cytoscape-container')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '4' } });
+
+    await waitFor(() => {
+      expect(vi.mocked(api.getKnowledgeGraph)).toHaveBeenLastCalledWith(undefined, 4);
+    });
+  });
+
+  it('reverts entity type, paper-count threshold and node selection to their defaults', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('cytoscape-container')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '4' } });
+    expect(screen.getByText('Min Paper Count: 4')).toBeInTheDocument();
+
+    // Pick an entity type other than "All" (the first combobox — EntityTypeFilter
+    // precedes the layout selector in the Filters card).
+    const [entityTypeSelect] = screen.getAllByRole('combobox');
+    expect(entityTypeSelect).toBeDefined();
+    await user.click(entityTypeSelect as HTMLElement);
+    await user.click(await screen.findByRole('option', { name: 'Method' }));
+    await waitFor(() => {
+      expect(vi.mocked(api.getKnowledgeGraph)).toHaveBeenLastCalledWith('method', 4);
+    });
+
+    expect(tapHandlers.length).toBeGreaterThan(0);
+    act(() => {
+      tapHandlers.forEach((cb) => cb({ target: { id: () => '1' } }));
+    });
+    expect(screen.getByTestId('kg-node-detail')).toHaveTextContent('Transformer');
+
+    await user.click(screen.getByRole('button', { name: 'Reset filters' }));
+
+    expect(screen.getByText('Min Paper Count: 1')).toBeInTheDocument();
+    expect(
+      screen.getByText('Click a node in the graph to see its details and relationships.'),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(vi.mocked(api.getKnowledgeGraph)).toHaveBeenLastCalledWith(undefined, 1);
     });
   });
 });

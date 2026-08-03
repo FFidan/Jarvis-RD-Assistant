@@ -104,6 +104,7 @@ async def _paper_process_job(
     """
     from paper_ingestion.services.pdf_workflow import (
         PDFRebuildNotPermittedError,
+        PDFUserFacingError,
         run_process_pdf,
     )
 
@@ -161,6 +162,8 @@ async def _paper_process_job(
         )
     except PDFRebuildNotPermittedError as exc:
         raise JobError(str(exc)) from exc
+    except PDFUserFacingError as exc:
+        raise JobError(str(exc)) from exc
     return cast(dict[str, Any], result)
 
 
@@ -198,6 +201,42 @@ async def _analyze_download_stage(
         raise JobError(f"Paper {paper_id} changed while its PDF was downloading") from exc
 
 
+async def _summarize_single_paper(
+    paper_id: int,
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: int | None,
+    force: bool,
+) -> Any:
+    """Summarize one paper, keeping a requester-facing failure readable.
+
+    Single-paper jobs report one outcome, so a message written for the requester
+    becomes the job's own error. Batch runs deliberately do not use this: there
+    the per-paper error string is what the caller sees, and one paper's failure
+    must not discard the rest of the run.
+
+    Callers validate the services first; this reads them back from the same
+    accessor rather than threading two more collaborators through.
+    """
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError
+    from paper_ingestion.services.summarization import generate_paper_summary
+
+    services = get_services()
+    try:
+        return await generate_paper_summary(
+            paper_id,
+            pool,
+            http_client,
+            services.verifier,
+            services.embedder,
+            user_id=user_id,
+            force=force,
+        )
+    except PDFUserFacingError as exc:
+        raise JobError(str(exc)) from exc
+
+
 async def _paper_analyze_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -216,9 +255,9 @@ async def _paper_analyze_job(
     """
     from paper_ingestion.services.pdf_workflow import (
         PDFRebuildNotPermittedError,
+        PDFUserFacingError,
         run_process_pdf,
     )
-    from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_id: int = payload["paper_id"]
     user_id: int | None = payload.get("user_id")
@@ -277,18 +316,12 @@ async def _paper_analyze_job(
         )
     except PDFRebuildNotPermittedError as exc:
         raise JobError(str(exc)) from exc
+    except PDFUserFacingError as exc:
+        raise JobError(str(exc)) from exc
 
     # ---- Step 3: Summarize ----
     await ctx.update_progress(0.7, "Summarizing")
-    await generate_paper_summary(
-        paper_id,
-        pool,
-        http_client,
-        verifier,
-        embedder,
-        user_id=user_id,
-        force=force,
-    )
+    await _summarize_single_paper(paper_id, pool, http_client, user_id=user_id, force=force)
 
     await ctx.update_progress(1.0, "Done")
     composite: dict[str, Any] = {
@@ -311,8 +344,6 @@ async def _paper_summarize_job(
     ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Generate a quote-verified summary for a single paper."""
-    from paper_ingestion.services.summarization import generate_paper_summary
-
     paper_id: int = int(payload["paper_id"])
     user_id: int | None = payload.get("user_id")
     force = bool(payload.get("force", False))
@@ -328,8 +359,8 @@ async def _paper_summarize_job(
         raise RuntimeError("embedder not initialized")
 
     await ctx.update_progress(0.1, "Summarizing")
-    result: SummaryGenerationResult = await generate_paper_summary(
-        paper_id, pool, http_client, verifier, embedder, user_id=user_id, force=force
+    result: SummaryGenerationResult = await _summarize_single_paper(
+        paper_id, pool, http_client, user_id=user_id, force=force
     )
     await ctx.update_progress(1.0, "Done")
     job_result: dict[str, Any] = {

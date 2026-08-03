@@ -224,7 +224,7 @@ def test_published_docs_match_automatic_subnet_and_tailscale_setup() -> None:
     env_example = _ENV_EXAMPLE.read_text(encoding="utf-8")
 
     assert "network.prefixlen > 27" in setup_lib
-    assert "edges = [network.broadcast_address - offset for offset in range(4, 0, -1)]" in setup_lib
+    assert "edges = [network.broadcast_address - offset for offset in range(5, 0, -1)]" in setup_lib
     assert "IPv4 `/27` or larger" in deployment
     assert "Do not edit Compose or nginx" in env_example
     assert "requires updating TWO sets of hard-coded" not in env_example

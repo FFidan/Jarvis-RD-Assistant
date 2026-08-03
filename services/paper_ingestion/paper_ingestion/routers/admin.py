@@ -552,6 +552,19 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                 user_id,
             )
 
+            # Revoking in the same transaction is what makes the deletion take
+            # effect: an unexpired session cookie would otherwise keep
+            # authenticating the account. Keyed on user_id so non-passkey
+            # sessions are covered, and scoped so no other user is signed out.
+            await conn.execute(
+                """
+                UPDATE sessions
+                SET revoked_at = NOW()
+                WHERE user_id = $1 AND revoked_at IS NULL
+                """,
+                user_id,
+            )
+
             # Soft delete only — the daily data_purge job hard-deletes after
             # the 30-day grace, when ownership is no longer attached to this row.
             await log_audit_strict(
@@ -647,7 +660,12 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
     not a 24h invite). ``pending_email`` is left NULL so ``/auth/verify``
     treats it as a plain login token (it rejects pending-email tokens).
 
-    Raises 404 if the user does not exist or is soft-deleted.
+    Raises 404 if the user does not exist or is soft-deleted, and 409 when a
+    non-owner admin asks for the instance owner's link. The refusal lands
+    before any token is minted, so it cannot be turned into a way to mint fresh
+    owner sign-in tokens or to fill the audit trail with links nobody sent. It
+    fails OPEN on an unresolvable owner, so a stale owner config cannot block
+    legitimate admin recovery.
     """
     pool = request.app.state.db_pool
 
@@ -656,9 +674,17 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
             "SELECT id, email FROM users WHERE id = $1 AND deleted_at IS NULL",
             user_id,
         )
+        owner = await resolve_owner_identity(conn)
 
     if user_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    caller_id = getattr(request.state, "user_id", None)
+    if _owner_change_blocked(owner, user_id) and caller_id != owner.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sign-in links for the instance owner can only be retrieved by the owner",
+        )
 
     email = user_row["email"]
     raw_token = secrets.token_urlsafe(32)
@@ -684,7 +710,6 @@ async def send_sign_in_link(user_id: int, request: Request) -> SendLinkResponse:
     except Exception:  # noqa: BLE001 — never expose SMTP errors
         logger.exception("send_magic_link (sign-in) failed for user_id=%s", user_id)
 
-    caller_id = getattr(request.state, "user_id", None)
     await log_audit(
         pool,
         action="admin.user.send_link",

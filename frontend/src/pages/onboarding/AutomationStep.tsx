@@ -31,6 +31,7 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
   const [time, setTime] = useState('04:00');
   const [pulseEnabled, setPulseEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [partialWarning, setPartialWarning] = useState<string | null>(null);
   const seededRef = useRef(false);
 
   useEffect(() => {
@@ -44,11 +45,19 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
   const saveMut = useMutation({
     mutationFn: async (value: string) => {
       await setConfig('pulse.cron', value);
-      await setConfig('pulse.enabled', pulseEnabled);
+      try {
+        await setConfig('pulse.enabled', pulseEnabled);
+        return { partial: null as string | null };
+      } catch {
+        return {
+          partial: 'The schedule time was saved, but enabling Pulse failed — try the switch again.',
+        };
+      }
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
-      setSaved(true);
+      setSaved(result.partial === null);
+      setPartialWarning(result.partial);
     },
     onError: (err: Error) => {
       console.error('Failed to save pulse config', err);
@@ -106,6 +115,7 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
         {saveMut.isError && (
           <p className="text-sm text-destructive">{errorMessage(saveMut.error, 'Could not save schedule — try again.')}</p>
         )}
+        {partialWarning && <p className="text-sm text-amber-600">{partialWarning}</p>}
       </div>
     </SetupStep>
   );

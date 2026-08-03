@@ -463,8 +463,13 @@ def test_preparing_holder_timeout_clears_identity_before_retry(tmp_path: Path) -
     expired_id = "6" * 32
     retry_id = "7" * 32
     lifecycle = tmp_path / "backups" / ".lifecycle"
-    expired = _start_update_holder(tmp_path, destructive_log, expired_id, timeout="1")
-    assert expired.wait(timeout=5) != 0
+    # The holder's expiry has to outlast starting a subprocess and watching it take
+    # the guard, which is real process startup: at one second a loaded machine
+    # expires the holder before that setup finishes, and the case fails having
+    # asserted nothing. Three seconds still expires well inside the wait below,
+    # which is the behaviour the case is actually about.
+    expired = _start_update_holder(tmp_path, destructive_log, expired_id, timeout="3")
+    assert expired.wait(timeout=30) != 0
     for path in (
         lifecycle / "update.guard",
         lifecycle / "update.reservation",

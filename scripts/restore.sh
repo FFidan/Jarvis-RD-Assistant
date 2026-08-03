@@ -56,6 +56,11 @@ ROTATION_RESERVATION="${LOCK_DIR}/rotation.reservation"
 # from the host secrets dir instead, which an attacker who only controls BACKUP_DIR
 # cannot touch. Mirrors backup.sh's marker path.
 MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
+# The same ratchet, second copy: a durable host state directory outside the checkout,
+# bind-mounted into this sidecar only. Either copy arms the requirement, so a checkout
+# that is replaced or re-created between backup and restore cannot disarm it.
+BACKUP_STATE_DIR="${BACKUP_STATE_DIR:-/backup-state}"
+MANIFEST_HMAC_MARKER_DURABLE="${BACKUP_STATE_DIR}/manifest-hmac-required"
 # Mirror of backup.sh's domain label; both sides must agree byte-for-byte.
 MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
 # The phrase the operator must type to restore a backup set that has no authenticated
@@ -123,6 +128,7 @@ DATA_KEYS_STAGED=0
 PDFS_STAGED=0
 PDF_RESTORE_RUN_ID=""
 ALLOW_MISSING_PDFS=0
+ALLOW_UNKNOWN_SCHEMA=0
 RESTORE_ID=""
 REQUESTED_AT=""
 VECTOR_VISIBILITY_GENERATION=""
@@ -258,10 +264,11 @@ verify_manifest_signature_with_key() (
 # is present by construction, the archives are the least trusted, and a fresh-host
 # restore is the decisive DR path — so off-host recovery needs a backup set taken by a
 # version that signs. Same-host sets require one once the out-of-band ratchet marker
-# exists.
+# exists — in EITHER of its two locations, since the requirement may only ever be
+# added and a copy missing from one location is not evidence that it was never armed.
 manifest_signature_required() {
   [ "$SOURCE" = "inbox" ] && return 0
-  [ -e "$MANIFEST_HMAC_MARKER" ]
+  [ -e "$MANIFEST_HMAC_MARKER_DURABLE" ] || [ -e "$MANIFEST_HMAC_MARKER" ]
 }
 
 # break_glass_accepted — the ONLY escape from the signature requirement, for the
@@ -271,6 +278,8 @@ manifest_signature_required() {
 # non-interactive restore can never reach it. It applies ONLY to an ABSENT signature:
 # one that fails to verify is evidence of tampering, not of loss.
 break_glass_accepted() {
+  # Off-host sets are refused unconditionally; break-glass exists only for the disaster where the sole SAME-HOST backup predates signing.
+  [ "$SOURCE" != "inbox" ] || return 1
   [ "${JARVIS_RESTORE_ALLOW_LEGACY:-}" = "1" ] || return 1
   [ -t 0 ] || return 1
   local reply=""
@@ -421,6 +430,27 @@ parse_allow_missing_pdfs_request() {
   case "$value" in
     true) ALLOW_MISSING_PDFS=1 ;;
     false) ALLOW_MISSING_PDFS=0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_allow_unknown_schema_request() {
+  local content="$1" count value
+  ALLOW_UNKNOWN_SCHEMA=0
+  count="$(printf '%s' "$content" \
+    | grep -oE '"allow_unknown_schema"[[:space:]]*:' \
+    | wc -l | tr -d ' ')"
+  case "$count" in
+    0) return 0 ;;
+    1) ;;
+    *) return 1 ;;
+  esac
+  value="$(printf '%s' "$content" \
+    | grep -oE '"allow_unknown_schema"[[:space:]]*:[[:space:]]*(true|false)' \
+    | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || true)"
+  case "$value" in
+    true) ALLOW_UNKNOWN_SCHEMA=1 ;;
+    false) ALLOW_UNKNOWN_SCHEMA=0 ;;
     *) return 1 ;;
   esac
 }
@@ -1925,6 +1955,12 @@ parse_restore_identity_request "$REQ_CONTENT" \
 parse_allow_missing_pdfs_request "$REQ_CONTENT" \
   || fail_before_destruction "restore request has an invalid allow_missing_pdfs value"
 
+# Backups written while the database was unreachable could record no usable schema
+# version. Restoring one skips the compatibility check entirely, so it needs the same
+# strict, explicit acknowledgement as the missing-PDF path.
+parse_allow_unknown_schema_request "$REQ_CONTENT" \
+  || fail_before_destruction "restore request has an invalid allow_unknown_schema value"
+
 if outbound_quarantine_exists; then
   fail_before_destruction "restore is blocked until the current outbound credential review is acknowledged"
 fi
@@ -2042,11 +2078,20 @@ if [ -r "$MANIFEST" ]; then
 
   MANIFEST_SCHEMA="$(printf '%s' "$MANIFEST_CONTENT" \
     | grep -oE '"schema_version"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
+  # A manifest recording no usable schema version (absent, or the 0 older backups
+  # wrote when their schema query failed) leaves the comparison below with nothing
+  # to check, so restoring it takes an explicit acknowledgement in the request.
+  if [ -z "$MANIFEST_SCHEMA" ] || [ "$MANIFEST_SCHEMA" = "0" ]; then
+    if [ "$ALLOW_UNKNOWN_SCHEMA" != "1" ]; then
+      fail_before_destruction "backup ${TIMESTAMP} does not record a usable database schema version, so compatibility with this deployment cannot be checked; choose a restore point written by a healthy backup, or accept the risk: a command-line restore adds --allow-unknown-schema (jarvis-research restore legacy ${TIMESTAMP} --allow-unknown-schema), a web-app or off-host restore sets \"allow_unknown_schema\": true in the restore request; nothing was changed"
+    fi
+    echo "[restore] WARNING: restoring backup ${TIMESTAMP} without a schema compatibility check on explicit operator acknowledgement" >&2
+  fi
   # Compare the backup schema with the maximum schema supported by the installed
   # code. A partial restore can leave the live database unavailable, while the
   # installed schema support remains readable. If there are no incremental
   # migration files, db/SCHEMA_VERSION supplies the baseline schema number.
-  if [ -n "$MANIFEST_SCHEMA" ]; then
+  if [ -n "$MANIFEST_SCHEMA" ] && [ "$MANIFEST_SCHEMA" != "0" ]; then
     MIG_DIR="${MIGRATIONS_DIR:-/app/db/migrations}"
     # Read the highest NNN_*.sql migration with a glob rather than parsing `ls`.
     # The 10# prefix treats a leading-zero migration number as base 10. Backups at
@@ -2063,7 +2108,7 @@ if [ -r "$MANIFEST" ]; then
     if [ -z "$CODE_MAX" ]; then
       CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX=110
+      [ -n "$CODE_MAX" ] || CODE_MAX=111
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"
@@ -2106,6 +2151,16 @@ for arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
   magic="$(decrypt_or_passthrough "$arch" 2>/dev/null | head -c 2 | od -An -tx1 | tr -d ' \n')"
   set -e
   if [ "$magic" != "1f8b" ]; then
+    # An encrypted archive with no key on this host is a missing-key failure, not a
+    # wrong-key/corrupt one — name the cause so a keyless install restoring an older
+    # encrypted set is not sent chasing a key rotation or corruption it does not have.
+    case "$arch" in
+      *.enc)
+        if [ -z "$ENC_KEYFILE" ] || [ ! -s "$ENC_KEYFILE" ]; then
+          fail_before_destruction "backup archive $(basename "$arch") is encrypted, but this host has no usable backup encryption key (BACKUP_ENCRYPT_KEYFILE) to read it; the set was written with a key that is absent here, so restore that key file or re-run setup to provision the backup key; nothing was changed"
+        fi
+        ;;
+    esac
     fail_before_destruction "backup archive $(basename "$arch") is unreadable (wrong encryption key or corrupt); nothing was changed"
   fi
 done

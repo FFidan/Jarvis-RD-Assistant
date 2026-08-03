@@ -46,6 +46,12 @@ gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all \
   -f update_mode=direct
 ```
 
+If the lifecycle run fails, download its `lifecycle-smoke-log` artifact before
+anything else and search it for `=== diagnostics: project` — a run covering
+every leg keeps going after one fails, so the failing leg's evidence is usually
+far from the end of the log. The failure path in step 3 explains what that
+block contains.
+
 This branch check selects the two newest published tags, which predate the
 candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
 covered by the per-source upgrade checks in step 3, which pass explicit
@@ -92,11 +98,26 @@ gh workflow run first-run-smoke.yml --ref main \
   -f cold_install_version="$MERGED_SHA"
 
 UPDATE_FROM=vA.B.C
+# Per the table below: bootstrap for the older sources, direct for the newest.
 UPDATE_MODE=bootstrap
 gh workflow run lifecycle-smoke.yml --ref main -f leg=update \
   -f update_from="$UPDATE_FROM" -f update_to="$MERGED_SHA" \
   -f update_mode="$UPDATE_MODE"
 ```
+
+When a lifecycle run fails, start from its `lifecycle-smoke-log` artifact rather
+than the job page. For a failed leg that owns a Compose project — `tls`,
+`update`, or `uninstall` — search the log for `=== diagnostics: project`, which
+opens that project's container listing, each container's state and exit code,
+and each container's own output, captured before the leg's resources were
+removed. A run covering every leg continues after a leg fails, so that block
+will not be at the end of the log. The smoke registers no Compose project for
+the `restore` leg, so it produces no such block; its evidence is the round-trip
+sub-script log, which the smoke echoes inline, and which names the separate
+project the sub-script creates for its fixture. Fix the cause, then re-dispatch
+only the check that failed:
+identical re-dispatches supersede each other, while runs differing in `leg`,
+`update_from`, `update_to`, or `update_mode` now run concurrently.
 
 Run the upgrade check for each maintained source contract:
 
@@ -105,6 +126,12 @@ Run the upgrade check for each maintained source contract:
 | `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
+| `v1.2.2` | `direct` | `current-merge-pending` |
+
+The `direct` row is the path essentially every existing installation takes, and
+it exercises the update transaction itself rather than the bootstrap. Do not skip
+it because the bootstrap rows passed: they enter through different code, and a
+release that changes the update transaction is only covered by this row.
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
@@ -112,8 +139,11 @@ anonymously, build no application image, reach a healthy stack, and remove its
 isolated project resources. Each upgrade must start at the selected stable tag,
 recover from its supported interrupted-update state, finish at `MERGED_SHA`,
 and leave no pending journal or project resource behind.
-Every source loads the candidate's bootstrap before invoking the updater, so
-each check exercises the update path the candidate actually ships.
+The `bootstrap` rows load the candidate's bootstrap before invoking the updater.
+The `direct` row does not: it runs the source release's own installed command, so
+it is the only check that exercises the update transaction the candidate ships.
+Dispatch it with `UPDATE_MODE=direct`; running every row in bootstrap mode leaves
+that transaction unverified.
 
 ### 4. Tag the release and promote exact digests
 

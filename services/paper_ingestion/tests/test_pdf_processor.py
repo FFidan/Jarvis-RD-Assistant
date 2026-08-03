@@ -403,6 +403,36 @@ async def test_http_allowed_in_dev_mode(monkeypatch: pytest.MonkeyPatch) -> None
     await _validate_pdf_url("http://arxiv.org/pdf/test.pdf")
 
 
+@pytest.mark.asyncio
+async def test_dev_hostname_rejected_at_the_domain_gate_outside_dev_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The development hostnames widen the domain allowlist only in dev mode."""
+    monkeypatch.delenv("DEV_MODE", raising=False)
+
+    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
+        return _fake_getaddrinfo("151.101.1.1")  # public, so only the domain gate can refuse
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    with pytest.raises(ValueError, match="not allowed"):
+        await _validate_pdf_url("https://host.docker.internal/paper.pdf")
+
+
+@pytest.mark.asyncio
+async def test_dev_hostname_passes_the_domain_gate_in_dev_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In dev mode the same hostname clears the domain gate."""
+    monkeypatch.setenv("DEV_MODE", "true")
+
+    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
+        return _fake_getaddrinfo("151.101.1.1")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    # Should not raise
+    await _validate_pdf_url("https://host.docker.internal/paper.pdf")
+
+
 # ---------------------------------------------------------------------------
 # SSRF guard — URL parse edge cases
 # ---------------------------------------------------------------------------

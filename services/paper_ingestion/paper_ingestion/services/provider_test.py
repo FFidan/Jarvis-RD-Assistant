@@ -40,17 +40,18 @@ def _bearer_headers(api_key: str) -> dict[str, str]:
 
 
 async def _probe_anthropic(client: httpx.AsyncClient, api_key: str) -> httpx.Response:
-    """Use Anthropic's token-count endpoint as a low-cost credential probe."""
-    return await client.post(
-        "https://api.anthropic.com/v1/messages/count_tokens",
-        json={
-            "model": "claude-sonnet-4-5",
-            "messages": [{"role": "user", "content": "ping"}],
-        },
+    """Authenticate against Anthropic's model list, as every other provider does.
+
+    The token-count endpoint this used to call needs a model id in the request
+    body, so retiring that id would turn every key test into a failure that reads
+    like a bad key. Listing models authenticates just as well and names nothing
+    that can be retired out from under it.
+    """
+    return await client.get(
+        "https://api.anthropic.com/v1/models",
         headers={
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
         },
     )
 

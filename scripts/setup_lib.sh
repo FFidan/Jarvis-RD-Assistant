@@ -1913,10 +1913,12 @@ selected_https_is_verified() {
   [ "$1" = "none" ] || [ "$2" = "verified" ]
 }
 
-# allocate_ingress_ips SUBNET -> gateway, Caddy, local Caddy, dashboard, and
-# cloudflared addresses as one space-separated row. Docker keeps its usual low
-# dynamic addresses; trusted ingress peers use the highest four usable addresses
-# so existing networks can adopt the pins without an IPAM/network migration.
+# allocate_ingress_ips SUBNET -> gateway, Telegram bot, Caddy, local Caddy,
+# dashboard, and cloudflared addresses as one space-separated row. Docker keeps
+# its usual low dynamic addresses; pinned peers use the highest five usable
+# addresses so existing networks can adopt the pins without an IPAM/network
+# migration. The row is ordered lowest-to-highest after the gateway, so the
+# four addresses pinned before the bot keep the values they were assigned.
 allocate_ingress_ips() {
   python3 - "$1" <<'PY'
 import ipaddress
@@ -1929,7 +1931,7 @@ except ValueError:
 if network.version != 4 or network.prefixlen > 27:
     raise SystemExit(1)
 gateway = network.network_address + 1
-edges = [network.broadcast_address - offset for offset in range(4, 0, -1)]
+edges = [network.broadcast_address - offset for offset in range(5, 0, -1)]
 print(" ".join(str(address) for address in [gateway, *edges]))
 PY
 }
@@ -2176,17 +2178,18 @@ upsert_app_identity() {
 # after the durable .env has been corrected.
 sync_ingress_ips_from_env() {
   [ -f .env ] || return 0
-  local subnet resolved gateway caddy caddy_local dashboard cloudflared
+  local subnet resolved gateway bot caddy caddy_local dashboard cloudflared
   subnet="${JARVIS_NET_SUBNET:-}"
   if [ -z "$subnet" ]; then
     subnet="$(sed -n 's/^JARVIS_NET_SUBNET=//p' .env | head -n 1)"
   fi
   subnet="${subnet:-10.137.241.0/24}"
   resolved="$(allocate_ingress_ips "$subnet")" || return 1
-  read -r gateway caddy caddy_local dashboard cloudflared <<< "$resolved"
+  read -r gateway bot caddy caddy_local dashboard cloudflared <<< "$resolved"
 
   upsert_env_var JARVIS_NET_SUBNET "$subnet" || return 1
   upsert_env_var JARVIS_NET_GATEWAY_IP "$gateway" || return 1
+  upsert_env_var JARVIS_TELEGRAM_BOT_IP "$bot" || return 1
   upsert_env_var JARVIS_CADDY_IP "$caddy" || return 1
   upsert_env_var JARVIS_CADDY_LOCAL_IP "$caddy_local" || return 1
   upsert_env_var JARVIS_DASHBOARD_IP "$dashboard" || return 1
@@ -2194,6 +2197,7 @@ sync_ingress_ips_from_env() {
 
   export JARVIS_NET_SUBNET="$subnet"
   export JARVIS_NET_GATEWAY_IP="$gateway"
+  export JARVIS_TELEGRAM_BOT_IP="$bot"
   export JARVIS_CADDY_IP="$caddy"
   export JARVIS_CADDY_LOCAL_IP="$caddy_local"
   export JARVIS_DASHBOARD_IP="$dashboard"
@@ -2505,6 +2509,46 @@ exec "${repo}/scripts/jarvis-research.sh" --repo "$repo" "$@"
 SHIM
 }
 
+# recorded_state_dir [REPO_DIR] -> the JARVIS_STATE_DIR value recorded in .env,
+# empty when the file or the line is absent. The quote strip is the same
+# untrusted-value idiom the other .env readers use; it lives here once so the
+# creating side (ensure_state_dir) and the removing side (uninstall) can never
+# disagree about which path was recorded.
+recorded_state_dir() {
+  local value
+  value="$(sed -n 's/^JARVIS_STATE_DIR=//p' "${1:-$PWD}/.env" 2>/dev/null | head -1)"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
+# ensure_state_dir [REPO_DIR] -> create the durable lifecycle-state directory and
+# record it in .env as JARVIS_STATE_DIR. Idempotent; never moves existing state;
+# prints one line when it writes something. Compose bind-mounts this path into the
+# backup sidecar, so the mkdir runs unconditionally and BEFORE any early return: a
+# missing bind-mount source is created by Docker as root:root, which a later
+# host-user removal could not unlink. A RECORDED value always wins over the computed
+# one, or compose would mount a path this never created.
+ensure_state_dir() {
+  local repo="${1:-$PWD}" project state_dir recorded
+  recorded="$(recorded_state_dir "$repo")"
+  if [ -n "$recorded" ]; then
+    mkdir -p "$recorded" || return 1
+    chmod 700 "$recorded" 2>/dev/null || true
+    return 0
+  fi
+  project="$(_lifecycle_compose_project_name "$repo")" || return 1
+  state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/jarvis-research/${project}"
+  mkdir -p "$state_dir" || return 1
+  chmod 700 "$state_dir" 2>/dev/null || true
+  # upsert_env_var rewrites ./.env through a colocated temp, so it must run with the
+  # repo as the working directory.
+  ( cd "$repo" && upsert_env_var JARVIS_STATE_DIR "$state_dir" ) || return 1
+  printf 'Recorded durable state directory: %s\n' "$state_dir"
+}
+
 # install_cli_shim [REPO_DIR] -> install/refresh the jarvis-research launcher and
 # register REPO_DIR (default: $PWD) at the TOP of the installs registry, so the
 # shim always targets the most recently installed repo. Idempotent: a re-run with
@@ -2544,6 +2588,49 @@ install_cli_shim() {
 
   [ "$changed" -eq 1 ] && printf 'Installed jarvis-research launcher: %s\n' "$shim"
   return 0
+}
+
+# warn_if_launcher_unreachable -> after installing the launcher, confirm THIS
+# shell can find it, and offer to add the PATH line once. Installing a command a
+# shell cannot resolve is the same as not installing it. The check reads the
+# setup process's own PATH, which is the honest limit of what it can observe: a
+# run under a temporarily augmented PATH passes here while a fresh login shell
+# may still not resolve the command, so the message says "will not be found",
+# never "is now permanently on your PATH".
+# Bare printf, not the caller's warn/ok: this library is presentation-free.
+# The prompt is offered only when the caller has a terminal to answer it with —
+# an unanswerable prompt in a piped or CI install must never edit a startup file.
+warn_if_launcher_unreachable() {
+  local bin_dir="${JARVIS_CLI_BIN_DIR:-${HOME}/.local/bin}" rc_file line reply=""
+  case ":$PATH:" in *":${bin_dir}:"*) return 0 ;; esac
+  line="export PATH=\"${bin_dir}:\$PATH\""
+  case "$(basename "${SHELL:-}")" in
+    zsh)  rc_file="${HOME}/.zshrc" ;;
+    bash) rc_file="${HOME}/.bashrc" ;;
+    *)    rc_file="" ;;
+  esac
+  printf 'The jarvis-research command was installed to %s, but that directory is not on your PATH, so the command will not be found.\n' \
+    "$bin_dir" >&2
+  if [ -n "$rc_file" ] && grep -qxF "$line" "$rc_file" 2>/dev/null; then
+    printf '%s already carries that PATH line. Open a new terminal (or run: source %s) and jarvis-research will work.\n' \
+      "$rc_file" "$rc_file" >&2
+    return 0
+  fi
+  if [ -n "$rc_file" ] && [ "${NON_INTERACTIVE:-0}" -eq 0 ] && [ -t 0 ]; then
+    read -rp "Add it to ${rc_file} now? (Y/n): " reply || reply=""
+    case "$reply" in
+      [nN]*) ;;
+      *)
+        if printf '\n%s\n' "$line" >> "$rc_file"; then
+          printf 'Added. Open a new terminal (or run: source %s) and jarvis-research will work.\n' \
+            "$rc_file" >&2
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  printf 'To fix it, add this line to your shell startup file and open a new terminal:\n  %s\n' \
+    "$line" >&2
 }
 
 # verify_release_manifests TARGET_REF [ACTIVE_PROFILE...] -> confirm every

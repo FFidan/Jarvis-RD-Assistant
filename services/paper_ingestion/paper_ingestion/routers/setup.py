@@ -13,11 +13,22 @@ unauthenticated caller to:
 
 Access control
 --------------
-A new ``require_unconfigured_or_admin`` dependency gates every endpoint:
+``require_unconfigured_or_admin`` is awaited INLINE in the endpoint body by
+every endpoint except two:
+
+* ``/status`` — the pre-auth boot poll ``FirstRunGate`` issues before any
+  credential exists.
+* first-admin creation — self-guarded, refusing with 409 once an admin exists.
+
+The gate itself resolves as:
 
 * When ``users`` is empty → no auth required (this IS the bootstrap).
 * When ≥ 1 admin user exists → caller must have ``role='admin'`` per the
   session cookie.
+
+No route declares it as a FastAPI dependency, so a new endpoint must call
+``await require_unconfigured_or_admin(request)`` itself; naming it in a comment
+or docstring gates nothing.
 
 The app-level ``verify_api_key`` returns early for any path starting with
 ``/api/setup/``, so these endpoints answer without a session or API key. That

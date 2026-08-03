@@ -210,7 +210,11 @@ function RestorePointCard({
   point: RestorePoint;
   retentionDays: number | null;
   onDownload: (name: string) => void;
-  onRestore: (timestamp: string, allowMissingPdfs: boolean) => void;
+  onRestore: (
+    timestamp: string,
+    allowMissingPdfs: boolean,
+    schemaUncheckable: boolean,
+  ) => void;
   onDelete: (timestamp: string) => void;
   restoringTimestamp: string | null;
 }) {
@@ -218,6 +222,10 @@ function RestorePointCard({
   const isNewer = point.compat === 'newer';
   const isThisRestoring = restoringTimestamp === point.timestamp;
   const legacyMissingPdfs = !point.has_pdfs && point.legacy_missing_pdfs;
+  // Backups taken while the database was unreachable recorded no usable schema
+  // version, so the restore service cannot check compatibility and refuses
+  // without the operator's explicit acknowledgement in the confirm dialog.
+  const unknownSchema = point.schema_version == null || point.schema_version === 0;
   const missingCurrentPdfs = !point.has_pdfs && !point.legacy_missing_pdfs;
   const restoreDisabled =
     isNewer || !point.complete || missingCurrentPdfs || restoringTimestamp !== null;
@@ -320,7 +328,7 @@ function RestorePointCard({
             type="button"
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
             disabled={restoreDisabled}
-            onClick={() => onRestore(point.timestamp, legacyMissingPdfs)}
+            onClick={() => onRestore(point.timestamp, legacyMissingPdfs, unknownSchema)}
           >
             {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
           </button>
@@ -349,6 +357,12 @@ function RestorePointCard({
             current PDF files.
           </span>
         )}
+        {unknownSchema && (
+          <span className="text-xs text-muted-foreground">
+            This restore point predates schema recording, so JARVIS cannot check whether it fits
+            this version.
+          </span>
+        )}
       </div>
     </div>
   );
@@ -362,6 +376,11 @@ export function AdminBackupsPage() {
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
   const [confirmSource, setConfirmSource] = useState<RestoreSource>('local');
   const [confirmAllowMissingPdfs, setConfirmAllowMissingPdfs] = useState(false);
+  // Whether this restore point's database version can be checked before the
+  // restore runs, and whether the operator has accepted going ahead without that
+  // check. The acceptance is always the operator's own act — never derived.
+  const [confirmSchemaUncheckable, setConfirmSchemaUncheckable] = useState(false);
+  const [confirmSchemaAccepted, setConfirmSchemaAccepted] = useState(false);
   const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
   const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(
     recovery?.target_timestamp ?? null,
@@ -508,11 +527,14 @@ export function AdminBackupsPage() {
       timestamp,
       source,
       allowMissingPdfs,
+      allowUnknownSchema,
     }: {
       timestamp: string;
       source: RestoreSource;
       allowMissingPdfs: boolean;
-    }) => requestRestore(timestamp, 'RESTORE', source, allowMissingPdfs),
+      allowUnknownSchema: boolean;
+    }) =>
+      requestRestore(timestamp, 'RESTORE', source, allowMissingPdfs, allowUnknownSchema),
     onSuccess: (data, { timestamp }) => {
       // Evict any terminal state (e.g. 'done') left by a previous restore so the
       // new restore starts from a clean fetch rather than the stale cached state.
@@ -531,11 +553,13 @@ export function AdminBackupsPage() {
       setRestoringTimestamp(timestamp);
       setConfirmTs(null);
       setConfirmAllowMissingPdfs(false);
+      setConfirmSchemaAccepted(false);
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not start the restore.');
       setConfirmTs(null);
       setConfirmAllowMissingPdfs(false);
+      setConfirmSchemaAccepted(false);
     },
   });
 
@@ -650,6 +674,18 @@ export function AdminBackupsPage() {
   };
 
   const points = restore?.restore_points ?? [];
+  // A run succeeds when a complete restorable local set exists, which stays true
+  // when the vector store could not be snapshotted or the off-site copy failed.
+  // Those shortfalls have no other surface, so the status line has to name them.
+  const noVectors = status?.last_run_vectors_captured === false;
+  const noOffSite = status?.last_run_s3_complete === false;
+  const incompleteCapture = noVectors
+    ? noOffSite
+      ? 'vectors were not captured and the off-site copy is incomplete'
+      : 'vectors were not captured'
+    : noOffSite
+      ? 'the off-site copy is incomplete'
+      : null;
   const inboxPoints = inbox.data ?? [];
   const confirmPoint = confirmTs ? (points.find((p) => p.timestamp === confirmTs) ?? null) : null;
   const deleteConfirmPoint = deleteConfirmTs
@@ -669,9 +705,12 @@ export function AdminBackupsPage() {
     timestamp: string,
     source: RestoreSource,
     allowMissingPdfs: boolean,
+    schemaUncheckable: boolean,
   ) => {
     setConfirmSource(source);
     setConfirmAllowMissingPdfs(allowMissingPdfs);
+    setConfirmSchemaUncheckable(schemaUncheckable);
+    setConfirmSchemaAccepted(false);
     setConfirmTs(timestamp);
   };
   const showRestorePanel =
@@ -707,6 +746,11 @@ export function AdminBackupsPage() {
             <span className="text-amber-700 dark:text-amber-400">
               Last backup attempt failed — check the backup service.
               {status.last_attempt_at ? ` (${formatAge(status.last_attempt_at)})` : ''}
+            </span>
+          ) : status?.last_run_succeeded && incompleteCapture ? (
+            <span className="text-amber-700 dark:text-amber-400">
+              {`Last backup completed, but ${incompleteCapture}.`}
+              {status.last_run_at ? ` (${formatAge(status.last_run_at)})` : ''}
             </span>
           ) : status?.last_run_at ? (
             `Last backup ${formatAge(status.last_run_at)} · ${points.length} restore point${points.length !== 1 ? 's' : ''}`
@@ -772,8 +816,8 @@ export function AdminBackupsPage() {
                 point={point}
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
-                onRestore={(ts, allowMissingPdfs) =>
-                  askRestore(ts, 'local', allowMissingPdfs)
+                onRestore={(ts, allowMissingPdfs, schemaUncheckable) =>
+                  askRestore(ts, 'local', allowMissingPdfs, schemaUncheckable)
                 }
                 onDelete={(ts) => setDeleteConfirmTs(ts)}
                 restoringTimestamp={restoringTimestamp}
@@ -789,11 +833,13 @@ export function AdminBackupsPage() {
         }
       />
 
+      {/* An off-host listing carries no database version, so the check is always
+          unavailable here and the confirm dialog always asks the operator. */}
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection
           points={inboxPoints}
           restoringTimestamp={restoringTimestamp}
-          onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs)}
+          onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs, true)}
         />
       )}
 
@@ -914,6 +960,7 @@ export function AdminBackupsPage() {
           if (!open) {
             setConfirmTs(null);
             setConfirmAllowMissingPdfs(false);
+            setConfirmSchemaAccepted(false);
           }
         }}
         title={
@@ -923,33 +970,62 @@ export function AdminBackupsPage() {
         }
         confirmLabel="Restore"
         description={
-          confirmAllowMissingPdfs ? (
-            <span>
-              This older backup does not include PDF files. Restoring it will remove the PDF files
-              currently stored on this server. Papers may still appear in JARVIS, but their PDF
-              files will not open. A safety backup is taken first. Type{' '}
-              <span className="font-mono font-semibold">RESTORE</span> to confirm.
-            </span>
-          ) : (
-            <span>
-              This replaces the current JARVIS data, saved database settings and credentials,
-              data keys, search index, and PDF files with the contents of this backup
-              {confirmPoint ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}` : ''}. A
-              safety backup is taken first. This host&apos;s infrastructure credentials stay
-              unchanged; off-host outbound connections remain blocked until reviewed. The app is
-              briefly unavailable while it restores. Type{' '}
-              <span className="font-mono font-semibold">RESTORE</span> to confirm.
-            </span>
-          )
+          <>
+            {confirmSchemaUncheckable && (
+              <span data-testid="restore-unknown-schema-warning">
+                {confirmSource === 'inbox'
+                  ? 'An off-host backup set carries no database version JARVIS can read up front, so it cannot check that this set fits this version before restoring.'
+                  : 'This restore point predates schema recording, so JARVIS cannot check that it fits this version.'}{' '}
+                Restore it anyway only if it is the restore point you need.{' '}
+              </span>
+            )}
+            {confirmAllowMissingPdfs ? (
+              <span>
+                This older backup does not include PDF files. Restoring it will remove the PDF
+                files currently stored on this server. Papers may still appear in JARVIS, but
+                their PDF files will not open. A safety backup is taken first. Type{' '}
+                <span className="font-mono font-semibold">RESTORE</span> to confirm.
+              </span>
+            ) : (
+              <span>
+                This replaces the current JARVIS data, saved database settings and credentials,
+                data keys, search index, and PDF files with the contents of this backup
+                {confirmPoint
+                  ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}`
+                  : ''}
+                . A safety backup is taken first. This host&apos;s infrastructure credentials
+                stay unchanged; off-host outbound connections remain blocked until reviewed. The
+                app is briefly unavailable while it restores. Type{' '}
+                <span className="font-mono font-semibold">RESTORE</span> to confirm.
+              </span>
+            )}
+            {confirmSchemaUncheckable && (
+              <label className="mt-3 flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={confirmSchemaAccepted}
+                  onChange={(e) => setConfirmSchemaAccepted(e.target.checked)}
+                />
+                <span>Go ahead without a version check.</span>
+              </label>
+            )}
+          </>
         }
         onConfirm={() => {
-          if (confirmTs) {
-            restoreMutation.mutate({
-              timestamp: confirmTs,
-              source: confirmSource,
-              allowMissingPdfs: confirmAllowMissingPdfs,
-            });
+          if (!confirmTs) return;
+          if (confirmSchemaUncheckable && !confirmSchemaAccepted) {
+            toast.error(
+              'Tick "Go ahead without a version check" to restore a backup JARVIS cannot check.',
+            );
+            return;
           }
+          restoreMutation.mutate({
+            timestamp: confirmTs,
+            source: confirmSource,
+            allowMissingPdfs: confirmAllowMissingPdfs,
+            allowUnknownSchema: confirmSchemaAccepted,
+          });
         }}
       />
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1109,4 +1111,35 @@ def test_wizard_smtp_keys_stay_bound_to_canonical_config_sets():
     )
     assert (set(_SMTP_PLAINTEXT_KEYS) | set(_SMTP_ENCRYPTED_KEYS)) <= _ALLOWED_CONFIG_KEYS, (
         "every wizard SMTP key must be in the canonical _ALLOWED_CONFIG_KEYS"
+    )
+
+
+# Deliberately ungated: the boot poll runs before any credential exists, and
+# first-admin creation carries its own admin-exists refusal.
+_UNGATED_SETUP_ENDPOINTS = frozenset({"get_status", "create_first_admin"})
+
+# An awaited call at the start of a non-comment line. A plain substring search
+# would be satisfied by the gate's name appearing in a docstring or comment.
+_INLINE_GATE_CALL = re.compile(r"^\s*(?!#)await\s+require_unconfigured_or_admin\s*\(", re.M)
+
+
+def test_every_setup_route_calls_the_access_gate_inline():
+    """Each setup endpoint but the two exempt ones awaits the gate in its body.
+
+    The gate is never declared as a FastAPI dependency here, so nothing but the
+    call in the endpoint body enforces it.
+    """
+    assert len(_UNGATED_SETUP_ENDPOINTS) == 2, (
+        "exempting a third endpoint must be a deliberate, reviewed change"
+    )
+
+    ungated = {
+        route.endpoint.__name__
+        for route in setup_router.router.routes
+        if not _INLINE_GATE_CALL.search(inspect.getsource(route.endpoint))
+    }
+
+    assert ungated == _UNGATED_SETUP_ENDPOINTS, (
+        f"setup endpoints without an inline access-gate call: "
+        f"{sorted(ungated - _UNGATED_SETUP_ENDPOINTS)}"
     )

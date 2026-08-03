@@ -14,6 +14,8 @@ relying on verification badges, consensus views, or extracted evidence.
 
 ## Start here
 
+- **[Quick start](manual/quickstart.md)** — the one-screen happy path: install,
+  create an admin, and analyze your first paper.
 - **[Install JARVIS](readme-shim.md)** — the shortest supported path from a new
   host to the finish-setup link.
 - **[First sign-in and setup](manual/getting-started.md)** — create the first

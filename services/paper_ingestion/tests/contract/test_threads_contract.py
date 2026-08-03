@@ -52,17 +52,20 @@ async def _pi_threads_app(contract_conn):
     """
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
-    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common import (
+        current_user_id_strict_with_owner_override,
+        get_current_user_id,
+    )
 
     shared = SharedConnPool(contract_conn)
     original_pool = getattr(app.state, "db_pool", None)
     app.state.db_pool = shared
     app.dependency_overrides[get_db_pool] = lambda: shared
 
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
+    removed_overrides = {
+        key: app.dependency_overrides.pop(key, None)
+        for key in (current_user_id_strict_with_owner_override, get_current_user_id)
+    }
 
     limiter_was_enabled = limiter.enabled
     limiter.enabled = False
@@ -76,8 +79,9 @@ async def _pi_threads_app(contract_conn):
         else:
             app.state.db_pool = original_pool
         app.dependency_overrides.pop(get_db_pool, None)
-        if had_override:
-            app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
+        for key, removed in removed_overrides.items():
+            if removed is not None:
+                app.dependency_overrides[key] = removed
 
 
 # ---------------------------------------------------------------------------

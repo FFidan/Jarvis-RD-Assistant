@@ -77,6 +77,8 @@ logger = logging.getLogger(__name__)
 
 _PAPER_LOCK_RETRY_INITIAL_SECONDS = 0.05
 _PAPER_LOCK_RETRY_MAX_SECONDS = 1.0
+# Total time a caller waits for a contended per-paper lock before giving up.
+_PAPER_LOCK_MAX_WAIT_SECONDS = 600
 
 
 class ProcessPdfResult(TypedDict):
@@ -125,6 +127,27 @@ class PDFRecordMissingError(RuntimeError):
 
 class PDFSourceSupersededError(RuntimeError):
     """Raised when a paper's source URL moves away from the one a run derived content from."""
+
+
+class PDFUserFacingError(RuntimeError):
+    """Raised with a message written for the person who asked for the run.
+
+    Subclasses ``RuntimeError`` so the synchronous process route keeps
+    producing its sanitized 502; the job handler translates it into a
+    ``JobError`` so the remediation text survives into the job error payload
+    instead of collapsing to a generic failure.
+    """
+
+
+def paper_locked_error(paper_id: int) -> PDFUserFacingError:
+    """Build the refusal both per-paper lock waits raise once they give up.
+
+    Shared so the try-lock probe loop and the blocking summarize lock cannot
+    drift into telling the same person two different things.
+    """
+    return PDFUserFacingError(
+        f"Paper {paper_id} is locked by another long-running operation; retry after it finishes."
+    )
 
 
 class PDFRebuildNotPermittedError(RuntimeError):
@@ -847,7 +870,9 @@ _SUPERSEDED_SOURCE_MESSAGE = (
 
 
 @asynccontextmanager
-async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
+async def advisory_lock(
+    conn: ConnLike, lock_key: int, paper_id: int, timeout_s: float | None = None
+):
     """Acquire a PostgreSQL session-level advisory lock and release on exit.
 
     Parameters
@@ -859,6 +884,9 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
     paper_id : int
         Second key component (paper DB ID); combined with *lock_key* forms the
         unique 64-bit advisory lock identifier.
+    timeout_s : float | None
+        Bound on the wait for a contended lock. ``None`` waits indefinitely, as
+        the reconciliation paths do while holding their own connection.
 
     Notes
     -----
@@ -867,12 +895,25 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
     per-paper lock across Qdrant I/O so deterministic point replacement and
     PostgreSQL metadata publication form one serialized generation. Different
     papers use different lock keys and continue concurrently.
+
+    ``lock_timeout`` is a session setting and this lock is taken outside a
+    transaction, so ``SET LOCAL`` would be a no-op; the outer ``finally`` resets
+    it explicitly, including on the timeout path where the lock was never
+    acquired. asyncpg's pool also resets a connection on release, but that only
+    covers a task that died without unwinding.
     """
-    await conn.execute("SELECT pg_advisory_lock($1, $2)", lock_key, paper_id)
+    if timeout_s is not None:
+        # SET takes no bind parameters; the int cast is what keeps this literal safe.
+        await conn.execute(f"SET lock_timeout = '{int(timeout_s)}s'")
     try:
-        yield
+        await conn.execute("SELECT pg_advisory_lock($1, $2)", lock_key, paper_id)
+        try:
+            yield
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1, $2)", lock_key, paper_id)
     finally:
-        await conn.execute("SELECT pg_advisory_unlock($1, $2)", lock_key, paper_id)
+        if timeout_s is not None:
+            await conn.execute("SET lock_timeout = DEFAULT")
 
 
 @asynccontextmanager
@@ -883,8 +924,12 @@ async def _paper_mutation_connection(db_pool: asyncpg.Pool, paper_id: int):
     duplicate requests for one long-running PDF cannot consume every pool slot.
     Once acquired, the same connection and session-level lock span the complete
     Qdrant plus PostgreSQL publication.
+
+    ``pg_try_advisory_lock`` never waits, so ``lock_timeout`` cannot bound this
+    loop; the accumulated sleep time is the deadline instead.
     """
     retry_delay = _PAPER_LOCK_RETRY_INITIAL_SECONDS
+    waited = 0.0
     while True:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -906,7 +951,10 @@ async def _paper_mutation_connection(db_pool: asyncpg.Pool, paper_id: int):
                         await unlock_task
                         raise
                 return
+        if waited >= _PAPER_LOCK_MAX_WAIT_SECONDS:
+            raise paper_locked_error(paper_id)
         await asyncio.sleep(retry_delay)
+        waited += retry_delay
         retry_delay = min(retry_delay * 2, _PAPER_LOCK_RETRY_MAX_SECONDS)
 
 
@@ -1451,9 +1499,10 @@ async def run_process_pdf(
 
     Raises
     ------
-    RuntimeError
-        If text extraction or embedding fails. The HTTP router translates this
-        service-level error; background callers can handle it directly.
+    PDFUserFacingError
+        If text extraction or embedding fails. The message is written for the
+        requester: the HTTP router sanitizes it into its 502, and job callers
+        translate it into a ``JobError`` so it reaches the job error payload.
     PDFSourceSupersededError
         If the paper does not reference ``pdf_path`` as its downloaded PDF when
         the run starts, or its ``pdf_url`` is replaced before the chunk commit,
@@ -1657,29 +1706,29 @@ async def _run_process_pdf_locked(
             # a run the commit fence rejects; the caller sees the message either
             # way, and both types are RuntimeError.
             raise PDFSourceSupersededError(_SUPERSEDED_SOURCE_MESSAGE) from exc
-        raise RuntimeError(
+        raise PDFUserFacingError(
             f"{_embedding_failure_message(exc)} "
             f"({saved_chunk_count} chunks saved — retry to resume)."
         ) from exc
     except RuntimeError as exc:
         if torch is not None and isinstance(exc, torch.OutOfMemoryError):
             logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, exc)
-            raise RuntimeError(
+            raise PDFUserFacingError(
                 "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
                 " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
             ) from exc
         message = str(exc)
         if "CUDA out of memory" in message or "CUDA error" in message:
             logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, exc)
-            raise RuntimeError(
+            raise PDFUserFacingError(
                 "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or"
                 " set TORCH_DEVICE=cpu."
             ) from exc
         logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
-        raise RuntimeError(_embedding_failure_message(exc)) from exc
+        raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
     except httpx.HTTPStatusError as exc:
         logger.error("Process PDF embedding HTTP failure for paper %d: %s", paper_id, exc)
-        raise RuntimeError(_embedding_failure_message(exc)) from exc
+        raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
 
     async with conn.transaction():
         await _require_unchanged_source_url(conn, paper_id, source_url)

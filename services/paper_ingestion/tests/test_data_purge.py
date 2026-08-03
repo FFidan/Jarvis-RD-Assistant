@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
+from qdrant_client import models as qdrant_models
 
 from paper_ingestion.jobs import data_purge
+
+
+def _count(value: int) -> object:
+    """Return a Qdrant count response carrying *value*."""
+    return type("C", (), {"count": value})()
 
 
 @pytest.mark.asyncio
 async def test_purge_qdrant_excludes_papers_still_held_by_survivors():
     """Protected points keep vectors but lose the erased user's audit ID."""
     qdrant = AsyncMock()
-    qdrant.count.side_effect = [
-        type("C", (), {"count": 5})(),
-        type("C", (), {"count": 2})(),
-    ]
+    qdrant.count.side_effect = [_count(5), _count(2), _count(0)]
 
     counts = await data_purge._purge_qdrant_for_user(
         qdrant,
@@ -26,6 +30,7 @@ async def test_purge_qdrant_excludes_papers_still_held_by_survivors():
 
     delete_kwargs = qdrant.delete.await_args.kwargs
     flt = delete_kwargs["points_selector"]
+    assert flt.must, "a selector without conditions matches the whole collection"
     assert any(c.match.value == 42 for c in flt.must), "user_id match dropped"
     excluded = {pid for c in (flt.must_not or []) for pid in c.match.any}
     assert excluded == {101, 202}, f"protected paper_ids not excluded: {excluded}"
@@ -39,19 +44,116 @@ async def test_purge_qdrant_excludes_papers_still_held_by_survivors():
     writes = [entry[0] for entry in qdrant.mock_calls if entry[0] in {"set_payload", "delete"}]
     expected_writes = ["set_payload", "delete"]
     assert writes == expected_writes
-    assert counts == data_purge.QdrantPurgeCounts(deleted=5, redacted=2)
+    assert counts == data_purge.QdrantPurgeCounts(deleted=5, redacted=2, residual_points=0)
 
 
 @pytest.mark.asyncio
 async def test_purge_qdrant_no_protected_filters_only_by_user():
     """Without protected papers, every matching point is deleted."""
     qdrant = AsyncMock()
-    qdrant.count.return_value = type("C", (), {"count": 3})()
+    qdrant.count.side_effect = [_count(3), _count(0)]
 
     counts = await data_purge._purge_qdrant_for_user(qdrant, uid=9, protected_paper_ids=[])
 
     flt = qdrant.delete.await_args.kwargs["points_selector"]
+    assert flt.must, "a selector without conditions matches the whole collection"
     assert any(c.match.value == 9 for c in flt.must)
     assert not flt.must_not, "must_not must be empty when nothing is protected"
     qdrant.set_payload.assert_not_awaited()
-    assert counts == data_purge.QdrantPurgeCounts(deleted=3, redacted=0)
+    assert counts == data_purge.QdrantPurgeCounts(deleted=3, redacted=0, residual_points=0)
+
+
+@pytest.mark.asyncio
+async def test_purge_qdrant_refuses_a_selector_that_matches_every_point(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A condition-less selector would erase the shared collection, so refuse it."""
+
+    class _ConditionlessFilter(qdrant_models.Filter):
+        def __init__(self, **_kwargs: object) -> None:
+            super().__init__()
+
+    monkeypatch.setattr(qdrant_models, "Filter", _ConditionlessFilter)
+    qdrant = AsyncMock()
+    qdrant.count.return_value = _count(4)
+
+    with pytest.raises(ValueError, match="match-all"):
+        await data_purge._purge_qdrant_for_user(qdrant, uid=7, protected_paper_ids=[])
+
+    qdrant.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_purge_qdrant_counts_and_warns_about_points_left_behind(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Points still carrying the purged id after both writes are the stores disagreeing."""
+    qdrant = AsyncMock()
+    qdrant.count.side_effect = [_count(5), _count(2), _count(3)]
+
+    with caplog.at_level(logging.WARNING, logger=data_purge.logger.name):
+        counts = await data_purge._purge_qdrant_for_user(qdrant, uid=42, protected_paper_ids=[101])
+
+    assert counts.residual_points == 3
+    assert "still carry user 42" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_purge_qdrant_is_idempotent_once_the_user_is_gone():
+    """A repeat run finds nothing to redact and leaves no residue."""
+    qdrant = AsyncMock()
+    qdrant.count.side_effect = [_count(0), _count(0), _count(0)]
+
+    counts = await data_purge._purge_qdrant_for_user(qdrant, uid=42, protected_paper_ids=[101])
+
+    assert counts == data_purge.QdrantPurgeCounts(deleted=0, redacted=0, residual_points=0)
+
+
+def _expired_row(uid: int) -> dict[str, int]:
+    return {"id": uid}
+
+
+async def _run_task_with_residual(residual: int) -> tuple[AsyncMock, list]:
+    """Drive the purge job for one expired user whose purge leaves *residual* points."""
+    from types import SimpleNamespace
+
+    from jarvis_common.testing import make_pool_and_conn
+
+    pool, conn = make_pool_and_conn()
+    # First fetch: the expired users. Second: the protected papers.
+    conn.fetch = AsyncMock(side_effect=[[_expired_row(42)], []])
+    conn.execute = AsyncMock(return_value="DELETE 1")
+
+    qdrant = AsyncMock()
+    # No protected papers here, so the redaction count is skipped: the helper
+    # counts what it will delete, then what is still left carrying the user.
+    qdrant.count.side_effect = [_count(4), _count(residual)]
+
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool, qdrant_client=qdrant))
+    await data_purge.data_purge_task(app)
+    return conn, [c for c in conn.execute.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_purge_defers_the_hard_delete_when_points_are_left_behind():
+    """Measuring a disagreement is not enough: the row must survive to be retried.
+
+    Deleting the row while points still carry the identifier strands them with
+    nothing left to attribute or retry them from, behind a job reporting success.
+    """
+    _conn, executes = await _run_task_with_residual(3)
+
+    delete_calls = [c for c in executes if "DELETE" in str(c.args[0]).upper()]
+    assert delete_calls, "the job never issued its hard delete"
+    excluded = delete_calls[0].args[1]
+    assert 42 in excluded, "a user whose vectors survived was still hard-deleted"
+
+
+@pytest.mark.asyncio
+async def test_purge_hard_deletes_when_no_points_are_left_behind():
+    """The clean case still deletes, so the guard above cannot pass vacuously."""
+    _conn, executes = await _run_task_with_residual(0)
+
+    delete_calls = [c for c in executes if "DELETE" in str(c.args[0]).upper()]
+    assert delete_calls, "the job never issued its hard delete"
+    assert delete_calls[0].args[1] == [], "a clean purge must not defer the row"

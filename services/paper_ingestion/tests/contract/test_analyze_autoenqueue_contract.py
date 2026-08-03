@@ -48,17 +48,24 @@ pytestmark = [
 async def _autoenqueue_app(contract_conn):
     """paper_ingestion app wired to the contract conn pool.
 
-    Removes the autouse ``current_user_id_strict_with_owner_override`` override
-    so that session-cookie auth (contract_two_users) works.
+    Removes the autouse identity overrides so session-cookie auth
+    (contract_two_users) works.
     """
-    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common import (
+        current_user_id_strict_with_owner_override,
+        get_current_user_id,
+    )
     from paper_ingestion.main import app
 
     shared = SharedConnPool(contract_conn)
     with (
         patch_app_state(app, {"db_pool": shared}),
         patch_dependency_overrides(
-            app, remove_overrides={current_user_id_strict_with_owner_override}
+            app,
+            remove_overrides={
+                current_user_id_strict_with_owner_override,
+                get_current_user_id,
+            },
         ),
     ):
         yield app

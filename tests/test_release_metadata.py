@@ -22,14 +22,14 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
-    assert changelog.count("## v1.2.2 (2026-07-31)") == 1
+    assert changelog.count("## v1.2.3 (2026-08-03)") == 1
+    assert "## v1.2.2 (2026-07-31)" in changelog
     assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
-    assert "## v1.1.3 (2026-07-19)" in changelog
+    assert changelog.index("## v1.2.3") < changelog.index("## v1.2.2")
     assert changelog.index("## v1.2.2") < changelog.index("## v1.2.1")
     assert changelog.index("## v1.2.1") < changelog.index("## v1.2.0")
     assert changelog.index("## v1.2.0") < changelog.index("## v1.1.3")
-    assert changelog.index("## v1.1.3") < changelog.index("## v1.1.2")
 
 
 def test_roadmap_lists_the_export_slice_only_once() -> None:
@@ -151,6 +151,9 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
         "v1.1.3": ("bootstrap", "current-merge-pending"),
         "v1.2.0": ("bootstrap", "current-merge-pending"),
         "v1.2.1": ("bootstrap", "current-merge-pending"),
+        # The direct path is what an already-current installation takes, and it
+        # exercises the update transaction rather than the bootstrap.
+        "v1.2.2": ("direct", "current-merge-pending"),
     }
 
     assert documented == expected
@@ -319,13 +322,36 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     overrides = package["overrides"]
     security_workflow = _read(".github/workflows/security.yml")
 
-    assert overrides["brace-expansion@^1"] == "1.1.16"
-    assert overrides["brace-expansion@^2"] == "2.1.2"
-    assert overrides["brace-expansion@^5"] == "5.0.8"
+    assert overrides["brace-expansion@^1"] == "1.1.18"
+    assert overrides["brace-expansion@^2"] == "2.1.4"
+    assert overrides["brace-expansion@^5"] == "5.0.9"
     assert overrides["js-yaml"] == "^4.3.0"
+    assert overrides["postcss"] == "^8.5.23"
     assert "runs-on: ubuntu-latest" in security_workflow
     assert "npm ls --prefix frontend js-yaml brace-expansion eslint --all" in security_workflow
     assert "python3 scripts/check_npm_audit.py" in security_workflow
+
+    # Offline, advisory-DB-independent floors: every resolved node of a pinned parser
+    # must sit at or above its patched version, so a transitive bump cannot reintroduce
+    # the advisory between hosted npm-audit runs. Neither package needs an audit
+    # exception precisely because these floors hold.
+    lock = json.loads(_read("frontend/package-lock.json"))
+    floors = {
+        "brace-expansion": {1: (1, 1, 18), 2: (2, 1, 4), 5: (5, 0, 9)},
+        "postcss": {8: (8, 5, 23)},
+    }
+    seen = dict.fromkeys(floors, 0)
+    for lock_path, node in lock["packages"].items():
+        name = lock_path.rpartition("node_modules/")[2]
+        if name not in floors:
+            continue
+        parts = tuple(int(part) for part in node["version"].split("."))
+        floor = floors[name].get(parts[0])
+        assert floor is not None, f"unexpected {name} major in {lock_path}: {node['version']}"
+        assert parts >= floor, f"{name} {node['version']} is below its patched floor in {lock_path}"
+        seen[name] += 1
+    for name, count in seen.items():
+        assert count, f"no {name} nodes found in the lockfile"
 
 
 def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None:

@@ -25,7 +25,6 @@ They are never written to the YAML or any other file.
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,22 +32,23 @@ from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 
 from paper_ingestion.services.litellm_api import (
-    _HTTP_TIMEOUT,  # noqa: F401
     LiteLLMDeployment,
-    LiteLLMModelInfo,  # noqa: F401
     _key_fingerprint,
-    _parse_deployment,  # noqa: F401
     _post_model_delete,
     _post_model_new,
-    _redact_secret,  # noqa: F401
     get_litellm_deployments,
 )
 from paper_ingestion.services.llm_provider_registry import (
-    PROVIDER_REGISTRY,
+    ProviderDefinition,
     provider_for_id,
     provider_for_prefix,
     provider_model_for_delivery,
     validate_custom_openai_base_url_for_outbound,
+)
+from paper_ingestion.services.model_identifiers import (
+    NAMESPACED_PROVIDER_KINDS,
+    validate_model_name,
+    validate_namespaced_model_suffix,
 )
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
@@ -60,11 +60,6 @@ logger = logging.getLogger(__name__)
 # just created).
 _config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
 
-
-# Map from app-facing model prefix -> provider id used in the registry.
-_CLOUD_PREFIX_TO_PROVIDER: dict[str, str] = {
-    provider.assignment_prefix.rstrip("/"): provider.id for provider in PROVIDER_REGISTRY
-}
 
 ROLE_TO_ALIAS: dict[str, str] = {
     "llm.smart_model": "smart",
@@ -192,20 +187,6 @@ async def get_provider_base_url(provider: str, db_pool: Any) -> str | None:
         return definition.default_base_url
     value = resolve_secret_row(row)
     return value or definition.default_base_url
-
-
-def _validate_model_name(ollama_model_name: str) -> None:
-    """Reject model names that contain path traversal or shell metacharacters.
-
-    The model name is sent to LiteLLM's admin API; a value like
-    ``../../etc/passwd`` or ``; rm -rf /`` must never reach a config surface.
-    Permit only ``[a-zA-Z0-9._:-]`` characters (covers all real Ollama IDs).
-    """
-    if not re.fullmatch(r"[a-zA-Z0-9._:\-]+", ollama_model_name):
-        raise ValueError(
-            f"Model name {ollama_model_name!r} contains disallowed characters. "
-            "Only alphanumerics and . _ : - are permitted."
-        )
 
 
 async def _get_thinking_disabled(
@@ -418,7 +399,9 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
     so ``mistral-nemo:latest`` and ``mistral-nemo`` must be treated as equal),
     splits an optional ``provider/`` prefix mapping ``gemini/`` → ``google``,
     and validates the model-name portion (for ``provider/model`` only
-    the suffix is validated). Raises ``ValueError`` on a disallowed suffix.
+    the suffix is validated). Router and self-hosted providers namespace their
+    ids, so their suffix is validated as ``vendor/model``. Raises ``ValueError``
+    on a disallowed suffix.
     """
     # Normalize: strip :latest -- Ollama's default implicit tag is never stored
     # anywhere, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
@@ -426,15 +409,19 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
         model_name = model_name[:-7]
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
 
+    # Validate the model-name portion (no path traversal / shell chars).
+    # For "provider/model-name" strings we validate only the model-name suffix.
     cloud_provider: str | None = None
     if "/" in model_name:
         prefix, model_suffix = model_name.split("/", 1)
         provider = provider_for_prefix(prefix)
         cloud_provider = provider.id if provider is not None else None
-
-    # Validate the model-name portion (no path traversal / shell chars).
-    # For "provider/model-name" strings we validate only the model-name suffix.
-    _validate_model_name(model_suffix)
+        if provider is not None and provider.kind in NAMESPACED_PROVIDER_KINDS:
+            validate_namespaced_model_suffix(model_suffix)
+        else:
+            validate_model_name(model_suffix)
+    else:
+        validate_model_name(model_name)
     return _ModelTarget(new_name=model_name, suffix=model_suffix, cloud_provider=cloud_provider)
 
 
@@ -541,6 +528,27 @@ def _deliver_embed(
     )
 
 
+async def _provider_credentials(
+    cloud_provider: str,
+    db_pool: Any,
+) -> tuple[str | None, str | None]:
+    """Read a provider's stored key and endpoint URL, enforcing outbound policy.
+
+    Raises ``RuntimeError`` when a configured custom endpoint is refused by
+    network policy. Callers own the operator-facing warnings: the alias path
+    warns on every delivery, the smart-fallback path warns once per model.
+    """
+
+    api_key = await get_provider_api_key(cloud_provider, db_pool)
+    api_base = await get_provider_base_url(cloud_provider, db_pool)
+    if api_base is not None and cloud_provider == "custom_openai_compatible":
+        try:
+            await validate_custom_openai_base_url_for_outbound(api_base)
+        except ValueError as exc:
+            raise RuntimeError("custom provider endpoint is blocked by network policy") from exc
+    return api_key, api_base
+
+
 async def _provider_credentials_for_delivery(
     alias: str,
     cloud_provider: str,
@@ -556,13 +564,7 @@ async def _provider_credentials_for_delivery(
         )
         return None, None
 
-    api_key = await get_provider_api_key(cloud_provider, db_pool)
-    api_base = await get_provider_base_url(cloud_provider, db_pool)
-    if api_base is not None and cloud_provider == "custom_openai_compatible":
-        try:
-            await validate_custom_openai_base_url_for_outbound(api_base)
-        except ValueError as exc:
-            raise RuntimeError("custom provider endpoint is blocked by network policy") from exc
+    api_key, api_base = await _provider_credentials(cloud_provider, db_pool)
     if api_key is None:
         logger.warning(
             "No API key configured for provider %r (alias %r) -- "
@@ -572,6 +574,19 @@ async def _provider_credentials_for_delivery(
             alias,
         )
     return api_key, api_base
+
+
+def _delivery_model_for(provider: ProviderDefinition, model_name: str) -> str:
+    """Translate an app-facing ``prefix/suffix`` id into the model LiteLLM routes.
+
+    Shared by the primary and smart-fallback cloud paths so the two can never
+    disagree: a provider whose ``delivery_prefix`` differs from its
+    ``assignment_prefix`` (the custom OpenAI-compatible endpoint) would
+    otherwise be delivered under a prefix LiteLLM does not know.
+    """
+    if model_name.startswith(provider.assignment_prefix):
+        return provider_model_for_delivery(provider, model_name.split("/", 1)[1])
+    return model_name
 
 
 async def _deliver_cloud(
@@ -601,11 +616,7 @@ async def _deliver_cloud(
         # Ollama-only / local-transport params must not leak onto a cloud deployment.
         if k not in ("api_base", "num_ctx", "keep_alive", "dimensions", "think", "model")
     }
-    if new_model.startswith(provider_definition.assignment_prefix):
-        model_suffix = new_model.split("/", 1)[1]
-        new_params["model"] = provider_model_for_delivery(provider_definition, model_suffix)
-    else:
-        new_params["model"] = new_model
+    new_params["model"] = _delivery_model_for(provider_definition, new_model)
     if api_key is not None:
         new_params["api_key"] = api_key
     if api_base is not None:
@@ -822,55 +833,107 @@ async def update_litellm_model(
 
 
 def _smart_fallback_normalize(fast_model: str) -> tuple[str, str | None]:
-    """Strip the implicit :latest tag, validate, and detect a cloud prefix."""
+    """Strip the implicit :latest tag, detect a cloud prefix, and validate.
+
+    The prefix is resolved BEFORE validation because router and self-hosted ids
+    namespace their suffix; validating the remainder first rejects every one of
+    them.
+    """
     if fast_model.endswith(":latest"):
         fast_model = fast_model[:-7]
-    _validate_model_name(fast_model.split("/", 1)[-1])
-    cloud_provider: str | None = None
-    if "/" in fast_model:
-        cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(fast_model.split("/", 1)[0])
-    return fast_model, cloud_provider
+    if "/" not in fast_model:
+        validate_model_name(fast_model)
+        return fast_model, None
+    prefix, suffix = fast_model.split("/", 1)
+    provider = provider_for_prefix(prefix)
+    if provider is not None and provider.kind in NAMESPACED_PROVIDER_KINDS:
+        validate_namespaced_model_suffix(suffix)
+    else:
+        validate_model_name(suffix)
+    return fast_model, provider.id if provider is not None else None
 
 
-async def _smart_fallback_resolve_cloud_key(
+def _warn_smart_fallback_pinned(fast_model: str, reason: str) -> None:
+    """Warn once per fast model that the fallback pinned to the static default.
+
+    ensure_smart_fallback runs every reconciler pass, so this must not repeat.
+    """
+    if fast_model in _FALLBACK_KEYLESS_WARNED:
+        return
+    _FALLBACK_KEYLESS_WARNED.add(fast_model)
+    logger.warning(
+        "smart-fallback: %s for %r; pinning the fallback to the static default %r",
+        reason,
+        fast_model,
+        _STATIC_FALLBACK_MODEL,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CloudTarget:
+    """A cloud provider the fallback can actually reach, with its credentials."""
+
+    provider: str
+    api_key: str | None
+    api_base: str | None
+
+
+async def _smart_fallback_resolve_cloud_credentials(
     fast_model: str,
     cloud_provider: str | None,
     db_pool: Any,
-) -> tuple[str, str | None, str | None]:
-    """Resolve the provider key for a cloud fast model, else pin the static default."""
+) -> tuple[str, _CloudTarget | None]:
+    """Resolve delivery credentials for a cloud fast model, else pin the static default.
+
+    A provider reachable through a stored endpoint URL delivers without a key --
+    the alias path delivers keylessly too. A keyed provider with no key would
+    produce a deployment that cannot authenticate, i.e. one guaranteed to fail
+    exactly when smart fails, so it pins the static pulled default instead. An
+    endpoint refused by outbound policy pins as well rather than raising: a raise
+    here is caught by the reconciler on every pass, leaving the fallback group
+    empty for as long as the misconfiguration lasts.
+    """
     if cloud_provider is None:
-        return fast_model, None, None
+        return fast_model, None
     api_key: str | None = None
+    api_base: str | None = None
     if db_pool is not None:
-        api_key = await get_provider_api_key(cloud_provider, db_pool)
-    if api_key is not None:
-        return fast_model, cloud_provider, api_key
-    if fast_model not in _FALLBACK_KEYLESS_WARNED:
-        _FALLBACK_KEYLESS_WARNED.add(fast_model)
-        logger.warning(
-            "smart-fallback: no %r API key available for %r; pinning the "
-            "fallback to the static default %r until a key is saved",
-            cloud_provider,
-            fast_model,
-            _STATIC_FALLBACK_MODEL,
-        )
-    return _STATIC_FALLBACK_MODEL, None, None
+        try:
+            api_key, api_base = await _provider_credentials(cloud_provider, db_pool)
+        except RuntimeError:
+            _warn_smart_fallback_pinned(
+                fast_model, f"the {cloud_provider!r} endpoint is blocked by network policy"
+            )
+            return _STATIC_FALLBACK_MODEL, None
+    if api_key is not None or api_base is not None:
+        return fast_model, _CloudTarget(cloud_provider, api_key, api_base)
+    _warn_smart_fallback_pinned(
+        fast_model, f"no {cloud_provider!r} API key or endpoint URL is configured"
+    )
+    return _STATIC_FALLBACK_MODEL, None
 
 
 async def _smart_fallback_deliver_cloud(
     new_model: str,
-    api_key: str | None,
+    target: _CloudTarget,
     db_entries: list[LiteLLMDeployment],
     yaml_entries: list[LiteLLMDeployment],
 ) -> bool:
-    """Deliver (or no-op) the cloud smart-fallback deployment."""
+    """Deliver (or no-op) the cloud smart-fallback deployment.
+
+    Mirrors ``_deliver_cloud``: the app-facing prefix is translated to the
+    delivery prefix and a configured ``api_base`` is carried, so the fallback
+    reaches the same endpoint the primary alias does.
+    """
+    api_key, api_base = target.api_key, target.api_base
+    delivery_model = _delivery_model_for(provider_for_id(target.provider), new_model)
     # Process-local fingerprint in the no-op check: a rotated key re-delivers
     # within one reconciler pass instead of riding the stale key forever.
-    desired_cloud = (new_model, None, _key_fingerprint(api_key), None)
+    desired_cloud = (delivery_model, None, _key_fingerprint(api_key), api_base)
     if (
         len(db_entries) == 1
         and not yaml_entries
-        and db_entries[0].litellm_params.get("model") == new_model
+        and db_entries[0].litellm_params.get("model") == delivery_model
         and _CLOUD_DELIVERED_FINGERPRINTS.get("smart-fallback") == desired_cloud
     ):
         return False
@@ -880,8 +943,10 @@ async def _smart_fallback_deliver_cloud(
         # Ollama-only params must not leak onto a cloud deployment.
         if k not in ("num_ctx", "think")
     }
-    cloud_params["model"] = new_model
+    cloud_params["model"] = delivery_model
     cloud_params["api_key"] = api_key
+    if api_base is not None:
+        cloud_params["api_base"] = api_base
     delivered = await _replace_alias_deployment("smart-fallback", cloud_params, db_entries)
     _CLOUD_DELIVERED_FINGERPRINTS["smart-fallback"] = desired_cloud
     return delivered
@@ -930,16 +995,17 @@ async def ensure_smart_fallback(
     ``router_settings.fallbacks`` in the YAML maps ``smart → [\"smart-fallback\"]``;
     this function creates the real deployment behind that group (the fast-tier
     model with a longer timeout). Cloud fast models mirror
-    ``update_litellm_model``'s cloud semantics (no api_base/num_ctx/think; the
-    Fernet-decrypted provider key is carried); when the provider key is missing
-    the fallback pins to the static pulled default instead of creating a
-    deployment that cannot authenticate — i.e. one guaranteed to fail exactly
+    ``update_litellm_model``'s cloud semantics (no num_ctx/think; the app-facing
+    prefix translated for delivery; the Fernet-decrypted provider key and any
+    configured endpoint URL carried); when neither a key nor an endpoint URL is
+    available the fallback pins to the static pulled default instead of creating
+    a deployment that cannot reach anything — i.e. one guaranteed to fail exactly
     when smart fails. Returns True when a delivery happened, False when the
     deployment already routes the target. Raises ``RuntimeError`` on delivery
     failure.
     """
     fast_model, cloud_provider = _smart_fallback_normalize(fast_model)
-    fast_model, cloud_provider, api_key = await _smart_fallback_resolve_cloud_key(
+    fast_model, cloud_target = await _smart_fallback_resolve_cloud_credentials(
         fast_model, cloud_provider, db_pool
     )
     new_model = fast_model if "/" in fast_model else f"ollama_chat/{fast_model}"
@@ -947,6 +1013,8 @@ async def ensure_smart_fallback(
     deployments = await get_litellm_deployments()
     db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")
 
-    if cloud_provider is not None:
-        return await _smart_fallback_deliver_cloud(new_model, api_key, db_entries, yaml_entries)
+    if cloud_target is not None:
+        return await _smart_fallback_deliver_cloud(
+            new_model, cloud_target, db_entries, yaml_entries
+        )
     return await _smart_fallback_deliver_local(new_model, db_entries, yaml_entries)

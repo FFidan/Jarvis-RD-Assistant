@@ -1,6 +1,7 @@
 """Automated fetch->embed pipeline scheduler for paper_ingestion."""
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,9 +12,15 @@ from jarvis_common.maintenance import skip_for_maintenance
 from jarvis_common.serialization import _coerce_bool, read_global_config_flag
 
 from paper_ingestion.ingestion import refresh_recommendations
-from paper_ingestion.pipelines.auto_fetch import run_auto_pipeline
+from paper_ingestion.pipelines.auto_fetch import AUTO_PIPELINE_LAST_RUN_KEY, run_auto_pipeline
 
 logger = logging.getLogger(__name__)
+
+# Interval triggers default their start_date to construction time, which re-phases
+# every job to the moment of the last restart — a box that reboots daily never
+# reaches a long interval. Anchoring to a fixed past instant keeps the fire grid
+# stable across restarts.
+_INTERVAL_EPOCH = datetime(2026, 1, 1, 3, 0, tzinfo=UTC)
 
 # Re-export so callers that do ``from paper_ingestion.scheduler import run_auto_pipeline``
 # (e.g. tests) continue to work without modification.
@@ -32,6 +39,15 @@ _DEFAULT_PULSE_CRON = "0 4 * * *"
 _DEFAULT_PULSE_CLASSIFIER_CRON = "30 3 * * *"
 _DEFAULT_WEEKLY_DIGEST_CRON = "0 9 * * 1"  # Monday 09:00
 _DEFAULT_ZOTERO_CRON = "0 * * * *"  # hourly
+_DEFAULT_SYSTEM_EVENTS_PURGE_CRON = "0 2 * * *"
+_DEFAULT_JOB_HISTORY_PURGE_CRON = "30 2 * * *"  # daily, after the system-events purge
+
+# procrastinate registers its own maintenance tasks under the "builtin" namespace;
+# this is the registry key of the one that deletes finished job rows.
+_REMOVE_OLD_JOBS_TASK = "builtin:procrastinate.builtin_tasks.remove_old_jobs"
+# Finished jobs stay visible for 30 days, so a job reclaimed as failed after an
+# interrupted run is still readable long after the operator notices it.
+_JOB_HISTORY_MAX_HOURS = 24 * 30
 _ZOTERO_POLL_CONFIG_KEYS = [
     "zotero.poll_enabled",
     "zotero.api_key",
@@ -74,16 +90,16 @@ async def _list_active_users(db_pool: Any) -> list[int] | None:
         return None
 
 
-async def _users_without_active_pulse_lock(db_pool: Any, user_ids: list[int]) -> list[int]:
-    """Return the subset of *user_ids* whose pulse advisory lock is not currently held.
+async def _users_without_active_lock(db_pool: Any, user_ids: list[int], *, kind: str) -> list[int]:
+    """Return the subset of *user_ids* whose *kind* advisory lock is not currently held.
 
     Probes ``pg_try_advisory_xact_lock`` (transaction-scoped, auto-released — leak-proof)
     for each user inside a short transaction so Postgres releases the lock automatically
     at transaction end.  No explicit unlock is needed; if the connection dies mid-loop
     the lock is never stranded on the pooled connection.
-    Users whose lock is already held by a running pipeline are excluded.
+    Users whose lock is already held by a running job are excluded.
     """
-    key1 = _kind_lock_key("pulse.generate")
+    key1 = _kind_lock_key(kind)
     free: list[int] = []
     async with db_pool.acquire() as conn:
         for uid in user_ids:
@@ -208,6 +224,61 @@ async def _get_pulse_cron(db_pool: Any) -> str:
     return _DEFAULT_PULSE_CRON
 
 
+async def _read_auto_pipeline_last_run(db_pool: Any) -> datetime | None:
+    """Read the persisted auto-fetch last-run stamp, or ``None`` if unusable."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                AUTO_PIPELINE_LAST_RUN_KEY,
+            )
+    except Exception:
+        logger.exception("auto_pipeline: failed to read the last-run stamp")
+        return None
+    value = row["value"] if row is not None else None
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        logger.warning("auto_pipeline: last-run stamp %r is not a timestamp", value)
+        return None
+    # A hand-edited row may be naive; comparing it to an aware ``now`` would raise.
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
+
+
+def _log_schedule(scheduler: AsyncIOScheduler) -> None:
+    """Log when every registered job next fires, so the schedule is observable."""
+    for job in scheduler.get_jobs():
+        logger.info("scheduler job %s next fires at %s", job.id, job.next_run_time)
+
+
+async def _schedule_auto_pipeline_catchup(
+    scheduler: AsyncIOScheduler, app: Any, interval_hours: float, effective_interval: float
+) -> None:
+    """Pull the interval job forward when its last fire was missed.
+
+    Jobs live in memory, so an interval fire due while the service was down is
+    simply lost. A stale last-run stamp means exactly that happened: run once
+    shortly after boot, leaving the service time to finish starting up.
+
+    This MOVES the existing job rather than registering a second one. Two ids
+    running the same pipeline would each get their own ``max_instances``, so a
+    boot whose anchored fire landed in this window would run the pipeline twice
+    over. The interval trigger re-anchors to whichever fire actually happened,
+    so the spacing is preserved and only the phase shifts, until the next
+    restart re-anchors it to the fixed epoch.
+    """
+    if interval_hours <= 0:
+        return
+    last_run = await _read_auto_pipeline_last_run(app.state.db_pool)
+    now = datetime.now(UTC)
+    if last_run is not None and now - last_run < timedelta(hours=effective_interval):
+        return
+    scheduler.modify_job("auto_pipeline", next_run_time=now + timedelta(minutes=2))
+    logger.info("auto_pipeline catch-up scheduled (last successful run: %s)", last_run)
+
+
 async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
     """Return scheduler registration readiness and cron_expr from user_config.
 
@@ -310,11 +381,19 @@ async def run_zotero_sync_wrapper(app: Any, user_id: int | None = None) -> None:
                 logger.info("zotero: polling not ready for user %d; skipping", user_id)
                 return
             ready_user_ids = [user_id]
+        # A poll already running for a user re-imports the same items; the job
+        # itself refuses the duplicate, this only avoids enqueueing it.
+        free_user_ids = await _users_without_active_lock(
+            db_pool, ready_user_ids, kind="zotero.sync_from_zotero"
+        )
+        if not free_user_ids:
+            logger.info("zotero: all ready users have an in-flight sync — skipping")
+            return
         await _defer_per_user(
             task_kind="zotero.sync_from_zotero",
             db_pool=db_pool,
             log_label="zotero",
-            user_ids=ready_user_ids,
+            user_ids=free_user_ids,
         )
     except Exception:
         logger.exception("zotero: failed to defer sync job")
@@ -341,7 +420,7 @@ async def run_pulse_wrapper(app: Any) -> None:
         if not active_users:
             logger.info("pulse: no active users — skipping nightly run")
             return
-        user_ids = await _users_without_active_pulse_lock(db_pool, active_users)
+        user_ids = await _users_without_active_lock(db_pool, active_users, kind="pulse.generate")
         if not user_ids:
             logger.info("pulse: all active users have an in-flight run — skipping")
             return
@@ -431,6 +510,46 @@ async def purge_system_events_task(app: Any) -> None:
         logger.exception("purge_system_events: failed to purge old events")
 
 
+# Named so the contract case can execute the statement the service runs rather
+# than a copy of it that could drift.
+ORPHANED_JOB_PROGRESS_PURGE = (
+    "DELETE FROM job_progress WHERE NOT EXISTS ("
+    "SELECT 1 FROM procrastinate_jobs pj"
+    " WHERE pj.args->>'job_id' = job_progress.jarvis_job_id)"
+)
+
+
+async def purge_job_history_task(app: Any) -> None:
+    """Prune finished procrastinate jobs and the progress rows left behind by them.
+
+    Retention policy is owned here rather than in the shared worker hook: that
+    hook is also used by the other service, and ``remove_old_jobs`` defaults to
+    every queue, so a deferral sited there would prune across both services'
+    histories.
+    """
+    if skip_for_maintenance("purge job history"):
+        return
+    db_pool = app.state.db_pool
+    try:
+        procrastinate_app = app.state.procrastinate_app
+        # Looked up by exact registry key rather than by importing the task
+        # object: the module-level object is shared process-wide across both
+        # services' apps, while this key is registered on ours.
+        await procrastinate_app.tasks[_REMOVE_OLD_JOBS_TASK].defer_async(
+            max_hours=_JOB_HISTORY_MAX_HOURS,
+            remove_failed=True,
+            remove_cancelled=True,
+            remove_aborted=True,
+        )
+        # Ordering against the deferral above is irrelevant: a deferral is
+        # fire-and-forget, and this deletes the rows orphaned by any PRIOR
+        # prune cycle, so both tables stay bounded either way.
+        result = await db_pool.execute(ORPHANED_JOB_PROGRESS_PURGE)
+        logger.info("purge_job_history: prune deferred, orphaned progress rows %s", result)
+    except Exception:
+        logger.exception("purge_job_history: failed to prune job history")
+
+
 async def reconcile_zotero_poll_job(
     *,
     scheduler: Any,
@@ -458,6 +577,7 @@ async def reconcile_zotero_poll_job(
         name=f"Zotero library sync for user {user_id}",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
     logger.info("%s scheduler reconciled (cron=%s)", job_id, cron_expr)
 
@@ -499,45 +619,61 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     scheduler = AsyncIOScheduler()
 
+    def _register_cron(func: Any, *, cron: str, job_id: str, name: str) -> None:
+        """Register one whole-app cron job with the shared overlap and misfire defaults.
+
+        A bad cron expression must not take the remaining schedules down with it,
+        so registration failures are logged and skipped.
+        """
+        try:
+            scheduler.add_job(
+                func,
+                trigger=CronTrigger.from_crontab(cron),
+                args=[app],
+                id=job_id,
+                name=name,
+                replace_existing=True,
+                max_instances=1,
+                misfire_grace_time=3600,
+            )
+            logger.info("%s scheduler registered (cron=%s)", job_id, cron)
+        except Exception:
+            logger.exception("Failed to register %s job", job_id)
+
     # Register auto_pipeline unconditionally — the job self-gates when interval_hours <= 0.
     # This allows live-enabling via the Settings UI without restarting the service.
     _effective_interval = max(interval_hours, 1.0) if interval_hours > 0 else 24
     scheduler.add_job(
         run_auto_pipeline,
-        trigger=IntervalTrigger(hours=_effective_interval),  # type: ignore[arg-type]
+        trigger=IntervalTrigger(
+            hours=_effective_interval,  # type: ignore[arg-type]
+            start_date=_INTERVAL_EPOCH,
+        ),
         args=[app],
         id="auto_pipeline",
         name="Auto fetch->process pipeline",
         replace_existing=True,
         max_instances=1,  # prevent overlap if a run takes longer than the interval
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _run_recommendations,
-        IntervalTrigger(hours=24),
+        IntervalTrigger(hours=24, start_date=_INTERVAL_EPOCH),
         args=[app],
         id="recommendation_refresh",
         name="Nightly recommendation refresh",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # Pulse classifier training (cron-scheduled before the overnight deck; gated on pulse.enabled)
-    try:
-        scheduler.add_job(
-            run_pulse_classifier_training_wrapper,
-            trigger=CronTrigger.from_crontab(_DEFAULT_PULSE_CLASSIFIER_CRON),
-            args=[app],
-            id="pulse_classifier_training",
-            name="Pulse classifier retraining",
-            replace_existing=True,
-            max_instances=1,
-        )
-        logger.info(
-            "pulse_classifier_training scheduler registered (cron=%s)",
-            _DEFAULT_PULSE_CLASSIFIER_CRON,
-        )
-    except Exception:
-        logger.exception("Failed to register pulse_classifier_training job")
+    _register_cron(
+        run_pulse_classifier_training_wrapper,
+        cron=_DEFAULT_PULSE_CLASSIFIER_CRON,
+        job_id="pulse_classifier_training",
+        name="Pulse classifier retraining",
+    )
 
     # Pulse overnight deck (cron-scheduled, gated on pulse.enabled)
     try:
@@ -550,25 +686,19 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             name="Overnight Pulse deck generation",
             replace_existing=True,
             max_instances=1,
+            misfire_grace_time=3600,
         )
         logger.info("pulse_overnight scheduler registered (cron=%s)", cron_expr)
     except Exception:
         logger.exception("Failed to register pulse_overnight job")
 
     # Weekly digest regeneration (cron-scheduled; GET /api/digest/weekly remains synchronous)
-    try:
-        scheduler.add_job(
-            run_weekly_digest_wrapper,
-            trigger=CronTrigger.from_crontab(_DEFAULT_WEEKLY_DIGEST_CRON),
-            args=[app],
-            id="weekly_digest",
-            name="Weekly digest regeneration",
-            replace_existing=True,
-            max_instances=1,
-        )
-        logger.info("weekly_digest scheduler registered (cron=%s)", _DEFAULT_WEEKLY_DIGEST_CRON)
-    except Exception:
-        logger.exception("Failed to register weekly_digest job")
+    _register_cron(
+        run_weekly_digest_wrapper,
+        cron=_DEFAULT_WEEKLY_DIGEST_CRON,
+        job_id="weekly_digest",
+        name="Weekly digest regeneration",
+    )
 
     # Zotero library sync (per-user cron-scheduled, gated on each user's config)
     try:
@@ -582,25 +712,27 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
                 name=f"Zotero library sync for user {uid}",
                 replace_existing=True,
                 max_instances=1,
+                misfire_grace_time=3600,
             )
         logger.info("zotero_library_sync scheduler registered (%d users)", len(zotero_schedules))
     except Exception:
         logger.exception("Failed to register zotero_library_sync jobs")
 
     # Tiered system_events purge (daily at 2 AM)
-    try:
-        scheduler.add_job(
-            purge_system_events_task,
-            trigger=CronTrigger.from_crontab("0 2 * * *"),
-            args=[app],
-            id="purge_system_events",
-            name="Tiered system_events purge",
-            replace_existing=True,
-            max_instances=1,
-        )
-        logger.info("purge_system_events scheduler registered (cron=0 2 * * *)")
-    except Exception:
-        logger.exception("Failed to register purge_system_events job")
+    _register_cron(
+        purge_system_events_task,
+        cron=_DEFAULT_SYSTEM_EVENTS_PURGE_CRON,
+        job_id="purge_system_events",
+        name="Tiered system_events purge",
+    )
+
+    # Daily prune of finished job rows and their orphaned progress rows.
+    _register_cron(
+        purge_job_history_task,
+        cron=_DEFAULT_JOB_HISTORY_PURGE_CRON,
+        job_id="purge_job_history",
+        name="Job history prune",
+    )
 
     # Daily hard-purge of soft-deleted users past grace period.
     from paper_ingestion.jobs.data_purge import register_data_purge  # noqa: PLC0415
@@ -617,6 +749,9 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     register_purge_sessions(scheduler, app)
 
+    await _schedule_auto_pipeline_catchup(scheduler, app, interval_hours, _effective_interval)
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
+    _log_schedule(scheduler)
     return scheduler

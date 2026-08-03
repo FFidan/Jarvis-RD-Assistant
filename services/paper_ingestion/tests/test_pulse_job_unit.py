@@ -9,6 +9,8 @@ Verified identifiers:
 
 from __future__ import annotations
 
+import contextlib
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -353,3 +355,149 @@ async def test_persist_pipeline_reclaims_only_cards_whose_promotion_survived():
 
     assert persisted == 1
     reclaimed.assert_awaited_once_with(101, pool)
+
+
+# ---------------------------------------------------------------------------
+# A Pulse run reports what it actually produced
+# ---------------------------------------------------------------------------
+
+_RAW_PROFILE_FAILURE = "connection to the profile store was refused"
+
+
+def _pulse_profile():
+    """A minimal profile object with the attributes run_pulse reads."""
+    return SimpleNamespace(
+        topics=["ml"],
+        deck_size=5,
+        stage2_top_k=10,
+        lookback_days=7,
+        weights={},
+    )
+
+
+@contextlib.contextmanager
+def _pulse_pipeline(*, load_profile_error=None, stage1_error=None, persisted=3):
+    """Patch run_pulse's collaborators so only the named stage fails."""
+    from paper_ingestion.pulse import job as pulse_job
+
+    load_profile = AsyncMock(side_effect=load_profile_error, return_value=_pulse_profile())
+    stage1 = AsyncMock(side_effect=stage1_error, return_value=[])
+    with (
+        patch.object(pulse_job, "load_profile", load_profile),
+        patch.object(pulse_job, "discover_candidates", AsyncMock(return_value=([], {}, {}))),
+        patch.object(pulse_job, "stage1_embedding_filter", stage1),
+        patch.object(pulse_job, "_run_stage2", AsyncMock(return_value=([], None, 0))),
+        patch.object(pulse_job, "_run_optional_signals", AsyncMock(return_value=([], None, None))),
+        patch.object(pulse_job, "stage3_combine", AsyncMock(return_value=[])),
+        patch.object(pulse_job, "_select_deck_cards", AsyncMock(return_value=([], 0))),
+        patch.object(pulse_job, "_persist_pipeline", AsyncMock(return_value=persisted)),
+        patch.object(pulse_job, "_emit_post_run_telemetry", AsyncMock(return_value=None)),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_first_stage_failure_is_recorded_as_a_failed_stage():
+    """A run that returns before doing any work names the stage that stopped it."""
+    from paper_ingestion.pulse.job import run_pulse
+
+    with _pulse_pipeline(load_profile_error=RuntimeError(_RAW_PROFILE_FAILURE)):
+        stats = await run_pulse(db_pool=MagicMock(), http_client=MagicMock(), embedder=MagicMock())
+
+    assert stats["failed_stage"] == "loading your profile"
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_stage_that_still_persists_a_deck_is_not_a_failure():
+    """A source or ranking stage that degraded and carried on leaves no failed stage.
+
+    Instrumenting those handlers would discard the deck a run genuinely produced.
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    with _pulse_pipeline(stage1_error=RuntimeError("embedder timed out")):
+        stats = await run_pulse(db_pool=MagicMock(), http_client=MagicMock(), embedder=MagicMock())
+
+    assert stats["last_error"] is not None
+    assert stats["failed_stage"] is None
+    assert stats["card_count"] == 3
+
+
+def _pulse_job_ctx():
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(return_value=False)
+    return ctx
+
+
+@contextlib.contextmanager
+def _pulse_generate_env(*, locked=True, stats=None):
+    """Patch _pulse_generate_job's lock and pipeline call."""
+    from paper_ingestion.pulse import job as pulse_job
+
+    lock = MagicMock()
+    lock.__aenter__ = AsyncMock(return_value=locked)
+    lock.__aexit__ = AsyncMock(return_value=None)
+    with (
+        patch.object(pulse_job, "AdvisoryLock", MagicMock(return_value=lock)),
+        patch.object(pulse_job, "get_services", MagicMock(return_value=MagicMock())),
+        patch.object(pulse_job, "run_pulse", AsyncMock(return_value=stats or {})),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_generate_job_fails_with_the_stage_name_and_no_raw_error():
+    """The job fails with a stage label; the raw collaborator text never travels."""
+    from jarvis_common.jobs import JobError
+    from paper_ingestion.pulse.job import _pulse_generate_job
+
+    stats = {
+        "failed_stage": "loading your profile",
+        "last_error": f"load_profile: {_RAW_PROFILE_FAILURE}",
+    }
+    with _pulse_generate_env(stats=stats):
+        with pytest.raises(JobError) as raised:
+            await _pulse_generate_job(
+                pool=MagicMock(),
+                http_client=MagicMock(),
+                payload={},
+                ctx=_pulse_job_ctx(),
+            )
+
+    assert "loading your profile" in str(raised.value)
+    assert _RAW_PROFILE_FAILURE not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_job_returns_a_deck_whose_run_only_degraded():
+    """A run that saved a deck returns it, even with a stage error recorded."""
+    from paper_ingestion.pulse.job import _pulse_generate_job
+
+    stats = {"failed_stage": None, "last_error": "upsert_paper: card rolled back", "card_count": 4}
+    with _pulse_generate_env(stats={**stats, "deck_date": "2026-01-02"}):
+        result = await _pulse_generate_job(
+            pool=MagicMock(),
+            http_client=MagicMock(),
+            payload={},
+            ctx=_pulse_job_ctx(),
+        )
+
+    assert result["card_count"] == 4
+    assert result["deck_date"] == "2026-01-02"
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_run_says_so_instead_of_finishing_silently():
+    """A run the lock turned away leaves a visible record of why it did nothing."""
+    from paper_ingestion.pulse.job import _pulse_generate_job
+
+    ctx = _pulse_job_ctx()
+    with _pulse_generate_env(locked=False):
+        result = await _pulse_generate_job(
+            pool=MagicMock(), http_client=MagicMock(), payload={}, ctx=ctx
+        )
+
+    assert result == {"status": "blocked", "reason": "Pulse already running"}
+    message = ctx.update_progress.await_args.args[1]
+    assert "already in progress" in message
