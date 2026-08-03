@@ -594,7 +594,9 @@ def test_backup_reports_a_failed_off_site_upload_without_changing_its_exit_statu
     )
 
     assert result.returncode == 0, result.stderr
-    assert "FATAL: off-site upload incomplete" in result.stderr
+    assert "off-site copy incomplete" in result.stderr
+    assert "local backup" in result.stderr and "complete and usable" in result.stderr
+    assert "FATAL" not in result.stderr
     status = _last_run(backup_dir)
     assert status["succeeded"] is True
     assert status["s3_complete"] is False

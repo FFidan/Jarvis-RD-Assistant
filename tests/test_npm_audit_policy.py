@@ -39,19 +39,24 @@ def _advisory(advisory_id: str, dependency: str) -> dict[str, object]:
 
 def _report(
     *,
-    include_brace: bool = True,
+    include_brace: bool = False,
+    include_router: bool = True,
     extra_advisory: str | None = None,
 ) -> dict[str, object]:
-    vulnerabilities: dict[str, object] = {
-        "react-router": {
-            "severity": "high",
-            "via": [_advisory(REACT_ROUTER_RSC_ADVISORY, "react-router")],
-        },
-        "react-router-dom": {
-            "severity": "high",
-            "via": ["react-router"],
-        },
-    }
+    vulnerabilities: dict[str, object] = {}
+    if include_router:
+        vulnerabilities.update(
+            {
+                "react-router": {
+                    "severity": "high",
+                    "via": [_advisory(REACT_ROUTER_RSC_ADVISORY, "react-router")],
+                },
+                "react-router-dom": {
+                    "severity": "high",
+                    "via": ["react-router"],
+                },
+            }
+        )
     if include_brace:
         vulnerabilities.update(
             {
@@ -118,21 +123,18 @@ def _stage_frontend(
 
 
 def test_expected_runtime_and_dev_advisories_pass(tmp_path: Path) -> None:
-    """Only the checked RSC and dev-tool advisories may pass."""
+    """Only the checked RSC advisory may pass; the brace-expansion advisory is patched."""
     root = _stage_frontend(tmp_path)
 
     entries = evaluate_reports(
         _report(),
-        _report(include_brace=False),
+        _report(),
         repo_root=root,
         policy_path=POLICY_PATH,
         today=date(2026, 7, 28),
     )
 
-    assert {entry.advisory_id for entry in entries} == {
-        BRACE_EXPANSION_ADVISORY,
-        REACT_ROUTER_RSC_ADVISORY,
-    }
+    assert {entry.advisory_id for entry in entries} == {REACT_ROUTER_RSC_ADVISORY}
 
 
 def test_unexpected_high_advisory_fails(tmp_path: Path) -> None:
@@ -169,8 +171,8 @@ def test_resolved_advisory_requires_exception_removal(tmp_path: Path) -> None:
 
     with pytest.raises(AuditPolicyError, match="remove resolved audit exceptions"):
         evaluate_reports(
-            _report(include_brace=False),
-            _report(include_brace=False),
+            _report(include_router=False),
+            _report(include_router=False),
             repo_root=root,
             policy_path=POLICY_PATH,
             today=date(2026, 7, 28),
@@ -184,24 +186,10 @@ def test_expired_exception_fails(tmp_path: Path) -> None:
     with pytest.raises(AuditPolicyError, match="exception expired"):
         evaluate_reports(
             _report(),
-            _report(include_brace=False),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 8, 11),
-        )
-
-
-def test_brace_exception_must_remain_dev_only(tmp_path: Path) -> None:
-    """The build-tool exception fails if it reaches production dependencies."""
-    root = _stage_frontend(tmp_path)
-
-    with pytest.raises(AuditPolicyError, match="no longer confined to dev"):
-        evaluate_reports(
-            _report(),
             _report(),
             repo_root=root,
             policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
+            today=date(2026, 10, 15),
         )
 
 

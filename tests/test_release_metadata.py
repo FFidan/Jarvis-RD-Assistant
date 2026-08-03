@@ -322,7 +322,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     overrides = package["overrides"]
     security_workflow = _read(".github/workflows/security.yml")
 
-    assert overrides["brace-expansion@^1"] == "1.1.16"
+    assert overrides["brace-expansion@^1"] == "1.1.17"
     assert overrides["brace-expansion@^2"] == "2.1.2"
     assert overrides["brace-expansion@^5"] == "5.0.8"
     assert overrides["js-yaml"] == "^4.3.0"
