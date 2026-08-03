@@ -94,8 +94,8 @@ honestly described.
   every other outbound path** — carrier-grade-NAT, reserved, multicast, and
   unspecified destinations are refused, and each request re-checks the host
   rather than trusting one indefinitely.
-- **The frontend dependency scan was reassessed**: a development-only advisory
-  was cleared by an in-range patch, and a remaining routing-library advisory is
+- **The frontend dependency scan was reassessed**: development-only advisories
+  were cleared by in-range patches, and a remaining routing-library advisory is
   tracked with a dated removal trigger and does not affect a running instance.
 
 ## v1.2.2 (2026-07-31)
