@@ -1015,7 +1015,7 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
     if [ "$s3_complete" = "true" ]; then
       echo "[$(date -Iseconds)] Uploaded backups to s3://${BACKUP_S3_BUCKET}/"
     else
-      echo "[$(date -Iseconds)] FATAL: off-site upload incomplete; the S3 copy of ${TIMESTAMP} must not be trusted" >&2
+      echo "[$(date -Iseconds)] ERROR: off-site copy incomplete; local backup ${TIMESTAMP} is complete and usable, but its S3 copy must not be trusted" >&2
     fi
   fi
 fi

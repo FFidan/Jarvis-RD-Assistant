@@ -336,6 +336,17 @@ else
   fail=1
 fi
 
+# An off-site (S3) copy that failed or truncated leaves the LOCAL backup complete
+# and the run exiting 0, so its message must not read as a fatal/data-loss outcome.
+check "off-site incompleteness states the local backup is complete and usable" \
+  'off-site copy incomplete; local backup .* is complete and usable'
+if grep -Eq 'FATAL: off-site' "$BACKUP_SCRIPT"; then
+  printf 'FAIL: off-site incompleteness is still labelled FATAL on a run that exits 0\n' >&2
+  fail=1
+else
+  pass "off-site incompleteness is not labelled FATAL on a run that exits 0"
+fi
+
 # With an age limit configured the record reports its number of days; with none
 # configured it reports no number at all, because a 0 there renders in the UI as
 # "Kept for 0 days" — a policy claim the install is not applying.
