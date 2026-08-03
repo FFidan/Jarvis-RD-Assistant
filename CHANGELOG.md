@@ -10,7 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## v1.2.3 (2026-08-02)
+## v1.2.3 (2026-08-03)
 
 This release closes the gap between what the product says and what it does.
 Several features were documented, offered in the interface, or described in the
@@ -36,6 +36,11 @@ honestly described.
   selecting a reference the library does not hold shows what is known about it.
 - **A durable second copy of the signed-restore requirement**, so an update
   cannot silently return an installation to accepting unauthenticated backups.
+- **A one-screen quick-start guide** — clone, run setup, and analyze a first
+  paper — alongside the full deployment guide for anything non-standard.
+- **Accepting a backup whose database version cannot be checked is now a flag on
+  the same-host recovery command** (`restore legacy … --allow-unknown-schema`),
+  so the guidance the restore prints is one you can actually run.
 
 ### Fixed
 
@@ -85,6 +90,13 @@ honestly described.
 - Documentation corrected where it described behavior inaccurately: cloud
   provider support, the knowledge graph controls, and how the scheduler treats a
   catch-up run that coincides with an interval run.
+- **The Better BibTeX (Zotero) connection applies the same address policy as
+  every other outbound path** — carrier-grade-NAT, reserved, multicast, and
+  unspecified destinations are refused, and each request re-checks the host
+  rather than trusting one indefinitely.
+- **The frontend dependency scan was reassessed**: a development-only advisory
+  was cleared by an in-range patch, and a remaining routing-library advisory is
+  tracked with a dated removal trigger and does not affect a running instance.
 
 ## v1.2.2 (2026-07-31)
 
