@@ -496,7 +496,7 @@ _preview() {
     # "the clone directory" would remove a path the operator was never shown.
     _preview_state_dir="$(recorded_state_dir "$REPO")"
     [ -z "$_preview_state_dir" ] \
-      || printf '  durable state directory (outside the clone): %s\n' "$_preview_state_dir" >&2
+      || printf '  durable state directory (outside the clone, removed only if it resolves inside the JARVIS state namespace): %s\n' "$_preview_state_dir" >&2
   fi
 }
 

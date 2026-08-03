@@ -871,15 +871,19 @@ fi
 
 # The state directory is the one removal target OUTSIDE the clone, so the plan
 # the operator reads before confirming has to name it.
-if has "$out" "durable state directory" && has "$out" "$IN_NS"; then
-  pass "tier4_previews_the_state_dir_it_will_remove"
+if has "$out" "durable state directory" && has "$out" "$IN_NS" \
+   && has "$out" "removed only if it resolves inside the JARVIS state namespace"; then
+  pass "tier4_previews_the_state_dir_with_its_containment_condition"
 else
-  check_fail "tier4_previews_the_state_dir_it_will_remove: out=<<<$out>>>"
+  check_fail "tier4_previews_the_state_dir_with_its_containment_condition: out=<<<$out>>>"
 fi
 
+# Preview and teardown must agree: an outside-namespace value is previewed as
+# conditional and then actually refused, never previewed as an unconditional removal.
 out="$(state_purge_run /etc)"
-if [ -d /etc ] && has "$out" 'Refusing to remove /etc'; then
-  pass "tier4_refuses_state_dir_outside_namespace: /etc refused and intact"
+if [ -d /etc ] && has "$out" 'Refusing to remove /etc' \
+   && has "$out" "removed only if it resolves inside the JARVIS state namespace"; then
+  pass "tier4_refuses_state_dir_outside_namespace: /etc refused and the preview flagged it conditional"
 else
   check_fail "tier4_refuses_state_dir_outside_namespace: out=<<<$out>>>"
 fi
