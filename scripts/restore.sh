@@ -2083,7 +2083,7 @@ if [ -r "$MANIFEST" ]; then
   # to check, so restoring it takes an explicit acknowledgement in the request.
   if [ -z "$MANIFEST_SCHEMA" ] || [ "$MANIFEST_SCHEMA" = "0" ]; then
     if [ "$ALLOW_UNKNOWN_SCHEMA" != "1" ]; then
-      fail_before_destruction "backup ${TIMESTAMP} does not record a usable database schema version, so compatibility with this deployment cannot be checked; choose a restore point written by a healthy backup, or resubmit this restore with \"allow_unknown_schema\": true to accept the risk; nothing was changed"
+      fail_before_destruction "backup ${TIMESTAMP} does not record a usable database schema version, so compatibility with this deployment cannot be checked; choose a restore point written by a healthy backup, or accept the risk: a command-line restore adds --allow-unknown-schema (jarvis-research restore legacy ${TIMESTAMP} --allow-unknown-schema), a web-app or off-host restore sets \"allow_unknown_schema\": true in the restore request; nothing was changed"
     fi
     echo "[restore] WARNING: restoring backup ${TIMESTAMP} without a schema compatibility check on explicit operator acknowledgement" >&2
   fi
@@ -2151,6 +2151,16 @@ for arch in "$JARVIS_ARCHIVE" "$LITELLM_ARCHIVE"; do
   magic="$(decrypt_or_passthrough "$arch" 2>/dev/null | head -c 2 | od -An -tx1 | tr -d ' \n')"
   set -e
   if [ "$magic" != "1f8b" ]; then
+    # An encrypted archive with no key on this host is a missing-key failure, not a
+    # wrong-key/corrupt one — name the cause so a keyless install restoring an older
+    # encrypted set is not sent chasing a key rotation or corruption it does not have.
+    case "$arch" in
+      *.enc)
+        if [ -z "$ENC_KEYFILE" ] || [ ! -s "$ENC_KEYFILE" ]; then
+          fail_before_destruction "backup archive $(basename "$arch") is encrypted, but this host has no usable backup encryption key (BACKUP_ENCRYPT_KEYFILE) to read it; the set was written with a key that is absent here, so restore that key file or re-run setup to provision the backup key; nothing was changed"
+        fi
+        ;;
+    esac
     fail_before_destruction "backup archive $(basename "$arch") is unreadable (wrong encryption key or corrupt); nothing was changed"
   fi
 done

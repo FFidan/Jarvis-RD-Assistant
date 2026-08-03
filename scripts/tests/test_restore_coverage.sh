@@ -204,6 +204,45 @@ else
   fail=1
 fi
 
+# 5d-bis. The probe distinguishes a MISSING key from a wrong/corrupt one: a keyless
+#     host meeting an encrypted (.enc) archive is told the key is absent, not sent
+#     chasing a rotation or corruption it does not have. The probe block and its
+#     decrypt helper are run for real against fixture archives with a stubbed refusal.
+decrypt_fn="$(sed -n '/^decrypt_or_passthrough() {/,/^}/p' "$RESTORE_SCRIPT")"
+probe_block="$(sed -n '/^for arch in "\$JARVIS_ARCHIVE" "\$LITELLM_ARCHIVE"; do$/,/^done$/p' "$RESTORE_SCRIPT")"
+run_probe() {
+  # run_probe <archive path> <ENC_KEYFILE>
+  bash -c '
+    set -euo pipefail
+    fail_before_destruction() { printf "REFUSED %s" "$1"; exit 9; }
+    JARVIS_ARCHIVE="$1"
+    LITELLM_ARCHIVE="$1"
+    ENC_KEYFILE="$2"
+    '"$decrypt_fn"'
+    '"$probe_block"'
+    printf "PROCEEDED"
+  ' _ "$1" "$2" 2>/dev/null
+}
+probe_tmp="$(mktemp -d)"
+printf 'not a gzip stream' > "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc"
+printf 'not a gzip stream' > "${probe_tmp}/jarvis_20260801_120000.sql.gz"
+printf 'a-real-looking-key' > "${probe_tmp}/key"
+missing_key_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc" '' || true)"
+wrong_key_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz.enc" "${probe_tmp}/key" || true)"
+plain_corrupt_refusal="$(run_probe "${probe_tmp}/jarvis_20260801_120000.sql.gz" '' || true)"
+rm -rf "$probe_tmp"
+if [ -n "$probe_block" ] \
+   && printf '%s' "$missing_key_refusal" | grep -q 'no usable backup encryption key' \
+   && printf '%s' "$wrong_key_refusal" | grep -q 'wrong encryption key or corrupt' \
+   && ! printf '%s' "$wrong_key_refusal" | grep -q 'no usable backup encryption key' \
+   && printf '%s' "$plain_corrupt_refusal" | grep -q 'wrong encryption key or corrupt'; then
+  pass "the decrypt probe names a missing key, and still reports wrong-key/corrupt otherwise"
+else
+  printf 'FAIL: probe messages wrong (missing=<<<%s>>> wrong=<<<%s>>> plain=<<<%s>>>)\n' \
+    "$missing_key_refusal" "$wrong_key_refusal" "$plain_corrupt_refusal" >&2
+  fail=1
+fi
+
 # 6. NEVER-RE-EXPOSE: the EXIT trap lifts .maintenance on a clean restore OR a
 #    failure BEFORE the first DROP (DROP_STARTED=0, nothing destroyed); a
 #    post-DROP failure (DROP_STARTED=1, not clean) MUST keep the stack 503.

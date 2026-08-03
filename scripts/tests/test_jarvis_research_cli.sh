@@ -1938,6 +1938,7 @@ USAGE_SITES=(
   "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)"
   "restore legacy@@restore legacy takes exactly one backup timestamp.@@Run: jarvis-research restore legacy <timestamp>"
   "restore legacy nonsense@@restore legacy requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore legacy <timestamp>"
+  "restore legacy --bogus@@restore legacy: unknown option '--bogus'.@@Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
   "restore request@@restore request takes exactly one backup timestamp.@@Run: jarvis-research restore request <timestamp>"
   "restore request nonsense@@restore request requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore request <timestamp>"
   "restore status extra@@restore status takes no arguments.@@Run: jarvis-research restore status"
@@ -2119,6 +2120,23 @@ if printf '%s' "$legacy_request" | grep -Eq '"source":"local"' \
   pass "restore_legacy_writes_a_well_formed_same_host_restore_request"
 else
   check_fail "restore legacy request json: <<<$legacy_request>>>"
+fi
+
+# The unknown-schema acknowledgement is off unless the operator opts in, so the
+# schema-0 refusal's "--allow-unknown-schema" advice is followable from the CLI.
+if printf '%s' "$legacy_request" | grep -q 'allow_unknown_schema'; then
+  check_fail "restore legacy default request must NOT acknowledge unknown schema: <<<$legacy_request>>>"
+else
+  pass "restore_legacy_default_request_does_not_acknowledge_unknown_schema"
+fi
+new_env; register_repo
+run_cli restore legacy 20260101_010101 --allow-unknown-schema >/dev/null 2>&1
+legacy_ack_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+if printf '%s' "$legacy_ack_request" | grep -Eq '"allow_unknown_schema":true' \
+   && printf '%s' "$legacy_ack_request" | grep -Eq '"timestamp":"20260101_010101"'; then
+  pass "restore_legacy_allow_unknown_schema_flag_sets_the_acknowledgement"
+else
+  check_fail "restore legacy --allow-unknown-schema request: <<<$legacy_ack_request>>>"
 fi
 
 # The service loop must resume even when the restore itself fails, or a failed

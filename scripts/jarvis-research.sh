@@ -1996,8 +1996,14 @@ _restore_new_request_id() {
 }
 
 _restore_request_json() {
-  printf '{"source":"%s","timestamp":"%s","restore_id":"%s","requested_at":"%s"}' \
-    "$1" "$2" "$3" "$4"
+  # $5 (optional): when "1", record the operator's unknown-schema acknowledgement so a
+  # restore point that carries no usable schema version is accepted. restore.sh reads it
+  # back from the request; the field is omitted otherwise, leaving a normal request byte
+  # for byte unchanged.
+  local ack=""
+  [ "${5:-}" = "1" ] && ack=',"allow_unknown_schema":true'
+  printf '{"source":"%s","timestamp":"%s","restore_id":"%s","requested_at":"%s"%s}' \
+    "$1" "$2" "$3" "$4" "$ack"
 }
 
 # _restore_status_field JSON FIELD — the value of a flat top-level string field,
@@ -2032,10 +2038,25 @@ _restore_legacy_resume_sidecar() {
 }
 
 cmd_restore_legacy() {
-  [ "$#" -eq 1 ] \
+  local allow_unknown_schema=0 timestamp=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --allow-unknown-schema) allow_unknown_schema=1 ;;
+      -*) usage_error "restore legacy: unknown option '$1'." \
+            "Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]" ;;
+      *)
+        [ -z "$timestamp" ] \
+          || usage_error "restore legacy takes exactly one backup timestamp." \
+            "Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
+        timestamp="$1"
+        ;;
+    esac
+    shift
+  done
+  [ -n "$timestamp" ] \
     || usage_error "restore legacy takes exactly one backup timestamp." \
-      "Run: jarvis-research restore legacy <timestamp>"
-  local timestamp="$1" restore_id requested_at
+      "Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
+  local restore_id requested_at
   _restore_timestamp_or_usage legacy "$timestamp"
 
   _require_docker_daemon
@@ -2075,7 +2096,7 @@ cmd_restore_legacy() {
       "Nothing was changed. Run: jarvis-research doctor"
   trap _restore_legacy_resume_sidecar EXIT
 
-  _restore_request_json local "$timestamp" "$restore_id" "$requested_at" \
+  _restore_request_json local "$timestamp" "$restore_id" "$requested_at" "$allow_unknown_schema" \
     | _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
         -c "cat > ${RESTORE_REQUEST_PATH}" \
     || die "The restore request could not be written." \
