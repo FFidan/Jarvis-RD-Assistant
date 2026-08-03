@@ -47,10 +47,18 @@ cd jarvis-rd-assistant
 ./setup.sh
 ```
 
-You need Docker Engine 24+ with Compose 2.24+, about 27–54 GB of free disk for the one-time install, and optionally an NVIDIA GPU (CPU works, just slower). Two paths from here:
+New here? The **[Quick start guide](docs/manual/quickstart.md)** walks you from clone to your first analyzed paper in one screen. The **[Deployment guide](docs/DEPLOYMENT.md)** covers GPUs, remote and family access, and non-interactive installs in full.
 
-- **[Quick start guide](docs/manual/quickstart.md)** — one screen from clone to your first analyzed paper.
-- **[Deployment guide](docs/DEPLOYMENT.md)** — full prerequisites and options: GPUs (NVIDIA, ROCm, Vulkan), macOS and Windows/WSL2, `setup.sh --check`, remote and family access, non-interactive installs, and the [disk budget](docs/REQUIREMENTS.md#disk-budget).
+**Before you start:**
+
+- Docker Engine 24+ with Compose v2.24.4+, Python 3, `openssl`, `curl`, `git`
+- **~27–54 GB free disk space** for a default first install — a one-time peak, not the ongoing footprint. The exact figure depends on the tier-selected model and whether images are pulled prebuilt or built locally; custom models may require more. See [Disk budget](docs/REQUIREMENTS.md#disk-budget).
+- GPU optional. NVIDIA (CUDA) is the fully supported acceleration path — on GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. By default `setup.sh` **pulls** prebuilt application images from `ghcr.io/limitcycle-oss/jarvis-*` (no local build), then downloads the Ollama model set for your hardware tier (roughly 7 GB on the smallest tier, up to 23 GB on the largest) — allow more time on a typical connection for larger tiers. Contributors and forks can build from source instead with `./setup.sh --build-local`.
+- AMD ROCm is selected only when `/dev/kfd` is available. Other AMD and Intel hosts stay on the supported CPU path unless Vulkan is selected explicitly with `./setup.sh --gpu vulkan`. Both ROCm and Vulkan remain experimental, and PDF parsing and reranking stay on CPU. See the [hardware support matrix](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-support-matrix/).
+- On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
+- Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On supported hosts it can install missing packages after showing the commands and asking permission. `./setup.sh --check` runs the same preflight without making changes.
+- **Windows:** use WSL2 + Docker Desktop
+- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full installer. `scripts/jarvis-setup.sh` is a local-only compatibility bootstrap for older CI jobs; it does not configure TLS or remote access.
 
 `setup.sh` generates the repository-controlled secrets and configuration, pulls
 the selected images and Ollama models, waits for the services, and prints one

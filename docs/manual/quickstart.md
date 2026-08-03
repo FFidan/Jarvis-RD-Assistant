@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-08-03 | routes: /setup, /onboarding -->
+<!-- verified-against-UI: 2026-08-03 | routes: /setup, /first-run -->
 
 # Quick start
 
@@ -28,7 +28,7 @@ cd jarvis-rd-assistant
 
 1. **Create your administrator** — enter an email and choose *Create admin & sign in*. The first admin needs no email round-trip.
 2. **Add a research topic** in the setup wizard so the feed has something to track.
-3. **Add your first paper** — paste an arXiv link or DOI, or upload a PDF.
+3. **Add your first paper** — open Discover, search by title or keyword, and **Save to library** the result you want; or **Upload PDF** to add a file directly.
 4. **Choose *Analyze*** on that paper to download, parse, and summarize it. On a GPU this takes a few minutes; on CPU, longer.
 
 You now have a running instance with a paper analyzed. Explore the daily feed, ask questions across your library, and turn findings into cards.
