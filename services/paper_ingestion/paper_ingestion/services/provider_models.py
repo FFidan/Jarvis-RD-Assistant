@@ -559,7 +559,7 @@ async def fetch_provider_models(
                 )
         except (TimeoutError, _ProviderListError, httpx.HTTPError) as exc:
             reason = _fetch_failure_reason(exc)
-            logger.warning("provider %s model list failed: %s", provider_id, reason)
+            logger.warning("provider %s model list failed: %s", provider_id, reason, exc_info=True)
             return _stale_or_error(provider_id, reason)
 
         fetched_at = datetime.now(UTC)

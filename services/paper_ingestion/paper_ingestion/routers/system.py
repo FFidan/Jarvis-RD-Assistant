@@ -631,7 +631,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
     num_ctx_per_role = await _load_num_ctx_overrides(request.app.state.db_pool, hardware.machine_id)
 
     provider_lists = await fetch_all_provider_models(
-        [provider_id for provider_id, reachable in cloud_api_keys.items() if reachable],
+        [provider.id for provider in PROVIDER_REGISTRY if cloud_api_keys.get(provider.id)],
         db_pool=request.app.state.db_pool,
         http_client=http,
     )
