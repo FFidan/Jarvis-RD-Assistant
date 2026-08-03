@@ -203,15 +203,24 @@ async def _reclaim_stalled_jobs(app: FastAPI) -> int:
             await procrastinate_app.job_manager.finish_job(
                 job, status=ProcrastinateJobStatus.FAILED, delete_job=False
             )
-            # Surface the reason through the channel the UI already reads.
-            jarvis_job_id = (job.task_kwargs or {}).get("job_id")
-            if jarvis_job_id and db_pool is not None:
-                await ProcrastinateJobContextShim(
-                    job_id=str(jarvis_job_id), pool=db_pool
-                ).record_terminal_outcome(error=_INTERRUPTED_JOB_ERROR, is_error=True)
-            count += 1
         except Exception:  # noqa: BLE001 — the sibling service's sweep may have won this job
             logger.debug("Job %s already reclaimed elsewhere; continuing", job.id, exc_info=True)
+            continue
+        # finish_job succeeded, so the job is reclaimed and counted regardless of
+        # whether its interrupted-outcome row can be written. Surface that reason
+        # through the channel the UI already reads; a failed write is best-effort
+        # but must be reported, not lost as if it were the benign sweep race above.
+        count += 1
+        jarvis_job_id = (job.task_kwargs or {}).get("job_id")
+        if jarvis_job_id and db_pool is not None:
+            recorded = await ProcrastinateJobContextShim(
+                job_id=str(jarvis_job_id), pool=db_pool
+            ).record_terminal_outcome(error=_INTERRUPTED_JOB_ERROR, is_error=True)
+            if not recorded:
+                logger.warning(
+                    "Job %s marked FAILED but its interrupted-outcome record could not be written",
+                    job.id,
+                )
     if count:
         logger.warning("Reclaimed %d job(s) abandoned by an interrupted worker", count)
     return count

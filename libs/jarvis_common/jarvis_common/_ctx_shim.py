@@ -104,11 +104,14 @@ class ProcrastinateJobContextShim:
         result: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
         is_error: bool = False,
-    ) -> None:
+    ) -> bool:
         """UPSERT terminal result/error payloads into ``job_progress``.
 
         Outcome persistence is best-effort: losing the UI payload is bad, but
         it must not turn a completed handler into a failed Procrastinate job.
+        Returns ``True`` when the outcome was persisted (or there was nothing
+        to persist) and ``False`` when a write was attempted and failed, so a
+        caller such as stalled-job reclamation can surface the loss.
 
         Progress semantics on terminal write:
         - **New row** (no prior ``update_progress`` call): ``progress`` is
@@ -132,7 +135,7 @@ class ProcrastinateJobContextShim:
                 self._pool,
                 self.job_id,
             )
-            return
+            return True
         try:
             await self._pool.execute(
                 """
@@ -155,6 +158,8 @@ class ProcrastinateJobContextShim:
                 self.job_id,
                 exc_info=True,
             )
+            return False
+        return True
 
     async def is_cancelled(self) -> bool:
         """Return True when procrastinate has flagged the job for abort.

@@ -1006,3 +1006,27 @@ async def test_a_lost_reclamation_race_does_not_abandon_the_remaining_jobs() -> 
     assert finish_job.await_count == 2
     pool.execute.assert_awaited_once()
     assert pool.execute.await_args.args[1] == "jarvis-job-2"
+
+
+async def test_reclamation_reports_a_failed_outcome_write_without_undercounting(caplog) -> None:
+    """finish_job succeeds but the interrupted-outcome write fails.
+
+    The job IS reclaimed, so it stays counted; the lost UI row is surfaced as a
+    distinct warning rather than swallowed as the benign sweep race; and the
+    remaining jobs are still processed.
+    """
+    import logging
+
+    from jarvis_common.app_factory import _reclaim_stalled_jobs
+
+    jobs = [_stalled_job(11, "jarvis-job-1"), _stalled_job(12, "jarvis-job-2")]
+    app, finish_job, pool = _reclaim_app(AsyncMock(return_value=jobs))
+    pool.execute = AsyncMock(side_effect=RuntimeError("job_progress write failed"))
+
+    with caplog.at_level(logging.WARNING):
+        assert await _reclaim_stalled_jobs(app) == 2
+
+    assert finish_job.await_count == 2
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert sum("interrupted-outcome record could not be written" in m for m in warnings) == 2
+    assert not any("already reclaimed elsewhere" in m for m in warnings)
