@@ -71,7 +71,7 @@ clean-venvs:
 
 ## Run pyright type checking (pinned to same version as CI)
 typecheck:
-	npx --yes pyright@1.1.408
+	uv run npx --yes pyright@1.1.408
 
 ## Enforce the secrets contract: directory 700 (owner-only), files 644 (readable by non-root service containers via the compose bind mount)
 secure-secrets:
