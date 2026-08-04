@@ -36,9 +36,10 @@ make check
 Review the generated notes, update the versioned product files, and include
 those changes in the pull request.
 
-The pull request must pass the hosted CI aggregate, strict Docs build, and
-`Security / npm-audit`. Run the independent hosted checks against the same
-branch:
+The pull request must pass the hosted CI aggregate, the strict Docs build, and
+the `Security / Security gate` aggregate, which covers `pip-audit`, `npm-audit`,
+`osv-scanner`, the Docker build smoke test, `gitleaks`, and CodeQL. Run the
+independent hosted checks against the same branch:
 
 ```bash
 gh workflow run nightly-llm-smoke.yml --ref "$RELEASE_BRANCH"
@@ -89,9 +90,17 @@ gh workflow run ghcr-publish.yml --ref main -f source_commit="$MERGED_SHA"
 
 Wait for every build, manifest, SBOM, and vulnerability-report job to finish.
 Record that run's ID and manifest-digest artifacts. Stop here if any job fails.
+The checks below pull the SHA images, so dispatching them before this run
+finishes fails every one of them with `manifest unknown`:
 
-Use the SHA images for the credential-free install and supported upgrade
-checks:
+```bash
+VERIFY_RUN_ID="$(gh run list --workflow=ghcr-publish.yml --limit 1 \
+  --json databaseId --jq '.[0].databaseId')"
+gh run watch "$VERIFY_RUN_ID"
+```
+
+Only after that run succeeds, use the SHA images for the credential-free install
+and supported upgrade checks:
 
 ```bash
 gh workflow run first-run-smoke.yml --ref main \
@@ -132,6 +141,13 @@ The `direct` row is the path essentially every existing installation takes, and
 it exercises the update transaction itself rather than the bootstrap. Do not skip
 it because the bootstrap rows passed: they enter through different code, and a
 release that changes the update transaction is only covered by this row.
+
+The table encodes a rule: the newest published release updates `direct`, because
+it already ships the update transaction the candidate builds on, and every older
+supported source enters through the bootstrap. It names explicit tags rather than
+deriving them, so refresh it while preparing each release — the release being
+published becomes the new `direct` row, the previous `direct` row becomes a
+`bootstrap` row, and any source that has left support is dropped.
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
@@ -184,9 +200,19 @@ stable tag:
 
 ```bash
 gh release create "$RELEASE_TAG" --verify-tag \
-  --title "JARVIS RD Assistant ${RELEASE_TAG}" \
-  --notes-file /tmp/jarvis-changelog-draft.md
+  --title "$RELEASE_TAG" \
+  --notes-file /tmp/jarvis-release-notes.md
 ```
+
+The title is the tag alone. The notes file is a written release note, not the
+generated changelog draft from step 1 and not a copy of the `CHANGELOG.md`
+section; open the two most recent releases and match them. The shape is a
+`## vX.Y.Z — <short summary>` heading, one paragraph of intent, a line stating
+which migrations the release carries and whether they need operator action, a
+line stating whether the images differ from the previous tag, condensed
+`### Added` / `### Fixed` / `### Changed` sections, an `### Upgrading` section
+giving the direct and bootstrap paths from each supported source, and a closing
+`**Full changelog:**` link to `CHANGELOG.md` at this tag.
 
 ## Release Checks
 
@@ -198,10 +224,44 @@ gh release create "$RELEASE_TAG" --verify-tag \
 | Install and upgrade | Run the anonymous SHA cold install and upgrade each supported source release to the same SHA. | The pull-only install and every resumable upgrade pass without leaving project resources behind. |
 | Stable publication | Put the successful verification run ID in the annotated tag, push it, verify digest-preserving promotion from that run's artifacts, then create the GitHub Release. | The run matches the tagged `main` commit, every stable digest matches its exact receipt, and no `latest` mutation occurs. |
 
+## Dependency Scans
+
+`pip-audit`, `npm-audit`, and `osv-scanner` evaluate a live advisory database
+against a static lockfile, so a scan that passed an hour ago can fail with no
+change to the branch. A newly published advisory is the expected cause of a
+dependency job turning red mid-release; check when it was published before
+looking for a regression in the diff:
+
+```bash
+gh api /advisories/<GHSA-ID> --jq '{summary, published_at, vulnerabilities}'
+```
+
+Patch whenever the fixed version is installable, and reserve a dated suppression
+for an advisory that has none. Raising a floor means raising it in every manifest
+that declares it — the root `pyproject.toml`, `libs/jarvis_common/pyproject.toml`,
+and each service's `requirements.txt` — then re-locking both projects and
+regenerating the lock-derived pins with `scripts/export-service-requirements.sh`.
+
+Reproduce all three scans locally before pushing a release branch and again
+before tagging:
+
+```bash
+for c in services/*/constraints.txt; do
+  uvx pip-audit --no-deps --disable-pip -r "$c"
+done
+python3 scripts/check_npm_audit.py
+curl -fsSL -o /tmp/osv-scanner \
+  https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+chmod +x /tmp/osv-scanner && /tmp/osv-scanner scan --recursive .
+```
+
 ## Changelog Generation
 
-`CHANGELOG.md` is generated by [git-cliff](https://github.com/orhun/git-cliff),
-configured in `cliff.toml`. Conventional commit prefixes map to sections:
+`CHANGELOG.md` is written by hand, in user-facing prose grouped under `### Added`,
+`### Fixed`, and `### Changed`. [git-cliff](https://github.com/orhun/git-cliff),
+configured in `cliff.toml`, produces a commit-derived draft that seeds that
+writing; it is not wired into CI, and its output is not committed verbatim.
+Conventional commit prefixes map to draft sections:
 
 | Commit prefix | CHANGELOG section |
 |---|---|
