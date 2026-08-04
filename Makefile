@@ -123,9 +123,13 @@ test-shell-contracts:
 ##  11. Frontend lint + typecheck + tests + build
 ##
 ## Live-Postgres checks run separately in CI and are opt-in locally:
-##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m contract -v
+##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant" -v
 ##   JARVIS_RUN_LIVE_PG=1 uv run pytest -c pyproject.toml -m "integration and live_pg" \
 ##     services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+##
+## The live-Qdrant release gate never skips and has its own driver, which supplies
+## JARVIS_TEST_QDRANT_URL. Selecting it via a bare `-m contract` hard-fails by design:
+##   JARVIS_RUN_LIVE_PG=1 bash scripts/tests/test_corpus_visibility_qdrant.sh
 check: no-tracked-secrets secure-secrets deps-check lint
 	uv run tach check
 	$(MAKE) typecheck
