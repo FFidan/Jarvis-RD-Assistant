@@ -359,7 +359,11 @@ def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None
     release_guide = _read("docs/RELEASE.md")
 
     assert "`make check`" in release_guide
-    assert "Security / npm-audit" in release_guide
+    # The gate is the Security aggregate, not one job within it: osv-scanner has
+    # blocked a release that npm-audit passed, so the guide must name them all.
+    assert "Security / Security gate" in release_guide
+    for security_job in ("pip-audit", "npm-audit", "osv-scanner", "gitleaks", "CodeQL"):
+        assert security_job in release_guide, security_job
     assert 'gh workflow run nightly-llm-smoke.yml --ref "$RELEASE_BRANCH"' in release_guide
     assert 'gh workflow run lifecycle-smoke.yml --ref "$RELEASE_BRANCH" -f leg=all' in release_guide
     assert "git switch -c release/" not in release_guide
