@@ -40,6 +40,62 @@ def test_measure_raises_when_ruff_tool_errors(monkeypatch):
         mod.measure(["C901"])
 
 
+def test_measure_raises_when_a_target_path_is_missing(monkeypatch):
+    """A renamed or moved target must abort before ruff runs, not measure zero."""
+    mod = _load()
+    monkeypatch.setattr(mod, "_TARGETS", ("services", "no_such_dir"))
+    monkeypatch.setattr(
+        mod.subprocess, "run", lambda *args, **kwargs: pytest.fail("ruff must not be invoked")
+    )
+
+    with pytest.raises(SystemExit, match="no_such_dir"):
+        mod.measure(["C901"])
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        # Ruff exits 0 with empty stdout, so the exit-2 guard passes it through and
+        # every rule measures as zero — the gate then prints "Complexity improved".
+        (0, "", "warning: Failed to lint services: No such file or directory (os error 2)"),
+        # An unreadable path uses different wording and can still exit 1 with a
+        # PARTIAL count, which reads as an improvement rather than as a failure.
+        (0, "", "warning: Encountered error: Permission denied (os error 13)"),
+        (
+            1,
+            '[{"code": "C901", "count": 4}]',
+            "warning: Encountered error: Permission denied (os error 13)",
+        ),
+    ],
+)
+def test_measure_raises_when_ruff_could_not_read_a_target(monkeypatch, returncode, stdout, stderr):
+    """Anything ruff failed to read must abort: it warns but still exits 0 or 1."""
+    mod = _load()
+    skipped = subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: skipped)
+
+    with pytest.raises(SystemExit, match="could not read every target"):
+        mod.measure(["C901"])
+
+
+def test_measure_reports_zero_for_a_rule_ruff_found_clean(monkeypatch):
+    """A genuinely clean rule stays reportable — ruff also exits 0 with empty stdout."""
+    mod = _load()
+    # Unrelated ruff warnings land on stderr as well, so a guard keyed on stderr
+    # being non-empty would make a real zero fatal.
+    clean = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="",
+        stderr="warning: Selection `PLR0904` has no effect because preview is not enabled.",
+    )
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: clean)
+
+    assert mod.measure(["C901"]) == {"C901": 0}
+
+
 def test_growth_fails_and_shrink_passes(monkeypatch):
     mod = _load()
     base = mod.baseline()
