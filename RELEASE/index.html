@@ -1751,6 +1751,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dependency-scans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Scans
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#changelog-generation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1965,6 +1976,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dependency-scans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Scans
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#changelog-generation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2074,9 +2096,10 @@ checks from the release branch:</p>
 </code></pre></div>
 <p>Review the generated notes, update the versioned product files, and include
 those changes in the pull request.</p>
-<p>The pull request must pass the hosted CI aggregate, strict Docs build, and
-<code>Security / npm-audit</code>. Run the independent hosted checks against the same
-branch:</p>
+<p>The pull request must pass the hosted CI aggregate, the strict Docs build, and
+the <code>Security / Security gate</code> aggregate, which covers <code>pip-audit</code>, <code>npm-audit</code>,
+<code>osv-scanner</code>, the Docker build smoke test, <code>gitleaks</code>, and CodeQL. Run the
+independent hosted checks against the same branch:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>nightly-llm-smoke.yml<span class="w"> </span>--ref<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_BRANCH</span><span class="s2">&quot;</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_BRANCH</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>all<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span>direct
@@ -2111,18 +2134,24 @@ refresh the protected checkout and record the commit eligible for publication:</
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>ghcr-publish.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">source_commit</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
 </code></pre></div>
 <p>Wait for every build, manifest, SBOM, and vulnerability-report job to finish.
-Record that run's ID and manifest-digest artifacts. Stop here if any job fails.</p>
-<p>Use the SHA images for the credential-free install and supported upgrade
-checks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>first-run-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">cold_install_version</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nv">UPDATE_FROM</span><span class="o">=</span>vA.B.C
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Per the table below: bootstrap for the older sources, direct for the newest.</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nv">UPDATE_MODE</span><span class="o">=</span>bootstrap
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>update<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_from</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_FROM</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">update_to</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_MODE</span><span class="s2">&quot;</span>
+Record that run's ID and manifest-digest artifacts. Stop here if any job fails.
+The checks below pull the SHA images, so dispatching them before this run
+finishes fails every one of them with <code>manifest unknown</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">VERIFY_RUN_ID</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>gh<span class="w"> </span>run<span class="w"> </span>list<span class="w"> </span>--workflow<span class="o">=</span>ghcr-publish.yml<span class="w"> </span>--limit<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--json<span class="w"> </span>databaseId<span class="w"> </span>--jq<span class="w"> </span><span class="s1">&#39;.[0].databaseId&#39;</span><span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>gh<span class="w"> </span>run<span class="w"> </span>watch<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>Only after that run succeeds, use the SHA images for the credential-free install
+and supported upgrade checks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>first-run-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">cold_install_version</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nv">UPDATE_FROM</span><span class="o">=</span>vA.B.C
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Per the table below: bootstrap for the older sources, direct for the newest.</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nv">UPDATE_MODE</span><span class="o">=</span>bootstrap
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>lifecycle-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">leg</span><span class="o">=</span>update<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_from</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_FROM</span><span class="s2">&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">update_to</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>-f<span class="w"> </span><span class="nv">update_mode</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UPDATE_MODE</span><span class="s2">&quot;</span>
 </code></pre></div>
 <p>When a lifecycle run fails, start from its <code>lifecycle-smoke-log</code> artifact rather
 than the job page. For a failed leg that owns a Compose project — <code>tls</code>,
@@ -2173,6 +2202,12 @@ identical re-dispatches supersede each other, while runs differing in <code>leg<
 it exercises the update transaction itself rather than the bootstrap. Do not skip
 it because the bootstrap rows passed: they enter through different code, and a
 release that changes the update transaction is only covered by this row.</p>
+<p>The table encodes a rule: the newest published release updates <code>direct</code>, because
+it already ships the update transaction the candidate builds on, and every older
+supported source enters through the bootstrap. It names explicit tags rather than
+deriving them, so refresh it while preparing each release — the release being
+published becomes the new <code>direct</code> row, the previous <code>direct</code> row becomes a
+<code>bootstrap</code> row, and any source that has left support is dropped.</p>
 <p>The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
 anonymously, build no application image, reach a healthy stack, and remove its
@@ -2187,16 +2222,16 @@ that transaction unverified.</p>
 <h3 id="4-tag-the-release-and-promote-exact-digests">4. Tag the release and promote exact digests<a class="headerlink" href="#4-tag-the-release-and-promote-exact-digests" title="Permanent link">&para;</a></h3>
 <p>After the SHA-based checks pass, record that exact successful workflow run in
 the annotated tag:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">VERIFY_RUN_ID</span><span class="o">=</span><span class="s2">&quot;replace-with-successful-run-id&quot;</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">test</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>gh<span class="w"> </span>run<span class="w"> </span>view<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>--json<span class="w"> </span>headSha<span class="w"> </span>--jq<span class="w"> </span>.headSha<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nb">test</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>gh<span class="w"> </span>run<span class="w"> </span>view<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>--json<span class="w"> </span>conclusion<span class="w"> </span>--jq<span class="w"> </span>.conclusion<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>success
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nv">TAG_MESSAGE</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;Release %s\n\nVerification-Run-ID: %s\n&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TAG_MESSAGE</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span>-F<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TAG_MESSAGE</span><span class="s2">&quot;</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">VERIFY_RUN_ID</span><span class="o">=</span><span class="s2">&quot;replace-with-successful-run-id&quot;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">test</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>gh<span class="w"> </span>run<span class="w"> </span>view<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>--json<span class="w"> </span>headSha<span class="w"> </span>--jq<span class="w"> </span>.headSha<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">test</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>gh<span class="w"> </span>run<span class="w"> </span>view<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>--json<span class="w"> </span>conclusion<span class="w"> </span>--jq<span class="w"> </span>.conclusion<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>success
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nv">TAG_MESSAGE</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;Release %s\n\nVerification-Run-ID: %s\n&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TAG_MESSAGE</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MERGED_SHA</span><span class="s2">&quot;</span><span class="w"> </span>-F<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TAG_MESSAGE</span><span class="s2">&quot;</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span>
 </code></pre></div>
 <p>Never point a stable tag at a commit that is not on <code>main</code>. The tag workflow
 rejects non-stable <code>v*</code> names, peels the annotated tag to its commit, checks
@@ -2213,10 +2248,19 @@ failed or cancelled promotion stops the release.</p>
 <h3 id="5-create-the-github-release">5. Create the GitHub Release<a class="headerlink" href="#5-create-the-github-release" title="Permanent link">&para;</a></h3>
 <p>After digest promotion succeeds, publish the GitHub Release from the existing
 stable tag:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>gh<span class="w"> </span>release<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span>--verify-tag<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--title<span class="w"> </span><span class="s2">&quot;JARVIS RD Assistant </span><span class="si">${</span><span class="nv">RELEASE_TAG</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--notes-file<span class="w"> </span>/tmp/jarvis-changelog-draft.md
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>gh<span class="w"> </span>release<span class="w"> </span>create<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span>--verify-tag<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--title<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RELEASE_TAG</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--notes-file<span class="w"> </span>/tmp/jarvis-release-notes.md
 </code></pre></div>
+<p>The title is the tag alone. The notes file is a written release note, not the
+generated changelog draft from step 1 and not a copy of the <code>CHANGELOG.md</code>
+section; open the two most recent releases and match them. The shape is a
+<code>## vX.Y.Z — &lt;short summary&gt;</code> heading, one paragraph of intent, a line stating
+which migrations the release carries and whether they need operator action, a
+line stating whether the images differ from the previous tag, condensed
+<code>### Added</code> / <code>### Fixed</code> / <code>### Changed</code> sections, an <code>### Upgrading</code> section
+giving the direct and bootstrap paths from each supported source, and a closing
+<code>**Full changelog:**</code> link to <code>CHANGELOG.md</code> at this tag.</p>
 <h2 id="release-checks">Release Checks<a class="headerlink" href="#release-checks" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2254,9 +2298,35 @@ stable tag:</p>
 </tr>
 </tbody>
 </table>
+<h2 id="dependency-scans">Dependency Scans<a class="headerlink" href="#dependency-scans" title="Permanent link">&para;</a></h2>
+<p><code>pip-audit</code>, <code>npm-audit</code>, and <code>osv-scanner</code> evaluate a live advisory database
+against a static lockfile, so a scan that passed an hour ago can fail with no
+change to the branch. A newly published advisory is the expected cause of a
+dependency job turning red mid-release; check when it was published before
+looking for a regression in the diff:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>gh<span class="w"> </span>api<span class="w"> </span>/advisories/&lt;GHSA-ID&gt;<span class="w"> </span>--jq<span class="w"> </span><span class="s1">&#39;{summary, published_at, vulnerabilities}&#39;</span>
+</code></pre></div>
+<p>Patch whenever the fixed version is installable, and reserve a dated suppression
+for an advisory that has none. Raising a floor means raising it in every manifest
+that declares it — the root <code>pyproject.toml</code>, <code>libs/jarvis_common/pyproject.toml</code>,
+and each service's <code>requirements.txt</code> — then re-locking both projects and
+regenerating the lock-derived pins with <code>scripts/export-service-requirements.sh</code>.</p>
+<p>Reproduce all three scans locally before pushing a release branch and again
+before tagging:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">for</span><span class="w"> </span>c<span class="w"> </span><span class="k">in</span><span class="w"> </span>services/*/constraints.txt<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>uvx<span class="w"> </span>pip-audit<span class="w"> </span>--no-deps<span class="w"> </span>--disable-pip<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$c</span><span class="s2">&quot;</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">done</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>python3<span class="w"> </span>scripts/check_npm_audit.py
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span>/tmp/osv-scanner<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>chmod<span class="w"> </span>+x<span class="w"> </span>/tmp/osv-scanner<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>/tmp/osv-scanner<span class="w"> </span>scan<span class="w"> </span>--recursive<span class="w"> </span>.
+</code></pre></div>
 <h2 id="changelog-generation">Changelog Generation<a class="headerlink" href="#changelog-generation" title="Permanent link">&para;</a></h2>
-<p><code>CHANGELOG.md</code> is generated by <a href="https://github.com/orhun/git-cliff">git-cliff</a>,
-configured in <code>cliff.toml</code>. Conventional commit prefixes map to sections:</p>
+<p><code>CHANGELOG.md</code> is written by hand, in user-facing prose grouped under <code>### Added</code>,
+<code>### Fixed</code>, and <code>### Changed</code>. <a href="https://github.com/orhun/git-cliff">git-cliff</a>,
+configured in <code>cliff.toml</code>, produces a commit-derived draft that seeds that
+writing; it is not wired into CI, and its output is not committed verbatim.
+Conventional commit prefixes map to draft sections:</p>
 <table>
 <thead>
 <tr>
@@ -2311,8 +2381,8 @@ the CUDA flavor. Stable image tags omit Git's leading <code>v</code>; a release 
 <code>vX.Y.Z</code> therefore promotes to <code>:X.Y.Z</code> and <code>:X.Y.Z-cuda</code>. Promotion reuses
 registry digests and never rebuilds.</p>
 <p>To run an already published stable version:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>X.Y.Z<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>X.Y.Z<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>X.Y.Z<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>X.Y.Z<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
 </code></pre></div>
 <p><code>JARVIS_VERSION</code> records the semantic application version represented by the
 checkout. <code>JARVIS_IMAGE_TAG</code> selects the published application images, including
@@ -2328,8 +2398,8 @@ rollback with a restore point, or use a forward-only corrective migration.</p>
 </blockquote>
 <p>To return to a previously published release after confirming its schema is
 compatible:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>&lt;previous-version&gt;<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>&lt;previous-version&gt;<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>&lt;previous-version&gt;<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>pull
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">JARVIS_IMAGE_TAG</span><span class="o">=</span>&lt;previous-version&gt;<span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-build
 </code></pre></div>
 <p>If the target predates published images, or the installation uses local builds,
 check out the target tag and rebuild instead.</p>
