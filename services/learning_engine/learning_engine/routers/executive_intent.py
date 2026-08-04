@@ -21,8 +21,9 @@ from learning_engine.repos.intent_repo import (
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
 
-# verify_api_key is applied globally on the FastAPI app (main.py:160) —
-# the per-route dependency here would be redundant.
+# verify_api_key is applied globally, as an app-level dependency of the
+# FastAPI instance built in ``learning_engine.main`` — a per-route dependency
+# here would be redundant.
 
 
 @router.get("/intent/today", response_model=IntentRow)

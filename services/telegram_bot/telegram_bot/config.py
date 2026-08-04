@@ -53,25 +53,33 @@ async def _read_db_bot_token(database_url: str) -> str | None:
 
 
 class BotConfig(JarvisCommonSettings):
-    model_config = SettingsConfigDict(
-        env_file=None, extra="ignore", case_sensitive=False, populate_by_name=True
-    )
     """Typed pydantic-settings configuration for the Telegram bot.
 
-    Extends ``JarvisCommonSettings`` with bot-specific keys.  All fields map
-    1:1 to the existing env vars — no drops, no renames.
+    Extends ``JarvisCommonSettings`` with bot-specific keys.  Every field name
+    is its env var lowercased, except ``telegram_token``, which an ``alias``
+    bridges to ``TELEGRAM_BOT_TOKEN``.
 
-    1:1 env-var table (telegram-bot layer)
+    Env-var table (telegram-bot layer)
     ----------------------------------------
     Env var                 Field                   Notes
     ---                     ---                     ---
     TELEGRAM_BOT_TOKEN      telegram_token          Required; bot token
-    TELEGRAM_CHAT_ID        telegram_chat_id        Optional; int or None
+    TELEGRAM_CHAT_ID        telegram_chat_id        Optional; retained but inert
+    JARVIS_BASE_URL         jarvis_base_url         Optional; deep-link base
     DATABASE_URL            database_url            Inherited; fallback DSN
     PAPER_INGESTION_URL     paper_ingestion_url     Service URL
     LEARNING_ENGINE_URL     learning_engine_url     Service URL
     JARVIS_API_KEY          jarvis_api_key          Optional; auth header
+
+    ``from_env`` additionally reads ``TELEGRAM_BOT_TOKEN_FILE`` and
+    ``JARVIS_API_KEY_FILE`` directly to support Docker secrets.  Every other
+    env var this class accepts is inherited from ``JarvisCommonSettings`` and
+    documented there.
     """
+
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", case_sensitive=False, populate_by_name=True
+    )
 
     # --- Telegram bot token ---------------------------------------------
     telegram_token: SecretStr = Field(
@@ -80,13 +88,17 @@ class BotConfig(JarvisCommonSettings):
         description="Telegram bot token (TELEGRAM_BOT_TOKEN).  Required at runtime.",
     )
 
-    # --- Outbound chat ID -----------------------------------------------
+    # --- Legacy chat ID: retained for compatibility, never consulted -----
     telegram_chat_id: int | None = Field(
         default=None,
         alias="TELEGRAM_CHAT_ID",
         description=(
-            "Telegram chat ID for outbound messages (TELEGRAM_CHAT_ID).  "
-            "None = use DB pairing flow."
+            "Legacy chat ID (TELEGRAM_CHAT_ID), retained for backward compatibility. "
+            "It selects no delivery target and grants no authorization. Delivery is "
+            "decided by telegram_user_pairings alone: handlers.helpers.auth_check "
+            "resolves the paired user of an inbound private chat (fail-closed), and "
+            "owner.list_user_pairings enumerates the chats scheduled pushes go to. "
+            "Setting this variable changes only which startup log line is emitted."
         ),
     )
 
@@ -178,7 +190,8 @@ class BotConfig(JarvisCommonSettings):
 
         if cfg.telegram_chat_id is None:
             logger.info(
-                "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
+                "TELEGRAM_CHAT_ID is not set — expected: outbound messages are always "
+                "addressed from Telegram pairing records, never from this variable"
             )
 
         # Resolve JARVIS_API_KEY from a Docker secret file when the bare env is empty.

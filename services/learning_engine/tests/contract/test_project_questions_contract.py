@@ -276,3 +276,29 @@ async def test_create_question_idempotency_on_duplicate_body(
         body_text,
     )
     assert count >= 2, f"Expected >= 2 rows with same body; found {count}"
+
+
+# ---------------------------------------------------------------------------
+# The module's own account of its two ownership guards
+# ---------------------------------------------------------------------------
+
+
+async def test_module_docstring_describes_both_ownership_guards() -> None:
+    """The router must not claim a single universal project-row guard.
+
+    Declared async only because this module's ``pytestmark`` carries the
+    session-scoped asyncio marker; the assertions need no I/O.
+
+    Three endpoints gate on the project row via ``assert_project_owner``; the
+    DELETE above gates on the question row's own ``user_id`` and fetches no
+    project row at all. A docstring claiming one mechanism for all four sends a
+    reader auditing this tenancy surface looking for a guard that is not there,
+    and hides that the DELETE is in fact the stricter of the two.
+    """
+    from learning_engine.routers import project_questions
+
+    doc = project_questions.__doc__ or ""
+
+    assert "assert_project_owner" in doc
+    assert "delete_project_question" in doc
+    assert "stricter" in doc

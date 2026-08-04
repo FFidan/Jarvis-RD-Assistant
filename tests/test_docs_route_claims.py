@@ -593,6 +593,21 @@ def test_security_copy_limits_owner_recovery_and_suppressed_email_logs() -> None
     assert "written to stdout/logs" not in flags
 
 
+def test_security_copy_describes_the_legacy_chat_id_variable_accurately() -> None:
+    """The TELEGRAM_CHAT_ID tombstone must be denied a role without overclaiming.
+
+    "not read at runtime" was too strong — the bot reads the variable once at
+    startup to choose between two log lines. The security-relevant claim (it
+    addresses and authorizes nothing) has to survive that correction, so both
+    halves are pinned here.
+    """
+    override = _normalized_words(_section(_read(_SECURITY_DOC), "X-Owner-User-Id Mechanism"))
+
+    assert "read once at startup only to choose a log line" in override
+    assert "never to address or authorize a message" in override
+    assert "not read at runtime" not in override
+
+
 def test_hardware_and_disk_guidance_names_the_real_diagnostics_boundary() -> None:
     """Hardware and cleanup guidance must point to the UI and state host-wide impact."""
     admin = _section(_read(_ADMIN_DOC), "System Health — `/admin/system-health`")
