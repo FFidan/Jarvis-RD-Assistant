@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "check-complexity-budget.py"
@@ -23,6 +26,18 @@ def test_baseline_matches_live_ruff_counts():
     assert baseline == mod.measure(sorted(baseline)), (
         "[tool.complexity-budget] drifted from live ruff output — re-freeze the caps"
     )
+
+
+def test_measure_raises_when_ruff_tool_errors(monkeypatch):
+    """A ruff tool error must abort, not silently measure zero complexity."""
+    mod = _load()
+    # Ruff exits 2 on a tool error (0 = clean, 1 = violations) and writes nothing
+    # to stdout, so an unchecked returncode measures every rule as zero.
+    errored = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="boom")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: errored)
+
+    with pytest.raises(SystemExit, match="boom"):
+        mod.measure(["C901"])
 
 
 def test_growth_fails_and_shrink_passes(monkeypatch):

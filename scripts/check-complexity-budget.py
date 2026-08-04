@@ -7,7 +7,7 @@ frozen baseline in pyproject's [tool.complexity-budget]. New code therefore
 cannot add complexity; an improvement prints a nudge to lower the baseline but
 never fails (mirrors the frontend eslint --max-warnings budget).
 
-Exit code: 0 = within budget, 1 = a rule grew.
+Exit code: 0 = within budget, 1 = a rule grew or ruff could not be measured.
 """
 
 from __future__ import annotations
@@ -50,6 +50,14 @@ def measure(codes: list[str]) -> dict[str, int]:
         text=True,
         check=False,
     )
+    # Ruff exits 0 clean / 1 with violations; anything else is a tool error that
+    # leaves stdout empty, which would otherwise measure as zero complexity and
+    # pass the gate.
+    if proc.returncode not in (0, 1):
+        raise SystemExit(
+            f"ruff failed (exit {proc.returncode}); complexity budget cannot be measured: "
+            f"{proc.stderr.strip()[:300]}"
+        )
     rows = json.loads(proc.stdout or "[]")
     counts = {code: 0 for code in codes}
     counts.update({row["code"]: row["count"] for row in rows})
