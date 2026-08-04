@@ -2,7 +2,7 @@
 
 Covers:
 - Templates: GET /api/extraction-templates, POST, PUT (not found), DELETE
-- Table missing: UndefinedTableError -> 503
+- Table missing: UndefinedTableError -> 503, naming the table the query reads
 - Extraction table: JSON format, CSV format
 - Paper extractions: GET /api/papers/{id}/extractions
 """
@@ -162,7 +162,7 @@ async def test_delete_template(_app):
 
 @pytest.mark.asyncio
 async def test_create_template_table_missing_503(_app):
-    """POST /api/extraction-templates returns 503 when table is missing."""
+    """POST /api/extraction-templates returns 503 naming the table and a followable remedy."""
     app, conn, _ = _app
     conn.fetchrow.side_effect = asyncpg.exceptions.UndefinedTableError(
         'relation "extraction_templates" does not exist'
@@ -180,6 +180,47 @@ async def test_create_template_table_missing_503(_app):
         )
 
     assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert detail.startswith("extraction_templates table not found")
+    assert "db/init.sql" in detail
+    assert "db/migrations/README.md" in detail
+    # The squashed baseline deleted the numbered migration files, so naming one
+    # would send an operator after a file that cannot be applied.
+    assert "migration 011" not in detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "params"),
+    [
+        ("/api/papers/42/extractions", None),
+        ("/api/extractions/table", {"template_id": 1}),
+        ("/api/extractions/table", {"template_id": 1, "paper_ids": "1,2"}),
+    ],
+)
+async def test_paper_extractions_missing_503_names_that_table(_app, url, params):
+    """Endpoints reading paper_extractions name it, not the template table."""
+    app, conn, _ = _app
+    # One row serves whichever lookup runs first: the ownership check reads
+    # id/is_visible, the comparison table reads fields.
+    conn.fetchrow.return_value = FakeRecord(
+        id=42,
+        is_visible=True,
+        fields=[{"name": "method", "label": "Method", "description": "d", "type": "text"}],
+    )
+    conn.fetch.side_effect = asyncpg.exceptions.UndefinedTableError(
+        'relation "paper_extractions" does not exist'
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get(url, params=params)
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert detail.startswith("paper_extractions table not found")
+    assert "db/migrations/README.md" in detail
 
 
 # ---------------------------------------------------------------------------

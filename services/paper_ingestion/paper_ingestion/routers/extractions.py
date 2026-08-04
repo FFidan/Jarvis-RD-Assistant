@@ -35,6 +35,15 @@ from paper_ingestion.models import (
 
 logger = logging.getLogger(__name__)
 
+# Both extraction tables ship in the squashed baseline (db/init.sql), so a missing one
+# means the database was provisioned from an older schema rather than that a single
+# migration was skipped -- there is no individual file left for an operator to apply.
+_MISSING_TABLE_DETAIL = (
+    "{table} table not found: this database predates the schema baseline in "
+    "db/init.sql, which creates it. See db/migrations/README.md for how the "
+    "baseline and its migrations are applied."
+)
+
 router = APIRouter(
     prefix="/api",
     tags=["extractions"],
@@ -65,9 +74,7 @@ async def list_templates(
                 "SELECT * FROM extraction_templates ORDER BY is_default DESC, name"
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
     return [
         ExtractionTemplateResponse(
             id=r["id"],
@@ -107,9 +114,7 @@ async def create_template(
                 body.is_default,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
         except asyncpg.UniqueViolationError:
             raise HTTPException(409, f"Template '{body.name}' already exists")
     return ExtractionTemplateResponse(
@@ -142,9 +147,7 @@ async def update_template(
                 "SELECT * FROM extraction_templates WHERE id = $1", template_id
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
         if not existing:
             raise HTTPException(404, f"Template {template_id} not found")
 
@@ -215,9 +218,7 @@ async def delete_template(
                 "DELETE FROM extraction_templates WHERE id = $1", template_id
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
         if result == "DELETE 0":
             raise HTTPException(404, f"Template {template_id} not found")
 
@@ -274,9 +275,7 @@ async def get_paper_extractions(
                 user_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="paper_extractions"))
     result = []
     for r in rows:
         exts = r["extractions"] or {}
@@ -351,9 +350,7 @@ async def get_extraction_table(
                 template_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(
-                503, "extraction_templates table not found (migration 011 not applied)"
-            )
+            raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
 
         template_fields: list[ExtractionField] = []
         if template_row and template_row["fields"]:
@@ -386,9 +383,7 @@ async def get_extraction_table(
                     user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
-                raise HTTPException(
-                    503, "extraction_templates table not found (migration 011 not applied)"
-                )
+                raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="paper_extractions"))
         else:
             try:
                 rows = await conn.fetch(
@@ -403,9 +398,7 @@ async def get_extraction_table(
                     user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
-                raise HTTPException(
-                    503, "extraction_templates table not found (migration 011 not applied)"
-                )
+                raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="paper_extractions"))
 
     result: list[ExtractionTableRow] = []
     for r in rows:
