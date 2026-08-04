@@ -52,7 +52,9 @@ function makeUserState(overrides: Partial<{
   };
 }
 
-function makePaper(overrides: Partial<{ user_state: ReturnType<typeof makeUserState> }> = {}) {
+function makePaper(
+  overrides: Partial<{ user_state: ReturnType<typeof makeUserState>; state: string }> = {},
+) {
   return {
     id: PAPER_ID,
     external_id: 'lifecycle-test-0042',
@@ -65,6 +67,9 @@ function makePaper(overrides: Partial<{ user_state: ReturnType<typeof makeUserSt
     pdf_local_path: null,
     pdf_downloaded: false,
     user_status: 'new',
+    // FeedPaper.state is required by the API contract (types/paper.ts:149) and drives
+    // which lifecycle controls FeedPaperRow renders (FeedPaperRow.tsx:97).
+    state: 'inbox',
     user_state: makeUserState(),
     published_date: '2026-01-01',
     discovered_at: '2026-01-10T08:00:00Z',
@@ -314,9 +319,12 @@ test.describe('Feed — full lifecycle smoke', () => {
   // ── Step 4: Mark Read (currently wired) ─────────────────────────────────
 
   test('4. Mark Read fires PUT /api/papers/{id}/user-state', async ({ page }) => {
+    // The control under test is FeedPaperRow's "Mark Reading" button, which renders
+    // only for state === 'to_read' (FeedPaperRow.tsx:336,345); a default 'inbox'
+    // paper never shows it.
     await routeFeedAndCounts(
       page,
-      () => feedResponse([makePaper()]),
+      () => feedResponse([makePaper({ state: 'to_read' })]),
       () => libraryCounts,
     );
 
@@ -329,13 +337,11 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // "Mark Read" button is rendered by FeedView (currently wired via onMarkRead)
+    // Matches aria-label="Mark <title> as reading" (FeedPaperRow.tsx:345), wired by
+    // FeedView via onMarkReading (FeedView.tsx:254,370).  A missing button is a
+    // regression, not a pending-wiring condition: assert it, never skip.
     const markReadBtn = page.getByRole('button', { name: new RegExp(`Mark ${PAPER_TITLE} as read`) });
-    const markReadVisible = await markReadBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-
-    if (!markReadVisible) {
-      test.skip(true, 'Mark Read button not rendered — FeedView wiring needed');
-    }
+    await expect(markReadBtn).toBeVisible({ timeout: 10_000 });
 
     const [request] = await Promise.all([
       page.waitForRequest((req) => req.url().includes(`/api/papers/${PAPER_ID}`) && req.method() === 'PUT'),

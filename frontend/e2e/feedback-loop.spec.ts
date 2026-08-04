@@ -12,10 +12,10 @@
  *     is tested in Python unit tests; here we verify the UI does not show the paper).
  *
  * NOTE on FeedbackButtons visibility:
- *   FeedbackButtons renders for any paper whose discovery_origin ≠ 'user_initiated'
- *   and whose surface ≠ 'trash' (FeedPaperRow.tsx line 462-470).
+ *   FeedPaperRow renders FeedbackButtons for every row whose surface ≠ 'trash'
+ *   (FeedPaperRow.tsx line 657-665).
  *   The aria-label is "Don't recommend like this" for the 👎 button
- *   (FeedbackButtons.tsx line 67).
+ *   (FeedbackButtons.tsx line 147).
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
@@ -329,17 +329,12 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion', () =
     await page.goto('/feed?surface=inbox');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // The 👎 button has aria-label="Don't recommend like this" (FeedbackButtons.tsx:67)
+    // The thumbs-down button has aria-label="Don't recommend like this"
+    // (FeedbackButtons.tsx:147); FeedPaperRow renders it for every non-trash row
+    // (FeedPaperRow.tsx:657-665).  A missing button is a regression, not a
+    // pending-wiring condition: assert it, never skip.
     const thumbsDown = page.getByRole('button', { name: "Don't recommend like this" }).first();
-    const isVisible = await thumbsDown.isVisible({ timeout: 5_000 }).catch(() => false);
-
-    if (!isVisible) {
-      // FeedbackButtons is rendered inside FeedPaperRow only when FeedView wires
-      // the row component.  Log and skip if not yet wired for this surface.
-      test.skip(true, 'FeedbackButtons 👎 not visible in Inbox — FeedPaperRow wiring may be pending');
-    }
-
-    await expect(thumbsDown).toBeVisible();
+    await expect(thumbsDown).toBeVisible({ timeout: 10_000 });
   });
 
   // ── Test 2: Clicking 👎 fires POST with correct body ────────────────────
@@ -361,11 +356,7 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion', () =
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
     const thumbsDown = page.getByRole('button', { name: "Don't recommend like this" }).first();
-    const isVisible = await thumbsDown.isVisible({ timeout: 5_000 }).catch(() => false);
-
-    if (!isVisible) {
-      test.skip(true, 'FeedbackButtons 👎 not visible — FeedPaperRow wiring may be pending');
-    }
+    await expect(thumbsDown).toBeVisible({ timeout: 10_000 });
 
     const [request] = await Promise.all([
       page.waitForRequest(
@@ -438,11 +429,7 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion', () =
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
     const thumbsDown = page.getByRole('button', { name: "Don't recommend like this" }).first();
-    const isVisible = await thumbsDown.isVisible({ timeout: 5_000 }).catch(() => false);
-
-    if (!isVisible) {
-      test.skip(true, 'FeedbackButtons 👎 not visible — FeedPaperRow wiring may be pending');
-    }
+    await expect(thumbsDown).toBeVisible({ timeout: 10_000 });
 
     // Click 👎 and wait for the POST
     await Promise.all([
