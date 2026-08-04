@@ -123,7 +123,7 @@ shell-lint:
 ##   1. Guard: no tracked secrets
 ##   2. Guard: dependency parity (uv.lock ↔ requirements*.txt)
 ##   3. Lint (ruff + migrations-no-tx + jsonb-double-encode + unsafe-resolver)
-##   4. Tach (module boundary check)
+##   4. Tach (module boundary check) + guard: no service imports in jarvis_common
 ##   5. Pyright (type check)
 ##   6. Test-shape check
 ##   7. Guard: burned secrets
@@ -143,6 +143,7 @@ shell-lint:
 ##   JARVIS_RUN_LIVE_PG=1 bash scripts/tests/test_corpus_visibility_qdrant.sh
 check: no-tracked-secrets secure-secrets deps-check lint
 	uv run tach check
+	bash scripts/check-no-service-imports-in-common.sh
 	$(MAKE) typecheck
 	uv run python3 scripts/check-test-shape.py
 	uv run python3 scripts/check_contract_docs.py

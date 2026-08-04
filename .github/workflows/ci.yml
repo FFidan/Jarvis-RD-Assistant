@@ -48,6 +48,9 @@ jobs:
       - name: Tach (module boundaries)
         run: uv run tach check
 
+      - name: Guard - no service imports in jarvis_common
+        run: bash scripts/check-no-service-imports-in-common.sh
+
       - name: Set up Node (for pyright)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:

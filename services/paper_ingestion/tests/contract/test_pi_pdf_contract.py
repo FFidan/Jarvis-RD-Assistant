@@ -61,6 +61,8 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
 
     # PDF_STORAGE_PATH is read at module-import; monkeypatch the module constant.
     import paper_ingestion.routers.pdf as _pdf_mod
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
 
     monkeypatch.setattr(_pdf_mod, "PDF_STORAGE_PATH", str(tmp_path))
     monkeypatch.setenv("PDF_STORAGE_PATH", str(tmp_path))
@@ -68,6 +70,9 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(
             remove_owner_override=True,
             state_overrides={"embedder": None, "pdf_processor": MagicMock()},

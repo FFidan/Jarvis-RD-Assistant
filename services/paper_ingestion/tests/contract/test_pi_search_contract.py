@@ -43,10 +43,16 @@ pytestmark = [
 async def _pi_app_with_pool(contract_conn):
     from unittest.mock import MagicMock
 
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
+
     # search-preview reads http_client from app.state via get_http_client dep.
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(
             remove_owner_override=True,
             state_overrides={"embedder": None, "http_client": MagicMock()},

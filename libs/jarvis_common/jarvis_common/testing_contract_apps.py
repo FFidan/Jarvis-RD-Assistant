@@ -159,12 +159,17 @@ def patch_dependency_overrides(
 def patch_pi_test_app(
     pool: Any,
     *,
+    app: Any,
+    get_db_pool: Any,
+    limiter: Any,
     options: PITestAppOptions,
 ) -> Iterator[Any]:
-    """Wire the Paper Ingestion app for a test and restore every changed seam."""
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
+    """Wire the Paper Ingestion app for a test and restore every changed seam.
 
+    ``app``, ``get_db_pool`` and ``limiter`` are injected by the calling app
+    fixture (from ``paper_ingestion.main`` and ``paper_ingestion.deps``) so that
+    this library function does not import from any service package.
+    """
     from jarvis_common import current_user_id_strict_with_owner_override, get_current_user_id
 
     state = {"db_pool": pool, **dict(options.state_overrides)}

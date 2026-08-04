@@ -86,6 +86,24 @@ No mocks, no setup, no fixtures. The test IS the spec.
 
 **Fixtures.** `contract_conn` (per-test txn rollback) + `contract_two_users` (two seeded users + owned resources) + `SharedConnPool` wrapping the conn + the service's app fixture (`_pi_app_with_pool`, `_le_app`, etc.) + `_configure_api_key`.
 
+**Service seams are injected, never imported by the shared library (MANDATORY).** `jarvis_common.testing_contract_apps` must not import `paper_ingestion`, `learning_engine` or `telegram_bot` — a helper that needs a service object takes it as a parameter and the app fixture passes it in:
+
+```python
+from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.main import app as pi_app
+
+with patch_pi_test_app(
+    SharedConnPool(contract_conn),
+    app=pi_app,
+    get_db_pool=get_db_pool,
+    limiter=limiter,
+    options=PITestAppOptions(remove_owner_override=True),
+) as app:
+    yield app
+```
+
+`_make_le_contract_app_with_litellm_sidecar(set_services_fn, reset_services_fn)` follows the same shape. Enforced by [scripts/check-no-service-imports-in-common.sh](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/scripts/check-no-service-imports-in-common.sh), which runs in `make check` and in CI; `tach check` does not catch this.
+
 **Marker boilerplate (MANDATORY, verbatim).**
 
 ```python
@@ -467,9 +485,10 @@ facade); the `file:line` points at the submodule that defines it.
 | `make_contract_client` | [testing_contract_apps.py:76](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L76) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
 | `patch_app_state` | [testing_contract_apps.py:96](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L96) | Restores exact `app.state` attributes after contract app wiring. |
 | `patch_dependency_overrides` | [testing_contract_apps.py:121](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L121) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
-| PI LiteLLM sidecar fixture | [testing_contract_apps.py:197](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L197) | Builds a Paper Ingestion contract fixture backed by `FauxLiteLLMServer`. |
-| LE LiteLLM sidecar fixture | [testing_contract_apps.py:246](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L246) | Builds the equivalent Learning Engine contract fixture and restores service state afterward. |
-| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:241](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/conftest.py#L241) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
+| `patch_pi_test_app` | [testing_contract_apps.py:159](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L159) | `(pool, *, app, get_db_pool, limiter, options: PITestAppOptions)` context manager yielding the wired Paper Ingestion app. The three service seams are **required keyword arguments supplied by the caller** — see §1.2. |
+| PI LiteLLM sidecar fixture | [testing_contract_apps.py:211](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L211) | Builds a Paper Ingestion contract fixture backed by `FauxLiteLLMServer`. |
+| LE LiteLLM sidecar fixture | [testing_contract_apps.py:260](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L260) | Builds the equivalent Learning Engine contract fixture and restores service state afterward. |
+| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:253](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/conftest.py#L253) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
 | `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:222](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L222) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
 | Default `addopts` excludes | [pyproject.toml:247](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/pyproject.toml#L247) | Default selection excludes `live_pg`, `live_qdrant`, `integration`, and `slow`, and ignores root integration tests. |
 | `test_baseline_invariants.py` (DO NOT DELETE) | [test_baseline_invariants.py:40](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/tests/test_baseline_invariants.py#L40) | Post-squash schema invariants. The module is marked `live_pg`. |
