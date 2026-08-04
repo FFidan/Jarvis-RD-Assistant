@@ -316,7 +316,9 @@ The implementation MUST satisfy these. Testable.
    `stats` populated. Two exceptions propagate by design and MUST NOT be
    swallowed: `asyncio.CancelledError` on cancellation (a `BaseException`, so
    `except Exception` does not catch it) and `RuntimeError` when
-   `JARVIS_STRICT_MODELS=1` and Stage 2 scored no candidate at all. This is a
+   `JARVIS_STRICT_MODELS=1` and Stage 2 returned candidates without the scoring
+   model being called once, meaning the embedding-only fallback produced them —
+   an empty candidate set returns early and does not raise. This is a
    degrade-on-stage-failure guarantee, not a blanket "never raises" one —
    progress reporting through `ctx` is itself unguarded.
 6. **Per-card isolation.** Stage 8 MUST use SAVEPOINTs for per-card upserts

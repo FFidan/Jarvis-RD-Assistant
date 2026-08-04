@@ -171,9 +171,11 @@ async def run_pulse(
         ``BaseException``, so a caller guarding with ``except Exception`` will
         not see it — a cancellation must not be persisted as a job failure.
     RuntimeError
-        When ``JARVIS_STRICT_MODELS=1`` and stage 2 scored no candidate at all.
-        Strict mode is opt-in precisely so a missing scoring model fails loudly
-        rather than shipping a silently downgraded deck.
+        When ``JARVIS_STRICT_MODELS=1`` and stage 2 produced candidates without
+        the scoring model being called even once, so the embedding-only fallback
+        stood in for it.  Strict mode is opt-in precisely so a missing scoring
+        model fails loudly rather than shipping a silently downgraded deck.
+        An empty candidate set does not raise — stage 2 returns early instead.
     """
     now = now or datetime.now(UTC)
     start = time.monotonic()
