@@ -29,8 +29,9 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
     If the column is absent from the Record's keys the field defaults to
     ``None``.  This means callers that use ``SELECT *`` on the base ``papers``
     table will get the stored value, while callers that project a subset of
-    columns will silently omit it.  ``discovered_at`` uses ``.get()`` with a
-    safe default for the same reason (it may come from a joined expression).
+    columns will silently omit it.  ``discovered_at`` and ``discovery_origin``
+    are guarded for the same reason (either may be absent from a projected
+    subset), each falling back to the model default.
     """
     return PaperResponse(
         id=row["id"],
@@ -48,6 +49,9 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
         priority_score=row["priority_score"] if "priority_score" in row.keys() else None,
         metadata=row["metadata"] or {},
         discovered_at=row.get("discovered_at"),
+        discovery_origin=(
+            row["discovery_origin"] if "discovery_origin" in row.keys() else "user_initiated"
+        ),
         created_at=row["created_at"],
     )
 
