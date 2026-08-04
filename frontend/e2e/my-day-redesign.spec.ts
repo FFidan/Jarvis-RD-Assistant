@@ -25,17 +25,21 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ---------------------------------------------------------------------------
-// Reachability guard — skip gracefully if dashboard is not up
+// Reachability guard — an unreachable dashboard is a failure, not a skip
 // ---------------------------------------------------------------------------
 
-async function skipIfUnreachable(page: Page): Promise<void> {
+// This suite runs in a required CI check. Skipping when the preview server is
+// down would let that check report success having executed zero tests, so a
+// server that failed to start must fail the run loudly instead.
+async function assertDashboardReachable(page: Page): Promise<void> {
+  let resp;
   try {
-    const resp = await page.request.get('/', { timeout: 3_000 });
-    if (!resp.ok()) {
-      test.skip(true, `Dashboard unreachable (status ${resp.status()})`);
-    }
+    resp = await page.request.get('/', { timeout: 3_000 });
   } catch (err) {
-    test.skip(true, `Dashboard unreachable: ${(err as Error).message}`);
+    throw new Error(`Dashboard unreachable: ${(err as Error).message}`);
+  }
+  if (!resp.ok()) {
+    throw new Error(`Dashboard unreachable (status ${resp.status()})`);
   }
 }
 
@@ -181,7 +185,7 @@ test.describe('My Day v5 redesign — smoke', () => {
   test.setTimeout(30_000);
 
   test.beforeEach(async ({ page }) => {
-    await skipIfUnreachable(page);
+    await assertDashboardReachable(page);
     // Seed auth before any navigation so Zustand hydrates correctly
     await seedAuthedSession(page);
     await installMockedApiDefaults(page);
@@ -355,7 +359,7 @@ test.describe('dark mode toggle', () => {
   test.setTimeout(30_000);
 
   test.beforeEach(async ({ page }) => {
-    await skipIfUnreachable(page);
+    await assertDashboardReachable(page);
     await seedAuthedSession(page);
     await installMockedApiDefaults(page);
     await installMyDayMocks(page);
