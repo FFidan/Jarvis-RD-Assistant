@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Trash2, Plus, Pencil, TableProperties } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
@@ -55,7 +56,7 @@ export function ExtractionTemplateSection() {
   const [editDescription, setEditDescription] = useState('');
   const [editFields, setEditFields] = useState('');
 
-  const { data: templates = [], isLoading } = useQuery({
+  const { data: templates = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.extraction.templates(),
     queryFn: fetchExtractionTemplates,
   });
@@ -143,7 +144,9 @@ export function ExtractionTemplateSection() {
       <p className="text-sm text-muted-foreground mb-4">
         Extraction templates define the structured fields JARVIS pulls from papers. Each field extracts a specific fact (e.g. sample size, main finding). Once you create a template, use it in the Extraction Table to compare papers side-by-side.
       </p>
-      {templates.length === 0 && !showAdd ? (
+      {isError ? (
+        <QueryErrorState message="Failed to load extraction templates." />
+      ) : templates.length === 0 && !showAdd ? (
         <EmptyState
           title="No extraction templates"
           description="Define structured fields to extract from papers."

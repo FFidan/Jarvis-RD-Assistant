@@ -66,6 +66,20 @@ describe('AutomationSection', () => {
     await waitFor(() => {
       expect(screen.getByText(/No automation jobs/i)).toBeInTheDocument();
     });
+    expect(screen.queryByText('Failed to load automation jobs.')).toBeNull();
+  });
+
+  it('shows an error message, not the empty state, when nudges fail to load', async () => {
+    vi.mocked(fetchNudges).mockRejectedValue(new Error('network down'));
+    renderSection();
+    expect(await screen.findByText('Failed to load automation jobs.')).toBeInTheDocument();
+    expect(screen.queryByText(/No automation jobs/i)).toBeNull();
+  });
+
+  it('shows an error message when settings values fail to load', async () => {
+    vi.mocked(fetchConfig).mockRejectedValue(new Error('network down'));
+    renderSection();
+    expect(await screen.findByText('Failed to load automation settings.')).toBeInTheDocument();
   });
 
   it('renders nudge card when nudges are returned', async () => {

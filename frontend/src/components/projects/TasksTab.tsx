@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   Select,
@@ -64,7 +65,7 @@ export function TasksTab({ projectId }: TasksTabProps) {
   const [editEstimatedHours, setEditEstimatedHours] = useState('');
   const [editActualHours, setEditActualHours] = useState('');
 
-  const { data: tasks = [], isLoading } = useQuery({
+  const { data: tasks = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.tasks.byProject(projectId),
     queryFn: () => fetchTasks(projectId),
   });
@@ -143,13 +144,18 @@ export function TasksTab({ projectId }: TasksTabProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{`${tasks.length} task${tasks.length !== 1 ? 's' : ''}`}</span>
+        {isError ? (
+          <span aria-hidden="true" />
+        ) : (
+          <span className="text-xs text-muted-foreground">{`${tasks.length} task${tasks.length !== 1 ? 's' : ''}`}</span>
+        )}
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="mr-1 h-4 w-4" /> Add Task
         </Button>
       </div>
 
-      {tasks.length === 0 ? (
+      {isError && <QueryErrorState message="Failed to load tasks." />}
+      {!isError && (tasks.length === 0 ? (
         <EmptyState
           title="No tasks"
           description="Add tasks to break down your project work."
@@ -211,7 +217,7 @@ export function TasksTab({ projectId }: TasksTabProps) {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>

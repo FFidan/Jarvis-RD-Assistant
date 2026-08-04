@@ -476,6 +476,22 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('button', { name: /Generate Cards/ })).toBeInTheDocument();
   });
 
+  it('shows the "No decks available" empty state when the deck list loads empty', async () => {
+    vi.mocked(fetchDecks).mockResolvedValue([]);
+    renderSidebar();
+
+    expect(await screen.findByText(/No decks available/)).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load decks.')).toBeNull();
+  });
+
+  it('shows an error message, not the "No decks available" hint, when decks fail to load', async () => {
+    vi.mocked(fetchDecks).mockRejectedValue(new Error('network down'));
+    renderSidebar();
+
+    expect(await screen.findByText('Failed to load decks.')).toBeInTheDocument();
+    expect(screen.queryByText(/No decks available/)).toBeNull();
+  });
+
   it('Generate Cards button is disabled when hasChunks=false (no deck selected)', async () => {
     // Verify !hasChunks contributes to disabled state: even before a deck is
     // chosen, the button's disabled expression includes !hasChunks. When hasChunks

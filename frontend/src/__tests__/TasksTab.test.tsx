@@ -75,4 +75,23 @@ describe('TasksTab', () => {
     });
     expect(screen.queryByText('§ TASKS')).toBeNull();
   });
+
+  it('shows the "No tasks" empty state when the list loads empty', async () => {
+    mockFetchTasks.mockResolvedValue([]);
+
+    renderTab();
+
+    expect(await screen.findByText('No tasks')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load tasks.')).toBeNull();
+  });
+
+  it('shows an error message, not the empty state, when tasks fail to load', async () => {
+    mockFetchTasks.mockRejectedValue(new Error('network down'));
+
+    renderTab();
+
+    expect(await screen.findByText('Failed to load tasks.')).toBeInTheDocument();
+    expect(screen.queryByText('No tasks')).toBeNull();
+    expect(screen.queryByText(/0 tasks/)).toBeNull();
+  });
 });

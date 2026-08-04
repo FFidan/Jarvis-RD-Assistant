@@ -246,4 +246,23 @@ describe('CitationGraphPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/paper/1');
     });
   });
+
+  // Keep these last in the file: they replace the module-level fetchPapersBrief
+  // implementation, which this suite's beforeEach does not restore.
+  it('shows no paper-load error when the paper list loads empty', async () => {
+    const { fetchPapersBrief } = await import('@/lib/api');
+    vi.mocked(fetchPapersBrief).mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => {
+      expect(vi.mocked(fetchPapersBrief)).toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Failed to load papers.')).toBeNull();
+  });
+
+  it('shows a paper-load error in the selection section when the paper list fails to load', async () => {
+    const { fetchPapersBrief } = await import('@/lib/api');
+    vi.mocked(fetchPapersBrief).mockRejectedValue(new Error('network down'));
+    renderPage();
+    expect(await screen.findByText('Failed to load papers.')).toBeInTheDocument();
+  });
 });

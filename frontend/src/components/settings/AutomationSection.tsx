@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { TimeSelect } from '@/components/ui/time-select';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { Bell, ChevronsUpDown, Check } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
@@ -106,12 +107,12 @@ function NudgeRow({
 export function AutomationSection() {
   const queryClient = useQueryClient();
 
-  const { data: nudges = [], isLoading } = useQuery({
+  const { data: nudges = [], isLoading, isError: nudgesError } = useQuery({
     queryKey: QUERY_KEYS.account.nudges(),
     queryFn: fetchNudges,
   });
 
-  const { data: configs = [] } = useQuery({
+  const { data: configs = [], isError: configsError } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
@@ -186,8 +187,11 @@ export function AutomationSection() {
       <p className="text-sm text-muted-foreground">
         Control when JARVIS runs background tasks and sends you notifications. Enable or disable each job and set its schedule here.
       </p>
+      {configsError && <QueryErrorState message="Failed to load automation settings." />}
       {isLoading ? (
         <div className="py-8 text-center text-muted-foreground">Loading automation...</div>
+      ) : nudgesError ? (
+        <QueryErrorState message="Failed to load automation jobs." />
       ) : nudges.length === 0 ? (
         <EmptyState
           title="No automation jobs"

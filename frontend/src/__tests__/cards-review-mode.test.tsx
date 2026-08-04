@@ -94,6 +94,22 @@ describe('ReviewMode', () => {
     });
   });
 
+  it('renders the card without a deck-name error when decks load empty', async () => {
+    mockFetchDecks.mockResolvedValue([]);
+    renderReview({});
+    await waitFor(() => {
+      expect(screen.getByText(CARD_FIXTURE.front)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Failed to load deck names.')).toBeNull();
+  });
+
+  it('keeps the card visible and shows a deck-name error when decks fail to load', async () => {
+    mockFetchDecks.mockRejectedValue(new Error('network down'));
+    renderReview({});
+    expect(await screen.findByText('Failed to load deck names.')).toBeInTheDocument();
+    expect(screen.getByText(CARD_FIXTURE.front)).toBeInTheDocument();
+  });
+
   it('does not expose rating controls for an earlier-version cached card', async () => {
     const submitReviewFn = vi.fn().mockResolvedValue({});
     renderReview({

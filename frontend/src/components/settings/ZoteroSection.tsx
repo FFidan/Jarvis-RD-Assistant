@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { ConfigEntry } from '@/types';
 import { toast } from 'sonner';
 
@@ -37,7 +38,7 @@ function getConfigValue(configs: ConfigEntry[], key: string): string {
 export function ZoteroSection() {
   const queryClient = useQueryClient();
 
-  const { data: configs = [], isLoading } = useQuery({
+  const { data: configs = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
@@ -188,6 +189,11 @@ export function ZoteroSection() {
 
   if (isLoading) {
     return <div className="py-4 text-sm text-muted-foreground">Loading Zotero settings…</div>;
+  }
+
+  if (isError) {
+    // A blank form would read as "Zotero not configured" — show the failure instead.
+    return <QueryErrorState message="Failed to load Zotero settings." />;
   }
 
   return (

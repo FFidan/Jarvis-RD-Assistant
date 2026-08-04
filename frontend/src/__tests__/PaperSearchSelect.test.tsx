@@ -76,6 +76,20 @@ describe('PaperSearchSelect', () => {
     await waitFor(() => {
       expect(screen.getByText('No papers found')).toBeInTheDocument();
     });
+    expect(screen.queryByText('Failed to load papers.')).toBeNull();
+  });
+
+  it('shows an error message, not "No papers found", when the fetch fails', async () => {
+    const { fetchPapersBrief } = await import('@/lib/api');
+    vi.mocked(fetchPapersBrief).mockRejectedValue(new Error('network down'));
+    const user = userEvent.setup();
+    renderComponent();
+    const input = screen.getByPlaceholderText('Search papers by title...');
+    await user.click(input);
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load papers.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('No papers found')).toBeNull();
   });
 
   it('debounces search — calls searchPapersBrief only after 300ms', async () => {

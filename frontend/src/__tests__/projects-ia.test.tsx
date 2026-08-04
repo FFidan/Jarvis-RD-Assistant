@@ -50,6 +50,8 @@ import {
 import { ChapterRail, toRoman } from '@/components/projects/ChapterRail';
 import { QuestionsSection } from '@/components/projects/QuestionsSection';
 import { RecentActivitySection } from '@/components/projects/RecentActivitySection';
+import { MilestonesTab } from '@/components/projects/MilestonesTab';
+import { LinkedPapersTab } from '@/components/projects/LinkedPapersTab';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import type { Project, ProjectQuestion, ProjectActivityItem } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
@@ -557,6 +559,34 @@ describe('Existing functionality preserved', () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/search papers/i)).toBeInTheDocument();
     });
+  });
+
+  it('MilestonesTab shows the empty state on an empty load and an error message on failure', async () => {
+    mockFetchMilestones.mockResolvedValue([]);
+    const { unmount } = wrap(<MilestonesTab projectId={1} />);
+    expect(await screen.findByText('No milestones')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load milestones.')).toBeNull();
+    unmount();
+
+    mockFetchMilestones.mockRejectedValue(new Error('network down'));
+    wrap(<MilestonesTab projectId={1} />);
+    expect(await screen.findByText('Failed to load milestones.')).toBeInTheDocument();
+    expect(screen.queryByText('No milestones')).toBeNull();
+    expect(screen.queryByText(/0 milestones/)).toBeNull();
+  });
+
+  it('LinkedPapersTab shows the empty state on an empty load and an error message on failure', async () => {
+    mockFetchProjectPapers.mockResolvedValue([]);
+    const { unmount } = wrap(<LinkedPapersTab projectId={1} />);
+    expect(await screen.findByText('No linked papers')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load linked papers.')).toBeNull();
+    unmount();
+
+    mockFetchProjectPapers.mockRejectedValue(new Error('network down'));
+    wrap(<LinkedPapersTab projectId={1} />);
+    expect(await screen.findByText('Failed to load linked papers.')).toBeInTheDocument();
+    expect(screen.queryByText('No linked papers')).toBeNull();
+    expect(screen.queryByText(/0 linked/)).toBeNull();
   });
 
   it('Delete project button is present and opens confirm dialog', async () => {

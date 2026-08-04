@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { GenerateCardsDialog } from '@/components/cards/CreateCardForm';
+import { CreateCardForm, GenerateCardsDialog } from '@/components/cards/CreateCardForm';
 import type { Job } from '@/stores/job-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
@@ -107,6 +107,22 @@ describe('GenerateCardsDialog', () => {
     });
   });
 
+  it('shows the deck selector without an error when the deck list loads empty', async () => {
+    mockFetchDecks.mockResolvedValue([]);
+    renderDialog();
+    await waitFor(() => {
+      expect(mockFetchDecks).toHaveBeenCalled();
+    });
+    expect(screen.getByText('Deck')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load decks.')).toBeNull();
+  });
+
+  it('shows an error message under the deck selector when decks fail to load', async () => {
+    mockFetchDecks.mockRejectedValue(new Error('network down'));
+    renderDialog();
+    expect(await screen.findByText('Failed to load decks.')).toBeInTheDocument();
+  });
+
   it('renders max cards input', async () => {
     renderDialog();
     await waitFor(() => {
@@ -191,4 +207,36 @@ describe('GenerateCardsDialog', () => {
     expect(isGeneratingAfterTerminal).toBe(false);
   });
 
+});
+
+describe('CreateCardForm deck list states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderForm() {
+    const queryClient = createTestQueryClient();
+    return renderWithProviders(
+      <MemoryRouter>
+        <CreateCardForm open onOpenChange={vi.fn()} defaultDeckId={null} />
+      </MemoryRouter>,
+      { queryClient },
+    );
+  }
+
+  it('renders the deck selector without an error when the deck list loads empty', async () => {
+    mockFetchDecks.mockResolvedValue([]);
+    renderForm();
+    await waitFor(() => {
+      expect(mockFetchDecks).toHaveBeenCalled();
+    });
+    expect(screen.getByText('Deck')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load decks.')).toBeNull();
+  });
+
+  it('shows an error message under the deck selector when decks fail to load', async () => {
+    mockFetchDecks.mockRejectedValue(new Error('network down'));
+    renderForm();
+    expect(await screen.findByText('Failed to load decks.')).toBeInTheDocument();
+  });
 });

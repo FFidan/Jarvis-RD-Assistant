@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { PaperSearchSelect } from '@/components/shared/PaperSearchSelect';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import {
   Dialog,
   DialogContent,
@@ -44,7 +45,7 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
   const [cardType, setCardType] = useState<string>('concept');
   const [deckId, setDeckId] = useState<string>(() => (defaultDeckId != null ? String(defaultDeckId) : ''));
 
-  const { data: decks = [] } = useQuery({
+  const { data: decks = [], isError: decksError } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -89,6 +90,7 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
                 ))}
               </SelectContent>
             </Select>
+            {decksError && <QueryErrorState message="Failed to load decks." />}
           </div>
           <div className="space-y-2">
             <Label htmlFor="card-type">Type</Label>
@@ -159,7 +161,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   const [job, setJob] = useState<Job | PartialGenJob | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const { data: decks = [] } = useQuery({
+  const { data: decks = [], isError: decksError } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -276,6 +278,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
                 ))}
               </SelectContent>
             </Select>
+            {decksError && <QueryErrorState message="Failed to load decks." />}
           </div>
           <div className="space-y-2">
             <Label htmlFor="gen-max">Max Cards</Label>

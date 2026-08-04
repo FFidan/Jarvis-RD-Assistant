@@ -176,6 +176,28 @@ describe('LearningCardsPage — stats failure (StatsHeader)', () => {
   });
 });
 
+describe('LearningCardsPage — deck list failure in review mode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
+  });
+
+  it('shows a deck-name error under the breadcrumb when decks fail to load', async () => {
+    mockFetchDecks.mockRejectedValue(new Error('network down'));
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
+    expect(await screen.findByText('Failed to load deck names.')).toBeInTheDocument();
+  });
+
+  it('shows no deck-name error when decks load empty', async () => {
+    mockFetchDecks.mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
+    expect(screen.queryByText('Failed to load deck names.')).toBeNull();
+  });
+});
+
 describe('LearningCardsPage — breadcrumb and progress', () => {
   beforeEach(() => {
     vi.clearAllMocks();

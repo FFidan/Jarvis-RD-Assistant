@@ -100,6 +100,20 @@ describe('ZoteroSection', () => {
     });
   });
 
+  it('renders the blank form, not an error, when config loads empty', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue([]);
+    renderSection();
+    expect(await screen.findByLabelText('API Key')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load Zotero settings.')).toBeNull();
+  });
+
+  it('shows an error message, not a blank form, when config fails to load', async () => {
+    vi.mocked(fetchConfig).mockRejectedValue(new Error('network down'));
+    renderSection();
+    expect(await screen.findByText('Failed to load Zotero settings.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('API Key')).toBeNull();
+  });
+
   it('calls zoteroPollNow on Sync now click', async () => {
     vi.mocked(zoteroPollNow).mockResolvedValue({ job_id: 'jid-123', status: 'queued' });
     const user = userEvent.setup();
