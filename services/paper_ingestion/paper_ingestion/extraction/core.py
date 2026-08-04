@@ -159,7 +159,8 @@ async def extract_fields_for_paper(
             )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
-                "extraction_templates table not found (migration 011 not applied)"
+                "extraction_templates table not found — this database predates the schema "
+                "baseline in db/init.sql; see db/migrations/README.md"
             ) from None
         if not template:
             raise ValueError(f"Template {template_id} not found")
@@ -272,8 +273,9 @@ async def extract_fields_for_paper(
                 chunk_id = vr.chunk_id
                 page_number = vr.page_number
                 if not vr.verified:
-                    # Mirror entity_extractor policy: unverified extractions are
-                    # dropped rather than persisted with uncertain values.
+                    # A verdict exists, so the quote survives as evidence the
+                    # reader sees labelled unverified; only the value it failed
+                    # to support is dropped.
                     logger.debug(
                         "Quote verification failed for field %s — discarding value",
                         field_name,
@@ -281,9 +283,13 @@ async def extract_fields_for_paper(
                     )
                     value = None
             except Exception:
-                # Verifier raised unexpectedly: treat as unverified and discard
-                # value+quote so the anti-hallucination rule is never bypassed.
-                logger.debug("Quote verifier raised for field %s — discarding value", field_name)
+                # No verdict exists, so the quote cannot carry the unverified
+                # label the branch above relies on — drop it with the value
+                # rather than surface text that reads as if it had been checked.
+                logger.debug(
+                    "Quote verifier raised for field %s — discarding value and quote",
+                    field_name,
+                )
                 value = None
                 quote = None
 
@@ -350,7 +356,8 @@ async def extract_fields_for_paper(
                         )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
-                "paper_extractions table not found (migration 011 not applied)"
+                "paper_extractions table not found — this database predates the schema "
+                "baseline in db/init.sql; see db/migrations/README.md"
             ) from None
         except SourceGenerationChangedError:
             row = await _fetch_current_extraction(

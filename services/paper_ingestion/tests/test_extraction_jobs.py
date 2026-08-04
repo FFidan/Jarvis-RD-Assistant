@@ -279,3 +279,109 @@ async def test_delayed_extraction_writer_without_current_winner_reports_source_c
         for call in conn.fetchrow.await_args_list
     )
     assert conn.fetchrow.await_count == 3
+
+
+class _RaisingQuoteVerifier:
+    """Verifier whose backend fails mid-run, leaving the quote without a verdict."""
+
+    def verify_quote(self, *_args, **_kwargs):
+        raise RuntimeError("quote verifier backend unavailable")
+
+
+def _pool_echoing_persisted_extractions():
+    """Pool whose ``INSERT ... RETURNING`` echoes the payload it was given.
+
+    ``extract_fields_for_paper`` rebuilds its response from the returned row, so
+    echoing is what makes the persisted field values observable to a test.
+    """
+    pool, conn = make_pool_and_conn()
+    conn.fetchval.return_value = 0
+
+    def _fetchrow(sql, *args):
+        if "INSERT INTO paper_extractions" in sql:
+            return {
+                "id": 19,
+                "paper_id": 7,
+                "template_id": 3,
+                "extractions": args[2],
+                "extraction_model": "smart",
+                "content_generation": 0,
+                "created_at": datetime.now(UTC),
+            }
+        if "extraction_templates" in sql:
+            return {
+                "id": 3,
+                "fields": [
+                    {
+                        "name": "accuracy",
+                        "label": "Accuracy",
+                        "description": "reported accuracy",
+                        "type": "text",
+                    }
+                ],
+            }
+        return {"id": 7, "title": "Paper", "content_generation": 0}
+
+    conn.fetchrow.side_effect = _fetchrow
+    conn.fetch.return_value = [
+        {
+            "id": 1,
+            "chunk_index": 0,
+            "content": "The model reaches 94.2% accuracy on GLUE.",
+            "page_number": 1,
+        }
+    ]
+    return pool
+
+
+async def _extract_one_field(verifier, quote: str):
+    """Run one extraction whose single field carries *quote*, and return that field."""
+    from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import ExtractedFieldOutput
+
+    llm_result = SimpleNamespace(
+        accuracy=ExtractedFieldOutput(value="95.0%", quote=quote),
+        model_dump_json=lambda: "{}",
+    )
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            MagicMock(),
+            _pool_echoing_persisted_extractions(),
+            7,
+            3,
+            verifier=verifier,
+            openai_client=MagicMock(),
+            user_id=42,
+        )
+    return result.extractions["accuracy"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_quote_is_kept_so_the_reader_sees_it_labelled_unverified():
+    """A quote the verifier rejected survives; only the value it failed to support is dropped."""
+    from jarvis_common.verify import QuoteVerifier
+
+    hallucinated = "This sentence appears nowhere in the paper."
+
+    field = await _extract_one_field(QuoteVerifier(), hallucinated)
+
+    assert field.quote == hallucinated
+    assert field.value is None
+    assert field.verified is False
+    assert field.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_verifier_crash_drops_the_quote_because_no_verdict_can_label_it():
+    """A crashed verifier leaves no verdict, so the quote cannot be surfaced at all."""
+    field = await _extract_one_field(
+        _RaisingQuoteVerifier(), "The model reaches 94.2% accuracy on GLUE."
+    )
+
+    assert field.quote is None
+    assert field.value is None
+    assert field.verified is False
+    assert field.confidence == 0.0

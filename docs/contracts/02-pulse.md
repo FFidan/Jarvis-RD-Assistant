@@ -310,9 +310,15 @@ The implementation MUST satisfy these. Testable.
 3. **Missing signals = 0.0.** `stage3_combine` MUST treat any signal name in
    `weights` but missing from a candidate's `signals` as 0.0 ([scoring.py:362](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L362) `signals.get(k, 0.0)`).
 4. **Weights clamped.** `pulse.weights` values MUST be clamped to `[0, 1]` before any signal multiplication ([profile.py:182-186](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/profile.py#L182-L186)).
-5. **Run is non-crashing.** `run_pulse` MUST never raise an unhandled
-   exception. Every `try/except` may set `last_error` and continue;
-   unrecoverable failures (Stage 1) MUST return early with `stats` populated.
+5. **Run degrades rather than crashes.** A failing pipeline stage MUST be
+   recorded in `stats['last_error']` and the run MUST continue from the
+   best-known state; unrecoverable failures (Stage 1) MUST return early with
+   `stats` populated. Two exceptions propagate by design and MUST NOT be
+   swallowed: `asyncio.CancelledError` on cancellation (a `BaseException`, so
+   `except Exception` does not catch it) and `RuntimeError` when
+   `JARVIS_STRICT_MODELS=1` and Stage 2 scored no candidate at all. This is a
+   degrade-on-stage-failure guarantee, not a blanket "never raises" one —
+   progress reporting through `ctx` is itself unguarded.
 6. **Per-card isolation.** Stage 8 MUST use SAVEPOINTs for per-card upserts
    so a single bad card does not roll back the deck.
 7. **Negative-feedback exclusion.** The 60-day negative-feedback filter MUST be
