@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -106,6 +106,16 @@ test-shell-contracts:
 	bash scripts/tests/test_jarvis_research_cli.sh
 	bash scripts/tests/test_uninstall.sh
 
+## Static analysis for the shell entry points the lifecycle contracts exercise.
+## Gated at --severity=warning on purpose: shellcheck's info level here is
+## entirely SC2015 ("A && B || C is not if-then-else"), a style preference these
+## scripts deliberately do not follow, so gating on it would block the build on
+## formatting rather than on defects. Missing shellcheck is a hard failure --
+## a check that silently skips is not a check.
+shell-lint:
+	shellcheck --severity=warning scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
+	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
+
 ## Run all local quality checks (mirrors CI lint-test + frontend and adds the
 ## optional Docker-backed swap/recovery matrix when Docker is available).
 ##
@@ -119,8 +129,9 @@ test-shell-contracts:
 ##   7. Guard: burned secrets
 ##   8. Deterministic shell contracts
 ##   9. Optional Docker-backed swap/recovery matrix
-##  10. Fast pytest suite (excludes live_pg / integration / slow)
-##  11. Frontend lint + typecheck + tests + build
+##  10. Shell lint (shellcheck)
+##  11. Fast pytest suite (excludes live_pg / integration / slow)
+##  12. Frontend lint + typecheck + tests + build
 ##
 ## Live-Postgres checks run separately in CI and are opt-in locally:
 ##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant" -v
@@ -138,10 +149,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/check-burned-secrets.sh
 	$(MAKE) test-shell-contracts
 	bash scripts/tests/test_restore_swap_recovery.sh
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/update-bootstrap.sh scripts/backup-lifecycle.sh; else echo "shellcheck not installed; skipping update bootstrap and backup lifecycle lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/jarvis-research.sh; else echo "shellcheck not installed; skipping scripts/jarvis-research.sh lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/uninstall.sh; else echo "shellcheck not installed; skipping scripts/uninstall.sh lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/lifecycle-smoke.sh; else echo "shellcheck not installed; skipping scripts/lifecycle-smoke.sh lint"; fi
+	$(MAKE) shell-lint
 	uv run pytest
 	$(MAKE) frontend-check
 

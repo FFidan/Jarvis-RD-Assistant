@@ -67,6 +67,18 @@ jobs:
       - name: Deterministic shell contracts
         run: make test-shell-contracts
 
+      - name: Install shellcheck
+        # Pinned: shellcheck-py 0.11.0.1 ships shellcheck 0.11.0, the version the
+        # gated scripts are known clean against. GITHUB_PATH applies to later
+        # steps only, so the lint itself must be a separate step.
+        run: |
+          uv tool install shellcheck-py==0.11.0.1
+          tool_bin="$(uv tool dir --bin)"
+          echo "$tool_bin" >> "$GITHUB_PATH"
+
+      - name: Shell lint
+        run: make shell-lint
+
       - name: Guard - no tracked secrets
         run: bash scripts/check-no-tracked-secrets.sh
 
