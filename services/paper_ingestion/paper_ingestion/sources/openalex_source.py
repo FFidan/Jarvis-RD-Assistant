@@ -588,19 +588,15 @@ class OpenAlexSource(PaperSource):
                             },
                         )
                     else:
-                        await self._record_fetch_outcome(
+                        await self._record_poll_exception(
                             started_at=started_at,
-                            candidate_count=0,
                             user_id=user_id,
-                            status="error",
                             p_limiter=p_limiter,
-                            retry_after_s=retry_after,
-                            log_level="error",
-                            log_message="fetch_failed",
                             log_context={
                                 "http_status": response.status_code,
                                 "exception": None,
                             },
+                            retry_after_s=retry_after,
                         )
                     continue
                 response.raise_for_status()
@@ -620,14 +616,10 @@ class OpenAlexSource(PaperSource):
                     )
                 logger.warning("OpenAlex scheduled request failed")
                 _exc_status = getattr(getattr(exc, "response", None), "status_code", None)
-                await self._record_fetch_outcome(
+                await self._record_poll_exception(
                     started_at=started_at,
-                    candidate_count=0,
                     user_id=user_id,
-                    status="error",
                     p_limiter=p_limiter,
-                    log_level="error",
-                    log_message="fetch_failed",
                     log_context={
                         "http_status": _exc_status,
                         "exception": type(exc).__name__,
@@ -650,19 +642,12 @@ class OpenAlexSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            await self._record_fetch_outcome(
+            await self._record_poll_success(
                 started_at=started_at,
                 candidate_count=candidate_count,
+                query_count=len(consolidated),
                 user_id=user_id,
-                status="ok",
                 p_limiter=p_limiter,
-                log_level="info",
-                log_message="fetch_succeeded",
-                log_context={
-                    "http_status": 200,
-                    "papers_fetched": candidate_count,
-                    "query_count": len(consolidated),
-                },
             )
 
         return papers

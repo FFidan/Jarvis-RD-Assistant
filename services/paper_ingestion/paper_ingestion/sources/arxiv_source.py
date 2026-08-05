@@ -597,54 +597,19 @@ class ArxivSource(PaperSource):
                 logger.warning(
                     "arXiv fetch_new_since failed for query: %s", search_query, exc_info=True
                 )
-                await self._record_fetch_outcome(
+                await self._record_poll_exception(
                     started_at=started_at,
-                    candidate_count=0,
                     user_id=user_id,
-                    status="error",
                     p_limiter=p_limiter,
-                    log_level="error",
-                    log_message="fetch_failed",
                     log_context={"http_status": None, "exception": repr(_exc)[:300]},
                 )
                 continue
 
             if root is None:
                 logger.warning("arXiv fetch_new_since returned no data for query: %s", search_query)
-                diag = self.last_poll_diagnostic or {}
-                http_status = diag.get("status", "error")
-                retry_after = diag.get("retry_after_s")
-                _diag_code = diag.get("status_code")
-                if http_status == "rate_limit":
-                    await self._record_fetch_outcome(
-                        started_at=started_at,
-                        candidate_count=0,
-                        user_id=user_id,
-                        status="rate_limit",
-                        p_limiter=p_limiter,
-                        retry_after_s=retry_after,
-                        log_level="warning",
-                        log_message="rate_limited",
-                        log_context={
-                            "http_status": _diag_code or 429,
-                            "retry_after_s": retry_after,
-                        },
-                    )
-                else:
-                    await self._record_fetch_outcome(
-                        started_at=started_at,
-                        candidate_count=0,
-                        user_id=user_id,
-                        status="error",
-                        p_limiter=p_limiter,
-                        retry_after_s=retry_after,
-                        log_level="error",
-                        log_message="fetch_failed",
-                        log_context={
-                            "http_status": _diag_code,
-                            "exception": diag.get("message", "")[:300],
-                        },
-                    )
+                await self._record_poll_from_diagnostic(
+                    started_at=started_at, user_id=user_id, p_limiter=p_limiter
+                )
                 continue
 
             entries = root.findall(f"{{{ATOM_NS}}}entry")
@@ -664,19 +629,12 @@ class ArxivSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            await self._record_fetch_outcome(
+            await self._record_poll_success(
                 started_at=started_at,
                 candidate_count=candidate_count,
+                query_count=len(consolidated),
                 user_id=user_id,
-                status="ok",
                 p_limiter=p_limiter,
-                log_level="info",
-                log_message="fetch_succeeded",
-                log_context={
-                    "http_status": 200,
-                    "papers_fetched": candidate_count,
-                    "query_count": len(consolidated),
-                },
             )
 
         return papers

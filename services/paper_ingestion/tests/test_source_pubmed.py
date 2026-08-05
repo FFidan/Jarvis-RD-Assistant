@@ -652,6 +652,13 @@ async def test_fetch_new_since_calls_log_event_on_success():
     call_kwargs = log_event_mock.call_args.kwargs
     assert call_kwargs.get("message") == "fetch_succeeded"
     assert call_kwargs.get("source") == "pubmed"
+    assert call_kwargs.get("level") == "info"
+    # Exact payload equality guards the recorded outcome against drift.
+    assert call_kwargs.get("context") == {
+        "http_status": 200,
+        "papers_fetched": 5,
+        "query_count": 1,
+    }
 
 
 @respx.mock
@@ -694,6 +701,12 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
     call_kwargs = log_event_mock.call_args.kwargs
     assert call_kwargs.get("message") == "fetch_failed"
     assert call_kwargs.get("source") == "pubmed"
+    assert call_kwargs.get("level") == "error"
+    # Exact payload equality guards the recorded outcome against drift.
+    assert call_kwargs.get("context") == {
+        "http_status": None,
+        "exception": "RuntimeError('unexpected upstream failure')",
+    }
 
 
 # ---------------------------------------------------------------------------

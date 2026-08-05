@@ -421,53 +421,19 @@ class SemanticScholarSource(PaperSource):
                 raise
             except Exception as _exc:
                 logger.warning("S2 fetch_new_since failed for query %r", query, exc_info=True)
-                await self._record_fetch_outcome(
+                await self._record_poll_exception(
                     started_at=started_at,
-                    candidate_count=0,
                     user_id=user_id,
-                    status="error",
                     p_limiter=p_limiter,
-                    log_level="error",
-                    log_message="fetch_failed",
                     log_context={"http_status": None, "exception": repr(_exc)[:300]},
                 )
                 continue
 
             if not data:
                 logger.warning("S2 search returned no data for query %r; skipping", query)
-                diag = self.last_poll_diagnostic or {}
-                retry_after = diag.get("retry_after_s")
-                _diag_code = diag.get("status_code")
-                if diag.get("status") == "rate_limit":
-                    await self._record_fetch_outcome(
-                        started_at=started_at,
-                        candidate_count=0,
-                        user_id=user_id,
-                        status="rate_limit",
-                        p_limiter=p_limiter,
-                        retry_after_s=retry_after,
-                        log_level="warning",
-                        log_message="rate_limited",
-                        log_context={
-                            "http_status": _diag_code or 429,
-                            "retry_after_s": retry_after,
-                        },
-                    )
-                else:
-                    await self._record_fetch_outcome(
-                        started_at=started_at,
-                        candidate_count=0,
-                        user_id=user_id,
-                        status="error",
-                        p_limiter=p_limiter,
-                        retry_after_s=retry_after,
-                        log_level="error",
-                        log_message="fetch_failed",
-                        log_context={
-                            "http_status": _diag_code,
-                            "exception": diag.get("message", "")[:300],
-                        },
-                    )
+                await self._record_poll_from_diagnostic(
+                    started_at=started_at, user_id=user_id, p_limiter=p_limiter
+                )
                 continue
 
             candidate_count = 0
@@ -508,19 +474,12 @@ class SemanticScholarSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            await self._record_fetch_outcome(
+            await self._record_poll_success(
                 started_at=started_at,
                 candidate_count=candidate_count,
+                query_count=len(queries),
                 user_id=user_id,
-                status="ok",
                 p_limiter=p_limiter,
-                log_level="info",
-                log_message="fetch_succeeded",
-                log_context={
-                    "http_status": 200,
-                    "papers_fetched": candidate_count,
-                    "query_count": len(queries),
-                },
             )
 
         return papers[:limit]
