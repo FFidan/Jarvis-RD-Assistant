@@ -160,7 +160,7 @@ async def test_delete_model_admin_accepted(_base_app):
     )
     with (
         patch(
-            "paper_ingestion.routers.system.async_get_cached_hardware",
+            "paper_ingestion.services.system_models_view.async_get_cached_hardware",
             new=AsyncMock(return_value=fake_hw),
         ),
         patch(
@@ -280,7 +280,7 @@ async def test_model_recommendations_admin_only(_base_app):
         machine_id="test-host",
     )
     with patch(
-        "paper_ingestion.routers.system.async_get_cached_hardware",
+        "paper_ingestion.services.system_models_view.async_get_cached_hardware",
         new=AsyncMock(return_value=fake_hw),
     ):
         async with _client_with_role(app, "admin") as client:

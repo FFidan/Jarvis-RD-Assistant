@@ -293,10 +293,10 @@ async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch
     from paper_ingestion.main import get_system_models
 
     monkeypatch.setattr(
-        "paper_ingestion.routers.system.EMBEDDING_MODEL_NAME",
+        "paper_ingestion.services.system_models_view.EMBEDDING_MODEL_NAME",
         "qwen3-embedding:0.6b",
     )
-    monkeypatch.setattr("paper_ingestion.routers.system.EMBEDDING_DIMENSION", 768)
+    monkeypatch.setattr("paper_ingestion.services.system_models_view.EMBEDDING_DIMENSION", 768)
 
     request = _make_request(app.state.db_pool, mock_http)
     conn.fetch.return_value = []
