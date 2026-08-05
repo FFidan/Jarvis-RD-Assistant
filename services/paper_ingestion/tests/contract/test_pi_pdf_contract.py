@@ -60,7 +60,7 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
     # PDF_STORAGE_PATH is read at module-import; monkeypatch the module constant.
-    import paper_ingestion.routers.pdf as _pdf_mod
+    import paper_ingestion.routers.pdf_actions as _pdf_mod
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
@@ -92,7 +92,7 @@ async def test_p01_upload_pdf_stamps_user_initiated_and_adds_to_library(
     """POST /api/upload-pdf creates a paper with discovery_origin='user_initiated'
     + discovered_by=caller, and adds a user_library row.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:211
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:211
     # (upload_pdf: INSERT papers ... discovery_origin='user_initiated' + add_to_library).
     """
     user_a_id = contract_two_users.user_a_id
@@ -135,7 +135,7 @@ async def test_p02_upload_pdf_rejects_oversized_title(
 ):
     """POST /api/upload-pdf with title > 500 chars returns 422 via Form validation.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:211
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:211
     # (upload_pdf: title: str = Form(..., max_length=500)).
     """
     files = {"file": ("test.pdf", io.BytesIO(_MIN_PDF_BYTES), "application/pdf")}
@@ -163,12 +163,12 @@ async def test_upload_pdf_refusal_names_the_browser_upload_limit(
     in the message comes from the route, so it still pins the user-facing text.
     The disk-scan and download paths keep the larger shared limit.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:374
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:374
     # (upload_pdf refuses above MAX_UPLOAD_PDF_SIZE)
     # Verified: services/paper_ingestion/paper_ingestion/pdf_processor.py:62
     # (MAX_UPLOAD_PDF_SIZE = 50 MB, separate from MAX_PDF_SIZE)
     """
-    import paper_ingestion.routers.pdf as _pdf_mod
+    import paper_ingestion.routers.pdf_actions as _pdf_mod
 
     monkeypatch.setattr(_pdf_mod, "MAX_UPLOAD_PDF_SIZE", 64)
     oversized = b"%PDF-1.7\n" + b"x" * 200
@@ -197,7 +197,7 @@ async def test_p03_download_pdf_already_downloaded_short_circuits(
     No real HTTP fetch (pdf_processor) is invoked because the
     short-circuit at download_pdf:76-77 returns early.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:44
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:44
     # (download_pdf: `if row["pdf_downloaded"]: return row_to_paper_response(row)`).
     """
     paper_id_a = contract_two_users.paper_id_a
@@ -224,7 +224,7 @@ async def test_p04_download_pdf_unowned_returns_403_or_404(
 ):
     """User B downloading user A's paper exits via assert_paper_ownership.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:44
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:44
     # (download_pdf calls assert_paper_ownership before any I/O).
     """
     paper_id_a = contract_two_users.paper_id_a
@@ -252,7 +252,7 @@ async def test_p05_process_pdf_unowned_returns_403_or_404(
 ):
     """User B requesting process_pdf for user A's paper: assert_paper_ownership fails.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:114
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:114
     # (process_pdf async path: assert_paper_ownership before defer_async).
     """
     paper_id_a = contract_two_users.paper_id_a
@@ -278,7 +278,7 @@ async def test_p06_batch_process_scopes_to_user_library(
 ):
     """POST /api/papers/batch-process queues only papers in the caller's user_library.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:381
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:381
     # (batch_process_papers: scopes candidate papers to user_library when user_id is not None).
     """
     # Seed a paper owned by user B (NOT in user A's library) to verify it's excluded
@@ -322,7 +322,7 @@ async def test_p07_process_pdf_enqueues_job_returns_queued_shape(
 ):
     """POST /api/process-pdf/{id} as owner returns {job_id, status: 'queued'}; carve-out via task_registry.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:114
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:114
     # (process_pdf async path: defers paper.process via KIND_TO_TASK).
     """
     paper_id_a = contract_two_users.paper_id_a
@@ -359,10 +359,10 @@ async def test_p08_pdf_served_only_while_a_stored_record_points_at_it(
     same request to 200, which is what keeps the 404 attributable to the
     missing record rather than to the visibility predicate.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:51
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_files.py:51
     # (assert_paper_pdf_visible: WHERE p.id = $1 AND p.pdf_local_path IS NOT NULL AND ...).
     """
-    import paper_ingestion.routers.pdfs as _pdfs_mod
+    import paper_ingestion.routers.pdf_files as _pdfs_mod
 
     monkeypatch.setattr(_pdfs_mod, "PDF_STORAGE_PATH", str(tmp_path))
 

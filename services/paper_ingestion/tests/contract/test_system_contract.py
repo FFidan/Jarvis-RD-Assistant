@@ -312,7 +312,7 @@ async def test_setup_status_topics_count_reflects_real_db(
 
 
 # §A-SYS-06 — GET /api/system/setup-status: setup_completed=True when user_config set
-# Verified: system.py:196 (_coerce_bool(config.get("setup.completed"), default=False))
+# Verified: system.py:196 (coerce_bool(config.get("setup.completed"), default=False))
 
 
 async def test_setup_status_setup_completed_when_config_set(

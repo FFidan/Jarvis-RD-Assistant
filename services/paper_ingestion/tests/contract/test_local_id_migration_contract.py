@@ -34,7 +34,7 @@ async def _insert_local_paper(conn, external_id: str, url: str, title: str) -> i
     )
 
 
-# Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:383
+# Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:383
 # Verified: services/paper_ingestion/paper_ingestion/services/local_pdfs.py:86
 async def test_short_id_is_rewritten_to_the_full_digest(contract_conn):
     """A paper uploaded before the change gets the id a re-upload now computes."""

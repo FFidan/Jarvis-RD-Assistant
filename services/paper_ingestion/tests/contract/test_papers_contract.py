@@ -1413,7 +1413,7 @@ async def test_a90_batch_process_returns_job_id(
     _configure_api_key,
 ):
     """Covers map row A90: POST /api/papers/batch-process returns {queued, job_id} dict.
-    Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:384 at HEAD ba1f8146.
+    Verified: services/paper_ingestion/paper_ingestion/routers/pdf_actions.py:384 at HEAD ba1f8146.
     Survivor-of: test_pdf_router_direct.py mock-unit batch_process tests.
 
     This endpoint queries for papers with pdf_downloaded=True in the user's library;
@@ -2390,7 +2390,7 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
 #
 # Verified identifiers:
 #   routers/papers_detail.py:batch_save_papers — claim check gates attach + echo
-#   routers/pdfs.py:get_pdf — private paper requires user_library membership (404 otherwise)
+#   routers/pdf_files.py:get_pdf — private paper requires user_library membership (404 otherwise)
 # ---------------------------------------------------------------------------
 
 

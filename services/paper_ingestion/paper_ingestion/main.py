@@ -629,8 +629,8 @@ from paper_ingestion.routers import (  # noqa: E402
     my_day,
     notes,
     papers,
-    pdf,
-    pdfs,
+    pdf_actions,
+    pdf_files,
     priority,
     rag,
     recommendation_feedback,
@@ -681,8 +681,8 @@ app.include_router(recommendation_feedback.router)
 app.include_router(search.router)
 app.include_router(discovery.router)
 app.include_router(papers.router)
-app.include_router(pdf.router)
-app.include_router(pdfs.router)
+app.include_router(pdf_actions.router)
+app.include_router(pdf_files.router)
 app.include_router(highlights.router)
 app.include_router(rag.router)
 app.include_router(pulse_router.router)

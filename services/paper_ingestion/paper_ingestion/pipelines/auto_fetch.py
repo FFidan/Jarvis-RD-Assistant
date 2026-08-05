@@ -11,9 +11,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from jarvis_common.config_flags import read_global_config_flag
 from jarvis_common.library import fan_out_to_topic_users
 from jarvis_common.maintenance import skip_for_maintenance
-from jarvis_common.serialization import read_global_config_flag
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME

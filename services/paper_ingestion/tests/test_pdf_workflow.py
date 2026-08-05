@@ -739,7 +739,7 @@ def _process_route_app(tmp_path, monkeypatch, *, process_side_effect=None, lock_
     from fastapi import FastAPI
     from jarvis_common import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
-    from paper_ingestion.routers import pdf as pdf_router
+    from paper_ingestion.routers import pdf_actions as pdf_router
     from tests.conftest import FakeRecord
 
     storage_dir = tmp_path / "storage"
@@ -784,7 +784,7 @@ async def _post_synchronous_process(app):
     from jarvis_common.settings import CoreSettings
 
     with mock_patch(
-        "paper_ingestion.routers.pdf.get_core_settings",
+        "paper_ingestion.routers.pdf_actions.get_core_settings",
         return_value=CoreSettings(dev_mode=True),
     ):
         async with httpx.AsyncClient(

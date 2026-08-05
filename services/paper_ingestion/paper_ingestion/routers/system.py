@@ -16,8 +16,8 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import STRUCTURED_DECODING_MODE
 from jarvis_common.audit import log_audit
+from jarvis_common.config_flags import coerce_bool
 from jarvis_common.model_catalog import Role
-from jarvis_common.serialization import _coerce_bool
 from pydantic import BaseModel, Field
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -107,7 +107,7 @@ async def get_setup_status(
         paired_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM telegram_user_pairings")
 
     config: dict[str, Any] = {r["key"]: r["value"] for r in rows}
-    setup_completed = _coerce_bool(config.get("setup.completed"), default=False)
+    setup_completed = coerce_bool(config.get("setup.completed"), default=False)
     telegram_paired = int(paired_row["n"]) > 0 if paired_row else False
     topics_count = int(topics_row["n"]) if topics_row else 0
 

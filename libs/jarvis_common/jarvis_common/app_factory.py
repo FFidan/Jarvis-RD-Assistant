@@ -45,7 +45,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from jarvis_common._ctx_shim import ProcrastinateJobContextShim
 from jarvis_common.auth import (
     RAW_CLIENT_SCOPE_KEY,
     invalidate_api_key_login_cache,
@@ -63,6 +62,7 @@ from jarvis_common.error_handlers import (
     validation_exception_handler,
 )
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
+from jarvis_common.job_context import ProcrastinateJobContextShim
 from jarvis_common.maintenance import (
     configure_maintenance,
     maintenance_active,

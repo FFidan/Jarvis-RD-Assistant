@@ -432,4 +432,4 @@ async def test_no_active_users_results_in_zero_defers(task_registry_mocks):
 )
 def test_coerce_bool_parity(value, expected):
     """Characterize the shared bool coercion the zotero-poll gate relies on."""
-    assert scheduler._coerce_bool(value) is expected
+    assert scheduler.coerce_bool(value) is expected

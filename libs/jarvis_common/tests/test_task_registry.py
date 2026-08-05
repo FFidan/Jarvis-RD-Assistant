@@ -305,7 +305,7 @@ def test_queue_assignments_match_owner_map() -> None:
 
 def test_ctx_shim_implements_jobcontext_protocol() -> None:
     """Expose the job identifier, progress callback, and cancellation check."""
-    from jarvis_common._ctx_shim import ProcrastinateJobContextShim, make_ctx_shim
+    from jarvis_common.job_context import ProcrastinateJobContextShim, make_ctx_shim
 
     shim = make_ctx_shim(None, job_id="job-abc")
 
@@ -334,7 +334,7 @@ def test_ctx_shim_satisfies_progress_context_protocol() -> None:
     task wrapper calls -- including ``record_terminal_outcome`` -- fails here
     instead of raising ``AttributeError`` mid-job.
     """
-    from jarvis_common._ctx_shim import make_ctx_shim
+    from jarvis_common.job_context import make_ctx_shim
     from jarvis_common.jobs import ProgressContext
 
     shim = make_ctx_shim(None, job_id="job-protocol")
@@ -349,7 +349,7 @@ def test_ctx_shim_satisfies_progress_context_protocol() -> None:
 @pytest.mark.asyncio
 async def test_ctx_shim_methods_runnable() -> None:
     """The context shim methods execute without external dependencies."""
-    from jarvis_common._ctx_shim import make_ctx_shim
+    from jarvis_common.job_context import make_ctx_shim
 
     shim = make_ctx_shim(None, job_id="job-xyz")
     await shim.update_progress(0.5, "halfway")  # no-op log line

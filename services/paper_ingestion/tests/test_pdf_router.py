@@ -18,7 +18,7 @@ from jarvis_common.testing_db import make_multi_acquire_pool
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
-from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
 

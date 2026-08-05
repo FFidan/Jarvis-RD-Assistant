@@ -790,9 +790,9 @@ async def _promotion_app(contract_conn):
 
 def _serve_storage_roots_to_routes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point the PDF and page-image routes at the roots the workflow was redirected to."""
-    from paper_ingestion.routers import pdfs, snapshots
+    from paper_ingestion.routers import pdf_files, snapshots
 
-    monkeypatch.setattr(pdfs, "PDF_STORAGE_PATH", str(tmp_path / "pdfs"))
+    monkeypatch.setattr(pdf_files, "PDF_STORAGE_PATH", str(tmp_path / "pdfs"))
     monkeypatch.setattr(snapshots, "SNAPSHOT_STORAGE_PATH", str(tmp_path / "snapshots"))
 
 
@@ -833,7 +833,7 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
     """
     # Verified: services/paper_ingestion/paper_ingestion/routers/search.py:250 (POST /api/search)
     # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:67 (chunks)
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_files.py:70 (GET /api/pdfs)
     # Verified: services/paper_ingestion/paper_ingestion/routers/snapshots.py:18 (page images)
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -948,7 +948,7 @@ async def test_promotion_confirming_the_source_url_keeps_the_paper_whole_over_ht
     list is where that decision is made, so it is exercised here: it reads
     exactly the chunk rows the promotion left in place.
     """
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_files.py:70 (GET /api/pdfs)
     # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:48
     #   (PUT /api/papers/{id}/save defers paper.analyze only when no chunk row exists)
     import jarvis_common.task_registry as task_registry

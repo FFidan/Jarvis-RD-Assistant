@@ -3624,7 +3624,7 @@ async def test_push_highlights_job_single_user_skips_visibility_check():
 
     with (
         patch(
-            "paper_ingestion.routers.pdfs.assert_paper_pdf_visible",
+            "paper_ingestion.routers.pdf_files.assert_paper_pdf_visible",
             AsyncMock(),
         ) as mock_visible,
         patch(

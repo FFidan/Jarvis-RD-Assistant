@@ -17,7 +17,7 @@ fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 from jarvis_common.testing import make_pool_and_conn  # noqa: E402
 from jarvis_common.jobs import JobError  # noqa: E402
 from paper_ingestion.pdf_processor import PDFPublishBlockedError  # noqa: E402
-from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
@@ -431,7 +431,9 @@ async def test_process_pdf_dev_mode_exposes_error_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf_mock)
 
-    with mock_patch("paper_ingestion.routers.pdf.get_core_settings", return_value=dev_settings):
+    with mock_patch(
+        "paper_ingestion.routers.pdf_actions.get_core_settings", return_value=dev_settings
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await pdf.process_pdf.__wrapped__(
                 request,
@@ -605,7 +607,7 @@ def test_process_pdf_async_response_model_no_500():
     from fastapi.testclient import TestClient
     from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
-    from paper_ingestion.routers.pdf import router
+    from paper_ingestion.routers.pdf_actions import router
 
     app = FastAPI()
     app.include_router(router)
@@ -662,7 +664,7 @@ async def test_get_pdf_rejects_traversal_path(monkeypatch):
     """
     from httpx import ASGITransport
 
-    import paper_ingestion.routers.pdfs as pdfs_mod
+    import paper_ingestion.routers.pdf_files as pdfs_mod
     from jarvis_common.auth import get_current_user_id, verify_api_key
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
     from paper_ingestion.deps import get_db_pool, limiter

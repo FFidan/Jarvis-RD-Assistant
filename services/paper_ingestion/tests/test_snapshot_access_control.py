@@ -36,7 +36,7 @@ def _snap_app(tmp_path):
     Both the page PNG and the raw PDF are present, so a route that returns 404
     can only have been stopped by the shared guard.
     """
-    import paper_ingestion.routers.pdfs as pdfs_mod
+    import paper_ingestion.routers.pdf_files as pdfs_mod
     import paper_ingestion.routers.snapshots as snap_mod
     from jarvis_common.auth import verify_api_key
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app

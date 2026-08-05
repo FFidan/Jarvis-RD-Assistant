@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Any
 import procrastinate
 from procrastinate.contrib.aiopg import AiopgConnector
 
-from jarvis_common._ctx_shim import make_ctx_shim
 from jarvis_common.event_log import log_event
+from jarvis_common.job_context import make_ctx_shim
 from jarvis_common.jobs import JobError, queue_for_kind
 from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.maintenance import (
