@@ -116,12 +116,12 @@ test-shell-contracts:
 ## defects.
 ## Missing shellcheck is a hard failure -- a check that silently skips is not a
 ## check -- so shellcheck is invoked directly and never guarded by `command -v`.
-## Keep all ten in ONE invocation: shellcheck resolves each `# shellcheck source=`
+## Keep all eleven in ONE invocation: shellcheck resolves each `# shellcheck source=`
 ## against the other files on the command line, so splitting this into per-file
 ## runs would silently stop checking setup_lib.sh's helpers against their callers.
 shell-lint:
 	shellcheck --severity=warning setup.sh update.sh scripts/setup_lib.sh \
-	  scripts/backup.sh scripts/restore.sh \
+	  scripts/backup.sh scripts/restore.sh scripts/init-secrets.sh \
 	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
 	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
 

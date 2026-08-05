@@ -482,11 +482,11 @@ diverges deliberately between Tier 1 (`> 50 %`) and Tier 2 (`≥ 50 %`).
 
 | Site | Verifier type | Path |
 |---|---|---|
-| 1 Pulse Stage-2 | `QuoteVerifier` (optional, Tier 3 bucket mapping) | [verification.py:verify_pulse_reasoning](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:303-308](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L303-L308) — verifies `reasoning` against title+abstract |
-| 2 Extraction | `QuoteVerifier` (mandatory, Tier 1) | [extraction/core.py:197-215](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L197-L215) — per-field; unverified `value` is dropped |
-| 3 KG entity | `QuoteVerifier` (mandatory, Tier 1) | [extraction/entities.py:399-413](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L399-L413) — relationships dropped if `evidence` not verifiable against full text |
-| 4 Card gen | Custom fuzzy verify (`_verify_quote`) | [card_generator.py:72-79](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L72-L79) — unverified cards dropped; rule 5/6/7 confidence + abstract fallback ([card_generator.py:138-263](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L138-L263)) |
-| 5 Contradiction | `QuoteVerifier` (mandatory, Tier 1) | [contradictions.py:_quotes_verify](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L408-L425) — both quotes verified; if either fails, contradiction NOT persisted |
+| 1 Pulse Stage-2 | `QuoteVerifier` (optional, Tier 3 bucket mapping) | [verification.py:verify_pulse_reasoning](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:358-363](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L358-L363) — verifies `reasoning` against title+abstract |
+| 2 Extraction | `QuoteVerifier` (mandatory, Tier 1) | [extraction/core.py:248-273](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/core.py#L248-L273) — per-field; unverified `value` is dropped |
+| 3 KG entity | `QuoteVerifier` (mandatory, Tier 1) | [extraction/entities.py:313-327](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/entities.py#L313-L327) — relationships dropped if `evidence` not verifiable against full text |
+| 4 Card gen | `QuoteVerifier` (mandatory, in `_verify_raw_cards`) | [card_generator.py:150-231](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L150-L231) — unverified or generic-front cards dropped (rules 5/7); rule 5/6 confidence in `_compute_result` ([card_generator.py:233-275](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/card_generator.py#L233-L275)) |
+| 5 Contradiction | `QuoteVerifier` (mandatory, Tier 1) | [contradictions.py:_quotes_verify](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/contradictions.py#L232-L254) — both quotes verified; if either fails, contradiction NOT persisted |
 | 6 Weekly digest | `QuoteVerifier` (display-only, Tier 4) | [weekly_summary.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/weekly_summary.py) `_theme_supported` — themes annotated with `verified` / `verification_reason`; split into `verified_themes` / `unverified_themes` (display only, not persisted) |
 | 7 Summarization | `QuoteVerifier` (mandatory, Tier 1) | per-window in map-reduce path; unverified findings discarded immediately (§4.7) |
 | 9 RAG answer | `verify_answer_sentences` (Tier 2) | [rag/verification.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/rag/verification.py) — sentence-level grounded-support at 70 %; result on `AskResponse` |
@@ -593,7 +593,6 @@ The implementation MUST satisfy these. Testable.
 | KG site 3 lacks per-paper isolation in failure path | (a) Adopt `extraction/core.py`-style per-paper try/except in batch endpoints; (b) Accept current "endpoint 500" behavior with documented retry guidance |
 | Contradiction `quote_a`/`quote_b` model_validator strictness | (a) Keep the validator; (b) Permit empty quotes when `is_contradiction=True` and downgrade confidence |
 | Streaming-path observability detail | `@observe(as_type="generation")` per stream span, not per token (see [04-observability.md](04-observability.md)) |
-| Card-generator's custom `_verify_quote` vs the shared `QuoteVerifier` | (a) Keep custom (fuzzy match has different requirements); (b) Migrate to the shared verifier for anti-hallucination consistency |
 
 ---
 
@@ -633,5 +632,5 @@ The implementation MUST satisfy these. Testable.
 | `AskResponse` model | services/paper_ingestion/paper_ingestion/models/rag.py:40-47 | answer + sources + confidence + per-sentence verification |
 | RAG streaming raw `client.stream` | services/paper_ingestion/paper_ingestion/rag/streaming.py:381 | The streaming exception (§6.1) |
 | `ExtractionField` template-field def | services/paper_ingestion/paper_ingestion/models/extractions.py | Name regex validator |
-| Card-generator `_verify_quote` fuzzy match | services/learning_engine/learning_engine/card_generator.py | Custom verifier |
+| Card-generator quote verification | services/learning_engine/learning_engine/card_generator.py:172-188 | Shared `QuoteVerifier` from `jarvis_common.verify` |
 | Anti-hallucination standard | docs/ENGINEERING_STANDARDS.md | Mandates evidence-backed claims |

@@ -134,18 +134,27 @@ You can also run each sub-check individually (targets: `lint`, `typecheck`,
 
 `uv run pytest` (or `make test`) runs the **fast suite only**. The
 `pyproject.toml` `addopts` permanently deselects tests marked `live_pg`,
-`integration`, or `slow`:
+`live_qdrant`, `integration`, or `slow`:
 
 ```
-addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"
+addopts = "--import-mode=importlib -p no:randomly -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
 ```
 
 For the **contract layer** (DB-backed) and **cross-user isolation** gate you
 need a live Postgres. Set `JARVIS_RUN_LIVE_PG=1` and
 `JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres`,
-then run pytest with the `contract` or `integration and live_pg` markers (e.g.
-`-m contract` / `-m "integration and live_pg"`). CI runs these in dedicated jobs
-with a managed Postgres container.
+then run the canonical invocation:
+
+```bash
+JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant"
+```
+
+Do not use a bare `-m contract`: it also selects the live-Qdrant contract test,
+which `pytest.fail()`s (it does not skip) unless `JARVIS_TEST_QDRANT_URL` is
+set — that test runs through its own driver,
+`scripts/tests/test_corpus_visibility_qdrant.sh`. The cross-user isolation gate
+uses `-m "integration and live_pg"` (see the Makefile header for the exact
+command). CI runs these in dedicated jobs with a managed Postgres container.
 
 ### Frontend (standalone)
 

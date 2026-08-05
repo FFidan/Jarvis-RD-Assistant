@@ -37,7 +37,7 @@ set -euo pipefail
 # parsing because the parser reports its own failures through err().
 # -----------------------------------------------------------------------------
 SMOKE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=setup_lib.sh
+# shellcheck source=scripts/setup_lib.sh
 source "${SMOKE_SCRIPT_DIR}/setup_lib.sh"
 
 show_help() {
@@ -446,18 +446,6 @@ fi
 exec "${REAL_DOCKER}" "\$@"
 SHIM
   chmod +x "${dir}/docker"
-}
-
-# recorded_state_dir CLONE — the durable state directory .env records, quotes
-# stripped. .env is install-owned data: read it, never source it.
-recorded_state_dir() {
-  local value
-  value="$(sed -n 's/^JARVIS_STATE_DIR=//p' "${1}/.env" 2>/dev/null | head -1)"
-  case "$value" in
-    \"*\") value="${value#\"}"; value="${value%\"}" ;;
-    \'*\') value="${value#\'}"; value="${value%\'}" ;;
-  esac
-  printf '%s' "$value"
 }
 
 run_leg_update() {

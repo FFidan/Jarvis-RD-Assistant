@@ -2,9 +2,12 @@
 
 Every route that hands long-running work to Procrastinate repeats the same three
 steps: mint a JARVIS job id, defer the registered task with that id and the
-calling user, then answer with the queued envelope. Keeping them here means the
-id format, the two keyword names every task receives, and the envelope are
-defined once.
+calling user, then answer with the queued envelope. This module bundles the
+three steps for the routes that call it, but it is not yet the single
+definition: most deferring call sites still mint ``str(uuid.uuid4())`` and pass
+``job_id=``/``user_id=`` to ``defer_async`` themselves, so a change to the id
+format, the keyword names, or the envelope has to be carried to those call
+sites as well.
 
 Task lookup deliberately stays at the call site: routes differ in how they react
 to an unregistered task, and one of them answers with its own error rather than

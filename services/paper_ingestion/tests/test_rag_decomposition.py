@@ -18,31 +18,43 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_decompose_query_passes_system_prompt_in_options():
-    """call_llm_structured must receive ChatCompletionOptions(system=...) non-empty."""
+    """call_llm_structured must receive ChatCompletionOptions(system=...) non-empty.
+
+    Calls decompose_query WITHOUT an explicit client so the function falls back
+    to ``svc.openai_client`` resolved from ``paper_ingestion._state`` — the
+    module the function-local ``from paper_ingestion._state import svc`` reads.
+    """
     from pydantic import RootModel
+
+    from paper_ingestion._state import PaperIngestionServices
 
     captured_calls: list[dict] = []
 
     async def _fake_call_llm_structured(client, *, response_model, prompt, options, **kwargs):
-        captured_calls.append({"prompt": prompt, "options": options})
+        captured_calls.append({"client": client, "prompt": prompt, "options": options})
         return RootModel[list[str]](root=["sub-query A", "sub-query B"])
 
     mock_client = AsyncMock()
 
     with (
         patch("paper_ingestion.rag.decomposition.call_llm_structured", _fake_call_llm_structured),
-        patch("paper_ingestion.rag.decomposition.svc", create=True),
+        patch(
+            "paper_ingestion._state.svc",
+            PaperIngestionServices(openai_client=mock_client),
+        ),
     ):
         from paper_ingestion.rag.decomposition import decompose_query
 
         result = await decompose_query(
             "How does attention relate to transformers?",
             model="fast",
-            openai_client=mock_client,
         )
 
     assert result == ["sub-query A", "sub-query B"]
     assert captured_calls, "call_llm_structured was never called"
+    assert captured_calls[0]["client"] is mock_client, (
+        "decompose_query must fall back to svc.openai_client when no client is passed"
+    )
 
     opts = captured_calls[0]["options"]
     assert opts.system, "ChatCompletionOptions.system must be non-empty (Shape A)"

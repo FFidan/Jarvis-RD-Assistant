@@ -1,4 +1,9 @@
-"""Serialization and type-coercion utilities shared across services."""
+"""Boolean config-flag helpers shared across services.
+
+- ``coerce_bool`` — lenient boolean coercion for ``user_config`` JSONB values.
+- ``read_global_config_flag`` — fail-closed read of a global
+  (``user_id IS NULL``) ``user_config`` boolean feature flag.
+"""
 
 import logging
 from typing import Any

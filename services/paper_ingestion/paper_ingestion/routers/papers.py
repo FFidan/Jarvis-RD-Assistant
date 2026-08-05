@@ -7,15 +7,10 @@ The monolithic papers.py has been split into:
   papers_lifecycle.py  — save/unsave/skip/reading/done/star/unstar/trash/restore/annotate/hard_del
   papers_bulk.py       — bulk_action_papers, process_batch
 
-``logger`` is kept here so ``test_star_zotero_push_trigger.py`` can still patch
-``papers.logger`` (``patch.object(papers.logger, "exception")``).
-
 The split is by responsibility (feed listing, detail fetch, feedback, lifecycle
 transitions, bulk actions), not an arbitrary file-size cut; recombining the
 sub-routers into one module would re-create the monolith this replaced.
 """
-
-import logging
 
 from fastapi import APIRouter
 
@@ -29,8 +24,6 @@ from paper_ingestion.routers.papers_lifecycle import router as _lifecycle_router
 # papers.submit_feedback, etc. (patch.object and __wrapped__ access patterns).
 from paper_ingestion.routers.papers_feedback import submit_feedback  # noqa: F401
 from paper_ingestion.routers.papers_lifecycle import star_paper  # noqa: F401
-
-logger = logging.getLogger(__name__)
 
 # Aggregate all sub-routers into a single router so main.py needs only one
 # include_router call and existing callers of ``papers.router`` keep working.

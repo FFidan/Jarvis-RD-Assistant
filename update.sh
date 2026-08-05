@@ -284,7 +284,8 @@ fi
 
 # A pre-1.1 .env carries no TORCH_VARIANT, so the image tag would resolve to the
 # CPU flavour even on a CUDA host. Backfill BEFORE anything resolves an image —
-# section 5 below already starts services, and cloudflared depends on dashboard.
+# section 5 below pulls/builds every staged image (the first point the
+# TORCH_VARIANT-suffixed tag is resolved), and section 6 recreates from them.
 if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; then
   info "Recorded this host's torch image variant in .env: ${_bf_variant}"
 fi

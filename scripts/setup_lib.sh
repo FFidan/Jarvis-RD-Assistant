@@ -34,9 +34,15 @@
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
 
-# Presentation primitives, defined here so the level colours cannot drift
-# between the scripts that share them. Colours are emitted only when stdout is a
-# terminal, so piped output and log files stay free of escape codes.
+# Presentation primitives for the scripts that source this library. Not every
+# script shares them: setup.sh and update.sh keep same-format copies of the
+# colours and of info/ok/warn/err for the output they print before their
+# source line, and scripts/init-secrets.sh (uncoloured info, no err),
+# scripts/update-bootstrap.sh (plain err only) and
+# scripts/production-readiness-check.sh (the colour block) define their own,
+# so a changed prefix or colour here must be mirrored in those copies by hand.
+# Colours are emitted only when stdout is a terminal, so piped output and log
+# files stay free of escape codes.
 # `die`/`usage_error`/`env_die` deliberately stay with their scripts: each owns a
 # different exit code and next-step hint.
 # C_BOLD is read only by the scripts that source this library (setup.sh, update.sh,

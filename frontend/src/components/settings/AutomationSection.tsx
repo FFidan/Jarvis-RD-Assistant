@@ -112,10 +112,16 @@ export function AutomationSection() {
     queryFn: fetchNudges,
   });
 
-  const { data: configs = [], isError: configsError } = useQuery({
+  const { data: configs = [], isPending: configsPending, isError: configsError } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
+
+  // Config-backed controls stay inert until real server values arrive. While
+  // the config query is pending or failed, the fallbacks below (24 hours, UTC)
+  // are placeholders, not data — letting a blur or click persist them would
+  // overwrite the real server state.
+  const configsReady = !configsPending && !configsError;
 
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Nudge> }) => updateNudge(id, data),
@@ -147,10 +153,13 @@ export function AutomationSection() {
     fetchIntervalEntry !== undefined && fetchIntervalEntry.value !== null
       ? Number(fetchIntervalEntry.value)
       : 24;
-  const [fetchIntervalInput, setFetchIntervalInput] = useState<number>(fetchIntervalValue);
+  // Seed the writable input only from loaded data; until then it stays empty
+  // and disabled, and it re-syncs whenever the server value changes (e.g.
+  // after page reload).
+  const [fetchIntervalInput, setFetchIntervalInput] = useState<number | ''>('');
   useEffect(() => {
-    setFetchIntervalInput(fetchIntervalValue);
-  }, [fetchIntervalValue]);
+    if (configsReady) setFetchIntervalInput(fetchIntervalValue);
+  }, [configsReady, fetchIntervalValue]);
 
   const timezoneEntry = configs.find((e) => e.key === 'user.timezone');
   const timezoneValue = timezoneEntry
@@ -159,11 +168,12 @@ export function AutomationSection() {
         : String(timezoneEntry.value))
     : 'UTC';
 
-  // G-03: keep local input in sync when server value changes (e.g. after page reload)
-  const [timezoneInput, setTimezoneInput] = useState<string>(timezoneValue);
+  // Same containment as the interval input: seed only from loaded data, and
+  // keep the local input in sync when the server value changes.
+  const [timezoneInput, setTimezoneInput] = useState<string>('');
   useEffect(() => {
-    setTimezoneInput(timezoneValue);
-  }, [timezoneValue]);
+    if (configsReady) setTimezoneInput(timezoneValue);
+  }, [configsReady, timezoneValue]);
 
   // Timezone combobox open state
   const [tzOpen, setTzOpen] = useState(false);
@@ -220,10 +230,12 @@ export function AutomationSection() {
                       role="combobox"
                       aria-expanded={tzOpen}
                       className="w-full sm:w-64 justify-between font-normal text-left"
-                      disabled={configMut.isPending}
+                      disabled={!configsReady || configMut.isPending}
                     >
                       <span className="truncate">
-                        {TIMEZONE_BY_VALUE.get(timezoneInput)?.label ?? timezoneInput}
+                        {configsReady
+                          ? (TIMEZONE_BY_VALUE.get(timezoneInput)?.label ?? timezoneInput)
+                          : '—'}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
@@ -331,9 +343,12 @@ export function AutomationSection() {
                 min={1}
                 className="w-24 text-right"
                 value={fetchIntervalInput}
-                disabled={configMut.isPending}
+                disabled={!configsReady || configMut.isPending}
                 onChange={(e) => setFetchIntervalInput(Number(e.target.value))}
                 onBlur={() => {
+                  // Guard against programmatic blur while disabled: never
+                  // persist a value that was not seeded from server data.
+                  if (!configsReady || fetchIntervalInput === '') return;
                   const hours = Math.max(1, fetchIntervalInput);
                   setFetchIntervalInput(hours);
                   configMut.mutate({ key: 'automation.fetch_interval_hours', value: hours });

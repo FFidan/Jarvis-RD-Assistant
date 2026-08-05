@@ -26,6 +26,13 @@ def test_sse_named_event_emits_event_and_data_lines() -> None:
 
 
 def test_sse_named_event_payload_matches_the_unnamed_helper() -> None:
-    """Only the ``event:`` line may differ, so named frames stay wire-compatible."""
+    """Named frames must carry the exact wire bytes an SSE client parses.
+
+    Asserted against the literal frame (not by re-calling the helpers), so any
+    format drift — prefix, JSON encoding, or the blank-line terminator — fails
+    here even if it changes both helpers consistently.
+    """
     payload = {"served_by": "qwen3:8b", "fallback": False}
-    assert sse_named_event("backend", payload) == f"event: backend\n{sse_event(payload)}"
+    assert sse_named_event("backend", payload) == (
+        'event: backend\ndata: {"served_by": "qwen3:8b", "fallback": false}\n\n'
+    )

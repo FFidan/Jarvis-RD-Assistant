@@ -310,6 +310,15 @@ def test_app_version_sources_agree():
     package = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
     package_lock = json.loads((REPO_ROOT / "frontend" / "package-lock.json").read_text())
     uv_lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    # CITATION.cff is what GitHub renders in the repository sidebar and what
+    # Zenodo and other CFF consumers read, so a stale value there is published
+    # metadata. Matched by line rather than parsed to avoid a YAML dependency.
+    citation = re.search(
+        r"^version:\s*(\S+)\s*$",
+        (REPO_ROOT / "CITATION.cff").read_text(),
+        re.MULTILINE,
+    )
+    assert citation, "CITATION.cff must declare a version"
     compose_defaults = re.findall(
         r"\$\{JARVIS_VERSION:-([^}]*)\}",
         (REPO_ROOT / "docker-compose.yml").read_text(),
@@ -332,6 +341,7 @@ def test_app_version_sources_agree():
         "frontend/package-lock.json": package_lock["version"],
         "frontend/package-lock.json packages['']": package_lock["packages"][""]["version"],
         "uv.lock": root_packages[0]["version"],
+        "CITATION.cff": citation.group(1),
     }
     for index, version in enumerate(compose_defaults, start=1):
         versions[f"docker-compose.yml default {index}"] = version

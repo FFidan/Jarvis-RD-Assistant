@@ -320,9 +320,9 @@ test.describe('Feed — full lifecycle smoke', () => {
     await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 10_000 });
   });
 
-  // ── Step 4: Mark Read (currently wired) ─────────────────────────────────
+  // ── Step 4: Mark Reading (currently wired) ──────────────────────────────
 
-  test('4. Mark Read fires PUT /api/papers/{id}/user-state', async ({ page }) => {
+  test('4. Mark Reading fires PUT /api/papers/{id}/reading', async ({ page }) => {
     // The control under test is FeedPaperRow's "Mark Reading" button, which renders
     // only for state === 'to_read' (FeedPaperRow.tsx:336,345); a default 'inbox'
     // paper never shows it.
@@ -332,8 +332,8 @@ test.describe('Feed — full lifecycle smoke', () => {
       () => libraryCounts,
     );
 
-    // Stub bookmark endpoint (used for Mark Read via bookmarkPaper helper)
-    await page.route(`**/api/papers/${PAPER_ID}/bookmark`, async (route: Route) => {
+    // Stub the reading-transition endpoint (markReading in lib/api/papers.ts:157)
+    await page.route(`**/api/papers/${PAPER_ID}/reading`, async (route: Route) => {
       if (route.request().method() !== 'PUT') { await route.continue(); return; }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', paper_id: PAPER_ID }) });
     });
@@ -341,17 +341,26 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // Matches aria-label="Mark <title> as reading" (FeedPaperRow.tsx:345), wired by
+    // Exact aria-label="Mark <title> as reading" (FeedPaperRow.tsx:345), wired by
     // FeedView via onMarkReading (FeedView.tsx:254,370).  A missing button is a
     // regression, not a pending-wiring condition: assert it, never skip.
-    const markReadBtn = page.getByRole('button', { name: new RegExp(`Mark ${PAPER_TITLE} as read`) });
-    await expect(markReadBtn).toBeVisible({ timeout: 10_000 });
+    const markReadingBtn = page.getByRole('button', {
+      name: `Mark ${PAPER_TITLE} as reading`,
+      exact: true,
+    });
+    await expect(markReadingBtn).toBeVisible({ timeout: 10_000 });
 
+    // Wait on the exact endpoint path so an unrelated paper PUT cannot satisfy
+    // the assertion, then pin URL, method, and (empty) payload to the contract.
     const [request] = await Promise.all([
-      page.waitForRequest((req) => req.url().includes(`/api/papers/${PAPER_ID}`) && req.method() === 'PUT'),
-      markReadBtn.click(),
+      page.waitForRequest((req) =>
+        new URL(req.url()).pathname === `/api/papers/${PAPER_ID}/reading` && req.method() === 'PUT',
+      ),
+      markReadingBtn.click(),
     ]);
-    expect(request.url()).toContain(`/api/papers/${PAPER_ID}`);
+    expect(new URL(request.url()).pathname).toBe(`/api/papers/${PAPER_ID}/reading`);
+    expect(request.method()).toBe('PUT');
+    expect(request.postData()).toBeNull();
   });
 
   // ── Step 5 (LIFECYCLE_WIRED): Save from Inbox ────────────────────────────

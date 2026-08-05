@@ -82,6 +82,45 @@ describe('AutomationSection', () => {
     expect(await screen.findByText('Failed to load automation settings.')).toBeInTheDocument();
   });
 
+  it('keeps config controls disabled and never persists fallbacks when settings fail to load', async () => {
+    vi.mocked(fetchConfig).mockRejectedValue(new Error('network down'));
+    vi.mocked(fetchNudges).mockResolvedValue([
+      {
+        id: 5,
+        nudge_type: 'daily_summary',
+        enabled: true,
+        cron_expression: '0 8 * * *',
+        last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
+      },
+    ]);
+    const user = userEvent.setup();
+    const { unmount } = renderSection();
+    expect(await screen.findByText('Failed to load automation settings.')).toBeInTheDocument();
+
+    // Timezone combobox must be disabled and must not open.
+    const tzTrigger = await screen.findByRole('combobox');
+    expect(tzTrigger).toBeDisabled();
+    await user.click(tzTrigger);
+    expect(screen.queryByPlaceholderText('Search city or timezone...')).toBeNull();
+
+    // Fetch-interval input must be disabled, and even a programmatic
+    // change-plus-blur must not write the fabricated default to the server.
+    const intervalInput = screen.getByRole('spinbutton');
+    expect(intervalInput).toBeDisabled();
+    fireEvent.change(intervalInput, { target: { value: '6' } });
+    fireEvent.blur(intervalInput);
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+
+    // Unmount inside the test, while the DOM still exists. The failed query
+    // leaves a batched TanStack Query notification queued on a timer; if that
+    // timer fires after the environment has been torn down, React reads
+    // `window` and the run reports an uncaught ReferenceError even though every
+    // assertion passed. Unmounting here drops the subscriber first.
+    unmount();
+  });
+
   it('renders nudge card when nudges are returned', async () => {
     vi.mocked(fetchNudges).mockResolvedValue([
       {
@@ -187,10 +226,12 @@ describe('AutomationSection', () => {
 
     renderSection();
 
-    // The numeric input must be present
+    // The numeric input must be present; its value arrives once config loads
     const input = await screen.findByRole('spinbutton');
     expect(input).toBeInTheDocument();
-    expect((input as HTMLInputElement).value).toBe('24');
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe('24');
+    });
 
     // Change value and blur to trigger mutation
     fireEvent.change(input, { target: { value: '6' } });

@@ -16,10 +16,15 @@ modules, this checks that the distribution is
    there fixes all consumers at once; and
 2. pinned in each base ``constraints.txt`` a service image installs.
 
-``testing_*`` modules and ``testing_sidecars/`` are deliberately excluded: they
-ship inside the wheel but no service imports them at runtime, and declaring
-``pytest`` a runtime dependency of every image would be wrong. Their imports are
-covered instead by the release-time smoke that runs each image's own interpreter.
+``testing.py``, ``testing_*`` modules and ``testing_sidecars/`` are not scanned
+on their own: they ship inside the wheel but no service imports them at runtime,
+and declaring
+``pytest`` a runtime dependency of every image would be wrong. They are not
+exempt, though. Intra-package imports are followed transitively, so the moment a
+runtime module imports a testing helper (directly or through a chain), that
+helper's own import-time requirements count -- the interpreter will execute them
+on service startup. Purely test-side imports remain covered by the release-time
+smoke that runs each image's own interpreter.
 
 Imports that are deferred (inside a function or class), guarded by an
 ``ImportError`` handler, or reachable only under ``TYPE_CHECKING`` are not
@@ -102,17 +107,36 @@ def _skipped_at_import_time(node: ast.AST) -> bool:
     return isinstance(node, ast.Try) and _guards_import_error(node)
 
 
-def _imported_roots(node: ast.AST) -> list[tuple[str, int]]:
-    """Return (top-level package, line) for the packages an import statement pulls in."""
+def _imported_modules(node: ast.AST, current_package: str) -> list[tuple[str, int]]:
+    """Return (dotted module, line) for the modules an import statement pulls in.
+
+    ``from X import name`` also yields ``X.name``: when ``name`` is a submodule
+    rather than an attribute, importing it executes that submodule too. Names
+    that are plain attributes resolve to no file and drop out downstream.
+    Relative imports are resolved against *current_package*.
+    """
     if isinstance(node, ast.Import):
-        return [(alias.name.split(".")[0], node.lineno) for alias in node.names]
-    if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-        return [(node.module.split(".")[0], node.lineno)]  # absolute import only
-    return []
+        return [(alias.name, node.lineno) for alias in node.names]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+    if node.level == 0:
+        base = node.module or ""
+    else:
+        parts = current_package.split(".")
+        if node.level > len(parts):
+            return []  # escapes the package; nothing this scan can resolve
+        base = ".".join(parts[: len(parts) - node.level + 1])
+        if node.module:
+            base = f"{base}.{node.module}"
+    if not base:
+        return []
+    found = [(base, node.lineno)]
+    found += [(f"{base}.{alias.name}", node.lineno) for alias in node.names if alias.name != "*"]
+    return found
 
 
-def import_time_roots(tree: ast.Module) -> list[tuple[str, int]]:
-    """Return (top-level package, line) for every import executed on module import."""
+def import_time_modules(tree: ast.Module, current_package: str) -> list[tuple[str, int]]:
+    """Return (dotted module, line) for every import executed on module import."""
     found: list[tuple[str, int]] = []
 
     def visit(node: ast.AST) -> None:
@@ -123,9 +147,9 @@ def import_time_roots(tree: ast.Module) -> list[tuple[str, int]]:
                 for fallback in child.orelse:  # only the runtime arm of the guard
                     visit(fallback)
                 continue
-            roots = _imported_roots(child)
-            if roots:
-                found.extend(roots)
+            modules = _imported_modules(child, current_package)
+            if modules:
+                found.extend(modules)
             else:
                 visit(child)
 
@@ -134,22 +158,67 @@ def import_time_roots(tree: ast.Module) -> list[tuple[str, int]]:
 
 
 def runtime_modules(package: Path) -> list[Path]:
-    """Return the shared library's runtime modules, excluding test-only helpers."""
+    """Return the shared library's runtime modules, excluding test-only helpers.
+
+    ``testing.py`` is the aggregator that re-exports the ``testing_*`` helpers,
+    so it is excluded on the same grounds. Exclusion only keeps these out of the
+    scan's roots; anything a runtime module imports is still followed.
+    """
     return [
         path
         for path in sorted(package.rglob("*.py"))
-        if not path.name.startswith("testing_") and "testing_sidecars" not in path.parts
+        if not path.name.startswith("testing_")
+        and path.name != "testing.py"
+        and "testing_sidecars" not in path.parts
     ]
 
 
+def _module_package(package: Path, path: Path) -> str:
+    """Return the dotted package containing *path*, for relative-import resolution."""
+    parts = path.relative_to(package.parent).with_suffix("").parts
+    return ".".join(parts[:-1])
+
+
+def _module_files(package: Path, dotted: str) -> list[Path]:
+    """Return the source files that importing intra-package module *dotted* executes.
+
+    Includes every ancestor package ``__init__.py`` on the way down, because
+    importing a submodule runs them all. A dotted name that resolves to no
+    module file (an attribute pulled in via ``from X import name``) contributes
+    only the ancestors that exist.
+    """
+    files = [package / "__init__.py"]
+    base = package
+    for part in dotted.split(".")[1:]:
+        base = base / part
+        files.append(base.with_suffix(".py"))
+        files.append(base / "__init__.py")
+    return [candidate for candidate in files if candidate.is_file()]
+
+
 def required_distributions(root: Path) -> dict[str, str]:
-    """Map each required distribution to the first ``file:line`` that imports it."""
+    """Map each required distribution to the first ``file:line`` that imports it.
+
+    Starts from the runtime modules and follows intra-package imports
+    transitively, so a module the scan does not seed (``testing_*``) still has
+    its import-time requirements counted once anything runtime imports it.
+    """
     first_use: dict[str, str] = {}
-    local = {"jarvis_common", "__future__"}
-    for path in runtime_modules(root / SHARED_PACKAGE):
+    package = root / SHARED_PACKAGE
+    queue = runtime_modules(package)
+    scanned = set(queue)
+    while queue:
+        path = queue.pop(0)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for import_root, lineno in import_time_roots(tree):
-            if import_root in local or import_root in sys.stdlib_module_names:
+        for module, lineno in import_time_modules(tree, _module_package(package, path)):
+            import_root = module.split(".")[0]
+            if import_root == "__future__" or import_root in sys.stdlib_module_names:
+                continue
+            if import_root == SHARED_PACKAGE.name:
+                for target in _module_files(package, module):
+                    if target not in scanned:
+                        scanned.add(target)
+                        queue.append(target)
                 continue
             first_use.setdefault(
                 distribution_for(import_root),

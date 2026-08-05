@@ -284,21 +284,46 @@ async def test_create_question_idempotency_on_duplicate_body(
 
 
 async def test_module_docstring_describes_both_ownership_guards() -> None:
-    """The router must not claim a single universal project-row guard.
+    """The router's two-guard account must match its implementation.
 
     Declared async only because this module's ``pytestmark`` carries the
     session-scoped asyncio marker; the assertions need no I/O.
 
-    Three endpoints gate on the project row via ``assert_project_owner``; the
-    DELETE above gates on the question row's own ``user_id`` and fetches no
-    project row at all. A docstring claiming one mechanism for all four sends a
-    reader auditing this tenancy surface looking for a guard that is not there,
-    and hides that the DELETE is in fact the stricter of the two.
+    The guard *behaviour* is proven by the DB-backed tests above:
+    ``test_delete_question_user_b_gets_404`` for the question-row ``user_id``
+    filter, and ``test_list_project_activity_non_owner_gets_404`` /
+    ``test_list_questions_returns_only_own`` for ``assert_project_owner``.
+    This test pins the *documented mechanism* to the source, so the module
+    docstring cannot drift from the code: the three project-nested endpoints
+    must actually call the shared owner guard it attributes to them, and the
+    DELETE must scope on the question row's own ``user_id`` with no project-row
+    guard — the deliberate asymmetry the docstring exists to explain.
     """
+    import inspect
+
     from learning_engine.routers import project_questions
 
     doc = project_questions.__doc__ or ""
-
     assert "assert_project_owner" in doc
     assert "delete_project_question" in doc
-    assert "stricter" in doc
+
+    for endpoint in (
+        project_questions.list_project_questions,
+        project_questions.create_project_question,
+        project_questions.list_project_activity,
+    ):
+        assert "_assert_project_owner(" in inspect.getsource(endpoint), (
+            f"{endpoint.__name__} no longer calls the shared project-owner guard "
+            "the module docstring attributes to it"
+        )
+
+    delete_src = inspect.getsource(project_questions.delete_project_question)
+    assert "_assert_project_owner(" not in delete_src, (
+        "delete_project_question now uses the project-row guard; the module "
+        "docstring's account of the two mechanisms is stale"
+    )
+    assert "user_id = $2" in delete_src, (
+        "delete_project_question no longer filters the DELETE on the question "
+        "row's user_id — the ownership guard the docstring (and the 404 "
+        "contract test above) rely on"
+    )
