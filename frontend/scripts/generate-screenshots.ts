@@ -12,12 +12,23 @@
  *
  * Viewport: 1440×900 (above-the-fold, not fullPage).
  * All API calls intercepted via page.route().
+ *
+ * This is documentation tooling, not a test: it asserts nothing and it
+ * overwrites the tracked PNGs under docs/screenshots/. It therefore lives
+ * outside the Playwright testDir so that `npm run test:e2e` cannot rewrite
+ * those tracked files as a side effect, and runs only when invoked on purpose:
+ *
+ *   npm run build
+ *   npm run preview -- --port 3001 &
+ *   npm run screenshots:generate
+ *
+ * The Playwright runner still drives it, via playwright.screenshots.config.ts.
  */
 
 import { test, type Page, type Route } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { seedAuthedSession } from './helpers/setup';
+import { seedAuthedSession } from '../e2e/helpers/setup';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
