@@ -100,6 +100,21 @@ class ProgressContext(Protocol):
         """Return True when the job has been requested to abort."""
         ...
 
+    async def record_terminal_outcome(
+        self,
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+        is_error: bool = False,
+    ) -> bool:
+        """Persist the job's terminal result or error payload.
+
+        Declared here because the task wrapper calls it on every context it
+        receives, so a context that omits it must fail this protocol rather
+        than at run time. Returns False when a write was attempted and failed.
+        """
+        ...
+
 
 # SSE keepalive / max-stream constants shared across routers
 KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments

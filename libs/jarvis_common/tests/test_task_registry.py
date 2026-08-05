@@ -325,6 +325,27 @@ def test_ctx_shim_implements_jobcontext_protocol() -> None:
     assert inspect.iscoroutinefunction(shim.is_cancelled)
 
 
+def test_ctx_shim_satisfies_progress_context_protocol() -> None:
+    """Pin the shim against the protocol itself, not just the concrete class.
+
+    The sibling test above asserts ``isinstance(shim, ProcrastinateJobContextShim)``,
+    which is true by construction and stays true however the protocol drifts. This
+    one checks the shim against ``ProgressContext``, so dropping any member the
+    task wrapper calls -- including ``record_terminal_outcome`` -- fails here
+    instead of raising ``AttributeError`` mid-job.
+    """
+    from jarvis_common._ctx_shim import make_ctx_shim
+    from jarvis_common.jobs import ProgressContext
+
+    shim = make_ctx_shim(None, job_id="job-protocol")
+
+    assert isinstance(shim, ProgressContext)
+    # Name the members explicitly: isinstance() on a runtime_checkable protocol
+    # only checks presence, so a silently narrowed protocol would still pass.
+    for member in ("job_id", "update_progress", "is_cancelled", "record_terminal_outcome"):
+        assert member in ProgressContext.__protocol_attrs__, member
+
+
 @pytest.mark.asyncio
 async def test_ctx_shim_methods_runnable() -> None:
     """The context shim methods execute without external dependencies."""
