@@ -4,7 +4,6 @@ Includes single-paper ask, cross-paper ask, streaming SSE variants,
 summarization, and weekly digest.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from jarvis_common.llm_client import (
     observe,
     strip_think_blocks,
 )
-from jarvis_common.sse import SSE_DONE, sse_event
+from jarvis_common.sse import SSE_DONE, sse_event, sse_named_event
 from jarvis_common.verify import QuoteVerifier
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
@@ -514,8 +513,7 @@ async def ask_paper_stream(
         served, _ = observed_share("smart")
         configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
         is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
-        payload = json.dumps({"served_by": served, "fallback": is_fallback})
-        yield f"event: backend\ndata: {payload}\n\n"
+        yield sse_named_event("backend", {"served_by": served, "fallback": is_fallback})
         async for event in stream_rag_events(
             http_client,
             messages,
@@ -669,9 +667,7 @@ async def ask_cross_paper_stream(
     served, _ = observed_share("smart")
     configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
     is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
-    _backend_event = (
-        f"event: backend\ndata: {json.dumps({'served_by': served, 'fallback': is_fallback})}\n\n"
-    )
+    _backend_event = sse_named_event("backend", {"served_by": served, "fallback": is_fallback})
 
     # Short-circuit when no chunks were found -- return canned answer as SSE
     if isinstance(result, CrossPaperRagNoResults):
