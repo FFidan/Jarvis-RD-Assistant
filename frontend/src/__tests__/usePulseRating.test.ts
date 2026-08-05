@@ -25,9 +25,8 @@ vi.mock('@/lib/api', () => ({
   ratePulseCard: vi.fn(),
 }));
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { ratePulseCard } = await import('@/lib/api');
 const { toast } = await import('sonner');

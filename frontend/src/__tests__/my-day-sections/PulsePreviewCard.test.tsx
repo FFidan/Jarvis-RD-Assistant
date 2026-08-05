@@ -21,14 +21,16 @@ vi.mock('@/stores/job-store', () => ({
   ),
 }));
 
-vi.mock('@/lib/api', () => ({
-  fetchPulseToday: vi.fn(),
-  ratePulseCard: vi.fn(),
-}));
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchPulseToday: vi.fn(),
+    ratePulseCard: vi.fn(),
+  });
+});
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { fetchPulseToday, ratePulseCard } = await import('@/lib/api');
 
@@ -158,6 +160,10 @@ describe('PulsePreviewCard', () => {
 
     const PAPER_ID = 101;
     const deck = makeDeck({ cards: [makeCard({ paper_id: PAPER_ID, user_state: 'inbox' })] });
+    // The mount refetch must succeed too, or the card flips to its error state
+    // and the click lands on a stale node. This test used to inherit the stub
+    // from a sibling test's un-reset mock.
+    vi.mocked(fetchPulseToday).mockResolvedValue(deck);
 
     const qc = createTestQueryClient();
     qc.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), deck);
@@ -182,6 +188,8 @@ describe('PulsePreviewCard', () => {
 
     const PAPER_ID = 101;
     const deck = makeDeck({ cards: [makeCard({ paper_id: PAPER_ID, user_state: 'inbox' })] });
+    // Self-sufficient stub — see the sibling test above.
+    vi.mocked(fetchPulseToday).mockResolvedValue(deck);
 
     const qc = createTestQueryClient();
     qc.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), deck);

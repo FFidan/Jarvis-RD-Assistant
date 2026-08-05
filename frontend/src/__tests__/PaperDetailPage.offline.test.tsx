@@ -93,15 +93,14 @@ const { DETAIL_FIXTURE } = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
-  return {
-    ...actual,
-    fetchPaperDetail: vi.fn().mockResolvedValue(DETAIL_FIXTURE),
-    fetchContradictions: vi.fn().mockResolvedValue({ contradictions: [] }),
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchPaperDetail: async () => DETAIL_FIXTURE,
+    fetchContradictions: async () => ({ contradictions: [] }),
     scanPaperContradictions: vi.fn(),
-    fetchNotes: vi.fn().mockResolvedValue([]),
-    fetchDecks: vi.fn().mockResolvedValue([]),
-    zoteroGetLinkage: vi.fn().mockResolvedValue({ zotero_item_key: null }),
+    fetchNotes: async () => [],
+    fetchDecks: async () => [],
+    zoteroGetLinkage: async () => ({ zotero_item_key: null }),
     zoteroPushPaper: vi.fn(),
     zoteroResync: vi.fn(),
     zoteroSyncAnnotations: vi.fn(),
@@ -114,7 +113,7 @@ vi.mock('@/lib/api', async () => {
     summarizePaper: vi.fn(),
     generateCardsJob: vi.fn(),
     getJob: vi.fn(),
-  };
+  });
 });
 
 vi.mock('@/hooks/use-streaming-chat', () => ({

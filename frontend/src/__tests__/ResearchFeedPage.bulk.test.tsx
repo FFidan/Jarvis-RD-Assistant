@@ -7,19 +7,15 @@ import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/components/chat/StreamingChat', () => ({
   StreamingChat: () => <div data-testid="streaming-chat" />,
 }));
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   const paper = {
     id: 7,
     external_id: 'arxiv:2603.00007',
@@ -56,21 +52,20 @@ vi.mock('@/lib/api', async (importOriginal) => {
       updated_at: null,
     },
   };
-  return {
-    ...actual,
-    fetchFeed: vi.fn().mockResolvedValue({ papers: [paper], total: 1 }),
-    bulkAction: vi.fn().mockResolvedValue({ succeeded: [7], failed: [] }),
-    fetchSources: vi.fn().mockResolvedValue([]),
-    fetchTopics: vi.fn().mockResolvedValue([]),
-    fetchFeedCounts: vi.fn().mockResolvedValue({
+  return createApiMock({
+    fetchFeed: async () => ({ papers: [paper], total: 1 }),
+    bulkAction: async () => ({ succeeded: [7], failed: [] }),
+    fetchSources: async () => [],
+    fetchTopics: async () => [],
+    fetchFeedCounts: async () => ({
       inbox: 1, library: 1, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2,
     }),
-    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
+    fetchFeedCountsWithFacets: async () => ({
       inbox: 1, library: 1, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
       active: 1, kept: 1, all_non_trash: 1,
       by_source: {}, by_topic: [], untagged: 0,
     }),
-  };
+  });
 });
 
 function makeClient() {

@@ -4,9 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { NotesTab } from '@/components/paper/NotesTab';
 import type { Note } from '@/types';
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { toast } from 'sonner';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';

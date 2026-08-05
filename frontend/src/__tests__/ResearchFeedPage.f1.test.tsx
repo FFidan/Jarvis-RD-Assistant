@@ -18,12 +18,8 @@ import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 // ─── API mock ─────────────────────────────────────────────────────────────────
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/components/chat/StreamingChat', () => ({
   StreamingChat: () => <div data-testid="streaming-chat" />,
@@ -79,37 +75,36 @@ const { RICH_COUNTS, INBOX_PAPER } = vi.hoisted(() => {
   return { RICH_COUNTS, INBOX_PAPER };
 });
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...actual,
-    fetchFeedCounts: vi.fn().mockResolvedValue(RICH_COUNTS),
-    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue(RICH_COUNTS),
-    fetchFeed: vi.fn().mockResolvedValue({ papers: [INBOX_PAPER], total: 1 }),
-    fetchSources: vi.fn().mockResolvedValue([
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchFeedCounts: async () => (RICH_COUNTS),
+    fetchFeedCountsWithFacets: async () => (RICH_COUNTS),
+    fetchFeed: async () => ({ papers: [INBOX_PAPER], total: 1 }),
+    fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
     ]),
-    searchPreview: vi.fn().mockResolvedValue({ results: [], total: 0, source_errors: {} }),
-    batchSavePapers: vi.fn().mockResolvedValue([]),
+    searchPreview: async () => ({ results: [], total: 0, source_errors: {} }),
+    batchSavePapers: async () => ([]),
     // Lifecycle mutations
-    savePaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    skipPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markReading: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    trashPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    restorePaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    starPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    unstarPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    bulkAction: vi.fn().mockResolvedValue({ succeeded: [], failed: [] }),
-    discoverPapers: vi.fn().mockResolvedValue([]),
-    scanLocalPdfs: vi.fn().mockResolvedValue({ job_id: 'job-scan', status: 'queued' }),
-    batchProcessPapers: vi.fn().mockResolvedValue({ queued: 0, total_unprocessed: 0, skipped_missing_pdf: 0, job_id: 'job' }),
-    fetchTopics: vi.fn().mockResolvedValue([]),
-    fetchPulseHistory: vi.fn().mockResolvedValue([]),
-    zoteroGetLinkage: vi.fn().mockResolvedValue({ zotero_item_key: null, zotero_citation_key: null, zotero_last_pushed_at: null }),
-    uploadPdf: vi.fn().mockResolvedValue({ id: 99 }),
-    processPdf: vi.fn().mockResolvedValue({ job_id: 'job-pdf', status: 'queued' }),
-  };
+    savePaper: async () => ({ status: 'ok', paper_id: 1 }),
+    skipPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    markReading: async () => ({ status: 'ok', paper_id: 1 }),
+    markDone: async () => ({ status: 'ok', paper_id: 1 }),
+    trashPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    restorePaper: async () => ({ status: 'ok', paper_id: 1 }),
+    starPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    unstarPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    bulkAction: async () => ({ succeeded: [], failed: [] }),
+    discoverPapers: async () => ([]),
+    scanLocalPdfs: async () => ({ job_id: 'job-scan', status: 'queued' }),
+    batchProcessPapers: async () => ({ queued: 0, total_unprocessed: 0, skipped_missing_pdf: 0, job_id: 'job' }),
+    fetchTopics: async () => ([]),
+    fetchPulseHistory: async () => ([]),
+    zoteroGetLinkage: async () => ({ zotero_item_key: null, zotero_citation_key: null, zotero_last_pushed_at: null }),
+    uploadPdf: async () => ({ id: 99 }),
+    processPdf: async () => ({ job_id: 'job-pdf', status: 'queued' }),
+  });
 });
 
 function makeQueryClient() {

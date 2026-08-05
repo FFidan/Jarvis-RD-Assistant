@@ -57,10 +57,15 @@ vi.mock('@/lib/api', () => ({
 }));
 
 // --- sonner toast ----------------------------------------------------------
+// Shared sonner mock; the success member is additionally routed through the
+// toastSuccess spy the assertions in this file use.
 const toastSuccess = vi.fn();
-vi.mock('sonner', () => ({
-  toast: { success: (...a: unknown[]) => toastSuccess(...a) },
-}));
+vi.mock('sonner', async () => {
+  const { createSonnerMock } = await import('@/__tests__/fixtures/sonner-mock');
+  const mock = createSonnerMock();
+  mock.toast.success = vi.fn((...a: unknown[]) => toastSuccess(...a));
+  return mock;
+});
 
 import { useOfflineReviewQueue } from '@/components/cards/use-offline-review-queue';
 import { getReviewOutbox, __resetOutboxForTests } from '@/lib/review-outbox';

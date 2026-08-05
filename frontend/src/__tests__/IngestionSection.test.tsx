@@ -17,20 +17,20 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   const apiFetch = vi.fn();
-  // fetchSystemModels is the named export used by IngestionSection's queryFn.
-  // Wire it through to the same apiFetch mock so existing per-test
-  // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
-  const fetchSystemModels = vi.fn().mockImplementation((_signal?: AbortSignal) => apiFetch('/api/system/models'));
-  return {
-    ...orig,
+  const mocked = await createApiMock({
     fetchConfig: vi.fn(),
-    setConfig: vi.fn().mockResolvedValue({}),
-    apiFetch,
-    fetchSystemModels,
-  };
+    setConfig: async () => ({}),
+    // fetchSystemModels is the named export used by IngestionSection's queryFn.
+    // Wire it through to the same apiFetch mock so existing per-test
+    // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
+    fetchSystemModels: () => apiFetch('/api/system/models'),
+  });
+  // Export the very same apiFetch instance fetchSystemModels closes over —
+  // wrapping it would break that per-test control.
+  return Object.assign(mocked, { apiFetch });
 });
 
 // Mock Radix Slider with a simple range input for testability

@@ -10,7 +10,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const logoutMock = vi.fn();
 // Mutable so a test can flip the session between "signed in" (auto-logout fires)

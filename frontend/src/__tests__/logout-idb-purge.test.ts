@@ -30,13 +30,13 @@ Object.defineProperty(navigator, 'serviceWorker', {
 });
 
 // ------ Mock clearPersistedQueryCache so we can spy on it ------
-const mockClearPersistedQueryCache = vi.fn().mockResolvedValue(undefined);
+const mockClearPersistedQueryCache = vi.fn(async (): Promise<void> => undefined);
 vi.mock('@/lib/query-persister', () => ({
-  attachQueryPersister: vi.fn().mockReturnValue(() => {}),
+  attachQueryPersister: vi.fn(() => () => {}),
   clearPersistedQueryCache: mockClearPersistedQueryCache,
   GC_TIME: 7 * 24 * 60 * 60 * 1000,
-  shouldDehydrateQuery: vi.fn().mockReturnValue(false),
-  getPersistedCacheTimestamp: vi.fn().mockResolvedValue(null),
+  shouldDehydrateQuery: vi.fn(() => false),
+  getPersistedCacheTimestamp: vi.fn(async () => null),
 }));
 
 // ------ Dynamic imports (after stubs + mocks) ------

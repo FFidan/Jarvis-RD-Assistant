@@ -3,22 +3,18 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
-import type { FeedPaper, MissingFoundationalPaper } from '@/types';
+import type { MissingFoundationalPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const toastMocks = vi.hoisted(() => ({
-  success: vi.fn(),
-  error: vi.fn(),
-  warning: vi.fn(),
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
-vi.mock('sonner', () => ({
-  toast: toastMocks,
-}));
+const { toast } = await import('sonner');
 
 const startJobMock = vi.hoisted(() => vi.fn());
 
@@ -60,35 +56,6 @@ function renderSubject() {
 // ---------------------------------------------------------------------------
 // Shared fixture builders
 // ---------------------------------------------------------------------------
-
-function makeFeedPaper(overrides: Partial<FeedPaper> = {}): FeedPaper {
-  return {
-    id: 1,
-    external_id: 'ext-001',
-    source_type: 'arxiv' as const,
-    title: 'Action Item Paper',
-    authors: ['Author A'],
-    abstract: null,
-    published_date: '2026-01-01',
-    url: 'https://example.com/papers/ext-001',
-    pdf_url: null,
-    pdf_local_path: null,
-    pdf_downloaded: false,
-    discovered_at: '2026-01-01T00:00:00Z',
-    priority_score: null,
-    citation_count: 0,
-    metadata: {},
-    created_at: '2026-01-01T00:00:00Z',
-    discovery_origin: 'pulse',
-    user_state: null,
-    recent_feedback: null,
-    state: 'inbox' as const,
-    state_before_trash: null,
-    starred: false,
-    rating: null,
-    ...overrides,
-  };
-}
 
 function makeFoundationalPaper(overrides: Partial<MissingFoundationalPaper> = {}): MissingFoundationalPaper {
   return {
@@ -189,7 +156,7 @@ describe('TriageSection', () => {
     await user.click(processButton);
 
     await vi.waitFor(() => {
-      expect(toastMocks.error).toHaveBeenCalledWith('Could not start processing: queue full');
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not start processing: queue full');
     });
   });
 
@@ -205,7 +172,7 @@ describe('TriageSection', () => {
     await user.click(addButton);
 
     await vi.waitFor(() => {
-      expect(toastMocks.error).toHaveBeenCalledWith('Could not add the paper: locked');
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not add the paper: locked');
     });
   });
 });

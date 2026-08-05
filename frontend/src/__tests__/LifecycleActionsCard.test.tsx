@@ -32,13 +32,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-vi.mock('sonner', () => ({
-  toast: {
-    error: vi.fn(),
-    success: vi.fn(),
-    warning: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 function renderCard(
   state: LifecycleState = 'inbox',

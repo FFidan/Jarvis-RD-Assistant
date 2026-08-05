@@ -30,14 +30,16 @@ function LocationDisplay() {
   );
 }
 
-vi.mock('@/lib/api', () => ({
-  getFirstRunStatus: vi.fn().mockResolvedValue({ configured: false, setup_completed: false }),
-  runFirstRunSystemCheck: vi.fn().mockResolvedValue({
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+  getFirstRunStatus: async () => ({ configured: false, setup_completed: false }),
+  runFirstRunSystemCheck: async () => ({
     services: [{ name: 'postgres', ok: true, detail: null }],
     all_ok: true,
   }),
-  saveFirstRunSmtp: vi.fn().mockResolvedValue({ saved: true, test_sent: null, test_error: null }),
-  getSmtpConfig: vi.fn().mockResolvedValue({
+  saveFirstRunSmtp: async () => ({ saved: true, test_sent: null, test_error: null }),
+  getSmtpConfig: async () => ({
     host: null,
     port: null,
     user: null,
@@ -49,9 +51,9 @@ vi.mock('@/lib/api', () => ({
     deliverable: true,
     issues: [],
   }),
-  createFirstRunAdmin: vi.fn().mockResolvedValue({ id: 1, email: 'admin@example.com', role: 'admin' }),
-  saveFirstRunCloudKeys: vi.fn().mockResolvedValue({ saved_providers: [], applied_now: [], restart_required: false }),
-  getSetupStatus: vi.fn().mockResolvedValue({
+  createFirstRunAdmin: async () => ({ id: 1, email: 'admin@example.com', role: 'admin' }),
+  saveFirstRunCloudKeys: async () => ({ saved_providers: [], applied_now: [], restart_required: false }),
+  getSetupStatus: async () => ({
     setup_completed: false,
     models_ready: true,
     models_downloading: [],
@@ -59,19 +61,20 @@ vi.mock('@/lib/api', () => ({
     telegram_configured: false,
     telegram_paired: false,
   }),
-  createTopic: vi.fn().mockResolvedValue({ id: 1, name: 'test' }),
-  setConfig: vi.fn().mockResolvedValue({ key: 'pulse.cron', value: '0 4 * * *' }),
-  fetchConfig: vi.fn().mockResolvedValue([]),
-  fetchSources: vi.fn().mockResolvedValue([]),
+  createTopic: async () => ({ id: 1, name: 'test' }),
+  setConfig: async () => ({ key: 'pulse.cron', value: '0 4 * * *' }),
+  fetchConfig: async () => ([]),
+  fetchSources: async () => ([]),
   updateSource: vi.fn(),
-  markSetupCompleted: vi.fn().mockResolvedValue(undefined),
-  getTelegramPairing: vi.fn().mockResolvedValue({ paired: false, chat_id: null, telegram_username: null, paired_at: null }),
+  markSetupCompleted: async () => (undefined),
+  getTelegramPairing: async () => ({ paired: false, chat_id: null, telegram_username: null, paired_at: null }),
   removeTelegramPairing: vi.fn(),
   requestTelegramPairToken: vi.fn(),
-}));
+  });
+});
 
 vi.mock('@/lib/api/pulse', () => ({
-  generatePulseNow: vi.fn().mockResolvedValue({ job_id: 'pulse-job-1', status: 'queued' }),
+  generatePulseNow: vi.fn(async () => ({ job_id: 'pulse-job-1', status: 'queued' })),
 }));
 
 const api = await import('@/lib/api');

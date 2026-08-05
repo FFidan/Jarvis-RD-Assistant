@@ -3,7 +3,8 @@ import { toast } from 'sonner';
 
 // Mock sonner — logs.ts → sse-reader.ts now imports handleAuthFailure
 // (from @/lib/api/core), which toasts via sonner on a genuine 401.
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const logoutMock = vi.fn();
 vi.mock('@/stores/auth-store', () => ({

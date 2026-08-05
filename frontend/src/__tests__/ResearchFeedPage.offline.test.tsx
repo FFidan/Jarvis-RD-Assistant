@@ -35,37 +35,37 @@ vi.mock('@/lib/query-persister', () => ({
 // API mocks — minimal stubs so the component mounts without network calls
 // ---------------------------------------------------------------------------
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...actual,
-    fetchFeedPapers: vi.fn().mockResolvedValue({ papers: [], total: 0, offset: 0, limit: 20 }),
-    fetchFeedCounts: vi.fn().mockResolvedValue({
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchFeedPapers: async () => ({ papers: [], total: 0, offset: 0, limit: 20 }),
+    fetchFeedCounts: async () => ({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
       active: 5, kept: 5, all_non_trash: 5,
     }),
-    fetchSources: vi.fn().mockResolvedValue([]),
-    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
+    fetchSources: async () => [],
+    fetchFeedCountsWithFacets: async () => ({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
       active: 5, kept: 5, all_non_trash: 5,
       by_source: {}, by_topic: [], untagged: 0,
     }),
-    searchPreview: vi.fn(),
-    batchSavePapers: vi.fn(),
-  };
+    searchPreview: () => undefined,
+    batchSavePapers: () => undefined,
+  });
 });
 
 
 vi.mock('@/stores/bulk-selection-store', () => ({
-  useBulkSelection: Object.assign(vi.fn().mockReturnValue([]), {
-    getState: vi.fn().mockReturnValue({ clear: vi.fn(), selectedIds: new Set() }),
+  useBulkSelection: Object.assign(vi.fn(() => []), {
+    getState: vi.fn(() => ({ clear: vi.fn(), selectedIds: new Set() })),
   }),
 }));
 
 vi.mock('@/stores/job-store', () => ({
-  useJobStore: vi.fn().mockReturnValue(vi.fn()),
+  useJobStore: vi.fn(() => vi.fn()),
 }));
 
 // ---------------------------------------------------------------------------

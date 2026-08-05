@@ -6,37 +6,26 @@ import { toast } from 'sonner';
 import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
 
-// Minimal FeedPaper fixture used across all surface tests (test-body only — not used inside vi.mock factory)
-const mockPaper: FeedPaper = {
-  id: 1,
+// Hoisted so the same field values are visible both to test bodies and to the
+// hoisted vi.mock factory below.
+const surfacePaperOverrides = vi.hoisted(() => ({
   external_id: 'arxiv:2601.00001',
-  source_type: 'arxiv',
   title: 'Surface Callback Test Paper',
   authors: ['Alice Researcher'],
   abstract: 'A paper for testing surface-aware callbacks.',
-  published_date: '2026-01-01',
   url: 'https://example.com/paper/1',
-  pdf_url: null,
-  pdf_local_path: null,
-  pdf_downloaded: false,
-  discovered_at: null,
-  citation_count: 0,
   priority_score: 0.5,
-  metadata: {},
   created_at: '2026-01-02T00:00:00Z',
+  discovered_at: null,
   summary_brief: 'Brief summary',
   tldr: null,
   confidence: null,
-  rating: null,
   has_chunks: false,
   has_summary: false,
-  state: 'inbox',
-  state_before_trash: null,
-  starred: false,
-  discovery_origin: 'pulse',
   user_state: {
-    state: 'inbox',
+    state: 'inbox' as const,
     state_before_trash: null,
     starred: false,
     rating: null,
@@ -44,69 +33,31 @@ const mockPaper: FeedPaper = {
     flagged: false,
     updated_at: null,
   },
-  recent_feedback: null,
-};
+}));
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  // Inline paper object — cannot reference module-level vars here (vi.mock is hoisted)
-  const paper = {
-    id: 1,
-    external_id: 'arxiv:2601.00001',
-    source_type: 'arxiv' as const,
-    title: 'Surface Callback Test Paper',
-    authors: ['Alice Researcher'],
-    abstract: 'A paper for testing surface-aware callbacks.',
-    published_date: '2026-01-01',
-    url: 'https://example.com/paper/1',
-    pdf_url: null,
-    citation_count: 0,
-    priority_score: 0.5,
-    metadata: {},
-    created_at: '2026-01-02T00:00:00Z',
-    summary_brief: 'Brief summary',
-    tldr: null,
-    confidence: null,
-    rating: null,
-    has_chunks: false,
-    has_summary: false,
-    state: 'inbox' as const,
-    state_before_trash: null,
-    starred: false,
-    discovery_origin: 'pulse' as const,
-    user_state: {
-      state: 'inbox' as const,
-      state_before_trash: null,
-      starred: false,
-      rating: null,
-      user_notes: null,
-      flagged: false,
-      updated_at: null,
-    },
-    recent_feedback: null,
-  };
-  return {
-    ...actual,
-    fetchFeed: vi.fn().mockResolvedValue({ papers: [paper], total: 1 }),
-    savePaper: vi.fn().mockResolvedValue({ ok: true }),
-    skipPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markReading: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    trashPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    restorePaper: vi.fn().mockResolvedValue({ ok: true }),
-    hardDeletePaper: vi.fn().mockResolvedValue({ deleted: 1 }),
-    starPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    unstarPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    bulkAction: vi.fn().mockResolvedValue({ succeeded: [], failed: [] }),
-  };
+const mockPaper: FeedPaper = makeFeedPaper(surfacePaperOverrides);
+
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const { makeFeedPaper: makePaper } = await import('@/__tests__/fixtures/feed-paper');
+  const paper = makePaper(surfacePaperOverrides);
+  return createApiMock({
+    fetchFeed: async () => ({ papers: [paper], total: 1 }),
+    savePaper: async () => ({ ok: true }),
+    skipPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    markReading: async () => ({ status: 'ok', paper_id: 1 }),
+    markDone: async () => ({ status: 'ok', paper_id: 1 }),
+    trashPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    restorePaper: async () => ({ ok: true }),
+    hardDeletePaper: async () => ({ deleted: 1 }),
+    starPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    unstarPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    bulkAction: async () => ({ succeeded: [], failed: [] }),
+  });
 });
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 function makeQueryClient() {
   return createTestQueryClient();
@@ -248,33 +199,22 @@ describe('FeedView — shortcut callback freshness', () => {
     return { getPath: () => capturedPath };
   }
 
-  const freshPaper: FeedPaper = {
+  const freshPaper: FeedPaper = makeFeedPaper({
     id: 42,
     external_id: 'arxiv:2601.00042',
-    source_type: 'arxiv',
     title: 'Fresh Shortcut Paper',
     authors: ['Carol Researcher'],
     abstract: 'Abstract for shortcut freshness test.',
     published_date: '2026-02-01',
     url: 'https://example.com/paper/42',
-    pdf_url: null,
-    pdf_local_path: null,
-    pdf_downloaded: false,
     discovered_at: null,
-    citation_count: 0,
     priority_score: 0.7,
-    metadata: {},
     created_at: '2026-02-02T00:00:00Z',
     summary_brief: 'Brief',
     tldr: null,
     confidence: null,
-    rating: null,
     has_chunks: false,
     has_summary: false,
-    state: 'inbox',
-    state_before_trash: null,
-    starred: false,
-    discovery_origin: 'pulse',
     user_state: {
       state: 'inbox',
       state_before_trash: null,
@@ -284,8 +224,7 @@ describe('FeedView — shortcut callback freshness', () => {
       flagged: false,
       updated_at: null,
     },
-    recent_feedback: null,
-  };
+  });
 
   it('o key navigates to the paper at focused index (shortcutCallbacks.onOpenDetail is not stale)', async () => {
     const api = await import('@/lib/api');

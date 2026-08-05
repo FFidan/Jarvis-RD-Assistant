@@ -13,72 +13,59 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
 
-// vi.mock is hoisted above module-level const — fixtures that must be referenced
-// inside the factory MUST be declared with vi.hoisted().
-const { PAPER } = vi.hoisted(() => {
-  const PAPER: FeedPaper = {
-    id: 1,
-    external_id: 'arxiv:2601.00001',
-    source_type: 'arxiv',
-    title: 'Source Facet Test Paper',
-    authors: ['Alice'],
-    abstract: 'Abstract.',
-    published_date: '2026-01-01',
-    url: 'https://example.com/paper/1',
-    pdf_url: null,
-    pdf_local_path: null,
-    pdf_downloaded: false,
-    discovered_at: null,
-    citation_count: 0,
-    priority_score: 0.5,
-    metadata: {},
-    created_at: '2026-01-02T00:00:00Z',
-    summary_brief: 'Brief',
-    tldr: null,
-    confidence: null,
-    rating: null,
-    has_chunks: false,
-    has_summary: false,
-    state: 'to_read',
+// Hoisted so the same field values are visible both to test bodies and to the
+// hoisted vi.mock factory below.
+const sourceFacetPaperOverrides = vi.hoisted(() => ({
+  external_id: 'arxiv:2601.00001',
+  title: 'Source Facet Test Paper',
+  authors: ['Alice'],
+  abstract: 'Abstract.',
+  url: 'https://example.com/paper/1',
+  discovered_at: null,
+  priority_score: 0.5,
+  created_at: '2026-01-02T00:00:00Z',
+  summary_brief: 'Brief',
+  tldr: null,
+  confidence: null,
+  has_chunks: false,
+  has_summary: false,
+  state: 'to_read' as const,
+  user_state: {
+    state: 'to_read' as const,
     state_before_trash: null,
     starred: false,
-    discovery_origin: 'pulse',
-    user_state: {
-      state: 'to_read',
-      state_before_trash: null,
-      starred: false,
-      rating: null,
-      user_notes: null,
-      flagged: false,
-      updated_at: null,
-    },
-    recent_feedback: null,
-  };
-  return { PAPER };
-});
-
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...actual,
-    fetchFeed: vi.fn().mockResolvedValue({ papers: [PAPER], total: 1 }),
-    savePaper: vi.fn().mockResolvedValue({ ok: true }),
-    skipPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markReading: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    trashPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    restorePaper: vi.fn().mockResolvedValue({ ok: true }),
-    hardDeletePaper: vi.fn().mockResolvedValue({ deleted: 1 }),
-    starPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    unstarPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    bulkAction: vi.fn().mockResolvedValue({ succeeded: [], failed: [] }),
-  };
-});
-
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+    rating: null,
+    user_notes: null,
+    flagged: false,
+    updated_at: null,
+  },
 }));
+
+const PAPER: FeedPaper = makeFeedPaper(sourceFacetPaperOverrides);
+
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const { makeFeedPaper: makePaper } = await import('@/__tests__/fixtures/feed-paper');
+  const paper = makePaper(sourceFacetPaperOverrides);
+  return createApiMock({
+    fetchFeed: async () => ({ papers: [paper], total: 1 }),
+    savePaper: async () => ({ ok: true }),
+    skipPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    markReading: async () => ({ status: 'ok', paper_id: 1 }),
+    markDone: async () => ({ status: 'ok', paper_id: 1 }),
+    trashPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    restorePaper: async () => ({ ok: true }),
+    hardDeletePaper: async () => ({ deleted: 1 }),
+    starPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    unstarPaper: async () => ({ status: 'ok', paper_id: 1 }),
+    bulkAction: async () => ({ succeeded: [], failed: [] }),
+  });
+});
+
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 function makeQC() {
   return createTestQueryClient();

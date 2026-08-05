@@ -31,9 +31,8 @@ const restoreUserMock = vi.fn();
 const sendSignInLinkMock = vi.fn();
 const transferOwnerMock = vi.fn();
 
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 // Map of aria-label → onValueChange callback, populated as rows mount.
 // Used by the per-row isolation test to trigger mutations without Radix portals.
@@ -504,7 +503,9 @@ describe('AdminUsersPage — role mutation lifecycle (H2)', () => {
   it('pendingRoleUserId is set during mutation and cleared on success', async () => {
     let resolveRole!: () => void;
     updateUserRoleMock.mockReturnValue(new Promise<void>((res) => { resolveRole = res; }));
-    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    // Persistent, not Once: the success path invalidates and refetches the
+    // users query, so the second fetch needs data too.
+    listUsersMock.mockResolvedValue(_sampleUsers);
 
     renderPage();
     await waitFor(() => screen.getByText('alice@example.com'));
@@ -556,7 +557,9 @@ describe('AdminUsersPage — delete mutation lifecycle (H2)', () => {
   it('pendingDeleteUserId is set during mutation and cleared on success', async () => {
     let resolveDelete!: () => void;
     deleteUserMock.mockReturnValue(new Promise<void>((res) => { resolveDelete = res; }));
-    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    // Persistent, not Once: the success path invalidates and refetches the
+    // users query, so the second fetch needs data too.
+    listUsersMock.mockResolvedValue(_sampleUsers);
 
     renderPage();
     await waitFor(() => screen.getByText('alice@example.com'));

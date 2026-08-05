@@ -22,10 +22,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
-  return {
-    ...actual,
-    getSetupStatus: vi.fn().mockResolvedValue({
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const { ApiError } = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return createApiMock({
+    getSetupStatus: async () => ({
       setup_completed: true,
       models_ready: true,
       models_downloading: [],
@@ -34,12 +34,12 @@ vi.mock('@/lib/api', async () => {
       telegram_paired: false,
     }),
     // Default: fresh, unconfigured install — gate should render the wizard.
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: false, setup_completed: false }),
-    runFirstRunSystemCheck: vi.fn().mockResolvedValue({
+    getFirstRunStatus: async () => ({ configured: false, setup_completed: false }),
+    runFirstRunSystemCheck: async () => ({
       services: [{ name: 'postgres', ok: true, detail: null }],
       all_ok: true,
     }),
-    fetchDashboardMetrics: vi.fn().mockResolvedValue({
+    fetchDashboardMetrics: async () => ({
       total_papers: 0,
       unread_papers: 0,
       pending_papers: 0,
@@ -51,10 +51,10 @@ vi.mock('@/lib/api', async () => {
     }),
     // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
     // unauthenticated tests deterministically stay unauthenticated.
-    fetchAccount: vi.fn().mockRejectedValue(
-      new actual.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
-    ),
-  };
+    fetchAccount: async () => {
+      throw new ApiError(401, JSON.stringify({ detail: 'Not authenticated' }));
+    },
+  });
 });
 
 vi.stubGlobal('fetch', vi.fn());

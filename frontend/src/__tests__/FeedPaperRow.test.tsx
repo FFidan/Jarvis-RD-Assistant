@@ -6,6 +6,7 @@ import React from 'react';
 import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
 
 // FeedbackButtons uses useMutation — wrap with QueryClientProvider
 function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
@@ -16,33 +17,22 @@ function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
   );
 }
 
-const paper: FeedPaper = {
+const paper: FeedPaper = makeFeedPaper({
   id: 7,
   external_id: 'arxiv:2601.00007',
-  source_type: 'arxiv',
   title: 'Shared Feed Row Paper',
   authors: ['Ada Lovelace', 'Grace Hopper'],
   abstract: 'Abstract',
-  published_date: '2026-01-01',
   url: 'https://example.com/paper',
-  pdf_url: null,
-  pdf_local_path: null,
-  pdf_downloaded: false,
   discovered_at: null,
   citation_count: 5,
   priority_score: 0.75,
-  metadata: {},
   created_at: '2026-01-02T00:00:00Z',
   summary_brief: 'Brief summary',
   tldr: null,
   confidence: 'HIGH',
-  rating: null,
   has_chunks: true,
   has_summary: false,
-  state: 'inbox',
-  state_before_trash: null,
-  starred: false,
-  discovery_origin: 'pulse',
   user_state: {
     state: 'inbox',
     state_before_trash: null,
@@ -52,8 +42,7 @@ const paper: FeedPaper = {
     flagged: false,
     updated_at: null,
   },
-  recent_feedback: null,
-};
+});
 
 const toReadPaper: FeedPaper = {
   ...paper,

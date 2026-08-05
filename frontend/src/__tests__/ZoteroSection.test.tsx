@@ -54,12 +54,8 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
-vi.mock('sonner', () => ({
-  toast: {
-    error: vi.fn(),
-    success: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { fetchConfig, setConfig, zoteroPollNow, zoteroTest } = await import('@/lib/api');
 const { useJobStore } = await import('@/stores/job-store');

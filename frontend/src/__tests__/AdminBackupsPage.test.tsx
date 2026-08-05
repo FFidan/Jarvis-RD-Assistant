@@ -21,7 +21,8 @@ const getRetentionMock = vi.fn();
 const putRetentionMock = vi.fn();
 const acknowledgeRestoreMock = vi.fn();
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/lib/api/backups', () => ({
   getRestorePoints: () => getRestorePointsMock(),

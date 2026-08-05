@@ -13,11 +13,10 @@ import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // Mock the API module — includes fetchAnalyticsSummary + all existing chart fns.
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...orig,
-    fetchAnalyticsSummary: vi.fn().mockResolvedValue({
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchAnalyticsSummary: async () => ({
       papers_read_total: 24,
       focus_hours_total: 37.2,
       cards_reviewed_total: 412,
@@ -27,28 +26,28 @@ vi.mock('@/lib/api', async (importOriginal) => {
       focus_streak_days: 5,
       cards_review_streak_days: 28,
     }),
-    fetchAnalyticsActivity: vi.fn().mockResolvedValue([
+    fetchAnalyticsActivity: async () => ([
       { log_date: '2026-03-01', tasks_completed: 2, cards_reviewed: 5, papers_read: 1, focus_hours: 3, notes: null },
     ]),
-    fetchAnalyticsRetention: vi.fn().mockResolvedValue([
+    fetchAnalyticsRetention: async () => ([
       { review_date: '2026-03-01', total: 10, good_easy: 8, retention_pct: 80.0 },
     ]),
-    fetchAnalyticsReviews: vi.fn().mockResolvedValue([
+    fetchAnalyticsReviews: async () => ([
       { rating: 3, count: 15 },
       { rating: 4, count: 10 },
     ]),
-    fetchAnalyticsLlmCost: vi.fn().mockResolvedValue([
+    fetchAnalyticsLlmCost: async () => ([
       { day: '2026-03-01', total_cost: 0.05, workflow: 'summarize' },
     ]),
-    fetchPapersBySource: vi.fn().mockResolvedValue([
+    fetchPapersBySource: async () => ([
       { source_type: 'arxiv', count: 10 },
       { source_type: 'local', count: 5 },
     ]),
-    fetchPapersByStatus: vi.fn().mockResolvedValue([
+    fetchPapersByStatus: async () => ([
       { status: 'new', count: 8 },
       { status: 'read', count: 7 },
     ]),
-  };
+  });
 });
 
 function renderPage() {

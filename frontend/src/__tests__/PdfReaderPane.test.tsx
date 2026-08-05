@@ -122,10 +122,14 @@ vi.mock('@/stores/job-store', () => ({
     selector({ trackExternalJob: mocks.trackExternalJob, isRunning: mocks.isRunning }),
 }));
 
-// Spy on sonner toasts (error path).
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: (...args: unknown[]) => mocks.toastError(...args) },
-}));
+// Shared sonner mock; the error member is additionally routed through the
+// hoisted mocks.toastError spy the assertions in this file use.
+vi.mock('sonner', async () => {
+  const { createSonnerMock } = await import('@/__tests__/fixtures/sonner-mock');
+  const mock = createSonnerMock();
+  mock.toast.error = vi.fn((...args: unknown[]) => mocks.toastError(...args));
+  return mock;
+});
 
 function makeHighlight(overrides: Partial<Highlight> = {}): Highlight {
   return {

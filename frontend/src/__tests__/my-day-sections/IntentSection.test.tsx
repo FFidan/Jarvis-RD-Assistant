@@ -26,13 +26,8 @@ vi.mock('@/lib/api', () => ({
   saveIntentToday: vi.fn().mockResolvedValue({ intent: null, updated_at: null }),
 }));
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { fetchMyDay, updateTask } = await import('@/lib/api');
 const { toast } = await import('sonner');

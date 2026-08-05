@@ -42,18 +42,19 @@ vi.mock('@/components/ui/select', () => ({
   ),
 }));
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
-  const apiFetch = vi.fn().mockResolvedValue({});
-  // fetchSystemModels is the named export used by ModelSelector's queryFn.
-  // Wire it through to the same apiFetch mock so existing per-test
-  // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
-  const fetchSystemModels = vi.fn().mockImplementation((_signal?: AbortSignal) => apiFetch('/api/system/models'));
-  return {
-    ...orig,
-    apiFetch,
-    fetchSystemModels,
-  };
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const apiFetch: import('vitest').Mock<(path?: string, init?: unknown) => Promise<unknown>> =
+    vi.fn(async () => ({}));
+  const mocked = await createApiMock({
+    // fetchSystemModels is the named export used by ModelSelector's queryFn.
+    // Wire it through to the same apiFetch mock so existing per-test
+    // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
+    fetchSystemModels: () => apiFetch('/api/system/models'),
+  });
+  // Export the very same apiFetch instance fetchSystemModels closes over —
+  // wrapping it would break that per-test control.
+  return Object.assign(mocked, { apiFetch });
 });
 
 function renderComponent(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {

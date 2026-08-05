@@ -10,15 +10,10 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 
 // --- Mock sonner toast ---
 
-const toastMocks = vi.hoisted(() => ({
-  success: vi.fn(),
-  error: vi.fn(),
-  warning: vi.fn(),
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
-vi.mock('sonner', () => ({
-  toast: toastMocks,
-}));
+const { toast } = await import('sonner');
 
 // --- Mock useNavigate ---
 
@@ -107,18 +102,17 @@ vi.mock('@/lib/api/core', () => ({
   apiFetch: apiCoreMocks.apiFetch,
 }));
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...orig,
-    downloadPdf: vi.fn().mockResolvedValue({}),
-    processPdf: vi.fn().mockResolvedValue({ job_id: 'job-process-001', status: 'queued' }),
-    summarizePaper: vi.fn().mockResolvedValue({ job_id: 'job-summary-001', status: 'queued' }),
-    generateCardsJob: vi.fn().mockResolvedValue({ job_id: 'test-job-001', status: 'queued' }),
-    fetchDecks: vi.fn().mockResolvedValue([
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    downloadPdf: async () => ({}),
+    processPdf: async () => ({ job_id: 'job-process-001', status: 'queued' }),
+    summarizePaper: async () => ({ job_id: 'job-summary-001', status: 'queued' }),
+    generateCardsJob: async () => ({ job_id: 'test-job-001', status: 'queued' }),
+    fetchDecks: async () => [
       { id: 1, name: 'ML Fundamentals', description: null, card_count: 10, due_count: 0, topic_id: null, created_at: '2026-01-01T00:00:00Z' },
-    ]),
-  };
+    ],
+  });
 });
 
 const { downloadPdf, processPdf, summarizePaper, fetchDecks } = await import('@/lib/api');
@@ -698,7 +692,7 @@ describe('ActionsSidebar', () => {
     await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
 
     await waitFor(() => {
-      expect(toastMocks.success).toHaveBeenCalledWith(
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
         'Analyzed! You can now Ask across your library',
         expect.objectContaining({
           action: expect.objectContaining({ label: 'Go to Ask' }),
@@ -707,7 +701,7 @@ describe('ActionsSidebar', () => {
     });
 
     // Invoke the action's onClick to confirm it navigates to /ask
-    const call = toastMocks.success.mock.calls[0];
+    const call = vi.mocked(toast.success).mock.calls[0];
     const opts = call?.[1] as { action?: { label: string; onClick: () => void } } | undefined;
     opts?.action?.onClick();
     expect(mockNavigate).toHaveBeenCalledWith('/ask');
@@ -748,7 +742,7 @@ describe('ActionsSidebar', () => {
     }));
 
     await waitFor(() => {
-      expect(toastMocks.warning).toHaveBeenCalledWith(
+      expect(vi.mocked(toast.warning)).toHaveBeenCalledWith(
         expect.stringContaining('No reliable cards could be generated'),
       );
     });
@@ -770,7 +764,7 @@ describe('ActionsSidebar', () => {
       expect(screen.getByText('Generated 3 cards (confidence: HIGH)')).toBeInTheDocument();
     });
 
-    expect(toastMocks.warning).not.toHaveBeenCalled();
+    expect(vi.mocked(toast.warning)).not.toHaveBeenCalled();
   });
 
   it('renders tooltip info icons for visible action buttons', async () => {

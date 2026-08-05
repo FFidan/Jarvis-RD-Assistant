@@ -51,8 +51,8 @@ const { useCommandPalette } = await import('@/stores/command-palette-store');
 // --- QueryClient mock ---
 
 const cancelOrder: string[] = [];
-const mockQueryClientClear = vi.fn().mockImplementation(() => { cancelOrder.push('clear'); });
-const mockQueryClientCancelQueries = vi.fn().mockImplementation(() => { cancelOrder.push('cancelQueries'); return Promise.resolve(); });
+const mockQueryClientClear = vi.fn(() => { cancelOrder.push('clear'); });
+const mockQueryClientCancelQueries = vi.fn(() => { cancelOrder.push('cancelQueries'); return Promise.resolve(); });
 const fakeQueryClient = {
   clear: mockQueryClientClear,
   cancelQueries: mockQueryClientCancelQueries,
