@@ -1297,10 +1297,8 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
     from paper_ingestion.ingestion.search_scope import SearchScope
     from paper_ingestion.models import ChunkForEmbedding
     from paper_ingestion.services import embedding_reconcile as embedding_reconcile_module
-    from paper_ingestion.services.pdf_workflow import (
-        _delete_reconcile_generation,
-        reconcile_paper_embeddings,
-    )
+    from paper_ingestion.services.embedding_reconcile import _delete_reconcile_generation
+    from paper_ingestion.services.pdf_workflow import reconcile_paper_embeddings
     from qdrant_client import AsyncQdrantClient
     from qdrant_client.models import Distance, VectorParams
 

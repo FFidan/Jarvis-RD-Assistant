@@ -41,7 +41,6 @@ from paper_ingestion.pdf_processor import pdf_publish_operation
 from paper_ingestion.services.embedding_reconcile import (
     _PERSISTED_CHUNKS_SQL,
     EmbeddingReconcileResult,  # noqa: F401  # re-export
-    _delete_reconcile_generation,  # noqa: F401  # re-export
     _load_paper_embedding_context,
     _reconcile_paper_embeddings_locked,
     _reconcile_resume_content,
@@ -49,18 +48,15 @@ from paper_ingestion.services.embedding_reconcile import (
     reconcile_paper_embeddings,  # noqa: F401  # re-export
 )
 from paper_ingestion.services.paper_content_reclaim import (
-    _DISCARDED_CONTENT_STATE_SQL,  # noqa: F401  # re-export
     _reclaim_discarded_paper_content_on_connection,
     reclaim_discarded_paper_content,  # noqa: F401  # re-export
 )
 from paper_ingestion.services.paper_locks import (
-    _PAPER_LOCK_MAX_WAIT_SECONDS,  # noqa: F401  # re-export
     _paper_mutation_connection,
     advisory_lock,  # noqa: F401  # re-export
     paper_locked_error,  # noqa: F401  # re-export
 )
 from paper_ingestion.services.paper_upsert import (
-    _DELETE_DERIVED_CHUNKS_SQL,  # noqa: F401  # re-export
     upsert_paper,  # noqa: F401  # re-export
     upsert_verified_public_paper,  # noqa: F401  # re-export
 )

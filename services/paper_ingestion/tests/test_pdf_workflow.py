@@ -20,6 +20,7 @@ from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.services import embedding_reconcile as embedding_reconcile_module
 from paper_ingestion.services import paper_content_reclaim as paper_content_reclaim_module
+from paper_ingestion.services import paper_locks as paper_locks_module
 from paper_ingestion.services import pdf_workflow as pdf_workflow_module
 from paper_ingestion.services.pdf_workflow import (
     PDFRebuildNotPermittedError,
@@ -305,9 +306,9 @@ async def test_paper_lock_probe_loop_gives_up_after_its_total_deadline(monkeypat
                 pytest.fail("the contended lock must never be reported as acquired")
 
     assert "Paper 77 is locked by another long-running operation" in str(raised.value)
-    assert sum(slept) >= pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    assert sum(slept) >= paper_locks_module._PAPER_LOCK_MAX_WAIT_SECONDS
     # ... and not one probe earlier: the refusal waits out the whole budget.
-    assert sum(slept[:-1]) < pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    assert sum(slept[:-1]) < paper_locks_module._PAPER_LOCK_MAX_WAIT_SECONDS
     assert pool.release_count == 0
 
 
@@ -1727,7 +1728,7 @@ async def test_reconcile_cleanup_preserves_same_content_from_new_generation(
         "visibility_lease_is_current",
         _replace_then_confirm_lease,
     )
-    await pdf_workflow_module._delete_reconcile_generation(
+    await embedding_reconcile_module._delete_reconcile_generation(
         SimpleNamespace(qdrant=qdrant),
         paper_id,
         [chunk],
@@ -3153,10 +3154,8 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Refreshing a public row to a different source URL deletes its chunk rows."""
-    from paper_ingestion.services.pdf_workflow import (
-        _DELETE_DERIVED_CHUNKS_SQL,
-        upsert_verified_public_paper,
-    )
+    from paper_ingestion.services.paper_upsert import _DELETE_DERIVED_CHUNKS_SQL
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     promoted = _PROMOTED_ROW
     conn = _promoting_conn(
@@ -3418,10 +3417,8 @@ async def test_reclamation_removes_the_vectors_the_stored_pdf_and_the_page_image
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A paper still describing a discard gives up all three at once."""
-    from paper_ingestion.services.pdf_workflow import (
-        _DISCARDED_CONTENT_STATE_SQL,
-        reclaim_discarded_paper_content,
-    )
+    from paper_ingestion.services.paper_content_reclaim import _DISCARDED_CONTENT_STATE_SQL
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
 
     pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
     deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
@@ -3666,8 +3663,8 @@ def _promoted_mid_run_answers():
     Answers are chosen by statement rather than by call order, so a read added
     to the workflow cannot silently shift every later answer by one.
     """
+    from paper_ingestion.services.paper_content_reclaim import _DISCARDED_CONTENT_STATE_SQL
     from paper_ingestion.services.pdf_workflow import (
-        _DISCARDED_CONTENT_STATE_SQL,
         _LOCKED_PAPER_SOURCE_URL_SQL,
         _PAPER_PDF_READY_SQL,
         _PAPER_SOURCE_URL_SQL,
