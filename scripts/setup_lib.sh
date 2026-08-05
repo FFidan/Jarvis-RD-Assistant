@@ -39,6 +39,11 @@
 # terminal, so piped output and log files stay free of escape codes.
 # `die`/`usage_error`/`env_die` deliberately stay with their scripts: each owns a
 # different exit code and next-step hint.
+# C_BOLD is read only by the scripts that source this library (setup.sh, update.sh,
+# scripts/jarvis-setup.sh, scripts/jarvis-research.sh, scripts/uninstall.sh,
+# scripts/validate-hardware.sh) and never by the helpers below, so shellcheck
+# cannot see the use.
+# shellcheck disable=SC2034
 if [ -t 1 ]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
   C_BLUE=$'\033[34m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
@@ -221,7 +226,7 @@ _lifecycle_path_inside_repo() {
 # different lock domains.
 _lifecycle_compose_config_json() {
   local repo="$1" project="$2" raw item candidate canon base env_file seen=""
-  local -a requested=() files=() cmd=()
+  local -a requested_files=() files=() cmd=()
   repo="$(cd -- "$repo" 2>/dev/null && pwd -P)" || return 1
   base="$(canonical_path_portable "$repo/docker-compose.yml" 2>/dev/null || true)"
   [ -n "$base" ] && [ -f "$base" ] || return 1
@@ -235,8 +240,8 @@ _lifecycle_compose_config_json() {
     [ ! -f "$repo/docker-compose.override.yml" ] \
       || raw="${raw}:docker-compose.override.yml"
   fi
-  IFS=: read -r -a requested <<< "$raw"
-  for item in "${requested[@]}"; do
+  IFS=: read -r -a requested_files <<< "$raw"
+  for item in "${requested_files[@]}"; do
     [ -n "$item" ] || return 1
     case "$item" in /*) candidate="$item" ;; *) candidate="$repo/$item" ;; esac
     canon="$(canonical_path_portable "$candidate" 2>/dev/null || true)"
@@ -423,6 +428,9 @@ clear_retained_lifecycle_operation() {
 # wait_for_compose_service_health SERVICE BUDGET LOOKUP_FUNCTION [INTERVAL]
 # Sets COMPOSE_HEALTH_RESULT to healthy, running-unverified, terminal, or
 # timeout, and COMPOSE_HEALTH_LAST_STATE to the last observed container state.
+# Both globals are read by the callers (setup.sh, update.sh, scripts/jarvis-setup.sh)
+# after this returns, never inside this library, so shellcheck cannot see the use.
+# shellcheck disable=SC2034
 wait_for_compose_service_health() {
   local service="${1:-}" budget="${2:-}" lookup="${3:-}" interval="${4:-3}"
   local elapsed=0 step cid inspection health_state run_state
@@ -1653,10 +1661,10 @@ PY
 # Compose's implicit override auto-load, and overlay-before-override lets a dev
 # override's `deploy: !reset null` win).
 compute_compose_file() {
-  local overlay="$1" override="$2" files="docker-compose.yml"
-  [ -n "$overlay" ] && files="${files}:docker-compose.${overlay}.yml"
-  [ "$override" = "1" ] && files="${files}:docker-compose.override.yml"
-  printf '%s' "$files"
+  local overlay="$1" override="$2" joined="docker-compose.yml"
+  [ -n "$overlay" ] && joined="${joined}:docker-compose.${overlay}.yml"
+  [ "$override" = "1" ] && joined="${joined}:docker-compose.override.yml"
+  printf '%s' "$joined"
 }
 
 # compute_ollama_models SMART_MODEL -> echoes the comma-set ollama-bootstrap must
@@ -2673,7 +2681,7 @@ verify_release_manifests() {
   local ns="ghcr.io/limitcycle-oss/jarvis-"
   local svc suffix p row name delivery
   local versions_env img
-  local -a images=() skipped=()
+  local -a images=() skipped_images=()
 
   # Application images (registry-backed at the target version).
   for svc in "${PUBLISHED_SERVICES_BASE[@]}"; do
@@ -2699,7 +2707,7 @@ verify_release_manifests() {
       IFS='|' read -r name _ _ _ _ _ _ delivery <<< "$row"
       [ "$name" = "$p" ] || continue
       if [ "$delivery" = "local-build" ]; then
-        skipped+=("jarvis/langfuse-hardened:${target_version}")
+        skipped_images+=("jarvis/langfuse-hardened:${target_version}")
       else
         case "$p" in
           caddy-local|letsencrypt)
@@ -2720,8 +2728,8 @@ verify_release_manifests() {
       rc=1
     fi
   done
-  if [ "${#skipped[@]}" -gt 0 ]; then
-    for ref in "${skipped[@]}"; do
+  if [ "${#skipped_images[@]}" -gt 0 ]; then
+    for ref in "${skipped_images[@]}"; do
       printf 'SKIPPED %s (local build, not published)\n' "$ref"
     done
   fi

@@ -1391,6 +1391,10 @@ SQL
 # so every pre-restore, missing, or unrelated Qdrant point remains invisible until
 # the application validates and retags it. The global user_config row exists in
 # every supported schema and lets older backups fail closed before migrations run.
+# VECTOR_VISIBILITY_GENERATION is this function's result for callers that source
+# this script with --functions-only (tests/test_backup_restore_scripts.py reads it);
+# the restore flow itself does not, so shellcheck cannot see the use.
+# shellcheck disable=SC2034
 rotate_vector_visibility_checkpoint() {
   local step_status="$1" qdrant_recovery generation rotated_at
   case "$step_status" in

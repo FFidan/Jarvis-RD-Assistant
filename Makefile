@@ -106,14 +106,23 @@ test-shell-contracts:
 	bash scripts/tests/test_jarvis_research_cli.sh
 	bash scripts/tests/test_uninstall.sh
 
-## Static analysis for the shell entry points the lifecycle contracts exercise.
-## Gated at --severity=warning on purpose: shellcheck's info level here is
-## entirely SC2015 ("A && B || C is not if-then-else"), a style preference these
-## scripts deliberately do not follow, so gating on it would block the build on
-## formatting rather than on defects. Missing shellcheck is a hard failure --
-## a check that silently skips is not a check.
+## Static analysis for the scripts that install, upgrade and operate a deployment,
+## plus the shell entry points the lifecycle contracts exercise.
+## Gated at --severity=warning on purpose: the info level here is style and
+## reachability noise these scripts deliberately do not chase -- SC2015 ("A && B
+## || C is not if-then-else"), SC2329/SC2317 (log helpers that the sourced library
+## redefines, and code after a die), SC2030/SC2031 (subshell scoping), SC2016 and
+## SC1091 -- so gating on it would block the build on formatting rather than on
+## defects.
+## Missing shellcheck is a hard failure -- a check that silently skips is not a
+## check -- so shellcheck is invoked directly and never guarded by `command -v`.
+## Keep all ten in ONE invocation: shellcheck resolves each `# shellcheck source=`
+## against the other files on the command line, so splitting this into per-file
+## runs would silently stop checking setup_lib.sh's helpers against their callers.
 shell-lint:
-	shellcheck --severity=warning scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
+	shellcheck --severity=warning setup.sh update.sh scripts/setup_lib.sh \
+	  scripts/backup.sh scripts/restore.sh \
+	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
 	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
 
 ## Run all local quality checks (mirrors CI lint-test + frontend and adds the
