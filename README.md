@@ -1,6 +1,6 @@
 # JARVIS RD Assistant
 
-> A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.
+> A self-hosted AI research workspace for literature discovery, evidence-grounded synthesis, PDF and Zotero workflows, spaced repetition, and research-project organization.
 
 **Why it's different:**
 
