@@ -16,6 +16,21 @@ import pytest
 from jarvis_common.testing import make_pool_and_conn
 
 
+def _chunk_row(content: str = "A method.") -> dict:
+    """One paper_chunks row carrying every column the substrate SELECT returns."""
+    return {
+        "id": 1,
+        "paper_id": 7,
+        "chunk_index": 0,
+        "content": content,
+        "page_number": 1,
+        "start_char": None,
+        "end_char": None,
+        "embedding_id": None,
+        "created_at": datetime.now(UTC),
+    }
+
+
 class _FakeCtx:
     """Minimal JobContext substitute."""
 
@@ -198,9 +213,7 @@ async def test_delayed_extraction_writer_returns_the_newer_generation_winner():
         {"id": 7, "title": "Paper", "content_generation": 0},
         winner,
     ]
-    conn.fetch.return_value = [
-        {"id": 1, "chunk_index": 0, "content": "A method.", "page_number": 1}
-    ]
+    conn.fetch.return_value = [_chunk_row()]
     llm_result = SimpleNamespace(
         method=ExtractedFieldOutput(value="delayed generation zero"),
         model_dump_json=lambda: "{}",
@@ -252,9 +265,7 @@ async def test_delayed_extraction_writer_without_current_winner_reports_source_c
         {"id": 7, "title": "Paper", "content_generation": 0},
         None,
     ]
-    conn.fetch.return_value = [
-        {"id": 1, "chunk_index": 0, "content": "A method.", "page_number": 1}
-    ]
+    conn.fetch.return_value = [_chunk_row()]
     llm_result = SimpleNamespace(
         method=ExtractedFieldOutput(value="delayed generation zero"),
         model_dump_json=lambda: "{}",
@@ -323,14 +334,7 @@ def _pool_echoing_persisted_extractions():
         return {"id": 7, "title": "Paper", "content_generation": 0}
 
     conn.fetchrow.side_effect = _fetchrow
-    conn.fetch.return_value = [
-        {
-            "id": 1,
-            "chunk_index": 0,
-            "content": "The model reaches 94.2% accuracy on GLUE.",
-            "page_number": 1,
-        }
-    ]
+    conn.fetch.return_value = [_chunk_row("The model reaches 94.2% accuracy on GLUE.")]
     return pool
 
 

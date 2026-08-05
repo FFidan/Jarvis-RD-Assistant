@@ -18,7 +18,6 @@ Anti-hallucination strategy:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import asyncpg
@@ -39,6 +38,7 @@ from paper_ingestion.models import (
     ExtractedField,
     ExtractionResponse,
 )
+from paper_ingestion.queries.verification_substrate import load_paper_chunks
 from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 
 if TYPE_CHECKING:
@@ -175,12 +175,7 @@ async def extract_fields_for_paper(
             raise ValueError(f"Paper {paper_id} not found")
         content_generation = int(paper["content_generation"])
 
-        chunks = await conn.fetch(
-            """SELECT id, chunk_index, content, page_number
-               FROM paper_chunks WHERE paper_id = $1
-               ORDER BY chunk_index""",
-            paper_id,
-        )
+        chunks = await load_paper_chunks(conn, paper_id)
 
         if not chunks:
             raise ValueError(f"No chunks found for paper {paper_id}")
@@ -207,13 +202,13 @@ async def extract_fields_for_paper(
 
         if selected_chunks:
             if chunk_search_failed:
-                prioritized_chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
-                remaining_chunks = [c for c in chunks if c["chunk_index"] not in selected_chunks]
+                prioritized_chunks = [c for c in chunks if c.chunk_index in selected_chunks]
+                remaining_chunks = [c for c in chunks if c.chunk_index not in selected_chunks]
                 chunks = prioritized_chunks + remaining_chunks
             else:
-                chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
+                chunks = [c for c in chunks if c.chunk_index in selected_chunks]
 
-    full_text = "\n\n".join(c["content"] for c in chunks)
+    full_text = "\n\n".join(c.content for c in chunks)
 
     prompt = build_extraction_prompt(fields, paper["title"], full_text)
     from paper_ingestion._state import svc  # noqa: PLC0415
@@ -236,24 +231,8 @@ async def extract_fields_for_paper(
         logger.exception("LLM extraction failed for paper %d", paper_id)
         raise
 
-    from paper_ingestion.models import ChunkResponse
-
     extractions: dict[str, ExtractedField] = {}
-    chunk_responses = (
-        [
-            ChunkResponse(
-                id=c["id"],
-                paper_id=paper_id,
-                chunk_index=c["chunk_index"],
-                content=c["content"],
-                page_number=c["page_number"],
-                created_at=datetime.now(UTC),
-            )
-            for c in chunks
-        ]
-        if verifier
-        else []
-    )
+    chunk_responses = chunks if verifier else []
 
     for field in fields:
         field_name = field["name"]

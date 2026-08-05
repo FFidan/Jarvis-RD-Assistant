@@ -189,6 +189,38 @@ async def test_summary_idempotency_requires_the_current_content_generation():
     assert lookup.args[1:] == (7, 42, 1)
 
 
+@pytest.mark.asyncio
+async def test_summary_inputs_preserve_stored_chunk_order_and_timestamps():
+    """The loaded substrate keeps chunk_index order, this site's newline join,
+    and the stored created_at values — never an invented timestamp.
+
+    Chunk order decides what the LLM reads and which chunk a verified quote
+    is attributed to, so a silent reorder is a retrieval-quality regression
+    no other assertion observes.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    stored_at = datetime(2024, 5, 4, tzinfo=UTC)
+    rows = _chunk_rows(["First chunk.", "Second chunk.", "Third chunk."])
+    for row in rows:
+        row["created_at"] = stored_at
+    conn.fetch.return_value = rows
+    pool = _make_pool(conn)
+
+    with patch.object(summarization, "advisory_lock", _noop_lock):
+        loaded = await summarization._load_paper_for_summary(
+            pool,
+            paper_id=7,
+            user_id=42,
+            force=False,
+        )
+
+    assert isinstance(loaded, summarization.SummaryInputs)
+    assert loaded.full_text == "First chunk.\nSecond chunk.\nThird chunk."
+    assert [c.chunk_index for c in loaded.chunks] == [0, 1, 2]
+    assert [c.created_at for c in loaded.chunks] == [stored_at, stored_at, stored_at]
+
+
 def _summary_lock_conn(lock_error: BaseException | None = None) -> AsyncMock:
     """Return a connection that records its statements and can refuse the lock.
 

@@ -32,7 +32,6 @@ from paper_ingestion._state import svc
 from paper_ingestion.converters import (
     deduplicate_by_paper_id,
     filter_current_cross_references,
-    row_to_chunk_response,
     row_to_summary_response,
 )
 from paper_ingestion.db_types import ConnLike
@@ -51,6 +50,7 @@ from paper_ingestion.models import (
     SummaryResponse,
 )
 from paper_ingestion.queries.predicates import paper_visible_sql
+from paper_ingestion.queries.verification_substrate import load_verification_substrate
 from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 from paper_ingestion.services.pdf_workflow import advisory_lock, paper_locked_error
 from paper_ingestion.services.summarization_models import (
@@ -763,17 +763,16 @@ async def _load_paper_for_summary(
                             passes=0,
                         )
 
-                chunk_rows = await conn.fetch(
-                    "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
-                    paper_id,
+                # separator="\n" keeps this site's historic full_text bytes:
+                # the text feeds the summarization prompt, where the join is
+                # byte-visible (see load_verification_substrate's docstring).
+                full_text, chunks = await load_verification_substrate(
+                    conn, paper_id, separator="\n"
                 )
-                if not chunk_rows:
+                if not chunks:
                     raise EmptyChunksError(
                         f"Paper {paper_id} has no processed chunks. Run process-pdf first."
                     )
-
-                chunks = [row_to_chunk_response(r) for r in chunk_rows]
-                full_text = "\n".join(c.content for c in chunks)
 
                 # Read model preference from user_config while connection is held
                 smart_model = get_smart_model()

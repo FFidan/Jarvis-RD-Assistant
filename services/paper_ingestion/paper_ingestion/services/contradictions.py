@@ -32,9 +32,8 @@ if TYPE_CHECKING:
 
 from jarvis_common.verify import QuoteVerifier
 
-from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.db_types import ConnLike
-from paper_ingestion.models import ChunkResponse
+from paper_ingestion.queries.verification_substrate import load_verification_substrate
 from paper_ingestion.services.contradiction_models import ContradictionClassification
 from paper_ingestion.services.contradictions_extract import (
     _NEGATIVE_RE_CUES,
@@ -230,14 +229,6 @@ def build_contradiction_candidates(
     return sorted(candidates, key=lambda item: item.score, reverse=True)[:limit]
 
 
-async def _fetch_chunks(conn: ConnLike, paper_id: int) -> list[ChunkResponse]:
-    rows = await conn.fetch(
-        "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
-        paper_id,
-    )
-    return [row_to_chunk_response(row) for row in rows]
-
-
 async def _quotes_verify(
     conn: ConnLike,
     verifier: QuoteVerifier,
@@ -252,12 +243,10 @@ async def _quotes_verify(
             candidate.b.paper_id,
         )
         return False, None, None
-    chunks_a = await _fetch_chunks(conn, candidate.a.paper_id)
-    chunks_b = await _fetch_chunks(conn, candidate.b.paper_id)
+    full_a, chunks_a = await load_verification_substrate(conn, candidate.a.paper_id)
+    full_b, chunks_b = await load_verification_substrate(conn, candidate.b.paper_id)
     if not chunks_a or not chunks_b:
         return False, None, None
-    full_a = "\n\n".join(chunk.content for chunk in chunks_a)
-    full_b = "\n\n".join(chunk.content for chunk in chunks_b)
     result_a = verifier.verify_quote(quote_a, full_a, chunks_a)
     result_b = verifier.verify_quote(quote_b, full_b, chunks_b)
     if not result_a.verified or not result_b.verified:
@@ -406,7 +395,6 @@ __all__ = [
     "_build_prompt",
     "_classify_candidate",
     "_cross_reference_ids",
-    "_fetch_chunks",
     "_jaccard",
     "_load_verified_findings",
     "_parse_findings",
