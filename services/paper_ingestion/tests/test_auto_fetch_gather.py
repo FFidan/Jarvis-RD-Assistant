@@ -48,11 +48,7 @@ def test_resolve_topic_pairs_carries_configured_query_terms():
 
 
 def _make_app(conn) -> SimpleNamespace:
-    pool = MagicMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire = MagicMock(return_value=ctx)
+    pool = _make_pool_and_conn(conn=conn, with_transaction=False)[0]
     return SimpleNamespace(
         state=SimpleNamespace(
             db_pool=pool,

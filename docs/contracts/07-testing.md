@@ -472,14 +472,17 @@ It does NOT defer the rules. No new PR may add a §2 anti-pattern test. The pre-
 ## 8. Verified Identifiers
 
 Each canonical factory below is importable from `jarvis_common.testing` (the
-facade); the `file:line` points at the submodule that defines it.
+facade), except `make_multi_acquire_pool`, which is imported from its defining
+submodule `jarvis_common.testing_db`; the `file:line` points at the submodule
+that defines it.
 
 | Citation | File:line | Behavior |
 |---|---|---|
-| `make_pool_and_conn` canonical factory | [testing_db.py:153](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L153) | `(*, conn=None, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
-| `SharedConnPool` | [testing_db.py:774](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L774) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
-| `contract_conn` fixture factory | [testing_db.py:705](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L705) | Creates the per-test asyncpg connection fixture whose transaction rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
-| `contract_two_users` fixture factory | [testing_db.py:983](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L983) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) inside the contract_conn transaction. |
+| `make_pool_and_conn` canonical factory | [testing_db.py:170](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L170) | `(*, conn=None, fetchval_return, fetchrow_return, fetch_return, execute_return, raise_on_acquire, direct_methods, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. `direct_methods=True` additionally serves `pool.fetchrow(...)`-style direct calls from the same conn mocks (the `SharedConnPool` shape). |
+| `make_multi_acquire_pool` factory | [testing_db.py:227](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L227) | `(conns, *, with_transaction, await_acquire)` → `(pool, conns)`. Successive `pool.acquire()` calls yield each conn in turn (acquire-sequence tests); `await_acquire=True` serves `conn = await pool.acquire()` / `pool.release(conn)` consumers. Guarded by distinct-connection tests in `libs/jarvis_common/tests/test_testing_factories.py`. |
+| `SharedConnPool` | [testing_db.py:843](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L843) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
+| `contract_conn` fixture factory | [testing_db.py:774](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L774) | Creates the per-test asyncpg connection fixture whose transaction rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
+| `contract_two_users` fixture factory | [testing_db.py:1052](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L1052) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) inside the contract_conn transaction. |
 | `make_bot_config` | [testing_telegram.py:114](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L114) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
 | `configure_contract_api_key` | [testing_contract_apps.py:59](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L59) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
 | `make_contract_client` | [testing_contract_apps.py:76](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L76) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |

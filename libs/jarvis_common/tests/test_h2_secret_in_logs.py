@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import validate_production_config, validate_runtime_config
+from jarvis_common.testing import make_pool_and_conn
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -203,13 +204,8 @@ class TestSendMagicLinkTokenNotLogged:
 
 def _runtime_pool(*, user_count: int, admin_count: int) -> MagicMock:
     """asyncpg-pool-shaped mock whose connection returns the given user counts."""
-    conn = AsyncMock()
+    pool, conn = make_pool_and_conn(with_transaction=False)
     conn.fetchval = AsyncMock(side_effect=[user_count, admin_count])
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
     return pool
 
 

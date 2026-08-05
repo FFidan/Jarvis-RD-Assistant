@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import compute_priority, priority_level
 
 # ---------------------------------------------------------------------------
@@ -160,12 +161,7 @@ def _make_priority_client(user_id_override=None):
     app.state.limiter = limiter
     limiter.enabled = False
 
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
+    pool, conn = make_pool_and_conn(with_transaction=False)
     app.state.db_pool = pool
 
     app.include_router(priority_router.router)

@@ -18,7 +18,8 @@ import asyncpg
 import httpx
 import pytest
 import respx
-from jarvis_common.testing import make_conn
+from jarvis_common.testing import make_conn, make_pool_and_conn
+from jarvis_common.testing_db import make_multi_acquire_pool
 from paper_ingestion.integrations.zotero_service import (
     poll_zotero_library,
     push_highlight_to_zotero,
@@ -35,20 +36,9 @@ from tests.conftest import FakeRecord
 # ---------------------------------------------------------------------------
 
 
-# Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*conn_returns):
     """Return a mock pool whose successive acquire().__aenter__ calls return conn_returns."""
-    pool = MagicMock()
-
-    def _acquire_cm(return_value):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=return_value)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
-
-    # Each call to pool.acquire() returns a fresh context manager.
-    pool.acquire = MagicMock(side_effect=[_acquire_cm(rv) for rv in conn_returns])
-    return pool
+    return make_multi_acquire_pool(list(conn_returns))[0]
 
 
 def _make_conn(
@@ -558,18 +548,7 @@ def _make_poll_pool(*conn_returns, config_rows=None):
     _get_zotero_config now uses acquire() — config conn is prepended automatically.
     """
     config_conn = _make_conn(fetch=config_rows or _zotero_poll_enabled_config_rows())
-
-    def _cm_rv(rv):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=rv)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
-
-    pool = MagicMock()
-    pool.acquire = MagicMock(
-        side_effect=[_cm_rv(config_conn)] + [_cm_rv(rv) for rv in conn_returns]
-    )
-    return pool
+    return make_multi_acquire_pool([config_conn, *conn_returns])[0]
 
 
 def _poll_state_store() -> dict[str, object]:
@@ -632,9 +611,8 @@ def _make_stateful_poll_pool(
     conn.fetch = AsyncMock(side_effect=_fetch)
     conn.execute = AsyncMock(side_effect=_execute)
     conn.fetchrow = AsyncMock(side_effect=_fetchrow)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=lambda *a, **k: _cm(conn))
-    return pool
+    # Same conn on every acquire, unlimited: the A1 shape, not a sequence.
+    return make_pool_and_conn(conn=conn, with_transaction=False)[0]
 
 
 def _parse_with_pdf_url(real_parse):

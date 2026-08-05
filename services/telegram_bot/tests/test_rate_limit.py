@@ -15,7 +15,12 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_bot_config, make_telegram_update
+from jarvis_common.testing import (
+    PTBContextOptions,
+    make_bot_config,
+    make_ptb_context,
+    make_telegram_update,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.rate_limit import _locks, _timestamps, rate_limit
 
@@ -608,14 +613,11 @@ def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
     update.callback_query = query
 
     mock_http = AsyncMock()
-    context = MagicMock()
-    context.user_data = {}
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": make_bot_config(BotConfig, telegram_chat_id=chat_id),
-        "db_pool": AsyncMock(),
-        "http_client": mock_http,
-    }
+    context = make_ptb_context(
+        AsyncMock(),
+        make_bot_config(BotConfig, telegram_chat_id=chat_id),
+        options=PTBContextOptions(http_client=mock_http),
+    )
     return update, context, mock_http
 
 

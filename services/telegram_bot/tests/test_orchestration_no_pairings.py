@@ -6,6 +6,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 pytestmark = pytest.mark.asyncio
 
@@ -13,11 +14,10 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 def mock_deps():
     """Stock asyncpg.Pool / Bot / httpx.AsyncClient / BotConfig fixtures."""
-    db_pool = MagicMock()
     # list_user_pairings (the only db_pool consumer that runs before the guard)
     # is patched in each test, so db_pool.fetch is never reached — but keep it
     # awaitable as a defensive default.
-    db_pool.fetch = AsyncMock(return_value=[])
+    db_pool, _conn = make_pool_and_conn(fetch_return=[], direct_methods=True)
     bot = AsyncMock()
     http_client = AsyncMock()
     config = MagicMock()

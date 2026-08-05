@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common import auth
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _make_request(
@@ -44,8 +45,9 @@ def _make_request(
 
 def _make_pool(*, user_exists: bool = True) -> MagicMock:
     """Return a mock asyncpg.Pool whose fetchval returns 1 (user exists) or None."""
-    pool = MagicMock()
-    pool.fetchval = AsyncMock(return_value=1 if user_exists else None)
+    pool, _conn = make_pool_and_conn(
+        fetchval_return=1 if user_exists else None, direct_methods=True
+    )
     return pool
 
 

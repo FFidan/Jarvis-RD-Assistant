@@ -22,11 +22,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 from jarvis_common.testing import (
-    FakeAcquireCM,
     FakeTxnCM,
     PTBContextOptions,
     make_bot_config,
     make_conn,
+    make_pool_and_conn,
     make_ptb_context,
     make_telegram_update,
 )
@@ -55,8 +55,10 @@ _make_conn = partial(
 
 
 def _make_pool(conn, *, fetchrow_return=None, fetchval_return=None, fetch_return=None):
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
+    # conn is used as-is (with_transaction=False): tests wire their own txn CMs.
+    # Pool-level lookups intentionally return different rows than the conn-level
+    # command flow, so they stay independent mocks layered on the shared factory.
+    pool, _conn = make_pool_and_conn(conn=conn, with_transaction=False)
     pool.fetchrow = AsyncMock(return_value=fetchrow_return)
     pool.fetchval = AsyncMock(return_value=fetchval_return)
     pool.fetch = AsyncMock(return_value=fetch_return or [])

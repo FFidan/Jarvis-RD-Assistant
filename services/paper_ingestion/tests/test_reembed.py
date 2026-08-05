@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from jarvis_common.testing import make_pool_and_conn
+from jarvis_common.testing_db import make_multi_acquire_pool
 
 # scripts/ lives at the repo root, which is not in pytest's pythonpath.
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
@@ -125,11 +126,10 @@ def _make_sequenced_pool(
     fetch_returns: list[list],
     *,
     fetchval_returns: list[int] | None = None,
-) -> tuple[AsyncMock, list[AsyncMock]]:
+) -> tuple[MagicMock, list[AsyncMock]]:
     """Create a pool whose acquired connections return query-specific results in order."""
     fetchval_returns = list(fetchval_returns or [])
     conns: list[AsyncMock] = []
-    contexts: list[AsyncMock] = []
     for fetch_return in fetch_returns:
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=fetch_return)
@@ -141,15 +141,9 @@ def _make_sequenced_pool(
         txn.__aenter__ = AsyncMock(return_value=txn)
         txn.__aexit__ = AsyncMock(return_value=False)
         conn.transaction = MagicMock(return_value=txn)
-
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=conn)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        contexts.append(ctx)
         conns.append(conn)
 
-    pool = AsyncMock()
-    pool.acquire = MagicMock(side_effect=contexts)
+    pool, _conns = make_multi_acquire_pool(conns)
     pool.close = AsyncMock()
     return pool, conns
 

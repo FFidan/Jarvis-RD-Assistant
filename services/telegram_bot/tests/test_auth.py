@@ -12,7 +12,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_bot_config, make_telegram_update
+from jarvis_common.testing import (
+    make_bot_config,
+    make_pool_and_conn,
+    make_ptb_context,
+    make_telegram_update,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import auth_check as _auth_check
@@ -20,9 +25,7 @@ from telegram_bot.handlers.helpers import auth_check as _auth_check
 
 def _make_pool(*, fetchrow_return=None) -> MagicMock:
     """Build a minimal pool mock covering the telegram_user_pairings lookup."""
-    pool = MagicMock()
-    pool.fetchrow = AsyncMock(return_value=fetchrow_return)
-    return pool
+    return make_pool_and_conn(fetchrow_return=fetchrow_return, direct_methods=True)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -118,19 +121,13 @@ async def test_auth_check_denies_non_private_chat_even_when_paired():
 
 
 def _make_decorator_context() -> MagicMock:
-    pool = MagicMock()
-    pool.fetchrow = AsyncMock(return_value=None)  # unpaired
-    pool.fetchval = AsyncMock(return_value=None)
-    pool.execute = AsyncMock(return_value="OK")
-    context = MagicMock()
-    context.user_data = {}
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": make_bot_config(BotConfig, telegram_chat_id=None),
-        "db_pool": pool,
-        "http_client": AsyncMock(),
-    }
-    return context
+    pool, _conn = make_pool_and_conn(
+        fetchrow_return=None,  # unpaired
+        fetchval_return=None,
+        execute_return="OK",
+        direct_methods=True,
+    )
+    return make_ptb_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
 
 
 @pytest.mark.asyncio

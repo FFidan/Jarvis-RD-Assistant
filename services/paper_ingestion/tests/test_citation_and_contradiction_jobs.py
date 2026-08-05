@@ -5,27 +5,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
-class _Acquire:
-    """Async context manager returning a fake DB connection."""
-
-    def __init__(self, conn: MagicMock) -> None:
-        self.conn = conn
-
-    async def __aenter__(self) -> MagicMock:
-        return self.conn
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _pool_with_rows(rows: list[dict]) -> MagicMock:
-    conn = MagicMock()
-    conn.fetch = AsyncMock(return_value=rows)
-    pool = MagicMock()
-    pool.acquire.return_value = _Acquire(conn)
-    return pool
+    return make_pool_and_conn(fetch_return=rows, with_transaction=False)[0]
 
 
 def _ctx() -> MagicMock:

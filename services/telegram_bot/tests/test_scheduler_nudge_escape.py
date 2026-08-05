@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from telegram_bot.scheduler import JarvisScheduler
 
 # ---------------------------------------------------------------------------
@@ -25,10 +26,8 @@ def _make_scheduler(owner_chat_id: int | None = 99) -> JarvisScheduler:
     failure alert is delivered to). Pass owner_chat_id=None to simulate an
     unconfigured owner.
     """
-    db_pool = MagicMock()
-    db_pool.execute = AsyncMock()
     row = {"value": str(owner_chat_id)} if owner_chat_id is not None else None
-    db_pool.fetchrow = AsyncMock(return_value=row)
+    db_pool, _conn = make_pool_and_conn(fetchrow_return=row, direct_methods=True)
     http_client = MagicMock()
     bot = MagicMock()
     bot.send_message = AsyncMock()

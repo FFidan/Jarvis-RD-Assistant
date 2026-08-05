@@ -88,16 +88,9 @@ def _make_ctx() -> MagicMock:
     return ctx
 
 
-# Keep local: pool.acquire returns conn directly (no aenter/aexit ctx wrapper) — paper_jobs uses async-with on conn itself.
 def _make_pool(row: dict) -> MagicMock:
     """Return an asyncpg pool mock that yields *row* from fetchrow."""
-    conn = MagicMock()
-    conn.fetchrow = AsyncMock(return_value=row)
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
-    return pool
+    return make_pool_and_conn(fetchrow_return=row, with_transaction=False)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +161,8 @@ def _force_run_pool(tmp_path, *, library_rows: list):
         "pdf_local_path": str(pdf_file),
         "is_visible": True,
     }
-    pool = _make_pool(row)
-    pool.acquire.return_value.fetch = AsyncMock(return_value=library_rows)
+    pool, conn = make_pool_and_conn(fetchrow_return=row, with_transaction=False)
+    conn.fetch = AsyncMock(return_value=library_rows)
     # Populate svc so a run that gets past the membership gate reaches
     # run_process_pdf rather than dying on uninitialised services — otherwise a
     # removed gate would surface as an unrelated RuntimeError.
@@ -297,13 +290,7 @@ def _make_pool_with_side_effects(side_effects: list) -> MagicMock:
     Each ``pool.acquire()`` call returns the same conn (async-CM yielding itself),
     so successive fetchrow calls across acquire blocks consume the side-effect list.
     """
-    conn = MagicMock()
-    conn.fetchrow = AsyncMock(side_effect=side_effects)
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
-    return pool
+    return make_pool_and_conn(fetchrow_side_effects=side_effects, with_transaction=False)[0]
 
 
 @pytest.mark.asyncio
@@ -868,14 +855,12 @@ def _make_library_pool(select_rows: list[dict], update_rows: list[dict], user_id
     rows in order (one per downloaded paper).
     """
     ownership_rows = [{"id": r["id"], "is_visible": True} for r in select_rows]
-    conn = MagicMock()
+    pool, conn = make_pool_and_conn(
+        fetchval_return=len(select_rows),
+        fetchrow_side_effects=list(update_rows),
+        with_transaction=False,
+    )
     conn.fetch = AsyncMock(side_effect=[list(select_rows), ownership_rows])
-    conn.fetchval = AsyncMock(return_value=len(select_rows))
-    conn.fetchrow = AsyncMock(side_effect=list(update_rows))
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
     return pool
 
 

@@ -10,6 +10,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from jarvis_common.testing_db import make_multi_acquire_pool
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.exceptions import (
@@ -35,10 +36,8 @@ async def _noop_lock(*args, **kwargs):
     yield
 
 
-# Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*connections: AsyncMock) -> MagicMock:
     """Create a pool mock that yields transaction-capable connections in order."""
-    contexts = []
     for index, conn in enumerate(connections):
         transaction = MagicMock()
         transaction.__aenter__ = AsyncMock(return_value=transaction)
@@ -46,14 +45,7 @@ def _make_pool(*connections: AsyncMock) -> MagicMock:
         conn.transaction = MagicMock(return_value=transaction)
         if index > 0 and conn.fetchval._mock_return_value is DEFAULT:
             conn.fetchval.return_value = 0
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=conn)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        contexts.append(ctx)
-
-    pool = MagicMock()
-    pool.acquire.side_effect = contexts
-    return pool
+    return make_multi_acquire_pool(list(connections))[0]
 
 
 def _paper_row() -> dict:

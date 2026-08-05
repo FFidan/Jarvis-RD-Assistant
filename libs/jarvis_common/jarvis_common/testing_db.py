@@ -15,6 +15,7 @@ __all__ = [
     "make_paper_record",
     "make_pool_and_conn",
     "_make_pool_and_conn",
+    "make_multi_acquire_pool",
     "make_request",
     "shelve_paper",
     "seed_user_row",
@@ -86,6 +87,25 @@ class FakeRecord(dict):
 # ---------------------------------------------------------------------------
 
 
+def _wire_conn_returns(
+    conn: AsyncMock,
+    *,
+    execute_return: Any = _UNSET,
+    fetchval_return: Any = _UNSET,
+    fetchrow_return: Any = _UNSET,
+    fetch_return: Any = _UNSET,
+) -> None:
+    """Replace conn's query methods with AsyncMocks returning the given values."""
+    if execute_return is not _UNSET:
+        conn.execute = AsyncMock(return_value=execute_return)
+    if fetchval_return is not _UNSET:
+        conn.fetchval = AsyncMock(return_value=fetchval_return)
+    if fetchrow_return is not _UNSET:
+        conn.fetchrow = AsyncMock(return_value=fetchrow_return)
+    if fetch_return is not _UNSET:
+        conn.fetch = AsyncMock(return_value=fetch_return)
+
+
 def make_conn(
     *,
     execute_return: Any = _UNSET,
@@ -97,14 +117,13 @@ def make_conn(
     """Return an asyncpg connection mock with explicitly configured results."""
     conn = AsyncMock(spec=asyncpg.Connection)
 
-    if execute_return is not _UNSET:
-        conn.execute = AsyncMock(return_value=execute_return)
-    if fetchval_return is not _UNSET:
-        conn.fetchval = AsyncMock(return_value=fetchval_return)
-    if fetchrow_return is not _UNSET:
-        conn.fetchrow = AsyncMock(return_value=fetchrow_return)
-    if fetch_return is not _UNSET:
-        conn.fetch = AsyncMock(return_value=fetch_return)
+    _wire_conn_returns(
+        conn,
+        execute_return=execute_return,
+        fetchval_return=fetchval_return,
+        fetchrow_return=fetchrow_return,
+        fetch_return=fetch_return,
+    )
     if with_transaction:
         txn_cm = MagicMock()
         txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
@@ -154,13 +173,20 @@ def make_pool_and_conn(
     fetchval_return: Any = _UNSET,
     fetchrow_return: Any = _UNSET,
     fetch_return: Any = _UNSET,
+    execute_return: Any = _UNSET,
     with_transaction: bool = True,
     raise_on_acquire: BaseException | None = None,
     fetchrow_side_effects: list | None = None,
+    direct_methods: bool = False,
 ) -> tuple[MagicMock, AsyncMock]:
     """Return a ``(pool, conn)`` pair of asyncpg mocks.
 
     Keyword args wire canned return values and edge-case behaviours.
+    ``direct_methods=True`` additionally exposes the conn's query methods
+    (``fetch``/``fetchrow``/``fetchval``/``execute``/``executemany``) on the
+    pool itself, for code that calls ``pool.fetchrow(...)`` without
+    ``acquire()`` (mirrors ``SharedConnPool``); pool-level and conn-level
+    calls then share one mock per method, so assertions see both.
     """
     if conn is None:
         conn = make_conn(with_transaction=with_transaction)
@@ -170,12 +196,13 @@ def make_pool_and_conn(
         txn_cm.__aexit__ = AsyncMock(return_value=False)
         conn.transaction = MagicMock(return_value=txn_cm)
 
-    if fetchval_return is not _UNSET:
-        conn.fetchval = AsyncMock(return_value=fetchval_return)
-    if fetchrow_return is not _UNSET:
-        conn.fetchrow = AsyncMock(return_value=fetchrow_return)
-    if fetch_return is not _UNSET:
-        conn.fetch = AsyncMock(return_value=fetch_return)
+    _wire_conn_returns(
+        conn,
+        execute_return=execute_return,
+        fetchval_return=fetchval_return,
+        fetchrow_return=fetchrow_return,
+        fetch_return=fetch_return,
+    )
 
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
@@ -188,7 +215,51 @@ def make_pool_and_conn(
     if fetchrow_side_effects is not None:
         conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effects)
 
+    # Wired last so pool methods share the conn's FINAL mocks (a
+    # fetchrow_side_effects list replaces conn.fetchrow above).
+    if direct_methods:
+        for method in ("fetch", "fetchrow", "fetchval", "execute", "executemany"):
+            setattr(pool, method, getattr(conn, method))
+
     return pool, conn
+
+
+def make_multi_acquire_pool(
+    conns: int | list[AsyncMock],
+    *,
+    with_transaction: bool = True,
+    await_acquire: bool = False,
+) -> tuple[MagicMock, tuple[AsyncMock, ...]]:
+    """Return ``(pool, conns)`` where successive acquires yield each conn in turn.
+
+    ``conns`` is either a count (that many fresh ``make_conn`` mocks are built;
+    ``with_transaction`` applies to them) or a list of pre-built connection
+    mocks, used as-is. By default each ``pool.acquire()`` call returns an
+    async-CM yielding the next conn; with ``await_acquire=True`` the code under
+    test does ``conn = await pool.acquire()`` instead, and ``pool.release`` is
+    an awaitable no-op. Acquiring more times than there are conns raises
+    ``StopIteration`` — hand the factory exactly as many conns as the code
+    under test acquires.
+    """
+    if isinstance(conns, int):
+        conn_list = [make_conn(with_transaction=with_transaction) for _ in range(conns)]
+    else:
+        conn_list = list(conns)
+
+    pool = MagicMock()
+    if await_acquire:
+        pool.acquire = AsyncMock(side_effect=conn_list)
+        pool.release = AsyncMock()
+    else:
+        contexts = []
+        for conn in conn_list:
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=conn)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            contexts.append(ctx)
+        pool.acquire = MagicMock(side_effect=contexts)
+
+    return pool, tuple(conn_list)
 
 
 def make_request(user_id: int = 1, *, role: str | None = None, **state_overrides: Any) -> Any:

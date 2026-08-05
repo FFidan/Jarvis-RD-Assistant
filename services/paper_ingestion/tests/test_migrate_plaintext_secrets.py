@@ -2,29 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.crypto import decrypt_secret
+from jarvis_common.testing import make_pool_and_conn
 
 
-# Keep local: returns (pool, conn) and exposes conn.execute for assertion — extra
-# semantics not covered by jarvis_common.make_pool_and_conn's fetch_return kwarg.
 def _make_pool_with_rows(rows: list[dict]):
     """Build a mock asyncpg pool whose fetch() returns *rows*.
 
     Captures execute() calls on the connection so the test can assert what
     the migration helper rewrote.
     """
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=rows)
-    conn.execute = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+    return make_pool_and_conn(fetch_return=rows, execute_return=None, with_transaction=False)
 
 
 @pytest.mark.asyncio

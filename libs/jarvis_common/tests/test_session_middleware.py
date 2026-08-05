@@ -13,6 +13,7 @@ from jarvis_common.session_middleware import (
     _populate_state_from_cookie,
     session_cookie_kwargs,
 )
+from jarvis_common.testing import make_pool_and_conn
 from starlette.responses import Response
 
 
@@ -214,12 +215,11 @@ def _wire_conn(pool, *, row, renewed=None):
     the atomic renewal UPDATE ``fetchval`` returns (None ⇒ the predicate — grace /
     revoked / throttle — matched no row). Both acquires yield this same conn.
     """
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=row)
-    conn.fetchval = AsyncMock(return_value=renewed)
-    pool.acquire = MagicMock()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    wired, conn = make_pool_and_conn(
+        fetchrow_return=row, fetchval_return=renewed, with_transaction=False
+    )
+    # The pool under test comes from the fixture; graft the wired acquire onto it.
+    pool.acquire = wired.acquire
     return conn
 
 

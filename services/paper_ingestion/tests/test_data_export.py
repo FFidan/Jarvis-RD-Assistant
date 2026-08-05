@@ -13,6 +13,7 @@ import zipfile
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 from paper_ingestion.services.data_export import (
     _EXPORT_QUERIES,
@@ -47,18 +48,7 @@ def _build_pool(rows_by_user: dict[int, list[str]]) -> MagicMock:
         return _FakeCursor(rows_by_user.get(user_id, []))
 
     conn.cursor = cursor
-    tx = MagicMock()
-    tx.__aenter__ = AsyncMock(return_value=None)
-    tx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=tx)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+    return make_pool_and_conn(conn=conn)[0]
 
 
 # ---------------------------------------------------------------------------

@@ -27,32 +27,17 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from jarvis_common.testing import make_pool_and_conn
+
 
 def build_mock_pool_with_txn(conn: AsyncMock) -> MagicMock:
     """Return a pool mock whose acquire() yields *conn* and that wires conn.transaction()."""
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+    return make_pool_and_conn(conn=conn)[0]
 
 
 def build_mock_pool(conn: AsyncMock) -> MagicMock:
     """Return a plain acquire-only pool mock (no transaction CM)."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+    return make_pool_and_conn(conn=conn, with_transaction=False)[0]
 
 
 def build_request_admin(

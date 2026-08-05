@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.testing import make_bot_config
+from jarvis_common.testing import PTBContextOptions, make_bot_config, make_ptb_context
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.project_commands import projects_command
@@ -23,16 +23,14 @@ def _make_update_and_context(args=None):
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
 
-    context = MagicMock()
-    context.args = args or []
-    context.user_data = {"jarvis_user_id": 1}
     http = AsyncMock()
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
-        "db_pool": AsyncMock(),
-        "http_client": http,
-    }
+    context = make_ptb_context(
+        AsyncMock(),
+        make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
+        options=PTBContextOptions(
+            http_client=http, args=args or [], user_data={"jarvis_user_id": 1}
+        ),
+    )
     return update, context, http
 
 

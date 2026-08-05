@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 from paper_ingestion.converters import (
     batch_hybrid_results_to_paper_responses,
@@ -164,16 +165,9 @@ def _paper_record(paper_id: int, title: str = "T") -> MagicMock:
     return _dict_to_record(d)
 
 
-def _make_batch_pool(db_records: list[MagicMock]) -> tuple[AsyncMock, AsyncMock]:
+def _make_batch_pool(db_records: list[MagicMock]) -> tuple[MagicMock, AsyncMock]:
     """Return (pool, conn) where conn.fetch returns db_records."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=db_records)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = AsyncMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool, conn
+    return make_pool_and_conn(fetch_return=db_records, with_transaction=False)
 
 
 @pytest.mark.asyncio

@@ -8,25 +8,26 @@ events older than 7 days.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.scheduler import purge_system_events_task
 
 
-def _make_pool_and_conn():
-    """Create a pool supporting both purge writes and event-log acquisition."""
-    pool = MagicMock()
+def _make_purge_pool():
+    """Create a pool supporting both purge writes and event-log acquisition.
+
+    The purge writes go through ``pool.execute`` directly and must stay
+    independent of the event-log conn behind ``acquire()``, so no
+    ``direct_methods`` here.
+    """
+    pool, _event_conn = make_pool_and_conn()
     pool.execute = AsyncMock()
-    event_conn = AsyncMock()
-    acquire_context = MagicMock()
-    acquire_context.__aenter__ = AsyncMock(return_value=event_conn)
-    acquire_context.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire = MagicMock(return_value=acquire_context)
     return pool
 
 
 @pytest.mark.asyncio
 async def test_purge_deletes_app_events_older_than_30_days_keeps_newer():
     """Test that application events older than 30 days are deleted."""
-    pool = _make_pool_and_conn()
+    pool = _make_purge_pool()
     app = MagicMock()
     app.state.db_pool = pool
 
@@ -52,7 +53,7 @@ async def test_purge_deletes_app_events_older_than_30_days_keeps_newer():
 @pytest.mark.asyncio
 async def test_purge_deletes_infra_events_older_than_7_days_keeps_newer():
     """Test that infrastructure events older than 7 days are deleted."""
-    pool = _make_pool_and_conn()
+    pool = _make_purge_pool()
     app = MagicMock()
     app.state.db_pool = pool
 
@@ -79,7 +80,7 @@ async def test_purge_deletes_infra_events_older_than_7_days_keeps_newer():
 @pytest.mark.asyncio
 async def test_purge_emits_log_event_with_counts():
     """Test that log_event is called with correct deletion counts."""
-    pool = _make_pool_and_conn()
+    pool = _make_purge_pool()
     app = MagicMock()
     app.state.db_pool = pool
 
@@ -107,7 +108,7 @@ async def test_purge_emits_log_event_with_counts():
 @pytest.mark.asyncio
 async def test_purge_handles_malformed_delete_response():
     """Test that malformed asyncpg.execute response is handled gracefully."""
-    pool = _make_pool_and_conn()
+    pool = _make_purge_pool()
     app = MagicMock()
     app.state.db_pool = pool
 
@@ -130,7 +131,7 @@ async def test_purge_handles_malformed_delete_response():
 @pytest.mark.asyncio
 async def test_purge_handles_pool_exception():
     """Test that exceptions from pool.execute are caught and logged."""
-    pool = _make_pool_and_conn()
+    pool = _make_purge_pool()
     app = MagicMock()
     app.state.db_pool = pool
 

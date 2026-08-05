@@ -123,14 +123,7 @@ class _FakeResponse:
 
 
 def _make_fetch_pool(records: list) -> MagicMock:
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=records)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool
+    return make_pool_and_conn(fetch_return=records, with_transaction=False)[0]
 
 
 @pytest.mark.asyncio

@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from jarvis_common.testing import (
-    FakeAcquireCM,
     make_bot_config,
     make_conn,
+    make_pool_and_conn,
     make_telegram_update,
 )
 from jarvis_common.testing import (
@@ -42,8 +42,9 @@ _make_conn = partial(
 
 
 def _make_pool(conn, *, fetchrow_return=None):
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
+    # conn is used as-is (with_transaction=False); the pool-level pairing lookup
+    # intentionally returns a different row than the conn-level command flow.
+    pool, _conn = make_pool_and_conn(conn=conn, with_transaction=False)
     pool.fetchrow = AsyncMock(return_value=fetchrow_return)
     return pool
 
