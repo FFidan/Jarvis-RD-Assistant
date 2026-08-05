@@ -62,11 +62,7 @@ from paper_ingestion.models.backups import (
 )
 from paper_ingestion.services.backup_archive import (
     _BACKUP_DIR,
-    _FILENAME_RE,  # noqa: F401  # re-export
-    _QDRANT_RE,  # noqa: F401  # re-export
     _RESTORE_TOKEN_TTL,
-    _TS_RE,  # noqa: F401  # re-export
-    _code_max_migration,  # noqa: F401  # re-export
     _fsync_directory,
     _group_restore_points,
     _last_run_flag,

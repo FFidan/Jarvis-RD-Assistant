@@ -222,7 +222,7 @@ def test_code_max_migration_returns_floor_on_empty_dir(tmp_path, monkeypatch) ->
     ``db/migrations/`` — a missing dir must not degrade compat to "unknown".
     """
     monkeypatch.setenv("DB_MIGRATIONS_DIR", str(tmp_path))  # exists but empty
-    from paper_ingestion.routers.backups import _code_max_migration  # noqa: PLC0415
+    from paper_ingestion.services.backup_archive import _code_max_migration  # noqa: PLC0415
 
     assert _code_max_migration() == required_code_schema()
 
