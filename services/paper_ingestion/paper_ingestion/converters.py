@@ -5,6 +5,7 @@ models so that routers and main.py share a single implementation.
 """
 
 from datetime import UTC
+from typing import Any
 
 import asyncpg
 
@@ -21,6 +22,32 @@ from paper_ingestion.models import (
 )
 
 
+def _base_paper_fields(row: asyncpg.Record) -> dict[str, Any]:
+    """Field assignments shared verbatim by the paper and feed converters.
+
+    Hoisted into one place so ``row_to_paper_response`` and
+    ``row_to_feed_paper`` cannot drift apart when a shared column is added or
+    renamed; a past field addition landed in only one of the two.
+    """
+    return {
+        "id": row["id"],
+        "external_id": row["external_id"],
+        "source_type": row["source_type"],
+        "title": row["title"],
+        "authors": row["authors"],
+        "abstract": row["abstract"],
+        "published_date": row["published_date"],
+        "url": row["url"],
+        "pdf_url": row["pdf_url"],
+        "pdf_local_path": row["pdf_local_path"],
+        "pdf_downloaded": row["pdf_downloaded"],
+        "citation_count": row["citation_count"],
+        "metadata": row["metadata"] or {},
+        "discovered_at": row.get("discovered_at"),
+        "created_at": row["created_at"],
+    }
+
+
 def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
     """Convert an asyncpg Record from the ``papers`` table to a PaperResponse.
 
@@ -34,25 +61,11 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
     subset), each falling back to the model default.
     """
     return PaperResponse(
-        id=row["id"],
-        external_id=row["external_id"],
-        source_type=row["source_type"],
-        title=row["title"],
-        authors=row["authors"],
-        abstract=row["abstract"],
-        published_date=row["published_date"],
-        url=row["url"],
-        pdf_url=row["pdf_url"],
-        pdf_local_path=row["pdf_local_path"],
-        pdf_downloaded=row["pdf_downloaded"],
-        citation_count=row["citation_count"],
+        **_base_paper_fields(row),
         priority_score=row["priority_score"] if "priority_score" in row.keys() else None,
-        metadata=row["metadata"] or {},
-        discovered_at=row.get("discovered_at"),
         discovery_origin=(
             row["discovery_origin"] if "discovery_origin" in row.keys() else "user_initiated"
         ),
-        created_at=row["created_at"],
     )
 
 
@@ -66,21 +79,7 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
             created_at=row["recent_feedback_created_at"],
         )
     return FeedPaper(
-        id=row["id"],
-        external_id=row["external_id"],
-        source_type=row["source_type"],
-        title=row["title"],
-        authors=row["authors"],
-        abstract=row["abstract"],
-        published_date=row["published_date"],
-        url=row["url"],
-        pdf_url=row["pdf_url"],
-        pdf_local_path=row["pdf_local_path"],
-        pdf_downloaded=row["pdf_downloaded"],
-        citation_count=row["citation_count"],
-        metadata=row["metadata"] or {},
-        discovered_at=row.get("discovered_at"),
-        created_at=row["created_at"],
+        **_base_paper_fields(row),
         priority_score=row.get("priority_score"),
         discovery_origin=row.get("discovery_origin", "user_initiated"),
         summary_brief=row.get("summary_brief"),

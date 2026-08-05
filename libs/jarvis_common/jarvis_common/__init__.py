@@ -2,7 +2,6 @@
 
 from jarvis_common.app_factory import (
     ServiceLifespanConfig,
-    build_database_url,
     configure_lifespan,
     configure_middleware_and_errors,
 )
@@ -12,21 +11,11 @@ from jarvis_common.auth import (
     current_user_id_or_none,
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
-    current_user_id_with_owner_override,
     get_current_user_id,
     get_current_user_id_or_bot,
     require_admin,
     require_admin_or_api_key,
-    validate_production_config,
     verify_api_key,
-)
-from jarvis_common.crypto import (
-    decrypt_secret,
-    encrypt_secret,
-    mask_secret,
-    refresh_fernet_cache,
-    resolve_secret_row,
-    validate_encrypted_config_rows,
 )
 from jarvis_common.db_helpers import (
     assert_paper_ownership,
@@ -39,39 +28,10 @@ from jarvis_common.db_helpers import (
     get_smart_model,
     init_pg_connection,
     invalidate_effective_num_ctx_cache,
-    quote_ident,
     validated_model,
-    validated_model_with_reason,
 )
-from jarvis_common.email import send_magic_link
-from jarvis_common.error_handlers import (
-    generic_exception_handler,
-    http_exception_handler,
-    validation_exception_handler,
-)
-from jarvis_common.health import (
-    HealthCheck,
-    HealthProbe,
-    register_health_routes,
-    run_health_checks,
-)
-from jarvis_common.http_rate_limiter import create_limiter, rate_limit_exceeded_handler
-from jarvis_common.jobs import KEEPALIVE_INTERVAL, MAX_STREAM_SECONDS, stream_job_events
-from jarvis_common.llm_client import (
-    DEFAULT_LITELLM_BASE_URL,
-    LLM_TIMEOUT_DEFAULT,
-    LLM_TIMEOUT_LONG,
-    LLM_TIMEOUT_SHORT,
-    ChatCompletionOptions,
-    LiteLLMConfig,
-    build_litellm_headers,
-    call_llm_structured,
-    embed_texts,
-    get_litellm_config,
-    request_chat_completion_content,
-    strip_think_blocks,
-    strip_think_streaming,
-)
+from jarvis_common.health import register_health_routes
+from jarvis_common.http_rate_limiter import create_limiter
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.models import (
     ErrorResponse,
@@ -79,47 +39,26 @@ from jarvis_common.models import (
     JobCreateResponse,
     JobStatusResponse,
 )
-from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
-from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.sentry import maybe_init_sentry
-from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SessionMiddleware
-from jarvis_common.settings import SecretsSettings, get_secrets_settings
-from jarvis_common.source_rate_limiter import SourceRateLimiter
-from jarvis_common.streak import compute_streak
 from jarvis_common.text_utils import author_matches
 
 __all__ = [
     # DRY-002: shared FastAPI app factory
     "ServiceLifespanConfig",
-    "build_database_url",
     "configure_lifespan",
     "configure_middleware_and_errors",
     # Shared health-check routes
-    "HealthCheck",
-    "HealthProbe",
     "register_health_routes",
-    "run_health_checks",
     "log_audit",
     "verify_api_key",
-    "validate_production_config",
     "current_user_id_or_none",
     "current_user_id_strict",
     "current_user_id_strict_with_owner_override",
-    "current_user_id_with_owner_override",
     "get_current_user_id",
     "get_current_user_id_or_bot",
     "require_admin",
     "require_admin_or_api_key",
-    # DRY-003: crypto helpers re-exported from jarvis_common top-level
-    "encrypt_secret",
-    "decrypt_secret",
-    "mask_secret",
-    "refresh_fernet_cache",
-    "resolve_secret_row",
-    "validate_encrypted_config_rows",
-    "SourceRateLimiter",
     "create_limiter",
-    "rate_limit_exceeded_handler",
     "assert_paper_ownership",
     "assert_papers_ownership",
     "dynamic_update",
@@ -128,44 +67,14 @@ __all__ = [
     "escape_like",
     "init_pg_connection",
     "invalidate_effective_num_ctx_cache",
-    "quote_ident",
     "validated_model",
-    "validated_model_with_reason",
     "get_smart_model",
     "get_fast_model",
-    "http_exception_handler",
-    "validation_exception_handler",
-    "generic_exception_handler",
     "configure_logging",
     "HealthCheckResponse",
     "ErrorResponse",
     "JobCreateResponse",
     "JobStatusResponse",
-    "RequestIDMiddleware",
     "author_matches",
-    "safe_for_prompt",
-    "wrap_delimited",
-    "ChatCompletionOptions",
-    "LiteLLMConfig",
-    "build_litellm_headers",
-    "call_llm_structured",
-    "embed_texts",
-    "get_litellm_config",
-    "request_chat_completion_content",
-    "strip_think_blocks",
-    "strip_think_streaming",
-    "DEFAULT_LITELLM_BASE_URL",
-    "LLM_TIMEOUT_DEFAULT",
-    "LLM_TIMEOUT_LONG",
-    "LLM_TIMEOUT_SHORT",
-    "SecretsSettings",
-    "get_secrets_settings",
-    "send_magic_link",
-    "SessionMiddleware",
-    "SESSION_COOKIE_NAME",
-    "compute_streak",
-    "KEEPALIVE_INTERVAL",
-    "MAX_STREAM_SECONDS",
-    "stream_job_events",
     "maybe_init_sentry",
 ]
