@@ -140,6 +140,7 @@ dev = [
     "pre-commit>=4.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "pytest-randomly>=3.15.0",  # randomises test order so cross-test state leakage fails loudly
     "respx>=0.21.0",
     "ruff>=0.8.0",
     "tach>=0.29.0",
@@ -248,7 +249,12 @@ pythonpath = [
 # (e.g. paper_ingestion/tests/test_health.py and
 # learning_engine/tests/test_health.py). Safe to use here because after
 # the R12 package rename no two services share a top-level package name.
-addopts = "--import-mode=importlib -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
+# ``-p no:randomly`` keeps ordinary runs in a stable, reproducible order.
+# pytest-randomly activates itself on import, and a randomised default would
+# make every gate result depend on an unrecorded seed. Opt in per run with a
+# trailing ``-p randomly`` (a later ``-p`` wins) to shake out cross-test state
+# leakage; ``--randomly-seed=<n>`` then reproduces a specific failure.
+addopts = "--import-mode=importlib -p no:randomly -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",
