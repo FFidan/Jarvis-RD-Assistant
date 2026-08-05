@@ -32,8 +32,10 @@ import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
     configure_contract_api_key,
     make_contract_client,
+    patch_pi_test_app,
 )
 from jarvis_common.testing_db import _seed_user
 
@@ -71,27 +73,19 @@ async def _auth_app(contract_conn):
     Limiter is disabled so rate limits do not interfere with the creation
     flow being tested here.
     """
-    from paper_ingestion.main import (
-        app,
-        limiter,  # type: ignore[attr-defined]
-    )
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
     from paper_ingestion.routers.auth import router as auth_router  # noqa: F401
 
     shared = SharedConnPool(contract_conn)
-    original = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original
+    with patch_pi_test_app(
+        shared,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(remove_owner_override=False, disable_limiter=True),
+    ) as wired_app:
+        yield wired_app
 
 
 # ---------------------------------------------------------------------------

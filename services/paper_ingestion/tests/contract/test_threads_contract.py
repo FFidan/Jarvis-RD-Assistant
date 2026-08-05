@@ -33,6 +33,10 @@ import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
 
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
+    patch_pi_test_app,
+)
+from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
 )
 
@@ -52,36 +56,20 @@ async def _pi_threads_app(contract_conn):
     """
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
-    from jarvis_common import (
-        current_user_id_strict_with_owner_override,
-        get_current_user_id,
-    )
 
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-
-    removed_overrides = {
-        key: app.dependency_overrides.pop(key, None)
-        for key in (current_user_id_strict_with_owner_override, get_current_user_id)
-    }
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        for key, removed in removed_overrides.items():
-            if removed is not None:
-                app.dependency_overrides[key] = removed
+    with patch_pi_test_app(
+        shared,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            override_db_dependency=True,
+            disable_limiter=True,
+        ),
+    ) as wired_app:
+        yield wired_app
 
 
 # ---------------------------------------------------------------------------
