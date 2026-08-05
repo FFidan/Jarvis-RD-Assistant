@@ -30,8 +30,26 @@
 #   - resolve_gpu_vram_mb        : vendor-neutral total-VRAM (MB) probe
 #   - strip_gpu_args             : drop --gpu selection for the CPU-retry re-exec
 #   - _default_model_for_tier    : tier+backend -> default model id
+#   - info / ok / warn / err     : the level-prefixed output every script shares
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
+
+# Presentation primitives, defined here so the level colours cannot drift
+# between the scripts that share them. Colours are emitted only when stdout is a
+# terminal, so piped output and log files stay free of escape codes.
+# `die`/`usage_error`/`env_die` deliberately stay with their scripts: each owns a
+# different exit code and next-step hint.
+if [ -t 1 ]; then
+  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
+else
+  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_BOLD=""; C_RESET=""
+fi
+
+info() { printf '%s[INFO]%s  %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
+ok()   { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
+warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+err()  { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
 
 # sanitize_compose_environment
 # Caller-exported Compose selectors outrank a checkout's .env and can redirect

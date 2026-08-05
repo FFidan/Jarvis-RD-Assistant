@@ -33,18 +33,12 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Output helpers (mirrors scripts/first-run-smoke.sh)
+# Shared helpers (this script lives in <root>/scripts). Loaded before argument
+# parsing because the parser reports its own failures through err().
 # -----------------------------------------------------------------------------
-if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
-  C_BLUE=$'\033[34m'; C_RESET=$'\033[0m'
-else
-  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_RESET=""
-fi
-info() { printf '%s[INFO]%s  %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
-ok()   { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
-warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-err()  { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
+SMOKE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=setup_lib.sh
+source "${SMOKE_SCRIPT_DIR}/setup_lib.sh"
 
 show_help() {
   sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; s/^#$//; p; }' "$0"
