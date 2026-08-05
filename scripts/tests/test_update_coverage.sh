@@ -205,6 +205,19 @@ ln -s "$UPDATE_SCRIPT" "$FX/update.sh"
 mkdir -p "$FX/scripts"
 ln -s "$LIB" "$FX/scripts/setup_lib.sh"
 cp "$LIFECYCLE_HELPER" "$FX/scripts/backup-lifecycle.sh"
+# init-secrets.sh stub. It records its invocation in the SAME ordered log the
+# docker stub writes to, which is what makes the ordering assertion below
+# possible: position in one log is the only way to prove the secrets phase runs
+# before the first pull/build/up. STUB_FAIL_SECRETS models a secret that cannot
+# be written. The real script is idempotent and covered by its own boot path;
+# reproducing it here would only test the stub.
+cat > "$FX/scripts/init-secrets.sh" <<'SECRETS'
+#!/usr/bin/env bash
+printf 'init-secrets ensured\n' >> "$DOCKER_LOG"
+[ "${STUB_FAIL_SECRETS:-0}" = 1 ] && exit 1
+exit 0
+SECRETS
+chmod +x "$FX/scripts/init-secrets.sh"
 printf 'services: {}\nvolumes:\n  postgres_backups:\n' > "$FX/docker-compose.yml"
 cat > "$FX/pyproject.toml" <<'PYPROJECT'
 [project]
@@ -360,6 +373,7 @@ run_update() {
     STUB_EXACT_TAG="${STUB_EXACT_TAG:-}" STUB_FAIL_PULL="${STUB_FAIL_PULL:-0}" \
     STUB_FAIL_PULL_MATCH="${STUB_FAIL_PULL_MATCH:-}" \
     STUB_ACTIVE_INGRESS="${STUB_ACTIVE_INGRESS:-}" \
+    STUB_FAIL_SECRETS="${STUB_FAIL_SECRETS:-0}" \
     STUB_HEALTH="${STUB_HEALTH-healthy}" STUB_RUN_STATE="${STUB_RUN_STATE-running}" \
     STUB_HEALTH_SEQUENCE="${STUB_HEALTH_SEQUENCE:-}" \
     STUB_DEAD_GUARD="${STUB_DEAD_GUARD:-0}" STUB_NO_DAEMON="${STUB_NO_DAEMON:-0}" \
@@ -563,6 +577,37 @@ if [ "$rc" -eq 1 ] \
   pass "invalid_ingress_subnet_aborts_before_mutation"
 else
   check_fail "invalid_ingress_subnet_aborts_before_mutation: rc=$rc log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# An update is checkout-based: `git pull` delivers tracked files, but the
+# generated secrets/*.txt are not tracked. A release that begins mounting a new
+# Docker secret therefore reaches an older install with that file absent, and
+# Compose aborts with "secret not found" partway through recreating services.
+# ORDERING is the contract under test, not the mere presence of the call: a
+# check that only grepped for init-secrets would also pass if the call sat after
+# the recreate, which is precisely the failure being prevented.
+reset_fixture_env
+out="$(run_update --yes)"; rc=$?
+secrets_at="$(grep -n 'init-secrets' "$FX/docker.log" | head -1 | cut -d: -f1)"
+stage_at="$(grep -nE '^(pull|build|up|network-up) ' "$FX/docker.log" | head -1 | cut -d: -f1)"
+if [ "$rc" -eq 0 ] && [ -n "$secrets_at" ] && [ -n "$stage_at" ] \
+   && [ "$secrets_at" -lt "$stage_at" ]; then
+  pass "required_secrets_are_created_before_the_first_image_is_staged"
+else
+  check_fail "secrets phase did not precede staging: rc=$rc secrets_at=${secrets_at:-none} stage_at=${stage_at:-none} log=$(cat "$FX/docker.log") out=$out"
+fi
+
+# A secret that cannot be written must stop the update while the running cohort
+# is still untouched -- nothing pulled, built or recreated -- and must name the
+# script the operator has to run by hand.
+reset_fixture_env
+out="$(STUB_FAIL_SECRETS=1 run_update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && ! grep -Eq '^(pull|build|up|network-up) ' "$FX/docker.log" \
+   && printf '%s' "$out" | grep -q 'init-secrets.sh'; then
+  pass "unwritable_secrets_abort_the_update_before_any_image_is_staged"
+else
+  check_fail "unwritable secrets did not abort before staging: rc=$rc log=$(cat "$FX/docker.log") out=$out"
 fi
 
 # A staging failure must not claim that the old deployment advanced.

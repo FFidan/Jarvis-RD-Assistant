@@ -284,7 +284,7 @@ fi
 
 # A pre-1.1 .env carries no TORCH_VARIANT, so the image tag would resolve to the
 # CPU flavour even on a CUDA host. Backfill BEFORE anything resolves an image —
-# section 4 below already starts services, and cloudflared depends on dashboard.
+# section 5 below already starts services, and cloudflared depends on dashboard.
 if _bf_variant="$(backfill_torch_variant_from_env)" && [ -n "$_bf_variant" ]; then
   info "Recorded this host's torch image variant in .env: ${_bf_variant}"
 fi
@@ -437,7 +437,23 @@ if [ "$DO_TP" -eq 0 ] && [ "$DO_APP" -eq 0 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 4. Stage every image FIRST — all pulls/builds complete before any recreate.
+# 4. Materialize the Docker-secret source files this checkout expects.
+# -----------------------------------------------------------------------------
+# An update is checkout-based: `git pull` delivers tracked files, but the
+# generated secrets/*.txt are not tracked. A release that begins mounting a new
+# secret therefore lands on an older install with that file absent, and Compose
+# aborts with "secret not found" — partway through recreating services. Create
+# them BEFORE anything is staged so that failure costs nothing. init-secrets.sh
+# is idempotent and preserves existing values; it is the same script `make up`
+# runs, so this aligns update with the normal boot path.
+info "Ensuring the Docker-secret source files exist..."
+if ! bash scripts/init-secrets.sh; then
+  die "Could not create the Docker-secret source files this release requires." \
+      "No services were changed. Run: bash scripts/init-secrets.sh   (then re-run ./update.sh)"
+fi
+
+# -----------------------------------------------------------------------------
+# 5. Stage every image FIRST — all pulls/builds complete before any recreate.
 # -----------------------------------------------------------------------------
 if [ "$DO_TP" -eq 1 ]; then
   info "Pulling third-party images..."
@@ -467,7 +483,7 @@ if [ "$DO_APP" -eq 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 5. Recreate — every image is staged, so a bring-up only swaps containers.
+# 6. Recreate — every image is staged, so a bring-up only swaps containers.
 # -----------------------------------------------------------------------------
 UPDATE_MUTATION_STARTED=1
 TO_UPDATE=()
@@ -503,7 +519,7 @@ if [ "$DO_APP" -eq 1 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 6. Health wait (per service, 180s budget, 3s interval).
+# 7. Health wait (per service, 180s budget, 3s interval).
 # -----------------------------------------------------------------------------
 _update_service_container_id() {
   docker compose ps -q "$1" 2>/dev/null | head -n 1 || true
@@ -533,7 +549,7 @@ for svc in "${TO_UPDATE[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 7. Report
+# 8. Report
 # -----------------------------------------------------------------------------
 if [ "${#FAILED[@]}" -eq 0 ]; then
   if [ "$DO_APP" -eq 1 ]; then

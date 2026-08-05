@@ -711,6 +711,14 @@ make_repo() {
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
   cp "$LIFECYCLE_HELPER" "$dir/scripts/backup-lifecycle.sh"
   chmod +x "$dir/scripts/backup-lifecycle.sh"
+  # update.sh materializes the Docker-secret source files before it stages any
+  # image, so this fixture repo has to offer that script. A no-op stub is the
+  # right stand-in: these cases exercise the update transaction machinery, and
+  # the real script would generate keys on every one of them and rewrite this
+  # fixture's .env. The secrets phase itself is covered, with an ordering
+  # assertion, in scripts/tests/test_update_coverage.sh.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/scripts/init-secrets.sh"
+  chmod +x "$dir/scripts/init-secrets.sh"
   cat > "$dir/pyproject.toml" <<'PYPROJECT'
 [project]
 name = "jarvis-rd-assistant"
