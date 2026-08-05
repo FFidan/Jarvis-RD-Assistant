@@ -36,13 +36,18 @@ jarvis-common = [
     "langfuse>=2.50",
     "lxml>=6.1.0",  # SEC-3: cached_transport uses lxml for hardened XML parsing
     "openai>=2.0.0",
+    "opentelemetry-sdk>=1.41.1",  # llm_client imports opentelemetry.sdk.trace at module scope
     "procrastinate[aiopg]>=0.49",
     "psycopg[binary]>=3.1",  # procrastinate 3.x imports psycopg unconditionally; bundled libpq
     "pydantic-settings>=2.0",
+    "pydantic>=2.0,<3.0.0",
     "rapidfuzz>=3.0.0",  # libs/jarvis_common runtime dep (was previously absent from root group)
+    "sentry-sdk>=2.29.0",  # sentry.py subclasses HttpTransport at class-definition time
     "slowapi>=0.1.9",
+    "starlette>=1.3",
     "structlog>=24.0",
     "urllib3>=2.7.0",
+    "uvicorn>=0.30.0",
 ]
 # Shared dependency set for both paper-ingestion flavors. Kept in its own
 # group because a group must not include-group its declared conflict partner
