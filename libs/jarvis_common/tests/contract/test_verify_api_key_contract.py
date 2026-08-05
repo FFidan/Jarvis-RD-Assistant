@@ -137,6 +137,24 @@ async def test_no_key_configured_no_session_returns_401(contract_conn, _no_key_e
     assert resp.status_code == 401
 
 
+async def test_no_key_configured_dev_bypass_passes(contract_conn, _no_key_env, monkeypatch):
+    """No JARVIS_API_KEY + DEV_AUTH_BYPASS=true → the dev fallback authorizes the request.
+
+    The permissive half of branch B, and the counterpart to the 401 above: with
+    no key configured the API-key comparison is skipped entirely and
+    DEV_AUTH_BYPASS decides the outcome. Folding the "is a key configured?"
+    question into the comparison would turn both of these into 403.
+    """
+    monkeypatch.setenv("DEV_AUTH_BYPASS", "true")
+    app = _make_probe_app(lambda: SharedConnPool(contract_conn))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/probe")
+    assert resp.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Branch C — key configured, bad key, no session → 403
 # ---------------------------------------------------------------------------

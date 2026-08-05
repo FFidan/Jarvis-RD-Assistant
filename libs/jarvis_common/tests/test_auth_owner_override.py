@@ -108,9 +108,10 @@ async def test_owner_override_audit_pool_none_skips_log() -> None:
     with (
         patch("jarvis_common.auth._CACHED_API_KEY", "test-key"),
         patch("jarvis_common.auth._ip_in_allowlist", return_value=True),
-        # Guard (c) still uses mock_pool via request.app.state.db_pool;
-        # the AUDIT path sees None from _request_db_pool → skips the log call.
-        patch("jarvis_common.auth._request_db_pool", return_value=None),
+        # Guard (c) and the audit block both resolve the pool through
+        # _request_db_pool, so the stub separates them by call order: guard (c)
+        # receives the pool, then the AUDIT lookup sees None and skips the log.
+        patch("jarvis_common.auth._request_db_pool", side_effect=[mock_pool, None]),
         patch("jarvis_common.auth.log_audit", new_callable=AsyncMock) as mock_log_audit,
     ):
         result = await current_user_id_with_owner_override(mock_request, api_key="test-key")
@@ -158,6 +159,32 @@ async def test_owner_override_failed_api_key_does_not_emit_audit_log() -> None:
             await current_user_id_with_owner_override(mock_request, api_key="wrong-key")
 
     assert exc_info.value.status_code == 403
+    mock_log_audit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_override_without_configured_api_key_raises_403() -> None:
+    """No configured JARVIS_API_KEY → the override fails closed, whatever was presented.
+
+    Deliberately the opposite of ``verify_api_key``, which falls through to the
+    DEV_AUTH_BYPASS check when no key is configured. Guard (a) owns that
+    decision here; a comparison helper that answered "is a key configured?" on
+    the caller's behalf would swap the two paths' behaviour.
+    """
+    from fastapi import HTTPException
+    from jarvis_common.auth import current_user_id_with_owner_override
+
+    mock_request = _make_request()
+
+    with (
+        patch("jarvis_common.auth._CACHED_API_KEY", None),
+        patch("jarvis_common.auth.log_audit", new_callable=AsyncMock) as mock_log_audit,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await current_user_id_with_owner_override(mock_request, api_key="test-key")
+
+    assert exc_info.value.status_code == 403
+    assert "X-API-Key" in exc_info.value.detail
     mock_log_audit.assert_not_awaited()
 
 
