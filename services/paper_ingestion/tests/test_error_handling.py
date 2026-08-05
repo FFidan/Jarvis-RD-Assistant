@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 from paper_ingestion.ingestion.embedder import Embedder
 from qdrant_client.http.exceptions import ResponseHandlingException
 
@@ -188,20 +189,30 @@ def _make_fake_pool():
 @pytest.fixture()
 def _stub_rag_deps():
     """Override FastAPI deps that read from app.state so route tests work without lifespan."""
-    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
     from paper_ingestion.main import app
 
     fake_embedder = AsyncMock()
     fake_http = AsyncMock(spec=httpx.AsyncClient)
     fake_pool = _make_fake_pool()
 
-    app.dependency_overrides[get_embedder] = lambda: fake_embedder
-    app.dependency_overrides[get_http_client] = lambda: fake_http
-    app.dependency_overrides[get_db_pool] = lambda: fake_pool
-    yield
-    app.dependency_overrides.pop(get_embedder, None)
-    app.dependency_overrides.pop(get_http_client, None)
-    app.dependency_overrides.pop(get_db_pool, None)
+    # pool=None: these route tests resolve everything through dependency
+    # overrides and must leave ``app.state`` untouched.
+    with patch_pi_test_app(
+        None,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            dependency_overrides={
+                get_embedder: lambda: fake_embedder,
+                get_http_client: lambda: fake_http,
+                get_db_pool: lambda: fake_pool,
+            },
+        ),
+    ):
+        yield
 
 
 # ---- ask_paper (non-stream): Qdrant error → 503 ----

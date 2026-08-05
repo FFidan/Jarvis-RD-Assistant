@@ -16,6 +16,7 @@ import httpx
 import pytest
 import respx
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 # ---------------------------------------------------------------------------
 # Helpers (reuse conftest FakeRecord + _make_pool_and_conn)
@@ -46,7 +47,7 @@ def _app():
     """Create a minimal paper_ingestion app with mocked DB and auth disabled."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import require_admin
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
     from paper_ingestion.routers import settings as _settings_mod
 
@@ -63,20 +64,30 @@ def _app():
     pool = MagicMock()
     pool.acquire.return_value = ctx
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # Admin-gate the settings endpoints (see test_settings._app).
-    app.dependency_overrides[require_admin] = lambda: None
+    # The module-symbol swap is a seam the shared helper deliberately does not
+    # cover; restore it manually alongside the helper's scoped restore.
     _orig_require_admin = _settings_mod.require_admin
     _settings_mod.require_admin = AsyncMock(return_value=None)
-
-    yield app, conn
-    _settings_mod.require_admin = _orig_require_admin
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    try:
+        with patch_pi_test_app(
+            pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+                # Admin-gate the settings endpoints (see test_settings._app).
+                dependency_overrides={
+                    verify_api_key: lambda: None,
+                    require_admin: lambda: None,
+                },
+            ),
+        ):
+            yield app, conn
+    finally:
+        _settings_mod.require_admin = _orig_require_admin
 
 
 # ---------------------------------------------------------------------------

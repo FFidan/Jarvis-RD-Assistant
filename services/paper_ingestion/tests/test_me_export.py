@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 
 class _FakeCursor:
@@ -59,20 +60,24 @@ def _export_app(pool: MagicMock):
     """
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    _orig_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-    try:
-        yield app
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
-        if _orig_pool is not None:
-            app.state.db_pool = _orig_pool
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_strict: lambda: 1,
+            },
+        ),
+    ) as wired_app:
+        yield wired_app
 
 
 async def _get_export(app) -> httpx.Response:
