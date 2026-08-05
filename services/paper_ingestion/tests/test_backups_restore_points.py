@@ -15,12 +15,18 @@ from pathlib import Path
 import pytest
 
 from paper_ingestion.routers import backups as bk
+from paper_ingestion.services import backup_archive as bk_archive
 
 
 @pytest.fixture()
 def backup_dir(tmp_path, monkeypatch):
-    """Point the router's _BACKUP_DIR at a tmp dir and return it."""
+    """Point both _BACKUP_DIR bindings at a tmp dir and return it.
+
+    The archive helpers and the router each hold a binding of this name, so a
+    route that reads it directly *and* calls a helper needs both patched.
+    """
     monkeypatch.setattr(bk, "_BACKUP_DIR", tmp_path)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", tmp_path)
     return tmp_path
 
 
@@ -423,7 +429,7 @@ def test_restore_point_phantom_manifest_rejected(backup_dir, code_max_50):
 
 
 def test_read_inbox_manifest_absent_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", tmp_path / ".inbox_manifest.json")
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", tmp_path / ".inbox_manifest.json")
     assert bk._read_inbox_manifest() == []
 
 
@@ -451,7 +457,7 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
             ]
         )
     )
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     points = bk._read_inbox_manifest()
     assert [p.timestamp for p in points] == ["20260701_030000", "20260630_020000"]
     assert points[0].complete is True
@@ -463,7 +469,7 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
 
 def test_read_inbox_manifest_degrades_on_malformed(tmp_path, monkeypatch):
     manifest = tmp_path / ".inbox_manifest.json"
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     manifest.write_text("{ not json")
     assert bk._read_inbox_manifest() == []  # malformed → never raises
     manifest.write_text(json.dumps({"not": "a list"}))
@@ -489,7 +495,7 @@ def test_read_inbox_manifest_drops_corrupt_entries(tmp_path, monkeypatch):
             ]
         )
     )
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     points = bk._read_inbox_manifest()
     assert [p.timestamp for p in points] == ["20260701_030000"]
 
