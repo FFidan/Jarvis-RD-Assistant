@@ -26,6 +26,7 @@ from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.pdf_processor import resolve_safe_pdf_path as _real_resolve_safe_pdf_path
 from paper_ingestion.routers import jobs as _jobs_router_module
+from paper_ingestion.services import embedding_reconcile as _real_embedding_reconcile
 from paper_ingestion.services import pdf_workflow as _real_pdf_workflow
 from paper_ingestion.services.pdf_workflow import (
     PDFRecordMissingError as _RealPDFRecordMissingError,
@@ -58,9 +59,9 @@ def _install_stubs(monkeypatch):
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
     _workflow_stub.PDFRecordMissingError = _RealPDFRecordMissingError
-    # Resolved from the live module, not bound at import: test_pdf_workflow.py
-    # reloads pdf_workflow, which rebinds its classes, and a handler can only
-    # catch the class its own import resolves.
+    # Resolved from the live module rather than bound at import time. The
+    # classes are defined in services.pdf_errors and re-imported unchanged by
+    # a pdf_workflow reload, so both bindings stay identical either way.
     _workflow_stub.PDFRebuildNotPermittedError = _real_pdf_workflow.PDFRebuildNotPermittedError
     _workflow_stub.PDFUserFacingError = _real_pdf_workflow.PDFUserFacingError
     _workflow_stub.download_and_store_pdf = AsyncMock()
@@ -1417,10 +1418,19 @@ def _use_real_workflow(monkeypatch, tmp_path, pj) -> MagicMock:
 
     _workflow_stub.run_process_pdf = _real_pdf_workflow.run_process_pdf
     monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    # The generation resolver is read through two module namespaces: the PDF
+    # run (pdf_workflow) and reconciliation (embedding_reconcile). Patch both
+    # so either entry point sees the stubbed generation.
+    resolve_generation = AsyncMock(return_value=_REBUILD_VISIBILITY.visibility_generation)
     monkeypatch.setattr(
         _real_pdf_workflow,
         "_resolve_visibility_generation",
-        AsyncMock(return_value=_REBUILD_VISIBILITY.visibility_generation),
+        resolve_generation,
+    )
+    monkeypatch.setattr(
+        _real_embedding_reconcile,
+        "_resolve_visibility_generation",
+        resolve_generation,
     )
     monkeypatch.setattr(
         _real_pdf_workflow,
