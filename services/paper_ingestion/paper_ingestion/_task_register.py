@@ -6,6 +6,11 @@ lifespan startup *before* ``app.run_worker_async()`` is started.
 
 Handler imports are at module level (not lazy) because this module is only
 imported by paper_ingestion's lifespan, so there is no cross-service cycle risk.
+
+Mirrors ``learning_engine._task_register`` in shape, not content: each maps
+to handlers living in that service's own modules, so merging the two would
+require importing both services' handlers everywhere, reintroducing the
+cross-service cycle this split avoids.
 """
 
 from __future__ import annotations

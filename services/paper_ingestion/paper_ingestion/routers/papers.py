@@ -9,6 +9,10 @@ The monolithic papers.py has been split into:
 
 ``logger`` is kept here so ``test_star_zotero_push_trigger.py`` can still patch
 ``papers.logger`` (``patch.object(papers.logger, "exception")``).
+
+The split is by responsibility (feed listing, detail fetch, feedback, lifecycle
+transitions, bulk actions), not an arbitrary file-size cut; recombining the
+sub-routers into one module would re-create the monolith this replaced.
 """
 
 import logging

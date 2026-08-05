@@ -292,7 +292,7 @@ class PaperSource(ABC):
                     duration_ms,
                     "{}",
                 )
-        except Exception as exc:
+        except Exception as exc:  # broad: best-effort audit row; must not fail the fetch it records
             logger.warning(
                 "%s: failed to insert source_run_history: %s",
                 self.source_type,
@@ -381,7 +381,7 @@ class PaperSource(ABC):
                     message=log_message,
                     context=log_context,
                 )
-            except Exception as exc:
+            except Exception as exc:  # broad: best-effort write; outcome is already final
                 logger.warning(
                     "%s: log_event write failed for %s",
                     self.source_type,

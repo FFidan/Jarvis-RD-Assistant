@@ -177,6 +177,11 @@ async def _zotero_request_with_retry(
     source-plugin retry posture and bounds tail latency under sustained
     throttling.
 
+    This is the only Retry-After implementation in this client. Call sites
+    either route through it or, where a leg is documented as bypassing it
+    (e.g. the plain S3 upload POST), skip retrying entirely rather than
+    reimplementing the header parsing locally.
+
     The caller still owns ``raise_for_status()`` — this helper only retries;
     it does not promote 429 into an exception.
 

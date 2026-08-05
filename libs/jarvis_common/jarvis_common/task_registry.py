@@ -5,6 +5,12 @@ workers start. Generated tasks adapt those handlers to Procrastinate, expose a
 read-only kind-to-task mapping, and retry outbound-quarantine failures without
 marking the job complete. The connector is configured by service lifespan code;
 importing this module does not open a database connection.
+
+Distinct responsibility from ``jobs`` (queue-backbone types, DB reads, SSE
+streaming, and the kind-to-queue ownership map this module consumes via
+``queue_for_kind``) and from ``jobs_router`` (the per-service REST factory
+built on top of ``jobs``): this module is where handlers are registered so
+Procrastinate can dispatch to them, not where jobs are queried or exposed.
 """
 
 from __future__ import annotations

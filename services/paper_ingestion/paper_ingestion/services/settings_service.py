@@ -10,6 +10,10 @@ Submodules:
 - provider_test: provider connectivity probe
 - data_export: GDPR ZIP export
 - config_write: top-level write_config orchestration
+
+Each submodule is scoped to one concern (key metadata, validation, DB I/O,
+top-level orchestration, ...); this is the seam, not accidental duplication,
+and folding them back into one file would recreate the module this replaced.
 """
 
 # _log_event is re-exported here because routers.settings patches it via

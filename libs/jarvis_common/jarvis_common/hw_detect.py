@@ -13,7 +13,14 @@ _VENDORS: tuple[Vendor, ...] = ("nvidia", "amd", "intel", "none")
 
 
 def classify_tier(vram_mb: int | None) -> Tier:
-    """Map raw VRAM megabytes to a named hardware tier used for model-routing decisions."""
+    """Map raw VRAM megabytes to a named hardware tier used for model-routing decisions.
+
+    These cutoffs (8/16/24/48 GB) intentionally differ from
+    :mod:`jarvis_common.hardware_fit`'s model-recommendation thresholds
+    (4/10/20/40 GB): this function mirrors the shell contract in setup.sh's
+    detect_hw_tier, while hardware_fit's thresholds are tuned independently
+    around specific model memory footprints. Do not unify them.
+    """
     if vram_mb is None or vram_mb <= 0:
         return "cpu"
     if vram_mb < 8000:
