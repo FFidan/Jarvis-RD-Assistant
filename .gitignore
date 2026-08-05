@@ -26,6 +26,14 @@ build/
 .jarvis-setup-transaction.pending
 .env.pre-config-key-rotation.bak
 .env.rotation.*
+# Catch-all for every other machine-local .env variant. The named rules above and
+# below document the shapes we know about; this one covers the shapes nobody
+# anticipated — notably the timestamped copies the upgrade runbook tells operators
+# to make (`cp .env .env.bak-<version>-<date>`), which matched no rule and sat
+# untracked and unignored in a public working tree. The un-ignore keeps the
+# committed `.env.example` files visible at every depth.
+.env.*
+!.env.example
 *.pem
 *.key
 *.p12
@@ -85,6 +93,9 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+# JUnit reports written into the repo root by the release gates and CI test jobs
+# (baseline-invariants, contract-tests, corpus-visibility-qdrant, cross-user-isolation).
+*.junit.xml
 
 # Jupyter
 .ipynb_checkpoints/
