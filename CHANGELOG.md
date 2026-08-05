@@ -10,6 +10,44 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.4 (2026-08-06)
+
+This release repairs two paths that were broken for people running the software
+rather than reading about it: a container that could not start, and an upgrade
+that could not finish. Both had been shipping for several releases with no check
+that would notice, so each fix arrives with the check that was missing.
+
+### Fixed
+
+- **The Telegram bot container starts again.** Deployments using the `telegram`
+  profile have been unable to start it since v1.2.0: the published image was
+  missing a dependency the bot imports at startup, so the container exited
+  immediately and restarted forever. **This affected v1.2.0, v1.2.1, v1.2.2 and
+  v1.2.3 — every release in that range.** The dependency is now declared where it
+  is used, and every published image is started with its own interpreter and made
+  to import its entry point before it can join a release, so an image that cannot
+  start can no longer be published.
+- **Upgrading from v1.1.2 or older completes.** Since v1.1.3 the deployment has
+  referenced a mail-password secret file that upgrades never created, so
+  `./update.sh` stopped part way through replacing containers. Required secret
+  files are now created before any image is pulled or any container replaced, so
+  an upgrade that cannot create them stops with everything still running and
+  names the command to run.
+- **Lists say when a query failed** instead of showing the same empty state they
+  show when there is genuinely nothing to display.
+- **A single paper reports where it came from**, matching the origin already
+  shown in list views.
+- **A missing-table error names the schema baseline to apply**, so the message
+  points at the fix rather than only reporting the failure.
+
+### Changed
+
+- **Documentation that contradicted the code was corrected**, covering
+  configuration precedence, ownership rules, route behaviour, and the conditions
+  under which strict mode and extraction failures raise.
+- **The installer, upgrade, backup and restore scripts are now covered by shell
+  linting**, alongside the entry points that were already checked.
+
 ## v1.2.3 (2026-08-04)
 
 This release closes the gap between what the product says and what it does.

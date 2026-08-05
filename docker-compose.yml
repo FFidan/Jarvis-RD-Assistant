@@ -11,7 +11,7 @@ x-shared-env: &shared-env
   # Release version surfaced by /health/internal + FastAPI metadata + the UI.
   # The service images don't install the root distribution, so app_version()
   # reads this env; defaults to the release tag (same var drives the image tags).
-  JARVIS_VERSION: ${JARVIS_VERSION:-1.2.3}
+  JARVIS_VERSION: ${JARVIS_VERSION:-1.2.4}
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
@@ -299,7 +299,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.3}}${TORCH_VARIANT_SUFFIX:-}
+    image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.4}}${TORCH_VARIANT_SUFFIX:-}
     pull_policy: missing
     build:
       context: .
@@ -399,7 +399,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: ghcr.io/limitcycle-oss/jarvis-learning-engine:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.3}}
+    image: ghcr.io/limitcycle-oss/jarvis-learning-engine:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.4}}
     pull_policy: missing
     build:
       context: .
@@ -458,7 +458,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: ghcr.io/limitcycle-oss/jarvis-telegram-bot:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.3}}
+    image: ghcr.io/limitcycle-oss/jarvis-telegram-bot:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.4}}
     pull_policy: missing
     build:
       context: .
@@ -516,7 +516,7 @@ services:
         ipv4_address: ${JARVIS_TELEGRAM_BOT_IP:-10.137.241.250}
 
   dashboard:
-    image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.3}}
+    image: ghcr.io/limitcycle-oss/jarvis-dashboard:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.4}}
     pull_policy: missing
     build:
       context: ./frontend
@@ -596,7 +596,7 @@ services:
       SECRETS_DIR: /secrets
       # Stamped into each backup manifest's app_version (so a restore point shows
       # the JARVIS version it was taken on, not a constant "unknown").
-      JARVIS_VERSION: ${JARVIS_VERSION:-1.2.3}
+      JARVIS_VERSION: ${JARVIS_VERSION:-1.2.4}
     secrets:
       - postgres_password
       - backup_encrypt_key
@@ -660,7 +660,7 @@ services:
   # (a drop-in for the previous manual scp step). See services/restore_uploader.
   restore-uploader:
     build: ./services/restore_uploader
-    image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.3}}
+    image: ghcr.io/limitcycle-oss/jarvis-restore-uploader:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.4}}
     pull_policy: missing
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -731,7 +731,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.2.3}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.2.4}
     pull_policy: build
     build:
       context: ./langfuse
