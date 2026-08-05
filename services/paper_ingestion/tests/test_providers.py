@@ -31,27 +31,34 @@ def _app():
 
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    # set_config reads request.app.state.http_client; provide a stub so the test
-    # does not depend on a sibling test having set it on the shared app singleton.
-    app.state.http_client = AsyncMock()
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # get_config / set_config / test_provider resolve the caller via
-    # Depends(current_user_id_strict); steer it to a concrete user (the routes
-    # hard-401 sessionless callers otherwise).
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-
-    yield app, conn
-
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            # set_config reads request.app.state.http_client; provide a stub so
+            # the test does not depend on a sibling test having set it on the
+            # shared app singleton.
+            state_overrides={"http_client": AsyncMock()},
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                # get_config / set_config / test_provider resolve the caller
+                # via Depends(current_user_id_strict); steer it to a concrete
+                # user (the routes hard-401 sessionless callers otherwise).
+                current_user_id_strict: lambda: 1,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 # ---------------------------------------------------------------------------
@@ -644,13 +651,18 @@ async def test_key_presence_covers_every_registered_provider() -> None:
 
 
 @pytest.mark.asyncio
-async def test_models_response_offers_a_keyless_custom_endpoint_live_models() -> None:
+async def test_models_response_offers_a_keyless_custom_endpoint_live_models(monkeypatch) -> None:
     """A provider reachable by base URL alone is fetched, merged, and recommended."""
     from types import SimpleNamespace
 
     from paper_ingestion.routers.system import _get_system_models_data
     from paper_ingestion.services.provider_models import reset_provider_model_cache
     from tests.test_provider_models import FakeConfigPool, mock_http_client
+
+    # _get_system_models_data probes LiteLLM for real; fail that probe fast
+    # (connection refused) instead of hanging ~10 s on resolving the
+    # compose-internal hostname.
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://127.0.0.1:9")
 
     reset_provider_model_cache()
 

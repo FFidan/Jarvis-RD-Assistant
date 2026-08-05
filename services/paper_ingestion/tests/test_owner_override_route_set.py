@@ -109,17 +109,25 @@ def _app_without_api_key_gate():
     would pass no matter which resolver a route uses.
     """
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
 
     pool, _conn = _make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app
-    app.dependency_overrides.pop(get_db_pool, None)
-    app.dependency_overrides.pop(verify_api_key, None)
-    app.state.limiter.enabled = True
+    # remove_owner_override stays False: this file asserts how routes resolve
+    # identity UNDER the autouse stub, so the stub must remain in place.
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app
 
 
 async def test_a_directly_strict_route_still_requires_a_session(_app_without_api_key_gate) -> None:

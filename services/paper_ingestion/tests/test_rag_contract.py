@@ -10,11 +10,13 @@ boundary-adapter shape as test_rag_authorization.py.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from paper_ingestion.models.rag import AskResponse
 from tests.conftest import _make_pool_and_conn
@@ -25,32 +27,44 @@ from tests.conftest import _make_pool_and_conn
 # ---------------------------------------------------------------------------
 
 
-def _make_app_client(app, pool):
-    """Wire dependency overrides on *app* and return an httpx.AsyncClient."""
+@contextmanager
+def _wired_overrides(app, pool):
+    """Wire this module's dependency overrides on *app*, restored exactly on exit."""
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, get_verifier
+    from paper_ingestion.deps import (
+        get_db_pool,
+        get_embedder,
+        get_http_client,
+        get_verifier,
+        limiter,
+    )
 
     mock_embedder = AsyncMock()
     mock_embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
     mock_http_client = AsyncMock(spec=httpx.AsyncClient)
     mock_verifier = MagicMock()
 
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_embedder] = lambda: mock_embedder
-    app.dependency_overrides[get_http_client] = lambda: mock_http_client
-    app.dependency_overrides[get_verifier] = lambda: mock_verifier
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                get_embedder: lambda: mock_embedder,
+                get_http_client: lambda: mock_http_client,
+                get_verifier: lambda: mock_verifier,
+            },
+        ),
+    ):
+        yield
 
+
+def _asgi_client(app):
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-
-
-def _clear_overrides(app):
-    """Remove only the keys this module added."""
-    from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, get_verifier
-
-    for dep in (get_db_pool, verify_api_key, get_embedder, get_http_client, get_verifier):
-        app.dependency_overrides.pop(dep, None)
 
 
 _FAKE_ASK_RESPONSE = AskResponse(answer="structured answer", sources=[])
@@ -73,8 +87,8 @@ async def test_ask_paper_uses_structured_llm():
     from paper_ingestion.main import app
 
     pool, _conn = _make_pool_and_conn()
-    async with _make_app_client(app, pool) as client:
-        try:
+    with _wired_overrides(app, pool):
+        async with _asgi_client(app) as client:
             with (
                 patch(
                     "paper_ingestion.routers.rag.assert_paper_ownership",
@@ -93,8 +107,6 @@ async def test_ask_paper_uses_structured_llm():
                     "/api/papers/42/ask",
                     json={"question": "what is this about"},
                 )
-        finally:
-            _clear_overrides(app)
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     assert mock_llm.called, "ask_paper must invoke _call_rag_llm (call_llm_structured path)"
@@ -123,8 +135,8 @@ async def test_ask_cross_paper_uses_structured_llm():
         sources=_FAKE_SOURCES,
     )
 
-    async with _make_app_client(app, pool) as client:
-        try:
+    with _wired_overrides(app, pool):
+        async with _asgi_client(app) as client:
             with (
                 patch(
                     "paper_ingestion.routers.rag.prepare_cross_paper_rag",
@@ -139,8 +151,6 @@ async def test_ask_cross_paper_uses_structured_llm():
                     "/api/ask",
                     json={"question": "cross-paper question"},
                 )
-        finally:
-            _clear_overrides(app)
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     assert mock_llm.called, "ask_cross_paper must invoke _call_rag_llm (call_llm_structured path)"

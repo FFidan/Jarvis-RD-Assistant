@@ -29,25 +29,42 @@ def _app():
     """Minimal app instance with mocked DB pool and disabled auth/limiter."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import (
+        get_db_pool,
+        get_embedder,
+        get_http_client,
+        get_verifier,
+        limiter,
+    )
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
     mock_http = AsyncMock()
-    app.state.http_client = mock_http
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # Depends-wired routes (extract_paper, find_similar_papers) resolve the
-    # caller via current_user_id_strict; pin it. Still-imperative routes in
-    # this file resolve via the autouse module-symbol monkeypatch.
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-
-    yield app, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            state_overrides={"http_client": mock_http},
+            # Test bodies add per-test overrides for these seams; declaring
+            # them here guarantees any in-test write is removed again on exit.
+            dependency_absent=(get_embedder, get_http_client, get_verifier),
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                # Depends-wired routes (extract_paper, find_similar_papers)
+                # resolve the caller via current_user_id_strict; pin it.
+                # Still-imperative routes in this file resolve via the autouse
+                # module-symbol monkeypatch.
+                current_user_id_strict: lambda: 1,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 # ---------------------------------------------------------------------------

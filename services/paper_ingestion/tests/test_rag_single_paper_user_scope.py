@@ -49,23 +49,36 @@ def test_prepare_single_paper_rag_accepts_user_id() -> None:
 async def test_ask_paper_forwards_user_id_to_prepare_single_paper_rag() -> None:
     """Route handler must pass authenticated user_id into the RAG helper."""
     from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
     from paper_ingestion.deps import (
         get_db_pool,
         get_embedder,
         get_http_client,
         get_verifier,
+        limiter,
     )
     from paper_ingestion.main import app
     from paper_ingestion.models.rag import AskResponse
 
     pool, _conn = _make_pool_and_conn()
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[get_http_client] = lambda: AsyncMock(spec=httpx.AsyncClient)
-    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
-    app.dependency_overrides[get_verifier] = lambda: AsyncMock()
-    app.dependency_overrides[verify_api_key] = lambda: None
-
-    try:
+    # pool=None: this test resolves the pool through the dependency override
+    # only and leaves ``app.state`` untouched.
+    with patch_pi_test_app(
+        None,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            dependency_overrides={
+                get_db_pool: lambda: pool,
+                get_http_client: lambda: AsyncMock(spec=httpx.AsyncClient),
+                get_embedder: lambda: AsyncMock(),
+                get_verifier: lambda: AsyncMock(),
+                verify_api_key: lambda: None,
+            },
+        ),
+    ):
         with (
             patch(
                 "paper_ingestion.routers.rag.assert_paper_ownership",
@@ -89,15 +102,6 @@ async def test_ask_paper_forwards_user_id_to_prepare_single_paper_rag() -> None:
                     "/api/papers/42/ask",
                     json={"question": "hi", "max_chunks": 5},
                 )
-    finally:
-        for dep in (
-            get_db_pool,
-            verify_api_key,
-            get_embedder,
-            get_http_client,
-            get_verifier,
-        ):
-            app.dependency_overrides.pop(dep, None)
 
     assert resp.status_code == 200, resp.text
     assert mock_prep.await_count == 1

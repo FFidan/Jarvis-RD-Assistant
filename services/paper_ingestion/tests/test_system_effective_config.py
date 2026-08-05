@@ -6,6 +6,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 from jarvis_common.testing import make_pool_and_conn
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 
 def _make_pool(fetch_return=None):
@@ -16,18 +17,23 @@ def _make_pool(fetch_return=None):
 @pytest.fixture()
 def _app(monkeypatch):
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool = _make_pool()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app
 
 
 @pytest.mark.asyncio
@@ -58,23 +64,26 @@ async def test_effective_config_default_snapshot(_app):
 async def test_effective_config_db_override_visible(monkeypatch):
     """A stored llm.smart_model override surfaces as effective != code_default."""
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool = _make_pool(fetch_return=[{"key": "llm.smart_model", "value": '"qwen3:14b"'}])
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-
-    try:
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/system/effective-config")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200
     smart = resp.json()["roles"]["smart"]
@@ -103,24 +112,28 @@ async def test_effective_config_requires_auth(monkeypatch):
     monkeypatch.setenv("JARVIS_API_KEY", "secret-key-value-1234567890")
 
     from jarvis_common.auth import refresh_api_key_cache
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     refresh_api_key_cache()
     pool = _make_pool()
-    app.state.db_pool = pool
-    old_limiter = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-
     try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/api/system/effective-config")
+        with patch_pi_test_app(
+            pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+            ),
+        ):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/system/effective-config")
     finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = old_limiter
         monkeypatch.delenv("JARVIS_API_KEY", raising=False)
         refresh_api_key_cache()
 

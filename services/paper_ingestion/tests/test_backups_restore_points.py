@@ -518,26 +518,34 @@ async def test_download_backup_serves_valid_archive(backup_dir, monkeypatch):
     import httpx
     from httpx import ASGITransport
     from jarvis_common.auth import require_admin, verify_api_key
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     name = "jarvis_20260624_120000.sql.gz"
     (backup_dir / name).write_bytes(b"J" * 10)
 
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
-    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
-    app.state.limiter.enabled = False
-    app.dependency_overrides[require_admin] = lambda: None
-    app.dependency_overrides[verify_api_key] = lambda: None
 
-    try:
+    with patch_pi_test_app(
+        AsyncMock(),
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            disable_limiter=True,
+            dependency_overrides={
+                require_admin: lambda: None,
+                verify_api_key: lambda: None,
+            },
+        ),
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/admin/backups/{name}/download")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200
     assert resp.content == b"J" * 10

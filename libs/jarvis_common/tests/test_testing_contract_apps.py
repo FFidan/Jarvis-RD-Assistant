@@ -120,6 +120,28 @@ def test_patch_pi_test_app_none_pool_rejects_db_dependency_override():
             pass
 
 
+def test_patch_pi_test_app_dependency_absent_cleans_in_test_writes():
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+
+    def dep():
+        return None
+
+    app, get_db_pool, limiter = _pi_app_doubles()
+    pool = object()
+
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(remove_owner_override=False, dependency_absent=(dep,)),
+    ):
+        assert dep not in app.dependency_overrides
+        app.dependency_overrides[dep] = lambda: "added-inside"
+
+    assert dep not in app.dependency_overrides
+
+
 def test_patch_pi_test_app_state_absent_removes_and_restores():
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 

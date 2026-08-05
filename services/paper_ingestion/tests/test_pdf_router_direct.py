@@ -664,29 +664,36 @@ async def test_get_pdf_rejects_traversal_path(monkeypatch):
 
     import paper_ingestion.routers.pdfs as pdfs_mod
     from jarvis_common.auth import get_current_user_id, verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool, _ = make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_current_user_id] = lambda: 1
 
     def _escape(*_args, **_kwargs):
         raise ValueError("path escapes base directory")
 
     monkeypatch.setattr(pdfs_mod, "secure_path", _escape)
 
-    try:
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: 1,
+            },
+        ),
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/pdfs/1")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 400
 

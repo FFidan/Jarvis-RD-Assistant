@@ -18,7 +18,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
-from jarvis_common.testing import RoleMiddleware, make_pool_and_conn
+from jarvis_common.testing import RoleMiddleware
+from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
+    patch_dependency_overrides,
+    patch_pi_test_app,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -26,20 +31,36 @@ from jarvis_common.testing import RoleMiddleware, make_pool_and_conn
 
 
 @pytest.fixture()
-def _base_app(mock_db):
+def _base_app(mock_db, monkeypatch):
     """Return (app, pool, conn) with rate-limiter + verify_api_key bypassed."""
     from jarvis_common.auth import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
+    # The model-data handlers probe LiteLLM for real; point the probe at a
+    # connection-refused address so its degraded path fails fast instead of
+    # hanging ~10 s per test on resolving the compose-internal hostname.
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://127.0.0.1:9")
+
     pool, conn = mock_db
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app, pool, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            # Tests below wire app.state.http_client themselves, and the
+            # storage test asserts the degraded no-Qdrant section; declaring
+            # both here guarantees they start absent and any in-test write is
+            # removed again on exit.
+            state_absent=("http_client", "qdrant_client"),
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app, pool, conn
 
 
 def _client_with_role(app, role: str | None) -> httpx.AsyncClient:
@@ -82,28 +103,20 @@ async def test_delete_model_unauth_returns_401_or_403(_base_app):
     """No session role + no valid API key → 401 or 403."""
     app, _pool, _conn = _base_app
 
-    # Remove the verify_api_key bypass so the global key guard fires.
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = False
-
     import os
 
     original = os.environ.get("JARVIS_API_KEY")
     os.environ["JARVIS_API_KEY"] = "x" * 32  # ensure key guard is active
-    from jarvis_common.auth import refresh_api_key_cache
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.auth import refresh_api_key_cache, verify_api_key
 
     refresh_api_key_cache()
-    pool, _ = make_pool_and_conn()
-    app.state.db_pool = pool
-    app.dependency_overrides[get_db_pool] = lambda: pool
-
     try:
-        async with _client_with_role(app, None) as client:
-            resp = await client.delete("/api/system/models/qwen3:4b")
+        # Drop only the verify_api_key bypass so the global key guard fires;
+        # the fixture's pool wiring and limiter state stay in place.
+        with patch_dependency_overrides(app, remove_overrides={verify_api_key}):
+            async with _client_with_role(app, None) as client:
+                resp = await client.delete("/api/system/models/qwen3:4b")
     finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
         if original is not None:
             os.environ["JARVIS_API_KEY"] = original
         else:

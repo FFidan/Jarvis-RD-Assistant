@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,9 +16,36 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 # D3-08: use canonical pool builder instead of duplicated local _mock_pool.
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+@contextmanager
+def _wired_app(pool, *, user_id=None):
+    """Wire the app; when *user_id* is given, current_user_id_strict resolves to it."""
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
+
+    overrides = {verify_api_key: lambda: None}
+    if user_id is not None:
+        overrides[current_user_id_strict] = lambda: user_id
+
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides=overrides,
+        ),
+    ):
+        yield app
 
 
 def _contradiction_row(*, paper_a_id: int = 10, paper_b_id: int = 11) -> FakeRecord:
@@ -53,31 +81,13 @@ def _contradiction_row(*, paper_a_id: int = 10, paper_b_id: int = 11) -> FakeRec
 @pytest.mark.real_auth
 async def test_get_contradictions_no_session_returns_401() -> None:
     """GET /api/contradictions without a session must return 401."""
-    from jarvis_common.auth import verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
     pool, _conn = _make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def override_db_pool():
-        return pool
-
-    async def override_api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = override_db_pool
-    app.dependency_overrides[verify_api_key] = override_api_key
-    try:
+    with _wired_app(pool) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/contradictions")
         assert resp.status_code == 401, resp.text
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------
@@ -94,36 +104,16 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
     that user_id=2 (user B) gets an empty result when the DB returns nothing
     (simulating that neither paper_a nor paper_b is in user B's library).
     """
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
     pool, conn = _make_pool_and_conn()
     # DB returns empty — user B has no contradictions in their library.
     conn.fetch.return_value = []
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def override_db_pool():
-        return pool
-
-    async def override_api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = override_db_pool
-    app.dependency_overrides[verify_api_key] = override_api_key
-    # Override current_user_id_strict (Depends-wired) to return user_id=2.
-    app.dependency_overrides[current_user_id_strict] = lambda: 2
-
-    try:
+    # current_user_id_strict (Depends-wired) resolves to user_id=2.
+    with _wired_app(pool, user_id=2) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/contradictions")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -140,35 +130,15 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
 @pytest.mark.asyncio
 async def test_get_contradictions_user_id_threaded_to_sql() -> None:
     """Verify the user_id is included in the SQL query params."""
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_contradiction_row()]
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def override_db_pool():
-        return pool
-
-    async def override_api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = override_db_pool
-    app.dependency_overrides[verify_api_key] = override_api_key
     # current_user_id_strict (Depends-wired) resolves to 1 (user A).
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-
-    try:
+    with _wired_app(pool, user_id=1) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/contradictions")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     # user_id=1 must appear in the SQL params forwarded by list_contradictions.
@@ -192,9 +162,6 @@ async def _post_library_scan(scannable_count: int, monkeypatch) -> tuple[Any, An
     Returns ``(response, mock_task, conn)``.
     """
     import jarvis_common.task_registry as task_registry
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
 
     pool, conn = _make_pool_and_conn(fetchval_return=scannable_count)
 
@@ -202,20 +169,11 @@ async def _post_library_scan(scannable_count: int, monkeypatch) -> tuple[Any, An
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry._TASK_MAP, "contradictions.scan", mock_task)
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id_strict] = lambda: 7
-
-    try:
+    with _wired_app(pool, user_id=7) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.post("/api/contradictions/scan", json={})
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     return resp, mock_task, conn
 

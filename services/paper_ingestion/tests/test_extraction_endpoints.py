@@ -14,6 +14,7 @@ import asyncpg.exceptions
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -46,26 +47,35 @@ def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict, require_admin
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
     mock_http = AsyncMock()
-    app.state.http_client = mock_http
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # Template CUD is admin-gated (PI-B). These tests exercise CRUD/404/503
-    # logic, not the auth gate, so run them as an admin caller.
-    app.dependency_overrides[require_admin] = lambda: None
-    # Extraction read endpoints (table, paper extractions) resolve the caller
-    # via Depends(current_user_id_strict); override it to a fixed user.
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-    yield app, conn, mock_http
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            state_overrides={"http_client": mock_http},
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                # Template CUD is admin-gated (PI-B). These tests exercise
+                # CRUD/404/503 logic, not the auth gate, so run them as an
+                # admin caller.
+                require_admin: lambda: None,
+                # Extraction read endpoints (table, paper extractions) resolve
+                # the caller via Depends(current_user_id_strict); override it
+                # to a fixed user.
+                current_user_id_strict: lambda: 1,
+            },
+        ),
+    ):
+        yield app, conn, mock_http
 
 
 # ---------------------------------------------------------------------------

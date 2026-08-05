@@ -290,46 +290,46 @@ def test_build_ris_coerces_non_string_metadata() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _override_app(app, pool, user_id: int):
+@pytest.fixture
+def asgi_client():
+    from contextlib import ExitStack
+
+    import httpx
+    from httpx import ASGITransport
     from jarvis_common.auth import (
         current_user_id_strict_with_owner_override,
         verify_api_key,
     )
-    from paper_ingestion.deps import get_db_pool
-
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def _db_pool():
-        return pool
-
-    async def _api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = _db_pool
-    app.dependency_overrides[verify_api_key] = _api_key
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: user_id
-
-
-@pytest.fixture
-def asgi_client():
-    import httpx
-    from httpx import ASGITransport
-
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    def _make(pool, user_id: int = 1):
-        _override_app(app, pool, user_id)
-        return (
-            httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test"),
-            app,
-        )
+    with ExitStack() as stack:
 
-    yield _make
-    app.dependency_overrides.clear()
-    from paper_ingestion.main import app as a
+        def _make(pool, user_id: int = 1):
+            stack.enter_context(
+                patch_pi_test_app(
+                    pool,
+                    app=app,
+                    get_db_pool=get_db_pool,
+                    limiter=limiter,
+                    options=PITestAppOptions(
+                        remove_owner_override=False,
+                        override_db_dependency=True,
+                        disable_limiter=True,
+                        dependency_overrides={
+                            verify_api_key: lambda: None,
+                            current_user_id_strict_with_owner_override: lambda: user_id,
+                        },
+                    ),
+                )
+            )
+            return (
+                httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test"),
+                app,
+            )
 
-    a.state.limiter.enabled = True
+        yield _make
 
 
 @pytest.mark.asyncio

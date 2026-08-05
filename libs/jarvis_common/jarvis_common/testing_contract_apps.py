@@ -60,6 +60,14 @@ class PITestAppOptions:
     restored on exit.
     """
 
+    dependency_absent: tuple[Any, ...] = ()
+    """Dependency-override keys guaranteed absent while the app is wired.
+
+    For files whose tests add per-test overrides for these keys: any prior
+    entry is removed on entry and the prior state restored on exit, so a
+    test-body write cannot leak past the fixture.
+    """
+
 
 def _refresh_auth_settings() -> None:
     from jarvis_common import auth
@@ -207,11 +215,9 @@ def patch_pi_test_app(
     overrides = dict(options.dependency_overrides)
     if options.override_db_dependency:
         overrides[get_db_pool] = lambda: pool
-    removals = (
-        {current_user_id_strict_with_owner_override, get_current_user_id}
-        if options.remove_owner_override
-        else set()
-    )
+    removals = set(options.dependency_absent)
+    if options.remove_owner_override:
+        removals |= {current_user_id_strict_with_owner_override, get_current_user_id}
 
     limiter_was_enabled = limiter.enabled
     if options.disable_limiter:
