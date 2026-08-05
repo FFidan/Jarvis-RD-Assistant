@@ -26,6 +26,7 @@ _ALLOWED_TABLES = frozenset(
         "topics",
         "paper_notes",
         "tracked_authors",
+        "thread",
     }
 )
 
