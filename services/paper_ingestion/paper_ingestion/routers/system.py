@@ -5,7 +5,6 @@ import logging
 import re
 import shutil
 import time
-import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -51,6 +50,7 @@ from paper_ingestion.routers.system_readiness import (  # noqa: F401
     ReadinessStatus,
     get_system_readiness,
 )
+from paper_ingestion.services.job_enqueue import enqueue_job
 from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
@@ -743,9 +743,8 @@ async def pull_system_model(
     task = KIND_TO_TASK.get("model.pull")
     if task is None:
         raise HTTPException(status_code=500, detail="model.pull task is not registered")
-    jarvis_job_id = str(uuid.uuid4())
-    await task.defer_async(
-        job_id=jarvis_job_id,
+    enqueued = await enqueue_job(
+        task,
         user_id=user_id,
         ollama_tag=entry.ollama_tag or entry.id,
         ollama_url=get_paper_ingestion_settings().ollama_base_url,
@@ -757,7 +756,7 @@ async def pull_system_model(
         resource=f"models/{tag}",
         user_id=str(caller_id) if caller_id is not None else None,
     )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
+    return enqueued
 
 
 @router.delete(

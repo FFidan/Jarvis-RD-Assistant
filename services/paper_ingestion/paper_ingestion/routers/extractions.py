@@ -32,6 +32,7 @@ from paper_ingestion.models import (
     ExtractionTemplateResponse,
     ExtractionTemplateUpdate,
 )
+from paper_ingestion.services.job_enqueue import enqueue_job
 
 logger = logging.getLogger(__name__)
 
@@ -240,18 +241,14 @@ async def extract_paper(
     """Enqueue structured field extraction for a single paper."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["extraction.single"].defer_async(
-        job_id=jarvis_job_id,
+    return await enqueue_job(
+        KIND_TO_TASK["extraction.single"],
         user_id=user_id,
         paper_id=paper_id,
         template_id=body.template_id,
     )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])

@@ -58,6 +58,7 @@ from paper_ingestion.rag.streaming import (
     stream_rag_events,
 )
 from paper_ingestion.rag.verification import verify_answer_summary
+from paper_ingestion.services.job_enqueue import enqueue_job
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
 logger = logging.getLogger(__name__)
@@ -295,18 +296,14 @@ async def summarize_paper(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["paper.summarize"].defer_async(
-        job_id=jarvis_job_id,
+    return await enqueue_job(
+        KIND_TO_TASK["paper.summarize"],
         user_id=user_id,
         paper_id=paper_id,
         force=body.force if body is not None else False,
     )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -771,13 +768,7 @@ async def enqueue_weekly_digest(
     embedded in the procrastinate row's ``args->>'job_id'`` so the SSE bridge
     can correlate.
     """
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["digest.weekly"].defer_async(
-        job_id=jarvis_job_id, days=days, user_id=user_id
-    )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
+    return await enqueue_job(KIND_TO_TASK["digest.weekly"], user_id=user_id, days=days)
