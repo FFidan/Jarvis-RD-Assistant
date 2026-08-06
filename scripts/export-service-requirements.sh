@@ -75,6 +75,14 @@ def without_extras(spec: str) -> str:
     return re.sub(r"\[[^\]]*\]", "", spec, count=1)
 
 
+def extras_of(spec: str) -> frozenset[str]:
+    """Return the extras a spec asks for, so `x[a,b]>=1` gives ``{"a", "b"}``."""
+    match = re.search(r"\[([^\]]*)\]", spec)
+    if not match:
+        return frozenset()
+    return frozenset(part.strip() for part in match.group(1).split(",") if part.strip())
+
+
 for group, relative_output in outputs.items():
     output_path = output_root / relative_output
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +107,17 @@ for group, relative_output in outputs.items():
                 f"{relative_output}: conflicting requirements for {name!r}: "
                 f"{kept!r} and {dep!r} - reconcile them in pyproject.toml"
             )
-        if "[" in dep and "[" not in kept:
+        kept_extras, dep_extras = extras_of(kept), extras_of(dep)
+        # Two groups asking for the same package with DIFFERENT extras is not a
+        # stronger-vs-weaker pair, so there is no "keep the stronger" answer:
+        # emitting either one silently drops the other group's extra, and
+        # emitting the union would no longer match what uv resolved. Stop.
+        if kept_extras and dep_extras and kept_extras != dep_extras:
+            raise SystemExit(
+                f"{relative_output}: {name!r} is requested with different extras: "
+                f"{kept!r} and {dep!r} - reconcile them in pyproject.toml"
+            )
+        if dep_extras > kept_extras:
             deduped[slot_by_name[name]] = dep
     output_path.write_text(HEADER + "\n".join(deduped) + "\n", encoding="utf-8")
 PY
