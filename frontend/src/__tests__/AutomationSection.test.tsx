@@ -113,11 +113,9 @@ describe('AutomationSection', () => {
     fireEvent.blur(intervalInput);
     expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
 
-    // Unmount inside the test, while the DOM still exists. The failed query
-    // leaves a batched TanStack Query notification queued on a timer; if that
-    // timer fires after the environment has been torn down, React reads
-    // `window` and the run reports an uncaught ReferenceError even though every
-    // assertion passed. Unmounting here drops the subscriber first.
+    // This case deliberately leaves a query in its error state, which queues a
+    // batched TanStack Query notification on a timer. Drop the subscriber here
+    // rather than at teardown, so the notification has nothing to deliver.
     unmount();
   });
 
