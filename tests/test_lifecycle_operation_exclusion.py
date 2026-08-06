@@ -615,6 +615,8 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
 
     reserved = _run_lifecycle(tmp_path, destructive_log, "reserve-host", "setup", guard_id)
     assert reserved.returncode == 0, reserved.stderr
+    # Own process group, so the shell and the `sleep` it is executing can be
+    # killed together below.
     crashed = subprocess.Popen(
         ["bash", str(LIFECYCLE_HELPER), "hold-host", "setup", guard_id, "30"],
         cwd=REPO_ROOT,
@@ -622,14 +624,20 @@ def test_dead_host_holder_is_adoptable_only_by_its_exact_identity(tmp_path: Path
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     _wait_for(lifecycle / "operation.state", f"setup:{guard_id}", crashed)
-    crashed.terminate()
+    # The holder polls with `sleep 0.1`, and that child inherits the flock'd
+    # descriptors. Signalling the shell alone leaves the sleep holding both the
+    # operation and the reservation lock for up to 0.1s after the shell has been
+    # reaped, which is long enough for the retry below to be refused the lock it
+    # is entitled to. Kill the group so the descriptors go with it.
+    os.killpg(os.getpgid(crashed.pid), signal.SIGTERM)
     crashed.wait(timeout=5)
 
-    # A shell interrupted during `sleep` can leave that short-lived child with
-    # inherited lock descriptors. Wait until the original holder is genuinely
-    # gone before testing durable-state adoption.
+    # The locks are released with the group above; this loop now only confirms
+    # the helper reports the crashed holder as gone before durable-state
+    # adoption is tested.
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         old_status = _run_lifecycle(
