@@ -153,9 +153,14 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
         "v1.1.3": ("bootstrap", "current-merge-pending"),
         "v1.2.0": ("bootstrap", "current-merge-pending"),
         "v1.2.1": ("bootstrap", "current-merge-pending"),
+        "v1.2.2": ("bootstrap", "current-merge-pending"),
         # The direct path is what an already-current installation takes, and it
-        # exercises the update transaction rather than the bootstrap.
-        "v1.2.2": ("direct", "current-merge-pending"),
+        # exercises the update transaction rather than the bootstrap. Per the
+        # rule stated beside the table, this row advances with every release:
+        # the newest published tag takes it and the previous holder moves to
+        # bootstrap. Bumping the version without moving this row would leave
+        # the dominant upgrade path unexercised.
+        "v1.2.3": ("direct", "current-merge-pending"),
     }
 
     assert documented == expected

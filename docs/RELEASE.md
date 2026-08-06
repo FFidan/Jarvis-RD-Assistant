@@ -135,7 +135,8 @@ Run the upgrade check for each maintained source contract:
 | `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
-| `v1.2.2` | `direct` | `current-merge-pending` |
+| `v1.2.2` | `bootstrap` | `current-merge-pending` |
+| `v1.2.3` | `direct` | `current-merge-pending` |
 
 The `direct` row is the path essentially every existing installation takes, and
 it exercises the update transaction itself rather than the bootstrap. Do not skip
