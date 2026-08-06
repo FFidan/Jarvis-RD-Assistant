@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jarvis-common"
 version = "0.1.0"
-description = "Shared application infrastructure for JARVIS RD Assistant"
+description = "Internal shared infrastructure for JARVIS RD Assistant services; not a supported standalone library"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 maintainers = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"

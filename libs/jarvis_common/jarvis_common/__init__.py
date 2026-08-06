@@ -1,4 +1,17 @@
-"""Shared utilities for JARVIS microservices."""
+"""Shared utilities for JARVIS microservices.
+
+**Internal to this application. Not a supported library.** This package is never
+published to a package index; the service images install it from the path
+(`COPY libs/jarvis_common/`), so its only consumers are the services in this
+repository. The top-level namespace is an implementation detail, not a
+compatibility promise: names may be added, moved or removed in any release,
+including a patch release, and the package version is not a semantic-versioning
+contract for out-of-tree callers.
+
+``__all__`` exists to keep that surface minimal and honest, not to advertise it.
+``tests/test_public_api.py`` pins it to the names the services actually import
+from the top level.
+"""
 
 from jarvis_common.app_factory import (
     ServiceLifespanConfig,

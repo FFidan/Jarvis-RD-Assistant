@@ -30,7 +30,7 @@ that would notice, so each fix arrives with the check that was missing.
 - **Upgrading from v1.1.2 or older completes.** Since v1.1.3 the deployment has
   referenced an SMTP password secret file that upgrades never created, so
   `./update.sh` stopped part way through replacing containers. Required secret
-  files are now created before any image is pulled or any container replaced, so
+  files are now created before the update pulls, builds or replaces anything, so
   an upgrade that cannot create them stops with everything still running and
   names the command to run.
 - **Lists say when a query failed** instead of showing the same empty state they
