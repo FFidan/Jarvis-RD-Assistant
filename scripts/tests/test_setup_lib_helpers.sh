@@ -1785,14 +1785,35 @@ expect_eq "the checkout's git status command still succeeds" "$rc" "0"
 expect_eq "the quarantine leaves the checkout clean for the update fences" \
   "$staging_status" ""
 
+# frozen_date_bin <stamp> -> dir holding a `date` that always reports <stamp>
+# (export it onto PATH inside a subshell to use it).
+frozen_date_bin() {
+  local dir
+  dir="$(mktemp -d "${FIXTURES}/bin.XXXXXX")"
+  cat > "${dir}/date" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' '$1'
+EOF
+  chmod +x "${dir}/date"
+  printf '%s' "$dir"
+}
+
 # A destination that already exists must stop the rename: mv would move the
 # staging folder INSIDE it, hiding credential copies a level deeper than every
 # message here says they are.
+#
+# The quarantine name is `date +%Y%m%d%H%M%S`, and the recovery derives its own
+# copy of it. Reading the real clock twice means a second boundary between the
+# two reads produces two different names, no collision at all, and a case that
+# passes having exercised nothing. Pin the clock so the collision is the
+# behaviour under test rather than a coincidence.
 STAGE_TAKEN="$(new_staging_repo staging-taken)"
 add_abandoned_staging "$STAGE_TAKEN" 99999999
-TAKEN_HOLD="$(dirname "$STAGE_TAKEN")/jarvis-abandoned-staging-$(date +%Y%m%d%H%M%S)"
+TAKEN_STAMP="20260101000000"
+TAKEN_DATE_BIN="$(frozen_date_bin "$TAKEN_STAMP")"
+TAKEN_HOLD="$(dirname "$STAGE_TAKEN")/jarvis-abandoned-staging-${TAKEN_STAMP}"
 mkdir -p "$TAKEN_HOLD"
-out="$(drive_recovery "$STAGE_TAKEN" 1)" && rc=0 || rc=$?
+out="$(export PATH="${TAKEN_DATE_BIN}:${PATH}"; drive_recovery "$STAGE_TAKEN" 1)" && rc=0 || rc=$?
 expect_eq "a taken quarantine name stops setup instead of nesting the folder" "$rc" "1"
 expect_eq "the staging folder stays where it is when the name is taken" \
   "$([ -d "${STAGE_TAKEN}/.jarvis-setup-transaction.pending" ] && printf present || printf gone)" \
