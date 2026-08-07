@@ -631,3 +631,119 @@ def test_restore_roundtrip_requests_carry_the_required_identity() -> None:
     assert "scripts/backup-lifecycle.sh:/usr/local/bin/backup-lifecycle.sh:ro" in roundtrip
     assert "acknowledge_restore_review" in roundtrip
     assert "restore_failed_for_outstanding_review" in roundtrip
+
+
+def _build_matrix_entries(workflow: str) -> list[dict[str, str]]:
+    """Parse the ghcr build-matrix include entries into flat dicts."""
+    build_matrix = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
+    include = build_matrix.split("include:\n", 1)[1].split("\n    name:", 1)[0]
+    entries: list[dict[str, str]] = []
+    for raw in include.split("- slug:")[1:]:
+        lines = raw.splitlines()
+        entry: dict[str, str] = {"slug": lines[0].strip()}
+        for line in lines[1:]:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            key, _, value = stripped.partition(":")
+            entry.setdefault(key.strip(), value.strip())
+        entries.append(entry)
+    return entries
+
+
+def _final_base_image(dockerfile: Path) -> str:
+    """Resolve the last FROM of a Dockerfile using its own ARG defaults."""
+    args: dict[str, str] = {}
+    final_from = ""
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("ARG ") and "=" in stripped:
+            name, _, default = stripped[4:].partition("=")
+            args[name.strip()] = default.strip()
+        if stripped.startswith("FROM "):
+            final_from = stripped.split()[1]
+    for name, default in args.items():
+        final_from = final_from.replace("${" + name + "}", default)
+    return final_from
+
+
+def test_every_python_image_declares_an_import_smoke_target() -> None:
+    """A Python-based image must never silently skip the import check."""
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    entries = _build_matrix_entries(workflow)
+
+    assert len(entries) == 11, [entry["slug"] for entry in entries]
+    for entry in entries:
+        dockerfile = ROOT / entry["file"].removeprefix("./")
+        base = _final_base_image(dockerfile)
+        label = f"{entry['slug']} ({entry.get('arch')})"
+        assert base, f"{label}: no FROM resolved in {dockerfile}"
+        if base.startswith("python:"):
+            assert entry.get("smoke_import"), f"{label}: Python-based image with no smoke_import"
+        else:
+            assert not entry.get("smoke_import"), f"{label}: non-Python image declares smoke_import"
+
+
+def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -> None:
+    checker = ROOT / "scripts/check-model-catalog-freshness.py"
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"id": "fresh-model", "last_reviewed": "2026-08-01"},
+                {"id": "stale-model", "last_reviewed": "2026-01-01"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def run_checker(*extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(checker), *extra],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=ROOT,
+        )
+
+    stale = run_checker("--catalog", str(catalog), "--today", "2026-08-07")
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    assert "stale-model" in stale.stdout
+    assert "fresh-model" not in stale.stdout
+
+    fresh = run_checker("--catalog", str(catalog), "--today", "2026-02-01")
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+
+    missing = run_checker("--catalog", str(tmp_path / "absent.json"), "--today", "2026-08-07")
+    assert missing.returncode == 2, missing.stdout + missing.stderr
+
+    empty = tmp_path / "empty.json"
+    empty.write_text("[]", encoding="utf-8")
+    hollow = run_checker("--catalog", str(empty), "--today", "2026-08-07")
+    assert hollow.returncode == 2, hollow.stdout + hollow.stderr
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text('["a"]', encoding="utf-8")
+    broken = run_checker("--catalog", str(malformed), "--today", "2026-08-07")
+    assert broken.returncode == 2, broken.stdout + broken.stderr
+
+    undated = tmp_path / "undated.json"
+    undated.write_text(
+        json.dumps([{"id": "undated-model", "last_reviewed": "not-a-date"}]),
+        encoding="utf-8",
+    )
+    invalid = run_checker("--catalog", str(undated), "--today", "2026-08-07")
+    assert invalid.returncode == 1, invalid.stdout + invalid.stderr
+    assert "invalid last_reviewed" in invalid.stdout
+
+    shipped = run_checker("--today", "2026-08-07")
+    assert shipped.returncode == 0, shipped.stdout + shipped.stderr
+
+
+def test_catalog_freshness_job_runs_only_on_the_schedule() -> None:
+    workflow = _read(".github/workflows/nightly-llm-smoke.yml")
+    job = workflow.split("  model-catalog-freshness:", 1)[1]
+
+    assert "github.event_name == 'schedule'" in job
+    assert "python3 scripts/check-model-catalog-freshness.py" in job
+    assert "runs-on: ubuntu-latest" in job
