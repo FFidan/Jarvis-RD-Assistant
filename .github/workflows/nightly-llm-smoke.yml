@@ -85,3 +85,17 @@ jobs:
 
       - name: Live corpus-visibility gate
         run: bash scripts/tests/test_corpus_visibility_qdrant.sh
+
+  model-catalog-freshness:
+    # Scheduled runs only: what turns this red is the passage of time, not a
+    # change in the tree, so it must never gate a manually dispatched run that
+    # is verifying a branch. A red run is the reminder to re-review the
+    # bundled model catalog and refresh its last_reviewed dates.
+    if: github.event.repository.private == false && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Model-catalog freshness
+        run: python3 scripts/check-model-catalog-freshness.py
