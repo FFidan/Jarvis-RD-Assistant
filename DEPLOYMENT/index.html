@@ -3714,6 +3714,16 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <td>Cosmetic — Compose probes the registry for the pinned tag before falling back to a local build</td>
 <td>Harmless; ignore it. From v1.1.0 the application images are prebuilt on GHCR and <code>docker-compose.yml</code> sets <code>pull_policy: missing</code> on them (only the locally-built Langfuse wrapper uses <code>pull_policy: build</code>), so this message is only seen on pre-1.1.0 installs or a <code>--build-local</code> build.</td>
 </tr>
+<tr>
+<td>The <code>telegram_bot</code> container restarts forever and the bot never answers</td>
+<td>The published telegram-bot images for <strong>v1.2.0 through v1.2.3</strong> were missing a dependency the bot imports at startup</td>
+<td>Confirm with <code>docker compose logs telegram_bot</code> — the affected images exit with <code>ModuleNotFoundError: No module named 'sentry_sdk'</code>. Upgrade to v1.2.4 or later with <code>./update.sh</code>; no configuration change is needed.</td>
+</tr>
+<tr>
+<td><code>./update.sh</code> stops partway through replacing containers with a Compose <code>secret not found</code> error naming <code>smtp_pass</code></td>
+<td>Releases since v1.1.3 mount <code>secrets/smtp_pass.txt</code> as a Docker secret, but installations first set up <strong>before v1.1.3</strong> never had the file created, and upgrades before v1.2.4 did not create it either</td>
+<td>Confirm with <code>ls secrets/smtp_pass.txt</code> (the file is absent). Run <code>bash scripts/init-secrets.sh</code> to create the missing placeholder files, then re-run <code>./update.sh</code>. From v1.2.4 the updater creates required secret files before pulling images or touching any container.</td>
+</tr>
 </tbody>
 </table>
 <hr />

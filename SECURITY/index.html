@@ -2594,7 +2594,8 @@ calls. This header is only honored when all three guards pass:</p>
 durable record written when a user runs <code>/pair &lt;token&gt;</code> in the bot. This is
 the bot's sole identity mechanism; it does not rely on a fixed chat-id
 environment variable. The <code>TELEGRAM_CHAT_ID</code> environment variable is an inert
-tombstone (not read at runtime) and may be removed in a future cleanup. The
+tombstone — read once at startup only to choose a log line, never to address
+or authorize a message — and may be removed in a future cleanup. The
 <code>telegram.owner_chat_id</code> config key is active: the scheduler reads it to
 resolve the deployment owner's Telegram chat ID for timezone-based nudge
 scheduling and job failure-alert delivery (see

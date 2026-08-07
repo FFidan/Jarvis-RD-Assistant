@@ -2113,6 +2113,9 @@ block contains.</p>
 candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
 covered by the per-source upgrade checks in step 3, which pass explicit
 <code>update_from</code> and <code>update_to</code> values.</p>
+<p>The nightly workflow's catalog-freshness job runs only on its schedule, so it
+reports as skipped on this dispatch; that skip is expected and is not part of
+the release acceptance.</p>
 <p>Required JUnit selections must contain at least one pass and no skips, failures,
 or errors. The lifecycle run must complete its CA-verified HTTPS and destructive
 restore checks. These are public-repository workflows; never redirect them to a
@@ -2141,6 +2144,14 @@ finishes fails every one of them with <code>manifest unknown</code>:</p>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--json<span class="w"> </span>databaseId<span class="w"> </span>--jq<span class="w"> </span><span class="s1">&#39;.[0].databaseId&#39;</span><span class="k">)</span><span class="s2">&quot;</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>gh<span class="w"> </span>run<span class="w"> </span>watch<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$VERIFY_RUN_ID</span><span class="s2">&quot;</span>
 </code></pre></div>
+<p>Each build leg whose image carries a Python interpreter also runs an import
+check inside the image it just built: the image's own interpreter imports the
+service's entry module, so a missing runtime dependency fails the leg before
+its digest can join a manifest. The dashboard image is nginx, carries no
+interpreter, and has no import target. This proves the dependency set only.
+That the containers actually start, read their configuration, and report
+healthy is proven by the cold-install and upgrade checks below, before any
+stable tag exists.</p>
 <p>Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>first-run-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span><span class="se">\</span>
@@ -2193,6 +2204,11 @@ identical re-dispatches supersede each other, while runs differing in <code>leg<
 </tr>
 <tr>
 <td><code>v1.2.2</code></td>
+<td><code>bootstrap</code></td>
+<td><code>current-merge-pending</code></td>
+</tr>
+<tr>
+<td><code>v1.2.3</code></td>
 <td><code>direct</code></td>
 <td><code>current-merge-pending</code></td>
 </tr>
@@ -2208,6 +2224,14 @@ supported source enters through the bootstrap. It names explicit tags rather tha
 deriving them, so refresh it while preparing each release — the release being
 published becomes the new <code>direct</code> row, the previous <code>direct</code> row becomes a
 <code>bootstrap</code> row, and any source that has left support is dropped.</p>
+<p>The supported window is deliberate: the <code>bootstrap</code> rows reach back at most
+four releases behind the <code>direct</code> row. When adding a release to the table
+would leave more than four <code>bootstrap</code> rows, the oldest row leaves support
+and the release notes say so. An installation older than every table row
+completes the documented one-time step in the
+<a href="../manual/cli/#updating-from-a-release-before-v122">command-line reference</a>
+and then follows the bootstrap path; the floor below that is a fresh install
+plus a backup restore.</p>
 <p>The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
 anonymously, build no application image, reach a healthy stack, and remove its
@@ -2261,6 +2285,8 @@ line stating whether the images differ from the previous tag, condensed
 <code>### Added</code> / <code>### Fixed</code> / <code>### Changed</code> sections, an <code>### Upgrading</code> section
 giving the direct and bootstrap paths from each supported source, and a closing
 <code>**Full changelog:**</code> link to <code>CHANGELOG.md</code> at this tag.</p>
+<p>A release that retires an upgrade source from the support table states that in
+its <code>### Upgrading</code> section.</p>
 <h2 id="release-checks">Release Checks<a class="headerlink" href="#release-checks" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
