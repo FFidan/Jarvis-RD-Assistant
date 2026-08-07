@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import asdict, dataclass
-from datetime import date
 from importlib import resources
 from typing import Any, Literal
-
-logger = logging.getLogger(__name__)
 
 Role = Literal["smart", "fast", "embed"]
 Provider = Literal[
@@ -109,33 +105,3 @@ def load_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     if len(ids) != len(set(ids)):
         raise RuntimeError("model catalog contains duplicate ids")
     return entries
-
-
-_STALE_THRESHOLD_DAYS = 90
-
-
-def warn_if_catalog_stale(
-    entries: tuple[ModelCatalogEntry, ...],
-    *,
-    today: date | None = None,
-) -> None:
-    """Log a warning for catalog entries older than _STALE_THRESHOLD_DAYS days."""
-    now = today or date.today()
-    for entry in entries:
-        try:
-            reviewed = date.fromisoformat(entry.last_reviewed)
-        except ValueError:
-            logger.warning(
-                "model catalog entry %s has invalid last_reviewed=%r",
-                entry.id,
-                entry.last_reviewed,
-            )
-            continue
-        elapsed = (now - reviewed).days
-        if elapsed > _STALE_THRESHOLD_DAYS:
-            logger.warning(
-                "model catalog entry %s was last reviewed on %s (%d days ago)",
-                entry.id,
-                entry.last_reviewed,
-                elapsed,
-            )

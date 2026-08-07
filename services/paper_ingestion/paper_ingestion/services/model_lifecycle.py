@@ -22,7 +22,6 @@ from jarvis_common.model_catalog import (
     ModelCatalogEntry,
     Role,
     load_model_catalog,
-    warn_if_catalog_stale,
 )
 
 from paper_ingestion.services.llm_provider_registry import provider_for_id
@@ -110,7 +109,6 @@ class ModelStatusDict(TypedDict):
 
 
 MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = load_model_catalog()
-warn_if_catalog_stale(MODEL_CATALOG)
 
 _HARDWARE_TTL = timedelta(hours=1)
 
