@@ -95,10 +95,11 @@ coarse tier-only fit decision.
 
 ### 1.3 Curated entries
 
-The catalog ships a small curated set of local and cloud models. Local entries are Qwen3
-family (smart/fast at 4B–72B, embedding at 0.6B/4B) plus `gemma3:12b`, `llama4:scout`, and
-`mxbai-embed-large` as an embed fallback; cloud entries cover Anthropic Claude, OpenAI GPT-4o,
-and OpenAI text-embedding.
+The catalog ships a small curated set of local and cloud models. Local entries are Qwen
+family (smart/fast from 1.7B up to the sparse-MoE `qwen3.6:35b-a3b`, embedding at 0.6B/4B)
+plus `gemma3:12b`, `llama4:scout`, `llama3.2:3b`, `qwen2.5:7b-instruct`, `deepseek-r1:7b`,
+`gpt-oss:20b`, and `mxbai-embed-large` as an embed fallback; cloud entries cover Anthropic
+Claude, OpenAI GPT-4o, and OpenAI text-embedding.
 
 Notes on selection:
 - `qwen3-embedding:4b` (2560-dimensional) is the local default for notation-heavy scientific

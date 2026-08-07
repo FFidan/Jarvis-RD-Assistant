@@ -121,7 +121,7 @@
     "license": "Apache 2.0",
     "tier": 4,
     "description": "Sparse-MoE Qwen3.6 — top-tier local model for 48 GB VRAM machines.",
-    "notes": "35B total / 3B active parameters; leaves headroom for long-context KV cache on 48 GB. Hardware-aware fields populated 2026-08-07 from the Ollama library size (best-effort approximations; refine on measured data).",
+    "notes": "35B total / 3B active parameters; leaves headroom for long-context KV cache on 48 GB. Hardware-aware fields populated 2026-08-07 (best-effort approximations; refine on measured data).",
     "last_reviewed": "2026-08-07",
     "phase": "advanced",
     "assignable": true,
