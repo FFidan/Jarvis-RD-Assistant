@@ -113,8 +113,14 @@ Notes on selection:
 
 ### 1.4 Catalog staleness
 
-`last_reviewed` on each entry is the protection mechanism. If it is > 90 days old, the backend
-logs a WARNING on startup (not an error — staleness ≠ broken).
+`last_reviewed` on each entry records when it was last verified against its
+provider. Freshness is enforced on the repository side: a scheduled check
+(`scripts/check-model-catalog-freshness.py`, run nightly by the maintenance
+workflow) fails when any entry goes more than 90 days without review, which
+prompts a re-review and refreshed dates in the next release. The application
+does not warn about catalog age at runtime — a deployment cannot act on the
+age of a bundled catalog, and the operator-facing signal for a genuinely
+broken entry is the pull failure itself (§9).
 
 ---
 
@@ -567,9 +573,9 @@ Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/r
   pages; a shared config file may reference a model not pulled on the other machine. The
   409-on-assigned-delete guard, the `unfit` status, and per-machine `num_ctx` keys are the mitigations.
 - **Catalog staleness between releases.** The catalog is static in the package; if Ollama renames or
-  removes a tag, pulls fail until a new release ships an updated catalog. `last_reviewed` + the
-  startup warning for entries > 90 days old reduce the blast radius. Pull failures surface the
-  Ollama error verbatim in the UI.
+  removes a tag, pulls fail until a new release ships an updated catalog. `last_reviewed` plus the
+  scheduled repository freshness check bound how stale a shipped catalog can silently become. Pull
+  failures surface the Ollama error verbatim in the UI.
 - **macOS / probe imprecision.** `vram_source` is surfaced; recommendations are still computed but
   flagged. A probe failure yields `unknown` fit, not a false `unfit`.
 
