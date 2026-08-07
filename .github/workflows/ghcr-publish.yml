@@ -285,8 +285,9 @@ jobs:
       # import is never part of the manifest the release is assembled from.
       # The dashboard is nginx and carries no interpreter, so it has no target.
       # This proves the dependency set, not the runtime: the real ENTRYPOINT and
-      # CMD, configuration, and health are exercised later, before any tag
-      # exists, by the cold-install and upgrade checks in the release process.
+      # CMD, configuration, and health are exercised later, before any stable
+      # release tag exists, by the cold-install and upgrade checks in the
+      # release process.
       # The image blob itself is digest-pushed by the build step above before
       # this check runs; a failing leg therefore leaves an unreferenced,
       # untagged digest behind, which nothing resolves or promotes. That
