@@ -115,8 +115,8 @@ Notes on selection:
 
 `last_reviewed` on each entry records when it was last verified against its
 provider. Freshness is enforced on the repository side: a scheduled check
-(`scripts/check-model-catalog-freshness.py`, run nightly by the maintenance
-workflow) fails when any entry goes more than 90 days without review, which
+(`scripts/check-model-catalog-freshness.py`, run on the nightly workflow's
+schedule) fails when any entry goes more than 90 days without review, which
 prompts a re-review and refreshed dates in the next release. The application
 does not warn about catalog age at runtime — a deployment cannot act on the
 age of a bundled catalog, and the operator-facing signal for a genuinely

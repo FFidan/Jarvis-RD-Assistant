@@ -103,12 +103,14 @@ VERIFY_RUN_ID="$(gh run list --workflow=ghcr-publish.yml --limit 1 \
 gh run watch "$VERIFY_RUN_ID"
 ```
 
-Each build leg also runs an import check inside the image it just built: the
-image's own interpreter imports the service's entry module, so a missing
-runtime dependency fails the leg before its digest can join a manifest. This
-proves the dependency set only. That the containers actually start, read
-their configuration, and report healthy is proven by the cold-install and
-upgrade checks below, before any stable tag exists.
+Each build leg whose image carries a Python interpreter also runs an import
+check inside the image it just built: the image's own interpreter imports the
+service's entry module, so a missing runtime dependency fails the leg before
+its digest can join a manifest. The dashboard image is nginx, carries no
+interpreter, and has no import target. This proves the dependency set only.
+That the containers actually start, read their configuration, and report
+healthy is proven by the cold-install and upgrade checks below, before any
+stable tag exists.
 
 Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:
@@ -234,6 +236,9 @@ line stating whether the images differ from the previous tag, condensed
 `### Added` / `### Fixed` / `### Changed` sections, an `### Upgrading` section
 giving the direct and bootstrap paths from each supported source, and a closing
 `**Full changelog:**` link to `CHANGELOG.md` at this tag.
+
+A release that retires an upgrade source from the support table states that in
+its `### Upgrading` section.
 
 ## Release Checks
 

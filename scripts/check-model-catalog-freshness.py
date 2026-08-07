@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Fail when bundled model-catalog entries have gone unreviewed for too long.
 
-Runs from the scheduled maintenance workflow, never from pull-request CI: what
+Runs on the nightly workflow's schedule, never from pull-request CI: what
 turns this check red is the passage of time, not a change in the tree, and a
 time-triggered failure on an unrelated change teaches people to ignore the
 check. A red run means: re-verify the listed entries against their providers
 and update ``last_reviewed`` in
 ``libs/jarvis_common/jarvis_common/data/model_catalog.json``.
+
+Exit codes: 0 all entries fresh, 1 stale entries listed, 2 unreadable or
+empty catalog.
 """
 
 from __future__ import annotations

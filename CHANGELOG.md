@@ -27,13 +27,13 @@ that would notice, so each fix arrives with the check that was missing.
   is used, and every published image that carries a Python interpreter now imports
   its entry point with that interpreter before its digest may join a release
   manifest, so an image whose entry point cannot be imported is never released.
-- **Updates create required secret files before touching anything.** Since v1.1.3
-  the deployment has referenced an SMTP password secret file that no updater
-  before this release created, so on installations first set up before v1.1.3
-  `./update.sh` stopped part way through replacing containers. The update now
-  creates the secret files a release requires before it pulls, builds or
-  replaces anything, and an update that cannot create them stops with
-  everything still running and names the command to run. An installation first
+- **Updates create the secret files they manage before touching anything.** Since
+  v1.1.3 the deployment has referenced an SMTP password secret file that no
+  updater before this release created, so on installations first set up before
+  v1.1.3 `./update.sh` stopped part way through replacing containers. The update
+  now creates the secret files it manages — the SMTP password file among them —
+  before it pulls, builds or replaces anything, and an update that cannot create
+  them stops with everything still running and names the command to run. An installation first
   set up before v1.1.3 completes one documented one-time step before upgrading;
   the command-line reference gives the exact commands.
 - **Lists say when a query failed** instead of showing the same empty state they
