@@ -743,6 +743,7 @@ def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -
 def test_catalog_freshness_job_runs_only_on_the_schedule() -> None:
     workflow = _read(".github/workflows/nightly-llm-smoke.yml")
     job = workflow.split("  model-catalog-freshness:", 1)[1]
+    job = re.split(r"\n  [\w-]+:", job)[0]
 
     assert "github.event_name == 'schedule'" in job
     assert "python3 scripts/check-model-catalog-freshness.py" in job

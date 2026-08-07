@@ -33,9 +33,9 @@ that would notice, so each fix arrives with the check that was missing.
   v1.1.3 `./update.sh` stopped part way through replacing containers. The update
   now creates the secret files it manages — the SMTP password file among them —
   before it pulls, builds or replaces anything, and an update that cannot create
-  them stops with everything still running and names the command to run. An installation first
-  set up before v1.1.3 completes one documented one-time step before upgrading;
-  the command-line reference gives the exact commands.
+  them stops with everything still running and names the command to run. An
+  installation first set up before v1.1.3 completes one documented one-time step
+  before upgrading; the command-line reference gives the exact commands.
 - **Lists say when a query failed** instead of showing the same empty state they
   show when there is genuinely nothing to display.
 - **A single paper reports where it came from**, matching the origin already
