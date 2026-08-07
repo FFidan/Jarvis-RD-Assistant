@@ -172,7 +172,7 @@ def test_tier4_entry_unfit_on_tier1_hardware() -> None:
         cloud_api_keys={},
     )
     by_id = {item["id"]: item for item in statuses}
-    assert by_id["qwen3:72b"]["status"] == "unfit"
+    assert by_id["qwen3.6:35b-a3b"]["status"] == "unfit"
 
 
 async def test_model_pull_job_stops_when_cancelled_mid_stream() -> None:
