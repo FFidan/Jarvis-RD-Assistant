@@ -1,6 +1,23 @@
 import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
+
+// Radix's FocusScope schedules a zero-delay timer in its unmount cleanup that
+// builds a CustomEvent and dispatches it at the container. Testing Library
+// unmounts in its own afterEach, but that timer is still queued when the file
+// ends, and if the jsdom environment is torn down first the event belongs to a
+// dead realm: dispatchEvent rejects it and Vitest reports an uncaught
+// TypeError. The run then exits non-zero with every assertion passed, and it
+// blames whichever file happened to be running, not the one that armed the
+// timer. Yielding one macrotask here drains the timer while the DOM is alive.
+//
+// Registered before any test file imports Testing Library, so under Vitest's
+// reverse hook order this runs after its cleanup, not before.
+afterEach(async () => {
+  // A test that leaves fake timers installed would never resolve this.
+  if (vi.isFakeTimers()) return;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 // pdf.js cannot render under jsdom, so globally stub the in-PDF reader library
 // and its worker asset. Tests that exercise the reader (PdfReaderPane.test)

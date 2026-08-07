@@ -52,12 +52,12 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
     queryFn: () => fetchProjectActivity(project?.id ?? 0),
     enabled: (project?.id ?? 0) > 0,
   });
-  const { data: milestones = [], isError: milestonesError } = useQuery({
+  const { data: milestones = [] } = useQuery({
     queryKey: QUERY_KEYS.projects.milestones(project?.id ?? 0),
     queryFn: () => fetchMilestones(project?.id ?? 0),
     enabled: (project?.id ?? 0) > 0,
   });
-  const { data: tasks = [], isError: tasksError } = useQuery({
+  const { data: tasks = [] } = useQuery({
     queryKey: QUERY_KEYS.tasks.byProject(project?.id ?? 0),
     queryFn: () => fetchTasks(project?.id ?? 0),
     enabled: (project?.id ?? 0) > 0,
@@ -222,7 +222,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               MILESTONES · {milestones.length}
             </h3>
-            {milestonesError && <ErrorSentinel message="Failed to load milestones." />}
+            {/* MilestonesTab renders its own load-failure state. */}
             <MilestonesTab projectId={project.id} />
           </section>
 
@@ -234,7 +234,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               TASKS · {tasks.length}
             </h3>
-            {tasksError && <ErrorSentinel message="Failed to load tasks." />}
+            {/* TasksTab renders its own load-failure state. */}
             <TasksTab projectId={project.id} />
           </section>
 

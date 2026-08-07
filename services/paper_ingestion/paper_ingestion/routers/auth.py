@@ -21,7 +21,6 @@ dependency) since they ARE the auth bootstrap.
 
 import contextlib
 import hashlib
-import hmac
 import ipaddress
 import logging
 import secrets
@@ -31,7 +30,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
-from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY, api_key_matches
 from jarvis_common.email import MagicLinkDelivery, send_magic_link
 from jarvis_common.event_log import log_event
 from jarvis_common.owner import OwnerIdentity, resolve_owner_identity
@@ -456,12 +455,11 @@ async def api_key_session(
     _audit = _audit_pool(request)
     submitted = _submitted_api_key(body, request)
 
-    # Guardrail 2 (failure half): validate the key with hmac.compare_digest
-    # exactly as verify_api_key does. No configured key → cannot mint.
-    if not _CACHED_API_KEY or not hmac.compare_digest(
-        submitted.encode("utf-8", errors="replace"),
-        _CACHED_API_KEY.encode("utf-8", errors="replace"),
-    ):
+    # Guardrail 2 (failure half): validate the key with the same constant-time
+    # comparison verify_api_key uses. No configured key → cannot mint, so this
+    # guard stays here rather than inside api_key_matches, which serves callers
+    # that treat an unconfigured key as permissive.
+    if not _CACHED_API_KEY or not api_key_matches(submitted, _CACHED_API_KEY):
         if _audit is not None:
             ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
             await log_audit(

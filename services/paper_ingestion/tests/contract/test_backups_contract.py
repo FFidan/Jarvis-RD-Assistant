@@ -90,13 +90,19 @@ async def _set_database_owner(conn, user_id: int) -> None:
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def backups_dir(tmp_path_factory, monkeypatch):
-    """Point the router's backup dir + sentinel at a tmp dir with two fake archives."""
+    """Point the router's backup dir + sentinel at a tmp dir with two fake archives.
+
+    The archive helpers and the router each hold a binding of ``_BACKUP_DIR``, so a
+    route that reads it directly *and* calls a helper needs both patched.
+    """
     from paper_ingestion.routers import backups as backups_router
+    from paper_ingestion.services import backup_archive
 
     d = tmp_path_factory.mktemp("backups")
     (d / "jarvis_20260617_120000.sql.gz").write_bytes(b"FAKE-JARVIS-DUMP")
     (d / "secrets_20260617_120000.tar.gz").write_bytes(b"FAKE-SECRETS")
     monkeypatch.setattr(backups_router, "_BACKUP_DIR", d)
+    monkeypatch.setattr(backup_archive, "_BACKUP_DIR", d)
     monkeypatch.setattr(backups_router, "_TRIGGER_SENTINEL", d / ".backup_now")
     return d
 
@@ -278,10 +284,10 @@ async def inbox_manifest(restore_paths, monkeypatch):
     write it directly so the inbox-source restore/listing paths can be exercised without
     a real /restore-inbox mount (the app never mounts it).
     """
-    from paper_ingestion.routers import backups as backups_router
+    from paper_ingestion.services import backup_archive
 
     path = restore_paths / ".inbox_manifest.json"
-    monkeypatch.setattr(backups_router, "_INBOX_MANIFEST", path)
+    monkeypatch.setattr(backup_archive, "_INBOX_MANIFEST", path)
 
     def _write(entries: list[dict]) -> None:
         path.write_text(json.dumps(entries))
@@ -585,9 +591,9 @@ async def test_inbox_list_returns_manifest(admin_client, inbox_manifest):
 
 
 async def test_inbox_list_empty_when_absent(admin_client, restore_paths, monkeypatch):
-    from paper_ingestion.routers import backups as backups_router
+    from paper_ingestion.services import backup_archive
 
-    monkeypatch.setattr(backups_router, "_INBOX_MANIFEST", restore_paths / ".inbox_manifest.json")
+    monkeypatch.setattr(backup_archive, "_INBOX_MANIFEST", restore_paths / ".inbox_manifest.json")
     resp = await admin_client.get("/api/admin/backups/inbox")
     assert resp.status_code == 200, resp.text
     assert resp.json() == []

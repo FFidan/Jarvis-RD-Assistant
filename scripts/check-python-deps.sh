@@ -17,6 +17,7 @@ for file in \
   services/paper_ingestion/constraints.txt \
   services/paper_ingestion/constraints-cpu.txt \
   services/paper_ingestion/constraints-optional.txt \
+  services/paper_ingestion/constraints-optional-cpu.txt \
   services/learning_engine/requirements.txt \
   services/learning_engine/constraints.txt \
   services/telegram_bot/constraints.txt \
@@ -43,3 +44,8 @@ if major_minor_patch(fastapi_version) >= (0, 141, 0):
 
 print(f"OK host FastAPI {fastapi_version} matches Docker runtime cap <0.141.0")
 PY
+
+# The checks above prove the exported files faithfully reproduce the dependency
+# groups; they cannot tell that a group is missing something the shared library
+# imports. That gap shipped an unstartable image, so it gets its own check.
+uv run python scripts/check-shared-import-coverage.py "$ROOT_DIR"

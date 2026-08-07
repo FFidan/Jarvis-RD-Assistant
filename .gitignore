@@ -26,6 +26,15 @@ build/
 .jarvis-setup-transaction.pending
 .env.pre-config-key-rotation.bak
 .env.rotation.*
+# Catch-all for every other machine-local .env variant. The named rules above and
+# below cover the shapes this project's own scripts create; this one covers the
+# rest, including the dated copies people make by hand before upgrading. One such
+# file was found untracked and unignored in a working tree, matching no rule --
+# and a file holding every deployment secret should never be one `git add -A`
+# away from being published. The un-ignore keeps the committed `.env.example`
+# files visible at every depth.
+.env.*
+!.env.example
 *.pem
 *.key
 *.p12
@@ -85,6 +94,9 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+# JUnit reports written into the repo root by the release gates and CI test jobs
+# (baseline-invariants, contract-tests, corpus-visibility-qdrant, cross-user-isolation).
+*.junit.xml
 
 # Jupyter
 .ipynb_checkpoints/

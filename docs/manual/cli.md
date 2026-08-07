@@ -125,6 +125,23 @@ an unexpected commit.
 
 ### Updating from a release before v1.2.2
 
+Installations first set up before v1.1.3 need one extra step before the bootstrap
+below. v1.1.3 added an SMTP password to the deployment's Docker secrets, and no
+updater before v1.2.4 created that file, so `docker compose up` aborts with
+`secret not found` part way through replacing containers. Create the placeholder
+once, from the installation directory:
+
+```bash
+mkdir -p secrets
+[ -f secrets/smtp_pass.txt ] || { : > secrets/smtp_pass.txt; chmod 644 secrets/smtp_pass.txt; }
+```
+
+An empty file is the correct "SMTP password not configured" value; if you send
+mail, `setup.sh --smtp-pass-file` writes the real password to the same path. From
+v1.2.4 onward the updater creates the secret files it manages before it pulls,
+builds or replaces anything, so this step is only needed once, on the way out of
+a pre-v1.1.3 installation.
+
 The lifecycle commands shipped with v1.1.3, v1.2.0 and v1.2.1 all predate the
 backup protocol required by v1.2.2. From the installation directory, run the
 v1.2.2 bootstrap once:

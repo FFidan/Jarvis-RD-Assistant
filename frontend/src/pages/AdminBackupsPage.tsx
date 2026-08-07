@@ -47,6 +47,7 @@ import { OffHostUploadSection } from '@/components/admin/OffHostUploadSection';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
 import { GuidedRecoveryView } from '@/components/admin/GuidedRecoveryView';
 import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 
 const STORE_LABELS: Record<string, string> = {
   jarvis: 'Main database',
@@ -835,6 +836,7 @@ export function AdminBackupsPage() {
 
       {/* An off-host listing carries no database version, so the check is always
           unavailable here and the confirm dialog always asks the operator. */}
+      {inbox.isError && <QueryErrorState message="Failed to load off-host backups." />}
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection
           points={inboxPoints}

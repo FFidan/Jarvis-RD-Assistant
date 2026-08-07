@@ -135,6 +135,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Build contexts differ by need: paper-ingestion, learning-engine and
+        # telegram-bot build from the repository root because their Dockerfiles
+        # COPY libs/jarvis_common; restore-uploader and the dashboard are
+        # self-contained and build from their own directories. Reproducing a
+        # build by hand requires the same context as its matrix entry.
         include:
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
@@ -144,6 +149,7 @@ jobs:
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
+            smoke_import: paper_ingestion.main
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             context: .
@@ -152,6 +158,7 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
+            smoke_import: paper_ingestion.main
           - slug: paper-ingestion-cuda
             image: jarvis-paper-ingestion
             context: .
@@ -162,6 +169,7 @@ jobs:
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
+            smoke_import: paper_ingestion.main
           - slug: learning-engine
             image: jarvis-learning-engine
             context: .
@@ -169,6 +177,7 @@ jobs:
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
+            smoke_import: learning_engine.main
           - slug: learning-engine
             image: jarvis-learning-engine
             context: .
@@ -176,6 +185,7 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
+            smoke_import: learning_engine.main
           - slug: telegram-bot
             image: jarvis-telegram-bot
             context: .
@@ -183,6 +193,7 @@ jobs:
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
+            smoke_import: telegram_bot.main
           - slug: telegram-bot
             image: jarvis-telegram-bot
             context: .
@@ -190,6 +201,7 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
+            smoke_import: telegram_bot.main
           - slug: dashboard
             image: jarvis-dashboard
             context: ./frontend
@@ -211,6 +223,7 @@ jobs:
             platform: linux/amd64
             arch: amd64
             runner: ubuntu-latest
+            smoke_import: uploader
           - slug: restore-uploader
             image: jarvis-restore-uploader
             context: ./services/restore_uploader
@@ -218,6 +231,7 @@ jobs:
             platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
+            smoke_import: uploader
     name: build (${{ matrix.slug }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -262,6 +276,29 @@ jobs:
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
+
+      # Ask the image to import its own entrypoint module, using its own
+      # interpreter. A missing runtime dependency is invisible to a build and to
+      # every static check, and shipped undetected through four releases; the
+      # image starting is the only thing that proves the dependency set is
+      # complete. This runs before the digest is uploaded, so a leg that cannot
+      # import is never part of the manifest the release is assembled from.
+      # The dashboard is nginx and carries no interpreter, so it has no target.
+      # This proves the dependency set, not the runtime: the real ENTRYPOINT and
+      # CMD, configuration, and health are exercised later, before any stable
+      # release tag exists, by the cold-install and upgrade checks in the
+      # release process.
+      # The image blob itself is digest-pushed by the build step above before
+      # this check runs; a failing leg therefore leaves an unreferenced,
+      # untagged digest behind, which nothing resolves or promotes. That
+      # ordering is deliberate: pushing after a local load would either build
+      # twice or drop the SBOM attestations.
+      - name: Import smoke - run the image's own interpreter
+        if: needs.preflight.outputs.mode == 'verify' && matrix.smoke_import != ''
+        run: |
+          docker run --rm --entrypoint python \
+            "ghcr.io/limitcycle-oss/${{ matrix.image }}@${{ steps.build.outputs.digest }}" \
+            -c "import importlib; importlib.import_module('${{ matrix.smoke_import }}')"
 
       - name: Upload the platform digest
         if: needs.preflight.outputs.mode == 'verify'

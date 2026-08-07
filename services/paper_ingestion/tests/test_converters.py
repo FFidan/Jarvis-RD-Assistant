@@ -1,9 +1,9 @@
-"""Tests for row_to_feed_paper and batch_hybrid_results_to_paper_responses converters.
+"""Tests for the papers row-to-model converters.
 
-Ensures that state and state_before_trash are forwarded from the SQL row
-rather than silently falling back to Pydantic defaults, and that the batch
-hybrid helper issues exactly one query, preserves RRF order, and uses the
-deleted-paper fallback for ids not returned by the DB.
+Ensures that state, state_before_trash and discovery_origin are forwarded
+from the SQL row rather than silently falling back to Pydantic defaults,
+and that the batch hybrid helper issues exactly one query, preserves RRF
+order, and uses the deleted-paper fallback for ids not returned by the DB.
 """
 
 from __future__ import annotations
@@ -12,8 +12,13 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
-from paper_ingestion.converters import batch_hybrid_results_to_paper_responses, row_to_feed_paper
+from paper_ingestion.converters import (
+    batch_hybrid_results_to_paper_responses,
+    row_to_feed_paper,
+    row_to_paper_response,
+)
 from tests._embedder_fakes import _dict_to_record
 
 # ---------------------------------------------------------------------------
@@ -109,6 +114,30 @@ def test_row_to_feed_paper_recent_feedback_absent():
 
 
 # ---------------------------------------------------------------------------
+# row_to_paper_response tests
+# ---------------------------------------------------------------------------
+
+
+def test_row_to_paper_response_emits_discovery_origin():
+    """Row with discovery_origin='citation_batch' → PaperResponse carries it.
+
+    Guards against the converter dropping the column and letting Pydantic
+    serialise the 'user_initiated' model default, which would make every
+    paper look user-initiated to API clients.
+    """
+    row = _row(discovery_origin="citation_batch")
+    result = row_to_paper_response(row)  # type: ignore[arg-type]
+    assert result.discovery_origin == "citation_batch"
+
+
+def test_row_to_paper_response_discovery_origin_defaults_when_absent():
+    """Row without discovery_origin key → PaperResponse falls back to the default."""
+    row = _row()  # projected subset that omits the column
+    result = row_to_paper_response(row)  # type: ignore[arg-type]
+    assert result.discovery_origin == "user_initiated"
+
+
+# ---------------------------------------------------------------------------
 # batch_hybrid_results_to_paper_responses tests
 # ---------------------------------------------------------------------------
 
@@ -136,16 +165,9 @@ def _paper_record(paper_id: int, title: str = "T") -> MagicMock:
     return _dict_to_record(d)
 
 
-def _make_batch_pool(db_records: list[MagicMock]) -> tuple[AsyncMock, AsyncMock]:
+def _make_batch_pool(db_records: list[MagicMock]) -> tuple[MagicMock, AsyncMock]:
     """Return (pool, conn) where conn.fetch returns db_records."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=db_records)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = AsyncMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool, conn
+    return make_pool_and_conn(fetch_return=db_records, with_transaction=False)
 
 
 @pytest.mark.asyncio

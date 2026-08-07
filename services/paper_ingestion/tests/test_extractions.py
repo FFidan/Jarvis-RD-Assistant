@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 import asyncpg
 import pytest
 from fastapi import HTTPException
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
@@ -57,7 +58,7 @@ def _app(request):
     """
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict, require_admin
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     user_role = getattr(request, "param", None)
@@ -67,26 +68,32 @@ def _app(request):
     conn.fetchrow.return_value = _template_row(id=3, name="New Template")
     conn.execute.return_value = "DELETE 1"
 
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-
     async def _patched_require_admin() -> None:
         if user_role != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
 
-    app.dependency_overrides[require_admin] = _patched_require_admin
-
+    overrides = {
+        verify_api_key: lambda: None,
+        require_admin: _patched_require_admin,
+    }
     # When a role is present there is a valid session; steer current_user_id_strict
     # to a fixed user so list_templates (which now gates on session) passes.
     if user_role is not None:
-        app.dependency_overrides[current_user_id_strict] = lambda: 1
+        overrides[current_user_id_strict] = lambda: 1
 
-    yield app, conn
-
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides=overrides,
+        ),
+    ):
+        yield app, conn
 
 
 _VALID_BODY = {

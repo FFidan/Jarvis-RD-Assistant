@@ -58,6 +58,10 @@ candidate's bootstrap, so it runs in direct mode. The bootstrap paths are
 covered by the per-source upgrade checks in step 3, which pass explicit
 `update_from` and `update_to` values.
 
+The nightly workflow's catalog-freshness job runs only on its schedule, so it
+reports as skipped on this dispatch; that skip is expected and is not part of
+the release acceptance.
+
 Required JUnit selections must contain at least one pass and no skips, failures,
 or errors. The lifecycle run must complete its CA-verified HTTPS and destructive
 restore checks. These are public-repository workflows; never redirect them to a
@@ -99,6 +103,15 @@ VERIFY_RUN_ID="$(gh run list --workflow=ghcr-publish.yml --limit 1 \
 gh run watch "$VERIFY_RUN_ID"
 ```
 
+Each build leg whose image carries a Python interpreter also runs an import
+check inside the image it just built: the image's own interpreter imports the
+service's entry module, so a missing runtime dependency fails the leg before
+its digest can join a manifest. The dashboard image is nginx, carries no
+interpreter, and has no import target. This proves the dependency set only.
+That the containers actually start, read their configuration, and report
+healthy is proven by the cold-install and upgrade checks below, before any
+stable tag exists.
+
 Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:
 
@@ -135,7 +148,8 @@ Run the upgrade check for each maintained source contract:
 | `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
-| `v1.2.2` | `direct` | `current-merge-pending` |
+| `v1.2.2` | `bootstrap` | `current-merge-pending` |
+| `v1.2.3` | `direct` | `current-merge-pending` |
 
 The `direct` row is the path essentially every existing installation takes, and
 it exercises the update transaction itself rather than the bootstrap. Do not skip
@@ -148,6 +162,15 @@ supported source enters through the bootstrap. It names explicit tags rather tha
 deriving them, so refresh it while preparing each release — the release being
 published becomes the new `direct` row, the previous `direct` row becomes a
 `bootstrap` row, and any source that has left support is dropped.
+
+The supported window is deliberate: the `bootstrap` rows reach back at most
+four releases behind the `direct` row. When adding a release to the table
+would leave more than four `bootstrap` rows, the oldest row leaves support
+and the release notes say so. An installation older than every table row
+completes the documented one-time step in the
+[command-line reference](manual/cli.md#updating-from-a-release-before-v122)
+and then follows the bootstrap path; the floor below that is a fresh install
+plus a backup restore.
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
@@ -213,6 +236,9 @@ line stating whether the images differ from the previous tag, condensed
 `### Added` / `### Fixed` / `### Changed` sections, an `### Upgrading` section
 giving the direct and bootstrap paths from each supported source, and a closing
 `**Full changelog:**` link to `CHANGELOG.md` at this tag.
+
+A release that retires an upgrade source from the support table states that in
+its `### Upgrading` section.
 
 ## Release Checks
 

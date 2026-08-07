@@ -12,6 +12,7 @@ from jarvis_common.auth import (
     validate_runtime_config,
     verify_api_key,
 )
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _request(path: str):
@@ -208,12 +209,7 @@ def test_validate_production_config_single_user_dev_does_not_require_hmac_key(mo
 
 def _runtime_pool(conn: AsyncMock) -> MagicMock:
     """asyncpg-pool-shaped mock whose ``acquire()`` yields *conn*."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+    return make_pool_and_conn(conn=conn, with_transaction=False)[0]
 
 
 @pytest.mark.asyncio

@@ -310,6 +310,15 @@ def test_app_version_sources_agree():
     package = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
     package_lock = json.loads((REPO_ROOT / "frontend" / "package-lock.json").read_text())
     uv_lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    # CITATION.cff is what GitHub renders in the repository sidebar and what
+    # Zenodo and other CFF consumers read, so a stale value there is published
+    # metadata. Matched by line rather than parsed to avoid a YAML dependency.
+    citation = re.search(
+        r"^version:\s*(\S+)\s*$",
+        (REPO_ROOT / "CITATION.cff").read_text(),
+        re.MULTILINE,
+    )
+    assert citation, "CITATION.cff must declare a version"
     compose_defaults = re.findall(
         r"\$\{JARVIS_VERSION:-([^}]*)\}",
         (REPO_ROOT / "docker-compose.yml").read_text(),
@@ -332,6 +341,7 @@ def test_app_version_sources_agree():
         "frontend/package-lock.json": package_lock["version"],
         "frontend/package-lock.json packages['']": package_lock["packages"][""]["version"],
         "uv.lock": root_packages[0]["version"],
+        "CITATION.cff": citation.group(1),
     }
     for index, version in enumerate(compose_defaults, start=1):
         versions[f"docker-compose.yml default {index}"] = version
@@ -531,3 +541,72 @@ def test_public_caddy_hsts_is_host_only_and_not_preloaded():
     assert "preload" not in text.lower()
     for header in ("X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy"):
         assert header in text
+
+
+# Every compose secret must have a declared provisioning path. "update" secrets
+# are created by scripts/init-secrets.sh, which setup.sh and update.sh both run
+# before any container is touched. "setup" secrets are created only at setup
+# time by scripts/gen-langfuse-keys.sh: Langfuse headless init is write-once,
+# so recreating that keypair during an update would 401 against an
+# already-provisioned volume. A compose secret with no provisioning path is how
+# the v1.1.3 upgrade failure shipped — declared for every service start,
+# created by nothing on the update path.
+SECRET_PROVISIONING = {
+    "postgres_password": "update",
+    "jarvis_api_key": "update",
+    "jarvis_setup_token": "update",
+    "jarvis_model_hmac_key": "update",
+    "telegram_bot_token": "update",
+    "qdrant_api_key": "update",
+    "smtp_pass": "update",
+    "litellm_master_key": "update",
+    "litellm_salt_key": "update",
+    "jarvis_config_key": "update",
+    "langfuse_pg_password": "update",
+    "langfuse_nextauth_secret": "update",
+    "langfuse_salt": "update",
+    "cloudflare_tunnel_token": "update",
+    "backup_encrypt_key": "update",
+    "infra_ingest_key": "update",
+    "langfuse_init_pk": "setup",
+    "langfuse_init_sk": "setup",
+}
+
+PROVISIONING_SCRIPTS = {
+    "update": "scripts/init-secrets.sh",
+    "setup": "scripts/gen-langfuse-keys.sh",
+}
+
+
+def test_every_compose_secret_has_a_declared_provisioning_path(compose):
+    declared = compose.get("secrets") or {}
+
+    unclassified = sorted(set(declared) - set(SECRET_PROVISIONING))
+    assert not unclassified, (
+        f"compose secrets without a provisioning path: {unclassified} — add each to "
+        "scripts/init-secrets.sh and mark it 'update' in SECRET_PROVISIONING, or mark "
+        "it 'setup' there with a rationale if it must only be created at setup time"
+    )
+    stale = sorted(set(SECRET_PROVISIONING) - set(declared))
+    assert not stale, f"SECRET_PROVISIONING lists secrets compose no longer declares: {stale}"
+
+    for name, definition in declared.items():
+        assert definition.get("file") == f"./secrets/{name}.txt", (
+            f"{name}: compose secret file must be ./secrets/{name}.txt"
+        )
+
+    scripts = {}
+    for mode, path in PROVISIONING_SCRIPTS.items():
+        lines = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
+        scripts[mode] = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+    for name, mode in SECRET_PROVISIONING.items():
+        assert f"{name}.txt" in scripts[mode], (
+            f"{name}: declared '{mode}' but {PROVISIONING_SCRIPTS[mode]} never touches "
+            f"{name}.txt outside comments"
+        )
+
+    for runner in ("update.sh", "setup.sh"):
+        assert "init-secrets.sh" in (REPO_ROOT / runner).read_text(encoding="utf-8"), (
+            f"{runner} no longer runs scripts/init-secrets.sh, so 'update' secrets "
+            "would not be provisioned before containers are touched"
+        )

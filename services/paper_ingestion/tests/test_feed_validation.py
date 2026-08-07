@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: F401
 
 import pytest
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 # ---------------------------------------------------------------------------
 # Shared client fixture
@@ -28,39 +29,35 @@ def api_client():
         },
     ):
         from fastapi.testclient import TestClient
-        from paper_ingestion.deps import get_db_pool, get_embedder
+        from jarvis_common import verify_api_key
+        from jarvis_common.auth import current_user_id_strict
+        from paper_ingestion.deps import get_db_pool, get_embedder, limiter
         from paper_ingestion.main import app
 
         mock_pool = MagicMock()
         mock_embedder = MagicMock()
-        app.dependency_overrides = {}
-        app.dependency_overrides[get_db_pool] = lambda: mock_pool
-        app.dependency_overrides[get_embedder] = lambda: mock_embedder
-        app.state.limiter.enabled = False
-
-        from jarvis_common import (
-            get_current_user_id,
-            get_current_user_id_or_bot,
-            verify_api_key,
-        )
-        from jarvis_common.auth import current_user_id_strict
-
-        app.dependency_overrides[verify_api_key] = lambda: None
-        # CC-03: this fixture resets ``dependency_overrides`` wholesale, which
-        # wipes the autouse ``_default_authenticated_user`` override. Re-add it
-        # so the converted ``Depends(get_current_user_id)`` routes still default
-        # to user 1 (identical to the pre-conversion symbol-stub behaviour).
-        app.dependency_overrides[get_current_user_id] = lambda: 1
-        app.dependency_overrides[get_current_user_id_or_bot] = lambda: 1
-        # PR5-T8: /api/discover now resolves identity via ``Depends(current_user_id_strict)``
-        # (was an imperative in-body call). Override it too so this "auth disabled"
-        # fixture keeps exercising the paper_ids cap (422) rather than the auth gate (401).
-        app.dependency_overrides[current_user_id_strict] = lambda: 1
-
-        yield TestClient(app, raise_server_exceptions=False), mock_pool
-
-        app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+        with patch_pi_test_app(
+            mock_pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+                dependency_overrides={
+                    verify_api_key: lambda: None,
+                    get_embedder: lambda: mock_embedder,
+                    # PR5-T8: /api/discover resolves identity via
+                    # ``Depends(current_user_id_strict)``, which the autouse
+                    # module-symbol stub does not reach. Override it so this
+                    # "auth disabled" fixture keeps exercising the paper_ids
+                    # cap (422) rather than the auth gate (401).
+                    current_user_id_strict: lambda: 1,
+                },
+            ),
+        ):
+            yield TestClient(app, raise_server_exceptions=False), mock_pool
 
 
 # ---------------------------------------------------------------------------

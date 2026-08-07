@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { searchPapersBrief, fetchPapersBrief } from '@/lib/api';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { PaperBrief } from '@/types';
 
 interface PaperSearchSelectProps {
@@ -34,7 +35,7 @@ export function PaperSearchSelect({
     return () => clearTimeout(timer);
   }, [search]);
 
-  const { data: papers = [] } = useQuery({
+  const { data: papers = [], isError } = useQuery({
     queryKey: QUERY_KEYS.papersBrief.list(debouncedSearch),
     queryFn: () =>
       debouncedSearch.length >= 2
@@ -112,7 +113,9 @@ export function PaperSearchSelect({
 
       {open && (
         <div className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover p-1 shadow-md">
-          {papers.length === 0 ? (
+          {isError ? (
+            <QueryErrorState message="Failed to load papers." />
+          ) : papers.length === 0 ? (
             <p className="px-2 py-4 text-center text-sm text-muted-foreground">
               No papers found
             </p>

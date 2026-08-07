@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -39,18 +40,13 @@ def _app(monkeypatch):
     from jarvis_common import verify_api_key
     from jarvis_common.owner import OwnerIdentity
     from jarvis_common.settings import get_secrets_settings
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     get_secrets_settings.cache_clear()
 
     mock_pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(n=0)
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
     monkeypatch.setattr(
         "paper_ingestion.routers.system_readiness.resolve_owner_identity",
         AsyncMock(return_value=OwnerIdentity("database", "valid", 1)),
@@ -66,10 +62,22 @@ def _app(monkeypatch):
             }
         ),
     )
-    yield app, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
-    get_secrets_settings.cache_clear()
+    try:
+        with patch_pi_test_app(
+            mock_pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+                dependency_overrides={verify_api_key: lambda: None},
+            ),
+        ):
+            yield app, conn
+    finally:
+        get_secrets_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -307,25 +315,29 @@ async def test_readiness_requires_auth(monkeypatch):
     monkeypatch.setenv("JARVIS_API_KEY", "secret-key-value-1234567890")
 
     from jarvis_common.auth import refresh_api_key_cache
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     refresh_api_key_cache()
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(n=0)
-    app.state.db_pool = pool
-    old_limiter = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-
     try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/api/system/readiness")
+        with patch_pi_test_app(
+            pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+            ),
+        ):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.get("/api/system/readiness")
     finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = old_limiter
         monkeypatch.delenv("JARVIS_API_KEY", raising=False)
         refresh_api_key_cache()
 

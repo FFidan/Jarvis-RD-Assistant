@@ -9,12 +9,8 @@ import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 function LocationDisplay() {
   const location = useLocation();
@@ -29,11 +25,10 @@ function LocationDisplay() {
 }
 
 // Mock the API module - vi.mock is hoisted, so use inline return values
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...actual,
-    fetchFeed: vi.fn().mockResolvedValue({
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchFeed: async () => ({
       papers: [
       {
         id: 1,
@@ -82,7 +77,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ],
     total: 2,
   }),
-    searchPreview: vi.fn().mockResolvedValue({
+    searchPreview: async () => ({
       results: [
         {
           title: 'Search Result Paper',
@@ -103,17 +98,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
       degraded_sources: [],
       source_errors: {},
     }),
-    batchSavePapers: vi.fn().mockResolvedValue([{ id: 1, title: 'Saved Paper' }]),
-    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
-    discoverPapers: vi.fn().mockResolvedValue([]),
-    scanLocalPdfs: vi.fn().mockResolvedValue({ job_id: 'job-scan', status: 'queued' }),
-    batchProcessPapers: vi.fn().mockResolvedValue({
+    batchSavePapers: async () => ([{ id: 1, title: 'Saved Paper' }]),
+    markDone: async () => ({ status: 'ok', paper_id: 1 }),
+    discoverPapers: async () => ([]),
+    scanLocalPdfs: async () => ({ job_id: 'job-scan', status: 'queued' }),
+    batchProcessPapers: async () => ({
       queued: 5,
       total_unprocessed: 10,
       skipped_missing_pdf: 2,
       job_id: 'job-abc',
     }),
-    fetchTopics: vi.fn().mockResolvedValue([
+    fetchTopics: async () => ([
       {
         id: 1,
         name: 'Machine Learning',
@@ -123,29 +118,29 @@ vi.mock('@/lib/api', async (importOriginal) => {
         created_at: '2025-01-01T00:00:00Z',
       },
     ]),
-    fetchSources: vi.fn().mockResolvedValue([
+    fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
       { id: 2, source_type: 'semantic_scholar', enabled: true, config: {}, priority: 2, display_order: 2, created_at: '2025-01-01T00:00:00Z' },
       { id: 3, source_type: 'openalex', enabled: true, config: {}, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
       { id: 4, source_type: 'pubmed', enabled: true, config: {}, priority: 4, display_order: 4, created_at: '2025-01-01T00:00:00Z' },
       { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
     ]),
-    fetchFeedCounts: vi.fn().mockResolvedValue({
+    fetchFeedCounts: async () => ({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
     }),
-    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
+    fetchFeedCountsWithFacets: async () => ({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
       by_source: {}, by_topic: [], untagged: 0,
     }),
-    fetchPulseHistory: vi.fn().mockResolvedValue([]),
-    zoteroGetLinkage: vi.fn().mockResolvedValue({
+    fetchPulseHistory: async () => ([]),
+    zoteroGetLinkage: async () => ({
       zotero_item_key: null,
       zotero_citation_key: null,
       zotero_last_pushed_at: null,
     }),
-    zoteroPushPaper: vi.fn().mockResolvedValue({ job_id: 'job-zotero', status: 'queued' }),
-    zoteroResync: vi.fn().mockResolvedValue({ job_id: 'job-zotero-resync', status: 'queued' }),
-  };
+    zoteroPushPaper: async () => ({ job_id: 'job-zotero', status: 'queued' }),
+    zoteroResync: async () => ({ job_id: 'job-zotero-resync', status: 'queued' }),
+  });
 });
 
 // Mock the StreamingChat component since it has complex dependencies
@@ -1901,6 +1896,14 @@ describe('ResearchFeedPage', () => {
   });
 
   it('shows library papers after switching to Library §Status facet', async () => {
+    // A zero library count renders the empty-library Discover panel instead of
+    // FeedView, so this test must report a non-empty library itself. It used to
+    // inherit that from a sibling test's un-reset mock override.
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2,
+      by_source: {}, by_topic: [], untagged: 0,
+    });
     const user = userEvent.setup();
     renderPage();
 

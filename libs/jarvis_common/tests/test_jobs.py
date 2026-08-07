@@ -25,6 +25,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -640,18 +641,7 @@ class TestListJobsUserIdHandling:
         """Return a mock asyncpg.Pool whose acquired connection returns `rows`."""
         # list_jobs does: [dict(r) for r in rows], so rows from conn.fetch must
         # support dict() conversion via the _DictRecord shim.
-        fetch_result: list[Any] = [_DictRecord(r) for r in rows]
-
-        conn = MagicMock()
-        conn.fetch = MagicMock(return_value=_async_return(fetch_result))
-
-        pool_cm = MagicMock()
-        pool_cm.__aenter__ = MagicMock(return_value=_async_return(conn))
-        pool_cm.__aexit__ = MagicMock(return_value=_async_return(None))
-
-        pool = MagicMock()
-        pool.acquire = MagicMock(return_value=pool_cm)
-        return pool, conn
+        return make_pool_and_conn(fetch_return=[_DictRecord(r) for r in rows])
 
     # ------------------------------------------------------------------
     # Tests
@@ -929,8 +919,7 @@ def _reclaim_app(
     the write pass while nothing was written.
     """
     finish_job = finish_job or AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.execute = AsyncMock()
+    pool, _conn = make_pool_and_conn(direct_methods=True)
     app = SimpleNamespace(
         state=SimpleNamespace(
             procrastinate_app=SimpleNamespace(

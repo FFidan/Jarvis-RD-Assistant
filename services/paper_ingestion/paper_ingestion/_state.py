@@ -22,6 +22,10 @@ In job handlers::
     from paper_ingestion._state import get_services
 
     embedder = get_services().embedder
+
+This mirrors ``learning_engine._state``, but the two are not interchangeable:
+each service's collaborator set is different (see ``PaperIngestionServices``
+below), so a shared generic holder would lose the per-field typing.
 """
 
 from __future__ import annotations

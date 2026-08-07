@@ -5,8 +5,8 @@ module for endpoint contracts and shared invariants (LE-002 ownership
 coercion, mutable-default fix, ``noop.test`` toggle).
 
 ``card.generate_batch`` is intentionally excluded from the public allowlist;
-that batch operation is dispatched through ``/api/generation/batch`` with its
-own validation.
+that batch operation is dispatched through ``POST /api/generate/batch`` with
+its own validation.
 """
 
 from __future__ import annotations

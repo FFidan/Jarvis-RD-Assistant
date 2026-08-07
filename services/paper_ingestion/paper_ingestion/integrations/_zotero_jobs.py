@@ -150,7 +150,7 @@ async def _zotero_push_highlights_job(
         paper_id (int): DB paper ID whose unsynced highlights are exported.
         user_id (int | None): Caller user ID for the view-level access check.
     """
-    from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
+    from paper_ingestion.routers.pdf_files import assert_paper_pdf_visible
 
     paper_id = int(payload["paper_id"])
     user_id = payload.get("user_id")

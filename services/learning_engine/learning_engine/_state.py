@@ -17,6 +17,10 @@ In job handlers / helpers::
     from learning_engine._state import get_services
 
     openai_client = get_services().openai_client
+
+This mirrors ``paper_ingestion._state``, but the two are not interchangeable:
+each service's collaborator set is different (see ``LearningEngineServices``
+below), so a shared generic holder would lose the per-field typing.
 """
 
 from __future__ import annotations

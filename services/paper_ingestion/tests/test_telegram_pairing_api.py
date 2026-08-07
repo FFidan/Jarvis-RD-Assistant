@@ -8,59 +8,56 @@ Covers:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+@contextmanager
+def _wired_app(user_id: int | None):
+    """Wire the app with auth bypassed and *user_id* as the session identity."""
+    from jarvis_common import current_user_id_or_none, verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
+
+    mock_pool, conn = _make_pool_and_conn()
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_or_none: lambda: user_id,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 @pytest.fixture()
 def app_fixture_with_user():
     """App with auth bypassed AND a fake authenticated user (user_id=7)."""
-    from jarvis_common import current_user_id_or_none, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
-    mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    original_limiter_enabled = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # Inject a concrete user_id=7 so session-gated endpoints work.
-    app.dependency_overrides[current_user_id_or_none] = lambda: 7
-
-    yield app, conn
-
-    app.state.limiter.enabled = original_limiter_enabled
-    app.dependency_overrides.clear()
+    with _wired_app(7) as wired:
+        yield wired
 
 
 @pytest.fixture()
 def app_fixture_no_user():
     """App with auth bypassed but NO session user (unauthenticated caller)."""
-    from jarvis_common import current_user_id_or_none, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
-    mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    original_limiter_enabled = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id_or_none] = lambda: None
-
-    yield app, conn
-
-    app.state.limiter.enabled = original_limiter_enabled
-    app.dependency_overrides.clear()
+    with _wired_app(None) as wired:
+        yield wired
 
 
 # ---------------------------------------------------------------------------

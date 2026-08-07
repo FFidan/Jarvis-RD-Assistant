@@ -4,10 +4,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
-  return {
-    ...actual,
-    getSetupStatus: vi.fn().mockResolvedValue({
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const { ApiError } = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return createApiMock({
+    getSetupStatus: async () => ({
       setup_completed: true,
       models_ready: true,
       models_downloading: [],
@@ -17,8 +17,8 @@ vi.mock('@/lib/api', async () => {
     }),
     // The onboarding gate calls this on every render; mock as configured AND
     // setup_completed so the gate is a no-op here (test focuses on auth gating).
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, setup_completed: true }),
-    fetchDashboardMetrics: vi.fn().mockResolvedValue({
+    getFirstRunStatus: async () => ({ configured: true, setup_completed: true }),
+    fetchDashboardMetrics: async () => ({
       total_papers: 0,
       unread_papers: 0,
       pending_papers: 0,
@@ -28,13 +28,13 @@ vi.mock('@/lib/api', async () => {
       nudge_count: 0,
       onboarding_stage: 'complete',
     }),
-    verifyMagicLink: vi.fn().mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' }),
+    verifyMagicLink: async () => ({ id: 7, email: 'a@b.com', role: 'admin' }),
     // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
     // unauthenticated tests deterministically land on the login page.
-    fetchAccount: vi.fn().mockRejectedValue(
-      new actual.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
-    ),
-  };
+    fetchAccount: async () => {
+      throw new ApiError(401, JSON.stringify({ detail: 'Not authenticated' }));
+    },
+  });
 });
 
 // Mock fetch for auth store

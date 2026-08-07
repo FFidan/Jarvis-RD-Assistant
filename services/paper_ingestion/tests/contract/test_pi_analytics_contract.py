@@ -38,9 +38,15 @@ pytestmark = [
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_with_pool(contract_conn):
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
+
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(
             remove_owner_override=True,
             state_overrides={"embedder": None},

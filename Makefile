@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -71,7 +71,7 @@ clean-venvs:
 
 ## Run pyright type checking (pinned to same version as CI)
 typecheck:
-	npx --yes pyright@1.1.408
+	uv run npx --yes pyright@1.1.408
 
 ## Enforce the secrets contract: directory 700 (owner-only), files 644 (readable by non-root service containers via the compose bind mount)
 secure-secrets:
@@ -106,6 +106,25 @@ test-shell-contracts:
 	bash scripts/tests/test_jarvis_research_cli.sh
 	bash scripts/tests/test_uninstall.sh
 
+## Static analysis for the scripts that install, upgrade and operate a deployment,
+## plus the shell entry points the lifecycle contracts exercise.
+## Gated at --severity=warning on purpose: the info level here is style and
+## reachability noise these scripts deliberately do not chase -- SC2015 ("A && B
+## || C is not if-then-else"), SC2329/SC2317 (log helpers that the sourced library
+## redefines, and code after a die), SC2030/SC2031 (subshell scoping), SC2016 and
+## SC1091 -- so gating on it would block the build on formatting rather than on
+## defects.
+## Missing shellcheck is a hard failure -- a check that silently skips is not a
+## check -- so shellcheck is invoked directly and never guarded by `command -v`.
+## Keep all eleven in ONE invocation: shellcheck resolves each `# shellcheck source=`
+## against the other files on the command line, so splitting this into per-file
+## runs would silently stop checking setup_lib.sh's helpers against their callers.
+shell-lint:
+	shellcheck --severity=warning setup.sh update.sh scripts/setup_lib.sh \
+	  scripts/backup.sh scripts/restore.sh scripts/init-secrets.sh \
+	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
+	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
+
 ## Run all local quality checks (mirrors CI lint-test + frontend and adds the
 ## optional Docker-backed swap/recovery matrix when Docker is available).
 ##
@@ -113,31 +132,34 @@ test-shell-contracts:
 ##   1. Guard: no tracked secrets
 ##   2. Guard: dependency parity (uv.lock ↔ requirements*.txt)
 ##   3. Lint (ruff + migrations-no-tx + jsonb-double-encode + unsafe-resolver)
-##   4. Tach (module boundary check)
+##   4. Tach (module boundary check) + guard: no service imports in jarvis_common
 ##   5. Pyright (type check)
 ##   6. Test-shape check
 ##   7. Guard: burned secrets
 ##   8. Deterministic shell contracts
 ##   9. Optional Docker-backed swap/recovery matrix
-##  10. Fast pytest suite (excludes live_pg / integration / slow)
-##  11. Frontend lint + typecheck + tests + build
+##  10. Shell lint (shellcheck)
+##  11. Fast pytest suite (excludes live_pg / integration / slow)
+##  12. Frontend lint + typecheck + tests + build
 ##
 ## Live-Postgres checks run separately in CI and are opt-in locally:
-##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m contract -v
+##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant" -v
 ##   JARVIS_RUN_LIVE_PG=1 uv run pytest -c pyproject.toml -m "integration and live_pg" \
 ##     services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+##
+## The live-Qdrant release gate never skips and has its own driver, which supplies
+## JARVIS_TEST_QDRANT_URL. Selecting it via a bare `-m contract` hard-fails by design:
+##   JARVIS_RUN_LIVE_PG=1 bash scripts/tests/test_corpus_visibility_qdrant.sh
 check: no-tracked-secrets secure-secrets deps-check lint
 	uv run tach check
+	bash scripts/check-no-service-imports-in-common.sh
 	$(MAKE) typecheck
 	uv run python3 scripts/check-test-shape.py
 	uv run python3 scripts/check_contract_docs.py
 	bash scripts/check-burned-secrets.sh
 	$(MAKE) test-shell-contracts
 	bash scripts/tests/test_restore_swap_recovery.sh
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/update-bootstrap.sh scripts/backup-lifecycle.sh; else echo "shellcheck not installed; skipping update bootstrap and backup lifecycle lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/jarvis-research.sh; else echo "shellcheck not installed; skipping scripts/jarvis-research.sh lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/uninstall.sh; else echo "shellcheck not installed; skipping scripts/uninstall.sh lint"; fi
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck scripts/lifecycle-smoke.sh; else echo "shellcheck not installed; skipping scripts/lifecycle-smoke.sh lint"; fi
+	$(MAKE) shell-lint
 	uv run pytest
 	$(MAKE) frontend-check
 

@@ -203,6 +203,63 @@ async def test_create_db_pool_log_redacts_credentials(caplog):
     assert "dbhost:5433/jarvis" in caplog.text
 
 
+# ---------------------------------------------------------------------------
+# Self-documentation: the env-var table and the TELEGRAM_CHAT_ID contract
+# ---------------------------------------------------------------------------
+
+
+def test_bot_config_env_var_table_is_a_real_docstring():
+    """The env-var table must be BotConfig's docstring, not a stray literal.
+
+    Placed after ``model_config`` the table was an ordinary expression
+    statement, so ``BotConfig.__doc__`` was None and the table was invisible to
+    ``help()`` and every docstring-reading tool. It must also stay complete:
+    JARVIS_BASE_URL was added to the class long after the table was written.
+    """
+    doc = BotConfig.__doc__
+    assert doc is not None, "BotConfig has no docstring — the env-var table is a stray literal"
+    for env_var in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "JARVIS_BASE_URL",
+        "DATABASE_URL",
+        "PAPER_INGESTION_URL",
+        "LEARNING_ENGINE_URL",
+        "JARVIS_API_KEY",
+    ):
+        assert env_var in doc, f"{env_var} is missing from the BotConfig env-var table"
+
+
+def test_telegram_chat_id_description_names_pairings_as_the_delivery_source():
+    """The field must not document itself as choosing the outbound target.
+
+    It once read "chat ID for outbound messages … None = use DB pairing flow",
+    which described a deployment-wide chat override the field does not provide
+    and demoted pairing to a fallback. ``telegram_user_pairings`` is the only
+    path, always — see test_auth.py's env-var-chat-is-not-authorised case.
+    """
+    description = BotConfig.model_fields["telegram_chat_id"].description or ""
+
+    assert "telegram_user_pairings" in description
+    assert "auth_check" in description
+    assert "list_user_pairings" in description
+
+
+def test_unset_chat_id_startup_log_denies_a_delivery_role(caplog):
+    """The startup line must not imply that setting the variable would redirect
+    delivery. Pairing records address every outbound message either way.
+    """
+    import logging
+
+    env = _minimal_env(chat_id=None)
+    with patch.dict(os.environ, env, clear=True):
+        with caplog.at_level(logging.INFO, logger="telegram_bot.config"):
+            BotConfig.from_env()
+
+    assert "TELEGRAM_CHAT_ID is not set" in caplog.text
+    assert "never from this variable" in caplog.text
+
+
 def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):
     """JARVIS_API_KEY_FILE pointing to an unreadable path must NOT raise.
 

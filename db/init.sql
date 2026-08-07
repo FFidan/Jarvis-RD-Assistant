@@ -1973,7 +1973,7 @@ ON CONFLICT (user_id, key) DO NOTHING;
 INSERT INTO paper_sources (source_type, enabled, config) VALUES
     ('arxiv', TRUE, '{}'),
     ('semantic_scholar', FALSE, '{"key_env": "SEMANTIC_SCHOLAR_API_KEY", "requires_key": false}'),
-    ('local', FALSE, '{}')  -- TODO: Enable when local PDF ingestion is implemented
+    ('local', FALSE, '{}')  -- registry stub: local PDFs are ingested via POST /api/upload-pdf, not through this source's search/fetch path
 ON CONFLICT (source_type) DO NOTHING;
 
 INSERT INTO scheduled_nudges (nudge_type, cron_expression, enabled) VALUES

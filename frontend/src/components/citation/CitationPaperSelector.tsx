@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchPapersBrief } from '@/lib/api';
 import { PaperSearchSelect } from '@/components/shared/PaperSearchSelect';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { PaperBrief } from '@/types';
 
 interface CitationPaperSelectorProps {
@@ -19,7 +20,7 @@ export function CitationPaperSelector({
   const selectedIds = selectedPapers.map((p) => p.id);
 
   // Keep a cache of papers for resolving ids back to PaperBrief objects
-  const { data: allPapers = [] } = useQuery({
+  const { data: allPapers = [], isError } = useQuery({
     queryKey: QUERY_KEYS.papersBrief.list(),
     queryFn: fetchPapersBrief,
   });
@@ -47,6 +48,7 @@ export function CitationPaperSelector({
         onChangeMulti={handleChangeMulti}
         placeholder="Search papers to add to citation graph..."
       />
+      {isError && <QueryErrorState message="Failed to load papers." />}
       <p className="text-xs text-muted-foreground">
         {selectedPapers.length}/{_maxSelections} papers selected
       </p>

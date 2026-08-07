@@ -12,7 +12,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_bot_config
+from jarvis_common.testing import PTBContextOptions, make_bot_config, make_ptb_context
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.review_handler import (  # noqa: E402
     SHOWING_BACK,
@@ -46,17 +46,11 @@ def _make_command_update_and_context(chat_id=_TEST_CHAT_ID):
     # (review_start branches on `update.callback_query is not None`).
     update.callback_query = None
 
-    context = MagicMock()
-    context.user_data = {}
     config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
     mock_http = AsyncMock()
-
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": AsyncMock(),
-        "http_client": mock_http,
-    }
+    context = make_ptb_context(
+        AsyncMock(), config, options=PTBContextOptions(http_client=mock_http)
+    )
 
     return update, context, mock_http
 
@@ -76,17 +70,13 @@ def _make_callback_update_and_context(callback_data: str, user_data=None, chat_i
     query.edit_message_text = AsyncMock()
     update.callback_query = query
 
-    context = MagicMock()
-    context.user_data = user_data if user_data is not None else {}
     config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
     mock_http = AsyncMock()
-
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": AsyncMock(),
-        "http_client": mock_http,
-    }
+    context = make_ptb_context(
+        AsyncMock(),
+        config,
+        options=PTBContextOptions(http_client=mock_http, user_data=user_data),
+    )
 
     return update, context, mock_http
 

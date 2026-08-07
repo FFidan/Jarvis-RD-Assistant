@@ -9,7 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.testing import make_bot_config
+from jarvis_common.testing import PTBContextOptions, make_bot_config, make_ptb_context
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import (  # noqa: E402
@@ -68,23 +68,19 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
 
-    context = MagicMock()
-    context.args = args or []
-    # auth_required stashes the resolved user_id here.  Default to user_id=1
-    # so commands that read context.user_data["jarvis_user_id"] get a valid
-    # paired user rather than None (which is now blocked by the B4 guard).
-    context.user_data = {"jarvis_user_id": 1}
-
     config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
-
-    context.application = MagicMock()
-    context.application.bot_data = {
-        "config": config,
-        "db_pool": mock_db,
-        "http_client": mock_http,
-    }
+    # auth_required stashes the resolved user_id in user_data.  Default to
+    # user_id=1 so commands that read context.user_data["jarvis_user_id"] get a
+    # valid paired user rather than None (which is now blocked by the B4 guard).
+    context = make_ptb_context(
+        mock_db,
+        config,
+        options=PTBContextOptions(
+            http_client=mock_http, args=args or [], user_data={"jarvis_user_id": 1}
+        ),
+    )
 
     return update, context, mock_db, mock_http
 

@@ -11,11 +11,38 @@ these functions are pure DB-query orchestrators with no other I/O.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import pytest
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, make_pool_and_conn
+
+
+@contextmanager
+def _wired_app(pool, *, identity_dep, user_id):
+    """Wire the app for one endpoint test; every changed seam restores on exit."""
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
+
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                identity_dep: lambda: user_id,
+            },
+        ),
+    ):
+        yield app
 
 
 # ---------------------------------------------------------------------------
@@ -334,9 +361,7 @@ async def test_get_citations_strips_invisible_counter_parties() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.auth import current_user_id_strict
 
     user_a_id = 1
     p1_id = 10
@@ -357,27 +382,11 @@ async def test_get_citations_strips_invisible_counter_parties() -> None:
         ]
     )
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def override_db_pool():
-        return pool
-
-    async def override_api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = override_db_pool
-    app.dependency_overrides[verify_api_key] = override_api_key
-    app.dependency_overrides[current_user_id_strict] = lambda: user_a_id
-
-    try:
+    with _wired_app(pool, identity_dep=current_user_id_strict, user_id=user_a_id) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/citations/{p1_id}")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -395,9 +404,7 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.auth import current_user_id_strict
 
     user_a_id = 1
     p1_id = 10
@@ -415,27 +422,11 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
         ]
     )
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def override_db_pool():
-        return pool
-
-    async def override_api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = override_db_pool
-    app.dependency_overrides[verify_api_key] = override_api_key
-    app.dependency_overrides[current_user_id_strict] = lambda: user_a_id
-
-    try:
+    with _wired_app(pool, identity_dep=current_user_id_strict, user_id=user_a_id) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/citations/{p1_id}")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -458,9 +449,7 @@ async def test_citation_key_flows_from_link_table_single() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import get_current_user_id, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.auth import get_current_user_id
 
     user_a_id = 1
     paper_id = 42
@@ -477,27 +466,11 @@ async def test_citation_key_flows_from_link_table_single() -> None:
         ]
     )
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def _db_pool():
-        return pool
-
-    async def _api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = _db_pool
-    app.dependency_overrides[verify_api_key] = _api_key
-    app.dependency_overrides[get_current_user_id] = lambda: user_a_id
-
-    try:
+    with _wired_app(pool, identity_dep=get_current_user_id, user_id=user_a_id) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     # decisive value-from-link-table assertion
@@ -510,9 +483,7 @@ async def test_citation_key_other_user_without_link_gets_fallback() -> None:
     """A user with no link row receives paper-{id} fallback, not the first user's key."""
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import get_current_user_id, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.auth import get_current_user_id
 
     user_b_id = 2
     paper_id = 42
@@ -527,27 +498,11 @@ async def test_citation_key_other_user_without_link_gets_fallback() -> None:
         ]
     )
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def _db_pool():
-        return pool
-
-    async def _api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = _db_pool
-    app.dependency_overrides[verify_api_key] = _api_key
-    app.dependency_overrides[get_current_user_id] = lambda: user_b_id
-
-    try:
+    with _wired_app(pool, identity_dep=get_current_user_id, user_id=user_b_id) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     expected_filename = f'"paper-{paper_id}.bib"'
@@ -567,9 +522,7 @@ async def test_citation_key_none_user_id_sole_user_resolves() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import get_current_user_id, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.auth import get_current_user_id
 
     sole_user_id = 1
     paper_id = 42
@@ -585,28 +538,12 @@ async def test_citation_key_none_user_id_sole_user_resolves() -> None:
         return_value=_citation_paper_row(paper_id=paper_id, link_citation_key="Smith2024")
     )
 
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-
-    async def _db_pool():
-        return pool
-
-    async def _api_key():
-        return None
-
-    app.dependency_overrides[get_db_pool] = _db_pool
-    app.dependency_overrides[verify_api_key] = _api_key
     # non-strict dependency: None signals single-user mode
-    app.dependency_overrides[get_current_user_id] = lambda: None
-
-    try:
+    with _wired_app(pool, identity_dep=get_current_user_id, user_id=None) as app:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     # None→sole-user resolution must surface the link-table key, not paper-{id}

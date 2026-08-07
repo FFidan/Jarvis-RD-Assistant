@@ -20,6 +20,8 @@ try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
 except ImportError:  # FastAPI <0.137 keeps app.routes a flat APIRoute list.
     _iter_route_contexts = None
 
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -36,20 +38,26 @@ def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import current_user_id_strict
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
-
-    # Dashboard routes now use the shared dependency from paper_ingestion.main/app.deps.
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id_strict] = lambda: 1
-    yield app, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_strict: lambda: 1,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 # ---------------------------------------------------------------------------

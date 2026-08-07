@@ -37,6 +37,7 @@ import {
   useSessionProgress,
 } from '@/components/cards/SessionShell';
 import { SessionComplete } from '@/components/cards/SessionComplete';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 
 type Mode = 'review' | 'library';
 
@@ -61,7 +62,7 @@ export function LearningCardsPage() {
   });
 
   // Fetch decks for breadcrumb deck-name resolution.
-  const { data: decks = [] } = useQuery({
+  const { data: decks = [], isError: decksError } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -184,6 +185,7 @@ export function LearningCardsPage() {
         deckName={deckName}
         onNavigateToLibrary={navigateToLibrary}
       />
+      {decksError && <QueryErrorState message="Failed to load deck names." />}
 
       {/* Subtle offline state — reviews are queued, not lost */}
       {!online && !sessionEnded && (

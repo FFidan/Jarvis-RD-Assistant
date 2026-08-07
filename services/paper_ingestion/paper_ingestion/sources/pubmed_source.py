@@ -550,34 +550,24 @@ class PubMedSource(PaperSource):
             # transient HTTP errors internally (returning []), so a no-data run
             # falls through to the success path with candidate_count=0.  Only an
             # *unexpected* exception escaping the loop reaches this error branch.
+            # The diagnostic's Retry-After (set by an earlier 429) is forwarded
+            # so the persistent limiter still backs off.
             diag = self.last_poll_diagnostic or {}
-            retry_after = diag.get("retry_after_s")
-            await self._record_fetch_outcome(
+            await self._record_poll_exception(
                 started_at=started_at,
-                candidate_count=0,
                 user_id=user_id,
-                status="error",
                 p_limiter=p_limiter,
-                retry_after_s=retry_after,
-                log_level="error",
-                log_message="fetch_failed",
                 log_context={"http_status": None, "exception": repr(_exc)[:300]},
+                retry_after_s=diag.get("retry_after_s"),
             )
             return papers[:limit]
 
-        await self._record_fetch_outcome(
+        await self._record_poll_success(
             started_at=started_at,
             candidate_count=candidate_count,
+            query_count=len(term_queries),
             user_id=user_id,
-            status="ok",
             p_limiter=p_limiter,
-            log_level="info",
-            log_message="fetch_succeeded",
-            log_context={
-                "http_status": 200,
-                "papers_fetched": candidate_count,
-                "query_count": len(term_queries),
-            },
         )
 
         return papers[:limit]

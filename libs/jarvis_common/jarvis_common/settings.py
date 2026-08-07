@@ -55,8 +55,22 @@ def _resolve_env_file_indirection(values: Any, fields: Any) -> Any:
     file resolves to ``None`` so that ``Optional[SecretStr]`` fields remain
     unset rather than receiving an empty string.
 
+    The injection is unconditional, so when both ``<FIELD>`` and
+    ``<FIELD>_FILE`` are set **the file wins**, and an unreadable file is fatal.
+
     Raised:
         RuntimeError: when the nominated file cannot be opened.
+
+    See also:
+        :func:`jarvis_common.secrets_files.read_secret_with_file_fallback`
+        resolves the same ``*_FILE`` convention with the opposite precedence and
+        the opposite failure mode -- direct-wins and fail-soft, against this
+        function's file-wins and fail-hard. **The difference is deliberate and
+        the two must not be consolidated** (reviewed 2026-08-03): this validator
+        runs while a process builds its configuration, where a nominated but
+        unreadable secret file is a misconfiguration worth refusing to start on,
+        while that reader serves callers that must keep running with the secret
+        unset. That module's docstring carries the full comparison.
     """
     if not isinstance(values, dict):
         return values

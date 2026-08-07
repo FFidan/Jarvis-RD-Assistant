@@ -13,27 +13,18 @@ import pytest
 from fastapi import HTTPException
 from fastapi.dependencies import utils as fastapi_dependency_utils
 from jarvis_common.testing import make_conn as _make_conn
+from jarvis_common.testing_db import make_multi_acquire_pool
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
-from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
 
-# Keep local: multi-conn side_effect semantics (successive acquire() yields different
-# connections) are not covered by jarvis_common.make_pool_and_conn.
 def _make_pool_multi_conn(*conns):
     """Return a pool mock that yields each connection in order on successive acquire() calls."""
-    pool = MagicMock()
-    contexts = []
-    for conn in conns:
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=conn)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        contexts.append(ctx)
-    pool.acquire.side_effect = contexts
-    return pool
+    return make_multi_acquire_pool(list(conns))[0]
 
 
 def _paper_row(**overrides):

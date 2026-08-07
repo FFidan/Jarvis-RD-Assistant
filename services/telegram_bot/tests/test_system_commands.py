@@ -10,18 +10,20 @@ goes through :func:`auth_check`:
 from __future__ import annotations
 
 from functools import partial
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_bot_config, make_ptb_context, make_telegram_update
+from jarvis_common.testing import (
+    make_bot_config,
+    make_pool_and_conn,
+    make_ptb_context,
+    make_telegram_update,
+)
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.system_commands import start_command
 
 
 def _make_pool(*, pairing_row=None):
-    pool = MagicMock()
-    pool.fetchrow = AsyncMock(return_value=pairing_row)
-    return pool
+    return make_pool_and_conn(fetchrow_return=pairing_row, direct_methods=True)[0]
 
 
 _make_context = partial(

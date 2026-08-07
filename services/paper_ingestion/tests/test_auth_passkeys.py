@@ -278,21 +278,18 @@ _ORIGIN = "https://localhost"
 async def _passkey_app(contract_conn):
     """PI app wired to the contract connection with the rate limiter disabled."""
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app, limiter
 
-    original = getattr(app.state, "db_pool", None)
-    app.state.db_pool = SharedConnPool(contract_conn)
-    was_enabled = limiter.enabled
-    limiter.enabled = False
-    try:
-        yield app
-    finally:
-        limiter.enabled = was_enabled
-        if original is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original
+    with patch_pi_test_app(
+        SharedConnPool(contract_conn),
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(remove_owner_override=False, disable_limiter=True),
+    ) as wired_app:
+        yield wired_app
 
 
 async def _register(

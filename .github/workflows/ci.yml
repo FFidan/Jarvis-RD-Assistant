@@ -48,6 +48,9 @@ jobs:
       - name: Tach (module boundaries)
         run: uv run tach check
 
+      - name: Guard - no service imports in jarvis_common
+        run: bash scripts/check-no-service-imports-in-common.sh
+
       - name: Set up Node (for pyright)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -66,6 +69,18 @@ jobs:
 
       - name: Deterministic shell contracts
         run: make test-shell-contracts
+
+      - name: Install shellcheck
+        # Pinned: shellcheck-py 0.11.0.1 ships shellcheck 0.11.0, the version the
+        # gated scripts are known clean against. GITHUB_PATH applies to later
+        # steps only, so the lint itself must be a separate step.
+        run: |
+          uv tool install shellcheck-py==0.11.0.1
+          tool_bin="$(uv tool dir --bin)"
+          echo "$tool_bin" >> "$GITHUB_PATH"
+
+      - name: Shell lint
+        run: make shell-lint
 
       - name: Guard - no tracked secrets
         run: bash scripts/check-no-tracked-secrets.sh
@@ -136,7 +151,7 @@ jobs:
       - name: Cross-user isolation suite
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "integration and live_pg"
           services/paper_ingestion/tests/integration/test_cross_user_isolation.py
           --junitxml=cross-user-isolation.junit.xml
@@ -147,7 +162,7 @@ jobs:
         # only the `live_pg` marker, so select that marker explicitly.
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "live_pg"
           services/paper_ingestion/tests/test_baseline_invariants.py
           --junitxml=baseline-invariants.junit.xml
@@ -215,7 +230,7 @@ jobs:
         # the non-skip validator cannot be satisfied by an unavailable service.
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "contract and not integration and not live_qdrant"
           --junitxml=contract-tests.junit.xml
           -v
@@ -294,8 +309,21 @@ jobs:
         run: |
           # Serve the production build on :3001 (matches PLAYWRIGHT_BASE_URL default).
           # vite preview is available as a devDependency (vite is already installed).
+          #
+          # Refuse to reuse a server this step did not start: it would be serving some
+          # other bundle, and the suite would report green for a build nobody tested.
+          if curl -sf http://127.0.0.1:3001/ >/dev/null 2>&1; then
+            echo "127.0.0.1:3001 is already being served; refusing to test an unknown bundle" >&2
+            exit 1
+          fi
+          # `npm run preview` is a wrapper that spawns `vite preview` as a child, and the PID
+          # recorded below is the wrapper's. Signalling it alone leaves that child alive still
+          # holding the port. Start the server under job control (`set -m`) so it gets its own
+          # process group, and signal the whole group on the way out.
+          set -m
           JARVIS_E2E_MOCK_HEALTH=true npm --prefix frontend run preview -- --port 3001 --host 127.0.0.1 &
           SERVER_PID=$!
+          set +m
           # Wait for the preview server to be ready (up to 30 s).
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:3001/ > /dev/null 2>&1 && break
@@ -310,7 +338,7 @@ jobs:
           PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001 npm --prefix frontend run test:e2e:mocked -- \
             --workers=2 \
             --reporter=line || rc=$?
-          kill "$SERVER_PID" || true
+          kill -- "-$SERVER_PID" 2>/dev/null || true
           exit "${rc:-0}"
         env:
           CI: "true"

@@ -292,7 +292,7 @@ class PaperSource(ABC):
                     duration_ms,
                     "{}",
                 )
-        except Exception as exc:
+        except Exception as exc:  # broad: best-effort audit row; must not fail the fetch it records
             logger.warning(
                 "%s: failed to insert source_run_history: %s",
                 self.source_type,
@@ -381,13 +381,118 @@ class PaperSource(ABC):
                     message=log_message,
                     context=log_context,
                 )
-            except Exception as exc:
+            except Exception as exc:  # broad: best-effort write; outcome is already final
                 logger.warning(
                     "%s: log_event write failed for %s",
                     self.source_type,
                     log_message,
                     exc_info=exc,
                 )
+
+    async def _record_poll_success(
+        self,
+        *,
+        started_at: float,
+        candidate_count: int,
+        query_count: int,
+        user_id: int | None,
+        p_limiter: "PersistentSourceRateLimiter | None",
+    ) -> None:
+        """Record a successful ``fetch_new_since`` attempt.
+
+        ``query_count`` is a parameter because each adapter derives it from a
+        different local (consolidated queries vs. per-topic term queries).
+        """
+        await self._record_fetch_outcome(
+            started_at=started_at,
+            candidate_count=candidate_count,
+            user_id=user_id,
+            status="ok",
+            p_limiter=p_limiter,
+            log_level="info",
+            log_message="fetch_succeeded",
+            log_context={
+                "http_status": 200,
+                "papers_fetched": candidate_count,
+                "query_count": query_count,
+            },
+        )
+
+    async def _record_poll_exception(
+        self,
+        *,
+        started_at: float,
+        user_id: int | None,
+        p_limiter: "PersistentSourceRateLimiter | None",
+        log_context: dict[str, Any],
+        retry_after_s: int | None = None,
+    ) -> None:
+        """Record a failed ``fetch_new_since`` attempt.
+
+        ``log_context`` stays caller-built because the error payload shape
+        differs per adapter (exception repr vs. type name vs. response code).
+        ``retry_after_s`` exists for callers whose diagnostic carries a
+        Retry-After hint to forward to the persistent limiter (PubMed).
+        """
+        await self._record_fetch_outcome(
+            started_at=started_at,
+            candidate_count=0,
+            user_id=user_id,
+            status="error",
+            p_limiter=p_limiter,
+            retry_after_s=retry_after_s,
+            log_level="error",
+            log_message="fetch_failed",
+            log_context=log_context,
+        )
+
+    async def _record_poll_from_diagnostic(
+        self,
+        *,
+        started_at: float,
+        user_id: int | None,
+        p_limiter: "PersistentSourceRateLimiter | None",
+    ) -> None:
+        """Record a no-data ``fetch_new_since`` attempt from the stored diagnostic.
+
+        For adapters whose request helper classifies failures into
+        ``last_poll_diagnostic`` (arXiv, Semantic Scholar): dispatches to a
+        rate-limit or error outcome based on the stored status.  Adapters that
+        classify from the live response (OpenAlex) must not use this.
+        """
+        diag = self.last_poll_diagnostic or {}
+        retry_after = diag.get("retry_after_s")
+        diag_code = diag.get("status_code")
+        if diag.get("status") == "rate_limit":
+            await self._record_fetch_outcome(
+                started_at=started_at,
+                candidate_count=0,
+                user_id=user_id,
+                status="rate_limit",
+                p_limiter=p_limiter,
+                retry_after_s=retry_after,
+                log_level="warning",
+                log_message="rate_limited",
+                log_context={
+                    "http_status": diag_code or 429,
+                    "retry_after_s": retry_after,
+                },
+            )
+        else:
+            await self._record_fetch_outcome(
+                started_at=started_at,
+                candidate_count=0,
+                user_id=user_id,
+                status="error",
+                p_limiter=p_limiter,
+                retry_after_s=retry_after,
+                log_level="error",
+                log_message="fetch_failed",
+                log_context={
+                    "http_status": diag_code,
+                    "exception": diag.get("message", "")[:300],
+                },
+            )
 
     async def apply_startup_grace(self) -> None:
         """Sleep until the configured startup grace period has elapsed.

@@ -63,7 +63,8 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const passkey = (over: Partial<Record<string, unknown>> = {}) => ({
   id: 'cred-1',

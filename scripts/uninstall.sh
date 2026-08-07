@@ -25,17 +25,15 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Presentation + failure primitives (mirrored from jarvis-research.sh).
+# Presentation + failure primitives. The colours and info/ok/warn/err come from
+# setup_lib.sh, loaded before argument parsing because the parser reports its own
+# failures through usage_error().
 # -----------------------------------------------------------------------------
-if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
-else
-  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_RESET=""
-fi
-info() { printf '%s[INFO]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
-ok()   { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
-warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-err()  { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
+UNINSTALL_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=scripts/setup_lib.sh
+# shellcheck disable=SC1091
+. "$UNINSTALL_SCRIPT_DIR/setup_lib.sh"
+
 die()         { err "$1"; printf '        %s%s%s\n' "$C_YELLOW" "${2:-}" "$C_RESET" >&2; exit 1; }
 usage_error() { err "$1"; printf '        %sRun: jarvis-research help%s\n' "$C_YELLOW" "$C_RESET" >&2; exit 2; }
 env_die()     { err "$1"; printf '        %s%s%s\n' "$C_YELLOW" "${2:-}" "$C_RESET" >&2; exit 3; }
@@ -72,10 +70,6 @@ if [ "$SKIP_ORDINARY" -eq 1 ] && [ "$TIER" -eq 0 ]; then
   usage_error "--yes requires an explicit --tier N (or --all)"
 fi
 
-UNINSTALL_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-# shellcheck source=scripts/setup_lib.sh
-# shellcheck disable=SC1091
-. "$UNINSTALL_SCRIPT_DIR/setup_lib.sh"
 command -v python3 >/dev/null 2>&1 \
   || env_die "Python 3 is required for safe path containment." \
     "Install Python 3, then re-run the uninstall."

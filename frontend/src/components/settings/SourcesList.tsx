@@ -16,11 +16,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchSources, reorderSources } from '@/lib/api';
 import type { SourceConfig } from '@/types';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { SourceSection } from './SourceSection';
 
 export function SourcesList() {
   const qc = useQueryClient();
-  const { data: sources = [], isLoading } = useQuery({
+  const { data: sources = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
@@ -66,6 +67,8 @@ export function SourcesList() {
   };
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading sources…</p>;
+
+  if (isError) return <QueryErrorState message="Failed to load sources." />;
 
   return (
     <DndContext

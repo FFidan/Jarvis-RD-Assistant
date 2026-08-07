@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "1.2.3",
+  "version": "1.2.4",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,6 +17,7 @@
     "test:e2e:live-readonly": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/auth.spec.ts e2e/home.spec.ts e2e/navigation.spec.ts e2e/analytics.spec.ts e2e/learning-cards.spec.ts e2e/extractions.spec.ts",
     "test:e2e:live-mutating": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/feed/discovery.spec.ts e2e/projects.spec.ts e2e/settings/authors.spec.ts e2e/settings/automation.spec.ts e2e/settings/ingestion.spec.ts e2e/settings/sources.spec.ts e2e/settings/templates.spec.ts e2e/settings/topics.spec.ts",
     "test:e2e:cross-user": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --grep @cross-user",
+    "screenshots:generate": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --config=playwright.screenshots.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "lint": "eslint . --max-warnings 474"
   },
@@ -99,7 +100,7 @@
     "brace-expansion@^1": "1.1.18",
     "brace-expansion@^2": "2.1.4",
     "brace-expansion@^5": "5.0.9",
-    "js-yaml": "^4.3.0",
+    "js-yaml": "^4.3.1",
     "postcss": "^8.5.23",
     "react-pdf-highlighter-extended": {
       "react": "$react",

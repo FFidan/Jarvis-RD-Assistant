@@ -15,7 +15,6 @@ from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured,
 from jarvis_common.prompt_safety import max_input_chars, wrap_delimited
 from jarvis_common.verify import QuoteVerifier
 
-from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.db_types import ConnLike  # noqa: F401
 from paper_ingestion.extraction.entities_qdrant import (  # noqa: F401
     KG_COLLECTION,
@@ -32,6 +31,7 @@ from paper_ingestion.extraction.entities_sql import (  # noqa: F401
 )
 from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.models import EntityExtractionResponse
+from paper_ingestion.queries.verification_substrate import load_verification_substrate
 from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 
 logger = logging.getLogger(__name__)
@@ -150,20 +150,12 @@ async def extract_entities_for_paper(
             raise ValueError(f"Paper {paper_id} not found")
         content_generation = int(paper["content_generation"])
 
-        chunks = await conn.fetch(
-            """SELECT id, chunk_index, content, page_number,
-                      start_char, end_char, embedding_id, created_at, paper_id
-               FROM paper_chunks WHERE paper_id = $1
-               ORDER BY chunk_index""",
-            paper_id,
-        )
-        if not chunks:
+        full_text, chunk_responses = await load_verification_substrate(conn, paper_id)
+        if not chunk_responses:
             raise ValueError(f"No chunks found for paper {paper_id}")
 
         fast_model = get_fast_model()
 
-    chunk_responses = [row_to_chunk_response(c) for c in chunks]
-    full_text = "\n\n".join(c.content for c in chunk_responses)
     # Truncate only for the LLM prompt input; verification uses the full text
     # so that evidence appearing beyond the prompt cap is not silently dropped.
     _entity_text_max = max_input_chars(
@@ -274,8 +266,8 @@ async def extract_entities_for_paper(
 
                 entity_name_lower = ve["name"].lower()
                 first_chunk_id = next(
-                    (c["id"] for c in chunks if entity_name_lower in c["content"].lower()),
-                    chunks[0]["id"] if chunks else None,
+                    (c.id for c in chunk_responses if entity_name_lower in c.content.lower()),
+                    chunk_responses[0].id if chunk_responses else None,
                 )
                 link = link_mentions.setdefault(
                     entity_id,

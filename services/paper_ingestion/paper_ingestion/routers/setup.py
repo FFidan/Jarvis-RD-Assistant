@@ -56,6 +56,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit_strict
+from jarvis_common.config_flags import coerce_bool
 from jarvis_common.crypto import encrypt_secret
 from jarvis_common.email import (
     _effective_smtp,
@@ -68,7 +69,6 @@ from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
-from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import mint_session
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -414,7 +414,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
             detail="Setup status check failed",
         ) from exc
     configured = admins > 0
-    setup_completed = _coerce_bool(row["value"] if row else None, default=False)
+    setup_completed = coerce_bool(row["value"] if row else None, default=False)
 
     # Report the SAVED mode (user_config, layered over env) so the wizard
     # reflects a /mode write immediately — this is the only runtime reader of

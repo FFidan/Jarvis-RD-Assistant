@@ -17,6 +17,7 @@ write_direct_requirements() {
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from pathlib import Path
 
@@ -61,15 +62,63 @@ def expand_group(name: str, *, seen: set[str] | None = None) -> list[str]:
     return out
 
 
+def canonical_name(spec: str) -> str:
+    """Return the PEP 503 canonical distribution name from a requirement spec."""
+    match = re.match(r"[A-Za-z0-9._-]+", spec)
+    if not match:
+        raise SystemExit(f"cannot read a distribution name from requirement {spec!r}")
+    return re.sub(r"[-_.]+", "-", match.group(0)).lower()
+
+
+def without_extras(spec: str) -> str:
+    """Return the spec with its extras removed, so `x[a]>=1` and `x>=1` compare equal."""
+    return re.sub(r"\[[^\]]*\]", "", spec, count=1)
+
+
+def extras_of(spec: str) -> frozenset[str]:
+    """Return the extras a spec asks for, so `x[a,b]>=1` gives ``{"a", "b"}``."""
+    match = re.search(r"\[([^\]]*)\]", spec)
+    if not match:
+        return frozenset()
+    return frozenset(part.strip() for part in match.group(1).split(",") if part.strip())
+
+
 for group, relative_output in outputs.items():
     output_path = output_root / relative_output
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Deduplicate by distribution name rather than by the whole spec string. One
+    # group may ask for `uvicorn>=0.30.0` while a group it includes asks for
+    # `uvicorn[standard]>=0.30.0`; those are different strings, so a string-keyed
+    # dedup emits both and the file carries two spec lines for one package. Keep
+    # the extras-bearing spec, which is the stronger requirement. Two specs whose
+    # version constraints actually differ are a conflict in pyproject.toml, so
+    # stop rather than silently choose one.
     deduped: list[str] = []
-    seen_pkgs: set[str] = set()
+    slot_by_name: dict[str, int] = {}
     for dep in expand_group(group):
-        if dep not in seen_pkgs:
-            seen_pkgs.add(dep)
+        name = canonical_name(dep)
+        if name not in slot_by_name:
+            slot_by_name[name] = len(deduped)
             deduped.append(dep)
+            continue
+        kept = deduped[slot_by_name[name]]
+        if without_extras(kept) != without_extras(dep):
+            raise SystemExit(
+                f"{relative_output}: conflicting requirements for {name!r}: "
+                f"{kept!r} and {dep!r} - reconcile them in pyproject.toml"
+            )
+        kept_extras, dep_extras = extras_of(kept), extras_of(dep)
+        # Two groups asking for the same package with DIFFERENT extras is not a
+        # stronger-vs-weaker pair, so there is no "keep the stronger" answer:
+        # emitting either one silently drops the other group's extra, and
+        # emitting the union would no longer match what uv resolved. Stop.
+        if kept_extras and dep_extras and kept_extras != dep_extras:
+            raise SystemExit(
+                f"{relative_output}: {name!r} is requested with different extras: "
+                f"{kept!r} and {dep!r} - reconcile them in pyproject.toml"
+            )
+        if dep_extras > kept_extras:
+            deduped[slot_by_name[name]] = dep
     output_path.write_text(HEADER + "\n".join(deduped) + "\n", encoding="utf-8")
 PY
 }

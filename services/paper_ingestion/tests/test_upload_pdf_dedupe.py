@@ -17,7 +17,7 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from jarvis_common.testing import make_pool_and_conn  # noqa: E402
-from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
 

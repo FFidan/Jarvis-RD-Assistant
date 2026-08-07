@@ -16,13 +16,8 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 
 // --- Module mocks (hoisted before any imports) ---
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {

@@ -679,6 +679,8 @@ CREATE UNIQUE INDEX user_config_user_key_idx
 -- production migration with IF EXISTS guards.
 CREATE TABLE papers(
   id bigint PRIMARY KEY,
+  external_id text NOT NULL UNIQUE,
+  url text,
   source_type text,
   discovery_origin text NOT NULL DEFAULT 'direct'
 );

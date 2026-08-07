@@ -37,6 +37,7 @@ from paper_ingestion.pdf_processor import (
     check_pdf_path_safe,
     pdf_publish_operation,
 )
+from paper_ingestion.services.job_enqueue import enqueue_job
 from paper_ingestion.services.pdf_workflow import (
     PDFRebuildNotPermittedError,
     PDFRecordMissingError,
@@ -475,16 +476,12 @@ async def scan_local_pdfs(
     The worker performs filesystem access and returns the import summary in
     the job result.
     """
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    jarvis_job_id = str(uuid.uuid4())
     # Thread caller user_id for audit-trail attribution. The scan itself is
     # filesystem-wide; per-user PDF dirs are deferred until the multi-user
     # PDF storage spec lands.
-    await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=user_id)
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
+    return await enqueue_job(KIND_TO_TASK["papers.scan_local"], user_id=user_id)
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HardDeleteModal } from '@/components/feed/HardDeleteModal';
 
 vi.mock('@/lib/api', () => ({ hardDeletePaper: vi.fn() }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { hardDeletePaper } from '@/lib/api';
 import { toast } from 'sonner';

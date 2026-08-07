@@ -41,15 +41,7 @@ def _make_embedder(chunks: list[dict] | None = None):
 def _make_pool(paper_row: dict | None = None):
     """Return a mock asyncpg Pool whose acquire() yields a connection."""
     row = paper_row or {"id": 1, "title": "Test Paper"}
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=row)
-    conn.fetch = AsyncMock(return_value=[])
-
-    pool = MagicMock()
-    pool.acquire = MagicMock()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return pool
+    return make_pool_and_conn(fetchrow_return=row, fetch_return=[], with_transaction=False)[0]
 
 
 def _make_cross_paper_embedder(chunks: list[dict] | None = None):
@@ -100,12 +92,7 @@ def _make_cross_paper_pool(paper_rows: list[dict] | None = None):
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=None)
     conn.fetch = AsyncMock(side_effect=_fetch)
-
-    pool = MagicMock()
-    pool.acquire = MagicMock()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return pool
+    return make_pool_and_conn(conn=conn, with_transaction=False)[0]
 
 
 def _pool_storing_chunk_keys(

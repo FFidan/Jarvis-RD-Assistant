@@ -20,6 +20,7 @@ from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.testing import (
     PTBContextOptions,
     make_bot_config,
+    make_pool_and_conn,
     make_ptb_context,
     make_telegram_update,
 )
@@ -47,10 +48,7 @@ _TEST_CHAT_ID = 99001
 
 
 def _make_pool():
-    pool = MagicMock()
-    pool.fetchval = AsyncMock(return_value=None)
-    pool.execute = AsyncMock(return_value="OK")
-    return pool
+    return make_pool_and_conn(fetchval_return=None, execute_return="OK", direct_methods=True)[0]
 
 
 def _make_context(

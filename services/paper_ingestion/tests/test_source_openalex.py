@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -21,7 +21,10 @@ from paper_ingestion.sources.openalex_source import (
     _reconstruct_abstract,
 )
 from pydantic import SecretStr
-from tests._source_fakes import make_openalex_source as _make_source
+from tests._source_fakes import (
+    make_openalex_source as _make_source,
+    mock_log_event_pool,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SEARCH_FIXTURE = json.loads((FIXTURES / "openalex_search.json").read_text())
@@ -643,3 +646,106 @@ async def test_fetch_new_since_503_without_retry_after_classified_as_error():
     assert source.last_poll_diagnostic["status"] != "rate_limit", (
         "503 without Retry-After must NOT be classified as rate_limit"
     )
+
+
+# ---------------------------------------------------------------------------
+# Exact log_event payloads on fetch_new_since terminal paths
+# ---------------------------------------------------------------------------
+
+
+def _poll_with_event_capture(source):
+    """Context manager stack + capture list for log_event payload tests."""
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    log_calls: list[dict] = []
+
+    async def _capture(**kwargs):
+        log_calls.append(kwargs)
+
+    patches = (
+        patch(
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
+        ),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
+    )
+    return patches, log_calls
+
+
+@respx.mock
+async def test_fetch_new_since_success_emits_exact_log_event_payload():
+    """A successful poll emits exactly one source event with the exact payload.
+
+    Guards the recorded outcome against drift: level='info',
+    message='fetch_succeeded', context carries http_status=200, the accepted
+    work count, and query_count derived from the consolidated query list.
+    """
+    respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(200, json=NEW_SINCE_FIXTURE))
+
+    source = _make_source(db_pool=mock_log_event_pool())
+    (limiter_patch, log_patch), log_calls = _poll_with_event_capture(source)
+
+    with limiter_patch, log_patch:
+        papers = await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC), topics=[], limit=10
+        )
+
+    assert len(papers) == 5
+    [ev] = [c for c in log_calls if c.get("category") == "source"]
+    assert ev["source"] == "openalex"
+    assert ev["level"] == "info"
+    assert ev["message"] == "fetch_succeeded"
+    assert ev["context"] == {"http_status": 200, "papers_fetched": 5, "query_count": 1}
+
+
+@respx.mock
+async def test_fetch_new_since_connect_error_emits_exact_log_event_payload():
+    """A transport failure emits fetch_failed with the exception's type name.
+
+    Guards the httpx.HTTPError path's payload shape: http_status is None (no
+    response) and exception carries type(exc).__name__, not a repr.
+    """
+    respx.get(OPENALEX_API_URL).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    source = _make_source(db_pool=mock_log_event_pool())
+    (limiter_patch, log_patch), log_calls = _poll_with_event_capture(source)
+
+    with limiter_patch, log_patch:
+        papers = await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC), topics=[], limit=10
+        )
+
+    assert papers == []
+    fail_events = [c for c in log_calls if c.get("message") == "fetch_failed"]
+    assert fail_events, "Expected a log_event with message='fetch_failed'"
+    ev = fail_events[0]
+    assert ev["source"] == "openalex"
+    assert ev["level"] == "error"
+    assert ev["context"] == {"http_status": None, "exception": "ConnectError"}
+
+
+@respx.mock
+async def test_fetch_new_since_503_error_emits_exact_log_event_payload():
+    """A 503 without Retry-After emits fetch_failed with the response's code.
+
+    Guards the response-driven error path's payload shape: http_status carries
+    the live status code and exception is None (no exception was raised).
+    """
+    respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(503))
+
+    source = _make_source(db_pool=mock_log_event_pool())
+    (limiter_patch, log_patch), log_calls = _poll_with_event_capture(source)
+
+    with limiter_patch, log_patch:
+        papers = await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC), topics=[], limit=10
+        )
+
+    assert papers == []
+    fail_events = [c for c in log_calls if c.get("message") == "fetch_failed"]
+    assert fail_events, "Expected a log_event with message='fetch_failed'"
+    ev = fail_events[0]
+    assert ev["source"] == "openalex"
+    assert ev["level"] == "error"
+    assert ev["context"] == {"http_status": 503, "exception": None}

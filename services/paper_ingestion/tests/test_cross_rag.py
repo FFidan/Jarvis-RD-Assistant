@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import shelve_paper
+from jarvis_common.testing import make_pool_and_conn, shelve_paper
 from paper_ingestion.models import CrossPaperAskRequest
 
 # D3-12 deleted: test_search_chunks_global_no_filter
@@ -181,9 +181,7 @@ def _make_cutoff_pool(db_rows: list[dict], library_rows: list[dict]):
 
     conn = AsyncMock()
     conn.fetch = AsyncMock(side_effect=_fetch)
-    db_pool = MagicMock()
-    db_pool.acquire.return_value.__aenter__.return_value = conn
-    return db_pool
+    return make_pool_and_conn(conn=conn, with_transaction=False)[0]
 
 
 async def test_relative_cutoff_drops_low_cosine_chunks(monkeypatch):

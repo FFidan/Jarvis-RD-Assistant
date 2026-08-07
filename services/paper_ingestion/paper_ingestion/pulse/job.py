@@ -149,9 +149,9 @@ async def run_pulse(
 ) -> dict:
     """Run the full overnight Pulse pipeline.
 
-    Returns a stats dict describing the run.  Never raises — any uncaught
-    collaborator error is recorded in ``stats['last_error']`` and the pipeline
-    continues from the best-known state.
+    Returns a stats dict describing the run.  A failing collaborator is recorded
+    in ``stats['last_error']`` and the pipeline continues from the best-known
+    state, so an ordinary stage failure degrades the deck instead of raising.
 
     Parameters
     ----------
@@ -163,6 +163,19 @@ async def run_pulse(
         Optional :class:`~jarvis_common.jobs.ProgressContext` for progress reporting
         and cancellation support when the pipeline runs as a background job.
         When ``None`` (scheduler / direct call) progress is not reported.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        When *ctx* reports the run cancelled at a stage boundary.  It is a
+        ``BaseException``, so a caller guarding with ``except Exception`` will
+        not see it — a cancellation must not be persisted as a job failure.
+    RuntimeError
+        When ``JARVIS_STRICT_MODELS=1`` and stage 2 produced candidates without
+        the scoring model being called even once, so the embedding-only fallback
+        stood in for it.  Strict mode is opt-in precisely so a missing scoring
+        model fails loudly rather than shipping a silently downgraded deck.
+        An empty candidate set does not raise — stage 2 returns early instead.
     """
     now = now or datetime.now(UTC)
     start = time.monotonic()

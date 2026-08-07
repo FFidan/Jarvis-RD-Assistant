@@ -80,7 +80,7 @@ export function ReviewMode({
   });
 
   // Pre-fetch decks to resolve deck name for the eyebrow.
-  const { data: decks = [] } = useQuery({
+  const { data: decks = [], isError: decksError } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -160,6 +160,7 @@ export function ReviewMode({
           </span>
         )}
       </div>
+      {decksError && <QueryErrorState message="Failed to load deck names." />}
 
       {/* Card canvas — paper surface, no shadow box */}
       <div

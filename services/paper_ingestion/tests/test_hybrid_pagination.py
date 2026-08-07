@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 from tests._embedder_fakes import _dict_to_record, _make_embedder
 
@@ -31,18 +32,9 @@ def _make_bm25_rows(n: int) -> list[dict]:
     ]
 
 
-def _make_pool_with_rows(rows: list[dict]) -> AsyncMock:
-    # Local helper — canonical make_pool_and_conn doesn't support rows-list factory semantics
-    # (needs _dict_to_record transform for BM25 record mocking).
+def _make_pool_with_rows(rows: list[dict]) -> MagicMock:
     records = [_dict_to_record(r) for r in rows]
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=records)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = AsyncMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool
+    return make_pool_and_conn(fetch_return=records, with_transaction=False)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -166,15 +158,10 @@ async def test_search_router_caller_no_offset_unchanged():
 # ---------------------------------------------------------------------------
 
 
-def _make_pool_with_fetch_sequence(record_batches: list[list]) -> tuple[AsyncMock, AsyncMock]:
+def _make_pool_with_fetch_sequence(record_batches: list[list]) -> tuple[MagicMock, AsyncMock]:
     """Pool whose conn.fetch returns each batch in turn; returns (pool, conn)."""
-    conn = AsyncMock()
+    pool, conn = make_pool_and_conn(with_transaction=False)
     conn.fetch = AsyncMock(side_effect=record_batches)
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = AsyncMock()
-    pool.acquire = MagicMock(return_value=ctx)
     return pool, conn
 
 

@@ -17,9 +17,8 @@ vi.mock('@/lib/api', () => ({
   clearFeedback: vi.fn(),
 }));
 
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { submitFeedback, clearFeedback } from '@/lib/api';
 

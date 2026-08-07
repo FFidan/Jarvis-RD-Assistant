@@ -10,6 +10,55 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.4 (2026-08-07)
+
+This release repairs two paths that were broken for people running the software
+rather than reading about it: a container that could not start, and an upgrade
+that could not finish. Both had been shipping for several releases with no check
+that would notice, so each fix arrives with the check that was missing.
+
+### Fixed
+
+- **The Telegram bot container starts again.** Deployments using the `telegram`
+  profile have been unable to start it since v1.2.0: the published image was
+  missing a dependency the bot imports at startup, so the container exited
+  immediately and restarted forever. **This affected v1.2.0, v1.2.1, v1.2.2 and
+  v1.2.3 — every release in that range.** The dependency is now declared where it
+  is used, and every published image that carries a Python interpreter now imports
+  its entry point with that interpreter before its digest may join a release
+  manifest, so an image whose entry point cannot be imported is never released.
+- **Updates create the secret files they manage before touching anything.** Since
+  v1.1.3 the deployment has referenced an SMTP password secret file that no
+  updater before this release created, so on installations first set up before
+  v1.1.3 `./update.sh` stopped part way through replacing containers. The update
+  now creates the secret files it manages — the SMTP password file among them —
+  before it pulls, builds or replaces anything, and an update that cannot create
+  them stops with everything still running and names the command to run. An
+  installation first set up before v1.1.3 completes one documented one-time step
+  before upgrading; the command-line reference gives the exact commands.
+- **Lists say when a query failed** instead of showing the same empty state they
+  show when there is genuinely nothing to display.
+- **A single paper reports where it came from**, matching the origin already
+  shown in list views.
+- **A missing-table error names the schema baseline to apply**, so the message
+  points at the fix rather than only reporting the failure.
+- **Dependency floors were raised to their patched releases** for the HTTP/2
+  library, the frontend's YAML parser, and the web framework, so no declared
+  version range admits a release carrying a known advisory.
+
+### Changed
+
+- **Documentation that contradicted the code was corrected**, covering
+  configuration precedence, ownership rules, route behaviour, and the conditions
+  under which strict mode and extraction failures raise.
+- **The installer, upgrade, backup and restore scripts are now covered by shell
+  linting**, alongside the entry points that were already checked.
+- **The bundled model catalog was re-verified against its providers.** Catalog
+  freshness is now enforced by a scheduled repository check instead of a startup
+  warning the operator could not act on, and the top-tier local entry advances to
+  the current generation, `qwen3.6:35b-a3b` — a sparse mixture-of-experts model
+  whose 24 GB footprint leaves room for long-context work on 48 GB hardware.
+
 ## v1.2.3 (2026-08-04)
 
 This release closes the gap between what the product says and what it does.

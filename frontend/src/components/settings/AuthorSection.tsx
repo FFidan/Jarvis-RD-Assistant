@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Trash2, Plus, UserSearch, RefreshCw, Users } from 'lucide-react';
 import type { TrackedAuthor } from '@/types';
@@ -34,7 +35,7 @@ export function AuthorSection() {
   const [addForm, setAddForm] = useState({ author_name: '', s2_author_id: '' });
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
-  const { data: authors = [], isLoading } = useQuery({
+  const { data: authors = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.authors.tracked(),
     queryFn: fetchTrackedAuthors,
   });
@@ -139,7 +140,9 @@ export function AuthorSection() {
         </p>
       )}
 
-      {authors.length === 0 && !showAdd ? (
+      {isError ? (
+        <QueryErrorState message="Failed to load tracked authors." />
+      ) : authors.length === 0 && !showAdd ? (
         <EmptyState title="No tracked authors" description="Add authors to track their new publications." icon={Users} />
       ) : (
         <div className="space-y-2">

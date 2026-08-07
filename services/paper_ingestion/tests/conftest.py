@@ -173,9 +173,15 @@ def adversarial_llm_payloads(model, valid_json: str) -> dict[str, str]:
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     """Wire the PI app to the per-test contract connection."""
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
+
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(remove_owner_override=True),
     ) as app:
         yield app
@@ -184,9 +190,15 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
     """Wire service doubles for PI endpoint contract tests."""
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
+
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(
             remove_owner_override=False,
             override_db_dependency=True,

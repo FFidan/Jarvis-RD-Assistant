@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import httpx
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ArxivSource
 from paper_ingestion.sources.base import PaperSource
@@ -105,10 +106,4 @@ def mock_log_event_pool() -> MagicMock:
     Suitable for tests that exercise ``log_event`` emission when a real pool
     is supplied to a source (``db_pool=pool``).
     """
-    mock_conn = AsyncMock()
-    mock_conn.execute = AsyncMock()
-    pool = MagicMock()
-    pool.acquire = MagicMock()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return pool
+    return make_pool_and_conn(with_transaction=False)[0]

@@ -3,6 +3,11 @@
 This module owns the kind→handler mapping for all JARVIS job kinds serviced
 by learning_engine. Call ``register_learning_engine_tasks(app)`` during
 lifespan startup *before* ``app.run_worker_async()`` is started.
+
+Mirrors ``paper_ingestion._task_register`` in shape, not content: each maps
+to handlers living in that service's own modules, so merging the two would
+require importing both services' handlers everywhere, reintroducing the
+cross-service cycle this split avoids.
 """
 
 from __future__ import annotations

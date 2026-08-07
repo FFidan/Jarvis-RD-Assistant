@@ -23,33 +23,35 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 // ---------------------------------------------------------------------------
 // Mock all api calls used by settings sections
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/api', () => ({
-  fetchTopics: vi.fn().mockResolvedValue([]),
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+  fetchTopics: async () => ([]),
   createTopic: vi.fn(),
   updateTopic: vi.fn(),
   deleteTopic: vi.fn(),
-  fetchMySubscriptions: vi.fn().mockResolvedValue([]),
-  subscribeToTopic: vi.fn().mockResolvedValue(undefined),
-  unsubscribeFromTopic: vi.fn().mockResolvedValue(undefined),
-  fetchSources: vi.fn().mockResolvedValue([]),
+  fetchMySubscriptions: async () => ([]),
+  subscribeToTopic: async () => (undefined),
+  unsubscribeFromTopic: async () => (undefined),
+  fetchSources: async () => ([]),
   updateSource: vi.fn(),
   reorderSources: vi.fn(),
-  fetchTrackedAuthors: vi.fn().mockResolvedValue([]),
+  fetchTrackedAuthors: async () => ([]),
   createTrackedAuthor: vi.fn(),
   updateTrackedAuthor: vi.fn(),
   deleteTrackedAuthor: vi.fn(),
   autoDetectAuthors: vi.fn(),
   checkTrackedAuthors: vi.fn(),
-  fetchConfig: vi.fn().mockResolvedValue([]),
+  fetchConfig: async () => ([]),
   setConfig: vi.fn(),
-  fetchNudges: vi.fn().mockResolvedValue([]),
+  fetchNudges: async () => ([]),
   updateNudge: vi.fn(),
-  fetchExtractionTemplates: vi.fn().mockResolvedValue([]),
+  fetchExtractionTemplates: async () => ([]),
   createExtractionTemplate: vi.fn(),
   deleteExtractionTemplate: vi.fn(),
   checkHealth: vi.fn(),
-  fetchPulseStats: vi.fn().mockResolvedValue({ last_run_at: null, decks_generated: 0, last_error: null }),
-  fetchPulseDebug: vi.fn().mockResolvedValue({
+  fetchPulseStats: async () => ({ last_run_at: null, decks_generated: 0, last_error: null }),
+  fetchPulseDebug: async () => ({
     deck_date: '2026-04-17',
     card_count: 5,
     degraded_reason: null,
@@ -63,9 +65,9 @@ vi.mock('@/lib/api', () => ({
     classifier_auc_degradation_reason: null,
     classifier_degradation_reason: null,
   }),
-  createJob: vi.fn().mockResolvedValue({ job_id: 'test-job-id', status: 'queued' }),
-  listJobs: vi.fn().mockResolvedValue([]),
-  getSetupStatus: vi.fn().mockResolvedValue({
+  createJob: async () => ({ job_id: 'test-job-id', status: 'queued' }),
+  listJobs: async () => ([]),
+  getSetupStatus: async () => ({
     setup_completed: true,
     models_ready: true,
     models_downloading: [],
@@ -73,7 +75,7 @@ vi.mock('@/lib/api', () => ({
     telegram_configured: false,
     telegram_paired: false,
   }),
-  fetchAccount: vi.fn().mockResolvedValue({
+  fetchAccount: async () => ({
     id: 1,
     email: 'test@example.com',
     role: 'admin',
@@ -82,14 +84,14 @@ vi.mock('@/lib/api', () => ({
     last_login_at: null,
   }),
   updateAccount: vi.fn(),
-  downloadMyData: vi.fn().mockResolvedValue(undefined),
+  downloadMyData: async () => (undefined),
   confirmEmailChange: vi.fn(),
   apiFetch: vi.fn(),
-  getTelegramBotToken: vi.fn().mockResolvedValue({ has_token: false }),
-  saveTelegramBotToken: vi.fn().mockResolvedValue(undefined),
-  fetchSystemModels: vi.fn().mockResolvedValue({ hardware: undefined, catalog: [] }),
+  getTelegramBotToken: async () => ({ has_token: false }),
+  saveTelegramBotToken: async () => (undefined),
+  fetchSystemModels: async () => ({ hardware: undefined, catalog: [] }),
   // AIPanel is now mounted as the advanced disclosure inside the LLM Models page.
-  getAISettings: vi.fn().mockResolvedValue({
+  getAISettings: async () => ({
     hw_tier: 'cpu',
     recommended_backend: 'ollama',
     recommended_model: 'qwen3:1.7b',
@@ -97,17 +99,18 @@ vi.mock('@/lib/api', () => ({
     candidate_issues: [],
   }),
   redetectHW: vi.fn(),
-  getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, hw_tier_changed: false }),
-  dismissBanner: vi.fn().mockResolvedValue(undefined),
+  getFirstRunStatus: async () => ({ configured: true, hw_tier_changed: false }),
+  dismissBanner: async () => (undefined),
   // AboutSection (mounted at the foot of the page) reads the shared stack-health
   // query for the server version; stub it so the page renders under test.
-  fetchStackHealth: vi.fn().mockResolvedValue({
+  fetchStackHealth: async () => ({
     overall: 'ok',
     checks: {},
     maintenance: false,
     version: undefined,
   }),
-}));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Render helpers

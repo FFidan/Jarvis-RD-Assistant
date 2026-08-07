@@ -11,26 +11,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion import scheduler
 
 
 def _pool_with_users(user_ids: list[int]) -> tuple[MagicMock, AsyncMock]:
     """Mock pool whose first fetch returns the user list (then config rows)."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=[{"id": uid} for uid in user_ids])
-    conn.fetchrow = AsyncMock(return_value=None)
-    # pulse de-dupe probe: every user's advisory lock is free
-    conn.fetchval = AsyncMock(return_value=True)
-    tx = MagicMock()
-    tx.__aenter__ = AsyncMock(return_value=conn)
-    tx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=tx)
-    pool = MagicMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool, conn
+    return make_pool_and_conn(
+        fetch_return=[{"id": uid} for uid in user_ids],
+        fetchrow_return=None,
+        # pulse de-dupe probe: every user's advisory lock is free
+        fetchval_return=True,
+    )
 
 
 @pytest.fixture()
@@ -440,4 +432,4 @@ async def test_no_active_users_results_in_zero_defers(task_registry_mocks):
 )
 def test_coerce_bool_parity(value, expected):
     """Characterize the shared bool coercion the zotero-poll gate relies on."""
-    assert scheduler._coerce_bool(value) is expected
+    assert scheduler.coerce_bool(value) is expected

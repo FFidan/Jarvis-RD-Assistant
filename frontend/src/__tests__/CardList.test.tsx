@@ -11,7 +11,8 @@ vi.mock('@/lib/api', () => ({
   fetchCards: vi.fn(),
   deleteCard: vi.fn(),
 }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { fetchCards, deleteCard } from '@/lib/api';
 import { toast } from 'sonner';

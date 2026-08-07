@@ -18,6 +18,9 @@ import torch
 from jarvis_common.testing import SharedConnPool, make_pool_and_conn
 from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
+from paper_ingestion.services import embedding_reconcile as embedding_reconcile_module
+from paper_ingestion.services import paper_content_reclaim as paper_content_reclaim_module
+from paper_ingestion.services import paper_locks as paper_locks_module
 from paper_ingestion.services import pdf_workflow as pdf_workflow_module
 from paper_ingestion.services.pdf_workflow import (
     PDFRebuildNotPermittedError,
@@ -38,10 +41,19 @@ _TEST_VECTOR_VISIBILITY = VectorVisibility(
 @pytest.fixture(autouse=True)
 def _default_vector_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep workflow tests focused while production generation plumbing is isolated."""
+    # The generation resolver is read through two module namespaces: the PDF run
+    # (pdf_workflow) and reconciliation (embedding_reconcile). Patch both so
+    # either entry point sees the stubbed generation.
+    resolve_generation = AsyncMock(return_value=_TEST_VISIBILITY_GENERATION)
     monkeypatch.setattr(
         pdf_workflow_module,
         "_resolve_visibility_generation",
-        AsyncMock(return_value=_TEST_VISIBILITY_GENERATION),
+        resolve_generation,
+    )
+    monkeypatch.setattr(
+        embedding_reconcile_module,
+        "_resolve_visibility_generation",
+        resolve_generation,
     )
     monkeypatch.setattr(
         pdf_workflow_module,
@@ -294,9 +306,9 @@ async def test_paper_lock_probe_loop_gives_up_after_its_total_deadline(monkeypat
                 pytest.fail("the contended lock must never be reported as acquired")
 
     assert "Paper 77 is locked by another long-running operation" in str(raised.value)
-    assert sum(slept) >= pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    assert sum(slept) >= paper_locks_module._PAPER_LOCK_MAX_WAIT_SECONDS
     # ... and not one probe earlier: the refusal waits out the whole budget.
-    assert sum(slept[:-1]) < pdf_workflow_module._PAPER_LOCK_MAX_WAIT_SECONDS
+    assert sum(slept[:-1]) < paper_locks_module._PAPER_LOCK_MAX_WAIT_SECONDS
     assert pool.release_count == 0
 
 
@@ -727,7 +739,7 @@ def _process_route_app(tmp_path, monkeypatch, *, process_side_effect=None, lock_
     from fastapi import FastAPI
     from jarvis_common import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
-    from paper_ingestion.routers import pdf as pdf_router
+    from paper_ingestion.routers import pdf_actions as pdf_router
     from tests.conftest import FakeRecord
 
     storage_dir = tmp_path / "storage"
@@ -772,7 +784,7 @@ async def _post_synchronous_process(app):
     from jarvis_common.settings import CoreSettings
 
     with mock_patch(
-        "paper_ingestion.routers.pdf.get_core_settings",
+        "paper_ingestion.routers.pdf_actions.get_core_settings",
         return_value=CoreSettings(dev_mode=True),
     ):
         async with httpx.AsyncClient(
@@ -1629,7 +1641,7 @@ async def test_reconcile_worker_lost_lease_aborts_before_payload_mutation(
     embedder.qdrant.set_payload = AsyncMock()
     embedder.embed_and_store = AsyncMock()
     monkeypatch.setattr(
-        pdf_workflow_module,
+        embedding_reconcile_module,
         "visibility_lease_is_current",
         AsyncMock(return_value=False),
     )
@@ -1712,11 +1724,11 @@ async def test_reconcile_cleanup_preserves_same_content_from_new_generation(
         return True
 
     monkeypatch.setattr(
-        pdf_workflow_module,
+        embedding_reconcile_module,
         "visibility_lease_is_current",
         _replace_then_confirm_lease,
     )
-    await pdf_workflow_module._delete_reconcile_generation(
+    await embedding_reconcile_module._delete_reconcile_generation(
         SimpleNamespace(qdrant=qdrant),
         paper_id,
         [chunk],
@@ -3142,10 +3154,8 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Refreshing a public row to a different source URL deletes its chunk rows."""
-    from paper_ingestion.services.pdf_workflow import (
-        _DELETE_DERIVED_CHUNKS_SQL,
-        upsert_verified_public_paper,
-    )
+    from paper_ingestion.services.paper_upsert import _DELETE_DERIVED_CHUNKS_SQL
+    from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     promoted = _PROMOTED_ROW
     conn = _promoting_conn(
@@ -3154,7 +3164,7 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
         _RESET_ROW,
     )
 
-    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.paper_upsert"):
         record = await upsert_verified_public_paper(
             conn, _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL)
         )
@@ -3164,7 +3174,7 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
     assert record["pdf_local_path"] is None
     assert record["chunked_at"] is None
 
-    logged = [r for r in caplog.records if r.name == "paper_ingestion.services.pdf_workflow"]
+    logged = [r for r in caplog.records if r.name == "paper_ingestion.services.paper_upsert"]
     assert len(logged) == 1, f"expected one discard record, got {[r.getMessage() for r in logged]}"
     assert logged[0].levelno == logging.INFO
     assert logged[0].args == (3, 4242, "promotion-discard"), (
@@ -3253,8 +3263,8 @@ def _stored_content_for_reclaim(
     snapshot_dir = snapshot_root / str(_RECLAIMED_PAPER_ID)
     snapshot_dir.mkdir(parents=True)
     (snapshot_dir / "page_1.png").write_bytes(b"")
-    monkeypatch.setattr(pdf_workflow_module, "PDF_STORAGE_PATH", str(pdf_root))
-    monkeypatch.setattr(pdf_workflow_module, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
+    monkeypatch.setattr(paper_content_reclaim_module, "PDF_STORAGE_PATH", str(pdf_root))
+    monkeypatch.setattr(paper_content_reclaim_module, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
     return pdf_path, snapshot_dir
 
 
@@ -3265,7 +3275,7 @@ def _record_reclaimed_vectors(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     async def _delete(paper_id: int) -> None:
         deleted.append(paper_id)
 
-    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    monkeypatch.setattr(paper_content_reclaim_module, "delete_paper_vectors", _delete)
     return deleted
 
 
@@ -3337,7 +3347,7 @@ async def test_reclamation_waits_for_a_publisher_then_spares_its_fresh_content(
             pdf_path.write_bytes(_FRESHLY_DOWNLOADED_PDF)
             (snapshot_dir / "page_1.png").write_bytes(_FRESHLY_RENDERED_PAGE)
 
-    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    monkeypatch.setattr(paper_content_reclaim_module, "delete_paper_vectors", _delete)
     publisher = asyncio.create_task(_publisher())
     await publisher_started.wait()
     reclamation = asyncio.create_task(reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool))
@@ -3389,7 +3399,7 @@ async def test_reclamation_finishes_before_a_waiting_publisher_writes_fresh_cont
             snapshot_dir.mkdir()
             (snapshot_dir / "page_1.png").write_bytes(_FRESHLY_RENDERED_PAGE)
 
-    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _delete)
+    monkeypatch.setattr(paper_content_reclaim_module, "delete_paper_vectors", _delete)
     reclamation = asyncio.create_task(reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool))
     await deleted_started.wait()
     publisher = asyncio.create_task(_publisher())
@@ -3407,10 +3417,8 @@ async def test_reclamation_removes_the_vectors_the_stored_pdf_and_the_page_image
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A paper still describing a discard gives up all three at once."""
-    from paper_ingestion.services.pdf_workflow import (
-        _DISCARDED_CONTENT_STATE_SQL,
-        reclaim_discarded_paper_content,
-    )
+    from paper_ingestion.services.paper_content_reclaim import _DISCARDED_CONTENT_STATE_SQL
+    from paper_ingestion.services.pdf_workflow import reclaim_discarded_paper_content
 
     pdf_path, snapshot_dir = _stored_content_for_reclaim(tmp_path, monkeypatch)
     deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
@@ -3455,7 +3463,7 @@ async def test_reclamation_skips_a_paper_that_stores_content_again(
     deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
     pool, _conn = make_pool_and_conn(fetchval_return=False)
 
-    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == [], "a paper storing content again must keep its vectors"
@@ -3482,7 +3490,7 @@ async def test_reclamation_reports_a_paper_that_no_longer_exists_as_content_left
     deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
     pool, _conn = make_pool_and_conn(fetchval_return=None)
 
-    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == []
@@ -3518,7 +3526,7 @@ async def test_reclamation_spares_content_stored_after_the_premise_was_read(
         page_image.write_bytes(_FRESHLY_RENDERED_PAGE)
 
     monkeypatch.setattr(
-        pdf_workflow_module,
+        paper_content_reclaim_module,
         "delete_paper_vectors",
         _download_commits_during_the_vector_delete,
     )
@@ -3544,7 +3552,7 @@ async def test_reclamation_skips_when_the_state_read_fails(
     deleted_vector_ids = _record_reclaimed_vectors(monkeypatch)
     pool, _conn = make_pool_and_conn(raise_on_acquire=RuntimeError("pool exhausted"))
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == []
@@ -3565,10 +3573,10 @@ async def test_reclamation_absorbs_a_vector_store_failure_and_still_frees_the_fi
     async def _fail(paper_id: int) -> None:
         raise RuntimeError("vector store unavailable")
 
-    monkeypatch.setattr(pdf_workflow_module, "delete_paper_vectors", _fail)
+    monkeypatch.setattr(paper_content_reclaim_module, "delete_paper_vectors", _fail)
     pool, _conn = make_pool_and_conn(fetchval_return=True)
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert not pdf_path.exists()
@@ -3590,7 +3598,7 @@ async def test_reclamation_absorbs_an_unremovable_stored_pdf_and_still_frees_the
     pdf_path.mkdir()
     pool, _conn = make_pool_and_conn(fetchval_return=True)
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
@@ -3613,7 +3621,7 @@ async def test_reclamation_absorbs_an_unremovable_page_image_directory(
     snapshot_dir.write_bytes(b"not a directory")
     pool, _conn = make_pool_and_conn(fetchval_return=True)
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
@@ -3634,7 +3642,7 @@ async def test_reclamation_ignores_a_paper_that_never_had_page_images(
     shutil.rmtree(snapshot_dir)
     pool, _conn = make_pool_and_conn(fetchval_return=True)
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         await reclaim_discarded_paper_content(_RECLAIMED_PAPER_ID, pool)
 
     assert deleted_vector_ids == [_RECLAIMED_PAPER_ID]
@@ -3655,8 +3663,8 @@ def _promoted_mid_run_answers():
     Answers are chosen by statement rather than by call order, so a read added
     to the workflow cannot silently shift every later answer by one.
     """
+    from paper_ingestion.services.paper_content_reclaim import _DISCARDED_CONTENT_STATE_SQL
     from paper_ingestion.services.pdf_workflow import (
-        _DISCARDED_CONTENT_STATE_SQL,
         _LOCKED_PAPER_SOURCE_URL_SQL,
         _PAPER_PDF_READY_SQL,
         _PAPER_SOURCE_URL_SQL,
@@ -3737,11 +3745,11 @@ async def test_a_reclamation_failure_still_reports_the_promotion_to_the_caller(
     def _refuse_publication(_storage_path: Path):
         raise RuntimeError("publication lock unavailable")
 
-    monkeypatch.setattr(pdf_workflow_module, "pdf_publish_operation", _refuse_publication)
+    monkeypatch.setattr(paper_content_reclaim_module, "pdf_publish_operation", _refuse_publication)
     conn = AsyncMock()
     conn.fetchval.side_effect = _promoted_mid_run_answers()
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.pdf_workflow"):
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.paper_content_reclaim"):
         with pytest.raises(PDFSourceSupersededError):
             await run_process_pdf(**_voided_run(pdf_path, conn))
 

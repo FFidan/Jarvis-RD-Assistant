@@ -811,7 +811,7 @@ async def test_first_admin_rolls_back_when_mandatory_owner_audit_fails(
 async def test_a1_setup_status_setup_completed_false_on_fresh_db(setup_client):
     """GET /api/setup/status returns setup_completed=False when no user_config row.
 
-    Fresh contract DB has no setup.completed row → _coerce_bool(None) → False.
+    Fresh contract DB has no setup.completed row → coerce_bool(None) → False.
     Verified: setup.py get_status at HEAD.
     """
     resp = await setup_client.get("/api/setup/status")

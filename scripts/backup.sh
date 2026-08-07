@@ -296,6 +296,11 @@ TRIGGER_DIR="${BACKUP_TRIGGER_DIR:-/backup-trigger}"
 TRIGGER_FILE="${TRIGGER_DIR}/.backup_now"
 LOCK_DIR="${BACKUP_DIR}/.lifecycle"
 BACKUP_LOCK="${LOCK_DIR}/backup.lock"
+# UPDATE_LOCK is declared here only to keep the update-lock path identical across
+# the three actors that share it -- scripts/backup-lifecycle.sh and scripts/prune.sh
+# take the lock, this script does not. The literal is pinned by
+# tests/test_rotate_config_key_workflow.py.
+# shellcheck disable=SC2034
 UPDATE_LOCK="${LOCK_DIR}/update.lock"
 LEGACY_BACKUP_LOCK="${TRIGGER_DIR}/.backup.lock"
 # Update transactions put their correlation ID in the trigger. Empty legacy/UI

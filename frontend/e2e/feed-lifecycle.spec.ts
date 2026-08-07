@@ -52,7 +52,9 @@ function makeUserState(overrides: Partial<{
   };
 }
 
-function makePaper(overrides: Partial<{ user_state: ReturnType<typeof makeUserState> }> = {}) {
+function makePaper(
+  overrides: Partial<{ user_state: ReturnType<typeof makeUserState>; state: string }> = {},
+) {
   return {
     id: PAPER_ID,
     external_id: 'lifecycle-test-0042',
@@ -65,6 +67,9 @@ function makePaper(overrides: Partial<{ user_state: ReturnType<typeof makeUserSt
     pdf_local_path: null,
     pdf_downloaded: false,
     user_status: 'new',
+    // FeedPaper.state is required by the API contract (types/paper.ts:149) and drives
+    // which lifecycle controls FeedPaperRow renders (FeedPaperRow.tsx:97).
+    state: 'inbox',
     user_state: makeUserState(),
     published_date: '2026-01-01',
     discovered_at: '2026-01-10T08:00:00Z',
@@ -172,17 +177,21 @@ async function stubDeleteEndpoint(page: Page, paperId: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Auth guard helper — skip if dashboard unreachable (mirrors pulse.spec.ts)
+// Reachability guard — an unreachable dashboard is a failure, not a skip
 // ---------------------------------------------------------------------------
 
-async function skipIfUnreachable(page: Page) {
+// This suite runs in a required CI check. Skipping when the preview server is
+// down would let that check report success having executed zero tests, so a
+// server that failed to start must fail the run loudly instead.
+async function assertDashboardReachable(page: Page) {
+  let resp;
   try {
-    const resp = await page.request.get('/', { timeout: 3_000 });
-    if (!resp.ok()) {
-      test.skip(true, `Dashboard unreachable (status ${resp.status()})`);
-    }
+    resp = await page.request.get('/', { timeout: 3_000 });
   } catch (err) {
-    test.skip(true, `Dashboard unreachable: ${(err as Error).message}`);
+    throw new Error(`Dashboard unreachable: ${(err as Error).message}`);
+  }
+  if (!resp.ok()) {
+    throw new Error(`Dashboard unreachable (status ${resp.status()})`);
   }
 }
 
@@ -194,7 +203,7 @@ test.describe('Feed — full lifecycle smoke', () => {
   test.setTimeout(60_000);
 
   test.beforeEach(async ({ page }) => {
-    await skipIfUnreachable(page);
+    await assertDashboardReachable(page);
     await seedAuthedSession(page);
     await installMockedApiDefaults(page);
     // FirstRunGate — must return setup_completed: true or the wizard intercepts all routes.
@@ -311,17 +320,20 @@ test.describe('Feed — full lifecycle smoke', () => {
     await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 10_000 });
   });
 
-  // ── Step 4: Mark Read (currently wired) ─────────────────────────────────
+  // ── Step 4: Mark Reading (currently wired) ──────────────────────────────
 
-  test('4. Mark Read fires PUT /api/papers/{id}/user-state', async ({ page }) => {
+  test('4. Mark Reading fires PUT /api/papers/{id}/reading', async ({ page }) => {
+    // The control under test is FeedPaperRow's "Mark Reading" button, which renders
+    // only for state === 'to_read' (FeedPaperRow.tsx:336,345); a default 'inbox'
+    // paper never shows it.
     await routeFeedAndCounts(
       page,
-      () => feedResponse([makePaper()]),
+      () => feedResponse([makePaper({ state: 'to_read' })]),
       () => libraryCounts,
     );
 
-    // Stub bookmark endpoint (used for Mark Read via bookmarkPaper helper)
-    await page.route(`**/api/papers/${PAPER_ID}/bookmark`, async (route: Route) => {
+    // Stub the reading-transition endpoint (markReading in lib/api/papers.ts:157)
+    await page.route(`**/api/papers/${PAPER_ID}/reading`, async (route: Route) => {
       if (route.request().method() !== 'PUT') { await route.continue(); return; }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', paper_id: PAPER_ID }) });
     });
@@ -329,19 +341,26 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // "Mark Read" button is rendered by FeedView (currently wired via onMarkRead)
-    const markReadBtn = page.getByRole('button', { name: new RegExp(`Mark ${PAPER_TITLE} as read`) });
-    const markReadVisible = await markReadBtn.isVisible({ timeout: 3_000 }).catch(() => false);
+    // Exact aria-label="Mark <title> as reading" (FeedPaperRow.tsx:345), wired by
+    // FeedView via onMarkReading (FeedView.tsx:254,370).  A missing button is a
+    // regression, not a pending-wiring condition: assert it, never skip.
+    const markReadingBtn = page.getByRole('button', {
+      name: `Mark ${PAPER_TITLE} as reading`,
+      exact: true,
+    });
+    await expect(markReadingBtn).toBeVisible({ timeout: 10_000 });
 
-    if (!markReadVisible) {
-      test.skip(true, 'Mark Read button not rendered — FeedView wiring needed');
-    }
-
+    // Wait on the exact endpoint path so an unrelated paper PUT cannot satisfy
+    // the assertion, then pin URL, method, and (empty) payload to the contract.
     const [request] = await Promise.all([
-      page.waitForRequest((req) => req.url().includes(`/api/papers/${PAPER_ID}`) && req.method() === 'PUT'),
-      markReadBtn.click(),
+      page.waitForRequest((req) =>
+        new URL(req.url()).pathname === `/api/papers/${PAPER_ID}/reading` && req.method() === 'PUT',
+      ),
+      markReadingBtn.click(),
     ]);
-    expect(request.url()).toContain(`/api/papers/${PAPER_ID}`);
+    expect(new URL(request.url()).pathname).toBe(`/api/papers/${PAPER_ID}/reading`);
+    expect(request.method()).toBe('PUT');
+    expect(request.postData()).toBeNull();
   });
 
   // ── Step 5 (LIFECYCLE_WIRED): Save from Inbox ────────────────────────────

@@ -20,10 +20,10 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 
 // ------ Mock API calls so the onboarding gate is a no-op ------
 vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
-  return {
-    ...actual,
-    getSetupStatus: vi.fn().mockResolvedValue({
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  const { ApiError } = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return createApiMock({
+    getSetupStatus: async () => ({
       setup_completed: true,
       models_ready: true,
       models_downloading: [],
@@ -31,8 +31,8 @@ vi.mock('@/lib/api', async () => {
       telegram_configured: false,
       telegram_paired: false,
     }),
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, setup_completed: true }),
-    fetchDashboardMetrics: vi.fn().mockResolvedValue({
+    getFirstRunStatus: async () => ({ configured: true, setup_completed: true }),
+    fetchDashboardMetrics: async () => ({
       total_papers: 0,
       unread_papers: 0,
       pending_papers: 0,
@@ -44,10 +44,10 @@ vi.mock('@/lib/api', async () => {
     }),
     // Cookie-session bootstrap probe: default to "no valid cookie" (401) so
     // unauthenticated/expired tests deterministically land on the login page.
-    fetchAccount: vi.fn().mockRejectedValue(
-      new actual.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
-    ),
-  };
+    fetchAccount: async () => {
+      throw new ApiError(401, JSON.stringify({ detail: 'Not authenticated' }));
+    },
+  });
 });
 
 // Stub fetch so the login form doesn't fire real requests.
@@ -55,11 +55,11 @@ vi.stubGlobal('fetch', vi.fn());
 
 // ------ Mock query-persister to avoid IDB in jsdom ------
 vi.mock('@/lib/query-persister', () => ({
-  attachQueryPersister: vi.fn().mockReturnValue(() => {}),
-  clearPersistedQueryCache: vi.fn().mockResolvedValue(undefined),
+  attachQueryPersister: vi.fn(() => () => {}),
+  clearPersistedQueryCache: vi.fn(async () => undefined),
   GC_TIME: 7 * 24 * 60 * 60 * 1000,
-  shouldDehydrateQuery: vi.fn().mockReturnValue(false),
-  getPersistedCacheTimestamp: vi.fn().mockResolvedValue(null),
+  shouldDehydrateQuery: vi.fn(() => false),
+  getPersistedCacheTimestamp: vi.fn(async () => null),
 }));
 
 // ------ Mock query-client to avoid the self-attaching persister ------

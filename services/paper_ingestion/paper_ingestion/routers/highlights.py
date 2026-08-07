@@ -7,7 +7,7 @@ from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import HighlightCreate, HighlightResponse, HighlightUpdate
-from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
+from paper_ingestion.routers.pdf_files import assert_paper_pdf_visible
 
 router = APIRouter(prefix="/api", tags=["highlights"])
 

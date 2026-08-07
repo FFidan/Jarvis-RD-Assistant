@@ -25,20 +25,39 @@ def app_with_pool():
     Override it alongside verify_api_key so validation tests reach the
     discriminator/allowlist logic instead of getting a 401 first.
     """
-    from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.auth import (
+        current_user_id_strict,
+        get_current_user_id_or_bot,
+        require_admin,
+        require_admin_or_api_key,
+        verify_api_key,
+    )
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool, _conn = make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id_strict] = lambda: 42
-    app.dependency_overrides[require_admin] = lambda: None
-    yield app, pool
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            # The pulse_app factory below adds per-test overrides for these
+            # two seams; declaring them here removes any in-test write again
+            # on exit so it cannot leak past the fixture.
+            dependency_absent=(get_current_user_id_or_bot, require_admin_or_api_key),
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_strict: lambda: 42,
+                require_admin: lambda: None,
+            },
+        ),
+    ):
+        yield app, pool
 
 
 async def test_summarize_endpoint_enqueues_job(app_with_pool):

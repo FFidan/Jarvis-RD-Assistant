@@ -20,7 +20,7 @@ from paper_ingestion.deps import (
     limiter,
 )
 from paper_ingestion.pdf_processor import check_pdf_path_safe
-from paper_ingestion.routers.pdf import _require_library_membership
+from paper_ingestion.routers.pdf_actions import _require_library_membership
 from paper_ingestion.services.pdf_workflow import download_and_store_pdf
 
 logger = logging.getLogger(__name__)

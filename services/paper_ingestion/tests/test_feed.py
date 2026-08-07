@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_paper_record as _make_paper_record
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord
 
@@ -34,37 +35,28 @@ def client():
     ):
         # Patch lifespan to avoid real resource init
         from fastapi.testclient import TestClient
-        from paper_ingestion.deps import get_db_pool
+        from jarvis_common import verify_api_key
+        from paper_ingestion.deps import get_db_pool, limiter
         from paper_ingestion.main import app
 
-        # Override the db_pool dependency — use MagicMock so that
-        # pool.acquire() returns a synchronous context-manager stub
-        # (matching asyncpg's PoolAcquireContext behaviour).
+        # MagicMock so that pool.acquire() returns a synchronous
+        # context-manager stub (matching asyncpg's PoolAcquireContext
+        # behaviour). The autouse ``_default_authenticated_user`` override
+        # stays in place: the helper touches only the seams named here.
         mock_pool = MagicMock()
-        app.dependency_overrides = {}
-
-        app.dependency_overrides[get_db_pool] = lambda: mock_pool
-        app.state.limiter.enabled = False
-
-        # Disable auth
-        from jarvis_common import (
-            get_current_user_id,
-            get_current_user_id_or_bot,
-            verify_api_key,
-        )
-
-        app.dependency_overrides[verify_api_key] = lambda: None
-        # CC-03: this fixture resets ``dependency_overrides`` wholesale, which
-        # wipes the autouse ``_default_authenticated_user`` override. Re-add it
-        # so the converted ``Depends(get_current_user_id)`` routes still default
-        # to user 1 (identical to the pre-conversion symbol-stub behaviour).
-        app.dependency_overrides[get_current_user_id] = lambda: 1
-        app.dependency_overrides[get_current_user_id_or_bot] = lambda: 1
-
-        yield TestClient(app, raise_server_exceptions=False), mock_pool
-
-        app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+        with patch_pi_test_app(
+            mock_pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+                dependency_overrides={verify_api_key: lambda: None},
+            ),
+        ):
+            yield TestClient(app, raise_server_exceptions=False), mock_pool
 
 
 # ---------------------------------------------------------------------------

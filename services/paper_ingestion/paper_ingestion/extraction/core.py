@@ -18,7 +18,6 @@ Anti-hallucination strategy:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import asyncpg
@@ -39,6 +38,7 @@ from paper_ingestion.models import (
     ExtractedField,
     ExtractionResponse,
 )
+from paper_ingestion.queries.verification_substrate import load_paper_chunks
 from paper_ingestion.services.paper_state_helpers import guard_current_source_generation
 
 if TYPE_CHECKING:
@@ -159,7 +159,8 @@ async def extract_fields_for_paper(
             )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
-                "extraction_templates table not found (migration 011 not applied)"
+                "extraction_templates table not found — this database predates the schema "
+                "baseline in db/init.sql; see db/migrations/README.md"
             ) from None
         if not template:
             raise ValueError(f"Template {template_id} not found")
@@ -174,12 +175,7 @@ async def extract_fields_for_paper(
             raise ValueError(f"Paper {paper_id} not found")
         content_generation = int(paper["content_generation"])
 
-        chunks = await conn.fetch(
-            """SELECT id, chunk_index, content, page_number
-               FROM paper_chunks WHERE paper_id = $1
-               ORDER BY chunk_index""",
-            paper_id,
-        )
+        chunks = await load_paper_chunks(conn, paper_id)
 
         if not chunks:
             raise ValueError(f"No chunks found for paper {paper_id}")
@@ -206,13 +202,13 @@ async def extract_fields_for_paper(
 
         if selected_chunks:
             if chunk_search_failed:
-                prioritized_chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
-                remaining_chunks = [c for c in chunks if c["chunk_index"] not in selected_chunks]
+                prioritized_chunks = [c for c in chunks if c.chunk_index in selected_chunks]
+                remaining_chunks = [c for c in chunks if c.chunk_index not in selected_chunks]
                 chunks = prioritized_chunks + remaining_chunks
             else:
-                chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
+                chunks = [c for c in chunks if c.chunk_index in selected_chunks]
 
-    full_text = "\n\n".join(c["content"] for c in chunks)
+    full_text = "\n\n".join(c.content for c in chunks)
 
     prompt = build_extraction_prompt(fields, paper["title"], full_text)
     from paper_ingestion._state import svc  # noqa: PLC0415
@@ -235,24 +231,8 @@ async def extract_fields_for_paper(
         logger.exception("LLM extraction failed for paper %d", paper_id)
         raise
 
-    from paper_ingestion.models import ChunkResponse
-
     extractions: dict[str, ExtractedField] = {}
-    chunk_responses = (
-        [
-            ChunkResponse(
-                id=c["id"],
-                paper_id=paper_id,
-                chunk_index=c["chunk_index"],
-                content=c["content"],
-                page_number=c["page_number"],
-                created_at=datetime.now(UTC),
-            )
-            for c in chunks
-        ]
-        if verifier
-        else []
-    )
+    chunk_responses = chunks if verifier else []
 
     for field in fields:
         field_name = field["name"]
@@ -272,8 +252,9 @@ async def extract_fields_for_paper(
                 chunk_id = vr.chunk_id
                 page_number = vr.page_number
                 if not vr.verified:
-                    # Mirror entity_extractor policy: unverified extractions are
-                    # dropped rather than persisted with uncertain values.
+                    # A verdict exists, so the quote survives as evidence the
+                    # reader sees labelled unverified; only the value it failed
+                    # to support is dropped.
                     logger.debug(
                         "Quote verification failed for field %s — discarding value",
                         field_name,
@@ -281,9 +262,13 @@ async def extract_fields_for_paper(
                     )
                     value = None
             except Exception:
-                # Verifier raised unexpectedly: treat as unverified and discard
-                # value+quote so the anti-hallucination rule is never bypassed.
-                logger.debug("Quote verifier raised for field %s — discarding value", field_name)
+                # No verdict exists, so the quote cannot carry the unverified
+                # label the branch above relies on — drop it with the value
+                # rather than surface text that reads as if it had been checked.
+                logger.debug(
+                    "Quote verifier raised for field %s — discarding value and quote",
+                    field_name,
+                )
                 value = None
                 quote = None
 
@@ -350,7 +335,8 @@ async def extract_fields_for_paper(
                         )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
-                "paper_extractions table not found (migration 011 not applied)"
+                "paper_extractions table not found — this database predates the schema "
+                "baseline in db/init.sql; see db/migrations/README.md"
             ) from None
         except SourceGenerationChangedError:
             row = await _fetch_current_extraction(

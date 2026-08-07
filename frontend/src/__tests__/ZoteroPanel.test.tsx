@@ -21,14 +21,17 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 
 // --- Module mocks ---
 
-vi.mock('@/lib/api', () => ({
-  zoteroGetLinkage: vi.fn().mockResolvedValue({
-    zotero_item_key: 'ABCD1234',
-    zotero_citation_key: 'smith2024',
-  }),
-  zoteroPushPaper: vi.fn(),
-  zoteroResync: vi.fn(),
-}));
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    zoteroGetLinkage: async () => ({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: 'smith2024',
+    }),
+    zoteroPushPaper: vi.fn(),
+    zoteroResync: vi.fn(),
+  });
+});
 
 function renderPanel() {
   const queryClient = createTestQueryClient();

@@ -4,7 +4,6 @@ Includes single-paper ask, cross-paper ask, streaming SSE variants,
 summarization, and weekly digest.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from jarvis_common.llm_client import (
     observe,
     strip_think_blocks,
 )
-from jarvis_common.sse import SSE_DONE, sse_event
+from jarvis_common.sse import SSE_DONE, sse_event, sse_named_event
 from jarvis_common.verify import QuoteVerifier
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
@@ -59,6 +58,7 @@ from paper_ingestion.rag.streaming import (
     stream_rag_events,
 )
 from paper_ingestion.rag.verification import verify_answer_summary
+from paper_ingestion.services.job_enqueue import enqueue_job
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
 logger = logging.getLogger(__name__)
@@ -296,18 +296,14 @@ async def summarize_paper(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["paper.summarize"].defer_async(
-        job_id=jarvis_job_id,
+    return await enqueue_job(
+        KIND_TO_TASK["paper.summarize"],
         user_id=user_id,
         paper_id=paper_id,
         force=body.force if body is not None else False,
     )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -514,8 +510,7 @@ async def ask_paper_stream(
         served, _ = observed_share("smart")
         configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
         is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
-        payload = json.dumps({"served_by": served, "fallback": is_fallback})
-        yield f"event: backend\ndata: {payload}\n\n"
+        yield sse_named_event("backend", {"served_by": served, "fallback": is_fallback})
         async for event in stream_rag_events(
             http_client,
             messages,
@@ -669,9 +664,7 @@ async def ask_cross_paper_stream(
     served, _ = observed_share("smart")
     configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
     is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
-    _backend_event = (
-        f"event: backend\ndata: {json.dumps({'served_by': served, 'fallback': is_fallback})}\n\n"
-    )
+    _backend_event = sse_named_event("backend", {"served_by": served, "fallback": is_fallback})
 
     # Short-circuit when no chunks were found -- return canned answer as SSE
     if isinstance(result, CrossPaperRagNoResults):
@@ -775,13 +768,7 @@ async def enqueue_weekly_digest(
     embedded in the procrastinate row's ``args->>'job_id'`` so the SSE bridge
     can correlate.
     """
-    import uuid  # noqa: PLC0415
-
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["digest.weekly"].defer_async(
-        job_id=jarvis_job_id, days=days, user_id=user_id
-    )
-    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
+    return await enqueue_job(KIND_TO_TASK["digest.weekly"], user_id=user_id, days=days)

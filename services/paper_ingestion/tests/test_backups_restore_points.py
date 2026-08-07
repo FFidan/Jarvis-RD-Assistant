@@ -15,12 +15,18 @@ from pathlib import Path
 import pytest
 
 from paper_ingestion.routers import backups as bk
+from paper_ingestion.services import backup_archive as bk_archive
 
 
 @pytest.fixture()
 def backup_dir(tmp_path, monkeypatch):
-    """Point the router's _BACKUP_DIR at a tmp dir and return it."""
+    """Point both _BACKUP_DIR bindings at a tmp dir and return it.
+
+    The archive helpers and the router each hold a binding of this name, so a
+    route that reads it directly *and* calls a helper needs both patched.
+    """
     monkeypatch.setattr(bk, "_BACKUP_DIR", tmp_path)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", tmp_path)
     return tmp_path
 
 
@@ -317,15 +323,15 @@ def test_last_run_json_is_not_treated_as_an_archive(backup_dir):
 
 
 def test_filename_allowlist_accepts_encrypted_qdrant_snapshot():
-    assert bk._FILENAME_RE.match("qdrant_kg_entities_20260624_001234.snapshot.enc")
-    assert bk._FILENAME_RE.match("qdrant_paper_chunks_20260624_001234.snapshot")
+    assert bk_archive._FILENAME_RE.match("qdrant_kg_entities_20260624_001234.snapshot.enc")
+    assert bk_archive._FILENAME_RE.match("qdrant_paper_chunks_20260624_001234.snapshot")
     # _validate_name must not raise for the new encrypted shape.
     bk._validate_name("qdrant_kg_entities_20260624_001234.snapshot.enc")
 
 
 def test_filename_allowlist_accepts_pdf_archive():
     name = "pdfs_20260624_001234.tar.gz.enc"
-    assert bk._FILENAME_RE.fullmatch(name)
+    assert bk_archive._FILENAME_RE.fullmatch(name)
     bk._validate_name(name)
 
 
@@ -345,10 +351,10 @@ def test_filename_allowlist_still_rejects_traversal():
 
 def test_qdrant_collection_parse_ignores_underscores_in_name():
     """Collection names contain underscores; the ts must still parse unambiguously."""
-    m = bk._QDRANT_RE.match("qdrant_kg_entities_20260624_001234.snapshot.enc")
+    m = bk_archive._QDRANT_RE.match("qdrant_kg_entities_20260624_001234.snapshot.enc")
     assert m is not None
     assert m.group(1) == "kg_entities"
-    ts = bk._TS_RE.search("qdrant_kg_entities_20260624_001234.snapshot.enc")
+    ts = bk_archive._TS_RE.search("qdrant_kg_entities_20260624_001234.snapshot.enc")
     assert ts is not None
     assert ts.group(1) == "20260624_001234"
 
@@ -423,7 +429,7 @@ def test_restore_point_phantom_manifest_rejected(backup_dir, code_max_50):
 
 
 def test_read_inbox_manifest_absent_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", tmp_path / ".inbox_manifest.json")
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", tmp_path / ".inbox_manifest.json")
     assert bk._read_inbox_manifest() == []
 
 
@@ -451,7 +457,7 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
             ]
         )
     )
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     points = bk._read_inbox_manifest()
     assert [p.timestamp for p in points] == ["20260701_030000", "20260630_020000"]
     assert points[0].complete is True
@@ -463,7 +469,7 @@ def test_read_inbox_manifest_parses_entries(tmp_path, monkeypatch):
 
 def test_read_inbox_manifest_degrades_on_malformed(tmp_path, monkeypatch):
     manifest = tmp_path / ".inbox_manifest.json"
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     manifest.write_text("{ not json")
     assert bk._read_inbox_manifest() == []  # malformed → never raises
     manifest.write_text(json.dumps({"not": "a list"}))
@@ -489,7 +495,7 @@ def test_read_inbox_manifest_drops_corrupt_entries(tmp_path, monkeypatch):
             ]
         )
     )
-    monkeypatch.setattr(bk, "_INBOX_MANIFEST", manifest)
+    monkeypatch.setattr(bk_archive, "_INBOX_MANIFEST", manifest)
     points = bk._read_inbox_manifest()
     assert [p.timestamp for p in points] == ["20260701_030000"]
 
@@ -503,7 +509,7 @@ def test_code_max_migration_returns_floor_when_dir_missing(monkeypatch, tmp_path
         (Path(__file__).resolve().parents[3] / "db" / "SCHEMA_VERSION").read_text().strip()
     )
     assert baseline >= 102
-    assert bk._code_max_migration() == baseline
+    assert bk_archive._code_max_migration() == baseline
 
 
 @pytest.mark.asyncio
@@ -518,26 +524,34 @@ async def test_download_backup_serves_valid_archive(backup_dir, monkeypatch):
     import httpx
     from httpx import ASGITransport
     from jarvis_common.auth import require_admin, verify_api_key
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     name = "jarvis_20260624_120000.sql.gz"
     (backup_dir / name).write_bytes(b"J" * 10)
 
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
-    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
-    app.state.limiter.enabled = False
-    app.dependency_overrides[require_admin] = lambda: None
-    app.dependency_overrides[verify_api_key] = lambda: None
 
-    try:
+    with patch_pi_test_app(
+        AsyncMock(),
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            disable_limiter=True,
+            dependency_overrides={
+                require_admin: lambda: None,
+                verify_api_key: lambda: None,
+            },
+        ),
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(f"/api/admin/backups/{name}/download")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 200
     assert resp.content == b"J" * 10

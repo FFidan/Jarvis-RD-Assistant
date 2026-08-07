@@ -11,7 +11,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mocked before importing the module under test so the singleton sees them.
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: () => ({

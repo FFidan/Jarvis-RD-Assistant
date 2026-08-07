@@ -28,18 +28,17 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...orig, useNavigate: () => mockNavigate };
 });
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   const papers = [
     { id: 1, title: 'Attention Is All You Need' },
     { id: 2, title: 'BERT: Pre-training of Deep Bidirectional Transformers' },
     { id: 3, title: 'GPT-4 Technical Report' },
   ];
-  return {
-    ...orig,
-    fetchPapersBrief: vi.fn().mockResolvedValue(papers),
-    searchPapersBrief: vi.fn().mockResolvedValue(papers),
-    getCitationGraph: vi.fn().mockResolvedValue({
+  return createApiMock({
+    fetchPapersBrief: async () => papers,
+    searchPapersBrief: async () => papers,
+    getCitationGraph: async () => ({
       nodes: [
         { id: 1, title: 'Attention Is All You Need', citation_count: 50000, published_date: '2017-06-01', is_stub: false },
         { id: 10, title: 'Some Referenced Paper', citation_count: 100, published_date: '2015-01-01', is_stub: true },
@@ -48,10 +47,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
         { source: 1, target: 10, is_influential: true, context: null },
       ],
     }),
-    fetchCitationsFromS2: vi.fn().mockResolvedValue({
+    fetchCitationsFromS2: async () => ({
       citations_added: 5, references_added: 3, stubs_created: 2,
     }),
-  };
+  });
 });
 
 function renderPage() {
@@ -245,5 +244,24 @@ describe('CitationGraphPage', () => {
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/paper/1');
     });
+  });
+
+  // Keep these last in the file: they replace the module-level fetchPapersBrief
+  // implementation, which this suite's beforeEach does not restore.
+  it('shows no paper-load error when the paper list loads empty', async () => {
+    const { fetchPapersBrief } = await import('@/lib/api');
+    vi.mocked(fetchPapersBrief).mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => {
+      expect(vi.mocked(fetchPapersBrief)).toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Failed to load papers.')).toBeNull();
+  });
+
+  it('shows a paper-load error in the selection section when the paper list fails to load', async () => {
+    const { fetchPapersBrief } = await import('@/lib/api');
+    vi.mocked(fetchPapersBrief).mockRejectedValue(new Error('network down'));
+    renderPage();
+    expect(await screen.findByText('Failed to load papers.')).toBeInTheDocument();
   });
 });

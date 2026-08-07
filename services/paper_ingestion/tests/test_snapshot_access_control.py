@@ -36,10 +36,11 @@ def _snap_app(tmp_path):
     Both the page PNG and the raw PDF are present, so a route that returns 404
     can only have been stopped by the shared guard.
     """
-    import paper_ingestion.routers.pdfs as pdfs_mod
+    import paper_ingestion.routers.pdf_files as pdfs_mod
     import paper_ingestion.routers.snapshots as snap_mod
     from jarvis_common.auth import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     snap_dir = tmp_path / "1"
@@ -48,23 +49,30 @@ def _snap_app(tmp_path):
     (tmp_path / "1.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     pool, conn = make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
 
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-
+    # The storage-path module swaps are a seam the shared helper deliberately
+    # does not cover; restore them manually alongside the helper's restore.
     original_path = snap_mod.SNAPSHOT_STORAGE_PATH
     original_pdf_path = pdfs_mod.PDF_STORAGE_PATH
     snap_mod.SNAPSHOT_STORAGE_PATH = str(tmp_path)
     pdfs_mod.PDF_STORAGE_PATH = str(tmp_path)
-
-    yield app, conn
-
-    snap_mod.SNAPSHOT_STORAGE_PATH = original_path
-    pdfs_mod.PDF_STORAGE_PATH = original_pdf_path
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    try:
+        with patch_pi_test_app(
+            pool,
+            app=app,
+            get_db_pool=get_db_pool,
+            limiter=limiter,
+            options=PITestAppOptions(
+                remove_owner_override=False,
+                override_db_dependency=True,
+                disable_limiter=True,
+                dependency_overrides={verify_api_key: lambda: None},
+            ),
+        ):
+            yield app, conn
+    finally:
+        snap_mod.SNAPSHOT_STORAGE_PATH = original_path
+        pdfs_mod.PDF_STORAGE_PATH = original_pdf_path
 
 
 # ---------------------------------------------------------------------------

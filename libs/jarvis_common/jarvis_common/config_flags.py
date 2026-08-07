@@ -1,4 +1,9 @@
-"""Serialization and type-coercion utilities shared across services."""
+"""Boolean config-flag helpers shared across services.
+
+- ``coerce_bool`` — lenient boolean coercion for ``user_config`` JSONB values.
+- ``read_global_config_flag`` — fail-closed read of a global
+  (``user_id IS NULL``) ``user_config`` boolean feature flag.
+"""
 
 import logging
 from typing import Any
@@ -6,7 +11,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _coerce_bool(value: Any, default: bool = False) -> bool:
+def coerce_bool(value: Any, default: bool = False) -> bool:
     """Interpret user_config JSONB values as booleans."""
     if value is None:
         return default
@@ -30,7 +35,7 @@ async def read_global_config_flag(db_pool: Any, key: str, *, log_label: str) -> 
     never switch the feature on. ``log_label`` prefixes the failure log so the
     caller's feature is identifiable.
 
-    Deliberately does not delegate to ``_coerce_bool``: that helper falls back to
+    Deliberately does not delegate to ``coerce_bool``: that helper falls back to
     ``bool(value)`` for unrecognised strings, which is fail-OPEN and wrong here.
     """
     try:

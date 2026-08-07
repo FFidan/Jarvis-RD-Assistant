@@ -12,7 +12,7 @@ from jarvis_common import assert_paper_ownership, current_user_id_strict
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
-from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
+from paper_ingestion.routers.pdf_files import assert_paper_pdf_visible
 
 logger = logging.getLogger(__name__)
 

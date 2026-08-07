@@ -233,7 +233,8 @@ def _recommendations_app(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     conn = AsyncMock()
@@ -244,11 +245,19 @@ def _recommendations_app(monkeypatch):
     mock_pool = MagicMock()
     mock_pool.acquire.return_value = ctx
 
-    app.state.db_pool = mock_pool
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app
-    app.dependency_overrides.clear()
+    # disable_limiter stays False: this fixture exists to test rate limiting.
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app
 
 
 # ---------------------------------------------------------------------------

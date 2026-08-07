@@ -45,23 +45,38 @@ def _make_request(mock_pool, mock_http):
 
 
 @pytest.fixture()
-def _app():
+def _app(monkeypatch):
     """Create a minimal app instance with mocked DB pool, HTTP client, and disabled auth."""
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
-    mock_http = AsyncMock()
-    app.state.http_client = mock_http
+    # The model handlers probe LiteLLM for real; point the probe at a
+    # connection-refused address so its degraded path fails fast instead of
+    # hanging ~10 s per test on resolving the compose-internal hostname.
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://127.0.0.1:9")
 
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app, conn, mock_http
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    mock_pool, conn = _make_pool_and_conn()
+    mock_http = AsyncMock()
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            state_overrides={"http_client": mock_http},
+            # The model handlers memoize hardware probes on app.state; start
+            # every test without a cached value and remove any handler-written
+            # one again on exit so it cannot leak across files.
+            state_absent=("hw_info", "hw_info_at"),
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app, conn, mock_http
 
 
 # ---------------------------------------------------------------------------
@@ -278,10 +293,10 @@ async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch
     from paper_ingestion.main import get_system_models
 
     monkeypatch.setattr(
-        "paper_ingestion.routers.system.EMBEDDING_MODEL_NAME",
+        "paper_ingestion.services.system_models_view.EMBEDDING_MODEL_NAME",
         "qwen3-embedding:0.6b",
     )
-    monkeypatch.setattr("paper_ingestion.routers.system.EMBEDDING_DIMENSION", 768)
+    monkeypatch.setattr("paper_ingestion.services.system_models_view.EMBEDDING_DIMENSION", 768)
 
     request = _make_request(app.state.db_pool, mock_http)
     conn.fetch.return_value = []

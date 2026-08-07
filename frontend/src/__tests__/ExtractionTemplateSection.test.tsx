@@ -50,6 +50,15 @@ describe('ExtractionTemplateSection', () => {
     await waitFor(() => {
       expect(screen.getByText('No extraction templates')).toBeInTheDocument();
     });
+    expect(screen.queryByText('Failed to load extraction templates.')).toBeNull();
+  });
+
+  it('shows an error message, not the empty state, when templates fail to load', async () => {
+    vi.mocked(fetchExtractionTemplates).mockRejectedValue(new Error('network down'));
+    renderSection();
+
+    expect(await screen.findByText('Failed to load extraction templates.')).toBeInTheDocument();
+    expect(screen.queryByText('No extraction templates')).toBeNull();
   });
 
   it('renders template card with name, "Default" badge, and "1 fields" badge', async () => {

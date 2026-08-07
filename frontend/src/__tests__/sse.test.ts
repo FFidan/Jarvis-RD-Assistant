@@ -5,7 +5,8 @@ import { toast } from 'sonner';
 
 // Mock sonner — sse.ts now transitively imports `@/lib/api/core`, which
 // imports `toast` from sonner for the session-expired toast.
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 // Mock auth store — must be defined before importing sse to ensure
 // the module-level import in sse.ts resolves to this mock. `isAuthenticated`

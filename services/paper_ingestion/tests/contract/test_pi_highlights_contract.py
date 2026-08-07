@@ -46,13 +46,18 @@ _RECT = {
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     """PI app wired to the contract conn; PDF storage redirected to tmp_path."""
-    import paper_ingestion.routers.pdfs as _pdfs_mod
+    import paper_ingestion.routers.pdf_files as _pdfs_mod
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app as pi_app
 
     monkeypatch.setattr(_pdfs_mod, "PDF_STORAGE_PATH", str(tmp_path))
 
     shared = SharedConnPool(contract_conn)
     with patch_pi_test_app(
         shared,
+        app=pi_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
         options=PITestAppOptions(remove_owner_override=True),
     ) as app:
         yield app

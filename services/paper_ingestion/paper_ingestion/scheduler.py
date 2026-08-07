@@ -8,8 +8,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from jarvis_common.advisory_lock import _kind_lock_key
+from jarvis_common.config_flags import coerce_bool, read_global_config_flag
 from jarvis_common.maintenance import skip_for_maintenance
-from jarvis_common.serialization import _coerce_bool, read_global_config_flag
 
 from paper_ingestion.ingestion import refresh_recommendations
 from paper_ingestion.pipelines.auto_fetch import AUTO_PIPELINE_LAST_RUN_KEY, run_auto_pipeline
@@ -147,7 +147,7 @@ def _zotero_rows_by_user(rows: list[Any]) -> dict[int, dict[str, Any]]:
 
 def _zotero_poll_config_ready(cfg: dict[str, Any]) -> bool:
     """Return whether a per-user Zotero config is ready for polling."""
-    if not _coerce_bool(cfg.get("zotero.poll_enabled")):
+    if not coerce_bool(cfg.get("zotero.poll_enabled")):
         return False
     if not _has_config_value(cfg, "zotero.api_key"):
         return False

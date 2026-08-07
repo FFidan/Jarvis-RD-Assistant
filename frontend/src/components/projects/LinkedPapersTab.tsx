@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 
 interface LinkedPapersTabProps {
   projectId: number;
@@ -19,7 +20,7 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
   const [searchResults, setSearchResults] = useState<Array<{ id: number; title: string; published_date?: string | null }>>([]);
   const [searching, setSearching] = useState(false);
 
-  const { data: papers = [], isLoading } = useQuery({
+  const { data: papers = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.projects.papers(projectId),
     queryFn: () => fetchProjectPapers(projectId),
   });
@@ -67,9 +68,13 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
 
   return (
     <div className="space-y-4">
-      <span className="text-xs text-muted-foreground">{`${papers.length} linked`}</span>
+      {isError ? (
+        <QueryErrorState message="Failed to load linked papers." />
+      ) : (
+        <span className="text-xs text-muted-foreground">{`${papers.length} linked`}</span>
+      )}
 
-      {papers.length === 0 ? (
+      {!isError && (papers.length === 0 ? (
         <EmptyState
           title="No linked papers"
           description="Search your library below to link papers to this project."
@@ -102,7 +107,7 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       <Separator />
 

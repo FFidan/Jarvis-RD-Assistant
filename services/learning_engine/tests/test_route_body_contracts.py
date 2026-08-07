@@ -70,3 +70,23 @@ def test_my_day_bundle_declares_response_schema() -> None:
     assert json_schema.get("$ref") == "#/components/schemas/MyDayBundleResponse", (
         f"GET /api/executive/my-day-bundle must declare MyDayBundleResponse; got {json_schema!r}"
     )
+
+
+def test_jobs_router_docstring_cites_only_registered_routes() -> None:
+    """A route named in the jobs router's docstring must actually exist.
+
+    The docstring pointed readers at ``/api/generation/batch`` while the batch
+    endpoint is registered at ``/api/generate/batch``. A cross-reference naming
+    no real route sends a maintainer hunting an endpoint that was never there,
+    so every path the docstring cites is pinned against the live route table.
+    """
+    import re
+
+    from learning_engine.routers import jobs
+
+    schema = _openapi()
+    cited = set(re.findall(r"/api/[a-zA-Z0-9/_-]+", jobs.__doc__ or ""))
+
+    assert cited, "jobs router docstring cites no route — this guard needs updating"
+    unknown = sorted(path for path in cited if path not in schema["paths"])
+    assert not unknown, f"jobs router docstring cites unregistered route(s): {unknown}"

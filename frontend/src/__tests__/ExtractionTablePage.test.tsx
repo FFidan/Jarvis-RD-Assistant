@@ -20,11 +20,10 @@ vi.mock('@/components/shared/PaperSearchSelect', () => ({
 }));
 
 // Mock the API module
-vi.mock('@/lib/api', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...orig,
-    fetchExtractionTemplates: vi.fn().mockResolvedValue([
+vi.mock('@/lib/api', async () => {
+  const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
+  return createApiMock({
+    fetchExtractionTemplates: async () => ([
       {
         id: 1,
         name: 'Method Comparison',
@@ -38,13 +37,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
         updated_at: '2026-03-01T00:00:00Z',
       },
     ]),
-    fetchPapersBrief: vi.fn().mockResolvedValue([
+    fetchPapersBrief: async () => ([
       { id: 1, title: 'Paper Alpha' },
       { id: 2, title: 'Paper Beta' },
     ]),
-    fetchExtractionTable: vi.fn().mockResolvedValue([]),
-    batchExtract: vi.fn().mockResolvedValue({ job_id: 'fake-id', total: 2 }),
-  };
+    fetchExtractionTable: async () => [],
+    batchExtract: async () => ({ job_id: 'fake-id', total: 2 }),
+  });
 });
 
 function renderPage() {

@@ -2,7 +2,7 @@
 
 Provides:
 - ``ProgressContext`` — Protocol for handler execution context.
-- ``ProcrastinateJobContextShim`` — concrete adapter (re-exported from ``_ctx_shim``).
+- ``ProcrastinateJobContextShim`` — concrete adapter (re-exported from ``job_context``).
 - ``JobError`` for structured errors with an optional action_link payload.
 - ``JobLookupUnavailable`` for an infrastructure-caused lookup failure (503),
   distinct from a job that genuinely does not exist (404/None).
@@ -22,7 +22,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 import asyncpg
 import asyncpg_listen
 
-from jarvis_common._ctx_shim import ProcrastinateJobContextShim  # noqa: F401 — re-exported
+from jarvis_common.job_context import ProcrastinateJobContextShim  # noqa: F401 — re-exported
 from jarvis_common.sse import sse_event, sse_keepalive
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def queue_for_kind(kind: str) -> str:
 class ProgressContext(Protocol):
     """Full interface a job handler receives as its execution context.
 
-    Concrete implementation: :class:`jarvis_common._ctx_shim.ProcrastinateJobContextShim`.
+    Concrete implementation: :class:`jarvis_common.job_context.ProcrastinateJobContextShim`.
     """
 
     job_id: str
@@ -98,6 +98,21 @@ class ProgressContext(Protocol):
 
     async def is_cancelled(self) -> bool:
         """Return True when the job has been requested to abort."""
+        ...
+
+    async def record_terminal_outcome(
+        self,
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+        is_error: bool = False,
+    ) -> bool:
+        """Persist the job's terminal result or error payload.
+
+        Declared here because the task wrapper calls it on every context it
+        receives, so a context that omits it must fail this protocol rather
+        than at run time. Returns False when a write was attempted and failed.
+        """
         ...
 
 

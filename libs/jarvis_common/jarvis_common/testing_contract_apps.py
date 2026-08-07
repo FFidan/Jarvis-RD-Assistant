@@ -52,6 +52,21 @@ class PITestAppOptions:
     mock_embedder: bool = False
     state_overrides: Mapping[str, Any] = field(default_factory=dict)
     dependency_overrides: Mapping[Any, Any] = field(default_factory=dict)
+    state_absent: tuple[str, ...] = ()
+    """``app.state`` attributes guaranteed absent while the app is wired.
+
+    For tests that assert the degraded path a route takes when a collaborator
+    was never installed (e.g. no ``qdrant_client``). Previous values are
+    restored on exit.
+    """
+
+    dependency_absent: tuple[Any, ...] = ()
+    """Dependency-override keys guaranteed absent while the app is wired.
+
+    For files whose tests add per-test overrides for these keys: any prior
+    entry is removed on entry and the prior state restored on exit, so a
+    test-body write cannot leak past the fixture.
+    """
 
 
 def _refresh_auth_settings() -> None:
@@ -105,12 +120,25 @@ def patch_app_state(
     replacements: Mapping[str, Any],
     *,
     delete_missing: bool = True,
+    remove: tuple[str, ...] = (),
 ) -> Iterator[None]:
-    """Patch ``app.state`` attributes and restore the exact previous state."""
+    """Patch ``app.state`` attributes and restore the exact previous state.
+
+    Names in ``remove`` are guaranteed ABSENT on entry (some routes branch on
+    ``hasattr(app.state, ...)``, so a test may need the attribute gone, not
+    merely replaced). Their previous values are restored on exit like any
+    replacement.
+    """
+    overlap = set(remove).intersection(replacements)
+    if overlap:
+        raise ValueError("app.state names cannot be both removed and replaced")
     original = {
         name: getattr(app.state, name) if hasattr(app.state, name) else _MISSING
-        for name in replacements
+        for name in (*replacements, *remove)
     }
+    for name in remove:
+        if hasattr(app.state, name):
+            delattr(app.state, name)
     for name, value in replacements.items():
         setattr(app.state, name, value)
     try:
@@ -159,15 +187,26 @@ def patch_dependency_overrides(
 def patch_pi_test_app(
     pool: Any,
     *,
+    app: Any,
+    get_db_pool: Any,
+    limiter: Any,
     options: PITestAppOptions,
 ) -> Iterator[Any]:
-    """Wire the Paper Ingestion app for a test and restore every changed seam."""
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
+    """Wire the Paper Ingestion app for a test and restore every changed seam.
 
+    ``app``, ``get_db_pool`` and ``limiter`` are injected by the calling app
+    fixture (from ``paper_ingestion.main`` and ``paper_ingestion.deps``) so that
+    this library function does not import from any service package.
+
+    ``pool`` may be ``None`` for tests that route all data access through
+    dependency overrides and must leave ``app.state.db_pool`` untouched.
+    """
     from jarvis_common import current_user_id_strict_with_owner_override, get_current_user_id
 
-    state = {"db_pool": pool, **dict(options.state_overrides)}
+    if pool is None and options.override_db_dependency:
+        raise ValueError("override_db_dependency requires a pool")
+
+    state = {**({} if pool is None else {"db_pool": pool}), **dict(options.state_overrides)}
     if options.mock_http_client:
         state["http_client"] = MagicMock()
     if options.mock_embedder:
@@ -176,18 +215,16 @@ def patch_pi_test_app(
     overrides = dict(options.dependency_overrides)
     if options.override_db_dependency:
         overrides[get_db_pool] = lambda: pool
-    removals = (
-        {current_user_id_strict_with_owner_override, get_current_user_id}
-        if options.remove_owner_override
-        else set()
-    )
+    removals = set(options.dependency_absent)
+    if options.remove_owner_override:
+        removals |= {current_user_id_strict_with_owner_override, get_current_user_id}
 
     limiter_was_enabled = limiter.enabled
     if options.disable_limiter:
         limiter.enabled = False
     try:
         with (
-            patch_app_state(app, state),
+            patch_app_state(app, state, remove=options.state_absent),
             patch_dependency_overrides(
                 app,
                 set_overrides=overrides,

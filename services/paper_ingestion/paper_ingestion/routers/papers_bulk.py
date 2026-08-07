@@ -1,7 +1,6 @@
 """Bulk and batch-process endpoints: bulk_action_papers, process_batch."""
 
 import logging
-import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
@@ -16,6 +15,7 @@ from paper_ingestion.models import (
     BulkActionResponse,
     ProcessBatchRequest,
 )
+from paper_ingestion.services.job_enqueue import enqueue_job
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -99,7 +99,7 @@ async def process_batch(
     body: ProcessBatchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-) -> dict[str, str]:
+) -> JobCreateResponse:
     """Enqueue a ``papers.batch_process`` job for the given paper IDs.
 
     Accepts 1–50 explicit paper IDs and immediately queues the job without
@@ -114,11 +114,9 @@ async def process_batch(
     async with db_pool.acquire() as conn:
         await assert_papers_ownership(conn, list(body.paper_ids), user_id)
 
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["papers.batch_process"].defer_async(
-        job_id=jarvis_job_id, user_id=user_id, paper_ids=body.paper_ids
+    return await enqueue_job(
+        KIND_TO_TASK["papers.batch_process"], user_id=user_id, paper_ids=body.paper_ids
     )
-    return {"job_id": jarvis_job_id, "status": "queued"}
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +131,7 @@ async def process_library(
     summarize: bool = False,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-) -> dict[str, object]:
+) -> JobCreateResponse:
     """Enqueue one ``papers.process_library`` job for the caller's whole library.
 
     The job processes the caller's ``user_library`` in bounded pages for download,
@@ -160,10 +158,8 @@ async def process_library(
             0,
         )
     if not has_work:
-        return {"job_id": None, "status": "skipped", "reason": "library_already_processed"}
+        return JobCreateResponse(job_id=None, status="skipped", reason="library_already_processed")
 
-    jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["papers.process_library"].defer_async(
-        job_id=jarvis_job_id, user_id=user_id, summarize=summarize
+    return await enqueue_job(
+        KIND_TO_TASK["papers.process_library"], user_id=user_id, summarize=summarize
     )
-    return {"job_id": jarvis_job_id, "status": "queued"}

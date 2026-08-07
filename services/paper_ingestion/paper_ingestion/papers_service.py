@@ -146,9 +146,10 @@ async def _apply_bulk_action(
 ) -> None:
     """Dispatch a single bulk action to the appropriate state mutation.
 
-    ``router_logger`` is the ``paper_ingestion.routers.papers`` logger passed
-    in by the route handler so the orphan-vector ``logger.exception`` retains
-    its original logger name (caplog / patch.object targets that module).
+    ``router_logger`` is the calling router's own logger. Passing it keeps the
+    orphan-vector ``exception`` record attributed to the router that requested
+    the action; the bulk path passes nothing and the record falls back to this
+    module's logger.
     """
     if action == "save":
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
@@ -307,9 +308,10 @@ async def hard_delete_paper(
     reverse order is data-loss-prone — do not collapse the inside-txn
     DELETE and outside-txn Qdrant cleanup into a single try/except.
 
-    ``router_logger`` is the ``paper_ingestion.routers.papers`` logger passed
-    in by the route handler so the orphan-vector ``logger.exception`` retains
-    its original logger name (caplog / patch.object targets that module).
+    ``router_logger`` is the calling router's own logger, so the orphan-vector
+    ``exception`` record is attributed to the router that requested the delete
+    rather than to this module. The sole caller is
+    ``routers/papers_lifecycle.py``, which passes its own module logger.
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)

@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   Dialog,
@@ -37,7 +38,7 @@ export function MilestonesTab({ projectId }: MilestonesTabProps) {
   const [editDescription, setEditDescription] = useState('');
   const [editDeadline, setEditDeadline] = useState('');
 
-  const { data: milestones = [], isLoading } = useQuery({
+  const { data: milestones = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.projects.milestones(projectId),
     queryFn: () => fetchMilestones(projectId),
   });
@@ -109,13 +110,18 @@ export function MilestonesTab({ projectId }: MilestonesTabProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{`${milestones.length} milestone${milestones.length !== 1 ? 's' : ''}`}</span>
+        {isError ? (
+          <span aria-hidden="true" />
+        ) : (
+          <span className="text-xs text-muted-foreground">{`${milestones.length} milestone${milestones.length !== 1 ? 's' : ''}`}</span>
+        )}
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="mr-1 h-4 w-4" /> Add Milestone
         </Button>
       </div>
 
-      {milestones.length === 0 ? (
+      {isError && <QueryErrorState message="Failed to load milestones." />}
+      {!isError && (milestones.length === 0 ? (
         <EmptyState
           title="No milestones"
           description="Add milestones to track key deliverables."
@@ -166,7 +172,7 @@ export function MilestonesTab({ projectId }: MilestonesTabProps) {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>

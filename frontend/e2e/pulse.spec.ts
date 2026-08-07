@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { ensureAuthenticated } from './helpers/auth';
 
 /**
@@ -11,23 +11,34 @@ import { ensureAuthenticated } from './helpers/auth';
  *   - Research Feed → Pulse tab shows the full deck + history
  *
  * The test requires a live stack (backend + frontend) reachable at
- * PLAYWRIGHT_BASE_URL. When the stack is down we skip rather than fail so
- * this spec can live alongside unit tests in CI without blocking offline work.
+ * PLAYWRIGHT_BASE_URL, so run it deliberately against a running stack.
  */
+
+// ---------------------------------------------------------------------------
+// Reachability guard — an unreachable dashboard is a failure, not a skip
+// ---------------------------------------------------------------------------
+
+// Skipping when the target stack is down would let a run report success having
+// executed zero tests, so a stack that is not reachable must fail the run
+// loudly instead.
+async function assertDashboardReachable(page: Page): Promise<void> {
+  let resp;
+  try {
+    resp = await page.request.get('/', { timeout: 3_000 });
+  } catch (err) {
+    throw new Error(`Dashboard unreachable: ${(err as Error).message}`);
+  }
+  if (!resp.ok()) {
+    throw new Error(`Dashboard unreachable (status ${resp.status()})`);
+  }
+}
+
 test.describe('Pulse — post Round 4 happy path', () => {
   // Give the full generate → score → persist chain time to run.
   test.setTimeout(120_000);
 
   test.beforeEach(async ({ page }) => {
-    // Skip gracefully if the dashboard is unreachable.
-    try {
-      const resp = await page.request.get('/', { timeout: 3_000 });
-      if (!resp.ok()) {
-        test.skip(true, `Dashboard unreachable (status ${resp.status()})`);
-      }
-    } catch (err) {
-      test.skip(true, `Dashboard unreachable: ${(err as Error).message}`);
-    }
+    await assertDashboardReachable(page);
 
     await ensureAuthenticated(page);
 

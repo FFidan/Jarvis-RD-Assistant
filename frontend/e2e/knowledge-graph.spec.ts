@@ -11,11 +11,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('Knowledge Graph Page', () => {
-  test.fixme('page loads showing either empty state message or graph canvas', async ({ page }) => {
-    // FIXME: KnowledgeGraphPage is React.lazy()-loaded. Under concurrent Vite dev-server
-    // requests (parallel Playwright workers) it intermittently fails with
-    // "Failed to fetch dynamically imported module", triggering the error boundary.
-    // This is a Vite lazy-chunk infrastructure issue, not a spec regression.
+  test('page loads showing either empty state message or graph canvas', async ({ page }) => {
     await page.goto('/knowledge');
     await page.waitForLoadState('networkidle');
 
@@ -35,8 +31,7 @@ test.describe('Knowledge Graph Page', () => {
     ).toBeVisible({ timeout: 10000 });
   });
 
-  test.fixme('entity type filter dropdown is present and functional', async ({ page }) => {
-    // FIXME: Same lazy-chunk failure as above.
+  test('entity type filter dropdown is present and functional', async ({ page }) => {
     // Mock knowledge graph API with some data
     await page.route('**/api/knowledge-graph?**', async (route) => {
       await route.fulfill({
@@ -95,8 +90,7 @@ test.describe('Knowledge Graph Page', () => {
     ).toBeVisible();
   });
 
-  test.fixme('min paper count slider adjusts filter', async ({ page }) => {
-    // FIXME: Same lazy-chunk failure as above.
+  test('min paper count slider adjusts filter', async ({ page }) => {
     await page.route('**/api/knowledge-graph?**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -127,8 +121,7 @@ test.describe('Knowledge Graph Page', () => {
     await expect(page.getByText('Min Paper Count: 5')).toBeVisible();
   });
 
-  test.fixme('query input triggers knowledge graph search', async ({ page }) => {
-    // FIXME: Same lazy-chunk failure as above.
+  test('query input triggers knowledge graph search', async ({ page }) => {
     // Mock the knowledge graph query API
     await page.route('**/api/knowledge-graph/query**', async (route) => {
       await route.fulfill({

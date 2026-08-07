@@ -7,12 +7,14 @@ Single-tenant mode (user_id=None): original single-predicate SQL is preserved.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -45,26 +47,35 @@ def _full_note_row() -> FakeRecord:
     )
 
 
-def _setup_app(user_id: int | None, fetchrow_side_effects: list) -> tuple:
+@contextmanager
+def _wired_app(user_id: int | None, fetchrow_side_effects: list):
+    """Wire the app for one test and restore every changed seam on exit."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import get_current_user_id
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool, conn = _make_pool_and_conn(fetchrow_side_effects=fetchrow_side_effects)
     conn.execute = AsyncMock(return_value="DELETE 1")
 
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_current_user_id] = lambda: user_id
-
-    return app, conn
-
-
-def _teardown_app(app) -> None:
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    # pool=None: these tests resolve the pool through the dependency override
+    # only and leave ``app.state`` untouched.
+    with patch_pi_test_app(
+        None,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            disable_limiter=True,
+            dependency_overrides={
+                get_db_pool: lambda: pool,
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 @pytest.mark.asyncio
@@ -74,7 +85,7 @@ async def test_update_note_multi_tenant_includes_user_id_in_update():
     The dynamic UPDATE must remain owner-scoped even though the response is
     reselected with its generation-derived stale flag.
     """
-    app, conn = _setup_app(
+    with _wired_app(
         user_id=42,
         fetchrow_side_effects=[
             _note_row(),
@@ -82,14 +93,11 @@ async def test_update_note_multi_tenant_includes_user_id_in_update():
             _full_note_row(),
             _full_note_row(),
         ],
-    )
-    try:
+    ) as (app, conn):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.put("/api/notes/5", json={"user_note": "updated text"})
-    finally:
-        _teardown_app(app)
 
     assert resp.status_code == 200, f"Expected 200; got {resp.status_code}: {resp.text[:200]}"
     update_call = next(
@@ -108,17 +116,14 @@ async def test_update_note_multi_tenant_includes_user_id_in_update():
 @pytest.mark.asyncio
 async def test_delete_note_multi_tenant_includes_user_id_in_delete():
     """DELETE /api/notes/{id}: multi-tenant DELETE SQL must contain AND user_id = $2."""
-    app, conn = _setup_app(
+    with _wired_app(
         user_id=42,
         fetchrow_side_effects=[_note_row(), _paper_row()],
-    )
-    try:
+    ) as (app, conn):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.delete("/api/notes/5")
-    finally:
-        _teardown_app(app)
 
     assert resp.status_code == 204, f"Expected 204; got {resp.status_code}: {resp.text[:200]}"
     delete_params = conn.execute.await_args.args[1:]
@@ -132,17 +137,14 @@ async def test_delete_note_multi_tenant_includes_user_id_in_delete():
 @pytest.mark.asyncio
 async def test_delete_note_single_tenant_no_user_predicate():
     """DELETE /api/notes/{id}: single-tenant (user_id=None) uses simple WHERE id = $1."""
-    app, conn = _setup_app(
+    with _wired_app(
         user_id=None,
         fetchrow_side_effects=[_note_row()],
-    )
-    try:
+    ) as (app, conn):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.delete("/api/notes/5")
-    finally:
-        _teardown_app(app)
 
     assert resp.status_code == 204, f"Expected 204; got {resp.status_code}: {resp.text[:200]}"
     delete_params = conn.execute.await_args.args[1:]

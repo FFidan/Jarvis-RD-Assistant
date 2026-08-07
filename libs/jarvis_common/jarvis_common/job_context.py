@@ -1,18 +1,23 @@
-"""JobContext-compatible shim bridging procrastinate ↔ legacy ``jarvis_common.jobs.JobContext``.
+"""Execution-context adapter between procrastinate and JARVIS job handlers.
 
-The legacy 19 ``@job_handler``-decorated functions all expect a
-``jarvis_common.jobs.JobContext`` (a ``@dataclass`` with ``job_id: str``,
-``async update_progress(progress, message=None)``, ``async is_cancelled()``).
-Procrastinate hands tasks its own ``procrastinate.JobContext`` — a different
-object with ``context.job.id``, ``context.should_abort()``, etc.
+Job handlers receive a context satisfying the
+``jarvis_common.jobs.ProgressContext`` protocol (``job_id: str``,
+``async update_progress(progress, message=None)``, ``async is_cancelled()``,
+``async record_terminal_outcome(...)``). Procrastinate hands tasks its own
+``procrastinate.JobContext`` — a different object with ``context.job.id``,
+``context.should_abort()``, etc.
 
-This module provides a thin adapter so the legacy handlers can be invoked
-unchanged from inside a procrastinate task body:
+``ProcrastinateJobContextShim`` is the concrete adapter between the two.
+``task_registry`` builds one via ``make_ctx_shim`` for every handler it
+dispatches; stalled-job reclamation in ``app_factory`` constructs the shim
+directly to persist interrupted outcomes.
 
 - ``update_progress``: UPSERTs into the ``job_progress`` table (migration
   054). Silently degrades to a no-op when no pool is supplied or the table
   is missing — older DBs without migration 054 still run, they just don't
   surface progress.
+- ``record_terminal_outcome``: persists the job's terminal result or error
+  payload into the same table, best-effort.
 - ``is_cancelled``: bridges to procrastinate's ``should_abort()`` so
   abort-requested propagates to handler bodies.
 - ``job_id``: prefers the JARVIS UUID stored in ``task_kwargs['job_id']``
@@ -36,12 +41,13 @@ if TYPE_CHECKING:
 
 
 class ProcrastinateJobContextShim:
-    """Adapter exposing the legacy ``jarvis_common.jobs.JobContext`` surface.
+    """Adapter implementing the ``jarvis_common.jobs.ProgressContext`` protocol.
 
-    The legacy contract (see ``libs/jarvis_common/jarvis_common/jobs.py:464``):
+    The handler-facing contract (see ``ProgressContext`` in ``jobs.py``):
         - ``job_id: str``                         — attribute
         - ``async update_progress(progress, message=None) -> None``
         - ``async is_cancelled() -> bool``
+        - ``async record_terminal_outcome(*, result=None, error=None, is_error=False) -> bool``
     """
 
     __slots__ = ("job_id", "_procrastinate_ctx", "_pool")

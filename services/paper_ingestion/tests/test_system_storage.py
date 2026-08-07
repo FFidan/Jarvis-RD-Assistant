@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import _make_pool_and_conn
 
@@ -20,27 +21,36 @@ from tests.conftest import _make_pool_and_conn
 @pytest.fixture()
 def _app():
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool, conn = _make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
 
     tags_resp = MagicMock()
     tags_resp.status_code = 200
     tags_resp.json.return_value = {"models": [{"name": "qwen3:8b", "size": 5_000_000_000}]}
     http = MagicMock()
     http.get = AsyncMock(return_value=tags_resp)
-    app.state.http_client = http
 
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    yield app, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
-    if hasattr(app.state, "qdrant_client"):
-        del app.state.qdrant_client
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            state_overrides={"http_client": http},
+            # The shape test asserts the degraded "no Qdrant wired" section, so
+            # the client must be absent no matter what an earlier test left on
+            # the app singleton; tests that need one set it themselves and the
+            # helper removes it again on exit.
+            state_absent=("qdrant_client",),
+            dependency_overrides={verify_api_key: lambda: None},
+        ),
+    ):
+        yield app, conn
 
 
 async def _get_storage(app) -> httpx.Response:
@@ -55,7 +65,7 @@ async def test_storage_shape_and_totals(_app, tmp_path, monkeypatch):
     """Response shape + Ollama/Postgres totals; no qdrant_client wired → degrades."""
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=123_456)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     resp = await _get_storage(app)
 
@@ -83,7 +93,7 @@ async def test_storage_hf_cache_measures_real_files(_app, tmp_path, monkeypatch)
     conn.fetchval = AsyncMock(return_value=0)
     (tmp_path / "a.bin").write_bytes(b"x" * 1000)
     (tmp_path / "b.bin").write_bytes(b"y" * 2000)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     resp = await _get_storage(app)
 
@@ -95,9 +105,9 @@ async def test_storage_hf_cache_measures_real_files(_app, tmp_path, monkeypatch)
 async def test_storage_pressure_true_when_free_space_below_floor(_app, tmp_path, monkeypatch):
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=0)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
     monkeypatch.setattr(
-        "paper_ingestion.routers.system.shutil.disk_usage",
+        "paper_ingestion.services.storage_usage.shutil.disk_usage",
         lambda _path: SimpleNamespace(free=1_000_000_000),  # 1 GB, below the 6 GB floor
     )
 
@@ -110,9 +120,9 @@ async def test_storage_pressure_true_when_free_space_below_floor(_app, tmp_path,
 async def test_storage_pressure_false_when_free_space_ample(_app, tmp_path, monkeypatch):
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=0)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
     monkeypatch.setattr(
-        "paper_ingestion.routers.system.shutil.disk_usage",
+        "paper_ingestion.services.storage_usage.shutil.disk_usage",
         lambda _path: SimpleNamespace(free=99_000_000_000),  # 99 GB
     )
 
@@ -125,7 +135,7 @@ async def test_storage_pressure_false_when_free_space_ample(_app, tmp_path, monk
 async def test_storage_postgres_unreachable_degrades_without_500(_app, tmp_path, monkeypatch):
     app, conn = _app
     conn.fetchval = AsyncMock(side_effect=RuntimeError("connection refused"))
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     resp = await _get_storage(app)
 
@@ -138,7 +148,7 @@ async def test_storage_ollama_unreachable_degrades_without_500(_app, tmp_path, m
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=0)
     app.state.http_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     resp = await _get_storage(app)
 
@@ -153,7 +163,7 @@ async def test_storage_ollama_unreachable_degrades_without_500(_app, tmp_path, m
 async def test_storage_qdrant_collections_return_point_counts(_app, tmp_path, monkeypatch):
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=0)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     papers = SimpleNamespace(name="papers")
     kg_entities = SimpleNamespace(name="kg_entities")
@@ -181,7 +191,7 @@ async def test_storage_qdrant_collections_return_point_counts(_app, tmp_path, mo
 async def test_storage_qdrant_unreachable_degrades_without_500(_app, tmp_path, monkeypatch):
     app, conn = _app
     conn.fetchval = AsyncMock(return_value=0)
-    monkeypatch.setattr("paper_ingestion.routers.system._HF_CACHE_DIR", tmp_path)
+    monkeypatch.setattr("paper_ingestion.services.storage_usage._HF_CACHE_DIR", tmp_path)
 
     qdrant = MagicMock()
     qdrant.get_collections = AsyncMock(side_effect=RuntimeError("unreachable"))

@@ -140,8 +140,12 @@ async def test_source_emits_event_on_success(source_name, make_source, module, s
     ev = success_events[0]
     assert ev["source"] == source_name
     assert ev["level"] == "info"
-    assert ev["context"]["http_status"] == 200
-    assert "papers_fetched" in ev["context"]
+    # Exact payload equality guards the shared recording path against drift.
+    assert ev["context"] == {
+        "http_status": 200,
+        "papers_fetched": len(papers),
+        "query_count": 1,
+    }
 
 
 # ---------------------------------------------------------------------------

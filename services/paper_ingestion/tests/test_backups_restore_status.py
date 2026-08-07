@@ -30,6 +30,7 @@ from jarvis_common.testing_contract_apps import configure_contract_api_key
 
 from paper_ingestion.routers import backups as bk
 from paper_ingestion.routers.backups import RestoreStatus
+from paper_ingestion.services import backup_archive as bk_archive
 
 _STATUS_PATH = "/api/admin/backups/restore/status"
 _ACKNOWLEDGE_PATH = "/api/admin/backups/restore/acknowledge"
@@ -176,6 +177,7 @@ async def test_request_restore_returns_token_and_writes_only_hash(tmp_path, monk
 
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
     monkeypatch.setattr(bk, "log_event", AsyncMock())
@@ -238,6 +240,7 @@ async def test_request_restore_forwards_unknown_schema_acknowledgement(
 
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
     monkeypatch.setattr(bk, "log_event", AsyncMock())
@@ -282,6 +285,7 @@ async def test_request_restore_refuses_when_token_record_cannot_be_persisted(
     _seed_complete_point(backup_dir, ts)
 
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     monkeypatch.setattr(bk, "_write_status_token", lambda *args, **kwargs: False)
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
@@ -340,6 +344,7 @@ async def test_request_restore_forwards_legacy_missing_pdf_authorization(
 
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     monkeypatch.setattr(bk, "log_audit", AsyncMock())
     monkeypatch.setattr(bk, "log_event", AsyncMock())
@@ -635,6 +640,7 @@ async def test_request_restore_refuses_outstanding_quarantine_before_audit(
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     audit = AsyncMock()
     monkeypatch.setattr(bk, "log_audit", audit)
@@ -689,6 +695,7 @@ async def test_request_restore_refuses_an_active_lifecycle_operation_before_audi
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
     audit = AsyncMock()
     monkeypatch.setattr(bk, "log_audit", audit)
@@ -734,6 +741,7 @@ async def test_concurrent_restore_requests_keep_the_winners_token_record(
     monkeypatch.setenv("BACKUP_TRIGGER_DIR", str(trigger))
     monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(trigger / ".outbound-quarantine.json"))
     monkeypatch.setattr(bk, "_BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(bk_archive, "_BACKUP_DIR", backup_dir)
     monkeypatch.setattr(bk, "_RESTORE_SENTINEL", trigger / ".restore_request.json")
 
     both_audited = asyncio.Event()
@@ -943,12 +951,12 @@ async def test_bearer_acknowledgement_rejects_unbound_or_invalid_state(
 
 
 def test_write_upload_grant_persists_only_hash_0644(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(bk, "_UPLOAD_GRANT", tmp_path / ".upload_grant.json")
+    monkeypatch.setattr(bk_archive, "_UPLOAD_GRANT", tmp_path / ".upload_grant.json")
     token = "upload-grant-token-value"
 
     assert bk._write_upload_grant(token) is True
 
-    f = bk._UPLOAD_GRANT
+    f = bk_archive._UPLOAD_GRANT
     persisted = json.loads(f.read_text())
     # Server storage contains the hash and expiry, not the raw token.
     assert set(persisted) == {"sha256", "expires_at"}
@@ -969,7 +977,7 @@ def test_write_upload_grant_replaces_preexisting_symlink(tmp_path, monkeypatch) 
     referent = tmp_path / "referent.txt"
     referent.write_text("original-referent-content")
     grant.symlink_to(referent)
-    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant)
+    monkeypatch.setattr(bk_archive, "_UPLOAD_GRANT", grant)
     token = "upload-grant-token-value"
 
     assert bk._write_upload_grant(token) is True
@@ -990,7 +998,7 @@ def test_write_upload_grant_forces_0644_under_restrictive_umask(tmp_path, monkey
     # bits, so a hardened host umask cannot narrow the grant below the 0o644 the
     # co-mounted uploader needs to read through its read-only mount.
     grant = tmp_path / ".upload_grant.json"
-    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant)
+    monkeypatch.setattr(bk_archive, "_UPLOAD_GRANT", grant)
     old_umask = os.umask(0o077)
     try:
         assert bk._write_upload_grant("upload-grant-token-value") is True
@@ -1006,7 +1014,7 @@ async def test_upload_grant_endpoint_returns_token_once_and_audits(tmp_path, mon
     from paper_ingestion.main import app
 
     grant_file = tmp_path / ".upload_grant.json"
-    monkeypatch.setattr(bk, "_UPLOAD_GRANT", grant_file)
+    monkeypatch.setattr(bk_archive, "_UPLOAD_GRANT", grant_file)
     audit = AsyncMock()
     monkeypatch.setattr(bk, "log_audit", audit)
     monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)

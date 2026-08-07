@@ -20,6 +20,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Pencil, Trash2, Plus, Check, X, Tag } from 'lucide-react';
 import type { Topic } from '@/types';
@@ -42,12 +43,12 @@ export function TopicSection() {
   const [addForm, setAddForm] = useState({ name: '', query_terms: '', category: '', description: '' });
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
-  const { data: topics = [], isLoading } = useQuery({
+  const { data: topics = [], isLoading, isError: topicsError } = useQuery({
     queryKey: QUERY_KEYS.topics.list(),
     queryFn: fetchTopics,
   });
 
-  const { data: subscriptions = [] } = useQuery({
+  const { data: subscriptions = [], isError: subscriptionsError } = useQuery({
     queryKey: QUERY_KEYS.topics.subscriptions(),
     queryFn: fetchMySubscriptions,
   });
@@ -151,7 +152,10 @@ export function TopicSection() {
       <p className="text-sm text-muted-foreground">
         Research topics drive paper discovery — JARVIS searches for new papers matching each enabled topic&apos;s query terms and surfaces them in your daily Pulse deck.
       </p>
-      {topics.length === 0 && !showAdd ? (
+      {subscriptionsError && <QueryErrorState message="Failed to load topic subscriptions." />}
+      {topicsError ? (
+        <QueryErrorState message="Failed to load topics." />
+      ) : topics.length === 0 && !showAdd ? (
         <EmptyState title="No topics" description="Add a research topic to get started." icon={Tag} />
       ) : (
         <div className="space-y-2">

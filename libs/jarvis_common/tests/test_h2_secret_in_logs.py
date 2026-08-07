@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import validate_production_config, validate_runtime_config
+from jarvis_common.testing import make_pool_and_conn
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -151,14 +152,13 @@ class TestSendMagicLinkTokenNotLogged:
     async def test_raw_link_not_in_log_event_context(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """log_event context must not contain the raw link."""
-        _conn = AsyncMock()
-        _conn.fetch = AsyncMock(return_value=[])
-        _conn.fetchrow = AsyncMock(return_value=None)
-        fake_pool = AsyncMock()
-        fake_pool.acquire.return_value.__aenter__.return_value = _conn
-        contexts = await self._run(monkeypatch, caplog, pool=fake_pool)
+        """log_event context must not contain the raw link (successful DB config read)."""
+        pool, conn = make_pool_and_conn(with_transaction=False, fetch_return=[])
+        contexts = await self._run(monkeypatch, caplog, pool=pool)
 
+        # Prove the SMTP user_config read went through the pool (not the
+        # DB-unreachable fallback, which has its own test below).
+        conn.fetch.assert_awaited()
         assert contexts, "Expected log_event to be called at least once"
         for ctx in contexts:
             ctx_str = str(ctx)
@@ -169,19 +169,35 @@ class TestSendMagicLinkTokenNotLogged:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """log_event context must contain email_hash and link_issued=True."""
-        _conn = AsyncMock()
-        _conn.fetch = AsyncMock(return_value=[])
-        _conn.fetchrow = AsyncMock(return_value=None)
-        fake_pool = AsyncMock()
-        fake_pool.acquire.return_value.__aenter__.return_value = _conn
-        contexts = await self._run(monkeypatch, caplog, pool=fake_pool)
+        pool, conn = make_pool_and_conn(with_transaction=False, fetch_return=[])
+        contexts = await self._run(monkeypatch, caplog, pool=pool)
 
+        conn.fetch.assert_awaited()
         assert contexts, "Expected log_event to be called"
         ctx = contexts[0]
         assert ctx.get("email_hash") == _email_sha256(_EMAIL), (
             f"email_hash mismatch in log_event context: {ctx!r}"
         )
         assert ctx.get("link_issued") is True, f"link_issued not True in log_event context: {ctx!r}"
+
+    async def test_log_event_context_safe_when_db_config_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """DB unreachable → env-fallback path must also keep the link out of log_event."""
+        pool, _conn = make_pool_and_conn(
+            with_transaction=False,
+            raise_on_acquire=ConnectionError("db unreachable"),
+        )
+        contexts = await self._run(monkeypatch, caplog, pool=pool)
+
+        assert contexts, "Expected log_event to be called at least once"
+        for ctx in contexts:
+            ctx_str = str(ctx)
+            assert _LINK not in ctx_str, f"Raw link found in log_event context: {ctx_str!r}"
+            assert _TOKEN not in ctx_str, f"Raw token found in log_event context: {ctx_str!r}"
+        assert contexts[0].get("email_hash") == _email_sha256(_EMAIL), (
+            f"email_hash mismatch in log_event context: {contexts[0]!r}"
+        )
 
     async def test_raw_email_address_not_in_caplog(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -203,13 +219,8 @@ class TestSendMagicLinkTokenNotLogged:
 
 def _runtime_pool(*, user_count: int, admin_count: int) -> MagicMock:
     """asyncpg-pool-shaped mock whose connection returns the given user counts."""
-    conn = AsyncMock()
+    pool, conn = make_pool_and_conn(with_transaction=False)
     conn.fetchval = AsyncMock(side_effect=[user_count, admin_count])
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
     return pool
 
 

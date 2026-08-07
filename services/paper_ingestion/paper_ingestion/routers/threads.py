@@ -20,6 +20,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from jarvis_common import dynamic_update
 from jarvis_common.auth import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -155,26 +156,22 @@ async def update_thread(
     (status='done'). User-scoped: a non-owned id is a 404, never an update.
     """
     fields = body.model_dump(exclude_unset=True, include=_THREAD_ALLOWED_COLUMNS)
+    # This guard is load-bearing and cannot be delegated to dynamic_update: that
+    # helper only rejects an empty update when extra_sets is empty too, and the
+    # call below always passes one. Without it an empty body would 200 and
+    # silently bump last_at instead of 400.
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clauses: list[str] = []
-    params: list[object] = []
-    for idx, (col, val) in enumerate(fields.items(), start=1):
-        set_clauses.append(f'"{col}" = ${idx}')
-        params.append(val)
-    set_clauses.append("last_at = NOW()")
-    params.append(thread_id)
-    params.append(user_id)
-    id_pos = len(params) - 1
-    uid_pos = len(params)
-
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"UPDATE thread SET {', '.join(set_clauses)} "  # noqa: S608 (columns are code-defined via _THREAD_ALLOWED_COLUMNS)
-            f"WHERE id = ${id_pos} AND user_id = ${uid_pos} "
-            f"RETURNING {_ROW_COLS}",
-            *params,
+        row = await dynamic_update(
+            conn,
+            "thread",
+            thread_id,
+            fields,
+            _THREAD_ALLOWED_COLUMNS,
+            extra_sets=["last_at = NOW()"],
+            extra_where=("user_id", user_id),
         )
     if row is None:
         raise HTTPException(status_code=404, detail="Thread not found")

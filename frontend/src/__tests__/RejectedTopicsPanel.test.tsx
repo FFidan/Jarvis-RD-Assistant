@@ -6,7 +6,8 @@ vi.mock('@/lib/api', () => ({
   fetchRecommendationFeedback: vi.fn(),
   deleteRecommendationFeedback: vi.fn(),
 }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { fetchRecommendationFeedback, deleteRecommendationFeedback } from '@/lib/api';
 import { toast } from 'sonner';

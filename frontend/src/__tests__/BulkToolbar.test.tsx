@@ -13,12 +13,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 function makeQueryClient() {
   return createTestQueryClient();

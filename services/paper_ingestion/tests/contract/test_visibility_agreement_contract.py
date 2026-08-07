@@ -529,7 +529,7 @@ def _redirect_storage_roots(
     Returns the stored PDF path and the page-image directory a completed run
     would have left behind.
     """
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import paper_content_reclaim
 
     pdf_root = tmp_path / "pdfs"
     snapshot_root = tmp_path / "snapshots"
@@ -540,8 +540,8 @@ def _redirect_storage_roots(
     snapshot_dir.mkdir(parents=True)
     for page in (1, 2):
         (snapshot_dir / f"page_{page}.png").write_bytes(b"")
-    monkeypatch.setattr(pdf_workflow, "PDF_STORAGE_PATH", str(pdf_root))
-    monkeypatch.setattr(pdf_workflow, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
+    monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(pdf_root))
+    monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshot_root))
     return pdf_path, snapshot_dir
 
 
@@ -620,7 +620,7 @@ async def test_search_promotion_reclaims_the_discarded_files_and_vectors(
     # Verified: services/paper_ingestion/paper_ingestion/routers/search.py:206
     from jarvis_common.testing import SharedConnPool
     from paper_ingestion.routers.search import _persist_search_results
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import paper_content_reclaim
     from paper_ingestion.services.pdf_workflow import upsert_paper
 
     caller = await seed_user_row(contract_conn, "reclaim-search@contract.example.com")
@@ -636,7 +636,7 @@ async def test_search_promotion_reclaims_the_discarded_files_and_vectors(
     async def _record_vector_delete(paper_id: int) -> None:
         reclaimed_vector_ids.append(paper_id)
 
-    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _record_vector_delete)
+    monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", _record_vector_delete)
 
     saved, failed = await _persist_search_results(
         SharedConnPool(contract_conn),
@@ -678,7 +678,7 @@ async def test_promotion_stands_when_reclamation_fails_and_retrieval_stays_close
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
     from paper_ingestion.routers.search import _persist_search_results
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import paper_content_reclaim
     from paper_ingestion.services.pdf_workflow import upsert_paper
 
     reader = await seed_user_row(contract_conn, "reclaim-fault@contract.example.com")
@@ -692,7 +692,7 @@ async def test_promotion_stands_when_reclamation_fails_and_retrieval_stays_close
     async def _fail_vector_delete(paper_id: int) -> None:
         raise RuntimeError("vector store unavailable")
 
-    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _fail_vector_delete)
+    monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", _fail_vector_delete)
 
     pool = SharedConnPool(contract_conn)
     saved, failed = await _persist_search_results(
@@ -790,9 +790,9 @@ async def _promotion_app(contract_conn):
 
 def _serve_storage_roots_to_routes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point the PDF and page-image routes at the roots the workflow was redirected to."""
-    from paper_ingestion.routers import pdfs, snapshots
+    from paper_ingestion.routers import pdf_files, snapshots
 
-    monkeypatch.setattr(pdfs, "PDF_STORAGE_PATH", str(tmp_path / "pdfs"))
+    monkeypatch.setattr(pdf_files, "PDF_STORAGE_PATH", str(tmp_path / "pdfs"))
     monkeypatch.setattr(snapshots, "SNAPSHOT_STORAGE_PATH", str(tmp_path / "snapshots"))
 
 
@@ -833,7 +833,7 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
     """
     # Verified: services/paper_ingestion/paper_ingestion/routers/search.py:250 (POST /api/search)
     # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:67 (chunks)
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_files.py:70 (GET /api/pdfs)
     # Verified: services/paper_ingestion/paper_ingestion/routers/snapshots.py:18 (page images)
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -842,7 +842,7 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
     from jarvis_common.testing_contract_apps import make_contract_client
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import paper_content_reclaim
     from paper_ingestion.services.pdf_workflow import upsert_paper
 
     external_id = "promotion-http-superseded"
@@ -854,7 +854,7 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
     await _seed_derived_pdf_content(contract_conn, paper_id)
     pdf_path, snapshot_dir = _redirect_storage_roots(tmp_path, monkeypatch, paper_id)
     _serve_storage_roots_to_routes(monkeypatch, tmp_path)
-    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", AsyncMock())
+    monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", AsyncMock())
     _adapter_returns(monkeypatch, _adapter_paper(external_id, _ADAPTER_PDF_URL))
 
     async with make_contract_client(_promotion_app, contract_two_users.cookie_a) as owner:
@@ -948,14 +948,14 @@ async def test_promotion_confirming_the_source_url_keeps_the_paper_whole_over_ht
     list is where that decision is made, so it is exercised here: it reads
     exactly the chunk rows the promotion left in place.
     """
-    # Verified: services/paper_ingestion/paper_ingestion/routers/pdfs.py:70 (GET /api/pdfs)
+    # Verified: services/paper_ingestion/paper_ingestion/routers/pdf_files.py:70 (GET /api/pdfs)
     # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:48
     #   (PUT /api/papers/{id}/save defers paper.analyze only when no chunk row exists)
     import jarvis_common.task_registry as task_registry
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from jarvis_common.testing_contract_apps import make_contract_client
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import paper_content_reclaim
     from paper_ingestion.services.pdf_workflow import upsert_paper
 
     external_id = "promotion-http-confirmed"
@@ -970,7 +970,7 @@ async def test_promotion_confirming_the_source_url_keeps_the_paper_whole_over_ht
     async def _record_vector_delete(reclaimed_id: int) -> None:
         reclaimed_vector_ids.append(reclaimed_id)
 
-    monkeypatch.setattr(pdf_workflow, "delete_paper_vectors", _record_vector_delete)
+    monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", _record_vector_delete)
     _adapter_returns(monkeypatch, _adapter_paper(external_id, _ADAPTER_PDF_URL))
 
     analyze_task = MagicMock()
@@ -1153,9 +1153,16 @@ class _LiveVisibilityEmbedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
 def _bind_live_collection(monkeypatch: pytest.MonkeyPatch, collection_name: str) -> None:
     """Route production mixins and reconciliation helpers to one isolated collection."""
     from paper_ingestion.ingestion import embed_store, embedding_config, payload_schema, search
-    from paper_ingestion.services import pdf_workflow
+    from paper_ingestion.services import embedding_reconcile, pdf_workflow
 
-    for module in (embed_store, embedding_config, payload_schema, search, pdf_workflow):
+    for module in (
+        embed_store,
+        embedding_config,
+        payload_schema,
+        search,
+        pdf_workflow,
+        embedding_reconcile,
+    ):
         monkeypatch.setattr(module, "COLLECTION_NAME", collection_name)
 
 
@@ -1289,11 +1296,9 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
     )
     from paper_ingestion.ingestion.search_scope import SearchScope
     from paper_ingestion.models import ChunkForEmbedding
-    from paper_ingestion.services import pdf_workflow as pdf_workflow_module
-    from paper_ingestion.services.pdf_workflow import (
-        _delete_reconcile_generation,
-        reconcile_paper_embeddings,
-    )
+    from paper_ingestion.services import embedding_reconcile as embedding_reconcile_module
+    from paper_ingestion.services.embedding_reconcile import _delete_reconcile_generation
+    from paper_ingestion.services.pdf_workflow import reconcile_paper_embeddings
     from qdrant_client import AsyncQdrantClient
     from qdrant_client.models import Distance, VectorParams
 
@@ -1698,7 +1703,7 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
             return True
 
         monkeypatch.setattr(
-            pdf_workflow_module,
+            embedding_reconcile_module,
             "visibility_lease_is_current",
             _replace_after_lease_check,
         )

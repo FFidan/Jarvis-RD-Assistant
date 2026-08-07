@@ -13,6 +13,7 @@ import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 
 from tests.conftest import FakeRecord
 
@@ -31,14 +32,8 @@ def _make_pool_multi(fetchrow_side_effects: list, fetch_side_effects: list) -> t
     fetchrow_side_effects: list of return values for successive fetchrow() calls.
     fetch_side_effects:    list of return values for successive fetch() calls.
     """
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effects)
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=fetchrow_side_effects)
     conn.fetch = AsyncMock(side_effect=fetch_side_effects)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
     return pool, conn
 
 

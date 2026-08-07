@@ -162,6 +162,13 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/__tests__/setup.ts'],
     exclude: ['e2e/**', 'node_modules/**'],
+    // Reset all mocks before every test: restores `vi.fn(impl)` implementations
+    // and drains `mock*Once` queues so no test inherits a sibling's leftover
+    // queued values. Note `clearMocks` would NOT drain those queues — only
+    // `mockReset` does. Mock defaults must therefore be written as
+    // `vi.fn(impl)` (survives reset), never `vi.fn().mockResolvedValue(...)`
+    // (wiped to undefined by reset).
+    mockReset: true,
     // react-pdf-highlighter-extended ships only a `module` field (no main/exports),
     // which vitest's resolver can't resolve from a bare specifier (the Rolldown
     // build resolver can). Tests mock the module anyway, so point the bare

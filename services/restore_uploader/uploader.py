@@ -227,6 +227,11 @@ class UploadHandler(BaseHTTPRequestHandler):
         # writing. _resolve_filename has already allowlisted the name upstream; resolving
         # and containment-checking again at the write site keeps this handler safe on its
         # own, regardless of the caller.
+        #
+        # This mirrors jarvis_common.paths.secure_path's realpath-containment
+        # technique but is reimplemented inline rather than imported: importing
+        # jarvis_common pulls in its __init__ (FastAPI, asyncpg, ...), which would
+        # break this container's stdlib-only trust boundary (see module docstring).
         inbox = os.path.realpath(_inbox_dir())
         resolved = os.path.realpath(os.path.join(inbox, filename))
         if not resolved.startswith(inbox + os.sep):

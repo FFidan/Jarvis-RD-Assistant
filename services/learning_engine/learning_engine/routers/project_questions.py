@@ -1,9 +1,22 @@
 """Project open-questions CRUD + recent-activity feed.
 
-Every endpoint is strictly project-owner-scoped: the project row is fetched
-with ``WHERE id = $1 AND user_id = $2`` (IDOR guard reused verbatim from
-``project_papers.list_project_papers``) and a 404 is raised when absent, so a
-caller can never read/write another user's questions or activity.
+Every endpoint is owner-scoped, through one of two guards:
+
+- The three project-nested endpoints — ``list_project_questions``,
+  ``create_project_question`` and ``list_project_activity`` — call
+  ``assert_project_owner``, which fetches the project row with
+  ``WHERE id = $1 AND user_id = $2`` (IDOR guard reused verbatim from
+  ``project_papers.list_project_papers``) and raises 404 when absent.
+- ``delete_project_question`` is addressed by question id rather than nested
+  under a project, so it has no project row to fetch. It filters the question
+  row itself on ``user_id`` — a ``NOT NULL`` column written only inside the
+  transaction that has already passed ``assert_project_owner`` — so another
+  user's question matches nothing and the endpoint 404s.
+
+The DELETE guard is the stricter of the two, keying on the question's own
+owner rather than the project's current owner: a deliberate deviation, not an
+oversight. Either way a caller can never read or write another user's
+questions or activity.
 """
 
 import asyncpg

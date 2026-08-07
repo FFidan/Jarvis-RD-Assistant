@@ -13,7 +13,8 @@ vi.mock('@/lib/api', () => ({
   createDeck: vi.fn(),
   exportAnki: vi.fn(),
 }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 import { fetchDecks, createDeck } from '@/lib/api';
 import { toast } from 'sonner';

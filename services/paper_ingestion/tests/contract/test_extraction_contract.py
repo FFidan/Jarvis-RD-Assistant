@@ -16,6 +16,10 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
+    patch_pi_test_app,
+)
+from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
 )
 
@@ -29,40 +33,26 @@ pytestmark = [
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_admin(contract_conn):
     """PI app wired to contract conn + require_admin bypassed (admin-gated template writes)."""
-    from jarvis_common import (
-        current_user_id_strict_with_owner_override,
-        get_current_user_id,
-    )
     from jarvis_common.auth import require_admin
     from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-
-    removed_overrides = {
-        key: app.dependency_overrides.pop(key, None)
-        for key in (current_user_id_strict_with_owner_override, get_current_user_id)
-    }
 
     async def _allow_admin():
         return None
 
-    app.dependency_overrides[require_admin] = _allow_admin
-
-    yield app
-
-    app.dependency_overrides.pop(require_admin, None)
-    if original_pool is None:
-        if hasattr(app.state, "db_pool"):
-            del app.state.db_pool
-    else:
-        app.state.db_pool = original_pool
-
-    for key, removed in removed_overrides.items():
-        if removed is not None:
-            app.dependency_overrides[key] = removed
+    shared = SharedConnPool(contract_conn)
+    with patch_pi_test_app(
+        shared,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=True,
+            dependency_overrides={require_admin: _allow_admin},
+        ),
+    ) as wired_app:
+        yield wired_app
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,38 +81,51 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
 @pytest.fixture()
 def _app_with_pool():
     """Yield a factory that creates a ready-to-test app for a given job user_id."""
+    from contextlib import ExitStack
+
     from fastapi import HTTPException
 
     from jarvis_common import current_user_id_strict, verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    def _make(job_user_id: int | None, caller_user_id: int | None = None):
-        pool = _make_pool_with_job(job_user_id)
-        app.state.db_pool = pool
+    with ExitStack() as stack:
 
-        try:
-            app.state.limiter.enabled = False
-        except AttributeError:
-            pass
+        def _make(job_user_id: int | None, caller_user_id: int | None = None):
+            pool = _make_pool_with_job(job_user_id)
 
-        # Bypass API key auth
-        app.dependency_overrides[verify_api_key] = lambda: None
-        # Stub current_user_id_strict: return caller id when set, raise 401 when None.
-        # stream_job uses Depends(current_user_id_strict) which raises 401 on None.
-        if caller_user_id is not None:
-            app.dependency_overrides[current_user_id_strict] = lambda: caller_user_id
-        else:
+            # Stub current_user_id_strict: return caller id when set, raise 401
+            # when None. stream_job uses Depends(current_user_id_strict) which
+            # raises 401 on None.
+            if caller_user_id is not None:
+                caller = caller_user_id
 
-            async def _raise_401():
-                raise HTTPException(status_code=401, detail="Not authenticated")
+                def _caller_override(caller=caller):
+                    return caller
+            else:
 
-            app.dependency_overrides[current_user_id_strict] = _raise_401
+                async def _caller_override():
+                    raise HTTPException(status_code=401, detail="Not authenticated")
 
-        return app, pool
+            stack.enter_context(
+                patch_pi_test_app(
+                    pool,
+                    app=app,
+                    get_db_pool=get_db_pool,
+                    limiter=limiter,
+                    options=PITestAppOptions(
+                        remove_owner_override=False,
+                        disable_limiter=True,
+                        dependency_overrides={
+                            verify_api_key: lambda: None,
+                            current_user_id_strict: _caller_override,
+                        },
+                    ),
+                )
+            )
+            return app, pool
 
-    yield _make
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+        yield _make
 
 
 # ---------------------------------------------------------------------------

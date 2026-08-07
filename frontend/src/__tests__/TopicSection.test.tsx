@@ -111,3 +111,32 @@ describe('TopicSection subscription switch', () => {
     });
   });
 });
+
+describe('TopicSection load failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchTopics).mockResolvedValue([TOPIC]);
+    vi.mocked(fetchMySubscriptions).mockResolvedValue([]);
+  });
+
+  it('shows the "No topics" empty state when the list loads empty', async () => {
+    vi.mocked(fetchTopics).mockResolvedValue([]);
+    renderSection();
+    expect(await screen.findByText('No topics')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load topics.')).toBeNull();
+  });
+
+  it('shows an error message, not the empty state, when topics fail to load', async () => {
+    vi.mocked(fetchTopics).mockRejectedValue(new Error('network down'));
+    renderSection();
+    expect(await screen.findByText('Failed to load topics.')).toBeInTheDocument();
+    expect(screen.queryByText('No topics')).toBeNull();
+  });
+
+  it('shows an error message when subscriptions fail to load while topics render', async () => {
+    vi.mocked(fetchMySubscriptions).mockRejectedValue(new Error('network down'));
+    renderSection();
+    expect(await screen.findByText('Failed to load topic subscriptions.')).toBeInTheDocument();
+    expect(screen.getByText('Diffusion Models')).toBeInTheDocument();
+  });
+});

@@ -21,7 +21,8 @@ const getRetentionMock = vi.fn();
 const putRetentionMock = vi.fn();
 const acknowledgeRestoreMock = vi.fn();
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/lib/api/backups', () => ({
   getRestorePoints: () => getRestorePointsMock(),
@@ -497,6 +498,14 @@ describe('AdminBackupsPage', () => {
     const section = await screen.findByTestId('inbox-restore-section');
     expect(within(section).getByText(/restore from another jarvis/i)).toBeInTheDocument();
     expect(screen.getByTestId('inbox-empty')).toHaveTextContent(/no off-host backups staged/i);
+    expect(screen.queryByText('Failed to load off-host backups.')).toBeNull();
+  });
+
+  it('shows an error message instead of silently hiding the section when the inbox fails to load', async () => {
+    getInboxRestorePointsMock.mockRejectedValue(new Error('network down'));
+    renderPage();
+    expect(await screen.findByText('Failed to load off-host backups.')).toBeInTheDocument();
+    expect(screen.queryByTestId('inbox-restore-section')).toBeNull();
   });
 
   it('lists inbox restore points and triggers an inbox restore through the RESTORE confirm', async () => {

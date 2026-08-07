@@ -9,8 +9,8 @@ vi.stubGlobal('fetch', mockFetch);
 // Spy on the cross-user-hygiene purges the auth flows fan out to. These are
 // mocked at the module boundary so the test asserts the contract (the auth
 // flow calls them) without driving real IndexedDB.
-const mockClearReviewOutbox = vi.fn().mockResolvedValue(undefined);
-const mockClearPersistedQueryCache = vi.fn().mockResolvedValue(undefined);
+const mockClearReviewOutbox = vi.fn(async (): Promise<void> => undefined);
+const mockClearPersistedQueryCache = vi.fn(async (): Promise<void> => undefined);
 vi.mock('@/lib/review-outbox', () => ({
   clearReviewOutbox: () => mockClearReviewOutbox(),
 }));

@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
+from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -19,28 +20,62 @@ def _user_config_rows(
     return rows
 
 
+@pytest.fixture(autouse=True)
+def _isolate_probe_caches():
+    """Flush the module-level setup-status TTL caches around every test.
+
+    The direct ``_probe_ollama`` / ``_compute_model_warnings`` tests below run
+    the real functions, which memoize their result in ``_ollama_probe_cache``
+    and ``_model_warnings_cache`` for 10-30 s. Without a flush, whichever test
+    runs next observes the previous test's probe result instead of its own
+    wiring — under randomized order this poisoned e.g. the litellm-down test
+    with a cached "not pulled" warning. Flush on entry and exit so no ordering
+    can leak a cached probe in either direction.
+    """
+    from paper_ingestion.routers import system as system_module
+
+    system_module._ollama_probe_cache._ts = 0.0
+    system_module._model_warnings_cache._ts = 0.0
+    yield
+    system_module._ollama_probe_cache._ts = 0.0
+    system_module._model_warnings_cache._ts = 0.0
+
+
 @pytest.fixture()
 def _app(monkeypatch):
     # Ensure TELEGRAM_BOT_TOKEN is deterministically absent by default.
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama-mock:11434")
+    # With the TTL caches flushed around every test, each endpoint test really
+    # runs the model-warnings probe. Point it at a connection-refused address
+    # so the degraded path stays fast instead of hanging on DNS for the
+    # compose-internal hostname.
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://127.0.0.1:9")
 
     from jarvis_common import require_admin, verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
-    app.state.db_pool = mock_pool
-    app.state.limiter.enabled = False
-
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    # AUTHZ-03 added require_admin to get_setup_status; these tests verify the
-    # response logic (the admin gate itself is covered in test_system_authz).
-    app.dependency_overrides[require_admin] = lambda: None
-    yield app, conn
-    app.dependency_overrides.clear()
-    app.state.limiter.enabled = True
+    with patch_pi_test_app(
+        mock_pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            # AUTHZ-03 added require_admin to get_setup_status; these tests
+            # verify the response logic (the admin gate itself is covered in
+            # test_system_authz).
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                require_admin: lambda: None,
+            },
+        ),
+    ):
+        yield app, conn
 
 
 # ---------------------------------------------------------------------------
@@ -260,9 +295,6 @@ async def test_probe_ollama_reachable_but_incomplete_populates_downloading(monke
 
     from paper_ingestion.routers import system as system_module
 
-    # Flush the TTL cache so our mock is used fresh.
-    system_module._ollama_probe_cache._ts = 0.0
-
     class _FakeResponse:
         status_code = 200
 
@@ -391,10 +423,6 @@ async def test_compute_model_warnings_not_pulled(monkeypatch):
     import paper_ingestion.services.litellm_config as _lc
     import paper_ingestion.routers.system as system_module
 
-    # Flush the model-warnings TTL cache so this test's mocks are used fresh
-    # (the cache is shared across direct _compute_model_warnings tests).
-    system_module._model_warnings_cache._ts = 0.0
-
     async def _fake_deployments():
         return [
             _lc.LiteLLMDeployment.model_validate(
@@ -440,9 +468,6 @@ async def test_compute_model_warnings_empty_when_all_match(monkeypatch):
     """_compute_model_warnings returns [] when every routed model is installed."""
     import paper_ingestion.services.litellm_config as _lc
     import paper_ingestion.routers.system as system_module
-
-    # Flush the model-warnings TTL cache so this test's mocks are used fresh.
-    system_module._model_warnings_cache._ts = 0.0
 
     async def _fake_deployments():
         return [
@@ -498,9 +523,6 @@ async def test_compute_model_warnings_latest_tolerant(monkeypatch):
     import paper_ingestion.services.litellm_config as _lc
     import paper_ingestion.routers.system as system_module
 
-    # Flush the model-warnings TTL cache so this test's mocks are used fresh.
-    system_module._model_warnings_cache._ts = 0.0
-
     async def _fake_deployments():
         return [
             _lc.LiteLLMDeployment.model_validate(
@@ -551,9 +573,6 @@ async def test_compute_model_warnings_excludes_embed_role(monkeypatch):
     """
     import paper_ingestion.services.litellm_config as _lc
     import paper_ingestion.routers.system as system_module
-
-    # Flush the model-warnings TTL cache so this test's mocks are used fresh.
-    system_module._model_warnings_cache._ts = 0.0
 
     async def _fake_deployments():
         return [

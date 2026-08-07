@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from jarvis_common.sse import SSE_DONE, sse_event, sse_keepalive
+from jarvis_common.sse import SSE_DONE, sse_event, sse_keepalive, sse_named_event
 
 
 def test_sse_event_formats_payload_as_single_data_frame() -> None:
@@ -18,3 +18,21 @@ def test_sse_done_constant_matches_protocol_sentinel() -> None:
 def test_sse_keepalive_returns_comment_frame() -> None:
     """Keepalive frames should use SSE comment syntax and a blank terminator."""
     assert sse_keepalive() == ": keepalive\n\n"
+
+
+def test_sse_named_event_emits_event_and_data_lines() -> None:
+    """Named events should precede the payload with an ``event:`` line."""
+    assert sse_named_event("done", {"a": 1}) == 'event: done\ndata: {"a": 1}\n\n'
+
+
+def test_sse_named_event_payload_matches_the_unnamed_helper() -> None:
+    """Named frames must carry the exact wire bytes an SSE client parses.
+
+    Asserted against the literal frame (not by re-calling the helpers), so any
+    format drift — prefix, JSON encoding, or the blank-line terminator — fails
+    here even if it changes both helpers consistently.
+    """
+    payload = {"served_by": "qwen3:8b", "fallback": False}
+    assert sse_named_event("backend", payload) == (
+        'event: backend\ndata: {"served_by": "qwen3:8b", "fallback": false}\n\n'
+    )

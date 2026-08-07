@@ -13,13 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.advisory_lock import AdvisoryLock
+from jarvis_common.testing_db import make_multi_acquire_pool
 
 
 def _mock_pool(conn: MagicMock) -> MagicMock:
-    pool = MagicMock()
-    pool.acquire = AsyncMock(return_value=conn)
-    pool.release = AsyncMock()
-    return pool
+    return make_multi_acquire_pool([conn], await_acquire=True)[0]
 
 
 @pytest.mark.asyncio

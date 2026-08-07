@@ -27,6 +27,10 @@ import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
 
 from jarvis_common.testing_contract_apps import (
+    PITestAppOptions,
+    patch_pi_test_app,
+)
+from jarvis_common.testing_contract_apps import (
     make_contract_client as _client,
 )
 from paper_ingestion.ingestion.search import EmbeddingSearchMixin
@@ -51,11 +55,6 @@ async def _pi_app(contract_conn):
     from paper_ingestion.deps import get_db_pool, get_embedder, limiter
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_embedder = getattr(app.state, "embedder", None)
-
     # Idiomatic mock for embedder (Qdrant/Ollama boundary)
     mock_embedder = MagicMock()
     mock_embedder.qdrant = MagicMock()  # non-None so 503 is not raised
@@ -63,33 +62,22 @@ async def _pi_app(contract_conn):
     mock_embedder.search_similar = AsyncMock(return_value=[])
     mock_embedder.hybrid_search = AsyncMock(return_value=[])
 
-    app.state.db_pool = shared
-    app.state.http_client = MagicMock()
-    app.state.embedder = mock_embedder
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[get_embedder] = lambda: mock_embedder
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            app.state.__dict__.pop("http_client", None)
-        else:
-            app.state.http_client = original_http
-        if original_embedder is None:
-            app.state.__dict__.pop("embedder", None)
-        else:
-            app.state.embedder = original_embedder
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(get_embedder, None)
+    shared = SharedConnPool(contract_conn)
+    with patch_pi_test_app(
+        shared,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            mock_http_client=True,
+            state_overrides={"embedder": mock_embedder},
+            dependency_overrides={get_embedder: lambda: mock_embedder},
+        ),
+    ) as wired_app:
+        yield wired_app
 
 
 # ---------------------------------------------------------------------------

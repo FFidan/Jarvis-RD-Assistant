@@ -26,6 +26,7 @@ from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.pdf_processor import resolve_safe_pdf_path as _real_resolve_safe_pdf_path
 from paper_ingestion.routers import jobs as _jobs_router_module
+from paper_ingestion.services import embedding_reconcile as _real_embedding_reconcile
 from paper_ingestion.services import pdf_workflow as _real_pdf_workflow
 from paper_ingestion.services.pdf_workflow import (
     PDFRecordMissingError as _RealPDFRecordMissingError,
@@ -58,9 +59,9 @@ def _install_stubs(monkeypatch):
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
     _workflow_stub.PDFRecordMissingError = _RealPDFRecordMissingError
-    # Resolved from the live module, not bound at import: test_pdf_workflow.py
-    # reloads pdf_workflow, which rebinds its classes, and a handler can only
-    # catch the class its own import resolves.
+    # Resolved from the live module rather than bound at import time. The
+    # classes are defined in services.pdf_errors and re-imported unchanged by
+    # a pdf_workflow reload, so both bindings stay identical either way.
     _workflow_stub.PDFRebuildNotPermittedError = _real_pdf_workflow.PDFRebuildNotPermittedError
     _workflow_stub.PDFUserFacingError = _real_pdf_workflow.PDFUserFacingError
     _workflow_stub.download_and_store_pdf = AsyncMock()
@@ -88,16 +89,9 @@ def _make_ctx() -> MagicMock:
     return ctx
 
 
-# Keep local: pool.acquire returns conn directly (no aenter/aexit ctx wrapper) — paper_jobs uses async-with on conn itself.
 def _make_pool(row: dict) -> MagicMock:
     """Return an asyncpg pool mock that yields *row* from fetchrow."""
-    conn = MagicMock()
-    conn.fetchrow = AsyncMock(return_value=row)
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
-    return pool
+    return make_pool_and_conn(fetchrow_return=row, with_transaction=False)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +162,8 @@ def _force_run_pool(tmp_path, *, library_rows: list):
         "pdf_local_path": str(pdf_file),
         "is_visible": True,
     }
-    pool = _make_pool(row)
-    pool.acquire.return_value.fetch = AsyncMock(return_value=library_rows)
+    pool, conn = make_pool_and_conn(fetchrow_return=row, with_transaction=False)
+    conn.fetch = AsyncMock(return_value=library_rows)
     # Populate svc so a run that gets past the membership gate reaches
     # run_process_pdf rather than dying on uninitialised services — otherwise a
     # removed gate would surface as an unrelated RuntimeError.
@@ -297,13 +291,7 @@ def _make_pool_with_side_effects(side_effects: list) -> MagicMock:
     Each ``pool.acquire()`` call returns the same conn (async-CM yielding itself),
     so successive fetchrow calls across acquire blocks consume the side-effect list.
     """
-    conn = MagicMock()
-    conn.fetchrow = AsyncMock(side_effect=side_effects)
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
-    return pool
+    return make_pool_and_conn(fetchrow_side_effects=side_effects, with_transaction=False)[0]
 
 
 @pytest.mark.asyncio
@@ -868,14 +856,12 @@ def _make_library_pool(select_rows: list[dict], update_rows: list[dict], user_id
     rows in order (one per downloaded paper).
     """
     ownership_rows = [{"id": r["id"], "is_visible": True} for r in select_rows]
-    conn = MagicMock()
+    pool, conn = make_pool_and_conn(
+        fetchval_return=len(select_rows),
+        fetchrow_side_effects=list(update_rows),
+        with_transaction=False,
+    )
     conn.fetch = AsyncMock(side_effect=[list(select_rows), ownership_rows])
-    conn.fetchval = AsyncMock(return_value=len(select_rows))
-    conn.fetchrow = AsyncMock(side_effect=list(update_rows))
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=conn)
     return pool
 
 
@@ -1432,10 +1418,19 @@ def _use_real_workflow(monkeypatch, tmp_path, pj) -> MagicMock:
 
     _workflow_stub.run_process_pdf = _real_pdf_workflow.run_process_pdf
     monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+    # The generation resolver is read through two module namespaces: the PDF
+    # run (pdf_workflow) and reconciliation (embedding_reconcile). Patch both
+    # so either entry point sees the stubbed generation.
+    resolve_generation = AsyncMock(return_value=_REBUILD_VISIBILITY.visibility_generation)
     monkeypatch.setattr(
         _real_pdf_workflow,
         "_resolve_visibility_generation",
-        AsyncMock(return_value=_REBUILD_VISIBILITY.visibility_generation),
+        resolve_generation,
+    )
+    monkeypatch.setattr(
+        _real_embedding_reconcile,
+        "_resolve_visibility_generation",
+        resolve_generation,
     )
     monkeypatch.setattr(
         _real_pdf_workflow,

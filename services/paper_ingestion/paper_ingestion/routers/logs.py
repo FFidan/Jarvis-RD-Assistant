@@ -8,7 +8,6 @@ live-tailing events by correlation_id.
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 import uuid as uuid_mod
 from collections.abc import AsyncGenerator
@@ -19,7 +18,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import require_admin_or_api_key, verify_api_key
 from jarvis_common.db_helpers import escape_like
-from jarvis_common.sse import sse_event, sse_keepalive
+from jarvis_common.sse import sse_event, sse_keepalive, sse_named_event
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -375,13 +374,12 @@ async def _stream_correlation_events(
 
         # Terminate if job is in a terminal state
         if job_status in _TERMINAL_JOB_STATUSES:
-            done_payload = json.dumps({"reason": "job_terminal", "status": job_status})
-            yield f"event: done\ndata: {done_payload}\n\n"
+            yield sse_named_event("done", {"reason": "job_terminal", "status": job_status})
             return
 
         # Terminate on idle timeout
         if time.monotonic() - idle_since > _STREAM_MAX_IDLE_SECONDS:
-            yield f"event: done\ndata: {json.dumps({'reason': 'idle_timeout'})}\n\n"
+            yield sse_named_event("done", {"reason": "idle_timeout"})
             return
 
         # Keepalive comment every poll cycle (low overhead)

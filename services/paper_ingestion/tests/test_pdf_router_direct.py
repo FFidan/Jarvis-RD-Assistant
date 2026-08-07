@@ -17,7 +17,7 @@ fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 from jarvis_common.testing import make_pool_and_conn  # noqa: E402
 from jarvis_common.jobs import JobError  # noqa: E402
 from paper_ingestion.pdf_processor import PDFPublishBlockedError  # noqa: E402
-from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
 
@@ -431,7 +431,9 @@ async def test_process_pdf_dev_mode_exposes_error_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf_mock)
 
-    with mock_patch("paper_ingestion.routers.pdf.get_core_settings", return_value=dev_settings):
+    with mock_patch(
+        "paper_ingestion.routers.pdf_actions.get_core_settings", return_value=dev_settings
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await pdf.process_pdf.__wrapped__(
                 request,
@@ -605,7 +607,7 @@ def test_process_pdf_async_response_model_no_500():
     from fastapi.testclient import TestClient
     from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
-    from paper_ingestion.routers.pdf import router
+    from paper_ingestion.routers.pdf_actions import router
 
     app = FastAPI()
     app.include_router(router)
@@ -662,31 +664,38 @@ async def test_get_pdf_rejects_traversal_path(monkeypatch):
     """
     from httpx import ASGITransport
 
-    import paper_ingestion.routers.pdfs as pdfs_mod
+    import paper_ingestion.routers.pdf_files as pdfs_mod
     from jarvis_common.auth import get_current_user_id, verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     pool, _ = make_pool_and_conn()
-    app.state.db_pool = pool
-    app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_current_user_id] = lambda: 1
 
     def _escape(*_args, **_kwargs):
         raise ValueError("path escapes base directory")
 
     monkeypatch.setattr(pdfs_mod, "secure_path", _escape)
 
-    try:
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: 1,
+            },
+        ),
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get("/api/pdfs/1")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
 
     assert resp.status_code == 400
 

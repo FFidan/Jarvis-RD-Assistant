@@ -99,6 +99,37 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def api_key_matches(presented: str | None, configured: str) -> bool:
+    """Compare a presented API key against the configured one in constant time.
+
+    Parameters
+    ----------
+    presented : str or None
+        Candidate key supplied by the caller, usually the ``X-API-Key`` header.
+        A missing or empty value compares as a non-match.
+    configured : str
+        The key this deployment expects.
+
+    Returns
+    -------
+    bool
+        Whether the presented key equals the configured one.
+
+    Notes
+    -----
+    Callers keep their own "is a key configured?" guard, because they disagree
+    about what an unconfigured key means: :func:`verify_api_key` falls through
+    to the ``DEV_AUTH_BYPASS`` check, while the owner-override path and the
+    API-key-to-session exchange fail closed. Answering that question here would
+    silently make all three fail closed.
+
+    """
+    return hmac.compare_digest(
+        (presented or "").encode("utf-8", "replace"),
+        configured.encode("utf-8", "replace"),
+    )
+
+
 def _load_api_key() -> str | None:
     """Resolve JARVIS_API_KEY once at import time (and on explicit refresh).
 
@@ -462,10 +493,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
         return
     # A configured API key is enforced in every environment.
     if jarvis_api_key:
-        if not hmac.compare_digest(
-            (api_key or "").encode("utf-8", "replace"),
-            jarvis_api_key.encode("utf-8", "replace"),
-        ):
+        if not api_key_matches(api_key, jarvis_api_key):
             # Record failures as potential probes or client misconfiguration.
             # Successful checks are omitted to avoid per-request log noise.
             try:
@@ -768,10 +796,7 @@ async def current_user_id_with_owner_override(
 
     # Guard (a): valid API key required.
     jarvis_api_key = _CACHED_API_KEY
-    if not jarvis_api_key or not hmac.compare_digest(
-        (api_key or "").encode("utf-8", "replace"),
-        jarvis_api_key.encode("utf-8", "replace"),
-    ):
+    if not jarvis_api_key or not api_key_matches(api_key, jarvis_api_key):
         logger.warning(
             "X-Owner-User-Id header present but API key check failed from %s",
             request.client.host if request.client else "unknown",
@@ -822,10 +847,8 @@ async def current_user_id_with_owner_override(
         ) from None
 
     # Guard (c): user_id must exist in the users table.
-    # We access the DB pool via app.state — same pattern as other auth helpers.
     try:
-        pool: asyncpg.Pool | None = getattr(getattr(request, "app", None), "state", None)
-        pool = getattr(pool, "db_pool", None) if pool is not None else None
+        pool = _request_db_pool(request)
         if pool is None:
             raise HTTPException(
                 status_code=503,
@@ -975,7 +998,7 @@ def validate_production_config() -> None:
         On the first failed gate encountered.
 
     """
-    from jarvis_common.settings import get_core_settings, get_secrets_settings  # noqa: PLC0415
+    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415
 
     core = get_core_settings()
     env = core.environment.lower()
@@ -1036,9 +1059,6 @@ def validate_production_config() -> None:
             )
 
     if env == "production":
-        import os as _os  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
-
         # Config encryption key gate. user_config rows are encrypted
         # with Fernet using JARVIS_CONFIG_KEY. Without it the first decrypt at
         # request-time raises a cryptic error instead of a clear boot failure.
@@ -1081,7 +1101,7 @@ def validate_production_config() -> None:
         # resolution order (env var, then the Docker Secret mount) so a
         # secrets-file deployment is not falsely flagged. Reject empty,
         # placeholder, and short passwords.
-        postgres_password = _os.environ.get("POSTGRES_PASSWORD", "")
+        postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
         if not postgres_password:
             try:
                 postgres_password = Path(POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
@@ -1104,7 +1124,7 @@ def validate_production_config() -> None:
         # when it is unset the link host falls back to the inbound request
         # ``Host`` header, which an attacker can poison to harvest tokens.
         # Require it explicitly in production.
-        app_base_url = _os.environ.get("APP_BASE_URL", "").strip()
+        app_base_url = os.environ.get("APP_BASE_URL", "").strip()
         if not app_base_url:
             raise RuntimeError(
                 "APP_BASE_URL must be set in production (prevents magic-link host-header poisoning)"

@@ -6,12 +6,8 @@ import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import type { ProviderMetadata } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();

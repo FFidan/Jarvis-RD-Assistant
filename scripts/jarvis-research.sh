@@ -33,18 +33,13 @@ LIFECYCLE_CODE_DIR="$(
 }
 
 # -----------------------------------------------------------------------------
-# Output and error helpers.
+# Output and error helpers. The colours and info/ok/warn/err come from
+# setup_lib.sh, loaded here rather than at dispatch because argument parsing and
+# repo resolution below already report their failures through err().
 # -----------------------------------------------------------------------------
-if [ -t 1 ]; then
-  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
-  C_BLUE=$'\033[34m'; C_BOLD=$'\033[1m'; C_RESET=$'\033[0m'
-else
-  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_BOLD=""; C_RESET=""
-fi
-info() { printf '%s[INFO]%s  %s\n' "$C_BLUE"   "$C_RESET" "$*"; }
-ok()   { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
-warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-err()  { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
+# shellcheck source=scripts/setup_lib.sh
+# shellcheck disable=SC1091  # selected lifecycle runtime, verified by its caller
+. "$LIFECYCLE_CODE_DIR/setup_lib.sh"
 
 # die MSG NEXT — a refused/failed operation. Two lines: what happened + what to
 # run next. Every failure path also points at `jarvis-research doctor`.
@@ -2409,9 +2404,6 @@ fi
 
 REPO="$(resolve_repo)"
 cd "$REPO"
-# shellcheck source=scripts/setup_lib.sh
-# shellcheck disable=SC1091  # selected lifecycle runtime, verified by its caller
-. "$LIFECYCLE_CODE_DIR/setup_lib.sh"
 # The managed repo, not the caller's shell, owns Compose file/project/profile
 # selection. Compose reloads the install's persisted selectors from its .env.
 sanitize_compose_environment

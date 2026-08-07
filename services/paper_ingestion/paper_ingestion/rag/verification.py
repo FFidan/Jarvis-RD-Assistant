@@ -22,6 +22,7 @@ import asyncpg
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.models.papers import ChunkResponse
+from paper_ingestion.queries.verification_substrate import load_verification_text
 
 if TYPE_CHECKING:
     pass
@@ -137,15 +138,6 @@ def _make_chunk_responses(
             )
         )
     return out
-
-
-async def _fetch_fulltext(conn: asyncpg.pool.PoolConnectionProxy, paper_id: int) -> str:
-    """Fetch and concatenate all chunks for *paper_id* from the DB."""
-    rows = await conn.fetch(
-        "SELECT content FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
-        paper_id,
-    )
-    return "\n\n".join(row["content"] for row in rows)
 
 
 def _paper_ordinals(sources: list[dict]) -> dict[int, int]:
@@ -275,7 +267,7 @@ async def verify_answer_sentences(
     if paper_ids:
         async with db_pool.acquire() as conn:
             for pid in paper_ids:
-                full_texts[pid] = await _fetch_fulltext(conn, pid)
+                full_texts[pid] = await load_verification_text(conn, pid)
     else:
         # Single-paper path: no paper_id in sources — build synthetic full text
         # from the concatenated source content (already in memory, no DB needed)

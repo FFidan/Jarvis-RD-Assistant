@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from jarvis_common.testing import make_pool_and_conn
 
 
 @pytest.fixture()
@@ -34,11 +35,8 @@ def app_and_pool(monkeypatch):
     app = FastAPI()
     app.include_router(infra_events_mod.router)
 
-    pool = MagicMock()
-    conn = AsyncMock()
+    pool, conn = make_pool_and_conn(with_transaction=False)
     conn.executemany = AsyncMock(return_value=None)
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
     app.state.db_pool = pool
 
     return app, pool, conn

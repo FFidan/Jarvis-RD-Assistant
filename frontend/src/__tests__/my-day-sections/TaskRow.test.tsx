@@ -27,12 +27,8 @@ vi.mock('@/lib/api', () => ({
   deleteTask: vi.fn(),
 }));
 
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { updateTask, deleteTask } = await import('@/lib/api');
 const { toast } = await import('sonner');

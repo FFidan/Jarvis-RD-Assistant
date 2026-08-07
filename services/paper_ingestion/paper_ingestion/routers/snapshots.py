@@ -8,7 +8,7 @@ from jarvis_common.paths import secure_path
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
-from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
+from paper_ingestion.routers.pdf_files import assert_paper_pdf_visible
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 

@@ -1,14 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { SourceSection } from '@/components/settings/SourceSection';
+import { SourcesList } from '@/components/settings/SourcesList';
 import type { SourceConfig } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('@/lib/api', () => ({
   updateSource: vi.fn().mockResolvedValue({}),
+  fetchSources: vi.fn(),
+  reorderSources: vi.fn().mockResolvedValue(undefined),
 }));
+
+const { fetchSources } = await import('@/lib/api');
 
 function source(overrides: Partial<SourceConfig> = {}): SourceConfig {
   return {
@@ -53,5 +58,35 @@ describe('SourceSection', () => {
     );
 
     expect(screen.getByText(/^API key: not set$/i)).toBeInTheDocument();
+  });
+});
+
+describe('SourcesList', () => {
+  function renderList() {
+    const queryClient = createTestQueryClient();
+    return renderWithProviders(<SourcesList />, { queryClient });
+  }
+
+  it('renders the source rows when the list loads', async () => {
+    vi.mocked(fetchSources).mockResolvedValue([source()]);
+    renderList();
+    expect(await screen.findByText(/API key: optional/i)).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load sources.')).toBeNull();
+  });
+
+  it('renders nothing but no error message when the list loads empty', async () => {
+    vi.mocked(fetchSources).mockResolvedValue([]);
+    const { container } = renderList();
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading sources/)).toBeNull();
+    });
+    expect(screen.queryByText('Failed to load sources.')).toBeNull();
+    expect(container).toBeInTheDocument();
+  });
+
+  it('shows an error message when the list fails to load', async () => {
+    vi.mocked(fetchSources).mockRejectedValue(new Error('network down'));
+    renderList();
+    expect(await screen.findByText('Failed to load sources.')).toBeInTheDocument();
   });
 });

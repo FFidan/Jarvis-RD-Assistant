@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { errorMessage } from '@/lib/errors';
 import type { RecentFeedback } from '@/types';
 
@@ -149,7 +150,7 @@ export function ActionsSidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genJob?.status]);
 
-  const { data: decks = [] } = useQuery({
+  const { data: decks = [], isError: decksError } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
@@ -531,7 +532,9 @@ export function ActionsSidebar({
 
       <h3 className="text-lg font-semibold">Generate Cards</h3>
 
-      {decks.length > 0 ? (
+      {decksError ? (
+        <QueryErrorState message="Failed to load decks." />
+      ) : decks.length > 0 ? (
         <div className="space-y-3">
           <div className="space-y-1">
             <Label htmlFor="action-deck">Target Deck</Label>

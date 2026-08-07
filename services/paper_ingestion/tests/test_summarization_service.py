@@ -10,6 +10,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from jarvis_common.testing_db import make_multi_acquire_pool
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.exceptions import (
@@ -35,10 +36,8 @@ async def _noop_lock(*args, **kwargs):
     yield
 
 
-# Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*connections: AsyncMock) -> MagicMock:
     """Create a pool mock that yields transaction-capable connections in order."""
-    contexts = []
     for index, conn in enumerate(connections):
         transaction = MagicMock()
         transaction.__aenter__ = AsyncMock(return_value=transaction)
@@ -46,14 +45,7 @@ def _make_pool(*connections: AsyncMock) -> MagicMock:
         conn.transaction = MagicMock(return_value=transaction)
         if index > 0 and conn.fetchval._mock_return_value is DEFAULT:
             conn.fetchval.return_value = 0
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=conn)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        contexts.append(ctx)
-
-    pool = MagicMock()
-    pool.acquire.side_effect = contexts
-    return pool
+    return make_multi_acquire_pool(list(connections))[0]
 
 
 def _paper_row() -> dict:
@@ -195,6 +187,38 @@ async def test_summary_idempotency_requires_the_current_content_generation():
     lookup = conn.fetchrow.await_args_list[1]
     assert "content_generation = $3" in lookup.args[0]
     assert lookup.args[1:] == (7, 42, 1)
+
+
+@pytest.mark.asyncio
+async def test_summary_inputs_preserve_stored_chunk_order_and_timestamps():
+    """The loaded substrate keeps chunk_index order, this site's newline join,
+    and the stored created_at values — never an invented timestamp.
+
+    Chunk order decides what the LLM reads and which chunk a verified quote
+    is attributed to, so a silent reorder is a retrieval-quality regression
+    no other assertion observes.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    stored_at = datetime(2024, 5, 4, tzinfo=UTC)
+    rows = _chunk_rows(["First chunk.", "Second chunk.", "Third chunk."])
+    for row in rows:
+        row["created_at"] = stored_at
+    conn.fetch.return_value = rows
+    pool = _make_pool(conn)
+
+    with patch.object(summarization, "advisory_lock", _noop_lock):
+        loaded = await summarization._load_paper_for_summary(
+            pool,
+            paper_id=7,
+            user_id=42,
+            force=False,
+        )
+
+    assert isinstance(loaded, summarization.SummaryInputs)
+    assert loaded.full_text == "First chunk.\nSecond chunk.\nThird chunk."
+    assert [c.chunk_index for c in loaded.chunks] == [0, 1, 2]
+    assert [c.created_at for c in loaded.chunks] == [stored_at, stored_at, stored_at]
 
 
 def _summary_lock_conn(lock_error: BaseException | None = None) -> AsyncMock:

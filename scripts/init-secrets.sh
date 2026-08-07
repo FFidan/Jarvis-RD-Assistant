@@ -283,6 +283,16 @@ if [ ! -f "secrets/smtp_pass.txt" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Deliberately NOT created here: secrets/langfuse_init_pk.txt and
+# secrets/langfuse_init_sk.txt. Langfuse headless init is write-once, so those
+# come from scripts/gen-langfuse-keys.sh at setup time only — creating a fresh
+# keypair during an update would 401 against an already-provisioned Langfuse
+# volume. Every secret docker-compose.yml declares must either be created above
+# or classified setup-time-only in tests/test_docker_compose_invariants.py;
+# that test fails the build when a new compose secret has no provisioning path.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Fail loudly if any auto-generated secret could not be written — a missing
 # secrets/*.txt for a _FILE-mounted secret breaks `docker compose up`.
 # ---------------------------------------------------------------------------
