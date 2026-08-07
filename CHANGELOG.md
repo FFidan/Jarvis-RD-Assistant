@@ -50,6 +50,11 @@ that would notice, so each fix arrives with the check that was missing.
   under which strict mode and extraction failures raise.
 - **The installer, upgrade, backup and restore scripts are now covered by shell
   linting**, alongside the entry points that were already checked.
+- **The bundled model catalog was re-verified against its providers.** Catalog
+  freshness is now enforced by a scheduled repository check instead of a startup
+  warning the operator could not act on, and the top-tier local entry advances to
+  the current generation, `qwen3.6:35b-a3b` — a sparse mixture-of-experts model
+  whose 24 GB footprint leaves room for long-context work on 48 GB hardware.
 
 ## v1.2.3 (2026-08-04)
 
