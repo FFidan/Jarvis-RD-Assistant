@@ -155,6 +155,10 @@ dev = [
 # flavor cannot share one resolution of torch, so the groups are declared
 # conflicting: uv forks the lockfile and each group exports its own variant.
 [tool.uv]
+# Transitive floor: h2 below 4.4.1 carries a request-smuggling advisory
+# (duplicate Host header); no direct dependency declares h2, so the floor
+# lives here.
+constraint-dependencies = ["h2>=4.4.1"]
 conflicts = [
     [
         { group = "paper-ingestion" },

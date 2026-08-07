@@ -332,7 +332,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     assert overrides["brace-expansion@^1"] == "1.1.18"
     assert overrides["brace-expansion@^2"] == "2.1.4"
     assert overrides["brace-expansion@^5"] == "5.0.9"
-    assert overrides["js-yaml"] == "^4.3.0"
+    assert overrides["js-yaml"] == "^4.3.1"
     assert overrides["postcss"] == "^8.5.23"
     assert "runs-on: ubuntu-latest" in security_workflow
     assert "npm ls --prefix frontend js-yaml brace-expansion eslint --all" in security_workflow
