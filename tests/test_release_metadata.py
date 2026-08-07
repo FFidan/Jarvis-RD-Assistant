@@ -542,6 +542,13 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
+    papers_table = seed.split("CREATE TABLE papers(", 1)[1].split("\n);", 1)[0]
+    for column in ("external_id", "url"):
+        assert column in papers_table, (
+            f"the schema-101 seed's papers table lacks {column}, which migration "
+            "0111 updates; the restore round trip fails at the migration step "
+            "without it"
+        )
     for table in (
         "paper_contradictions",
         "paper_user_zotero_links",
