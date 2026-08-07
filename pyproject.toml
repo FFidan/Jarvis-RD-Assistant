@@ -73,7 +73,7 @@ paper-ingestion-base = [
     # is unsupported. Widening this range without moving the server ships that
     # warning to every install, so the two move together in a change that can
     # exercise a running server.
-    "qdrant-client>=1.14.3,<1.15.0",
+    "qdrant-client>=1.14.3,<1.20.0",
     "rapidfuzz>=3.0.0",
     "rispy>=0.9,<1.0",  # RIS citation export
     "scikit-learn>=1.6.0",
