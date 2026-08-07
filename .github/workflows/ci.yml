@@ -151,7 +151,7 @@ jobs:
       - name: Cross-user isolation suite
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "integration and live_pg"
           services/paper_ingestion/tests/integration/test_cross_user_isolation.py
           --junitxml=cross-user-isolation.junit.xml
@@ -162,7 +162,7 @@ jobs:
         # only the `live_pg` marker, so select that marker explicitly.
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "live_pg"
           services/paper_ingestion/tests/test_baseline_invariants.py
           --junitxml=baseline-invariants.junit.xml
@@ -230,7 +230,7 @@ jobs:
         # the non-skip validator cannot be satisfied by an unavailable service.
         run: >-
           uv run pytest
-          --override-ini="addopts=--import-mode=importlib"
+          --override-ini="addopts=--import-mode=importlib -p no:randomly"
           -m "contract and not integration and not live_qdrant"
           --junitxml=contract-tests.junit.xml
           -v
