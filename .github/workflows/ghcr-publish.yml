@@ -135,6 +135,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Build contexts differ by need: paper-ingestion, learning-engine and
+        # telegram-bot build from the repository root because their Dockerfiles
+        # COPY libs/jarvis_common; restore-uploader and the dashboard are
+        # self-contained and build from their own directories. Reproducing a
+        # build by hand requires the same context as its matrix entry.
         include:
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
@@ -279,6 +284,14 @@ jobs:
       # complete. This runs before the digest is uploaded, so a leg that cannot
       # import is never part of the manifest the release is assembled from.
       # The dashboard is nginx and carries no interpreter, so it has no target.
+      # This proves the dependency set, not the runtime: the real ENTRYPOINT and
+      # CMD, configuration, and health are exercised later, before any tag
+      # exists, by the cold-install and upgrade checks in the release process.
+      # The image blob itself is digest-pushed by the build step above before
+      # this check runs; a failing leg therefore leaves an unreferenced,
+      # untagged digest behind, which nothing resolves or promotes. That
+      # ordering is deliberate: pushing after a local load would either build
+      # twice or drop the SBOM attestations.
       - name: Import smoke - run the image's own interpreter
         if: needs.preflight.outputs.mode == 'verify' && matrix.smoke_import != ''
         run: |
