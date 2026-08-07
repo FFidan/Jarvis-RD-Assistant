@@ -595,11 +595,18 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
             f"{name}: compose secret file must be ./secrets/{name}.txt"
         )
 
-    scripts = {
-        mode: (REPO_ROOT / path).read_text(encoding="utf-8")
-        for mode, path in PROVISIONING_SCRIPTS.items()
-    }
+    scripts = {}
+    for mode, path in PROVISIONING_SCRIPTS.items():
+        lines = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
+        scripts[mode] = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
     for name, mode in SECRET_PROVISIONING.items():
         assert f"{name}.txt" in scripts[mode], (
-            f"{name}: declared '{mode}' but {PROVISIONING_SCRIPTS[mode]} never touches {name}.txt"
+            f"{name}: declared '{mode}' but {PROVISIONING_SCRIPTS[mode]} never touches "
+            f"{name}.txt outside comments"
+        )
+
+    for runner in ("update.sh", "setup.sh"):
+        assert "init-secrets.sh" in (REPO_ROOT / runner).read_text(encoding="utf-8"), (
+            f"{runner} no longer runs scripts/init-secrets.sh, so 'update' secrets "
+            "would not be provisioned before containers are touched"
         )
