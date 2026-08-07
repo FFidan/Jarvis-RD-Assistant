@@ -42,9 +42,9 @@ that would notice, so each fix arrives with the check that was missing.
   shown in list views.
 - **A missing-table error names the schema baseline to apply**, so the message
   points at the fix rather than only reporting the failure.
-- **Dependency floors were raised to their patched releases**, covering
-  advisories published against the HTTP/2 library and the frontend's YAML
-  parser while this release was being prepared.
+- **Dependency floors were raised to their patched releases** for the HTTP/2
+  library, the frontend's YAML parser, and the web framework, so no declared
+  version range admits a release carrying a known advisory.
 
 ### Changed
 
