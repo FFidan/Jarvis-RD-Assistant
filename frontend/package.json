@@ -5,6 +5,9 @@
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": "^22.22.2"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -75,7 +78,6 @@
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.6.1",
-    "@types/cytoscape": "^3.31.0",
     "@types/katex": "^0.16.8",
     "@types/node": "^26.1.2",
     "@types/react": "^19.2.17",

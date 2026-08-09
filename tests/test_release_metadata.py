@@ -413,6 +413,36 @@ def test_versions_env_contains_only_runtime_image_pins() -> None:
     assert all(key.endswith("_IMAGE") for key in keys)
 
 
+def test_frontend_uses_cytoscapes_bundled_type_definitions() -> None:
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+
+    assert "@types/cytoscape" not in package["devDependencies"]
+    assert "node_modules/@types/cytoscape" not in package_lock["packages"]
+
+
+def test_frontend_node_version_is_declared_once_and_reused_by_ci() -> None:
+    node_version = _read(".nvmrc").strip()
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+
+    assert node_version == "22.22.2"
+    assert package["engines"]["node"] == "^22.22.2"
+    assert package_lock["packages"][""]["engines"] == package["engines"]
+    assert f"Node.js {node_version}" in _read("README.md")
+
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/security.yml",
+        ".github/workflows/sbom.yml",
+    ):
+        workflow = _read(path)
+        assert workflow.count("actions/setup-node@") == workflow.count(
+            'node-version-file: ".nvmrc"'
+        )
+        assert "node-version:" not in workflow
+
+
 def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
     readme = " ".join(_read("README.md").split())
     release = " ".join(_read("docs/RELEASE.md").split())

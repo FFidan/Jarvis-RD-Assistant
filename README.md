@@ -231,7 +231,7 @@ See [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/mai
 
 ## Development
 
-### Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, [`uv`](https://docs.astral.sh/uv/).
+### Prerequisites: Python 3.12+, Node.js 22.22.2 (the tested version in `.nvmrc`), Docker Engine 24+ with Compose v2, [`uv`](https://docs.astral.sh/uv/).
 
 Install `uv` (Python package manager used for all backend tooling):
 
