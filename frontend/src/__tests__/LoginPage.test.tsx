@@ -76,7 +76,6 @@ vi.mock('@/stores/auth-store', () => {
   // the passkey login path calls getState().loginWithSession(user).
   useAuthStore.getState = () => ({
     lastError: storeLastError,
-    getApiKey: () => null,
     isAuthenticated: false,
     loginWithSession: loginWithSessionMock,
   });

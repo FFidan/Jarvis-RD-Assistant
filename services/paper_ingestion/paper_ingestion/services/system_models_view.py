@@ -14,6 +14,7 @@ import asyncpg
 import httpx
 from fastapi import Request
 from jarvis_common.hardware_fit import recommend_models
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from pydantic import Field
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -136,7 +137,7 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
 
     ollama_url = get_paper_ingestion_settings().ollama_base_url
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
             # Log so a reachable-but-erroring Ollama (e.g. 503 during startup)
@@ -201,7 +202,7 @@ def _build_role_routing_map(deployments: list[Any]) -> dict[str, str]:
 async def _fetch_installed_ollama_models(ollama_url: str) -> set[str] | None:
     """Fetch installed Ollama model names (:latest-stripped); None on failure."""
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
             # Reachable-but-erroring Ollama (e.g. 503 during startup): log the

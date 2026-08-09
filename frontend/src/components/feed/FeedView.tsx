@@ -22,6 +22,7 @@ import { HardDeleteModal } from './HardDeleteModal';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
 import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PaginationControls, PAGE_SIZE_OPTIONS } from './PaginationControls';
@@ -94,6 +95,9 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const recordResearchMilestone = useResearchMilestoneStore(
+    (state) => state.recordMilestone,
+  );
 
   // Pagination state — persisted in URL search params for deep-link support
   const rawLimit = Number(searchParams.get('limit'));
@@ -178,7 +182,10 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
 
   const saveMutation = useMutation({
     mutationFn: (paperId: number) => savePaper(paperId),
-    onSuccess: invalidateFeed,
+    onSuccess: () => {
+      recordResearchMilestone('save');
+      invalidateFeed();
+    },
     onError: toastError('save paper'),
   });
 

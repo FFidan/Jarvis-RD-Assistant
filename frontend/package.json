@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "1.2.4",
+  "version": "1.2.5",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "Apache-2.0",
   "type": "module",
@@ -41,6 +41,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "@simplewebauthn/browser": "^13.1.0",
     "@tanstack/query-async-storage-persister": "5.101.4",
+    "@tanstack/query-core": "5.101.4",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-query-persist-client": "5.101.4",
     "class-variance-authority": "^0.7.1",
@@ -53,7 +54,7 @@
     "lucide-react": "^1.27.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-joyride": "^2.9.3",
+    "react-joyride": "3.2.0",
     "react-markdown": "^10.1.0",
     "react-pdf-highlighter-extended": "^8.1.0",
     "react-router-dom": "^7.18.2",
@@ -63,8 +64,8 @@
     "remark-math": "^6.0.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
-    "zustand": "^5.0.14",
-    "@tanstack/query-core": "5.101.4"
+    "zod": "4.4.3",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

@@ -391,6 +391,150 @@ async def test_log_focus_session_persists_to_daily_log(
     )
 
 
+async def test_durable_focus_start_conflict_and_cross_user_isolation(
+    contract_two_users, _le_app, _configure_api_key
+):
+    payload = {"duration_seconds": 600, "source": "web"}
+    async with _client(_le_app, contract_two_users.cookie_a) as client_a:
+        started = await client_a.post("/api/executive/focus/start", json=payload)
+        conflict = await client_a.post("/api/executive/focus/start", json=payload)
+        active_a = await client_a.get("/api/executive/focus/active")
+    async with _client(_le_app, contract_two_users.cookie_b) as client_b:
+        active_b = await client_b.get("/api/executive/focus/active")
+
+    assert started.status_code == 201, started.text[:300]
+    assert started.json()["state"] == "active"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "focus_session_active"
+    assert active_a.status_code == 200
+    assert active_a.json()["id"] == started.json()["id"]
+    assert active_b.status_code == 200
+    assert active_b.json() is None
+
+
+async def test_durable_focus_pause_resume_preserves_elapsed_time(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    async with _client(_le_app, contract_two_users.cookie_a) as client:
+        started = await client.post(
+            "/api/executive/focus/start",
+            json={"duration_seconds": 600, "source": "web"},
+        )
+        session_id = started.json()["id"]
+        await contract_conn.execute(
+            "UPDATE focus_sessions SET started_at = NOW() - INTERVAL '120 seconds' WHERE id = $1",
+            session_id,
+        )
+        paused = await client.post(f"/api/executive/focus/{session_id}/pause")
+        await contract_conn.execute(
+            "UPDATE focus_sessions "
+            "SET started_at = NOW() - INTERVAL '180 seconds', "
+            "paused_at = NOW() - INTERVAL '60 seconds' WHERE id = $1",
+            session_id,
+        )
+        resumed = await client.post(f"/api/executive/focus/{session_id}/resume")
+
+    assert paused.status_code == 200, paused.text[:300]
+    assert paused.json()["session"]["state"] == "paused"
+    assert 475 <= paused.json()["session"]["remaining_seconds"] <= 480
+    assert resumed.status_code == 200, resumed.text[:300]
+    assert resumed.json()["session"]["state"] == "active"
+    assert resumed.json()["session"]["paused_seconds"] >= 59
+    assert 475 <= resumed.json()["session"]["remaining_seconds"] <= 480
+
+
+async def test_durable_focus_completion_is_idempotent_and_logs_once(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    before = await contract_conn.fetchval(
+        "SELECT COALESCE(focus_hours, 0) FROM daily_log "
+        "WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as client:
+        started = await client.post(
+            "/api/executive/focus/start",
+            json={
+                "duration_seconds": 60,
+                "source": "telegram",
+                "task_id": contract_two_users.task_id_a,
+            },
+        )
+        session_id = started.json()["id"]
+        await contract_conn.execute(
+            "UPDATE focus_sessions SET started_at = NOW() - INTERVAL '90 seconds' WHERE id = $1",
+            session_id,
+        )
+        first = await client.post(
+            f"/api/executive/focus/{session_id}/complete",
+            json={"mode": "elapsed"},
+        )
+        second = await client.post(
+            f"/api/executive/focus/{session_id}/complete",
+            json={"mode": "elapsed"},
+        )
+
+    after = await contract_conn.fetchval(
+        "SELECT focus_hours FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    assert first.status_code == 200, first.text[:300]
+    assert first.json()["changed"] is True
+    assert first.json()["session"]["recorded_seconds"] == 60
+    assert second.status_code == 200, second.text[:300]
+    assert second.json()["changed"] is False
+    assert float(after) - float(before or 0) == pytest.approx(1 / 60)
+
+
+async def test_durable_focus_completion_rejects_other_user(
+    contract_two_users, _le_app, _configure_api_key
+):
+    async with _client(_le_app, contract_two_users.cookie_a) as client_a:
+        started = await client_a.post(
+            "/api/executive/focus/start",
+            json={"duration_seconds": 600, "source": "web"},
+        )
+    async with _client(_le_app, contract_two_users.cookie_b) as client_b:
+        response = await client_b.post(
+            f"/api/executive/focus/{started.json()['id']}/complete",
+            json={"mode": "stop"},
+        )
+
+    assert response.status_code == 404
+
+
+async def test_elapsed_telegram_focus_survives_restart_until_delivery_ack(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    async with _client(_le_app, contract_two_users.cookie_a) as client:
+        started = await client.post(
+            "/api/executive/focus/start",
+            json={"duration_seconds": 60, "source": "telegram"},
+        )
+        session_id = started.json()["id"]
+        await contract_conn.execute(
+            "UPDATE focus_sessions SET started_at = NOW() - INTERVAL '90 seconds' WHERE id = $1",
+            session_id,
+        )
+
+        completed = await client.get("/api/executive/focus/active")
+        pending_first = await client.get("/api/executive/focus/telegram/pending")
+        pending_after_restart = await client.get("/api/executive/focus/telegram/pending")
+        acknowledged = await client.post(f"/api/executive/focus/{session_id}/telegram-notified")
+        acknowledged_again = await client.post(
+            f"/api/executive/focus/{session_id}/telegram-notified"
+        )
+        pending_after_ack = await client.get("/api/executive/focus/telegram/pending")
+
+    assert completed.status_code == 200
+    assert completed.json()["state"] == "completed"
+    assert pending_first.json()["id"] == session_id
+    assert pending_after_restart.json()["id"] == session_id
+    assert acknowledged.json()["changed"] is True
+    assert acknowledged_again.json()["changed"] is False
+    assert pending_after_ack.json() is None
+
+
 # ---------------------------------------------------------------------------
 # §A218 — GET /api/executive/my-day via session cookie (positive control)
 # ---------------------------------------------------------------------------

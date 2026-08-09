@@ -191,6 +191,14 @@ named HTTPS address for JARVIS's exact health marker. A missing client,
 cancelled sign-in, or failed Serve command leaves localhost working but exits
 nonzero so an unfinished private route is not reported as complete.
 
+Installations configured before v1.2.0 may still have HTTPS 443 pointing at
+the old raw listener on port 3001. `jarvis-research doctor` and the update
+summary inspect Serve state without changing it. When the complete node-wide
+configuration is a single 443 route to that legacy port, they print a targeted
+retarget command. Run it only after confirming that the existing route belongs
+to this JARVIS installation; shared or custom Serve configurations require
+manual inspection and are never reset automatically.
+
 `--public-origin https://<host>` remains the non-interactive/manual adapter for
 an HTTPS proxy that the operator already configured. Setup does not install or
 configure that proxy, but it verifies the exact JARVIS health marker and exits
@@ -567,9 +575,10 @@ There is no supported "drop in a certificate" path for the dashboard container. 
 
 Use `./setup.sh --non-interactive` for a complete unattended installation: it
 owns access-mode selection, prerequisites, TLS profiles, and route verification.
-`scripts/jarvis-setup.sh` is a local-only compatibility bootstrap for older CI
-jobs. It serves plain HTTP on localhost, does not configure remote access or TLS,
-and expects host prerequisites to be present.
+`scripts/jarvis-setup.sh` is a deprecated compatibility forwarder for older
+local-development automation. It delegates to the same `setup.sh`
+development-profile path and accepts only `--skip-disk-check`; new automation
+should call `setup.sh` directly.
 
 ### Pre-flight check
 
@@ -664,7 +673,8 @@ dashboard URL does not. Once signed in as an admin, invite additional users at
 
 ## Update Workflow
 
-Installations running v1.2.2 or later use the lifecycle command:
+Maintained in-place update support starts at v1.2.0. Installations running
+v1.2.2 or later use the lifecycle command:
 
 ```bash
 jarvis-research update
@@ -674,21 +684,22 @@ It verifies the target release, protects data-changing migrations with a signed
 restore point, and can resume an interrupted run. The [command-line
 guide](manual/cli.md#how-update-works) is the canonical update runbook.
 
-An installation running v1.1.3, v1.2.0 or v1.2.1 needs the [v1.2.2 update
+A maintained installation running v1.2.0 or v1.2.1 needs the [v1.2.2 update
 bootstrap](manual/cli.md#updating-from-a-release-before-v122) once. It loads the
 v1.2.2 lifecycle command before the migration check so the required signed
 restore point includes both databases, uploaded PDFs and the data-coupled
-secrets. The same guide describes the constrained manual fallback and rollback
-rules.
+secrets. The same immutable bootstrap remains available as a separate legacy
+bridge from v1.1.3, which is outside the maintained update window. The command
+guide describes that bridge, the constrained manual fallback, and rollback
+rules; direct v1.1.3-to-current update is not promised.
 
 ### Upgrade notes
 
 **Telegram pairing (breaking change).** The Telegram bot now identifies chats
 exclusively via the `/pair` token flow. To pair: open the dashboard → Settings
 → Integrations → Telegram, copy the one-time token, and send `/pair <token>`
-to the bot. The legacy `TELEGRAM_CHAT_ID` environment variable and the
-dashboard-code pairing path (`/start PAIR_<code>`) no longer work — any
-existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
+to the bot. The retired dashboard-code pairing path (`/start PAIR_<code>`) no
+longer works.
 
 **Telegram owner-override network.** The bot calls service endpoints with
 `X-Owner-User-Id` to make per-user requests, trusted only from
@@ -780,6 +791,7 @@ bash scripts/production-readiness-check.sh
 | Rate limiter buckets by proxy IP instead of client | Upstream proxy not in `TRUSTED_PROXY_CIDRS` | Add the proxy CIDR to `TRUSTED_PROXY_CIDRS`. |
 | Pinned subnet `10.137.241.0/24` collides with LAN | `setup.sh --check` warns | Set `JARVIS_NET_SUBNET` to a free IPv4 `/27` or larger network, re-run setup, and accept **Overwrite**; setup derives the addresses. |
 | LAN device pings host but `curl http://<IP>:3001/health/jarvis` fails | The dashboard remains loopback-bound or a firewall blocks port 3001 | Re-run setup, accept **Overwrite**, and choose LAN diagnostics; if it still fails, allow port 3001 only on the trusted LAN interface. |
+| `jarvis-research doctor` reports a legacy Tailscale target | A pre-v1.2.0 Serve route may still target raw port 3001 instead of trusted port 3003 | Confirm that the node-wide HTTPS 443 route belongs to this installation, then run the exact targeted command printed by doctor. Do not reset shared Serve state. |
 | `setup.sh` Cloudflare Tunnel mode stops at the Zero-Trust warning | You have not acknowledged that a tunnel exposes the instance | Configure your Cloudflare Zero-Trust access policy first, then type `I understand`. For unattended setup, use `--profile=tunnel` with `--tunnel-ack`, `--tunnel-hostname`, and `--tunnel-token-file`. The old environment hand-edit is no longer used. |
 | Settings → "Models & Preferences" shows "No config entries" | DB initialized before default config rows were seeded | `docker compose restart paper_ingestion`, then verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — expect at least the model rows `llm.smart_model` and `llm.fast_model`. Ollama-backed roles add context-size rows alongside them, both deployment-wide (`llm.smart_num_ctx`) and per-machine (`llm.<machine_id>.smart_num_ctx`), so the exact number of keys varies with the deployment. An empty result means the seed did not run. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Model not pulled or config read-only | Pull the model from Settings → Models first. Setup selects the smart model for the detected [hardware tier](manual/hardware-and-models.md#hardware-tiers-and-default-models); a manually copied `.env.example` uses `qwen3:8b` only as its template fallback. |

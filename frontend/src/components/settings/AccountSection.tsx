@@ -7,7 +7,7 @@
  *   `email_verification_sent: true` when a verify link was sent.
  * - Confirm-email-change token: when the account pane mounts with
  *   `#confirm_email_token=<tok>`, this component confirms the change and strips
- *   the bearer from the address. The old query form remains compatible.
+ *   the bearer from the address.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,7 +47,7 @@ function useConfirmEmailToken(): ConfirmState {
   const location = useLocation();
   const tokenRef = useRef(
     new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
-      .get('confirm_email_token') ?? searchParams.get('confirm_email_token'),
+      .get('confirm_email_token'),
   );
   const token = tokenRef.current;
   const [state, setState] = useState<ConfirmState>({ status: 'idle' });
@@ -59,9 +59,8 @@ function useConfirmEmailToken(): ConfirmState {
     confirmedRef.current = true;
     setState({ status: 'pending' });
 
-    // New links use a fragment so the token never reaches the server. Strip
-    // either form before the confirmation request, while preserving the
-    // settings section and item query parameters.
+    // Strip the fragment token before the confirmation request while preserving
+    // the settings section and item query parameters.
     const next = new URLSearchParams(searchParams);
     next.delete('confirm_email_token');
     setSearchParams(next, { replace: true });

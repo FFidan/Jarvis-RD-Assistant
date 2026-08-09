@@ -18,8 +18,9 @@ dependencies = [
     # 0.137 routing API, and below it the check that pins the impersonation
     # route set degrades to a silent skip.
     "fastapi>=0.137.0,<0.141.0",
-    "gitpython>=3.1.57",  # >=3.1.57 clears GHSA-3f7w-8rr8-f37f and prior GitPython advisories
+    "gitpython>=3.1.58",  # >=3.1.58 clears the current GitPython advisory set
     "httpx>=0.27.0",
+    "httpcore>=1.0,<1.1",  # direct API used by pinned outbound transport
     "idna>=3.15",
     "instructor>=1.15.0",
     "lxml>=6.1.0",

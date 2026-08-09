@@ -21,12 +21,16 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 // ---------------------------------------------------------------------------
 
 // Mock the SSE streaming so we can test without a real backend
-vi.mock('@/lib/sse', () => ({
-  streamSSE: vi.fn().mockImplementation(async function* () {
-    yield { type: 'token', content: 'Mocked answer from the Ask backend.' };
-    yield { type: 'done', model_used: null };
-  }),
-}));
+vi.mock('@/lib/sse', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/sse')>();
+  return {
+    ...actual,
+    streamSSE: vi.fn().mockImplementation(async function* () {
+      yield { type: 'token', content: 'Mocked answer from the Ask backend.' };
+      yield { type: 'done', full_answer: 'Mocked answer from the Ask backend.', model_used: null };
+    }),
+  };
+});
 
 // Partial-mock the API barrel so the metrics query can be forced to fail while
 // the rest of @/lib/api (used by StreamingChat) stays real.
@@ -40,7 +44,6 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: vi.fn().mockReturnValue({
     user: { id: 1, email: 'test@example.com', role: 'user' },
     isAuthenticated: true,
-    apiKey: 'test-key',
     logout: vi.fn(),
     loginWithApiKey: vi.fn(),
     loginWithSession: vi.fn(),

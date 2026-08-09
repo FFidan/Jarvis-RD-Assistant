@@ -301,6 +301,63 @@ async def test_update_explicit_reenable_removes_think():
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_persisted_explicit_enable_removes_carried_think():
+    """A stored false thinking_disabled value removes a carried think=False."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama_chat/qwen3:14b", "num_ctx": 8192, "think": False})]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+    pool, _ = _make_pool_and_conn(fetchrow_return={"value": False})
+
+    result = await update_litellm_model(
+        "llm.smart_model", "qwen3:14b", db_pool=pool, machine_id="host-a"
+    )
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert "think" not in params
+    assert params["num_ctx"] == 8192
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_thinking_preference_read_failure_preserves_carried_route():
+    """A failed preference read cannot silently change the current routing policy."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama_chat/qwen3:14b", "num_ctx": 8192, "think": False})]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = RuntimeError("database unavailable")
+
+    result = await update_litellm_model(
+        "llm.smart_model", "qwen3:14b", db_pool=pool, machine_id="host-a"
+    )
+
+    assert result is False
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_non_thinking_model_preserves_carried_think_parameter():
+    """The four-state policy does not rewrite routes for non-thinking catalog entries."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama_chat/gemma3:12b", "num_ctx": 8192, "think": False})]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model("llm.smart_model", "gemma3:12b")
+
+    assert result is False
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_update_pending_num_ctx_override_wins():
     """An explicit num_ctx kwarg (pending settings write) overrides the carried value."""
     _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b", "num_ctx": 8192})])
@@ -360,16 +417,46 @@ async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(mon
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_local_noop_delivery_does_not_touch_system_num_ctx_row(monkeypatch):
-    """When the alias already routes the requested model with the same window,
-    no delivery happens — and the system row / cache are left untouched."""
+async def test_legacy_thinking_route_converges_once_then_is_noop(monkeypatch):
+    """An absent preference applies default-off once; the next pass is a no-op."""
     from tests.conftest import _make_pool_and_conn
 
-    _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b", "num_ctx": 4096})])
-    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+    model_info = respx.get(f"{LITELLM}/v1/model/info").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        _entry(
+                            "smart",
+                            {"model": "ollama_chat/qwen3:8b", "num_ctx": 4096},
+                            dep_id="legacy-smart",
+                        )
+                    ]
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        _entry(
+                            "smart",
+                            {"model": "ollama_chat/qwen3:8b", "num_ctx": 4096, "think": False},
+                            dep_id="current-smart",
+                        )
+                    ]
+                },
+            ),
+        ]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "current-smart"})
+    )
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
 
-    # fetchrow_return=None: the per-machine thinking_disabled read resolves to
-    # False so the routing signature matches the carried deployment exactly.
+    # No persisted preference means the product default is explicitly off.
     pool, conn = _make_pool_and_conn(fetchrow_return=None)
     invalidated: list[bool] = []
     monkeypatch.setattr(
@@ -378,15 +465,22 @@ async def test_local_noop_delivery_does_not_touch_system_num_ctx_row(monkeypatch
         lambda: invalidated.append(True),
     )
 
-    result = await update_litellm_model(
+    first = await update_litellm_model(
+        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
+    )
+    second = await update_litellm_model(
         "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
     )
 
-    assert result is False
-    assert not new_route.called
+    assert first is True
+    assert second is False
+    assert model_info.call_count == 2
+    assert new_route.call_count == 1
+    assert _last_payload(new_route)["litellm_params"]["think"] is False
+    assert delete_route.call_count == 1
     upserts = [c for c in conn.execute.await_args_list if "llm.smart_num_ctx" in c.args]
-    assert not upserts
-    assert invalidated == []
+    assert len(upserts) == 1
+    assert invalidated == [True]
 
 
 @respx.mock
@@ -1051,6 +1145,50 @@ def test_smart_fallback_normalize_matches_the_parse_direction_matrix():
     )
     with pytest.raises(ValueError):
         _smart_fallback_normalize("openrouter/../x")
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "qwen3:8b",
+        "qwen3:8b:latest",
+        "anthropic/claude-haiku-4-5",
+        "openrouter/anthropic/claude-sonnet-4.5",
+        "custom_openai/mistralai/Mistral-7B-Instruct-v0.3",
+        "unknown-vendor/model-name",
+        "openrouter/../x",
+        "unknown-vendor/a/b",
+    ],
+)
+def test_smart_fallback_and_primary_parser_have_exact_target_parity(model_name):
+    from paper_ingestion.services.litellm_config import (
+        _parse_model_target,
+        _smart_fallback_normalize,
+    )
+
+    try:
+        target = _parse_model_target(model_name)
+    except ValueError:
+        with pytest.raises(ValueError):
+            _smart_fallback_normalize(model_name)
+    else:
+        assert _smart_fallback_normalize(model_name) == (
+            target.new_name,
+            target.cloud_provider,
+        )
+
+
+def test_smart_fallback_normalize_consumes_the_primary_parser(monkeypatch):
+    target = litellm_config_module._ModelTarget(
+        new_name="normalized-model",
+        suffix="model",
+        cloud_provider="provider-id",
+    )
+    monkeypatch.setattr(litellm_config_module, "_parse_model_target", lambda _name: target)
+    assert litellm_config_module._smart_fallback_normalize("input") == (
+        "normalized-model",
+        "provider-id",
+    )
 
 
 # ---------------------------------------------------------------------------

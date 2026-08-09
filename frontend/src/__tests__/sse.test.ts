@@ -15,7 +15,6 @@ vi.mock('sonner', async () =>
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => null),
       isAuthenticated: true,
       logout: vi.fn(),
     })),
@@ -91,7 +90,7 @@ describe('streamSSE', () => {
 
   it('yields error events', async () => {
     const stream = createMockReadableStream([
-      'data: {"type":"error","message":"Something failed"}\n\n',
+      'data: {"type":"error","message":"Something failed","code":"llm_empty_visible_content"}\n\n',
       'data: [DONE]\n\n',
     ]);
 
@@ -109,6 +108,7 @@ describe('streamSSE', () => {
     if (!ev0err) throw new Error('test fixture: expected 1 error event');
     expect(ev0err.type).toBe('error');
     expect(ev0err.message).toBe('Something failed');
+    expect(ev0err.code).toBe('llm_empty_visible_content');
   });
 
   it('calls logout and throws on 401 response', async () => {
@@ -117,7 +117,6 @@ describe('streamSSE', () => {
     // Partial AuthState mock — only the fields used by this code path.
     // isAuthenticated must be true or handleAuthFailure early-returns.
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => null),
       isAuthenticated: true,
       logout: logoutMock,
     } as unknown as ReturnType<typeof useAuthStore.getState>);
@@ -136,7 +135,6 @@ describe('streamSSE', () => {
     const logoutMock = vi.fn();
     // Partial AuthState mock — only the fields used by this code path.
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => null),
       isAuthenticated: true,
       logout: logoutMock,
     } as unknown as ReturnType<typeof useAuthStore.getState>);
@@ -154,7 +152,6 @@ describe('streamSSE', () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logoutMock = vi.fn();
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => null),
       isAuthenticated: true,
       logout: logoutMock,
     } as unknown as ReturnType<typeof useAuthStore.getState>);
@@ -331,6 +328,7 @@ describe('streamSSE', () => {
     const stream = createMockReadableStream([
       'data: {"type":"token","content":"before"}\n\n',
       'data: not-valid-json{{{broken\n\n',
+      'data: {"type":"token","content":42}\n\n',
       'data: {"type":"token","content":"after"}\n\n',
       'data: [DONE]\n\n',
     ]);
@@ -350,8 +348,8 @@ describe('streamSSE', () => {
     expect(events[0]?.content).toBe('before');
     expect(events[1]?.content).toBe('after');
 
-    // console.warn was called once for the malformed frame.
-    expect(warnSpy).toHaveBeenCalledOnce();
+    // Invalid JSON and schema-invalid JSON are both rejected at the boundary.
+    expect(warnSpy).toHaveBeenCalledTimes(2);
     const [label, snippet] = warnSpy.mock.calls[0] as [string, string];
     expect(label).toBe('[sse] malformed frame skipped');
     // Snippet is a truncated string, not the raw exception.

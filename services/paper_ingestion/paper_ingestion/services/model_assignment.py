@@ -7,6 +7,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.maintenance import outbound_quarantine_active
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.settings import get_secrets_settings, get_telegram_settings
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
@@ -49,7 +50,7 @@ async def reload_telegram_nudges() -> None:
         if outbound_quarantine_active():
             logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
             return
-        async with httpx.AsyncClient() as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY) as client:
             resp = await client.post(
                 f"{telegram_url}/internal/reload-nudges",
                 headers={"X-API-Key": api_key},

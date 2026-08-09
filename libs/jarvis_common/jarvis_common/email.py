@@ -24,7 +24,12 @@ from jarvis_common.maintenance import (
     OutboundEgressBlockedError,
     ensure_outbound_egress_allowed,
 )
-from jarvis_common.net import _reject_non_public_host
+from jarvis_common.pinned_transport import (
+    PUBLIC_ONLY,
+    PinnedDestinationRejectedError,
+    connect_pinned_socket,
+    policy_allowing_private_host,
+)
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
@@ -89,7 +94,7 @@ class _EffectiveSmtp:
     @property
     def deliverable(self) -> bool:
         """True iff host + sender are present (the minimum to send an envelope)."""
-        return bool(self.host) and bool(self.sender)
+        return bool(self.host.strip()) and bool(self.sender.strip())
 
     @property
     def auth_consistent(self) -> bool:
@@ -122,11 +127,11 @@ def _env_smtp() -> _EffectiveSmtp:
     """Read SMTP from process-cached env (``SecretsSettings``)."""
     s = get_secrets_settings()
     return _EffectiveSmtp(
-        host=s.smtp_host.get_secret_value() if s.smtp_host else "",
+        host=s.smtp_host.get_secret_value().strip() if s.smtp_host else "",
         port=int(s.smtp_port.get_secret_value()) if s.smtp_port else 587,
         user=s.smtp_user.get_secret_value() if s.smtp_user else None,
         password=s.smtp_pass.get_secret_value() if s.smtp_pass else None,
-        sender=s.smtp_from.get_secret_value() if s.smtp_from else "",
+        sender=s.smtp_from.get_secret_value().strip() if s.smtp_from else "",
         reply_to=sanitize_header_value(
             s.smtp_reply_to.get_secret_value() if s.smtp_reply_to else None
         ),
@@ -177,9 +182,10 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             return None
         # asyncpg JSONB codec auto-decodes — value is already a scalar.
         value = row["value"]
-        if value is None or str(value) == "":
+        if value is None:
             return None
-        return str(value)
+        normalized = str(value).strip()
+        return normalized or None
 
     def _optional_field(key: str, env_value: str | None) -> str | None:
         """Resolve an optional field that the wizard can explicitly clear.
@@ -195,7 +201,7 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             return None
         return str(value)
 
-    host = _plain("smtp.host") or env.host
+    host = (_plain("smtp.host") or env.host).strip()
     port_raw = _plain("smtp.port")
     port = env.port
     if port_raw is not None:
@@ -204,7 +210,7 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
         except ValueError:
             port = env.port
     user = _optional_field("smtp.user", env.user)
-    sender = _plain("smtp.from") or env.sender
+    sender = (_plain("smtp.from") or env.sender).strip()
     reply_to = sanitize_header_value(_optional_field("smtp.reply_to", env.reply_to))
     from_name = sanitize_header_value(_optional_field("smtp.from_name", env.from_name))
 
@@ -247,7 +253,8 @@ async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
     raw env values to keep the status endpoint diagnostic instead of crashing.
     """
     for env_name in ("SMTP_HOST", "SMTP_FROM"):
-        if os.environ.get(env_name) == "":
+        raw_value = os.environ.get(env_name)
+        if raw_value is not None and not raw_value.strip():
             return True
     if pool is None:
         return False
@@ -260,7 +267,7 @@ async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
     except Exception:  # noqa: BLE001 — DB unreachable → cannot assert empty
         logger.debug("smtp empty-string probe DB read failed", exc_info=True)
         return False
-    return any(r["value"] is not None and str(r["value"]) == "" for r in rows)
+    return any(r["value"] is not None and not str(r["value"]).strip() for r in rows)
 
 
 # Reachability-probe cache: effective ``"host:port"`` -> (monotonic expiry,
@@ -299,28 +306,29 @@ async def _probe_relay(eff: _EffectiveSmtp) -> tuple[bool, str | None]:
     except OutboundEgressBlockedError:
         return False, _QUARANTINED_ISSUE
 
-    # SSRF parity with the live send: refuse a non-public relay unless the
-    # operator opted in. A send would be skipped for such a host anyway, so it
-    # is effectively unreachable for delivery — and this keeps the probe from
-    # opening an outbound connection to an internal address.
-    if not get_core_settings().allow_private_smtp_host:
-        try:
-            await _reject_non_public_host(eff.host)
-        except Exception:  # noqa: BLE001 — unresolved/non-public → treat as unreachable
-            logger.debug("smtp reachability probe: host rejected", exc_info=True)
-            return False, _UNREACHABLE_ISSUE
-
     import aiosmtplib  # noqa: PLC0415
 
     use_tls, start_tls = smtp_tls_flags(eff.port)
-    client = aiosmtplib.SMTP(
-        hostname=eff.host,
-        port=eff.port,
-        use_tls=use_tls,
-        start_tls=start_tls,
-        timeout=_REACHABILITY_PROBE_TIMEOUT_SECONDS,
-    )
     try:
+        policy = (
+            policy_allowing_private_host(eff.host)
+            if get_core_settings().allow_private_smtp_host
+            else PUBLIC_ONLY
+        )
+        sock = await connect_pinned_socket(
+            eff.host,
+            eff.port,
+            policy=policy,
+            timeout=_REACHABILITY_PROBE_TIMEOUT_SECONDS,
+        )
+        client = aiosmtplib.SMTP(
+            hostname=eff.host,
+            port=None,
+            sock=sock,
+            use_tls=use_tls,
+            start_tls=start_tls,
+            timeout=_REACHABILITY_PROBE_TIMEOUT_SECONDS,
+        )
         await client.connect()
         await client.ehlo()
     except Exception:  # noqa: BLE001 — any connect/EHLO failure → unreachable, never propagate
@@ -599,31 +607,34 @@ async def send_magic_link(
 
     use_tls, start_tls = smtp_tls_flags(smtp.port)
 
-    # SSRF guard: reject non-public SMTP hosts on the live send path unless the
-    # operator has explicitly opted in (e.g. an internal corporate relay).
-    if not get_core_settings().allow_private_smtp_host:
-        try:
-            await _reject_non_public_host(smtp.host)
-        except ValueError:
-            logger.warning(
-                "SMTP host is non-public; set ALLOW_PRIVATE_SMTP_HOST=true for an internal relay. "
-                "Magic-link send skipped."
-            )
-            return MagicLinkDelivery.DROPPED_PRIVATE_HOST
-
     try:
         if not _magic_link_egress_allowed():
             return MagicLinkDelivery.DROPPED_QUARANTINED
+        policy = (
+            policy_allowing_private_host(smtp.host)
+            if get_core_settings().allow_private_smtp_host
+            else PUBLIC_ONLY
+        )
+        sock = await connect_pinned_socket(
+            smtp.host,
+            smtp.port,
+            policy=policy,
+            timeout=SMTP_SEND_TIMEOUT_SECONDS,
+        )
         await aiosmtplib.send(
             message,
             hostname=smtp.host,
-            port=smtp.port,
+            port=None,
+            sock=sock,
             username=smtp.user,
             password=smtp.password,
             use_tls=use_tls,
             start_tls=start_tls,
             timeout=SMTP_SEND_TIMEOUT_SECONDS,
         )
+    except PinnedDestinationRejectedError:
+        logger.warning("SMTP host is not permitted; magic-link send skipped.")
+        return MagicLinkDelivery.DROPPED_PRIVATE_HOST
     except Exception as exc:
         # Make delivery failures observable (the Logs Live tab surfaces this),
         # then return FAILED so callers react without an exception. The

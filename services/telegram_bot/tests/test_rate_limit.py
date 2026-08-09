@@ -615,7 +615,7 @@ def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
     mock_http = AsyncMock()
     context = make_ptb_context(
         AsyncMock(),
-        make_bot_config(BotConfig, telegram_chat_id=chat_id),
+        make_bot_config(BotConfig),
         options=PTBContextOptions(http_client=mock_http),
     )
     return update, context, mock_http

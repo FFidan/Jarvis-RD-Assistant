@@ -13,8 +13,12 @@ from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_u
 from learning_engine.card_store import CURRENT_CARD_SQL
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
+    ActiveFocusSessionResponse,
+    FocusSessionCompleteRequest,
     FocusSessionRequest,
     FocusSessionResponse,
+    FocusSessionStartRequest,
+    FocusSessionTransitionResponse,
     MyDayBundleResponse,
     MyDayProjectPulseItem,
     MyDayRecommendationItem,
@@ -26,6 +30,115 @@ from learning_engine.models import (
 from learning_engine.repos import intent_repo
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
+
+
+def _focus_elapsed_seconds(row: Any, now: datetime.datetime) -> float:
+    end = row["paused_at"] if row["state"] == "paused" else now
+    return max(0.0, (end - row["started_at"]).total_seconds() - float(row["paused_seconds"]))
+
+
+def _focus_response(row: Any, now: datetime.datetime | None = None) -> ActiveFocusSessionResponse:
+    current = now or datetime.datetime.now(datetime.UTC)
+    elapsed = (
+        float(row["recorded_seconds"])
+        if row["state"] == "completed"
+        else _focus_elapsed_seconds(row, current)
+    )
+    return ActiveFocusSessionResponse(
+        id=row["id"],
+        state=row["state"],
+        source=row["source"],
+        duration_seconds=row["duration_seconds"],
+        remaining_seconds=max(0, int(row["duration_seconds"] - elapsed + 0.999999)),
+        started_at=row["started_at"],
+        paused_at=row["paused_at"],
+        paused_seconds=float(row["paused_seconds"]),
+        completed_at=row["completed_at"],
+        recorded_seconds=float(row["recorded_seconds"]),
+        task_id=row["task_id"],
+        paper_id=row["paper_id"],
+    )
+
+
+async def _validate_focus_attachments(
+    conn: Any,
+    user_id: int,
+    task_id: int | None,
+    paper_id: int | None,
+) -> None:
+    if task_id is not None:
+        task = await conn.fetchval(
+            "SELECT id FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            task_id,
+            user_id,
+        )
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+    if paper_id is not None:
+        await assert_paper_ownership(conn, paper_id, user_id)
+
+
+async def _record_focus_accounting(
+    conn: Any,
+    user_id: int,
+    duration_seconds: float,
+    task_id: int | None,
+    paper_id: int | None,
+) -> None:
+    if duration_seconds < 1:
+        return
+    duration_hours = duration_seconds / 3600
+    if task_id is not None:
+        await conn.execute(
+            "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
+            "updated_at = NOW() WHERE id = $2 AND user_id = $3",
+            duration_hours,
+            task_id,
+            user_id,
+        )
+    if paper_id is not None:
+        await _upsert_paper_user_state(
+            conn,
+            paper_id,
+            user_id,
+            state="reading",
+            on_conflict="update_state_when_inbox_or_to_read",
+        )
+    await conn.execute(
+        """INSERT INTO daily_log (user_id, log_date, focus_hours)
+        VALUES ($1, CURRENT_DATE, $2)
+        ON CONFLICT (user_id, log_date)
+        DO UPDATE SET focus_hours = COALESCE(daily_log.focus_hours, 0) + $2""",
+        user_id,
+        duration_hours,
+    )
+
+
+async def _complete_focus_row(
+    conn: Any,
+    row: Any,
+    user_id: int,
+    now: datetime.datetime,
+) -> Any:
+    recorded_seconds = min(float(row["duration_seconds"]), _focus_elapsed_seconds(row, now))
+    await _record_focus_accounting(
+        conn,
+        user_id,
+        recorded_seconds,
+        row["task_id"],
+        row["paper_id"],
+    )
+    return await conn.fetchrow(
+        """UPDATE focus_sessions
+           SET state = 'completed', paused_at = NULL, completed_at = $1,
+               recorded_seconds = $2, updated_at = $1
+           WHERE id = $3 AND user_id = $4
+           RETURNING *""",
+        now,
+        recorded_seconds,
+        row["id"],
+        user_id,
+    )
 
 
 # --- /my-day query fragments -------------------------------------------------
@@ -384,6 +497,255 @@ async def quick_add_task(
     return TaskResponse.model_validate(dict(row))  # type: ignore[arg-type]
 
 
+@router.get("/focus/active", response_model=ActiveFocusSessionResponse | None)
+@limiter.limit("60/minute")
+async def get_active_focus_session(
+    request: Request,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ActiveFocusSessionResponse | None:
+    """Return the caller's interval, completing an elapsed active interval once."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT * FROM focus_sessions
+                   WHERE user_id = $1 AND state IN ('active', 'paused')
+                   ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
+                user_id,
+            )
+            if row is None:
+                return None
+            now = await conn.fetchval("SELECT NOW()")
+            if (
+                row["state"] == "active"
+                and _focus_elapsed_seconds(row, now) >= row["duration_seconds"]
+            ):
+                row = await _complete_focus_row(conn, row, user_id, now)
+    return _focus_response(row, now)
+
+
+@router.get("/focus/telegram/pending", response_model=ActiveFocusSessionResponse | None)
+@limiter.limit("60/minute")
+async def get_pending_telegram_focus_completion(
+    request: Request,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ActiveFocusSessionResponse | None:
+    """Return one completed Telegram interval until its delivery is acknowledged.
+
+    The same transaction first advances an elapsed open interval. This lets a
+    restarted bot recover a completion even when no browser is open, while a
+    browser that completed the interval first cannot consume the bot's durable
+    delivery receipt.
+    """
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            now = await conn.fetchval("SELECT NOW()")
+            active = await conn.fetchrow(
+                """SELECT * FROM focus_sessions
+                   WHERE user_id = $1 AND state = 'active'
+                   ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
+                user_id,
+            )
+            if (
+                active is not None
+                and _focus_elapsed_seconds(active, now) >= active["duration_seconds"]
+            ):
+                await _complete_focus_row(conn, active, user_id, now)
+            pending = await conn.fetchrow(
+                """SELECT * FROM focus_sessions
+                   WHERE user_id = $1 AND source = 'telegram'
+                     AND state = 'completed' AND telegram_notified_at IS NULL
+                   ORDER BY completed_at ASC, id ASC
+                   LIMIT 1 FOR UPDATE""",
+                user_id,
+            )
+    return None if pending is None else _focus_response(pending, now)
+
+
+@router.post("/focus/start", response_model=ActiveFocusSessionResponse, status_code=201)
+@limiter.limit("10/minute")
+async def start_focus_session(
+    request: Request,
+    payload: FocusSessionStartRequest,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ActiveFocusSessionResponse:
+    """Start one interval; any existing open interval is the sole conflict rule."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.fetchval("SELECT id FROM users WHERE id = $1 FOR UPDATE", user_id)
+            existing = await conn.fetchrow(
+                "SELECT * FROM focus_sessions WHERE user_id = $1 AND state IN ('active', 'paused')",
+                user_id,
+            )
+            if existing is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "focus_session_active", "session_id": existing["id"]},
+                )
+            await _validate_focus_attachments(
+                conn,
+                user_id,
+                payload.task_id,
+                payload.paper_id,
+            )
+            row = await conn.fetchrow(
+                """INSERT INTO focus_sessions
+                   (user_id, state, source, duration_seconds, task_id, paper_id)
+                   VALUES ($1, 'active', $2, $3, $4, $5)
+                   RETURNING *""",
+                user_id,
+                payload.source,
+                payload.duration_seconds,
+                payload.task_id,
+                payload.paper_id,
+            )
+    return _focus_response(row)
+
+
+async def _locked_focus_session(conn: Any, session_id: int, user_id: int) -> Any:
+    row = await conn.fetchrow(
+        "SELECT * FROM focus_sessions WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        session_id,
+        user_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Focus session not found")
+    return row
+
+
+@router.post("/focus/{session_id}/pause", response_model=FocusSessionTransitionResponse)
+@limiter.limit("30/minute")
+async def pause_focus_session(
+    request: Request,
+    session_id: int,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> FocusSessionTransitionResponse:
+    """Pause an active interval; repeated pauses are idempotent."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await _locked_focus_session(conn, session_id, user_id)
+            now = await conn.fetchval("SELECT NOW()")
+            if row["state"] == "completed":
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(row, now), changed=False
+                )
+            if row["state"] == "paused":
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(row, now), changed=False
+                )
+            if _focus_elapsed_seconds(row, now) >= row["duration_seconds"]:
+                completed = await _complete_focus_row(conn, row, user_id, now)
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(completed, now), changed=True
+                )
+            updated = await conn.fetchrow(
+                """UPDATE focus_sessions
+                   SET state = 'paused', paused_at = $1, updated_at = $1
+                   WHERE id = $2 AND user_id = $3 RETURNING *""",
+                now,
+                session_id,
+                user_id,
+            )
+    return FocusSessionTransitionResponse(session=_focus_response(updated, now), changed=True)
+
+
+@router.post("/focus/{session_id}/resume", response_model=FocusSessionTransitionResponse)
+@limiter.limit("30/minute")
+async def resume_focus_session(
+    request: Request,
+    session_id: int,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> FocusSessionTransitionResponse:
+    """Resume a paused interval while retaining its accumulated pause time."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await _locked_focus_session(conn, session_id, user_id)
+            now = await conn.fetchval("SELECT NOW()")
+            if row["state"] != "paused":
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(row, now), changed=False
+                )
+            updated = await conn.fetchrow(
+                """UPDATE focus_sessions
+                   SET state = 'active',
+                       paused_seconds = paused_seconds + EXTRACT(EPOCH FROM ($1 - paused_at)),
+                       paused_at = NULL, updated_at = $1
+                   WHERE id = $2 AND user_id = $3 RETURNING *""",
+                now,
+                session_id,
+                user_id,
+            )
+    return FocusSessionTransitionResponse(session=_focus_response(updated, now), changed=True)
+
+
+@router.post("/focus/{session_id}/complete", response_model=FocusSessionTransitionResponse)
+@limiter.limit("30/minute")
+async def complete_focus_session(
+    request: Request,
+    session_id: int,
+    payload: FocusSessionCompleteRequest,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> FocusSessionTransitionResponse:
+    """Complete exactly once and add the measured interval to My Day exactly once."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await _locked_focus_session(conn, session_id, user_id)
+            now = await conn.fetchval("SELECT NOW()")
+            if row["state"] == "completed":
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(row, now), changed=False
+                )
+            elapsed = _focus_elapsed_seconds(row, now)
+            if payload.mode == "elapsed" and elapsed < row["duration_seconds"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "focus_session_not_elapsed",
+                        "remaining_seconds": max(1, int(row["duration_seconds"] - elapsed)),
+                    },
+                )
+            completed = await _complete_focus_row(conn, row, user_id, now)
+    return FocusSessionTransitionResponse(session=_focus_response(completed, now), changed=True)
+
+
+@router.post(
+    "/focus/{session_id}/telegram-notified",
+    response_model=FocusSessionTransitionResponse,
+)
+@limiter.limit("30/minute")
+async def acknowledge_telegram_focus_completion(
+    request: Request,
+    session_id: int,
+    db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> FocusSessionTransitionResponse:
+    """Acknowledge successful delivery of a completed Telegram interval."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await _locked_focus_session(conn, session_id, user_id)
+            now = await conn.fetchval("SELECT NOW()")
+            if row["source"] != "telegram" or row["state"] != "completed":
+                raise HTTPException(status_code=409, detail="Telegram completion is not pending")
+            if row["telegram_notified_at"] is not None:
+                return FocusSessionTransitionResponse(
+                    session=_focus_response(row, now), changed=False
+                )
+            updated = await conn.fetchrow(
+                """UPDATE focus_sessions
+                   SET telegram_notified_at = $1, updated_at = $1
+                   WHERE id = $2 AND user_id = $3 RETURNING *""",
+                now,
+                session_id,
+                user_id,
+            )
+    return FocusSessionTransitionResponse(session=_focus_response(updated, now), changed=True)
+
+
 @router.post("/focus/log", response_model=FocusSessionResponse)
 @limiter.limit("10/minute")
 async def log_focus_session(
@@ -416,30 +778,12 @@ async def log_focus_session(
                 # attribution is not an authorization input.
                 await assert_paper_ownership(conn, payload.paper_id, user_id)
 
-            if payload.task_id is not None:
-                await conn.execute(
-                    "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
-                    "updated_at = NOW() WHERE id = $2 "
-                    "AND user_id = $3",
-                    payload.duration_hours,
-                    payload.task_id,
-                    user_id,
-                )
-            if payload.paper_id is not None:
-                await _upsert_paper_user_state(
-                    conn,
-                    payload.paper_id,
-                    user_id,
-                    state="reading",
-                    on_conflict="update_state_when_inbox_or_to_read",
-                )
-            await conn.execute(
-                """INSERT INTO daily_log (user_id, log_date, focus_hours)
-                VALUES ($1, CURRENT_DATE, $2)
-                ON CONFLICT (user_id, log_date)
-                DO UPDATE SET focus_hours = COALESCE(daily_log.focus_hours, 0) + $2""",
+            await _record_focus_accounting(
+                conn,
                 user_id,
-                payload.duration_hours,
+                payload.duration_hours * 3600,
+                payload.task_id,
+                payload.paper_id,
             )
 
     return FocusSessionResponse(status="success", recorded_hours=payload.duration_hours)

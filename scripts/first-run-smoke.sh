@@ -18,9 +18,8 @@
 #
 # ISOLATION (so this can NEVER wipe a real deployment):
 #   * setup.sh receives a dedicated persisted project name
-#     (`jarvis-firstrun-<checkout-key>`); the compatibility wrapper receives the
-#     same name through COMPOSE_PROJECT_NAME. Teardown is explicitly scoped
-#     with `-p`.
+#     (`jarvis-firstrun-<checkout-key>`). Teardown is explicitly scoped with
+#     `-p`.
 #   * Refuses to run if that smoke project already has containers, volumes, or
 #     networks
 #     (unless --force), and refuses if a `.env` already exists in the repo
@@ -33,7 +32,7 @@
 # Usage:
 #   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS] [--build-local]
 #                                   [--image-tag TAG] [--integration] [--rerun]
-#                                   [--wrapper] [--help]
+#                                   [--help]
 #
 #   --force            Remove pre-existing resources carrying the exact smoke
 #                      project label before starting, instead of refusing.
@@ -45,17 +44,12 @@
 #                      BUILT from this checkout instead of pulled from GHCR —
 #                      how CI proves the branch's own code boots (the pull
 #                      path only exercises previously-published images).
-#                      Incompatible with --wrapper: scripts/jarvis-setup.sh
-#                      takes no bootstrap-mode flag, so there is nothing to
-#                      forward to it.
 #   --image-tag TAG    Pull stable, prerelease, or lowercase 40-hex commit-tagged
-#                      application images. Incompatible with --wrapper.
+#                      application images.
 #   --integration      After the stack is healthy, run the gated integration
 #                      suite against it (sets SMOKE_INTEGRATION=1; requires uv).
 #   --rerun            After the first bootstrap succeeds, run it again with
 #                      the kept .env and assert the re-run also succeeds.
-#   --wrapper          Bootstrap via scripts/jarvis-setup.sh instead of
-#                      ./setup.sh --non-interactive --profile=dev.
 #   --help             Show this help and exit.
 set -euo pipefail
 
@@ -96,7 +90,6 @@ IMAGE_TAG=""
 IMAGE_TAG_EXPLICIT=0
 INTEGRATION=0
 RERUN=0
-WRAPPER=0
 SMOKE_OWNS_PROJECT=0
 
 # -----------------------------------------------------------------------------
@@ -130,7 +123,6 @@ while [ $# -gt 0 ]; do
     --image-tag=*) IMAGE_TAG="${1#*=}"; IMAGE_TAG_EXPLICIT=1; shift ;;
     --integration) INTEGRATION=1; shift ;;
     --rerun)   RERUN=1; shift ;;
-    --wrapper) WRAPPER=1; shift ;;
     -h|--help) show_help; exit 0 ;;
     *) err "Unknown argument: $1"; echo; show_help; exit 2 ;;
   esac
@@ -138,16 +130,6 @@ done
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
-if [ "$BUILD_LOCAL" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
-  err "--build-local cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
-  err "bootstrap-mode flag, so there is nothing to forward to it."
-  exit 2
-fi
-if [ "$IMAGE_TAG_EXPLICIT" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
-  err "--image-tag cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
-  err "published-image selector."
-  exit 2
-fi
 # Adjust the budget to the path this run actually takes. The default above (6) is
 # cpu-pull; --build-local fills the build cache (cpu-build 9); and a GPU host
 # pulls/builds the much larger CUDA image (cuda-pull == cuda-build == 17). Mirrors
@@ -184,7 +166,6 @@ esac
   || { err "The checkout's isolated project identity has the wrong length."; exit 1; }
 readonly SMOKE_PROJECT="jarvis-firstrun-${_smoke_project_key:0:16}"
 unset _smoke_lock_path _smoke_project_key
-[ "$WRAPPER" -ne 1 ] || export COMPOSE_PROJECT_NAME="$SMOKE_PROJECT"
 
 # Whether a .env already existed BEFORE this run — drives teardown (only remove
 # the .env if WE generated it, never an operator's existing config).
@@ -302,10 +283,6 @@ docker info >/dev/null 2>&1 \
   || { err "Docker daemon unreachable ('docker info' failed)."; exit 1; }
 [ -x "$REPO_ROOT/setup.sh" ] \
   || { err "setup.sh not found or not executable at repo root ($REPO_ROOT)."; exit 1; }
-if [ "$WRAPPER" -eq 1 ]; then
-  [ -f "$REPO_ROOT/scripts/jarvis-setup.sh" ] \
-    || { err "--wrapper: scripts/jarvis-setup.sh not found."; exit 1; }
-fi
 if [ "$INTEGRATION" -eq 1 ]; then
   command -v uv >/dev/null 2>&1 \
     || { err "--integration requires uv (https://docs.astral.sh/uv/)."; exit 1; }
@@ -382,10 +359,8 @@ ok "Preconditions met — clean checkout, no conflicting deployment."
 
 # -----------------------------------------------------------------------------
 # Run the documented first-run bootstrap (README: "Non-interactive (CI/cloud-init)")
-#   ./setup.sh --non-interactive --profile=dev   (or scripts/jarvis-setup.sh
-#   with --wrapper)
-# setup.sh receives its persisted project explicitly. The compatibility wrapper
-# receives the same project through its supported ambient Compose selector.
+#   ./setup.sh --non-interactive --profile=dev
+# setup.sh receives its persisted project explicitly.
 # -----------------------------------------------------------------------------
 BOOTSTRAP_CMD=(
   ./setup.sh --non-interactive --profile=dev
@@ -393,7 +368,6 @@ BOOTSTRAP_CMD=(
 )
 [ "$BUILD_LOCAL" -eq 1 ] && BOOTSTRAP_CMD+=(--build-local)
 [ "$IMAGE_TAG_EXPLICIT" -eq 0 ] || BOOTSTRAP_CMD+=(--image-tag "$IMAGE_TAG")
-[ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
 
 # App images plus Docker build cache, in bytes — the disk the install acquires.
 # Measured as a delta against this pre-run baseline so the ratchet stays honest on

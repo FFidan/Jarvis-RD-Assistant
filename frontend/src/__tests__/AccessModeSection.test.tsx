@@ -33,7 +33,6 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       logout: vi.fn(),
     })),
   },

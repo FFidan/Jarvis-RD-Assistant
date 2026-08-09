@@ -30,7 +30,7 @@ async def test_run_author_alerts_calls_check_authors_per_pairing() -> None:
     """Each paired user gets exactly one owner-scoped POST /api/authors/check."""
     bot = AsyncMock()
     pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.post.return_value = make_http_response(
@@ -67,7 +67,7 @@ async def test_run_author_alerts_renders_one_message_per_match() -> None:
     """Each match in the service response becomes one HTML alert to that chat."""
     bot = AsyncMock()
     pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.post.return_value = make_http_response(
@@ -111,7 +111,7 @@ async def test_run_author_alerts_one_pairing_error_does_not_abort_others() -> No
     """A 5xx on one pairing's check is logged-and-skipped; later pairings still run."""
     bot = AsyncMock()
     pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     ok_resp = make_http_response(
         {

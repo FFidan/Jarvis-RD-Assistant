@@ -381,6 +381,30 @@ def test_raw_gate_blocks_incomplete_or_contaminated_capture_rows(tmp_path: Path)
     assert result.outside_fixed_pack_source_count == 1
 
 
+@pytest.mark.parametrize(
+    "marker",
+    ["<think>", "</THINK>", "<|im_start|>", "<|IM_END|>"],
+)
+def test_raw_gate_counts_every_hard_control_token(marker: str) -> None:
+    mod = _load_module()
+    assert mod._raw_hidden_reasoning_leak_count([{"answer": f"Answer {marker} continuation"}]) == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Let me summarize the evidence clearly.",
+        "We need to answer this from the reported measurements.",
+        "I need to distinguish the treatment groups.",
+        "The appendix describes a scratchpad used by participants.",
+        "The paper evaluates harmony analysis in music education.",
+    ],
+)
+def test_raw_gate_does_not_block_ordinary_prose(answer: str) -> None:
+    mod = _load_module()
+    assert mod._raw_hidden_reasoning_leak_count([{"answer": answer}]) == 0
+
+
 def test_capture_only_writes_raw_rows_without_scores(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -743,6 +767,20 @@ def test_summary_rejects_visible_control_token_continuation(tmp_path: Path) -> N
 
     assert summaries[0]["hidden_reasoning_leak_count"] == 1
     assert summaries[0]["decision"] == "reject"
+
+
+def test_summary_does_not_reject_soft_reasoning_prose(tmp_path: Path) -> None:
+    mod = _load_module()
+    manifest = mod.load_manifest(_MANIFEST)
+    rows = _rows_for_manifest(mod, manifest)
+    rows[0]["answer"] = "We need to answer from the evidence, so let me state the measured result."
+    answers_path = tmp_path / "answers.jsonl"
+    answers_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    summaries = mod.summarize_answers(manifest, mod.load_answer_rows(answers_path))
+
+    assert summaries[0]["hidden_reasoning_leak_count"] == 0
+    assert summaries[0]["decision"] != "reject"
 
 
 def test_summary_requires_fixed_pack_scope_for_library_wide_rows(tmp_path: Path) -> None:

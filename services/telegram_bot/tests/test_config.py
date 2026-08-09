@@ -9,44 +9,23 @@ import pytest
 from telegram_bot.config import BotConfig
 
 
-def _minimal_env(*, chat_id: str | None = "12345") -> dict[str, str]:
+def _minimal_env() -> dict[str, str]:
     """Return a minimal env dict with required vars set."""
     env: dict[str, str] = {
         "TELEGRAM_BOT_TOKEN": "test-token",
         "DATABASE_URL": "postgres://localhost/test",
     }
-    if chat_id is not None:
-        env["TELEGRAM_CHAT_ID"] = chat_id
     return env
 
 
 def test_config_from_env_happy_path():
     """All required vars set → config loads with correct values."""
-    env = _minimal_env(chat_id="99999")
+    env = _minimal_env()
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
     assert config.telegram_token.get_secret_value() == "test-token"
-    assert config.telegram_chat_id == 99999
     assert config.database_url == "postgres://localhost/test"
-
-
-def test_config_from_env_without_chat_id_returns_none():
-    """Missing TELEGRAM_CHAT_ID must NOT raise SystemExit; chat_id becomes None."""
-    env = _minimal_env(chat_id=None)
-    with patch.dict(os.environ, env, clear=True):
-        config = BotConfig.from_env()
-
-    assert config.telegram_chat_id is None
-
-
-def test_config_from_env_invalid_chat_id_treated_as_none():
-    """Non-integer TELEGRAM_CHAT_ID logs a warning and treats chat_id as None."""
-    env = _minimal_env(chat_id="not-a-number")
-    with patch.dict(os.environ, env, clear=True):
-        config = BotConfig.from_env()
-
-    assert config.telegram_chat_id is None
 
 
 def test_config_from_env_missing_token_raises_systemexit():
@@ -67,7 +46,7 @@ def test_config_from_env_missing_database_url_raises_systemexit():
 
 def test_config_jarvis_base_url_defaults_to_none():
     """TG-BUG-01: jarvis_base_url defaults to None when JARVIS_BASE_URL is unset."""
-    env = _minimal_env(chat_id="12345")
+    env = _minimal_env()
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
@@ -76,7 +55,7 @@ def test_config_jarvis_base_url_defaults_to_none():
 
 def test_config_reads_jarvis_base_url_from_env():
     """TG-BUG-01: jarvis_base_url is sourced from JARVIS_BASE_URL."""
-    env = _minimal_env(chat_id="12345")
+    env = _minimal_env()
     env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
@@ -149,7 +128,7 @@ def test_config_jarvis_base_url_javascript_scheme_rejected():
     """
     from pydantic import ValidationError
 
-    env = _minimal_env(chat_id="12345")
+    env = _minimal_env()
     env["JARVIS_BASE_URL"] = "javascript:alert(1)"
     with patch.dict(os.environ, env, clear=True):
         with pytest.raises(ValidationError):
@@ -158,7 +137,7 @@ def test_config_jarvis_base_url_javascript_scheme_rejected():
 
 def test_config_jarvis_base_url_https_accepted():
     """TG-03: a well-formed https:// JARVIS_BASE_URL passes validation unchanged."""
-    env = _minimal_env(chat_id="12345")
+    env = _minimal_env()
     env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
@@ -204,7 +183,7 @@ async def test_create_db_pool_log_redacts_credentials(caplog):
 
 
 # ---------------------------------------------------------------------------
-# Self-documentation: the env-var table and the TELEGRAM_CHAT_ID contract
+# Self-documentation: the env-var table
 # ---------------------------------------------------------------------------
 
 
@@ -220,7 +199,6 @@ def test_bot_config_env_var_table_is_a_real_docstring():
     assert doc is not None, "BotConfig has no docstring — the env-var table is a stray literal"
     for env_var in (
         "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_CHAT_ID",
         "JARVIS_BASE_URL",
         "DATABASE_URL",
         "PAPER_INGESTION_URL",
@@ -228,36 +206,6 @@ def test_bot_config_env_var_table_is_a_real_docstring():
         "JARVIS_API_KEY",
     ):
         assert env_var in doc, f"{env_var} is missing from the BotConfig env-var table"
-
-
-def test_telegram_chat_id_description_names_pairings_as_the_delivery_source():
-    """The field must not document itself as choosing the outbound target.
-
-    It once read "chat ID for outbound messages … None = use DB pairing flow",
-    which described a deployment-wide chat override the field does not provide
-    and demoted pairing to a fallback. ``telegram_user_pairings`` is the only
-    path, always — see test_auth.py's env-var-chat-is-not-authorised case.
-    """
-    description = BotConfig.model_fields["telegram_chat_id"].description or ""
-
-    assert "telegram_user_pairings" in description
-    assert "auth_check" in description
-    assert "list_user_pairings" in description
-
-
-def test_unset_chat_id_startup_log_denies_a_delivery_role(caplog):
-    """The startup line must not imply that setting the variable would redirect
-    delivery. Pairing records address every outbound message either way.
-    """
-    import logging
-
-    env = _minimal_env(chat_id=None)
-    with patch.dict(os.environ, env, clear=True):
-        with caplog.at_level(logging.INFO, logger="telegram_bot.config"):
-            BotConfig.from_env()
-
-    assert "TELEGRAM_CHAT_ID is not set" in caplog.text
-    assert "never from this variable" in caplog.text
 
 
 def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):

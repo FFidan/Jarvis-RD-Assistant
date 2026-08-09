@@ -2,84 +2,108 @@
  * OnboardingTour — first-login guided tour for new users.
  *
  * Fires when:
- *   - User has zero topics AND zero papers in the feed
+ *   - User has zero papers in the feed
  *   - AND user_config onboarding_dismissed !== true
  *
- * Steps walk the core happy path:
- *   1. Settings left rail → Sources (admin only) → connect a source
- *   2. Settings left rail → Research → Topics → define a topic
- *   3. Pulse Deck "Generate" button → run Pulse
- *   4. A Pulse card → rate cards so JARVIS learns
+ * Steps match the public quick start for every researcher:
+ *   1. Discover a paper
+ *   2. Save it to the Library
+ *   3. Analyze it
+ *   4. Ask across the analyzed Library
  *
  * Persistence: "Don't show again" writes onboarding.dismissed=true via
  * setConfig (PUT /api/config/onboarding.dismissed).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Joyride, { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride';
+import {
+  ACTIONS,
+  EVENTS,
+  Joyride,
+  STATUS,
+  type Controls,
+  type EventData,
+  type Step,
+} from 'react-joyride';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { fetchTopics, fetchFeed, setConfig } from '@/lib/api';
-import { useAuthStore } from '@/stores/auth-store';
+import { fetchFeed, setConfig } from '@/lib/api';
 
 // ── Tour steps ─────────────────────────────────────────────────────────────
 
-const STEP_SOURCES: Step = {
-  target: '[data-tour-id="sidebar-settings"]',
-  title: 'Connect a Source',
+const STEP_DISCOVER: Step = {
+  target: '[data-tour-id="sidebar-discover"]',
+  title: 'Discover Papers',
   content:
-    'Start by connecting a source — arXiv, Semantic Scholar, or OpenAlex — so JARVIS can fetch papers for you. Open Settings and choose Sources in the left rail.',
+    'Open Discover to search your enabled literature sources by title or keyword.',
   placement: 'right',
-  disableBeacon: true,
+  skipBeacon: true,
 };
 
-const STEP_TOPICS: Step = {
-  target: '[data-tour-id="sidebar-settings"]',
-  title: 'Define a Topic',
+const STEP_SAVE: Step = {
+  target: '[data-tour-id~="sidebar-library"]',
+  title: 'Save to Your Library',
   content:
-    'Define research topics to focus your feed. JARVIS uses these to score and rank every incoming paper. Open Settings and choose Research → Topics in the left rail.',
+    'Save a useful result to your Library so it becomes part of your research workspace.',
   placement: 'right',
-  disableBeacon: true,
+  skipBeacon: true,
 };
 
-const STEP_PULSE: Step = {
-  target: '[data-tour-id="pulse-generate-btn"]',
-  title: 'Run Pulse',
+const STEP_ANALYZE: Step = {
+  target: '[data-tour-id~="sidebar-analyze"]',
+  title: 'Analyze a Paper',
   content:
-    'Once you have sources and topics, run Pulse to get your first batch of AI-curated, personalised paper recommendations.',
-  placement: 'bottom',
-  disableBeacon: true,
+    'Open a saved paper from the Library and choose Analyze to download, parse, and summarize it.',
+  placement: 'right',
+  skipBeacon: true,
 };
 
-const STEP_RATE: Step = {
-  target: '[data-tour-id="pulse-card-first"]',
-  title: 'Rate Cards',
+const STEP_ASK: Step = {
+  target: '[data-tour-id="sidebar-ask"]',
+  title: 'Ask Across Your Library',
   content:
-    'Give thumbs up or thumbs down on cards. JARVIS learns from every signal to sharpen future recommendations.',
-  placement: 'bottom',
-  disableBeacon: true,
+    'After analysis, use Ask for evidence-grounded questions across papers in your Library.',
+  placement: 'right',
+  skipBeacon: true,
 };
+
+const RESEARCH_WORKFLOW_STEPS = [STEP_DISCOVER, STEP_SAVE, STEP_ANALYZE, STEP_ASK];
+
+function isNarrowViewport(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(max-width: 767px)').matches
+  );
+}
+
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(isNarrowViewport);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia('(max-width: 767px)');
+    const update = () => setNarrow(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  return narrow;
+}
 
 // ── Trigger-condition hook ─────────────────────────────────────────────────
 
 function useOnboardingEligibility() {
-  const topicsQuery = useQuery({
-    queryKey: QUERY_KEYS.topics.list(),
-    queryFn: fetchTopics,
-    staleTime: 60_000,
-  });
-
   const feedQuery = useQuery({
     queryKey: QUERY_KEYS.feed.onboardingCheck(),
     queryFn: () => fetchFeed({ limit: 1 }),
     staleTime: 60_000,
   });
 
-  const loading = topicsQuery.isLoading || feedQuery.isLoading;
-  const zeroTopics = !topicsQuery.data || topicsQuery.data.length === 0;
+  const loading = feedQuery.isLoading;
   const zeroPapers = !feedQuery.data || feedQuery.data.papers.length === 0;
 
-  return { loading, eligible: zeroTopics && zeroPapers };
+  return { loading, eligible: feedQuery.isSuccess && zeroPapers };
 }
 
 // ── Dismissed-state hook ───────────────────────────────────────────────────
@@ -124,14 +148,17 @@ export default function OnboardingTour() {
   const [stepIndex, setStepIndex] = useState(0);
   const { loading, eligible } = useOnboardingEligibility();
   const [dismissed, persistDismiss] = useDismissedState();
-  const user = useAuthStore((s) => s.user);
+  const narrowViewport = useNarrowViewport();
 
   const steps = useMemo<Step[]>(() => {
-    const isAdmin = user?.role === 'admin';
-    return isAdmin
-      ? [STEP_SOURCES, STEP_TOPICS, STEP_PULSE, STEP_RATE]
-      : [STEP_TOPICS, STEP_PULSE, STEP_RATE];
-  }, [user?.role]);
+    if (!narrowViewport) return RESEARCH_WORKFLOW_STEPS;
+    return RESEARCH_WORKFLOW_STEPS.map((step) => ({
+      ...step,
+      target: 'body',
+      placement: 'center',
+      content: `${String(step.content)} Open the navigation menu to choose the named destination.`,
+    }));
+  }, [narrowViewport]);
 
   // Start the tour once eligibility resolves and user hasn't dismissed it.
   useEffect(() => {
@@ -143,8 +170,8 @@ export default function OnboardingTour() {
     return undefined;
   }, [loading, eligible, dismissed]);
 
-  const handleCallback = useCallback(
-    (data: CallBackProps) => {
+  const handleEvent = useCallback(
+    (data: EventData, controls: Controls) => {
       const { action, index, status, type } = data;
 
       const isStepEvent =
@@ -153,7 +180,9 @@ export default function OnboardingTour() {
         status === STATUS.FINISHED || status === STATUS.SKIPPED;
 
       if (isStepEvent) {
-        setStepIndex(index + (action === ACTIONS.PREV ? -1 : 1));
+        const nextIndex = index + (action === ACTIONS.PREV ? -1 : 1);
+        const { size } = controls.info();
+        setStepIndex(Math.min(Math.max(nextIndex, 0), size));
       } else if (isTourDone) {
         setRun(false);
         setStepIndex(0);
@@ -176,10 +205,8 @@ export default function OnboardingTour() {
       run={run}
       stepIndex={stepIndex}
       steps={steps}
-      callback={handleCallback}
+      onEvent={handleEvent}
       scrollToFirstStep
-      showProgress
-      showSkipButton
       locale={{
         back: 'Back',
         close: 'Close',
@@ -187,11 +214,13 @@ export default function OnboardingTour() {
         next: 'Next',
         skip: "Don't show again",
       }}
+      options={{
+        buttons: ['back', 'skip', 'primary'],
+        primaryColor: 'hsl(var(--primary))',
+        showProgress: true,
+        zIndex: 10000,
+      }}
       styles={{
-        options: {
-          primaryColor: 'hsl(var(--primary))',
-          zIndex: 10000,
-        },
         tooltipContainer: {
           textAlign: 'left',
         },

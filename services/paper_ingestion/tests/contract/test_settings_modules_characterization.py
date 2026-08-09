@@ -1,19 +1,17 @@
-"""Characterization tests for settings_service — pre-decomposition behavioral snapshot.
+"""Characterization tests for the cohesive settings service modules.
 
-These tests pin the observable behaviour of settings_service.py before
-sub-module extraction.  The same tests MUST pass byte-identically after
-extraction; any divergence signals a regression.
+These tests pin the observable behavior retained after the settings monolith was
+split by concern. Each import targets the module that owns the behavior.
 
 Scope: smoke-level (3–5 assertions each).  Exhaustive coverage lives in the
 existing contract/test_settings_contract.py suite.
 
 Verified identifiers:
-  settings_service._write_config_row     settings_service.py:551 — UPSERT conn-level
-  settings_service._fetch_effective_config_row  settings_service.py:508 — scoped GET
-  settings_service._validate_pulse_weights  settings_service.py:319 — pure validator
-  settings_service.build_export_zip      settings_service.py:1044 — ZIP builder
-  settings_service.ProviderTestResult    settings_service.py:970 — Pydantic response model
-  settings_service.test_provider_connectivity settings_service.py:978 — async HTTP probe
+  config_db._write_config_row — UPSERT connection-level
+  config_db._fetch_effective_config_row — scoped GET
+  config_validators._validate_pulse_weights — pure validator
+  data_export.build_export_zip — ZIP builder
+  provider_test.ProviderTestResult — Pydantic response model
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ import zipfile
 import pytest
 from jarvis_common.testing import SharedConnPool
 
-# Verified: services/paper_ingestion/paper_ingestion/services/settings_service.py:319 (_validate_pulse_weights)
+# The contract spans the real owner modules rather than an import barrel.
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
@@ -45,14 +43,10 @@ async def test_write_config_lookback_days_persists_through_validator(contract_co
     """Golden path: write a value with the DB helpers, then read it back.
 
     Exercises _write_config_row (UPSERT) + _fetch_effective_config_row (SELECT).
-    Verified: settings_service.py:551-578 (_write_config_row),
-              settings_service.py:508-548 (_fetch_effective_config_row).
+    Exercises the write and effective-read helpers in ``config_db``.
     """
-    from paper_ingestion.services.settings_service import (
-        _fetch_effective_config_row,
-        _write_config_row,
-        _validate_lookback_days,
-    )
+    from paper_ingestion.services.config_db import _fetch_effective_config_row, _write_config_row
+    from paper_ingestion.services.config_validators import _validate_lookback_days
 
     key = "pulse.lookback_days"
     value = 14  # within valid [1, 90] range
@@ -77,16 +71,15 @@ async def test_write_config_lookback_days_persists_through_validator(contract_co
 # ---------------------------------------------------------------------------
 
 # _PULSE_REQUIRED_WEIGHT_KEYS = {"embedding","topic","llm_relevance","llm_novelty",
-#                                 "author_bonus","recency"} (settings_service.py:299-301)
+#                                 "author_bonus","recency"} (config_validators.py)
 
 
 async def test_validate_pulse_weights_rejects_missing_keys():
     """Validator raises ValueError when a required key is absent.
 
-    Verified: settings_service.py:319-331 (_validate_pulse_weights),
-              settings_service.py:299-301 (_PULSE_REQUIRED_WEIGHT_KEYS).
+    The canonical validator rejects missing required weights.
     """
-    from paper_ingestion.services.settings_service import _validate_pulse_weights
+    from paper_ingestion.services.config_validators import _validate_pulse_weights
 
     # Provide only 5 of the 6 required keys — "recency" is missing
     incomplete = {
@@ -104,9 +97,9 @@ async def test_validate_pulse_weights_rejects_missing_keys():
 async def test_validate_pulse_weights_accepts_valid_dict():
     """Validator passes when all required keys are present and values are in [0, 1].
 
-    Verified: settings_service.py:319-331 (_validate_pulse_weights).
+    The canonical validator accepts the complete bounded mapping.
     """
-    from paper_ingestion.services.settings_service import _validate_pulse_weights
+    from paper_ingestion.services.config_validators import _validate_pulse_weights
 
     valid = {
         "embedding": 0.5,
@@ -128,12 +121,12 @@ async def test_validate_pulse_weights_accepts_valid_dict():
 async def test_build_export_zip_produces_zip_with_expected_files(contract_conn):
     """build_export_zip returns ZIP bytes containing one file per _EXPORT_QUERIES table.
 
-    Verified: settings_service.py:1028-1064 (_EXPORT_QUERIES, build_export_zip).
+    Exercises the canonical data-export owner.
     Tables expected: papers, paper_notes, paper_summaries, cards, decks,
       review_logs, projects, tasks, milestones, journal_entries, daily_log,
       user_config.
     """
-    from paper_ingestion.services.settings_service import build_export_zip
+    from paper_ingestion.services.data_export import build_export_zip
 
     pool = SharedConnPool(contract_conn)
     # user_id=None to scope to system/NULL rows; minimal data in contract DB
@@ -157,12 +150,9 @@ async def test_build_export_zip_produces_zip_with_expected_files(contract_conn):
 async def test_provider_test_result_shape():
     """ProviderTestResult Pydantic model has ok (bool) and optional error (str|None).
 
-    Verified: settings_service.py:970-973 (ProviderTestResult).
-    Pre-extraction: this model is defined inline in settings_service.py.
-    Post-extraction: it must remain importable from the same path or via the
-    re-export shim at that path.
+    ``ProviderTestResult`` remains a Pydantic response model at its owner module.
     """
-    from paper_ingestion.services.settings_service import ProviderTestResult
+    from paper_ingestion.services.provider_test import ProviderTestResult
 
     ok_result = ProviderTestResult(ok=True)
     assert ok_result.ok is True

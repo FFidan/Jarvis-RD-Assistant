@@ -1,9 +1,8 @@
 """LiteLLM model reconciler.
 
 The persistent background pass that keeps LiteLLM's admin DB routing the
-settings-chosen smart/fast deployments. Split out of ``main.py`` as a
-facade-preserving move: ``main`` re-exports every name here, so
-``from paper_ingestion.main import <name>`` keeps working unchanged.
+settings-chosen smart/fast deployments. It is separate from application startup
+so its state machine can be imported and tested at its owning boundary.
 """
 
 import asyncio

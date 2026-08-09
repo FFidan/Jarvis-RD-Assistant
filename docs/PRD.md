@@ -54,8 +54,9 @@ month?" with source-linked evidence and a workflow that makes unsupported output
 ### 2.2 Research Pulse Module
 - Receive a daily Telegram briefing on new papers matching my topics; each summary
   includes title, authors, venue, date, 2–3 cited sentences, and a direct link.
-- JARVIS flags low-confidence summaries; reply on Telegram for an extended summary.
-- Save or star a paper from Telegram (`state='to_read'` / `starred=TRUE`).
+- JARVIS labels the evidence state of Pulse reasoning in Telegram and identifies
+  current, earlier, and reduced-signal decks.
+- Save, star, triage, or rate supported paper views from Telegram.
 - Search past briefings by keyword or date on the dashboard.
 
 ### 2.3 Learning Engine Module
@@ -155,7 +156,6 @@ Threat model and technical contract: `docs/SECURITY.md` and
 |---|---|
 | Daily briefing generation (10 topics, ~50 papers) | < 5 minutes end-to-end |
 | Telegram simple command | < 3 seconds |
-| Telegram LLM-backed query | < 15 seconds |
 | Dashboard page load | < 5 seconds |
 
 ### 4.3 Reliability

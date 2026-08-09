@@ -6,7 +6,7 @@ and router registration.  Endpoint logic lives in
 
 Extracted modules
 -----------------
-* ``paper_ingestion.migrations_runner`` — ``run_migrations()``
+* ``jarvis_common.migrations`` — ``run_migrations()``
 * ``paper_ingestion.services.telegram_bootstrap`` — ``refresh_telegram_bot_username()``
 * ``paper_ingestion.routers.system`` — ``GET /api/system/models``
 
@@ -51,6 +51,8 @@ from jarvis_common.app_factory import (
 from jarvis_common.auth import validate_runtime_config
 from jarvis_common.cached_transport import CachingTransport
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
+from jarvis_common.migrations import run_migrations
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.verify import QuoteVerifier
 from jarvis_common.version import app_version
@@ -74,26 +76,10 @@ from paper_ingestion.integrations.zotero_client import (
     refresh_configured_private_hosts,
     validate_bbt_base_url,
 )
-
-# Re-exported so `from paper_ingestion.main import <name>` keeps resolving after
-# the LiteLLM reconciler moved to paper_ingestion.litellm_reconciler. main.py
-# itself uses only _start/_shutdown (lifespan wiring); the rest are facade-only.
-from paper_ingestion.litellm_reconciler import (  # noqa: F401
-    _ALIAS_PLACEHOLDER_LOGGED,
-    _EMBED_MISMATCH_WARNED,
-    _LITELLM_RECONCILE_INTERVAL_SECONDS,
-    _LITELLM_ROLE_FALLBACKS,
-    _RECONCILE_FAILURE_STREAKS,
-    _RECONCILE_TERSE_EVERY_N,
-    _desired_model_for_role,
-    _litellm_model_reconciler_loop,
-    _log_reconcile_failure,
-    _mark_role_pending,
-    _reconcile_litellm_models_once,
+from paper_ingestion.litellm_reconciler import (
     _shutdown_litellm_reconciler,
     _start_litellm_reconciler,
 )
-from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
 from paper_ingestion.services.model_lifecycle import (
@@ -517,7 +503,7 @@ _lifespan_config = ServiceLifespanConfig(
         # paper_ingestion needs a longer read timeout (300s) than the shared
         # default (120s) because PDF downloads + extraction can run long.
         "timeout": httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
-        "transport": CachingTransport(httpx.AsyncHTTPTransport()),
+        "transport": CachingTransport(PinnedAsyncTransport(JARVIS_SERVICE_POLICY)),
     },
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),
@@ -773,16 +759,3 @@ register_health_routes(
     ],
     limiter=limiter,
 )
-
-
-# ---------------------------------------------------------------------------
-# Back-compat shims (imported by tests and internal lazy imports)
-# ---------------------------------------------------------------------------
-
-# run_migrations is imported directly from paper_ingestion.migrations_runner;
-# re-export here so existing `from paper_ingestion.main import run_migrations` still works.
-# (already imported at top of file)
-
-# get_system_models is now served by paper_ingestion.routers.system;
-# re-export the router function for test_brief_and_models.py back-compat.
-from paper_ingestion.routers.system import get_system_models  # noqa: E402,F401

@@ -66,6 +66,91 @@ enable the persisted profile on the host, before asking users to pair.
 
 ---
 
+## Commands
+
+The bot publishes the same command catalog to Telegram's autocomplete menu and
+to `/help`. Commands that read or change research data require a paired account.
+Arguments in square brackets are optional; arguments in angle brackets are
+required.
+
+| Command | What it does |
+|---------|--------------|
+| `/papers [query]` | List recent papers, or search when a query is supplied |
+| `/briefing` | Show the current briefing |
+| `/next` | Show the first recommendation from the current Pulse deck |
+| `/inbox` | Show unread saved papers for triage |
+| `/pulse_now` | Queue Pulse generation now |
+| `/review` | Start a flashcard review |
+| `/stats` | Show learning statistics |
+| `/cancel` | Cancel the active flashcard review; this conversation-only command is intentionally absent from Telegram's global menu |
+| `/projects` | List active projects |
+| `/newproject <name>` | Create a project |
+| `/tasks` | List in-progress tasks |
+| `/done <id>` | Mark a task complete |
+| `/focus [minutes]` | Start a shared focus session; the default is 25 minutes and the accepted range is 1–480 |
+| `/pair <code>` | Pair this Telegram chat to a JARVIS account |
+| `/unpair` | Unlink this chat from its account |
+| `/whoami` | Show the paired account |
+| `/help` | Show this command help in Telegram |
+| `/start` | Show the welcome message, or pairing guidance for an unpaired chat |
+
+`/pulse_now` acknowledges that generation was queued; it does not claim the deck
+is already finished. The job appears in the Web jobs indicator for the same
+account, even when Telegram started it or it completes between browser polls.
+Use `/next` or open Pulse after the job completes.
+
+### Inline actions
+
+The buttons below appear only where the corresponding object and state make the
+action valid:
+
+- Paper lists and detail views can offer Read more, Save, Star or Unstar,
+  Reading, Done, Skip, Trash, Restore, and Trash and reject.
+- Pulse and discovered-paper cards can record positive or negative feedback.
+  Scheduled Pulse delivery uses Up, Down, and Save on each card.
+- Project rows can open project details, and task rows can mark a task done.
+- Review reminders and `/review` can start a review, reveal the answer, and rate
+  recall as Again, Hard, Good, or Easy.
+
+All actions are scoped to the paired JARVIS user. A button reports a failure
+instead of silently claiming that the backend change succeeded.
+
+---
+
+## Pulse delivery
+
+Telegram shows the same ranked Pulse deck as the Web interface, limited to the
+first five cards for mobile readability. It labels whether the deck is current
+or from an earlier date, reports its age when earlier, and states when ranking
+used reduced signals. Each card reports its available evidence state: verified,
+a High/Medium/Low confidence label, unverified, or not reported. These are
+evidence-availability labels, not independent fact checking.
+
+The five-card limit does not change ranking or create a separate Telegram deck.
+The same paper can appear on another day when source results, relevance, and
+feedback are unchanged; daily novelty is not guaranteed.
+
+---
+
+## Shared focus sessions
+
+`/focus [minutes]` starts the same per-user focus interval shown by the Web
+TopBar timer. The Web interface observes Telegram starts and can pause, resume,
+or stop that session. Starting another interval while one is active is refused,
+and completion time is recorded once even if both clients observe it.
+
+While the interval is active or paused, JARVIS suppresses scheduled morning
+briefings, paper digests, review reminders, deadline warnings, Pulse delivery,
+and author alerts for that user. The focus-completion notice and operator-error
+messages remain available. If the bot cannot confirm focus state, scheduled
+delivery stays suppressed rather than breaking the pause promise.
+
+Work and break durations, break cycles, and browser notification permission are
+device-local preferences. The active focus interval and its accounting are
+shared server state.
+
+---
+
 ## Related pages
 
 - [Settings](settings.md) — full settings reference including the Integrations section.

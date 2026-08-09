@@ -10,7 +10,7 @@ import {
   setConfig,
   testProvider,
 } from '@/lib/api';
-import type { ProviderMetadata, ProviderModelListStatus, SystemModelsResponse } from '@/lib/api';
+import type { ProviderMetadata, ProviderModelListStatus } from '@/lib/api';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -107,11 +107,6 @@ function sortProviders(providers: ProviderMetadata[]): ProviderMetadata[] {
   return [...providers].sort((a, b) => compareCloudProviders(a.id, b.id) || a.display_name.localeCompare(b.display_name));
 }
 
-/** Narrowed system-models shape this section needs: per-entry provider id and fetch status. */
-type ProvidersModelsData = Omit<SystemModelsResponse, 'catalog'> & {
-  catalog?: Array<{ provider: string }>;
-};
-
 export function ProvidersSection() {
   const queryClient = useQueryClient();
 
@@ -135,9 +130,9 @@ export function ProvidersSection() {
   });
   // Same query key IngestionSection registers for /api/system/models — TanStack
   // dedupes by key, so this costs no extra request.
-  const { data: systemModels } = useQuery<ProvidersModelsData>({
+  const { data: systemModels } = useQuery({
     queryKey: QUERY_KEYS.config.systemModels(),
-    queryFn: ({ signal }) => fetchSystemModels<ProvidersModelsData>(signal),
+    queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 60_000,
   });
   const providerLists = systemModels?.provider_lists ?? {};

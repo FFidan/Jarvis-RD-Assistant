@@ -1925,6 +1925,93 @@ async def test_star_zotero_autopush_not_triggered_by_other_users_link(
     mock_enqueue.assert_not_awaited()
 
 
+async def _enable_zotero_autopush_for_owned_project(contract_conn, contract_two_users) -> None:
+    """Make user A's next star transition eligible for Zotero auto-push."""
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES ($1, 'zotero.auto_push_on_star', 'true'::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2)
+           ON CONFLICT DO NOTHING""",
+        contract_two_users.project_id_a,
+        contract_two_users.paper_id_a,
+    )
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET starred = FALSE WHERE paper_id = $1 AND user_id = $2",
+        contract_two_users.paper_id_a,
+        contract_two_users.user_a_id,
+    )
+
+
+async def test_star_zotero_autopush_enqueues_once_for_one_transition(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+    monkeypatch,
+):
+    """An eligible off-to-on star queues one push; repeating the request queues none.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:195
+    # (star_paper combines transition, caller-owned project, and user config gates).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
+    await _enable_zotero_autopush_for_owned_project(contract_conn, contract_two_users)
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "zotero.push", mock_task)
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        first = await c.put(f"/api/papers/{contract_two_users.paper_id_a}/star")
+        repeated = await c.put(f"/api/papers/{contract_two_users.paper_id_a}/star")
+
+    assert first.status_code == 200, first.text[:300]
+    assert repeated.status_code == 200, repeated.text[:300]
+    mock_task.defer_async.assert_awaited_once()
+    assert mock_task.defer_async.await_args.kwargs["paper_id"] == contract_two_users.paper_id_a
+
+
+async def test_star_zotero_autopush_failure_does_not_undo_star(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+    monkeypatch,
+):
+    """A queue-boundary failure remains best effort after the star is committed.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:195
+    # (zotero.push enqueue runs outside the connection and is non-blocking).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
+    await _enable_zotero_autopush_for_owned_project(contract_conn, contract_two_users)
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+    monkeypatch.setitem(task_registry._TASK_MAP, "zotero.push", mock_task)
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{contract_two_users.paper_id_a}/star")
+
+    assert resp.status_code == 200, resp.text[:300]
+    assert (
+        await contract_conn.fetchval(
+            "SELECT starred FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
+            contract_two_users.paper_id_a,
+            contract_two_users.user_a_id,
+        )
+        is True
+    )
+
+
 async def test_feedback_rejects_user_initiated_paper(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):

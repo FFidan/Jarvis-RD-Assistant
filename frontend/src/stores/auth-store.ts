@@ -6,6 +6,9 @@ import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { runSessionResets } from '@/stores/session-reset';
 import { clearPersistedQueryCache } from '@/lib/query-persister';
 import { clearReviewOutbox } from '@/lib/review-outbox';
+import { decodeResponseJson } from '@/lib/api/core';
+import { sessionUserSchema } from '@/lib/api/schemas/auth';
+import { apiErrorDetailSchema } from '@/lib/api/schemas/common';
 
 // ---------------------------------------------------------------------------
 // QueryClient holder — registered once by the app's provider tree so logout()
@@ -25,20 +28,16 @@ export function registerQueryClient(qc: QueryClient): void {
  *    it. This store carries only the user record (id/email/role) returned by
  *    /api/auth/verify so the UI can render greetings + role-gated chrome. The
  *    cookie travels on every fetch automatically (credentials:'include' on
- *    apiFetch).
+ *    the shared API client).
  *
- * 2. API-key sessions (legacy): users at the wizard or self-hosters without
+ * 2. API-key login: users at the wizard or self-hosters without
  *    SMTP can paste their JARVIS_API_KEY into the login form. login() exchanges
  *    it server-side for a real session cookie (POST /api/auth/api-key-session)
  *    and then takes the SAME path magic-link uses (loginWithSession), so the
- *    raw key is never held in the store (apiKey stays null; partialize omits it
- *    — see the persist config below) and the HttpOnly cookie is the credential.
- *    getApiKey() is retained for non-browser callers (Telegram bot / direct
- *    API) and returns null under a cookie session.
+ *    raw key is never held in the store and the HttpOnly cookie is the credential.
  *
- * When both a session cookie AND an X-API-Key are present the backend prefers
- * the session cookie (verify_api_key skips /api/auth/* and the session
- * middleware runs unconditionally).
+ * The raw key is sent only to the exchange endpoint and is not retained by the
+ * store or reused by the shared API clients.
  */
 // 30 days — mirrors jarvis_common/session_middleware.py SESSION_TTL. The backend
 // 401 interceptor (core.ts handleAuthFailure → logout) remains the authoritative
@@ -54,9 +53,6 @@ export interface SessionUser {
 interface AuthState {
   isAuthenticated: boolean;
   authTime: number | null;
-  /** Vestigial under cookie sessions: only ever null. Kept so the legacy
-   *  X-API-Key callers (Telegram bot / non-browser) still type-check. */
-  apiKey: string | null;
   user: SessionUser | null;
   lastError: string | null;
   login: (apiKey: string) => Promise<boolean>;
@@ -80,7 +76,6 @@ interface AuthState {
    * the next render cycle.
    */
   expireSession: () => void;
-  getApiKey: () => string | null;
   getUser: () => SessionUser | null;
 }
 
@@ -213,7 +208,6 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       isAuthenticated: false,
       authTime: null,
-      apiKey: null,
       user: null,
       lastError: null,
 
@@ -234,16 +228,29 @@ export const useAuthStore = create<AuthState>()(
             body: JSON.stringify({ api_key: apiKey }),
           });
           if (res.ok) {
-            const user = (await res.json()) as SessionUser;
-            await get().loginWithSession(user);
-            return true;
+            try {
+              const user = await decodeResponseJson(
+                res,
+                '/api/auth/api-key-session',
+                sessionUserSchema,
+              );
+              await get().loginWithSession(user);
+              return true;
+            } catch {
+              set({ lastError: 'API-key login returned an invalid response' });
+              return false;
+            }
           }
           // Surface the backend error (esp. the 403 multi-tenant-disabled
           // message) instead of a silent bounce to magic-link.
           let message = 'API-key login failed';
           try {
-            const data = (await res.json()) as { detail?: string };
-            if (data?.detail) message = data.detail;
+            const data = await decodeResponseJson(
+              res,
+              '/api/auth/api-key-session',
+              apiErrorDetailSchema,
+            );
+            if (typeof data.detail === 'string') message = data.detail;
           } catch {
             // non-JSON body — keep the generic message
           }
@@ -273,7 +280,6 @@ export const useAuthStore = create<AuthState>()(
         set({
           isAuthenticated: true,
           authTime: Date.now(),
-          apiKey: null,
           user,
           lastError: null,
         });
@@ -283,7 +289,6 @@ export const useAuthStore = create<AuthState>()(
         set({
           isAuthenticated: true,
           authTime: Date.now(),
-          apiKey: null,
           user,
           lastError: null,
         });
@@ -291,7 +296,7 @@ export const useAuthStore = create<AuthState>()(
 
       logout() {
         // Clear auth state first so the UI reflects logged-out immediately.
-        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null, lastError: null });
+        set({ isAuthenticated: false, authTime: null, user: null, lastError: null });
 
         void purgeIdentityCaches();
         notifySwLogout();
@@ -310,25 +315,19 @@ export const useAuthStore = create<AuthState>()(
       },
 
       isSessionValid(): boolean {
-        const { authTime, isAuthenticated, apiKey, user } = get();
+        const { authTime, isAuthenticated, user } = get();
         if (!isAuthenticated || authTime === null) return false;
-        if (!apiKey && !user) return false;
+        if (!user) return false;
         return Date.now() - authTime <= SESSION_DURATION_MS;
       },
 
       expireSession(): void {
-        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+        set({ isAuthenticated: false, authTime: null, user: null });
         // Client timeout / tab-close on a shared browser: purge the expired
         // identity's caches so the next user never inherits its persisted or
         // SW-cached private data.
         void purgeIdentityCaches();
         notifySwLogout();
-      },
-
-      // Always null under a cookie session; retained for the legacy X-API-Key
-      // callers (Telegram bot / non-browser) that read it via authHeaders().
-      getApiKey(): string | null {
-        return get().apiKey;
       },
 
       getUser(): SessionUser | null {

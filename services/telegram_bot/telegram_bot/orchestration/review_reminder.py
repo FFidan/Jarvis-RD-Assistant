@@ -9,6 +9,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,8 @@ async def run_review_reminder(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Send a review reminder if cards are due.
 
@@ -100,4 +103,8 @@ async def run_review_reminder(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "review_reminder"
+        ):
+            continue
         await _send_reminder_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)

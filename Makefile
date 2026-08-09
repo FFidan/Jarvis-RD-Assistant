@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint security-scan check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -19,8 +19,8 @@ up-https:
 	$(COMPOSE) --profile caddy-local up -d
 
 ## Install Python dev dependencies from uv.lock without running setup or Docker
-## For a full single-instance install run: ./setup.sh (interactive) or
-## ./scripts/jarvis-setup.sh (non-interactive).
+## For a full single-instance install run ./setup.sh; the deprecated
+## scripts/jarvis-setup.sh command only forwards to its development profile.
 dev-env:
 	uv sync --group dev
 
@@ -124,6 +124,12 @@ shell-lint:
 	  scripts/backup.sh scripts/restore.sh scripts/init-secrets.sh \
 	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
 	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
+
+## Reproduce the local subset of the hosted dependency and secret scanners.
+## Pinned scanner artifacts live in the user cache and are hash-verified on
+## every run. This complements, but does not replace, the hosted Security gate.
+security-scan:
+	python3 scripts/security-scan.py
 
 ## Run all local quality checks (mirrors CI lint-test + frontend and adds the
 ## optional Docker-backed swap/recovery matrix when Docker is available).

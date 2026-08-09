@@ -86,10 +86,9 @@ vi.mock('@/lib/api', async () => {
   updateAccount: vi.fn(),
   downloadMyData: async () => (undefined),
   confirmEmailChange: vi.fn(),
-  apiFetch: vi.fn(),
   getTelegramBotToken: async () => ({ has_token: false }),
   saveTelegramBotToken: async () => (undefined),
-  fetchSystemModels: async () => ({ hardware: undefined, catalog: [] }),
+  fetchSystemModels: vi.fn(async () => ({ hardware: undefined, catalog: [] })),
   // AIPanel is now mounted as the advanced disclosure inside the LLM Models page.
   getAISettings: async () => ({
     hw_tier: 'cpu',
@@ -131,14 +130,12 @@ function renderSettingsPageAs(role: 'admin' | 'user' | null, initialSearch = '')
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'test@example.com', role },
     });
   } else {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key',
       user: null,
     });
   }
@@ -155,7 +152,6 @@ describe('SettingsPage', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key',
       user: null,
     });
   });
@@ -266,7 +262,25 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.fetchConfig).mockResolvedValue(splitConfig);
-    vi.mocked(api.apiFetch).mockResolvedValue({ hardware: undefined, catalog: [] });
+    vi.mocked(api.fetchSystemModels).mockResolvedValue({
+      status: 'ok',
+      installed: [],
+      hardware: {},
+      current: {},
+      issues: {},
+      catalog: [],
+      recommendations: {},
+      hardware_recommendation: {
+        vram_mb: null,
+        bucket: 'CPU_ONLY',
+        summary: 'CPU-only host',
+        aliases: [],
+      },
+      delivery: {},
+      routing: {},
+      consistent: true,
+      provider_lists: {},
+    });
   });
 
   function renderDetail(section: string, item: string) {
@@ -375,7 +389,6 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'user@example.com', role: 'user' },
     });
     const queryClient = createTestQueryClient();
@@ -396,7 +409,6 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'admin@example.com', role: 'admin' },
     });
     const queryClient = createTestQueryClient();

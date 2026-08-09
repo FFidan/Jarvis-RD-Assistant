@@ -71,7 +71,6 @@ async def test_card_with_brace_quote_passes_verification() -> None:
         chunks=chunks,
         openai_client=_make_openai_client(),
         paper_id=None,
-        abstract="Abstract text.",
     )
 
     # The card should be verified and kept — NOT discarded and replaced by the abstract fallback
@@ -118,7 +117,6 @@ async def test_full_text_with_braces_does_not_crash_format() -> None:
         chunks=chunks_with_braces,
         openai_client=_make_openai_client(),
         paper_id=None,
-        abstract="Abstract without braces.",
     )
 
     # With a None LLM result the pipeline returns _empty_result()

@@ -14,10 +14,6 @@ name: First-run smoke
 #   setup-check — `./setup.sh --check` doctor on a cold box (informational).
 #   env-rerun   — a second --build-local bootstrap against the kept .env
 #                 (informational).
-#   wrapper     — the scripts/jarvis-setup.sh bootstrap path (informational).
-#                 The wrapper has no local-build mode, so this leg exercises
-#                 the published-image pull path and needs those images to be
-#                 anonymously pullable.
 # Plus:
 #   coldbox-prereqs — Docker removed, then the guided prerequisite installer;
 #                 the EXPECTED outcome is the documented exit-3 "log out and
@@ -58,8 +54,6 @@ jobs:
             required: false
           - mode: env-rerun
             required: false
-          - mode: wrapper
-            required: false
     name: first-run-smoke (${{ matrix.mode }})
     continue-on-error: ${{ !matrix.required }}
     runs-on: ubuntu-latest
@@ -87,8 +81,7 @@ jobs:
           # --build-local makes the smoke BUILD the app images from this
           # checkout: these legs must test the pushed code, not whatever was
           # last published to GHCR. The published-image pull path is covered
-          # by the cold-install job and the wrapper leg (jarvis-setup.sh has
-          # no local-build mode).
+          # by the cold-install job.
           case "${{ matrix.mode }}" in
             dev-boot)
               bash scripts/first-run-smoke.sh --integration --build-local
@@ -98,7 +91,6 @@ jobs:
               ;;
             setup-check) ./setup.sh --check ;;
             env-rerun)   bash scripts/first-run-smoke.sh --rerun --build-local ;;
-            wrapper)     bash scripts/first-run-smoke.sh --wrapper ;;
           esac
 
   coldbox-prereqs:

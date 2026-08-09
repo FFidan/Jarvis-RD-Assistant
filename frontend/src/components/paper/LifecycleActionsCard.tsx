@@ -49,6 +49,7 @@ import {
 } from '@/lib/api';
 import { toast } from 'sonner';
 import { errorMessage } from '@/lib/errors';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 
 interface LifecycleActionsCardProps {
   paperId: number;
@@ -67,6 +68,9 @@ export function LifecycleActionsCard({
 }: LifecycleActionsCardProps) {
   const [hardDeleteOpen, setHardDeleteOpen] = useState(false);
   const queryClient = useQueryClient();
+  const recordResearchMilestone = useResearchMilestoneStore(
+    (store) => store.recordMilestone,
+  );
 
   // NI-3 error helper (identical to PaperHeader)
   const toastError = (verb: string) => (err: unknown) =>
@@ -82,7 +86,10 @@ export function LifecycleActionsCard({
 
   const saveMut = useMutation({
     mutationFn: () => savePaper(paperId),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      recordResearchMilestone('save');
+      invalidate();
+    },
     onError: toastError('save'),
   });
 

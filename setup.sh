@@ -120,12 +120,13 @@ rollback_unverified_access_config() {
   # A reconfiguration may already have recreated the dashboard and its selected
   # edge. Roll back that JARVIS-owned runtime before reporting the route failure;
   # restoring files alone would leave the previous route pointed at new settings.
-  local _rollback_snapshot=.env.pre-setup.bak _rollback_secret_snapshot=""
-  if [ -f "${_SETUP_TRANSACTION_DIR:-}/active" ]; then
-    _rollback_snapshot="${_SETUP_TRANSACTION_DIR}/old.env"
-    _rollback_secret_snapshot="${_SETUP_TRANSACTION_DIR}/secrets"
-  fi
-  if [ "${_ENV_SNAPSHOT_TAKEN:-0}" -eq 1 ] && [ -f "$_rollback_snapshot" ]; then
+  local _rollback_snapshot="${_SETUP_TRANSACTION_DIR:-}/old.env"
+  local _rollback_secret_snapshot="${_SETUP_TRANSACTION_DIR:-}/secrets"
+  if [ "${_ENV_SNAPSHOT_TAKEN:-0}" -eq 1 ]; then
+    if [ ! -f "${_SETUP_TRANSACTION_DIR:-}/active" ]; then
+      warn "The private setup transaction is unavailable; runtime rollback was not attempted."
+      return 1
+    fi
     _ACCESS_ROLLBACK_ATTEMPTED=1
     if rollback_access_runtime \
         "${_PREVIOUS_ACCESS_MODE:-}" "${_PREVIOUS_COMPOSE_PROFILES:-}" \
@@ -133,7 +134,7 @@ rollback_unverified_access_config() {
         "${_PREVIOUS_DASHBOARD_HOST_PORT:-3001}" "${ACCESS_MODE_LABEL:-localhost}" \
         "${COMPOSE_PROFILES_VALUE:-}" "${DASHBOARD_TRUSTED_HOST_PORT_RESOLVED:-3003}" \
         "${_REPLACEMENT_TAILSCALE_ATTEMPTED:-0}" "${NON_INTERACTIVE:-1}" \
-        "$_rollback_snapshot" .env secrets/cloudflare_tunnel_token.txt "$SCRIPT_DIR" \
+        "$_rollback_snapshot" .env secrets "$SCRIPT_DIR" \
         "$_rollback_secret_snapshot"; then
       _STACK_STARTED=1
       if [ -n "${_SETUP_TRANSACTION_DIR:-}" ] \
@@ -162,12 +163,8 @@ rollback_unverified_access_config() {
       done < <(access_edge_retirements "${ACCESS_MODE_LABEL:-localhost}" \
         "${COMPOSE_PROFILES_VALUE:-}" '' '')
       warn "Then restore and verify the previous configuration:"
-      if [ -n "$_rollback_secret_snapshot" ]; then
-        warn "  cp .jarvis-setup-transaction/old.env .env"
-        warn "  bash -c '. ./scripts/setup_lib.sh; restore_setup_secret_snapshot .jarvis-setup-transaction/secrets ./secrets'"
-      else
-        warn "  cp .env.pre-setup.bak .env"
-      fi
+      warn "  cp .jarvis-setup-transaction/old.env .env"
+      warn "  bash -c '. ./scripts/setup_lib.sh; restore_setup_secret_snapshot .jarvis-setup-transaction/secrets ./secrets'"
       warn "  bash scripts/init-secrets.sh"
       warn "  docker compose up -d --no-build --force-recreate --no-deps dashboard"
       while IFS='|' read -r _recovery_edge _recovery_service; do
@@ -961,7 +958,7 @@ recover_interrupted_setup_transaction() {
   if rollback_access_runtime "$old_mode" "$old_profiles" "$old_port" \
       "$old_origin" "$old_dashboard_port" "$new_mode" "$new_profiles" \
       "$new_port" "$tailscale_attempted" "$NON_INTERACTIVE" \
-      "$transaction_dir/old.env" .env secrets/cloudflare_tunnel_token.txt \
+      "$transaction_dir/old.env" .env secrets \
       "$SCRIPT_DIR" "$transaction_dir/secrets"; then
     cp "$transaction_dir/old.env" .env.pre-setup.bak \
       && chmod 600 .env.pre-setup.bak || {
@@ -3205,8 +3202,8 @@ _STACK_STARTED=1
 # -----------------------------------------------------------------------------
 # The health gate is the shared always-on base plus each active group's own
 # service (registry extra_health_svcs): a group deliberately started is a group
-# whose health is verified. The base is shared with scripts/jarvis-setup.sh via
-# mandatory_health_services (setup_lib.sh), so the two entry points cannot drift.
+# whose health is verified. mandatory_health_services keeps the fresh-install
+# and existing-install paths on the same registry-backed contract.
 read -ra MANDATORY_SVCS <<< "$(mandatory_health_services "$MANDATORY_HEALTH_BASE" ${ACTIVE_PROFILES[@]+"${ACTIVE_PROFILES[@]}"})"
 
 printf '\n'

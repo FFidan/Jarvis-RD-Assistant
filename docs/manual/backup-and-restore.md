@@ -165,8 +165,9 @@ use a database restore as an image rollback mechanism.
 
 ## Recovering a fresh server in the browser
 
-You need one complete, signed off-site archive set and the matching backup
-encryption key. The set includes `manifest_<timestamp>.json` and
+Portable fresh-host restore starts with a complete, signed archive set created
+by JARVIS v1.2.0 or later and the matching backup encryption key. The set
+includes `manifest_<timestamp>.json` and
 `manifest_<timestamp>.json.hmac`. JARVIS checks the key and archive set before
 it replaces data.
 
@@ -193,8 +194,10 @@ it replaces data.
 
 <!-- screenshot: Restore from another JARVIS section showing a staged backup set with Complete, Secrets, and Key ready badges -->
 
-An unsigned off-site set is not accepted on a fresh host. After updating an old
-installation, download a new signed restore point for disaster recovery.
+An earlier or unsigned off-site set is not accepted as portable fresh-host
+recovery. After updating an old installation, create and download a new complete
+signed restore point for disaster recovery. Older unsigned points retain only
+the deliberate same-host path below.
 
 ---
 

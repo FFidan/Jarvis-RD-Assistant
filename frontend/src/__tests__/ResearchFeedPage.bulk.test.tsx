@@ -58,9 +58,6 @@ vi.mock('@/lib/api', async () => {
     fetchSources: async () => [],
     fetchTopics: async () => [],
     fetchFeedCounts: async () => ({
-      inbox: 1, library: 1, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2,
-    }),
-    fetchFeedCountsWithFacets: async () => ({
       inbox: 1, library: 1, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
       active: 1, kept: 1, all_non_trash: 1,
       by_source: {}, by_topic: [], untagged: 0,

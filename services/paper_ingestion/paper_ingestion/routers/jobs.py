@@ -18,8 +18,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from jarvis_common import jobs as jobs_lib
-from jarvis_common.jobs_router import build_jobs_router, collect_handlers
+from jarvis_common.jobs_router import build_jobs_router
 from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -124,18 +123,6 @@ router = build_jobs_router(
     paper_ownership_extractor=_extract_paper_ids,
 )
 
-# ---------------------------------------------------------------------------
-# Re-exports — preserve the public symbol surface tests + main.py rely on.
-# ---------------------------------------------------------------------------
-_HANDLERS = collect_handlers(router)
-create_job = _HANDLERS["create_job"]
-get_job = _HANDLERS["get_job"]
-list_jobs = _HANDLERS["list_jobs"]
-stream_job = _HANDLERS["stream_job"]
-cancel_job = _HANDLERS["cancel_job"]
-
-CreateJobRequest = router.create_job_request_model  # type: ignore[attr-defined]
-
 __all__ = [
     "PI_PUBLIC_JOB_KINDS",
     "PI_PAYLOAD_SCHEMAS",
@@ -146,12 +133,5 @@ __all__ = [
     "PapersBatchSummarizePayload",
     "ExtractionBatchPayload",
     "NoopTestPayload",
-    "CreateJobRequest",
     "router",
-    "jobs_lib",
-    "create_job",
-    "get_job",
-    "list_jobs",
-    "stream_job",
-    "cancel_job",
 ]

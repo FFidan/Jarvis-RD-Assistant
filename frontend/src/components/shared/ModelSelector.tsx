@@ -22,23 +22,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
-import { apiFetch, cloudProviderLabel, compareCloudProviders, fetchSystemModels } from '@/lib/api';
-import type { SystemModelsResponse } from '@/lib/api';
+import { apiFetchVoid, cloudProviderLabel, compareCloudProviders, fetchSystemModels } from '@/lib/api';
+import type { ModelCatalogEntry, SystemModelsResponse } from '@/lib/api';
 import type { ModelFitDetail } from '@/types';
-
-/**
- * Local refinement of `SystemModelsResponse` that narrows `catalog` and `hardware`
- * to their concrete typed shapes used by this component.
- * Derived from the canonical type so it remains structurally consistent.
- */
-type SystemModels = Omit<SystemModelsResponse, 'catalog' | 'hardware' | 'installed' | 'status' | 'current' | 'issues'> & {
-  status: 'ok' | 'degraded';
-  current: Record<string, string>;
-  issues: Record<string, string>;
-  catalog?: ModelCatalogEntry[];
-  hardware?: HardwareInfo;
-  installed?: unknown[];
-};
 
 interface ModelSelectorProps {
   value: string;
@@ -46,57 +32,8 @@ interface ModelSelectorProps {
   configKey?: string;
 }
 
-interface HardwareInfo {
-  vram_gb?: number;
-  vram_source?: string;
-  tier?: number;
-  detected_at?: string;
-  ollama_running?: number;
-  /** Stable machine identifier (hostname). Used as key segment only — never displayed. */
-  machine_id?: string;
-}
-
 type ModelRole = 'smart' | 'fast' | 'embed';
-type ModelStatus =
-  | 'active'
-  | 'pulled'
-  | 'downloadable'
-  | 'unfit'
-  | 'cloud_active'
-  | 'cloud_required';
-
-interface ModelCatalogEntry {
-  id: string;
-  name: string;
-  provider: string;
-  ollama_tag: string | null;
-  roles: string[];
-  vram_gb: number;
-  disk_gb: number;
-  context_tokens: number;
-  license: string;
-  tier: number;
-  description: string;
-  notes: string;
-  last_reviewed: string;
-  status: ModelStatus;
-  active: boolean;
-  pulled: boolean;
-  provider_key_present: boolean;
-  can_assign?: boolean;
-  assign_blocker?: string | null;
-  fit: string;
-  size?: number;
-  quantization?: string;
-  /** Optional — backend T3-B populates this; older backends omit it. UI degrades gracefully. */
-  fit_detail?: ModelFitDetail;
-  /** True for thinking-capable models (Qwen3 family). T3-A populates this. */
-  supports_thinking?: boolean;
-  /** Where this entry came from. Absent (catalog) on older backends and on bundled entries. */
-  source?: 'catalog' | 'provider';
-  /** When a live-fetched entry's provider list was last fetched. Absent for catalog entries. */
-  fetched_at?: string | null;
-}
+type HardwareInfo = SystemModelsResponse['hardware'];
 
 // ---------------------------------------------------------------------------
 // Fit-detail helpers (mirrored from IngestionSection)
@@ -244,9 +181,9 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const { isOpen: pullIsOpen, confirm: confirmPull, handleConfirm: handlePullConfirm, handleCancel: handlePullCancel } = useConfirm();
   const [deleteTarget, setDeleteTarget] = useState<ModelCatalogEntry | null>(null);
   const [pullTarget, setPullTarget] = useState<ModelCatalogEntry | null>(null);
-  const { data, error } = useQuery<SystemModels>({
+  const { data, error } = useQuery({
     queryKey: QUERY_KEYS.config.systemModels(),
-    queryFn: ({ signal }) => fetchSystemModels<SystemModels>(signal),
+    queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 60_000,
   });
 
@@ -317,12 +254,12 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   );
   const pullMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>
-      apiFetch(`/api/system/models/${localModelPath(entry)}/pull`, { method: 'POST' }),
+      apiFetchVoid(`/api/system/models/${localModelPath(entry)}/pull`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
   const deleteMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>
-      apiFetch(`/api/system/models/${localModelPath(entry)}`, { method: 'DELETE' }),
+      apiFetchVoid(`/api/system/models/${localModelPath(entry)}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
   const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());

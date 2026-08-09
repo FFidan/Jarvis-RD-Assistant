@@ -1,53 +1,46 @@
 // Admin Backup panel client — cookie-session admin auth (no X-API-Key needed,
-// but apiFetch sends the key harmlessly). Mirrors the system.ts client shape.
-import { apiFetch, apiFetchRaw, triggerBlobDownload } from './core';
+// but the shared client sends the key harmlessly). Mirrors the system.ts client shape.
+import { apiFetchJson, apiFetchRaw, triggerBlobDownload } from './core';
+import {
+  acknowledgedRestoreSchema,
+  backupStatusSchema,
+  inboxRestorePointSchema,
+  restorePointsResponseSchema,
+  restoreRequestResponseSchema,
+  restoreStatusSchema,
+  retentionConfigSchema,
+  scheduledResponseSchema,
+  uploadGrantSchema,
+} from './schemas/backups';
+import type {
+  BackupEntry,
+  BackupStatus,
+  InboxRestorePoint,
+  RestoreLastRun,
+  RestorePoint,
+  RestorePointFile,
+  RestorePointsResponse,
+  RestoreRequestResponse,
+  RestoreSource,
+  RestoreStatus,
+  RetentionConfig,
+  UploadGrant,
+} from './schemas/backups';
 
-export interface BackupEntry {
-  filename: string;
-  store: 'jarvis' | 'litellm' | 'pdfs' | 'secrets' | 'qdrant';
-  size_bytes: number;
-  modified_at: string;
-  encrypted: boolean;
-}
-
-export interface BackupStatus {
-  backup_dir_available: boolean;
-  archive_count: number;
-  last_run_at: string | null;
-  trigger_pending: boolean;
-  last_attempt_at: string | null;
-  last_run_succeeded: boolean | null;
-  // A succeeded run means a complete restorable local set exists; these stay
-  // separate because that remains true when the vector store was unreachable or
-  // the off-site copy failed. null = the run record predates the field.
-  last_run_vectors_captured: boolean | null;
-  last_run_s3_complete: boolean | null;
-}
-
-export interface RestorePointFile {
-  filename: string;
-  store: BackupEntry['store'];
-  size_bytes: number;
-  encrypted: boolean;
-}
-
-export interface RestorePoint {
-  timestamp: string;
-  created_at: string;
-  stores: BackupEntry['store'][];
-  qdrant_collections: string[];
-  complete: boolean;
-  has_pdfs: boolean;
-  legacy_missing_pdfs: boolean;
-  encrypted: boolean;
-  total_size_bytes: number;
-  files: RestorePointFile[];
-  app_version: string | null;
-  schema_version: number | null;
-  compat: 'same' | 'older' | 'newer' | 'unknown';
-}
-
-export type RestoreSource = 'local' | 'inbox';
+export type {
+  BackupEntry,
+  BackupStatus,
+  InboxRestorePoint,
+  RestoreLastRun,
+  RestorePoint,
+  RestorePointFile,
+  RestorePointsResponse,
+  RestoreRequestResponse,
+  RestoreSource,
+  RestoreStatus,
+  RetentionConfig,
+  UploadGrant,
+};
 
 export interface RestoreRequest {
   timestamp: string;
@@ -55,39 +48,6 @@ export interface RestoreRequest {
   source: RestoreSource;
   allow_missing_pdfs: boolean;
   allow_unknown_schema: boolean;
-}
-
-/** One off-host restore point staged in the restore_inbox (sidecar-authored manifest). */
-export interface InboxRestorePoint {
-  timestamp: string;
-  complete: boolean;
-  has_secrets: boolean;
-  has_key: boolean;
-  has_pdfs: boolean;
-  legacy_missing_pdfs: boolean;
-}
-
-export interface RestoreStatus {
-  state: string;
-  current_step: string | null;
-  steps: { name: string; status: string }[];
-  safety_backup_ts: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  error: string | null;
-  manual_steps_required: boolean;
-  phase: string | null;
-  restore_id: string | null;
-  source: RestoreSource | null;
-  quarantine: 'none' | 'awaiting_review' | 'unreadable';
-}
-
-export interface RestoreRequestResponse {
-  status: string;
-  status_token: string;
-  restore_id: string;
-  source: RestoreSource;
-  expires_at: string;
 }
 
 /** Tab-scoped restore session used to resume one exact restore after reload. */
@@ -100,36 +60,17 @@ export interface RestoreRecoveryRecord {
   target_timestamp: string;
 }
 
-export interface RestoreLastRun {
-  attempted_at: string | null;
-  succeeded: boolean | null;
-  stores: Record<string, string>;
-  vectors_captured: boolean | null;
-  s3_complete: boolean | null;
-}
-
-export interface RestorePointsResponse {
-  restore_points: RestorePoint[];
-  retention_days: number | null;
-  last_run: RestoreLastRun | null;
-}
-
-export interface RetentionConfig {
-  keep_last_n: number | null;
-  max_age_days: number | null;
-}
-
 /** Sidecar reachability + inferred last-run time. */
 export const getBackupStatus = () =>
-  apiFetch<BackupStatus>('/api/admin/backups/status');
+  apiFetchJson('/api/admin/backups/status', backupStatusSchema);
 
 /** Group archives into restore points (one per backup run). Requires admin session. */
 export const getRestorePoints = () =>
-  apiFetch<RestorePointsResponse>('/api/admin/backups/restore-points');
+  apiFetchJson('/api/admin/backups/restore-points', restorePointsResponseSchema);
 
 /** Request an on-demand backup (writes a sentinel the sidecar polls). */
 export const triggerBackup = () =>
-  apiFetch<{ status: string }>('/api/admin/backups', { method: 'POST' });
+  apiFetchJson('/api/admin/backups', scheduledResponseSchema, { method: 'POST' });
 
 /** Stream a single archive to the browser as a download. */
 export async function downloadBackup(name: string): Promise<void> {
@@ -157,7 +98,7 @@ export const requestRestore = (
   allowMissingPdfs = false,
   allowUnknownSchema = false,
 ) =>
-  apiFetch<RestoreRequestResponse>('/api/admin/backups/restore', {
+  apiFetchJson('/api/admin/backups/restore', restoreRequestResponseSchema, {
     method: 'POST',
     body: JSON.stringify({
       timestamp,
@@ -174,8 +115,9 @@ export const requestRestore = (
  * rows are replaced; otherwise the request uses its cookie or API key.
  */
 export const getRestoreStatus = (token?: string) =>
-  apiFetch<RestoreStatus>(
+  apiFetchJson(
     '/api/admin/backups/restore/status',
+    restoreStatusSchema,
     token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
   );
 
@@ -186,8 +128,9 @@ export const acknowledgeRestore = (
   confirm: string,
   token?: string,
 ) =>
-  apiFetch<{ status: 'acknowledged'; restore_id: string }>(
+  apiFetchJson(
     '/api/admin/backups/restore/acknowledge',
+    acknowledgedRestoreSchema,
     {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -197,26 +140,22 @@ export const acknowledgeRestore = (
 
 /** List off-host restore points staged in the restore_inbox (sidecar-authored). */
 export const getInboxRestorePoints = () =>
-  apiFetch<InboxRestorePoint[]>('/api/admin/backups/inbox');
+  apiFetchJson('/api/admin/backups/inbox', inboxRestorePointSchema.array());
 
 /**
  * Request deletion of a restore point. `confirm` ('DELETE') gates the destructive
  * op. Writes a sentinel the sidecar's prune executes — the app deletes nothing.
  */
 export const deleteRestorePoint = (timestamp: string, confirm: string) =>
-  apiFetch<{ status: string }>(
+  apiFetchJson(
     `/api/admin/backups/restore-points/${encodeURIComponent(timestamp)}/delete`,
+    scheduledResponseSchema,
     { method: 'POST', body: JSON.stringify({ confirm }) },
   );
 
-export interface UploadGrant {
-  grant_token: string;
-  expires_in_seconds: number;
-}
-
 /** Mint the one-time grant (30-min expiry) that authorizes a browser off-host upload. */
 export const createUploadGrant = () =>
-  apiFetch<UploadGrant>('/api/admin/backups/upload-grant', { method: 'POST' });
+  apiFetchJson('/api/admin/backups/upload-grant', uploadGrantSchema, { method: 'POST' });
 
 /** Operator-facing messages for the restore-uploader's typed denials. */
 const UPLOAD_ERROR_DETAILS: Record<number, string> = {
@@ -239,7 +178,7 @@ export class UploadError extends Error {
  * Stream one backup file to the restore-uploader sidecar
  * (PUT /restore-upload/<filename>, authorized by the X-Upload-Grant header).
  * XMLHttpRequest instead of fetch solely for upload-progress events; `signal`
- * aborts the transfer. Bypasses apiFetch on purpose: the uploader checks only
+ * aborts the transfer. Bypasses the shared fetch helper on purpose: the uploader checks only
  * the grant (no cookies/API key) and the bytes never traverse the app.
  */
 export function uploadRestoreFile(
@@ -267,11 +206,12 @@ export function uploadRestoreFile(
 }
 
 /** Read the backup retention policy (keep-last-N + max-age-days; nulls = env default). */
-export const getRetention = () => apiFetch<RetentionConfig>('/api/admin/backups/retention');
+export const getRetention = () =>
+  apiFetchJson('/api/admin/backups/retention', retentionConfigSchema);
 
 /** Update the backup retention policy the sidecar reads. */
 export const putRetention = (config: RetentionConfig) =>
-  apiFetch<RetentionConfig>('/api/admin/backups/retention', {
+  apiFetchJson('/api/admin/backups/retention', retentionConfigSchema, {
     method: 'PUT',
     body: JSON.stringify(config),
   });

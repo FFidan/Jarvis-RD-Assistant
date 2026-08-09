@@ -18,10 +18,40 @@ import pytest
 from jarvis_common.testing import make_bot_config
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
+from telegram_bot.formatters import format_pulse_card
 from telegram_bot.orchestration import research_pulse
 from telegram_bot.owner import UserPairing
 
 _DEFAULT_PAIRING = [UserPairing(user_id=1, chat_id=1234)]
+
+
+@pytest.mark.parametrize(
+    ("verified", "confidence", "expected"),
+    [
+        (False, "UNVERIFIED", "Evidence check: Unverified"),
+        (True, "HIGH", "Evidence confidence: High"),
+        (True, None, "Evidence check: Verified"),
+        (None, "MEDIUM", "Evidence confidence: Medium"),
+        (None, None, "Evidence check: Not reported"),
+    ],
+)
+def test_pulse_card_exposes_each_evidence_state(
+    verified: bool | None,
+    confidence: str | None,
+    expected: str,
+) -> None:
+    text = format_pulse_card(
+        {
+            "paper_title": "A paper",
+            "paper_authors": [],
+            "score": 0.8,
+            "rank": 1,
+            "reasoning_verified": verified,
+            "reasoning_confidence": confidence,
+        }
+    )
+
+    assert expected in text
 
 
 def _make_deck(num_cards: int = 3) -> dict:
@@ -48,6 +78,10 @@ def _make_deck(num_cards: int = 3) -> dict:
             for i in range(num_cards)
         ],
         "stats": {},
+        "degraded_reason": None,
+        "is_stale": False,
+        "stale_age_days": None,
+        "empty_reason": None,
     }
 
 
@@ -71,7 +105,7 @@ async def test_fetches_pulse_today_and_sends_cards():
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     # One GET to /api/pulse/today with auth header
@@ -87,6 +121,60 @@ async def test_fetches_pulse_today_and_sends_cards():
     joined = "\n".join(sent_texts)
     for i in range(3):
         assert f"Paper {i}" in joined
+    assert "Current Pulse for April 11" in joined
+
+
+@pytest.mark.asyncio
+async def test_stale_degraded_deck_is_labelled_without_internal_diagnostic():
+    deck = _make_deck(1)
+    deck.update(
+        {
+            "is_stale": True,
+            "stale_age_days": 2,
+            "degraded_reason": "database password rejected on internal-host",
+        }
+    )
+    deck["cards"][0]["reasoning_verified"] = False
+    deck["cards"][0]["reasoning_confidence"] = "UNVERIFIED"
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(deck)
+
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
+        )
+
+    joined = "\n".join(call.kwargs["text"] for call in bot.send_message.await_args_list)
+    assert "Earlier Pulse from April 11 (2 days old)" in joined
+    assert "reduced signals" in joined
+    assert "Unverified" in joined
+    assert "database password" not in joined
+    assert "internal-host" not in joined
+
+
+@pytest.mark.asyncio
+async def test_empty_current_deck_explains_that_no_papers_are_available_yet():
+    deck = _make_deck(0)
+    deck["empty_reason"] = "no_data_yet"
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(deck)
+
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
+        )
+
+    text = bot.send_message.await_args.kwargs["text"]
+    assert "no papers are available" in text.lower()
+    assert "April 11" in text
 
 
 @pytest.mark.asyncio
@@ -106,7 +194,7 @@ async def test_empty_deck_sends_fallback_message():
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_awaited()
@@ -130,7 +218,7 @@ async def test_null_body_sends_fallback_message():
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_awaited()
@@ -154,7 +242,7 @@ async def test_api_failure_sends_diagnostic(caplog):
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_awaited()
@@ -197,7 +285,7 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     assert len(captured_keyboards) == 2
@@ -236,7 +324,7 @@ async def test_deck_is_capped_to_top_n():
             http_client,
             db_pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     # PULSE_TELEGRAM_TOP_N is 5 (brevity). With optional header, up to 6 sends.

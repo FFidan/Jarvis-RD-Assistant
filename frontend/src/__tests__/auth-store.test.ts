@@ -45,7 +45,6 @@ describe('auth-store', () => {
     useAuthStore.setState({
       isAuthenticated: false,
       authTime: null,
-      apiKey: null,
       user: null,
       lastError: null,
     });
@@ -61,9 +60,8 @@ describe('auth-store', () => {
     expect(result).toBe(true);
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
     expect(useAuthStore.getState().authTime).not.toBeNull();
-    // Session path: user stored, no raw apiKey persisted (cookie is the credential).
+    // Session path: user stored, no raw key persisted (cookie is the credential).
     expect(useAuthStore.getState().getUser()).toEqual(OWNER);
-    expect(useAuthStore.getState().getApiKey()).toBeNull();
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/auth/api-key-session',
       expect.objectContaining({
@@ -163,17 +161,15 @@ describe('auth-store', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: twentyFourHoursAgo,
-      apiKey: null,
       user: OWNER,
     });
     expect(useAuthStore.getState().isSessionValid()).toBe(true);
   });
 
-  it('isSessionValid returns false when neither apiKey nor user is present', () => {
+  it('isSessionValid returns false when no session user is present', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: null,
     });
     expect(useAuthStore.getState().isSessionValid()).toBe(false);
@@ -203,7 +199,6 @@ describe('auth-store', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: thirtyOneDaysAgo,
-      apiKey: null,
       user: OWNER,
     });
 
@@ -226,7 +221,6 @@ describe('auth-store', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now() - THIRTY_ONE_DAYS_MS,
-      apiKey: null,
       user: OWNER,
     });
 
@@ -234,7 +228,6 @@ describe('auth-store', () => {
 
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
     expect(useAuthStore.getState().authTime).toBeNull();
-    expect(useAuthStore.getState().apiKey).toBeNull();
     expect(useAuthStore.getState().user).toBeNull();
   });
 
@@ -320,7 +313,6 @@ describe('auth-store', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: OWNER,
     });
 
@@ -345,7 +337,7 @@ describe('auth-store', () => {
   it('loginWithSession awaits an acknowledged SW cache clear, then exposes the new identity', async () => {
     const PREV: SessionUser = { id: 1, email: 'prev@example.com', role: 'user' };
     const NEXT: SessionUser = { id: 2, email: 'next@example.com', role: 'user' };
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: null, user: PREV });
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), user: PREV });
 
     // The SW mock replies on the transferred MessageChannel port (simulating
     // caches.delete completing), which is what unblocks set({...NEXT}).
@@ -432,7 +424,6 @@ describe('auth-store', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(true);
     expect(useAuthStore.getState().authTime).not.toBeNull();
     expect(useAuthStore.getState().user).toEqual(OWNER);
-    expect(useAuthStore.getState().apiKey).toBeNull();
     expect(useAuthStore.getState().lastError).toBeNull();
   });
 

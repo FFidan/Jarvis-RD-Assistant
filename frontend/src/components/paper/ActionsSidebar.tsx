@@ -6,6 +6,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { streamAnalyze } from '@/lib/sse';
 import { isSafeRelativeHref } from '@/lib/safe-href';
 import { Button } from '@/components/ui/button';
@@ -92,6 +93,9 @@ export function ActionsSidebar({
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const isRunning = useJobStore((s) => s.isRunning);
+  const recordResearchMilestone = useResearchMilestoneStore(
+    (store) => store.recordMilestone,
+  );
   const [genJobId, setGenJobId] = useState<string | null>(null);
   const genJob = useJobStore((s) => (genJobId ? s.jobs[genJobId] ?? null : null));
   const [deckId, setDeckId] = useState<string>('');
@@ -184,6 +188,7 @@ export function ActionsSidebar({
             setChunkCount(event.chunk_count);
           }
         } else if (event.type === 'complete') {
+          recordResearchMilestone('analyze');
           setActionResult({ type: 'success', message: 'Analysis complete' });
           queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
           toast.success('Analyzed! You can now Ask across your library', {
@@ -228,7 +233,7 @@ export function ActionsSidebar({
       setAnalyzeStep(null);
       abortRef.current = null;
     }
-  }, [paperId, queryClient, navigate]);
+  }, [paperId, queryClient, navigate, recordResearchMilestone]);
 
   const downloadMut = useMutation({
     mutationFn: () => downloadPdf(paperId),
@@ -574,7 +579,7 @@ export function ActionsSidebar({
                 <div className="h-1 w-full rounded-full bg-muted">
                   <div
                     className="h-1 rounded-full bg-primary transition-all"
-                    style={{ width: `${Math.round(genJob.progress * 100)}%` }}
+                    style={{ width: `${Math.round((genJob.progress ?? 0) * 100)}%` }}
                   />
                 </div>
               )}

@@ -10,7 +10,7 @@ import { useChatStore, abortAllStreams } from '@/stores/chat-store';
 // ---------------------------------------------------------------------------
 // Mock streamSSE before the hook module is imported
 // ---------------------------------------------------------------------------
-type StreamEvent = { type: string; content?: string; sources?: unknown[] };
+type StreamEvent = { type: string; content?: string; sources?: unknown[]; message?: string; code?: string };
 type StreamSSEFn = (
   url: string,
   body: unknown,
@@ -18,17 +18,14 @@ type StreamSSEFn = (
 ) => AsyncGenerator<StreamEvent, void, unknown>;
 const mockStreamSSE = vi.fn<StreamSSEFn>();
 
-vi.mock('@/lib/sse', () => ({
-  streamSSE: (url: string, body: unknown, signal: AbortSignal) =>
-    mockStreamSSE(url, body, signal),
-}));
-
-// Stub useAuthStore so streamSSE mock doesn't need it (sse.ts imports it at top-level)
-vi.mock('@/stores/auth-store', () => ({
-  useAuthStore: {
-    getState: () => ({ apiKey: 'test-key' }),
-  },
-}));
+vi.mock('@/lib/sse', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/sse')>();
+  return {
+    ...actual,
+    streamSSE: (url: string, body: unknown, signal: AbortSignal) =>
+      mockStreamSSE(url, body, signal),
+  };
+});
 
 // Import hook AFTER mocks are in place
 const { useStreamingChat } = await import('@/hooks/use-streaming-chat');
@@ -58,9 +55,13 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
     vi.clearAllMocks();
   });
 
-  it('surfaces streamError when SSE event type=error fires', async () => {
+  it('maps a known hygiene code to the same actionable transcript and error state', async () => {
     mockStreamSSE.mockImplementation(async function* () {
-      yield { type: 'error', message: 'context too long' };
+      yield {
+        type: 'error',
+        message: 'The model did not return a usable final answer. Please try again.',
+        code: 'llm_empty_visible_content',
+      };
     });
 
     const { result } = renderHook(() =>
@@ -75,7 +76,12 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
 
     await waitFor(() => expect(result.current.isStreaming).toBe(false));
 
-    expect(result.current.streamError).toBe('context too long');
+    const actionable = 'The model did not produce a usable answer. Try again. If it keeps happening, ask an administrator to review the smart model or thinking setting.';
+    expect(result.current.streamError).toEqual({
+      message: 'The model did not return a usable final answer. Please try again.',
+      code: 'llm_empty_visible_content',
+    });
+    expect(useChatStore.getState().chats.err1?.slice(-1)[0]?.content).toContain(actionable);
   });
 
   it('clears streamError when sendMessage is called again', async () => {
@@ -92,7 +98,7 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
       void result.current.sendMessage('first');
     });
 
-    await waitFor(() => expect(result.current.streamError).toBe('context too long'));
+    await waitFor(() => expect(result.current.streamError).toEqual({ message: 'context too long' }));
 
     // Second call: normal stream — streamError should be cleared at start
     mockStreamSSE.mockImplementationOnce(async function* () {
@@ -122,7 +128,7 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
 
     await waitFor(() => expect(result.current.isStreaming).toBe(false));
 
-    expect(result.current.streamError).toBe('Unknown streaming error');
+    expect(result.current.streamError).toEqual({ message: 'Unknown streaming error' });
   });
 });
 
@@ -153,7 +159,13 @@ describe('use-streaming-chat — catch-block setStreamError', () => {
 
     await waitFor(() => expect(result.current.isStreaming).toBe(false));
 
-    expect(result.current.streamError).toBe('network failure');
+    expect(result.current.streamError).toEqual({
+      message: 'network failure',
+      code: 'stream_transport_error',
+    });
+    const transcript = useChatStore.getState().chats.cf1?.slice(-1)[0]?.content ?? '';
+    expect(transcript).toContain('Something went wrong answering that. Please try again.');
+    expect(transcript).not.toContain('network failure');
   });
 });
 
@@ -180,7 +192,7 @@ describe('use-streaming-chat — clearChat resets streamError', () => {
       void result.current.sendMessage('trigger error');
     });
 
-    await waitFor(() => expect(result.current.streamError).toBe('some error'));
+    await waitFor(() => expect(result.current.streamError).toEqual({ message: 'some error' }));
 
     act(() => {
       result.current.clearChat();

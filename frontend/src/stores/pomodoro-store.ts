@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { ActiveFocusSession } from '@/types';
 
 type TimerPhase = 'idle' | 'work' | 'short-break' | 'long-break';
 
@@ -14,6 +15,14 @@ interface CompletedSession {
   taskId?: number;
   paperId?: number;
 }
+
+type FocusOperation =
+  | { id: number; kind: 'start'; durationSeconds: number; taskId?: number; paperId?: number }
+  | { id: number; kind: 'pause'; sessionId: number }
+  | { id: number; kind: 'resume'; sessionId: number }
+  | { id: number; kind: 'complete'; sessionId: number; mode: 'elapsed' | 'stop' };
+
+let nextOperationId = 1;
 
 interface PomodoroState {
   // Timer state (persisted — survives refresh)
@@ -31,6 +40,9 @@ interface PomodoroState {
    * amount rather than the full nominal workMinutes.
    */
   lastWorkElapsedMs: number;
+  sessionId: number | null;
+  serverSource: 'web' | 'telegram' | null;
+  pendingOperation: FocusOperation | null;
 
   // Computed (NOT persisted — recomputed each tick)
   secondsRemaining: number;
@@ -52,6 +64,8 @@ interface PomodoroState {
   skipBreak: () => void;
   stopAndLog: () => { durationSeconds: number; taskId?: number; paperId?: number } | null;
   clearCompletedSession: () => void;
+  applyServerSession: (session: ActiveFocusSession | null) => void;
+  clearPendingOperation: (operationId: number) => void;
   reset: () => void;
   /** Alias for reset — called on logout to prevent cross-user leakage. */
   _reset: () => void;
@@ -70,6 +84,9 @@ export const usePomodoroStore = create<PomodoroState>()(
       cyclesCompleted: 0,
       attachedItem: null,
       lastWorkElapsedMs: 0,
+      sessionId: null,
+      serverSource: null,
+      pendingOperation: null,
 
       // Ephemeral signal
       completedSession: null,
@@ -82,7 +99,15 @@ export const usePomodoroStore = create<PomodoroState>()(
 
       startWork(item?: AttachedItem) {
         const state = get();
+        if (state.phase === 'work' || state.pendingOperation !== null) return;
         const durationMs = state.workMinutes * 60 * 1000;
+        const operation: FocusOperation = {
+          id: nextOperationId++,
+          kind: 'start',
+          durationSeconds: state.workMinutes * 60,
+          ...(item?.type === 'task' ? { taskId: item.id } : {}),
+          ...(item?.type === 'paper' ? { paperId: item.id } : {}),
+        };
         set({
           phase: 'work',
           startedAt: Date.now(),
@@ -92,6 +117,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           secondsRemaining: state.workMinutes * 60,
           attachedItem: item ?? null,
           lastWorkElapsedMs: 0,
+          pendingOperation: operation,
         });
       },
 
@@ -115,10 +141,24 @@ export const usePomodoroStore = create<PomodoroState>()(
             // Actual elapsed work time — cap at phaseDurationMs (can't exceed it)
             const workElapsedMs = Math.min(state.phaseDurationMs, elapsed);
 
-            // Build completedSession signal for auto-logging
+            // A server-backed interval transitions only after the authoritative
+            // completion succeeds. Local-only tests and break phases retain the
+            // existing synchronous state-machine behavior.
             const session: CompletedSession = {
               durationSeconds: state.phaseDurationMs / 1000,
             };
+            const completionOperation: FocusOperation | null = state.sessionId === null
+              ? null
+              : {
+                  id: nextOperationId++,
+                  kind: 'complete',
+                  sessionId: state.sessionId,
+                  mode: 'elapsed',
+                };
+            if (completionOperation !== null) {
+              set({ secondsRemaining: 0, pendingOperation: completionOperation });
+              return;
+            }
             if (state.attachedItem) {
               if (state.attachedItem.type === 'task') {
                 session.taskId = state.attachedItem.id;
@@ -139,6 +179,7 @@ export const usePomodoroStore = create<PomodoroState>()(
                 cyclesCompleted: newCycles,
                 completedSession: session,
                 lastWorkElapsedMs: workElapsedMs,
+                pendingOperation: completionOperation,
               });
             } else {
               // Short break
@@ -152,19 +193,11 @@ export const usePomodoroStore = create<PomodoroState>()(
                 cyclesCompleted: newCycles,
                 completedSession: session,
                 lastWorkElapsedMs: workElapsedMs,
+                pendingOperation: completionOperation,
               });
             }
           } else if (state.phase === 'short-break') {
-            // Bug #4 fix: auto-start next work session instead of going idle
-            set({
-              phase: 'work',
-              startedAt: Date.now(),
-              pausedAt: null,
-              totalPausedMs: 0,
-              phaseDurationMs: state.workMinutes * 60 * 1000,
-              secondsRemaining: state.workMinutes * 60,
-              lastWorkElapsedMs: 0,
-            });
+            get().startWork(state.attachedItem ?? undefined);
           } else {
             // Long break ended — full reset
             set({
@@ -176,6 +209,8 @@ export const usePomodoroStore = create<PomodoroState>()(
               secondsRemaining: 0,
               cyclesCompleted: 0,
               attachedItem: null,
+              sessionId: null,
+              serverSource: null,
             });
           }
         } else {
@@ -187,7 +222,12 @@ export const usePomodoroStore = create<PomodoroState>()(
         const state = get();
         // Only allow pausing during work phase, and only if not already paused
         if (state.phase === 'work' && state.pausedAt === null && state.startedAt !== null) {
-          set({ pausedAt: Date.now() });
+          set({
+            pausedAt: Date.now(),
+            pendingOperation: state.sessionId === null
+              ? state.pendingOperation
+              : { id: nextOperationId++, kind: 'pause', sessionId: state.sessionId },
+          });
         }
       },
 
@@ -198,6 +238,9 @@ export const usePomodoroStore = create<PomodoroState>()(
           set({
             pausedAt: null,
             totalPausedMs: state.totalPausedMs + additionalPause,
+            pendingOperation: state.sessionId === null
+              ? state.pendingOperation
+              : { id: nextOperationId++, kind: 'resume', sessionId: state.sessionId },
           });
         }
       },
@@ -205,14 +248,7 @@ export const usePomodoroStore = create<PomodoroState>()(
       skipBreak() {
         const state = get();
         if (state.phase === 'short-break' || state.phase === 'long-break') {
-          set({
-            phase: 'work',
-            startedAt: Date.now(),
-            pausedAt: null,
-            totalPausedMs: 0,
-            phaseDurationMs: state.workMinutes * 60 * 1000,
-            secondsRemaining: state.workMinutes * 60,
-          });
+          get().startWork(state.attachedItem ?? undefined);
         }
       },
 
@@ -247,6 +283,15 @@ export const usePomodoroStore = create<PomodoroState>()(
           }
         }
 
+        const completionOperation: FocusOperation | null = state.sessionId === null
+          ? null
+          : {
+              id: nextOperationId++,
+              kind: 'complete',
+              sessionId: state.sessionId,
+              mode: 'stop',
+            };
+
         // Full reset
         set({
           phase: 'idle',
@@ -257,6 +302,9 @@ export const usePomodoroStore = create<PomodoroState>()(
           secondsRemaining: 0,
           cyclesCompleted: 0,
           attachedItem: null,
+          sessionId: null,
+          serverSource: null,
+          pendingOperation: completionOperation,
         });
 
         return result;
@@ -264,6 +312,78 @@ export const usePomodoroStore = create<PomodoroState>()(
 
       clearCompletedSession() {
         set({ completedSession: null });
+      },
+
+      applyServerSession(session) {
+        const state = get();
+        if (session === null) {
+          if (state.phase === 'work' && state.pendingOperation === null) {
+            set({
+              phase: 'idle',
+              startedAt: null,
+              pausedAt: null,
+              totalPausedMs: 0,
+              phaseDurationMs: 0,
+              secondsRemaining: 0,
+              attachedItem: null,
+              sessionId: null,
+              serverSource: null,
+            });
+          }
+          return;
+        }
+        if (session.state === 'completed') {
+          if (state.phase === 'work') {
+            const cyclesCompleted = state.cyclesCompleted + 1;
+            const completedSession: CompletedSession = {
+              durationSeconds: session.recorded_seconds,
+              ...(session.task_id === null ? {} : { taskId: session.task_id }),
+              ...(session.paper_id === null ? {} : { paperId: session.paper_id }),
+            };
+            const longBreak = cyclesCompleted >= state.targetCycles;
+            const breakMinutes = longBreak ? state.longBreakMinutes : state.shortBreakMinutes;
+            set({
+              phase: longBreak ? 'long-break' : 'short-break',
+              startedAt: Date.now(),
+              pausedAt: null,
+              totalPausedMs: 0,
+              phaseDurationMs: breakMinutes * 60 * 1000,
+              secondsRemaining: breakMinutes * 60,
+              cyclesCompleted,
+              completedSession,
+              lastWorkElapsedMs: session.recorded_seconds * 1000,
+              sessionId: null,
+              serverSource: null,
+            });
+          } else {
+            set({ sessionId: null, serverSource: null });
+          }
+          return;
+        }
+        const startedAt = Date.parse(session.started_at);
+        const pausedAt = session.paused_at === null ? null : Date.parse(session.paused_at);
+        const attachedItem: AttachedItem | null = session.task_id !== null
+          ? { id: session.task_id, title: '', type: 'task' }
+          : session.paper_id !== null
+            ? { id: session.paper_id, title: '', type: 'paper' }
+            : null;
+        set({
+          phase: 'work',
+          startedAt,
+          pausedAt,
+          totalPausedMs: session.paused_seconds * 1000,
+          phaseDurationMs: session.duration_seconds * 1000,
+          secondsRemaining: session.remaining_seconds,
+          attachedItem,
+          sessionId: session.id,
+          serverSource: session.source,
+        });
+      },
+
+      clearPendingOperation(operationId) {
+        if (get().pendingOperation?.id === operationId) {
+          set({ pendingOperation: null });
+        }
       },
 
       reset() {
@@ -278,6 +398,9 @@ export const usePomodoroStore = create<PomodoroState>()(
           attachedItem: null,
           completedSession: null,
           lastWorkElapsedMs: 0,
+          sessionId: null,
+          serverSource: null,
+          pendingOperation: null,
         });
       },
 

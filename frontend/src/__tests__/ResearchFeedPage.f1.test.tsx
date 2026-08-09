@@ -7,7 +7,7 @@
  *  - Trash appears as §Status facet, not a top-level tab
  *  - Ask is NOT rendered inside the feed page (F4 owns /ask route)
  *  - Scoped list-filter renders for inbox/library/trash surfaces
- *  - §Source facets from fetchFeedCountsWithFacets drive FeedView
+ *  - §Source facets from fetchFeedCounts drive FeedView
  *  - Clicking a §Status facet updates the URL (drives query params)
  *  - BulkToolbar is still present (preserved functionality)
  */
@@ -79,7 +79,6 @@ vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   return createApiMock({
     fetchFeedCounts: async () => (RICH_COUNTS),
-    fetchFeedCountsWithFacets: async () => (RICH_COUNTS),
     fetchFeed: async () => ({ papers: [INBOX_PAPER], total: 1 }),
     fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },

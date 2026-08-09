@@ -30,7 +30,7 @@ function latestLibraryConsensusScan(jobs: Record<string, Job>): Job | null {
   scans.sort((a, b) => {
     const aTime = a.finished_at ?? a.started_at ?? a.created_at;
     const bTime = b.finished_at ?? b.started_at ?? b.created_at;
-    return bTime.localeCompare(aTime);
+    return (bTime ?? '').localeCompare(aTime ?? '');
   });
   return scans[0] ?? null;
 }
@@ -147,7 +147,7 @@ export function ConsensusPage() {
         jobId: r.job_id,
         kind: 'contradictions.scan',
         payload: {},
-        status: r.status === 'running' || r.status === 'queued' ? r.status : 'queued',
+        status: 'queued',
       });
     },
   });

@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "1.2.4"
+version = "1.2.5"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
@@ -29,8 +29,9 @@ jarvis-common = [
     "cryptography>=50.0.0",  # >=50.0.0 clears GHSA-g6cj-pr64-35w5 and prior cryptography advisories
     "email-validator>=2.0",  # backs pydantic EmailStr
     "fastapi>=0.137.0,<0.141.0",
-    "gitpython>=3.1.57",  # >=3.1.57 clears GHSA-3f7w-8rr8-f37f and prior GitPython advisories
+    "gitpython>=3.1.58",  # >=3.1.58 clears the current GitPython advisory set
     "httpx>=0.27.0",
+    "httpcore>=1.0,<1.1",  # direct API used by pinned outbound transport
     "idna>=3.15",
     "instructor>=1.15.0",
     "langfuse>=2.50",
@@ -229,7 +230,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # findings). scripts/check-complexity-budget.py fails only when a count GROWS;
 # lower a cap whenever a refactor reduces the real number. Tests are excluded
 # from the scan (see _EXCLUDE there) so the budget tracks production only.
-max = { C901 = 55, PLR0911 = 8, PLR0912 = 29, PLR0913 = 86, PLR0915 = 21 }
+max = { C901 = 54, PLR0911 = 8, PLR0912 = 28, PLR0913 = 83, PLR0915 = 20 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

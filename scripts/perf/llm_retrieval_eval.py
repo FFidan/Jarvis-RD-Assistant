@@ -38,13 +38,15 @@ SCORE_DIMENSIONS = (
 )
 GROUNDING_DIMENSIONS = ("evidence_grounding", "citation_label_stability")
 ANSWER_KEY_DEFAULT = Path("docs/perf/eval_sets/2026-07-03-scientific-rag-answer-key.jsonl")
-HIDDEN_REASONING_MARKERS = (
+HARD_REASONING_CONTROL_MARKERS = (
     "<think>",
     "</think>",
-    "harmony analysis",
-    "scratchpad",
     "<|im_start|>",
     "<|im_end|>",
+)
+SOFT_REASONING_PROSE_INDICATORS = (
+    "harmony analysis",
+    "scratchpad",
     "i need to",
     "let me",
     "we need to",
@@ -739,11 +741,17 @@ def write_raw_capture_gate(path: Path, result: RawCaptureGateResult) -> None:
 
 
 def _raw_hidden_reasoning_leak_count(rows: Sequence[dict[str, Any]]) -> int:
-    return sum(
-        1
-        for row in rows
-        if any(marker in str(row.get("answer", "")).lower() for marker in HIDDEN_REASONING_MARKERS)
-    )
+    return sum(1 for row in rows if _contains_hard_reasoning_control(row.get("answer", "")))
+
+
+def _normalize_marker_text(value: object) -> str:
+    """Normalize case and whitespace once before marker classification."""
+    return " ".join(str(value).casefold().split())
+
+
+def _contains_hard_reasoning_control(value: object) -> bool:
+    normalized = _normalize_marker_text(value)
+    return any(marker in normalized for marker in HARD_REASONING_CONTROL_MARKERS)
 
 
 def _raw_missing_evidence_count(rows: Sequence[dict[str, Any]]) -> int:
@@ -1177,9 +1185,8 @@ def _update_stats_from_answer(
     row: dict[str, Any],
 ) -> None:
     answer = str(row.get("answer", ""))
-    lowered = answer.lower()
     stats.empty_count += int(not answer.strip())
-    stats.hidden_count += int(any(marker in lowered for marker in HIDDEN_REASONING_MARKERS))
+    stats.hidden_count += int(_contains_hard_reasoning_control(answer))
     stats.wrong_paper_count += int(bool(row.get("wrong_paper_central_claim")))
     stats.unanswerable_fabrication_count += int(
         bool(row.get("unanswerable_fabricated_positive_claim"))

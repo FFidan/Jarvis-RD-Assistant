@@ -185,10 +185,7 @@ Any guard failure returns 403. The mechanism is implemented in
 The bot resolves the `user_id` it injects from `telegram_user_pairings` — the
 durable record written when a user runs `/pair <token>` in the bot. This is
 the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The `TELEGRAM_CHAT_ID` environment variable is an inert
-tombstone — read once at startup only to choose a log line, never to address
-or authorize a message — and may be removed in a future cleanup. The
-`telegram.owner_chat_id` config key is active: the scheduler reads it to
+environment variable. The `telegram.owner_chat_id` config key is active: the scheduler reads it to
 resolve the deployment owner's Telegram chat ID for timezone-based nudge
 scheduling and job failure-alert delivery (see
 `services/telegram_bot/telegram_bot/scheduler.py`).

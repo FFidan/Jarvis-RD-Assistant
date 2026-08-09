@@ -1,6 +1,6 @@
 /**
- * Feed lifecycle smoke test (Inbox → Save → Library → Star → Archive
- *             → Dismiss → Trash → Restore → HardDelete).
+ * Feed lifecycle smoke test (Inbox → Save → Library → Star → Done
+ *             → Trash → Restore → HardDelete).
  *
  * MODE: mocked — all /api/papers/* calls are intercepted; no live stack required
  * for test discovery or basic route / surface navigation checks.
@@ -10,7 +10,7 @@
  * /api/papers/feed call returning the paper absent.  In mocked mode we verify
  * that the correct API endpoint was called (via waitForRequest) and that the
  * mock follow-up feed response (without the paper) is picked up by the UI.
- * Step 8 (GET /api/papers/{id} → 404) is conditional on LIVE_QDRANT=1 env var
+ * Step 11 (GET /api/papers/{id} → 404) is conditional on LIVE_BACKEND=1
  * matching the intent of the sprint spec.
  *
  * Lifecycle callbacks: wired in FeedView.tsx:246-269 (forwards onSave/onSkip/onTrash/etc to FeedPaperRow).
@@ -53,7 +53,12 @@ function makeUserState(overrides: Partial<{
 }
 
 function makePaper(
-  overrides: Partial<{ user_state: ReturnType<typeof makeUserState>; state: string }> = {},
+  overrides: Partial<{
+    user_state: ReturnType<typeof makeUserState>;
+    state: string;
+    state_before_trash: string | null;
+    starred: boolean;
+  }> = {},
 ) {
   return {
     id: PAPER_ID,
@@ -70,6 +75,7 @@ function makePaper(
     // FeedPaper.state is required by the API contract (types/paper.ts:149) and drives
     // which lifecycle controls FeedPaperRow renders (FeedPaperRow.tsx:97).
     state: 'inbox',
+    state_before_trash: null,
     user_state: makeUserState(),
     published_date: '2026-01-01',
     discovered_at: '2026-01-10T08:00:00Z',
@@ -82,6 +88,7 @@ function makePaper(
     summary_brief: null,
     has_chunks: false,
     has_summary: false,
+    discovery_origin: 'user_initiated',
     starred: false,
     archived: false,
     rating: null,
@@ -93,7 +100,10 @@ function feedResponse(papers: ReturnType<typeof makePaper>[]) {
   return { papers, total: papers.length };
 }
 
-const emptyCounts = { inbox: 0, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 0 };
+const emptyCounts = {
+  inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
+  active: 0, kept: 0, all_non_trash: 0, by_source: {}, by_topic: [], untagged: 0,
+};
 const inboxCounts = { ...emptyCounts, inbox: 1 };
 const libraryCounts = { ...emptyCounts, library: 1 };
 const trashCounts = { ...emptyCounts, trash: 1 };
@@ -212,92 +222,7 @@ test.describe('Feed — full lifecycle smoke', () => {
     });
   });
 
-  // ── Step 0 (sanity): Inbox surface loads with at least one paper ─────────
-
-  // Mock data uses the legacy user_state shape (status/saved/dismissed/archived booleans).
-  // The current schema is `state` ENUM + orthogonal `starred`. Surface chip count badge
-  // also routes through the new feed counts shape. Needs mock-data refresh + selector update.
-  test.fixme('0. Inbox surface renders seeded paper', async ({ page }) => {
-    const feedPhase: 'inbox' = 'inbox';
-
-    await routeFeedAndCounts(
-      page,
-      () => (feedPhase === 'inbox' ? feedResponse([makePaper()]) : feedResponse([])),
-      () => inboxCounts,
-    );
-
-    await page.goto('/feed?surface=inbox');
-    await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
-
-    // Inbox chip must show count badge
-    const inboxChip = page.getByRole('tab', { name: /Inbox/ });
-    await expect(inboxChip).toBeVisible();
-    // Count span inside the chip (CountsBadge renders a <span> with the number)
-    await expect(inboxChip.locator('span').filter({ hasText: '1' })).toBeVisible();
-  });
-
-  // ── Step 1: Surface navigation (Inbox → Library → Trash) ────────────────
-
-  test.fixme('1. Surface chip navigation works', async ({ page }) => {
-    // FIXME: Surface navigation (Inbox/Library/Trash) was redesigned from tab chips
-    // to FacetRail status facets in the v0.8 IA. `getByRole('tab', { name: /Library/ })`
-    // no longer matches — the only tablist on the feed page is the Library corpus scope
-    // (personal vs shared), not the surface switcher. Updated coverage lives in
-    // feed/feed-ia-v3.spec.ts which uses facet-status-library data-testid.
-    await routeFeedAndCounts(
-      page,
-      () => feedResponse([makePaper()]),
-      () => libraryCounts,
-    );
-
-    await page.goto('/feed?surface=inbox');
-    await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
-
-    // Navigate to Library via chip
-    await page.getByRole('tab', { name: /Library/ }).click();
-    await expect(page).toHaveURL(/surface=library/, { timeout: 5_000 });
-    await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 5_000 });
-
-    // Navigate to Trash via chip
-    await routeFeedAndCounts(
-      page,
-      () => feedResponse([]),
-      () => trashCounts,
-    );
-    await page.getByRole('tab', { name: /Trash/ }).click();
-    await expect(page).toHaveURL(/surface=trash/, { timeout: 5_000 });
-  });
-
-  // ── Step 2: Library sub-filters (Starred, Archived) ──────────────────────
-
-  // Chip labels were updated (Starred/Reading/Reading List/Done — no Archived).
-  // Test asserts legacy `Archived` chip and `filter=archived` URL value that were removed.
-  test.fixme('2. Library sub-filter chips update URL', async ({ page }) => {
-    await routeFeedAndCounts(
-      page,
-      () => feedResponse([makePaper({ user_state: makeUserState({ saved: true, starred: true }) })]),
-      () => libraryCounts,
-    );
-
-    await page.goto('/feed?surface=library');
-    await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
-
-    // Click "⭐ Starred" sub-filter
-    const starredChip = page.getByRole('tab', { name: /Starred/ });
-    await expect(starredChip).toBeVisible();
-    await starredChip.click();
-    await expect(page).toHaveURL(/filter=starred/, { timeout: 5_000 });
-
-    // Click "📁 Archived" sub-filter
-    const archivedChip = page.getByRole('tab', { name: /Archived/ });
-    await expect(archivedChip).toBeVisible();
-    await archivedChip.click();
-    await expect(page).toHaveURL(/filter=archived/, { timeout: 5_000 });
-
-    // Click "All" to clear filter
-    await page.getByRole('tab', { name: 'All' }).click();
-    await expect(page).not.toHaveURL(/filter=/, { timeout: 5_000 });
-  });
+  // Steps 0-2 are covered by the enabled feed/feed-ia-v3.spec.ts surface and facet receipts.
 
   // ── Step 3: Empty state messages render per surface ──────────────────────
 
@@ -371,7 +296,7 @@ test.describe('Feed — full lifecycle smoke', () => {
     await stubLifecycleEndpoint(
       page,
       `**/api/papers/${PAPER_ID}/save`,
-      makeUserState({ saved: true }),
+      { status: 'ok', paper_id: PAPER_ID },
     );
 
     await routeFeedAndCounts(
@@ -398,19 +323,16 @@ test.describe('Feed — full lifecycle smoke', () => {
 
   // ── Step 6 (LIFECYCLE_WIRED): Star in Library ────────────────────────────
 
-  // Lifecycle endpoints renamed (`/bookmark` → `/star`, `/archive` → `/done`,
-  // `/dismiss` → `/trash`). Mock URL patterns + assertion strings need a refresh; impl
-  // covered by router pytest tests + manual smoke (B.2 scenario 1).
-  test.fixme('6. [LIFECYCLE_WIRED] Star in Library fires /bookmark', async ({ page }) => {
+  test('6. Star in Library fires /star', async ({ page }) => {
     await stubLifecycleEndpoint(
       page,
-      `**/api/papers/${PAPER_ID}/bookmark`,
-      makeUserState({ saved: true, starred: true }),
+      `**/api/papers/${PAPER_ID}/star`,
+      { status: 'ok', paper_id: PAPER_ID },
     );
 
     await routeFeedAndCounts(
       page,
-      () => feedResponse([makePaper({ user_state: makeUserState({ saved: true }) })]),
+      () => feedResponse([makePaper({ state: 'to_read' })]),
       () => libraryCounts,
     );
 
@@ -421,108 +343,94 @@ test.describe('Feed — full lifecycle smoke', () => {
     await expect(starBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
-      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/bookmark`) && r.method() === 'PUT'),
+      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/star`) && r.method() === 'PUT'),
       starBtn.click(),
     ]);
-    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/bookmark`);
+    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/star`);
   });
 
   // ── Step 7 (LIFECYCLE_WIRED): Archive in Library ─────────────────────────
 
-  // See test 6 — endpoint rename `/archive` → `/done`.
-  test.fixme('7. [LIFECYCLE_WIRED] Archive in Library fires /archive', async ({ page }) => {
-    // NOTE: onArchive IS passed from FeedView for non-archived surfaces.
-    // This test exercises the Archive button on the library surface.
-
-    let archivedState = false;
+  test('7. Mark done in Library fires /done', async ({ page }) => {
+    let doneState = false;
 
     await stubLifecycleEndpoint(
       page,
-      `**/api/papers/${PAPER_ID}/archive`,
-      makeUserState({ saved: true, archived: true }),
+      `**/api/papers/${PAPER_ID}/done`,
+      { status: 'ok', paper_id: PAPER_ID },
     );
 
     await routeFeedAndCounts(
       page,
-      () => archivedState ? feedResponse([]) : feedResponse([makePaper({ user_state: makeUserState({ saved: true }) })]),
-      () => archivedState ? { ...libraryCounts, library: 0 } : libraryCounts,
+      () => doneState ? feedResponse([]) : feedResponse([makePaper({ state: 'to_read' })]),
+      () => doneState ? { ...libraryCounts, library: 0, done: 1 } : libraryCounts,
     );
 
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const archiveBtn = page.getByRole('button', { name: `Archive ${PAPER_TITLE}` });
-    await expect(archiveBtn).toBeVisible({ timeout: 5_000 });
+    const doneBtn = page.getByRole('button', { name: `Mark ${PAPER_TITLE} as done` });
+    await expect(doneBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
-      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/archive`) && r.method() === 'PUT'),
-      (async () => { archivedState = true; await archiveBtn.click(); })(),
+      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/done`) && r.method() === 'PUT'),
+      (async () => { doneState = true; await doneBtn.click(); })(),
     ]);
-    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/archive`);
+    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/done`);
 
     // Paper should leave default Library view
     await expect(page.getByText(PAPER_TITLE)).not.toBeVisible({ timeout: 10_000 });
 
-    // Navigate to Archived filter and assert paper is present
-    await page.getByRole('tab', { name: /Archived/ }).click();
-    await expect(page).toHaveURL(/filter=archived/);
   });
 
   // ── Step 8 (LIFECYCLE_WIRED): Dismiss from Library ───────────────────────
 
-  // See test 6 — endpoint rename `/dismiss` → `/trash` (+ optional `/feedback`
-  // companion call). Negative feedback now lives in recommendation_feedback (decoupled).
-  test.fixme('8. [LIFECYCLE_WIRED] Dismiss fires /dismiss and row vanishes', async ({ page }) => {
-    let dismissedState = false;
+  test('8. Trash fires /trash and row vanishes', async ({ page }) => {
+    let trashedState = false;
 
     await stubLifecycleEndpoint(
       page,
-      `**/api/papers/${PAPER_ID}/dismiss`,
-      makeUserState({ saved: true, dismissed: true }),
+      `**/api/papers/${PAPER_ID}/trash`,
+      { status: 'ok', paper_id: PAPER_ID },
     );
 
     await routeFeedAndCounts(
       page,
-      () => dismissedState ? feedResponse([]) : feedResponse([makePaper({ user_state: makeUserState({ saved: true }) })]),
-      () => dismissedState ? { ...libraryCounts, library: 0, trash: 1 } : libraryCounts,
+      () => trashedState ? feedResponse([]) : feedResponse([makePaper({ state: 'to_read' })]),
+      () => trashedState ? { ...libraryCounts, library: 0, trash: 1 } : libraryCounts,
     );
 
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const dismissBtn = page.getByRole('button', { name: `Dismiss ${PAPER_TITLE}` });
-    await expect(dismissBtn).toBeVisible({ timeout: 5_000 });
+    const trashBtn = page.getByRole('button', { name: `Trash ${PAPER_TITLE}` });
+    await expect(trashBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
-      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/dismiss`) && r.method() === 'PUT'),
-      (async () => { dismissedState = true; await dismissBtn.click(); })(),
+      page.waitForRequest((r) => r.url().includes(`/api/papers/${PAPER_ID}/trash`) && r.method() === 'PUT'),
+      (async () => { trashedState = true; await trashBtn.click(); })(),
     ]);
-    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/dismiss`);
+    expect(req.url()).toContain(`/api/papers/${PAPER_ID}/trash`);
 
     // Row vanishes from Library
     await expect(page.getByText(PAPER_TITLE)).not.toBeVisible({ timeout: 10_000 });
 
-    // Trash count chip increments
-    const trashChip = page.getByRole('tab', { name: /Trash/ });
-    await expect(trashChip.locator('span').filter({ hasText: '1' })).toBeVisible({ timeout: 5_000 });
   });
 
   // ── Step 9 (LIFECYCLE_WIRED): Restore from Trash ─────────────────────────
 
-  // See test 6 — restore now writes state := state_before_trash; mock shape +
-  // selectors need to follow the state ENUM rather than the legacy `archived` boolean.
-  test.fixme('9. [LIFECYCLE_WIRED] Restore from Trash fires /restore', async ({ page }) => {
+  test('9. Restore from Trash fires /restore', async ({ page }) => {
     let restoredState = false;
 
     await stubLifecycleEndpoint(
       page,
       `**/api/papers/${PAPER_ID}/restore`,
-      makeUserState({ saved: true }),
+      { status: 'ok', paper_id: PAPER_ID },
     );
 
     await routeFeedAndCounts(
       page,
-      () => restoredState ? feedResponse([]) : feedResponse([makePaper({ user_state: makeUserState({ dismissed: true }) })]),
+      () => restoredState ? feedResponse([]) : feedResponse([makePaper({ state: 'trash', state_before_trash: 'to_read' })]),
       () => restoredState ? { ...libraryCounts } : trashCounts,
     );
 
@@ -544,39 +452,28 @@ test.describe('Feed — full lifecycle smoke', () => {
 
   // ── Step 10 (LIFECYCLE_WIRED): Hard delete from Trash ────────────────────
 
-  // See test 6 — hard-delete still uses DELETE /api/papers/{id} but the modal
-  // copy + Trash mock seeding need the current state shape; impl covered by router pytests
-  // (test_papers_router.py:908,931,960 NEW-H2 regression).
-  test.fixme('10. [LIFECYCLE_WIRED] Hard-delete from Trash shows modal and fires DELETE', async ({ page }) => {
+  test('10. Hard-delete from Trash shows modal and fires DELETE', async ({ page }) => {
     let deletedState = false;
 
     await stubDeleteEndpoint(page, PAPER_ID);
 
     await routeFeedAndCounts(
       page,
-      () => deletedState ? feedResponse([]) : feedResponse([makePaper({ user_state: makeUserState({ dismissed: true }) })]),
+      () => deletedState ? feedResponse([]) : feedResponse([makePaper({ state: 'trash', state_before_trash: 'to_read' })]),
       () => deletedState ? emptyCounts : trashCounts,
     );
 
     await page.goto('/feed?surface=trash');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // Click the Permanently-delete icon button (Trash2 icon in FeedPaperRow)
     const hardDeleteBtn = page.getByRole('button', { name: `Permanently delete ${PAPER_TITLE}` });
     await expect(hardDeleteBtn).toBeVisible({ timeout: 5_000 });
     await hardDeleteBtn.click();
 
-    // HardDeleteModal should appear with title "Delete forever"
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('heading', { name: 'Delete forever' })).toBeVisible();
+    await expect(page.getByRole('alertdialog')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: 'Permanently delete this paper?' })).toBeVisible();
 
-    // Type the paper title into the confirm input to enable the Delete button
-    const confirmInput = page.getByPlaceholder('Paper title');
-    await expect(confirmInput).toBeVisible();
-    await confirmInput.fill(PAPER_TITLE);
-
-    // "Delete forever" button becomes enabled
-    const deleteBtn = page.getByRole('button', { name: 'Delete forever' });
+    const deleteBtn = page.getByRole('button', { name: 'Delete', exact: true });
     await expect(deleteBtn).toBeEnabled({ timeout: 3_000 });
 
     // Click and wait for DELETE request
@@ -587,7 +484,7 @@ test.describe('Feed — full lifecycle smoke', () => {
     expect(req.url()).toContain(`/api/papers/${PAPER_ID}`);
 
     // Modal closes
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('alertdialog')).not.toBeVisible({ timeout: 5_000 });
 
     // Row vanishes from Trash
     await expect(page.getByText(PAPER_TITLE)).not.toBeVisible({ timeout: 10_000 });

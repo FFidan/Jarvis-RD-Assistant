@@ -159,7 +159,7 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 
 Host credentials use Docker Secrets; database-backed integration credentials
 are encrypted under `JARVIS_CONFIG_KEY`. Initialise host secrets with
-`bash scripts/init-secrets.sh` (or `scripts/jarvis-setup.sh`). Full table:
+`bash scripts/init-secrets.sh` or run `./setup.sh`. Full table:
 [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
 Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md).

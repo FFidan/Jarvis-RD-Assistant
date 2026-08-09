@@ -171,7 +171,6 @@ async def generate_cards_core(
             chunks=chunks,
             openai_client=openai_client,
             paper_id=paper_id,
-            abstract=paper.get("abstract"),
             max_cards=max_cards,
             model=smart_model,
             summary_text=summary_text,

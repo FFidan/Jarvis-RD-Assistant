@@ -15,6 +15,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { LifecycleActionsCard } from '@/components/paper/LifecycleActionsCard';
 import type { LifecycleState } from '@/types';
 import { createTestQueryClient } from '@/__tests__/test-utils';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -96,6 +97,10 @@ describe('LifecycleActionsCard — state-contextual rendering', () => {
 describe('LifecycleActionsCard — mutation calls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useResearchMilestoneStore.setState({
+      completed: { save: false, analyze: false },
+      advancedCueDismissed: false,
+    });
   });
 
   it('calls savePaper when Save clicked (inbox)', async () => {
@@ -104,6 +109,19 @@ describe('LifecycleActionsCard — mutation calls', () => {
     renderCard('inbox');
     await user.click(screen.getByRole('button', { name: /Save paper/ }));
     await waitFor(() => expect(savePaper).toHaveBeenCalledWith(42));
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(true);
+  });
+
+  it('does not record the Save milestone when savePaper fails', async () => {
+    const { savePaper } = await import('@/lib/api');
+    vi.mocked(savePaper).mockRejectedValueOnce(new Error('save failed'));
+    const user = userEvent.setup();
+    renderCard('inbox');
+
+    await user.click(screen.getByRole('button', { name: /Save paper/ }));
+    await waitFor(() => expect(savePaper).toHaveBeenCalledWith(42));
+
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(false);
   });
 
   it('calls markReading when Start Reading clicked (to_read)', async () => {

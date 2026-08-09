@@ -193,7 +193,7 @@ async def test_papers_brief_empty(_app):
 async def test_system_models_full_response(_app):
     """GET /api/system/models returns installed, hardware, and current keys."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -269,7 +269,7 @@ async def test_system_models_full_response(_app):
 async def test_system_models_ollama_unreachable(_app):
     """GET /api/system/models returns empty installed list when Ollama is down."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -290,7 +290,7 @@ async def test_system_models_ollama_unreachable(_app):
 async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch):
     """GET /api/system/models surfaces stale model/dimension env drift."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     monkeypatch.setattr(
         "paper_ingestion.services.system_models_view.EMBEDDING_MODEL_NAME",
@@ -321,7 +321,7 @@ async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch
 async def test_system_models_no_config(_app):
     """GET /api/system/models returns empty current dict when no config exists."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -364,7 +364,7 @@ async def test_system_models_no_config(_app):
 async def test_system_models_db_failure_still_returns_ollama_data(_app):
     """GET /api/system/models degrades when config loading fails but still returns Ollama data."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -393,7 +393,7 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
 async def test_system_models_surfaces_pending_delivery(_app):
     """GET /api/system/models maps llm.delivery_pending roles to pending_restart."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -419,7 +419,7 @@ async def test_system_models_surfaces_pending_delivery(_app):
 async def test_system_models_delivery_empty_when_config_read_fails(_app):
     """Delivery state read failure leaves delivery empty — never a phantom applied."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
     conn.fetch.side_effect = RuntimeError("db unavailable")
@@ -434,7 +434,7 @@ async def test_system_models_delivery_empty_when_config_read_fails(_app):
 async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     """GET /api/system/models keeps installed models even when runtime probe fails."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -611,7 +611,7 @@ async def test_delete_system_model_fails_closed_when_current_assignments_unavail
 async def test_system_models_includes_hardware_recommendation(_app, monkeypatch):
     """GET /api/system/models response includes hardware_recommendation field."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     # Patch hardware detection to return a known 16 GB value so we can assert
     # deterministic recommendation output without an actual GPU.
@@ -669,7 +669,7 @@ async def test_system_models_includes_hardware_recommendation(_app, monkeypatch)
 async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, monkeypatch):
     """hardware_recommendation is safe / non-crashing when no GPU detected."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     from paper_ingestion.services import model_lifecycle as ml
 
     # Simulate CPU-only / GPU probe failure: vram_gb == 0.0
@@ -715,7 +715,7 @@ async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, 
 async def test_system_models_hardware_recommendation_48gb_no_confirm_flag(_app, monkeypatch):
     """hardware_recommendation for 48 GB GPU: smart is live-validated, no confirm flag."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     from paper_ingestion.services import model_lifecycle as ml
 
     # Simulate 48 GB GPU (49 152 MiB → HIGH bucket)
@@ -771,7 +771,7 @@ async def test_system_models_routing_mismatch_surfaces_inconsistency(_app, monke
     the smart alias. Expects routing["smart"] == "qwen3:8b" and consistent=False.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -808,7 +808,7 @@ async def test_system_models_litellm_down_endpoint_stays_200(_app, monkeypatch):
     routing must be empty; consistent=False only when there is stored intent.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -838,7 +838,7 @@ async def test_system_models_litellm_down_endpoint_stays_200(_app, monkeypatch):
 async def test_system_models_routing_consistent_when_litellm_matches(_app, monkeypatch):
     """When LiteLLM routes the same model as stored intent, consistent=True."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -888,7 +888,7 @@ async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeyp
     false divergence.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -935,7 +935,7 @@ async def test_system_models_num_ctx_override_reflected_in_fit_detail(_app, monk
     catalog default because the unparsable override is ignored.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)

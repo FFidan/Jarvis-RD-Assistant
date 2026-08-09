@@ -267,10 +267,10 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
 # ---------------------------------------------------------------------------
 # E1.PI extensions — FSRS / L2 / weights / setup.completed / telegram.owner_chat_id
 #
-# Verified: settings_service.py:56-107 (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
-# Verified: settings_service.py:415-468 (_CONFIG_VALIDATORS)
-# Verified: settings_service.py:520-547 (_write_config_row — UPSERT)
-# Verified: settings_service.py:477-517 (_fetch_effective_config_row — scoped GET)
+# Verified: config_metadata.py (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
+# Verified: config_validators.py (_CONFIG_VALIDATORS)
+# Verified: config_db.py (_write_config_row — UPSERT)
+# Verified: config_db.py (_fetch_effective_config_row — scoped GET)
 # ---------------------------------------------------------------------------
 
 
@@ -284,8 +284,8 @@ async def test_put_fsrs_desired_retention_round_trip(
 ):
     """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
 
-    Verified: settings_service.py:436 (_validate_fsrs_retention),
-              settings_service.py:520-547 (_write_config_row UPSERT path).
+    Verified: config_validators.py (_validate_fsrs_retention),
+              config_db.py (_write_config_row UPSERT path).
     Survivor-of: test_settings.py fsrs key round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -311,7 +311,7 @@ async def test_put_fsrs_desired_retention_round_trip(
 async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_client):
     """PUT fsrs.desired_retention with value ≥ 1.0 returns 400 (validator guard).
 
-    Verified: settings_service.py:416-421 (_validate_fsrs_retention out-of-range).
+    Verified: config_validators.py (_validate_fsrs_retention out-of-range).
     Survivor-of: test_settings.py invalid-value parametrize cases.
     """
     resp = await pi_settings_client.put(
@@ -331,8 +331,8 @@ async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_
 async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client):
     """PUT /api/config/pulse.l2_lambda persists in user_config (user_id IS NULL).
 
-    Verified: settings_service.py:329-337 (_validate_l2_lambda),
-              settings_service.py:520-547 (_write_config_row NULL-scoped UPSERT).
+    Verified: config_validators.py (_validate_l2_lambda),
+              config_db.py (_write_config_row NULL-scoped UPSERT).
     Survivor-of: test_settings.py l2_lambda round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -352,7 +352,7 @@ async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client)
 async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
     """PUT pulse.l2_lambda > 2.0 returns 400.
 
-    Verified: settings_service.py:335-337 (_validate_l2_lambda range guard).
+    Verified: config_validators.py (_validate_l2_lambda range guard).
     """
     resp = await pi_settings_client.put(
         "/api/config/pulse.l2_lambda",
@@ -369,8 +369,8 @@ async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
 async def test_put_setup_completed_persists_true(contract_conn, pi_settings_client):
     """PUT /api/config/setup.completed stores True in user_config.
 
-    Verified: settings_service.py:447 (_validate_bool guard),
-              settings_service.py:520-547 (_write_config_row UPSERT).
+    Verified: config_validators.py (_validate_bool guard),
+              config_db.py (_write_config_row UPSERT).
     Survivor-of: test_settings.py setup.completed round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -439,8 +439,8 @@ async def test_put_api_key_login_enabled_rejects_non_bool(pi_settings_client):
 async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_client):
     """PUT /api/config/telegram.owner_chat_id stores integer; GET reads it back.
 
-    Verified: settings_service.py:448 (telegram.owner_chat_id → _validate_optional_int),
-              settings_service.py:512-517 (_fetch_effective_config_row system path).
+    Verified: config_validators.py (telegram.owner_chat_id → _validate_optional_int),
+              config_db.py (_fetch_effective_config_row system path).
     Survivor-of: test_settings.py telegram.owner_chat_id round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -460,7 +460,7 @@ async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_
 async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings_client):
     """PUT /api/config/telegram.owner_chat_id with null clears the stored integer.
 
-    Verified: settings_service.py:313-317 (_validate_optional_int null branch).
+    Verified: config_validators.py (_validate_optional_int null branch).
     """
     resp = await pi_settings_client.put(
         "/api/config/telegram.owner_chat_id",
@@ -549,7 +549,7 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
 
     import paper_ingestion.services.config_db as _config_db
     import paper_ingestion.services.litellm_config as _litellm_cfg
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     # Seed the "old" stored model so the reconciler has something to re-deliver.
     await contract_conn.execute(
@@ -906,7 +906,7 @@ async def test_settings_ai_dismiss_banner_persists_per_user(contract_conn, _ai_s
 # Verified: routers/settings.py:466-486 (export_my_data)
 # Verified: auth.py:283-308 (current_user_id_strict — raises HTTPException(401) when
 #           request.state.user_id is absent)
-# Verified: services/settings_service.py:1044-1064 (build_export_zip)
+# Verified: services/data_export.py (build_export_zip)
 # ---------------------------------------------------------------------------
 
 
@@ -952,7 +952,7 @@ async def test_get_my_export_returns_zip_for_authenticated_user(
     """A130: GET /api/me/export returns 200 + application/zip for authenticated user.
 
     Verified: routers/settings.py:466-486 (export_my_data StreamingResponse)
-    Verified: services/settings_service.py:1044-1064 (build_export_zip returns bytes)
+    Verified: services/data_export.py (build_export_zip returns bytes)
     Verified: auth.py:283-308 (current_user_id_strict resolves cookie_a session)
     """
     resp = await _me_export_client.get("/api/me/export")
@@ -1156,7 +1156,7 @@ async def test_get_my_export_excludes_other_users_papers(
     ``discovered_by`` set; we then GET as user A and assert user B's seeded
     paper is absent from ``papers.jsonl``.
 
-    Verified: services/settings_service.py:1029 — papers query is scoped via
+    Verified: services/data_export.py — papers query is scoped via
     ``WHERE p.discovered_by = $1``; jarvis_common/testing.py:546 — fixture
     seeds A_PAPER_TITLE for user A and ``paper-b`` for user B.
     """

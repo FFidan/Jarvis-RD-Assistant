@@ -46,7 +46,7 @@
 # `die`/`usage_error`/`env_die` deliberately stay with their scripts: each owns a
 # different exit code and next-step hint.
 # C_BOLD is read only by the scripts that source this library (setup.sh, update.sh,
-# scripts/jarvis-setup.sh, scripts/jarvis-research.sh, scripts/uninstall.sh,
+# scripts/jarvis-research.sh, scripts/uninstall.sh,
 # scripts/validate-hardware.sh) and never by the helpers below, so shellcheck
 # cannot see the use.
 # shellcheck disable=SC2034
@@ -434,7 +434,7 @@ clear_retained_lifecycle_operation() {
 # wait_for_compose_service_health SERVICE BUDGET LOOKUP_FUNCTION [INTERVAL]
 # Sets COMPOSE_HEALTH_RESULT to healthy, running-unverified, terminal, or
 # timeout, and COMPOSE_HEALTH_LAST_STATE to the last observed container state.
-# Both globals are read by the callers (setup.sh, update.sh, scripts/jarvis-setup.sh)
+# Both globals are read by the callers (setup.sh and update.sh)
 # after this returns, never inside this library, so shellcheck cannot see the use.
 # shellcheck disable=SC2034
 wait_for_compose_service_health() {
@@ -921,6 +921,107 @@ raise SystemExit(0 if host_port.endswith(":443") and server == expected else 1)
 ' "$port"
 }
 
+# tailscale_serve_route_classification OLD_PORT TRUSTED_PORT
+# Read Tailscale's JSON status on stdin and classify only an exact singleton
+# HTTPS-443 loopback proxy. Output: none, legacy, healthy, or custom.
+tailscale_serve_route_classification() {
+  local old_port="$1" trusted_port="$2"
+  python3 -c '
+import json
+import sys
+from urllib.parse import urlsplit
+
+old_port, trusted_port = sys.argv[1:]
+try:
+    config = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    print("custom")
+    raise SystemExit(0)
+if config == {}:
+    print("none")
+    raise SystemExit(0)
+if not isinstance(config, dict) or set(config) != {"TCP", "Web"}:
+    print("custom")
+    raise SystemExit(0)
+if config.get("TCP") != {"443": {"HTTPS": True}}:
+    print("custom")
+    raise SystemExit(0)
+web = config.get("Web")
+if not isinstance(web, dict) or len(web) != 1:
+    print("custom")
+    raise SystemExit(0)
+host_port, server = next(iter(web.items()))
+if not host_port.endswith(":443") or not isinstance(server, dict):
+    print("custom")
+    raise SystemExit(0)
+handlers = server.get("Handlers")
+if not isinstance(handlers, dict) or set(handlers) != {"/"}:
+    print("custom")
+    raise SystemExit(0)
+handler = handlers.get("/")
+if not isinstance(handler, dict) or set(handler) != {"Proxy"}:
+    print("custom")
+    raise SystemExit(0)
+target = urlsplit(handler["Proxy"] if isinstance(handler["Proxy"], str) else "")
+if (target.scheme != "http" or target.hostname != "127.0.0.1"
+        or target.path not in ("", "/") or target.query or target.fragment):
+    print("custom")
+    raise SystemExit(0)
+try:
+    port = str(target.port) if target.port is not None else ""
+except ValueError:
+    print("custom")
+    raise SystemExit(0)
+print("legacy" if port == old_port else "healthy" if port == trusted_port else "custom")
+' "$old_port" "$trusted_port"
+}
+
+# tailscale_legacy_route_notice OLD_PORT TRUSTED_PORT
+# Read-only upgrade diagnosis. It never mutates node-global Serve state and
+# prints a targeted command only when an operator confirms route ownership.
+tailscale_legacy_route_notice() {
+  local old_port="$1" trusted_port="$2" uid status classification
+  case "$old_port:$trusted_port" in
+    *[!0-9:]*|:*|*:) warn "Tailscale Serve diagnosis skipped: invalid dashboard ports; inspect the persisted port settings."; return 0 ;;
+  esac
+  if [ "$old_port" -lt 1 ] || [ "$old_port" -gt 65535 ] \
+     || [ "$trusted_port" -lt 1 ] || [ "$trusted_port" -gt 65535 ] \
+     || [ "$old_port" -eq "$trusted_port" ]; then
+    warn "Tailscale Serve diagnosis skipped: invalid dashboard ports; inspect the persisted port settings."
+    return 0
+  fi
+  command -v tailscale >/dev/null 2>&1 || return 0
+  uid="$(id -u 2>/dev/null)" || {
+    warn "Could not inspect Tailscale Serve; inspect Tailscale Serve before changing it."
+    return 0
+  }
+  if [ "$uid" -eq 0 ]; then
+    status="$(tailscale serve status --json 2>/dev/null)" || status=""
+  else
+    status="$(sudo -n tailscale serve status --json 2>/dev/null)" || status=""
+  fi
+  if [ -z "$status" ]; then
+    warn "Could not inspect Tailscale Serve; inspect Tailscale Serve before changing it."
+    return 0
+  fi
+  classification="$(printf '%s' "$status" | \
+    tailscale_serve_route_classification "$old_port" "$trusted_port")" \
+    || classification=custom
+  case "$classification" in
+    none|healthy) return 0 ;;
+    legacy)
+      warn "Tailscale Serve still targets the legacy dashboard port ${old_port}."
+      printf '  Before changing it, confirm that the existing HTTPS 443 route belongs to this JARVIS installation.\n'
+      printf '  Then run: sudo tailscale serve --bg --yes --https=443 http://127.0.0.1:%s\n' "$trusted_port"
+      ;;
+    *)
+      warn "Tailscale Serve is shared, custom, malformed, or unreadable; inspect Tailscale Serve before changing it."
+      printf '  Inspect with: sudo tailscale serve status --json\n'
+      ;;
+  esac
+  return 0
+}
+
 # tailscale_serve_https_off PORT NON_INTERACTIVE
 # Use the documented `serve reset` primitive only after inspecting live state;
 # targeted `off` grammar has varied between client versions. Reset only when
@@ -1237,6 +1338,30 @@ restore_setup_secret_snapshot() {
   [ "$failed" -eq 0 ]
 }
 
+# setup_secret_snapshot_is_complete SNAPSHOT_DIR
+# Require an explicit present/absent record for every setup-owned credential.
+# Rollback callers use this before stopping any live edge, so an incomplete
+# journal cannot turn a recoverable route failure into a partial restoration.
+setup_secret_snapshot_is_complete() {
+  local snapshot_dir="$1" name state state_path secret_path
+  [ -d "$snapshot_dir" ] && [ ! -L "$snapshot_dir" ] || return 1
+  for name in cloudflare_tunnel_token.txt smtp_pass.txt telegram_bot_token.txt; do
+    state_path="${snapshot_dir}/${name}.state"
+    secret_path="${snapshot_dir}/${name}"
+    [ -f "$state_path" ] && [ ! -L "$state_path" ] || return 1
+    state="$(cat "$state_path")" || return 1
+    case "$state" in
+      present)
+        [ -f "$secret_path" ] && [ ! -L "$secret_path" ] || return 1
+        ;;
+      absent)
+        [ ! -e "$secret_path" ] && [ ! -L "$secret_path" ] || return 1
+        ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
 discard_setup_transaction() {
   local transaction_dir="$1"
   _setup_transaction_path_is_safe "$transaction_dir" || return 2
@@ -1365,8 +1490,8 @@ remove_attempted_access_runtime() {
 
 # rollback_access_runtime OLD_MODE OLD_PROFILES OLD_TAILSCALE_PORT OLD_ORIGIN
 #   OLD_DASHBOARD_PORT NEW_MODE NEW_PROFILES NEW_TAILSCALE_PORT
-#   NEW_TAILSCALE_ATTEMPTED NON_INTERACTIVE ENV_SNAPSHOT ENV_TARGET SECRET_TARGET
-#   PROJECT_DIR [SECRET_SNAPSHOT_DIR]
+#   NEW_TAILSCALE_ATTEMPTED NON_INTERACTIVE ENV_SNAPSHOT ENV_TARGET SECRET_TARGET_DIR
+#   PROJECT_DIR SECRET_SNAPSHOT_DIR
 #
 # Undo a failed access replacement at the JARVIS-owned runtime boundary. Order is
 # deliberate: stop only the replacement edge, restore persisted inputs, recreate
@@ -1375,20 +1500,28 @@ remove_attempted_access_runtime() {
 # restore, recreation, or exact-marker verification fails so the caller can print
 # manual recovery without claiming that the previous route works.
 rollback_access_runtime() {
+  [ "$#" -eq 15 ] || return 2
   local old_mode="$1" old_profiles="$2" old_tailscale_port="$3"
   local old_origin="$4" old_dashboard_port="$5" new_mode="$6"
   local new_profiles="$7" new_tailscale_port="$8"
   local new_tailscale_attempted="$9" non_interactive="${10}"
-  local env_snapshot="${11}" env_target="${12}" secret_target="${13}"
-  local project_dir="${14}" secret_snapshot_dir="${15:-}"
+  local env_snapshot="${11}" env_target="${12}" secret_target_dir="${13}"
+  local project_dir="${14}" secret_snapshot_dir="${15}"
   local compose_env="$env_target"
   local edge service old_route env_restored=0 failed=0 has_old_tailscale=0
   local seen_services=" dashboard "
   local -a previous_profile_args=() previous_services=(dashboard)
 
+  [ -f "$env_snapshot" ] && [ ! -L "$env_snapshot" ] \
+    && setup_secret_snapshot_is_complete "$secret_snapshot_dir" || return 2
+
   case "$compose_env" in
     /*) ;;
     *) compose_env="${project_dir%/}/${compose_env}" ;;
+  esac
+  case "$secret_target_dir" in
+    /*) ;;
+    *) secret_target_dir="${project_dir%/}/${secret_target_dir}" ;;
   esac
 
   remove_attempted_access_runtime "$new_mode" "$new_profiles" \
@@ -1397,15 +1530,8 @@ rollback_access_runtime() {
 
   if restore_env_snapshot "$env_snapshot" "$env_target"; then
     env_restored=1
-    if [ -n "$secret_snapshot_dir" ]; then
-      restore_setup_secret_snapshot "$secret_snapshot_dir" \
-        "${project_dir%/}/secrets" || failed=1
-    else
-      # Backward-compatible fallback for callers that predate the durable
-      # three-credential transaction snapshot.
-      restore_secret_from_env "$env_target" CLOUDFLARE_TUNNEL_TOKEN \
-        "$secret_target" || failed=1
-    fi
+    restore_setup_secret_snapshot "$secret_snapshot_dir" \
+      "$secret_target_dir" || failed=1
   else
     failed=1
   fi
@@ -1774,8 +1900,7 @@ resolve_docker_data_root() {
 # different filesystems on split-mount hosts) and compares it to REQUIRED_GB.
 # stdout: "<free_gb> <data_root>". Returns 0 when free >= required, 1 on a
 # shortfall, 2 when free space cannot be measured. Never hard-fails: setup.sh
-# and the alternate bootstraps compose their own fatal/warn policy around
-# this shared core.
+# owns the fatal/warn policy around this shared core.
 preflight_disk_lib() {
   local required_gb="$1" data_root free_kb
   data_root="$(resolve_docker_data_root)"
@@ -1791,8 +1916,8 @@ preflight_disk_lib() {
 # -----------------------------------------------------------------------------
 # The application images published to GHCR — single source of truth.
 # -----------------------------------------------------------------------------
-# Shared by every entry point that starts the stack (setup.sh, update.sh,
-# scripts/jarvis-setup.sh), because each of them must materialise these images
+# Shared by every entry point that starts the stack (setup.sh and update.sh),
+# because each of them must materialise these images
 # BEFORE bringing the stack up. They all keep a `build:` block so contributors can
 # still build from source, and that is exactly why they must be pulled BY NAME:
 # `docker compose pull --ignore-buildable` skips every buildable service and would
@@ -1820,9 +1945,8 @@ PUBLISHED_IMAGE_REPOS=(
 # -----------------------------------------------------------------------------
 # PROFILE_REGISTRY — single source of truth for every optional service group.
 # -----------------------------------------------------------------------------
-# Both entry points (setup.sh, scripts/jarvis-setup.sh) read this instead of
-# keeping their own hand-maintained profile lists, which is exactly how a group
-# came to be persisted-but-not-health-checked (or started-but-not-persisted).
+# setup.sh reads this instead of keeping separate hand-maintained profile lists
+# for persistence, health, and delivery behavior.
 # One pipe-delimited row per group; columns, in order:
 #   name              group identifier (== the compose --profile flag)
 #   overlay_file      compose file the group's services live in
@@ -1849,9 +1973,8 @@ PROFILE_REGISTRY=(
   "perf|docker-compose.perf.yml|perf|no||none|manual|published"
 )
 
-# MANDATORY_HEALTH_BASE — the always-on services both entry points must wait on.
-# Shared here so setup.sh and scripts/jarvis-setup.sh cannot drift (the drift that
-# left restore-uploader started-but-unverified by the wrapper).
+# MANDATORY_HEALTH_BASE — the always-on services every setup path must wait on.
+# Shared here so fresh and existing-install paths cannot drift.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
 MANDATORY_HEALTH_BASE="postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader"
 

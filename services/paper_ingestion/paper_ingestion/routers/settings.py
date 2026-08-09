@@ -1,12 +1,8 @@
 """Settings, nudges, and source management endpoints.
 
-HTTP transport layer only — all business logic lives in
-``paper_ingestion.services.settings_service``.
+HTTP transport layer only — business logic lives in concern-specific service modules.
 
 Route handlers are thin:  parse → auth check → delegate → return.
-
-Symbols that tests patch via ``paper_ingestion.routers.settings.*`` are
-re-exported here so existing patch-paths remain stable after the extraction.
 
 Sub-routers:
 - ``settings_sources.router`` — /api/nudges/* and /api/sources/*
@@ -16,18 +12,12 @@ import logging
 from typing import Any
 
 import asyncpg
-import httpx  # noqa: F401 — in namespace so tests can patch routers.settings.httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from jarvis_common import log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
-from jarvis_common.crypto import (
-    decrypt_secret,  # noqa: F401 — in namespace for test patch-path compat
-    encrypt_secret,  # noqa: F401 — tests patch routers.settings.encrypt_secret
-    mask_secret,  # noqa: F401 — imported by downstream (service uses it; keep for compat)
-    resolve_secret_row,
-)
-from jarvis_common.event_log import log_event as _log_event  # noqa: F401 — tests patch this name
+from jarvis_common.crypto import resolve_secret_row
+from jarvis_common.event_log import log_event as _log_event
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
@@ -36,18 +26,24 @@ from paper_ingestion.models import (
     PapersBySourceItem,
     PapersByStatusItem,
 )
-
-# Re-export ReorderRequest from sources sub-router for backward compat
-from paper_ingestion.routers.settings_sources import (  # noqa: F401
-    ReorderRequest,
-    sources_router,
+from paper_ingestion.routers.settings_sources import sources_router
+from paper_ingestion.services.analytics_queries import (
+    fetch_papers_by_source,
+    fetch_papers_by_status,
 )
-
-# update_litellm_model is passed to write_config so the router-module symbol is
-# what tests monkeypatch.  ROLE_TO_ALIAS is re-exported for any caller that
-# previously imported it from this module.
+from paper_ingestion.services.config_db import (
+    _fetch_effective_config_row,
+    _resolve_config_value,
+)
+from paper_ingestion.services.config_metadata import (
+    _ENCRYPTED_KEYS,
+    PERSONAL_KEYS,
+    _classify_config_key,
+    _is_allowed_config_key,
+)
+from paper_ingestion.services.config_write import write_config
+from paper_ingestion.services.data_export import build_export_zip
 from paper_ingestion.services.litellm_config import (
-    ROLE_TO_ALIAS,  # noqa: F401
     get_provider_base_url,
     update_litellm_model,
 )
@@ -55,58 +51,10 @@ from paper_ingestion.services.llm_provider_registry import (
     PROVIDER_REGISTRY,
     provider_for_id,
 )
-
-# --- Symbols used by handler code ---
-# --- Re-exports: symbols that existing tests import from this module ---
-# Tests that do `from paper_ingestion.routers.settings import X` or
-# `patch("paper_ingestion.routers.settings.X")` must still find X here.
-from paper_ingestion.services.settings_service import (  # noqa: F401
-    _ALLOWED_CONFIG_KEYS,
-    _CONFIG_VALIDATORS,
-    _ENCRYPTED_KEYS,
-    _NUDGE_ALLOWED_COLUMNS,
-    _NUDGE_JSONB_COLUMNS,
-    _NUM_CTX_PATTERN,
-    _SECRET_KEYS,
-    _SOURCE_ALLOWED_COLUMNS,
-    _SOURCE_JSONB_COLUMNS,
+from paper_ingestion.services.model_assignment import cloud_provider_key_present
+from paper_ingestion.services.provider_test import (
     _SUPPORTED_PROVIDERS,
-    _THINKING_DISABLED_PATTERN,
-    _ZOTERO_LIBRARY_SCOPE_KEYS,
-    PERSONAL_KEYS,
-    SYSTEM_KEYS,
-    _classify_config_key,
-    _fetch_effective_config_row,
-    _is_allowed_config_key,
-    _resolve_config_value,
-    _validate_bool,
-    _validate_cron,
-    _validate_fsrs_learning_steps,
-    _validate_fsrs_retention,
-    _validate_group_id,
-    _validate_l2_lambda,
-    _validate_langfuse_dashboard_url,
-    _validate_library_type,
-    _validate_lookback_days,
-    _validate_nonempty_str,
-    _validate_optional_int,
-    _validate_positive_int,
-    _validate_pulse_weights,
-    _validate_startup_grace_seconds,
-    _validate_zotero_cron,
-    _write_config_row,
-    apply_fetch_interval,
-    apply_pulse_cron,
-    apply_zotero_cron,
-    build_export_zip,
-    cloud_provider_key_present,
-    fetch_papers_by_source,
-    fetch_papers_by_status,
-    migrate_plaintext_secrets,
-    reload_telegram_nudges,
     test_provider_connectivity,
-    validate_model_assignment,
-    write_config,
 )
 
 logger = logging.getLogger(__name__)

@@ -71,10 +71,10 @@ class TestImportsUnsafe:
         assert hits == []
         assert not aliases
 
-    def test_both_unsafe_names_flagged(self) -> None:
+    def test_multiple_unsafe_imports_flagged(self) -> None:
         src = (
-            "from jarvis_common.auth import current_user_id\n"
             "from jarvis_common.auth import current_user_id_or_none\n"
+            "from jarvis_common.auth import current_user_id_or_none as uid\n"
         )
         hits, aliases = _imports_unsafe(_parse(src))
         assert len(hits) == 2

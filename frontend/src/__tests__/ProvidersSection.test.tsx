@@ -3,7 +3,12 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
-import type { ProviderMetadata } from '@/lib/api';
+import type {
+  ModelCatalogEntry,
+  ProviderMetadata,
+  ProviderModelListStatus,
+  SystemModelsResponse,
+} from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', async () =>
@@ -27,7 +32,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       logout: vi.fn(),
     })),
   },
@@ -36,7 +40,86 @@ vi.mock('@/stores/auth-store', () => ({
 const { fetchConfig, fetchSystemModels, listProviders, setConfig, testProvider } = await import('@/lib/api');
 const { toast } = await import('sonner');
 
-const EMPTY_SYSTEM_MODELS = { catalog: [], provider_lists: {} };
+const EMPTY_SYSTEM_MODELS: SystemModelsResponse = {
+  status: 'ok',
+  installed: [],
+  hardware: {},
+  current: {},
+  issues: {},
+  catalog: [],
+  recommendations: {},
+  hardware_recommendation: {
+    vram_mb: null,
+    bucket: 'CPU_ONLY',
+    summary: 'CPU-only test fixture',
+    aliases: [],
+  },
+  delivery: {},
+  routing: {},
+  consistent: true,
+  provider_lists: {},
+};
+
+function modelEntry(provider: string): ModelCatalogEntry {
+  return {
+    id: `${provider}/test-model`,
+    name: 'Test model',
+    provider,
+    ollama_tag: null,
+    roles: ['smart'],
+    vram_gb: 0,
+    disk_gb: 0,
+    context_tokens: 8192,
+    license: 'test',
+    tier: 0,
+    description: 'Test fixture',
+    notes: '',
+    last_reviewed: '2026-08-09',
+    embedding_dimension: null,
+    phase: 'test',
+    assignable: true,
+    min_vram_gb_at_default_ctx: null,
+    kv_cache_bytes_per_token: null,
+    default_num_ctx: null,
+    max_num_ctx: null,
+    supports_thinking: false,
+    active: false,
+    pulled: false,
+    provider_key_present: true,
+    fit: 'available',
+    status: 'cloud_active',
+    can_assign: true,
+    assign_blocker: null,
+    fit_detail: {
+      default: 'cloud',
+      at_num_ctx: 8192,
+      required_vram_gb: null,
+      base_vram_gb: null,
+      base_num_ctx: 8192,
+      default_num_ctx: 8192,
+      max_num_ctx: 8192,
+      kv_cache_bytes_per_token: null,
+    },
+  };
+}
+
+function providerListStatus(
+  fields: Pick<ProviderModelListStatus, 'fetched_at' | 'error'>,
+): ProviderModelListStatus {
+  return {
+    model_count: 0,
+    fetched_at: fields.fetched_at,
+    error: fields.error,
+    truncated: false,
+    excluded: {},
+  };
+}
+
+function systemModels(
+  fields: Pick<SystemModelsResponse, 'catalog' | 'provider_lists'>,
+): SystemModelsResponse {
+  return { ...EMPTY_SYSTEM_MODELS, ...fields };
+}
 
 const PROVIDERS: ProviderMetadata[] = [
   {
@@ -240,15 +323,15 @@ describe('ProvidersSection', () => {
   });
 
   it('shows model count and fetch staleness for a connected provider with a live list', async () => {
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [
-        { provider: 'anthropic' },
-        { provider: 'anthropic' },
+        modelEntry('anthropic'),
+        modelEntry('anthropic'),
       ],
       provider_lists: {
-        anthropic: { fetched_at: new Date().toISOString(), error: null, truncated: false },
+        anthropic: providerListStatus({ fetched_at: new Date().toISOString(), error: null }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {
@@ -258,12 +341,15 @@ describe('ProvidersSection', () => {
   });
 
   it('shows the unavailable text for a connected provider whose live fetch errored', async () => {
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: 'provider request failed', truncated: false },
+        anthropic: providerListStatus({
+          fetched_at: '2026-01-01T00:00:00Z',
+          error: 'provider request failed',
+        }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {
@@ -275,12 +361,12 @@ describe('ProvidersSection', () => {
 
   it('shows both tested-connectivity and zero-models availability for the same tile', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: null, error: 'provider request failed', truncated: false },
+        anthropic: providerListStatus({ fetched_at: null, error: 'provider request failed' }),
       },
-    });
+    }));
     const user = userEvent.setup();
     renderSection();
 
@@ -297,12 +383,12 @@ describe('ProvidersSection', () => {
   it('does not blame connectivity when the fetch succeeded but offered nothing usable', async () => {
     // Every model a provider lists can be excluded or already bundled. Telling the
     // operator to fix a working connection sends them after a problem they do not have.
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+        anthropic: providerListStatus({ fetched_at: '2026-01-01T00:00:00Z', error: null }),
       },
-    });
+    }));
     renderSection();
 
     expect(
@@ -332,12 +418,15 @@ describe('ProvidersSection', () => {
         supports_assignment: true,
       },
     ]);
-    vi.mocked(fetchSystemModels).mockResolvedValue({
-      catalog: [{ provider: 'custom_openai_compatible2' }],
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
+      catalog: [modelEntry('custom_openai_compatible2')],
       provider_lists: {
-        custom_openai_compatible2: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+        custom_openai_compatible2: providerListStatus({
+          fetched_at: '2026-01-01T00:00:00Z',
+          error: null,
+        }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {

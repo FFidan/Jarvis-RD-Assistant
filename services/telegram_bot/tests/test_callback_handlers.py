@@ -102,7 +102,7 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
     update.callback_query = query
 
     context = MagicMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
 
@@ -427,7 +427,7 @@ async def test_paper_action_auth_fail_answers_query():
     Without this, the Telegram client spins indefinitely on auth-rejected
     callbacks.
     """
-    # Use a chat_id that does NOT match make_bot_config(BotConfig, ).telegram_chat_id so
+    # Use an unpaired chat_id so
     # auth_check returns False against both the env path and the DB path.
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:save:42", chat_id=99999
@@ -1151,7 +1151,7 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
     context = MagicMock()
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
+        "config": make_bot_config(BotConfig),
         "db_pool": AsyncMock(),
         "http_client": AsyncMock(),
     }

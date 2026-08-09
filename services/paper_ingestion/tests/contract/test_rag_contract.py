@@ -285,7 +285,6 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
         embedder,
         SharedConnPool(contract_conn),
         body,
-        mock_http,
         user_id=None,
     )
 
@@ -371,7 +370,6 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
         embedder,
         SharedConnPool(contract_conn),
         body,
-        mock_http,
         user_id=99,  # user 99 has no library membership for this paper
     )
 
@@ -501,7 +499,6 @@ async def test_neither_rag_path_serves_a_chunk_whose_stored_row_is_gone(contract
         embedder,
         pool,
         CrossPaperAskRequest(question="What does the paper say?", decompose=False),
-        AsyncMock(),
         user_id=reader_id,
     )
     assert isinstance(result, CrossPaperRagNoResults), (
@@ -553,7 +550,6 @@ async def test_both_rag_paths_keep_chunks_backed_by_a_stored_row(contract_conn):
         embedder,
         pool,
         CrossPaperAskRequest(question="What does the paper say?", decompose=False),
-        AsyncMock(),
         user_id=reader_id,
     )
     assert isinstance(result, CrossPaperRagPrep), f"expected prepared results, got {result!r}"
@@ -637,7 +633,6 @@ async def test_cross_paper_rag_serves_a_healthy_paper_beside_one_whose_rows_are_
         embedder,
         SharedConnPool(contract_conn),
         CrossPaperAskRequest(question="What do the papers say?", decompose=False),
-        AsyncMock(),
         user_id=reader_id,
     )
 
@@ -693,7 +688,8 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
 
     from paper_ingestion.models import AskResponse as _AskResponse
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         assert "Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="Transformers use self-attention.")
 
@@ -768,7 +764,8 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
     pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
@@ -836,7 +833,8 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         raise EmptyVisibleLLMContentError(
             "LiteLLM chat response contained no visible content after think-block stripping"
         )
@@ -968,7 +966,8 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
 
     from paper_ingestion.models import AskResponse as _AskResponse
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         assert "A104 Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="This paper is about contract tests.")
 
@@ -1033,7 +1032,8 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
     with (
@@ -1093,7 +1093,8 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_call_rag_llm(messages, *, smart_model):
+    async def _stub_call_rag_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         raise EmptyVisibleLLMContentError("no visible content")
 
     with (
@@ -2084,7 +2085,8 @@ async def test_m11c_verifier_import_failure_not_masked(contract_conn, pi_test_cl
     )
     from paper_ingestion.models import AskResponse as _AskResponse
 
-    async def _stub_llm(messages, *, smart_model):
+    async def _stub_llm(messages, *, smart_model, answer_budget):
+        assert answer_budget.completion_tokens in {700, 2800}
         return _AskResponse(answer="An answer.")
 
     with (
@@ -2165,8 +2167,17 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
 
     call_capture = []
 
-    async def _capture_prepare(embedder, db_pool, paper_id_, body, http_client, *, user_id=None):
-        call_capture.append({"user_id": user_id})
+    async def _capture_prepare(
+        embedder,
+        db_pool,
+        paper_id_,
+        body,
+        http_client,
+        *,
+        user_id=None,
+        answer_budget=None,
+    ):
+        call_capture.append({"user_id": user_id, "answer_budget": answer_budget})
         return [{}, {}], [{}, {}]
 
     async def _stub_stream(*args, **kwargs):
@@ -2200,6 +2211,7 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
     assert resp.status_code == 200
     assert len(call_capture) == 1
     assert call_capture[0]["user_id"] == user_id
+    assert call_capture[0]["answer_budget"] is not None
 
 
 @pytest.mark.contract

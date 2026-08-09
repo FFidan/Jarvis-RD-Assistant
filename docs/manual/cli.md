@@ -1,7 +1,7 @@
 # The `jarvis-research` command
 
 `jarvis-research` is the lifecycle command for a JARVIS install. The installer
-(`./setup.sh` or `scripts/jarvis-setup.sh`) puts a small launcher on your PATH
+(`./setup.sh`) puts a small launcher on your PATH
 at `~/.local/bin/jarvis-research` and records your checkout as the managed
 install, so you can run day-to-day operations from any directory.
 
@@ -124,6 +124,12 @@ those remaining steps. The command refuses to resume if the checkout moved to
 an unexpected commit.
 
 ### Updating from a release before v1.2.2
+
+Maintained in-place update support starts at v1.2.0. The procedure below is the
+required one-time bridge for v1.2.0 and v1.2.1. It is also preserved as a
+separate immutable legacy bridge from v1.1.3, but v1.1.3 is no longer in the
+maintained source matrix and a direct jump from v1.1.3 to the current release is
+not supported.
 
 Installations first set up before v1.1.3 need one extra step before the bootstrap
 below. v1.1.3 added an SMTP password to the deployment's Docker secrets, and no

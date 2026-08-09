@@ -543,6 +543,26 @@ def test_smtp_body_host_required() -> None:
         )
 
 
+@pytest.mark.parametrize("host", [" ", "\t\n"])
+def test_smtp_body_rejects_whitespace_only_host(host: str) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="host"):
+        setup_router.SmtpBody(host=host, port=587, from_email="bot@example.com")
+
+
+def test_smtp_body_normalizes_required_and_clearable_fields() -> None:
+    body = setup_router.SmtpBody(
+        host="  smtp.example.com  ",
+        port=587,
+        from_email="  bot@example.com  ",
+        reply_to="   ",
+    )
+    assert body.host == "smtp.example.com"
+    assert str(body.from_email) == "bot@example.com"
+    assert body.reply_to == ""
+
+
 # ---------------------------------------------------------------------------
 # SmtpConfigResponse fields
 # ---------------------------------------------------------------------------

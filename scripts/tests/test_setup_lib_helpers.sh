@@ -226,17 +226,40 @@ scheck "fresh setup persists the checkout application version" \
 scheck "fresh setup persists the selected application image tag" \
   'upsert_env_var JARVIS_IMAGE_TAG "\$SELECTED_IMAGE_TAG"'
 
-if grep -Fq 'upsert_env_var JARVIS_VERSION "$_installed_app_version"' \
-    "$JARVIS_SETUP_SCRIPT" \
-   && grep -Fq 'export JARVIS_VERSION="$_installed_app_version"' \
-    "$JARVIS_SETUP_SCRIPT" \
-   && grep -Fq 'upsert_env_var JARVIS_IMAGE_TAG "$_installed_image_tag"' \
-    "$JARVIS_SETUP_SCRIPT" \
-   && grep -Fq 'export JARVIS_IMAGE_TAG="$_installed_image_tag"' \
-    "$JARVIS_SETUP_SCRIPT"; then
-  pass "the compatibility bootstrap persists separate application and image identities"
+# The deprecated entry point is a strict forwarder, not a second installer.
+FORWARDER_ROOT="${FIXTURES}/forwarder"
+FORWARDER_LOG="${FORWARDER_ROOT}/args.log"
+mkdir -p "${FORWARDER_ROOT}/scripts"
+cp "$JARVIS_SETUP_SCRIPT" "${FORWARDER_ROOT}/scripts/jarvis-setup.sh"
+cat > "${FORWARDER_ROOT}/setup.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FORWARDER_LOG"
+SH
+chmod +x "${FORWARDER_ROOT}/setup.sh"
+COMPOSE_PROJECT_NAME=smoke-project FORWARDER_LOG="$FORWARDER_LOG" \
+  bash "${FORWARDER_ROOT}/scripts/jarvis-setup.sh" --skip-disk-check \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "compatibility setup forwarder succeeds" "$rc" "0"
+expect_eq "compatibility setup forwards one supported option and explicit project identity" \
+  "$(cat "$FORWARDER_LOG")" \
+  "--non-interactive
+--profile=dev
+--skip-disk-check
+--compose-project-name
+smoke-project"
+: > "$FORWARDER_LOG"
+COMPOSE_PROJECT_NAME=smoke-project FORWARDER_LOG="$FORWARDER_LOG" \
+  bash "${FORWARDER_ROOT}/scripts/jarvis-setup.sh" --build-local \
+  >/dev/null 2>&1 && rc=0 || rc=$?
+expect_eq "compatibility setup rejects options outside its historical surface" "$rc" "2"
+expect_eq "a rejected compatibility option never reaches setup.sh" \
+  "$(wc -c < "$FORWARDER_LOG" | tr -d ' ')" "0"
+if [ "$(wc -l < "$JARVIS_SETUP_SCRIPT" | tr -d ' ')" -le 40 ] \
+   && ! grep -Eq '(^|[[:space:]])(docker|curl|openssl|cp)[[:space:]]|source .*setup_lib' \
+      "$JARVIS_SETUP_SCRIPT"; then
+  pass "compatibility setup contains no installer implementation"
 else
-  printf 'FAIL: compatibility bootstrap does not persist separate application and image identities\n' >&2
+  printf 'FAIL: compatibility setup regained installer behavior\n' >&2
   fail=1
 fi
 
@@ -255,8 +278,8 @@ else
 fi
 
 # Absence of .env does not prove that no previous volume or lifecycle holder
-# exists. Both setup entry points must claim the shared volume before creating
-# fresh config or secret state.
+# exists. The primary setup entry point must claim the shared volume before
+# creating fresh config or secret state.
 lease_line="$(awk -v after="$call_line" 'NR > after && /^claim_setup_volume_lease$/ { print NR; exit }' "$SETUP_SCRIPT")"
 env_write_line="$(grep -nE '^mv "\$TMP_ENV" \.env$' "$SETUP_SCRIPT" | head -1 | cut -d: -f1)"
 if [ -n "$lease_line" ] && [ -n "$env_write_line" ] \
@@ -265,17 +288,6 @@ if [ -n "$lease_line" ] && [ -n "$env_write_line" ] \
 else
   printf 'FAIL: setup.sh fresh lifecycle claim (%s) is not between disk preflight (%s) and .env mutation (%s)\n' \
     "$lease_line" "$call_line" "$env_write_line" >&2
-  fail=1
-fi
-
-jarvis_lease_line="$(grep -nE '^claim_setup_volume_lease$' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
-jarvis_env_copy_line="$(grep -nF '  cp .env.example .env' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1)"
-if [ -n "$jarvis_lease_line" ] && [ -n "$jarvis_env_copy_line" ] \
-   && [ "$jarvis_lease_line" -lt "$jarvis_env_copy_line" ]; then
-  pass "jarvis-setup claims the shared lifecycle volume before fresh config mutation"
-else
-  printf 'FAIL: jarvis-setup lifecycle claim (%s) does not precede .env creation (%s)\n' \
-    "$jarvis_lease_line" "$jarvis_env_copy_line" >&2
   fail=1
 fi
 
@@ -418,8 +430,8 @@ run_preflight() {  # <skip> <req_gb> <req_rc> <lib_out> <lib_rc> <images_out> [m
   SKIP="$1" REQ_GB="$2" REQ_RC="$3" LIB_OUT="$4" LIB_RC="$5" IMAGES_OUT="$6" MODEL_GB="${7:-8}" \
   LIB_SRC="${SCRIPT_DIR}/../setup_lib.sh" bash -c '
     set -euo pipefail
-    # The real lib provides PUBLISHED_IMAGE_REPOS (the wrapper iterates it, and
-    # a private copy here would drift). Source it FIRST: the stubs below must
+    # The real lib provides PUBLISHED_IMAGE_REPOS, and a private copy here would
+    # drift. Source it FIRST: the stubs below must
     # clobber its real compute_required_disk_gb/compute_model_disk_gb/
     # preflight_disk_lib.
     source "$LIB_SRC"
@@ -1535,6 +1547,51 @@ _wrong_target='{"TCP":{"443":{"HTTPS":true}},"Web":{"node.tailnet.ts.net:443":{"
 printf '%s' "$_wrong_target" | tailscale_serve_config_is_jarvis_only 3003 && rc=0 || rc=$?
 expect_eq "a single route to another target is not treated as JARVIS-owned" "$rc" "1"
 
+_legacy_serve='{"TCP":{"443":{"HTTPS":true}},"Web":{"node.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3001"}}}}}'
+: > "$TAILSCALE_COMMAND_LOG"
+out="$(STUB_ID_UID=1000 STUB_SUDO_RC=0 STUB_TAILSCALE_STATUS_JSON="$_legacy_serve" \
+  TAILSCALE_COMMAND_LOG="$TAILSCALE_COMMAND_LOG" PATH="${TAILSCALE_BIN}:${PATH}" \
+  tailscale_legacy_route_notice 3001 3003 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] \
+   && printf '%s' "$out" | grep -Fq 'confirm that the existing HTTPS 443 route belongs to this JARVIS installation' \
+   && printf '%s' "$out" | grep -Fq 'sudo tailscale serve --bg --yes --https=443 http://127.0.0.1:3003'; then
+  pass "legacy Tailscale singleton prints ownership-gated targeted repair"
+else
+  printf 'FAIL: legacy Tailscale notice was incomplete (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1
+fi
+expect_eq "legacy Tailscale diagnosis is read-only" \
+  "$(cat "$TAILSCALE_COMMAND_LOG")" "sudo -n tailscale serve status --json"
+
+: > "$TAILSCALE_COMMAND_LOG"
+out="$(STUB_ID_UID=1000 STUB_SUDO_RC=0 STUB_TAILSCALE_STATUS_JSON="$_owned_serve" \
+  TAILSCALE_COMMAND_LOG="$TAILSCALE_COMMAND_LOG" PATH="${TAILSCALE_BIN}:${PATH}" \
+  tailscale_legacy_route_notice 3001 3003 2>&1)" && rc=0 || rc=$?
+expect_eq "healthy trusted Tailscale singleton is quiet" "$out/$rc" "/0"
+
+: > "$TAILSCALE_COMMAND_LOG"
+out="$(STUB_ID_UID=1000 STUB_SUDO_RC=0 STUB_TAILSCALE_STATUS_JSON="$_shared_serve" \
+  TAILSCALE_COMMAND_LOG="$TAILSCALE_COMMAND_LOG" PATH="${TAILSCALE_BIN}:${PATH}" \
+  tailscale_legacy_route_notice 3001 3003 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Fq 'inspect Tailscale Serve before changing it'; then
+  pass "shared Tailscale state gets inspect-first guidance"
+else
+  printf 'FAIL: shared Tailscale state lacked guidance (rc=%s out=%s)\n' "$rc" "$out" >&2; fail=1
+fi
+expect_eq "shared Tailscale diagnosis is read-only" \
+  "$(cat "$TAILSCALE_COMMAND_LOG")" "sudo -n tailscale serve status --json"
+
+: > "$TAILSCALE_COMMAND_LOG"
+out="$(STUB_ID_UID=1000 TAILSCALE_COMMAND_LOG="$TAILSCALE_COMMAND_LOG" \
+  PATH="${TAILSCALE_BIN}:${PATH}" tailscale_legacy_route_notice bad 3003 2>&1)" \
+  && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Fq 'invalid dashboard ports' \
+   && [ ! -s "$TAILSCALE_COMMAND_LOG" ]; then
+  pass "invalid Tailscale diagnosis ports warn without reading or mutating state"
+else
+  printf 'FAIL: invalid port handling drifted (rc=%s out=%s log=%s)\n' \
+    "$rc" "$out" "$(cat "$TAILSCALE_COMMAND_LOG")" >&2; fail=1
+fi
+
 ROLLBACK_DIR="$(mktemp -d "${FIXTURES}/rollback.XXXXXX")"
 printf 'JARVIS_ACCESS_MODE=tailscale\n' > "${ROLLBACK_DIR}/previous.env"
 printf 'JARVIS_ACCESS_MODE=tunnel\n' > "${ROLLBACK_DIR}/current.env"
@@ -2062,6 +2119,34 @@ fi
 # Stub every side effect so the log proves the required order without touching
 # Docker, Tailscale, credentials, or the host network.
 ROLLBACK_COMMAND_LOG="${FIXTURES}/access-runtime-rollback.log"
+ROLLBACK_SECRET_SNAPSHOT="${FIXTURES}/access-runtime-secrets"
+mkdir -p "$ROLLBACK_SECRET_SNAPSHOT"
+for _secret_name in cloudflare_tunnel_token.txt smtp_pass.txt telegram_bot_token.txt; do
+  printf 'absent' > "${ROLLBACK_SECRET_SNAPSHOT}/${_secret_name}.state"
+done
+printf 'previous\n' > "${FIXTURES}/previous.env"
+
+setup_secret_snapshot_is_complete "$ROLLBACK_SECRET_SNAPSHOT" \
+  && rc=0 || rc=$?
+expect_eq "complete setup secret snapshot is accepted" "$rc" "0"
+rm -f "${ROLLBACK_SECRET_SNAPSHOT}/smtp_pass.txt.state"
+setup_secret_snapshot_is_complete "$ROLLBACK_SECRET_SNAPSHOT" \
+  && rc=0 || rc=$?
+expect_eq "missing setup secret state makes the snapshot incomplete" "$rc" "1"
+printf 'absent' > "${ROLLBACK_SECRET_SNAPSHOT}/smtp_pass.txt.state"
+
+: > "$ROLLBACK_COMMAND_LOG"
+(
+  remove_attempted_access_runtime() {
+    printf 'runtime-mutated\n' >> "$ROLLBACK_COMMAND_LOG"
+  }
+  rollback_access_runtime tunnel tunnel 3003 https://old.example 3001 \
+    letsencrypt letsencrypt 3003 0 1 "$FIXTURES/previous.env" current.env \
+    secrets "$FIXTURES" "${FIXTURES}/incomplete-secrets"
+) && rc=0 || rc=$?
+expect_eq "incomplete setup snapshot rejects rollback as a caller error" "$rc" "2"
+expect_eq "snapshot validation happens before runtime teardown" \
+  "$(wc -c < "$ROLLBACK_COMMAND_LOG" | tr -d ' ')" "0"
 
 run_rollback_order_case() {
   local old_mode="$1" old_profiles="$2" old_port="$3" old_origin="$4"
@@ -2081,15 +2166,16 @@ run_rollback_order_case() {
     restore_env_snapshot() {
       printf 'restore-env %s %s\n' "$1" "$2" >> "$ROLLBACK_COMMAND_LOG"
     }
-    restore_secret_from_env() {
-      printf 'restore-secret %s %s %s\n' "$1" "$2" "$3" >> "$ROLLBACK_COMMAND_LOG"
+    restore_setup_secret_snapshot() {
+      printf 'restore-secrets %s %s\n' "$1" "$2" >> "$ROLLBACK_COMMAND_LOG"
     }
     wait_for_jarvis_marker() {
       printf 'verify %s\n' "$1" >> "$ROLLBACK_COMMAND_LOG"
     }
     rollback_access_runtime "$old_mode" "$old_profiles" "$old_port" \
       "$old_origin" 3001 "$new_mode" "$new_profiles" "$new_port" \
-      "$new_tailscale_attempted" 1 previous.env current.env tunnel-secret "$FIXTURES"
+      "$new_tailscale_attempted" 1 "$FIXTURES/previous.env" current.env \
+      secrets "$FIXTURES" "$ROLLBACK_SECRET_SNAPSHOT"
   )
 }
 
@@ -2099,8 +2185,8 @@ expect_eq "old tunnel -> failed new route rollback succeeds" "$rc" "0"
 expect_eq "old tunnel rollback removes replacement, restores files, then reapplies and verifies old edge" \
   "$(cat "$ROLLBACK_COMMAND_LOG")" \
   "docker compose --profile letsencrypt rm -sf caddy
-restore-env previous.env current.env
-restore-secret current.env CLOUDFLARE_TUNNEL_TOKEN tunnel-secret
+restore-env ${FIXTURES}/previous.env current.env
+restore-secrets ${ROLLBACK_SECRET_SNAPSHOT} ${FIXTURES}/secrets
 docker compose --profile tunnel up -d --no-build --force-recreate --no-deps dashboard cloudflared
 verify http://127.0.0.1:3001/health/jarvis
 verify https://old.example/health/jarvis"
@@ -2111,8 +2197,8 @@ expect_eq "failed Tailscale invocation with a possibly-applied route rolls back 
 expect_eq "attempted Tailscale replacement is ownership-checked before persisted state is restored" \
   "$(cat "$ROLLBACK_COMMAND_LOG")" \
   "tailscale-off 3029 1
-restore-env previous.env current.env
-restore-secret current.env CLOUDFLARE_TUNNEL_TOKEN tunnel-secret
+restore-env ${FIXTURES}/previous.env current.env
+restore-secrets ${ROLLBACK_SECRET_SNAPSHOT} ${FIXTURES}/secrets
 docker compose --profile tunnel up -d --no-build --force-recreate --no-deps dashboard cloudflared
 verify http://127.0.0.1:3001/health/jarvis
 verify https://old.example/health/jarvis"
@@ -2123,8 +2209,8 @@ expect_eq "old Tailscale -> failed tunnel rollback succeeds" "$rc" "0"
 expect_eq "old Tailscale rollback removes tunnel, restores dashboard, then reapplies Serve" \
   "$(cat "$ROLLBACK_COMMAND_LOG")" \
   "docker compose --profile tunnel rm -sf cloudflared
-restore-env previous.env current.env
-restore-secret current.env CLOUDFLARE_TUNNEL_TOKEN tunnel-secret
+restore-env ${FIXTURES}/previous.env current.env
+restore-secrets ${ROLLBACK_SECRET_SNAPSHOT} ${FIXTURES}/secrets
 docker compose up -d --no-build --force-recreate --no-deps dashboard
 tailscale-on 3017 1
 verify http://127.0.0.1:3001/health/jarvis
@@ -2136,8 +2222,8 @@ expect_eq "same-mode failed tunnel rollback succeeds" "$rc" "0"
 expect_eq "same-mode rollback replaces the live edge instead of trusting restored files alone" \
   "$(cat "$ROLLBACK_COMMAND_LOG")" \
   "docker compose --profile tunnel rm -sf cloudflared
-restore-env previous.env current.env
-restore-secret current.env CLOUDFLARE_TUNNEL_TOKEN tunnel-secret
+restore-env ${FIXTURES}/previous.env current.env
+restore-secrets ${ROLLBACK_SECRET_SNAPSHOT} ${FIXTURES}/secrets
 docker compose --profile tunnel up -d --no-build --force-recreate --no-deps dashboard cloudflared
 verify http://127.0.0.1:3001/health/jarvis
 verify https://old.example/health/jarvis"
@@ -2159,14 +2245,15 @@ verify https://old.example/health/jarvis"
   restore_env_snapshot() {
     printf 'restore-env %s %s\n' "$1" "$2" >> "$ROLLBACK_COMMAND_LOG"
   }
-  restore_secret_from_env() {
-    printf 'restore-secret %s %s %s\n' "$1" "$2" "$3" >> "$ROLLBACK_COMMAND_LOG"
+  restore_setup_secret_snapshot() {
+    printf 'restore-secrets %s %s\n' "$1" "$2" >> "$ROLLBACK_COMMAND_LOG"
   }
   wait_for_jarvis_marker() { printf 'verify %s\n' "$1" >> "$ROLLBACK_COMMAND_LOG"; }
   die_enospc_aware() { printf 'terminal-error\n' >> "$ROLLBACK_COMMAND_LOG"; return 1; }
   rollback_unverified_access_config() {
     rollback_access_runtime tunnel tunnel 3003 https://old.example 3001 \
-      letsencrypt letsencrypt 3003 0 1 previous.env current.env tunnel-secret "$FIXTURES"
+      letsencrypt letsencrypt 3003 0 1 "$FIXTURES/previous.env" current.env \
+      secrets "$FIXTURES" "$ROLLBACK_SECRET_SNAPSHOT"
   }
   COMPOSE_OVERLAY=()
   NON_INTERACTIVE=1
@@ -2178,8 +2265,8 @@ expect_eq "partial main Compose failure restores old files and live edge before 
   "$(cat "$ROLLBACK_COMMAND_LOG")" \
   "main-compose compose up -d
 docker compose --profile letsencrypt rm -sf caddy
-restore-env previous.env current.env
-restore-secret current.env CLOUDFLARE_TUNNEL_TOKEN tunnel-secret
+restore-env ${FIXTURES}/previous.env current.env
+restore-secrets ${ROLLBACK_SECRET_SNAPSHOT} ${FIXTURES}/secrets
 docker compose --profile tunnel up -d --no-build --force-recreate --no-deps dashboard cloudflared
 verify http://127.0.0.1:3001/health/jarvis
 verify https://old.example/health/jarvis
@@ -3199,25 +3286,6 @@ else
   fail=1
 fi
 
-jarvis_openssl_ln="$(grep -nF 'command -v openssl' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
-jarvis_curl_ln="$(grep -nF 'command -v curl' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
-jarvis_env_copy_ln="$(grep -nF '  cp .env.example .env' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
-if [ -n "$jarvis_openssl_ln" ] && [ -n "$jarvis_curl_ln" ] \
-   && [ -n "$jarvis_env_copy_ln" ] \
-   && [ "$jarvis_openssl_ln" -lt "$jarvis_env_copy_ln" ] \
-   && [ "$jarvis_curl_ln" -lt "$jarvis_env_copy_ln" ]; then
-  pass "jarvis-setup checks openssl and curl before creating .env"
-else
-  printf 'FAIL: jarvis-setup prerequisite checks do not precede .env mutation (openssl=%s curl=%s env=%s)\n' \
-    "$jarvis_openssl_ln" "$jarvis_curl_ln" "$jarvis_env_copy_ln" >&2
-  fail=1
-fi
-if grep -qF 'Docker Compose v2.24.4 or newer is required' "$JARVIS_SETUP_SCRIPT"; then
-  pass "jarvis-setup enforces the Compose feature floor"
-else
-  printf 'FAIL: jarvis-setup does not enforce Compose 2.24.4+\n' >&2
-  fail=1
-fi
 scheck "the nvidia-toolkit probe is a first-class preflight" '^preflight_nvidia_toolkit$'
 scheck "the port pre-check reads .env port values"        '_port_or_default DASHBOARD_HOST_PORT'
 scheck "the port pre-check adds active-profile ports"     'registry_profile_host_ports'
@@ -3495,8 +3563,6 @@ expect_eq "service health lookup rejects command-like function names" "$rc" "2"
 # adapters; the shared helper executes the same transient-state sequence.
 SETUP_HEALTH_LOOKUP_SRC="$(sed -n '/^_setup_service_container_id()/,/^}/p' "$SETUP_SCRIPT")"
 SETUP_HEALTH_WAIT_SRC="$(sed -n '/^_wait_for_setup_service()/,/^}/p' "$SETUP_SCRIPT")"
-JARVIS_HEALTH_LOOKUP_SRC="$(sed -n '/^_jarvis_setup_service_container_id()/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
-JARVIS_HEALTH_WAIT_SRC="$(sed -n '/^_wait_for_jarvis_setup_service()/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
 CALLER_HEALTH_BIN="$(fake_docker '
 if [ "${1:-}" = inspect ]; then
   cat "$STUB_CALLER_HEALTH_CURRENT"
@@ -3540,12 +3606,6 @@ run_setup_caller_health() {
         PATH="$CALLER_HEALTH_BIN:$PATH" \
           _wait_for_setup_service test-service 4 0 || rc=$?
         ;;
-      wrapper)
-        eval "$JARVIS_HEALTH_LOOKUP_SRC"
-        eval "$JARVIS_HEALTH_WAIT_SRC"
-        PATH="$CALLER_HEALTH_BIN:$PATH" \
-          _wait_for_jarvis_setup_service test-service 4 0 || rc=$?
-        ;;
     esac
     printf '%s/%s/%s' "$rc" "$COMPOSE_HEALTH_RESULT" \
       "$(wc -l < "$HEALTH_LOOKUP_LOG" | tr -d ' ')"
@@ -3555,14 +3615,11 @@ run_setup_caller_health() {
 got="$(run_setup_caller_health setup)"
 expect_eq "setup.sh delegates transient health convergence to the shared helper" \
   "$got" "0/healthy/4"
-got="$(run_setup_caller_health wrapper)"
-expect_eq "jarvis-setup delegates transient health convergence to the shared helper" \
-  "$got" "0/healthy/4"
-if grep -qE '^wait_healthy\(\)' "$SETUP_SCRIPT" "$JARVIS_SETUP_SCRIPT"; then
-  printf 'FAIL: a setup entry point still owns a health state machine\n' >&2
+if grep -qE '^wait_healthy\(\)' "$SETUP_SCRIPT"; then
+  printf 'FAIL: setup.sh still owns a duplicate health state machine\n' >&2
   fail=1
 else
-  pass "setup entry points contain no caller-owned wait_healthy state machine"
+  pass "setup.sh contains no caller-owned wait_healthy state machine"
 fi
 
 # === host/shared lifecycle exclusion ========================================
@@ -3695,7 +3752,6 @@ else
 fi
 
 SETUP_LEASE_CLEANUP_FN="$(sed -n '/^cleanup_setup_lifecycle_exit() {/,/^}/p' "$SETUP_SCRIPT")"
-JARVIS_SETUP_LEASE_CLEANUP_FN="$(sed -n '/^cleanup_jarvis_setup_lifecycle() {/,/^}/p' "$JARVIS_SETUP_SCRIPT")"
 for _mutation_expected in "0 clear" "1 retain"; do
   _mutation="${_mutation_expected%% *}"
   _expected="${_mutation_expected#* }"
@@ -3710,19 +3766,6 @@ for _mutation_expected in "0 clear" "1 retain"; do
     cleanup_setup_lifecycle_exit
   )" && rc=0 || rc=$?
   expect_eq "setup.sh failed lifecycle exit uses ${_expected} after mutation=${_mutation}" \
-    "${got}/${rc}" "${_expected}/1"
-
-  got="$(
-    set +e
-    eval "$JARVIS_SETUP_LEASE_CLEANUP_FN"
-    _SETUP_LIFECYCLE_CLAIMED=1
-    _SETUP_MUTATION_STARTED="$_mutation"
-    REPO_ROOT="$LIFECYCLE_REPO"
-    finish_lifecycle_operation() { printf '%s\n' "$3"; }
-    false
-    cleanup_jarvis_setup_lifecycle
-  )" && rc=0 || rc=$?
-  expect_eq "jarvis-setup failed lifecycle exit uses ${_expected} after mutation=${_mutation}" \
     "${got}/${rc}" "${_expected}/1"
 done
 
@@ -4117,21 +4160,6 @@ _lifecycle_path_inside_repo /a/bc /a/b && rc=0 || rc=$?
 expect_eq "_lifecycle_path_inside_repo: a sibling-prefix path is NOT inside (rc 1)" "$rc" "1"
 _lifecycle_path_inside_repo /a/b /a/b && rc=0 || rc=$?
 expect_eq "_lifecycle_path_inside_repo: the repo root equals itself (inside, rc 0)" "$rc" "0"
-
-# === jarvis-setup ingress-IP derivation ordering (wrapper-leg fix) ============
-# jarvis-setup must derive the ingress IP peers into .env before Compose reads
-# it, so the wrapper install (which never runs setup.sh's inline
-# allocate_ingress_ips) writes the JARVIS_*_IP proxy pins the pull/up consumes.
-jarvis_ingress_line="$(grep -nE '^sync_ingress_ips_from_env' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1 || true)"
-jarvis_compose_line="$(grep -nE '\$\{COMPOSE\}[[:space:]]+(pull|up)' "$JARVIS_SETUP_SCRIPT" | head -1 | cut -d: -f1)"
-if [ -n "$jarvis_ingress_line" ] && [ -n "$jarvis_compose_line" ] \
-   && [ "$jarvis_ingress_line" -lt "$jarvis_compose_line" ]; then
-  pass "jarvis-setup derives ingress IPs before the first Compose pull/up"
-else
-  printf 'FAIL: jarvis-setup ingress-IP sync (%s) does not precede the first Compose pull/up (%s)\n' \
-    "$jarvis_ingress_line" "$jarvis_compose_line" >&2
-  fail=1
-fi
 
 # === setup.sh consumes every address the allocator emits =====================
 # setup.sh reads allocate_ingress_ips into positional variables and persists

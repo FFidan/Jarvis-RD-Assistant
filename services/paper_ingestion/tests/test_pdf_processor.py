@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-import ipaddress
 import os
 import socket
 import threading
@@ -24,7 +23,9 @@ from unittest.mock import AsyncMock, MagicMock
 # paper_ingestion.pdf_processor here is safe; the Docling converter is built
 # lazily on first use, not at import time.
 import paper_ingestion.pdf_processor as pdf_processor
+import httpx
 import pytest
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from paper_ingestion.pdf_processor import (
     ALLOWED_PDF_DOMAINS,
     MAX_PDF_PAGES,
@@ -328,43 +329,93 @@ async def test_disallowed_host_rejected(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 # ---------------------------------------------------------------------------
-# SSRF guard — private/reserved/loopback/link-local IPs
+# SSRF guard — resolution is bound to the pinned transport
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "ip",
-    [
-        # Private ranges
-        "10.0.0.1",
-        "172.16.0.1",
-        "192.168.1.1",
-        # Loopback
-        "127.0.0.1",
-        "::1",
-        # Link-local (AWS metadata endpoint)
-        "169.254.169.254",
-        # Reserved / unspecified
-        "0.0.0.0",
-        # IPv6 private / link-local
-        "fc00::1",
-        "fe80::1",
-    ],
-)
-async def test_private_ip_rejected(ip: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """DNS resolving to any private/reserved/loopback/link-local IP must raise ValueError."""
-    addr = ipaddress.ip_address(ip)
-    assert addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local, (
-        f"Test sanity: {ip} should be non-public"
+async def test_pdf_validation_defers_dns_to_the_pinned_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URL messaging checks must not pre-resolve before the pinned connection."""
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("PDF URL validation must not resolve DNS")
+        ),
     )
+    await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
 
-    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
-        return _fake_getaddrinfo(ip)
 
-    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    with pytest.raises(ValueError, match="private/reserved"):
-        await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
+@pytest.mark.asyncio
+async def test_pdf_redirect_and_final_get_use_the_pinned_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real downloader re-pins the redirect target and streamed GET."""
+    requests: list[tuple[str, str, str]] = []
+    resolved: list[str] = []
+    server: asyncio.AbstractServer
+
+    async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            raw = await reader.readuntil(b"\r\n\r\n")
+            lines = raw.decode("ascii").split("\r\n")
+            method, target, _version = lines[0].split(" ", 2)
+            host = next(line[6:] for line in lines[1:] if line.lower().startswith("host: "))
+            requests.append((method, target, host))
+            port = server.sockets[0].getsockname()[1]
+            if target == "/start.pdf":
+                response = (
+                    "HTTP/1.1 302 Found\r\n"
+                    f"Location: http://host.docker.internal:{port}/final.pdf\r\n"
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n"
+                ).encode("ascii")
+            elif method == "HEAD":
+                response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            else:
+                body = b"%PDF-1.7\npinned"
+                response = (
+                    f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+                ).encode("ascii") + body
+            writer.write(response)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def resolver(host: str, port: int) -> list[tuple[int, str]]:
+        resolved.append(host)
+        return [(socket.AF_INET, "127.0.0.1")]
+
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        async with httpx.AsyncClient(
+            transport=PinnedAsyncTransport(
+                JARVIS_SERVICE_POLICY,
+                resolver=resolver,
+            ),
+            trust_env=False,
+        ) as client:
+            processor = PDFProcessor(http_client=client, embedder=MagicMock())
+            staged, final = await processor.stage_pdf_download(
+                f"http://localhost:{port}/start.pdf", paper_id=91
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert staged.read_bytes() == b"%PDF-1.7\npinned"
+    assert final == tmp_path / "91.pdf"
+    assert resolved == ["localhost", "host.docker.internal", "host.docker.internal"]
+    assert requests == [
+        ("HEAD", "/start.pdf", f"localhost:{port}"),
+        ("HEAD", "/final.pdf", f"host.docker.internal:{port}"),
+        ("GET", "/final.pdf", f"host.docker.internal:{port}"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -491,42 +542,6 @@ async def test_idn_punycode_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SSRF guard — DNS failure / gaierror
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dns_resolution_failure_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """socket.gaierror during DNS resolution must raise ValueError."""
-
-    def fake_gai_fail(hostname: str, port: Any) -> list[tuple[Any, ...]]:
-        raise socket.gaierror("Name or service not known")
-
-    monkeypatch.setattr(socket, "getaddrinfo", fake_gai_fail)
-    with pytest.raises(ValueError, match="[Cc]annot resolve"):
-        await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
-
-
-# ---------------------------------------------------------------------------
-# SSRF guard — DNS rebinding defense
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dns_rebinding_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If ANY resolved IP is private, the request must be rejected (rebinding defense)."""
-    public_ip = "151.101.1.1"
-    private_ip = "10.0.0.1"
-
-    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
-        # Returns two IPs: one public, one private — classic DNS rebinding setup
-        return _mixed_getaddrinfo(public_ip, private_ip)
-
-    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    with pytest.raises(ValueError, match="private/reserved"):
-        await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
-
-
 # ---------------------------------------------------------------------------
 # Size cap — streaming accumulation
 # ---------------------------------------------------------------------------
@@ -1206,43 +1221,6 @@ async def test_download_pdf_retry_after_partial_does_not_concatenate(
     assert result == tmp_path / "7.pdf"
     assert (tmp_path / "7.pdf").read_bytes() == second_pdf
     assert not (tmp_path / "7.tmp").exists()
-
-
-# ---------------------------------------------------------------------------
-# PI-DISC-005: SSRF guard — CGNAT range (100.64.0.0/10)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "ip",
-    [
-        "100.64.0.1",  # first usable in CGNAT range
-        "100.127.255.254",  # last usable in CGNAT range
-        "100.100.100.100",  # middle of CGNAT range
-    ],
-)
-async def test_cgnat_ip_rejected(ip: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """DNS resolving to a CGNAT IP (100.64.0.0/10) must raise ValueError."""
-
-    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
-        return _fake_getaddrinfo(ip)
-
-    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    with pytest.raises(ValueError, match="private/reserved|CGNAT"):
-        await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
-
-
-@pytest.mark.asyncio
-async def test_public_ip_passes_ssrf_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A regular public IP (e.g. 1.1.1.1) must pass the SSRF guard without raising."""
-
-    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
-        return _fake_getaddrinfo("1.1.1.1")
-
-    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
-    # Should not raise
-    await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
 
 
 # ---------------------------------------------------------------------------

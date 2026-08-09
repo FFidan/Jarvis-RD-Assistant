@@ -225,6 +225,7 @@ async def test_stream_rag_events_work_notes_fails_closed():
     assert error_event == {
         "type": "error",
         "message": "The model did not return a usable final answer. Please try again.",
+        "code": "llm_visible_work_notes",
     }
     assert events[1].strip() == "data: [DONE]"
 
@@ -370,7 +371,7 @@ async def test_stream_rag_events_uses_shared_litellm_config_base_url(monkeypatch
     assert error_event["type"] == "error"
     assert "usable final answer" in error_event["message"]
     assert events == [
-        'data: {"type": "error", "message": "The model did not return a usable final answer. Please try again."}\n\n',
+        'data: {"type": "error", "message": "The model did not return a usable final answer. Please try again.", "code": "llm_empty_visible_content"}\n\n',
         "data: [DONE]\n\n",
     ]
     mock_client.stream.assert_called_once_with(
@@ -421,7 +422,7 @@ async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
 
     body = CrossPaperAskRequest(question="Something irrelevant", decompose=False)
 
-    result = await prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
+    result = await prepare_cross_paper_rag(embedder, mock_pool, body)
 
     # Returns CrossPaperRagNoResults dataclass when no chunks found
     from paper_ingestion.rag.streaming import CrossPaperRagNoResults

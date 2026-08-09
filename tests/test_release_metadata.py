@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,11 +23,13 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
+    assert changelog.count("## v1.2.5 (2026-08-10)") == 1
     assert changelog.count("## v1.2.4 (2026-08-07)") == 1
     assert changelog.count("## v1.2.3 (2026-08-04)") == 1
     assert "## v1.2.2 (2026-07-31)" in changelog
     assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
+    assert changelog.index("## v1.2.5") < changelog.index("## v1.2.4")
     assert changelog.index("## v1.2.4") < changelog.index("## v1.2.3")
     assert changelog.index("## v1.2.3") < changelog.index("## v1.2.2")
     assert changelog.index("## v1.2.2") < changelog.index("## v1.2.1")
@@ -149,21 +152,22 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
             release,
         )
     }
+    current = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
+    major, minor, patch = (int(part) for part in current.split("."))
+    assert patch >= 5, "the rolling five-origin matrix requires five prior patch releases"
+    retained_origins = [f"v{major}.{minor}.{value}" for value in range(patch - 5, patch)]
     expected = {
-        "v1.1.3": ("bootstrap", "current-merge-pending"),
-        "v1.2.0": ("bootstrap", "current-merge-pending"),
-        "v1.2.1": ("bootstrap", "current-merge-pending"),
-        "v1.2.2": ("bootstrap", "current-merge-pending"),
-        # The direct path is what an already-current installation takes, and it
-        # exercises the update transaction rather than the bootstrap. Per the
-        # rule stated beside the table, this row advances with every release:
-        # the newest published tag takes it and the previous holder moves to
-        # bootstrap. Bumping the version without moving this row would leave
-        # the dominant upgrade path unexercised.
-        "v1.2.3": ("direct", "current-merge-pending"),
+        source: (
+            "direct" if source == retained_origins[-1] else "bootstrap",
+            "current-merge-pending",
+        )
+        for source in retained_origins
     }
 
     assert documented == expected
+    assert retained_origins[0] == "v1.2.0"
+    assert retained_origins[-1] == "v1.2.4"
+    assert "v1.1.3" not in documented
 
     # The runbook and the matrix are prose; this input is what a dispatched run
     # actually uses, so a divergence here silently unverifies every source.
@@ -241,6 +245,23 @@ def test_live_postgres_jobs_reuse_one_non_skipping_result_validator() -> None:
         "@pytest.mark.integration\nasync def test_num_ctx_write_delivers" in live_litellm_contract
     )
     assert "--collect-only" not in workflow
+
+
+def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> None:
+    fixture = ROOT / "db/testdata/schema-101-seed.sql"
+    restore_roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
+    contract = _read(
+        "services/paper_ingestion/tests/contract/test_schema_101_migration_contract.py"
+    )
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert fixture.is_file()
+    assert "db/testdata/schema-101-seed.sql" in restore_roundtrip
+    assert "CREATE TABLE schema_migrations" not in restore_roundtrip
+    assert "pytest.mark.contract" in contract
+    assert "pytest.mark.integration" not in contract
+    assert "pytest.mark.live_qdrant" not in contract
+    assert '-m "contract and not integration and not live_qdrant"' in workflow
 
 
 def test_nightly_qdrant_gate_is_isolated_hosted_and_non_skipping() -> None:
@@ -345,6 +366,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     lock = json.loads(_read("frontend/package-lock.json"))
     floors = {
         "brace-expansion": {1: (1, 1, 18), 2: (2, 1, 4), 5: (5, 0, 9)},
+        "nanoid": {3: (3, 3, 17)},
         "postcss": {8: (8, 5, 23)},
     }
     seen = dict.fromkeys(floors, 0)
@@ -359,6 +381,63 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
         seen[name] += 1
     for name, count in seen.items():
         assert count, f"no {name} nodes found in the lockfile"
+
+
+def test_release_version_pins_are_complete_and_consistent() -> None:
+    version = "1.2.5"
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+    citation = _read("CITATION.cff")
+    compose = _read("docker-compose.yml")
+    lock = _read("uv.lock")
+
+    assert tomllib.loads(_read("pyproject.toml"))["project"]["version"] == version
+    assert package["version"] == version
+    assert package_lock["version"] == version
+    assert package_lock["packages"][""]["version"] == version
+    assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
+    assert "date-released: 2026-08-10" in citation
+    assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 8
+    assert "JARVIS_VERSION:-1.2.4" not in compose
+
+
+def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
+    readme = " ".join(_read("README.md").split())
+    release = " ".join(_read("docs/RELEASE.md").split())
+    deployment = " ".join(_read("docs/DEPLOYMENT.md").split())
+    cli = " ".join(_read("docs/manual/cli.md").split())
+    backup = " ".join(_read("docs/manual/backup-and-restore.md").split())
+
+    assert "Maintained in-place update support starts at v1.2.0" in readme
+    assert "outside the maintained update window" in readme
+    assert "Maintained in-place updates start at v1.2.0" in release
+    assert "Portable fresh-host restore starts with complete, signed backup sets" in release
+    assert "direct v1.1.3-to-current updates are not supported" in release
+    assert "Maintained in-place update support starts at v1.2.0" in deployment
+    assert "direct v1.1.3-to-current update is not promised" in deployment
+    assert "Maintained in-place update support starts at v1.2.0" in cli
+    assert "direct jump from v1.1.3 to the current release is not supported" in cli
+    assert "Portable fresh-host restore starts with a complete, signed archive set" in backup
+    assert "earlier or unsigned" in backup.lower()
+
+
+def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> None:
+    makefile = _read("Makefile")
+    scanner = _read("scripts/security-scan.py")
+
+    assert "security-scan:" in makefile
+    assert "python3 scripts/security-scan.py" in makefile
+    assert "JARVIS_SECURITY_CACHE_DIR" in scanner
+    assert "cache_root.relative_to(REPO_ROOT)" in scanner
+    assert "_verify_digest(artifact" in scanner
+    assert "_verify_executable(executable" in scanner
+    assert "--verify-cache-only" in scanner
+    assert "uvx" in scanner and "pip-audit" in scanner
+    assert "scripts/check_npm_audit.py" in scanner
+    assert 'tools["osv-scanner"]' in scanner
+    assert 'tools["gitleaks"]' in scanner
+    assert "|| true" not in scanner
 
 
 def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None:
@@ -535,10 +614,9 @@ def test_restore_release_mode_owns_a_generated_compose_project() -> None:
 
 def test_restore_release_fixture_contains_current_migration_prerequisites() -> None:
     roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
-    seed = roundtrip.split("seed_jarvis_101() {", 1)[1].split(
-        "\n}\n\nseed_auth_restore_contract()", 1
-    )[0]
+    seed = _read("db/testdata/schema-101-seed.sql")
 
+    assert "db/testdata/schema-101-seed.sql" in roundtrip
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
@@ -578,11 +656,17 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
         "\nYAML\n", 1
     )[0]
 
-    assert "faux-provider:" in fixture_compose
+    assert "vllm:" in fixture_compose
     assert "litellm:" in fixture_compose
     assert "ports:" not in fixture_compose
     assert (
         "scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro" in fixture_compose
+    )
+    assert "litellm/pinned_launcher.py:/app/pinned_launcher.py:ro" in fixture_compose
+    assert "jarvis_common/net.py:/app/jarvis_common/net.py:ro" in fixture_compose
+    assert (
+        "jarvis_common/pinned_transport.py:/app/jarvis_common/pinned_transport.py:ro"
+        in fixture_compose
     )
     assert (
         'test: ["CMD", "sh", "/usr/local/bin/litellm-entrypoint.sh", "--healthcheck"]'

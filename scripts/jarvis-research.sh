@@ -1389,6 +1389,7 @@ cmd_update() {
           "Inspect $(_update_backup_pin_path 2>/dev/null || printf '<backups>/.lifecycle/update-backup-pin.json'), then run: jarvis-research update"
         rm -f "$PENDING_FILE_PATH"
         ok "Update to ${TXN_TARGET} was already completed and health-verified."
+        _tailscale_upgrade_notice
         return 0 ;;
       merge_pending)
         head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -1418,6 +1419,7 @@ cmd_update() {
           "Inspect $(_update_backup_pin_path 2>/dev/null || printf '<backups>/.lifecycle/update-backup-pin.json'), then run: jarvis-research update"
         rm -f "$PENDING_FILE_PATH"
         ok "Update to ${TXN_TARGET} was already completed and health-verified."
+        _tailscale_upgrade_notice
         return 0 ;;
       merge_pending)
         head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -1466,6 +1468,7 @@ cmd_update() {
   # the commit it points at; peel it or this never matches.
   if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${target_ref}^{commit}")" ]; then
     ok "Already up to date (${target_ref})."
+    _tailscale_upgrade_notice
     return 0
   fi
 
@@ -2314,6 +2317,14 @@ _doctor_host_probes() {
   if [ -n "$cv" ] && ! compose_meets_floor "$cv" 2.24.4; then
     warn "Docker Compose ${cv} is older than the tested floor 2.24.4; overlay merges may misbehave."
   fi
+  _tailscale_upgrade_notice
+}
+
+_tailscale_upgrade_notice() {
+  local raw_port trusted_port
+  raw_port="$(sed -n 's/^DASHBOARD_HOST_PORT=//p' .env 2>/dev/null | head -1)"
+  trusted_port="$(sed -n 's/^DASHBOARD_TRUSTED_HOST_PORT=//p' .env 2>/dev/null | head -1)"
+  tailscale_legacy_route_notice "${raw_port:-3001}" "${trusted_port:-3003}"
 }
 
 # -----------------------------------------------------------------------------

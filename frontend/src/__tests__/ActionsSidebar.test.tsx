@@ -7,6 +7,7 @@ import { ActionsSidebar } from '@/components/paper/ActionsSidebar';
 import type { AnalyzeEvent } from '@/lib/sse';
 import type { Job } from '@/stores/job-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 
 // --- Mock sonner toast ---
 
@@ -95,11 +96,9 @@ vi.mock('@/stores/job-store', () => ({
 
 const apiCoreMocks = vi.hoisted(() => ({
   handleAuthFailure: vi.fn(),
-  apiFetch: vi.fn(),
 }));
 vi.mock('@/lib/api/core', () => ({
   handleAuthFailure: apiCoreMocks.handleAuthFailure,
-  apiFetch: apiCoreMocks.apiFetch,
 }));
 
 vi.mock('@/lib/api', async () => {
@@ -166,6 +165,10 @@ describe('ActionsSidebar', () => {
       trackExternalJob: jobStoreMocks.trackExternalJob,
       isRunning: jobStoreMocks.isRunning,
       jobs: {},
+    });
+    useResearchMilestoneStore.setState({
+      completed: { save: false, analyze: false },
+      advancedCueDismissed: false,
     });
   });
 
@@ -318,6 +321,7 @@ describe('ActionsSidebar', () => {
     await waitFor(() => {
       expect(screen.getByText('Analysis complete')).toBeInTheDocument();
     });
+    expect(useResearchMilestoneStore.getState().completed.analyze).toBe(true);
   });
 
   it('structured process error shows error_type:error_detail and Retry button', async () => {
@@ -422,6 +426,7 @@ describe('ActionsSidebar', () => {
     await waitFor(() => {
       expect(screen.getByText(/Failed during downloading/)).toBeInTheDocument();
     });
+    expect(useResearchMilestoneStore.getState().completed.analyze).toBe(false);
   });
 
   it('stream connection error shows error message', async () => {

@@ -2,7 +2,42 @@
 // recommendation feedback, discovery, PDF upload/processing, paper detail,
 // notes, foundational papers, citations, knowledge graph, and the extraction
 // table + CSV export.
-import { apiFetch, apiFetchRaw, triggerBlobDownload } from './core';
+import type { LibraryFilter } from '@/types';
+
+import { apiFetchJson, apiFetchRaw, apiFetchVoid, triggerBlobDownload } from './core';
+import {
+  batchEntityExtractionResponseSchema,
+  batchExtractionAcceptedSchema,
+  batchProcessResponseSchema,
+  batchSummarizeResponseSchema,
+  bulkActionResponseSchema,
+  citationFetchResponseSchema,
+  citationGraphSchema,
+  citationRelationSchema,
+  deleteFeedbackResponseSchema,
+  discoveryResultSchema,
+  entityExtractionResponseSchema,
+  entitySchema,
+  extractionTableRowSchema,
+  feedCountsSchema,
+  feedbackListResponseSchema,
+  feedbackResponseSchema,
+  fetchAndProcessFoundationalSchema,
+  feedResponseSchema,
+  hardDeleteResponseSchema,
+  kgQueryResponseSchema,
+  knowledgeGraphSchema,
+  lifecycleActionResponseSchema,
+  missingFoundationalPaperSchema,
+  noteSchema,
+  paperBriefSchema,
+  paperDetailSchema,
+  paperSchema,
+  processLibraryResponseSchema,
+  queuedJobSchema,
+  searchPreviewResponseSchema,
+  userStateSchema,
+} from './schemas/papers';
 import type {
   Paper,
   PaperDetail,
@@ -25,20 +60,22 @@ import type {
   BulkAction,
   FeedbackListResponse,
   DeleteFeedbackResponse,
+  JsonValue,
 } from '@/types';
 
 // --- Extraction Table ---
-export const fetchPapersBrief = () =>
-  apiFetch<PaperBrief[]>('/api/papers/brief');
+export const fetchPapersBrief = (): Promise<PaperBrief[]> =>
+  apiFetchJson('/api/papers/brief', paperBriefSchema.array());
 
-export const searchPapersBrief = (search: string) =>
-  apiFetch<PaperBrief[]>(`/api/papers/brief?search=${encodeURIComponent(search)}`);
-export const fetchExtractionTable = (templateId: number, paperIds: number[]) =>
-  apiFetch<ExtractionTableRow[]>(
+export const searchPapersBrief = (search: string): Promise<PaperBrief[]> =>
+  apiFetchJson(`/api/papers/brief?search=${encodeURIComponent(search)}`, paperBriefSchema.array());
+export const fetchExtractionTable = (templateId: number, paperIds: number[]): Promise<ExtractionTableRow[]> =>
+  apiFetchJson(
     `/api/extractions/table?template_id=${templateId}${paperIds.length ? `&paper_ids=${paperIds.join(',')}` : ''}`,
+    extractionTableRowSchema.array(),
   );
-export const batchExtract = (templateId: number, paperIds: number[]) =>
-  apiFetch<{ job_id: string; total: number }>('/api/extractions/batch', {
+export const batchExtract = (templateId: number, paperIds: number[]): Promise<{ job_id: string; total: number }> =>
+  apiFetchJson('/api/extractions/batch', batchExtractionAcceptedSchema, {
     method: 'POST',
     body: JSON.stringify({ template_id: templateId, paper_ids: paperIds }),
   });
@@ -56,7 +93,7 @@ export const fetchFeedPapers = (params: {
   date_to?: string;
   recommended?: boolean;
   include_zotero_notes?: boolean;
-}) => {
+}): Promise<FeedResponse> => {
   const searchParams = new URLSearchParams();
   const { recommended, ...rest } = params;
   Object.entries(rest).forEach(([key, value]) => {
@@ -67,7 +104,7 @@ export const fetchFeedPapers = (params: {
   if (recommended) {
     searchParams.set('recommended', 'true');
   }
-  return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
+  return apiFetchJson(`/api/papers/feed?${searchParams.toString()}`, feedResponseSchema);
 };
 
 
@@ -80,15 +117,12 @@ export interface SearchFilters {
 
 export const searchPreview = (
   query: string,
-  sourceTypes?: string | string[],
+  sourceTypes?: string[],
   maxResults?: number,
   filters?: SearchFilters,
-) => {
-  // Accept either a single source string (legacy) or an array of source types
-  const source_types = Array.isArray(sourceTypes)
-    ? sourceTypes
-    : [sourceTypes || 'arxiv'];
-  return apiFetch<SearchPreviewResponse>('/api/search-preview', {
+): Promise<SearchPreviewResponse> => {
+  const source_types = sourceTypes ?? ['arxiv'];
+  return apiFetchJson('/api/search-preview', searchPreviewResponseSchema, {
     method: 'POST',
     body: JSON.stringify({
       query,
@@ -102,8 +136,8 @@ export const searchPreview = (
   });
 };
 
-export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]) =>
-  apiFetch<Paper[]>('/api/papers/batch-save', {
+export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]): Promise<Paper[]> =>
+  apiFetchJson('/api/papers/batch-save', paperSchema.array(), {
     method: 'POST',
     body: JSON.stringify(papers),
   });
@@ -111,19 +145,19 @@ export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]
 // --- Paper lifecycle mutations ---
 
 export async function savePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch(`/api/papers/${paperId}/save`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/save`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 export async function restorePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch(`/api/papers/${paperId}/restore`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/restore`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 export async function hardDeletePaper(paperId: number): Promise<{ deleted: number }> {
-  return apiFetch(`/api/papers/${paperId}`, { method: 'DELETE' });
+  return apiFetchJson(`/api/papers/${paperId}`, hardDeleteResponseSchema, { method: 'DELETE' });
 }
 
 export async function bulkAction(body: { paper_ids: number[]; action: BulkAction }): Promise<{ succeeded: number[]; failed: { paper_id: number; error: string }[] }> {
-  return apiFetch('/api/papers/bulk', { method: 'POST', body: JSON.stringify(body) });
+  return apiFetchJson('/api/papers/bulk', bulkActionResponseSchema, { method: 'POST', body: JSON.stringify(body) });
 }
 
 /**
@@ -139,48 +173,46 @@ export async function bulkAction(body: { paper_ids: number[]; action: BulkAction
  */
 export async function fetchFeedCounts(scope?: 'library' | 'corpus'): Promise<FeedCountsWithFacets> {
   const qs = scope ? `?scope=${scope}` : '';
-  return apiFetch(`/api/papers/feed/counts${qs}`);
+  return apiFetchJson(`/api/papers/feed/counts${qs}`, feedCountsSchema);
 }
 
 /** @deprecated Use `fetchFeedCounts(scope)` instead. */
-export const fetchFeedCountsWithFacets = fetchFeedCounts;
-
 // --- Lifecycle mutations (additive) ---
 // Return type for simple state transitions: { status: string; paper_id: number }
 
 /** Skip a paper from the Inbox (state → done). */
 export async function skipPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/skip`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/skip`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Mark a paper as currently being read (state → reading). */
 export async function markReading(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/reading`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/reading`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Mark a paper as done/finished reading (state → done). */
 export async function markDone(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/done`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/done`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Move a paper to the Trash (state → trash, saves state_before_trash). */
 export async function trashPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/trash`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/trash`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Trash the paper AND record negative feedback in one atomic transaction (source='dismiss_combined'). */
 export async function trashAndRejectPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/trash_and_reject`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/trash_and_reject`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Set starred = TRUE on a paper. Does not change reading state. */
 export async function starPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/star`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/star`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Set starred = FALSE on a paper. Does not change reading state. */
 export async function unstarPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/unstar`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/unstar`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Body for PUT /api/papers/{id}/annotations. */
@@ -192,7 +224,7 @@ export interface AnnotationsBody {
 
 /** Update per-paper annotations (rating 1-5, user_notes, flagged). Returns the full user state. */
 export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserState> {
-  return apiFetch<UserState>(`/api/papers/${paperId}/annotations`, {
+  return apiFetchJson(`/api/papers/${paperId}/annotations`, userStateSchema, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
@@ -210,8 +242,9 @@ export async function submitFeedback(
   paperId: number,
   body: FeedbackBody,
 ): Promise<{ paper_id: number; signal: 'positive' | 'negative'; source: string; created_at: string }> {
-  return apiFetch<{ paper_id: number; signal: 'positive' | 'negative'; source: string; created_at: string }>(
+  return apiFetchJson(
     `/api/papers/${paperId}/feedback`,
+    feedbackResponseSchema,
     { method: 'POST', body: JSON.stringify(body) },
   );
 }
@@ -222,7 +255,7 @@ export async function submitFeedback(
  * Returns 204 on success.
  */
 export async function clearFeedback(paperId: number, source: string): Promise<void> {
-  await apiFetchRaw(`/api/papers/${paperId}/feedback?source=${encodeURIComponent(source)}`, {
+  await apiFetchVoid(`/api/papers/${paperId}/feedback?source=${encodeURIComponent(source)}`, {
     method: 'DELETE',
   });
 }
@@ -232,7 +265,7 @@ export async function clearFeedback(paperId: number, source: string): Promise<vo
  * Hits PUT /api/papers/:id/unsave.
  */
 export async function unsavePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
-  return apiFetch(`/api/papers/${paperId}/unsave`, { method: 'PUT' });
+  return apiFetchJson(`/api/papers/${paperId}/unsave`, lifecycleActionResponseSchema, { method: 'PUT' });
 }
 
 /** Query params for GET /api/recommendation_feedback. */
@@ -251,13 +284,14 @@ export async function fetchRecommendationFeedback(
   if (params.limit !== undefined) qs.set('limit', String(params.limit));
   if (params.offset !== undefined) qs.set('offset', String(params.offset));
   const suffix = qs.toString() ? `?${qs}` : '';
-  return apiFetch<FeedbackListResponse>(`/api/recommendation_feedback${suffix}`);
+  return apiFetchJson(`/api/recommendation_feedback${suffix}`, feedbackListResponseSchema);
 }
 
 /** Bulk-delete recommendation_feedback rows for the given topic. */
 export async function deleteRecommendationFeedback(topicId: number): Promise<DeleteFeedbackResponse> {
-  return apiFetch<DeleteFeedbackResponse>(
+  return apiFetchJson(
     `/api/recommendation_feedback?topic_id=${topicId}`,
+    deleteFeedbackResponseSchema,
     { method: 'DELETE' },
   );
 }
@@ -272,7 +306,7 @@ type BackendView =
   | 'starred' | 'trash' | 'active' | 'kept' | 'all_non_trash';
 
 const LIBRARY_FILTER_TO_BACKEND_VIEW: Record<
-  import('@/types').LibraryFilter,
+  LibraryFilter,
   BackendView
 > = {
   starred: 'starred',
@@ -280,6 +314,10 @@ const LIBRARY_FILTER_TO_BACKEND_VIEW: Record<
   to_read: 'reading_list',
   done: 'done',
 };
+
+function isLibraryFilter(value: string): value is LibraryFilter {
+  return value in LIBRARY_FILTER_TO_BACKEND_VIEW;
+}
 
 /** Surface-aware feed fetch for FeedView. Passes view= directly to the
  * backend so VIEW_PREDICATES (canonical lifecycle predicates) are used
@@ -306,8 +344,8 @@ export async function fetchFeed(params: {
   // Map (surface=library, filter=X) → backend view name. Otherwise the surface
   // value itself is already a valid backend view (inbox/library/trash overlap).
   let resolvedView: BackendView | undefined;
-  if (view === 'library' && filter && filter in LIBRARY_FILTER_TO_BACKEND_VIEW) {
-    resolvedView = LIBRARY_FILTER_TO_BACKEND_VIEW[filter as import('@/types').LibraryFilter];
+  if (view === 'library' && filter && isLibraryFilter(filter)) {
+    resolvedView = LIBRARY_FILTER_TO_BACKEND_VIEW[filter];
   } else if (view === 'library' && scope === 'corpus') {
     resolvedView = 'all_non_trash';
   } else if (view === 'inbox' || view === 'library' || view === 'trash') {
@@ -336,35 +374,37 @@ export async function fetchFeed(params: {
   if (q) {
     searchParams.set('q', q);
   }
-  return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
+  return apiFetchJson(`/api/papers/feed?${searchParams.toString()}`, feedResponseSchema);
 }
 
-export const discoverPapers = (paperIds: number[], limit?: number) =>
-  apiFetch<DiscoveryResult[]>('/api/discover', {
+export const discoverPapers = (paperIds: number[], limit?: number): Promise<DiscoveryResult[]> =>
+  apiFetchJson('/api/discover', discoveryResultSchema.array(), {
     method: 'POST',
     body: JSON.stringify({ paper_ids: paperIds, limit: limit || 10 }),
   });
 
-export const scanLocalPdfs = () =>
-  apiFetch<JobAccepted>('/api/scan-local-pdfs', { method: 'POST' });
+export const scanLocalPdfs = (): Promise<JobAccepted> =>
+  apiFetchJson('/api/scan-local-pdfs', queuedJobSchema, { method: 'POST' });
 
 export async function uploadPdf(file: File, title: string): Promise<{ id: number; title: string }> {
   const form = new FormData();
   form.append('file', file);
   form.append('title', title);
-  return apiFetch('/api/upload-pdf', { method: 'POST', body: form });
+  return apiFetchJson('/api/upload-pdf', paperSchema, { method: 'POST', body: form });
 }
 
-export const batchProcessPapers = (limit?: number) =>
-  apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number; job_id: string | null }>(
+export const batchProcessPapers = (limit?: number): Promise<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number; job_id: string | null }> =>
+  apiFetchJson(
     `/api/papers/batch-process?limit=${limit || 10}`,
+    batchProcessResponseSchema,
     { method: 'POST' },
   );
 
 
-export const batchSummarizePapers = (limit?: number) =>
-  apiFetch<{ total_unsummarized: number; job_id: string | null }>(
+export const batchSummarizePapers = (limit?: number): Promise<{ total_unsummarized: number; job_id: string | null }> =>
+  apiFetchJson(
     `/api/papers/batch-summarize?limit=${limit || 10}`,
+    batchSummarizeResponseSchema,
     { method: 'POST' },
   );
 
@@ -373,95 +413,97 @@ export const batchSummarizePapers = (limit?: number) =>
  * summarize). Returns the JobCreateResponse envelope; ``job_id`` is null with
  * ``status: "skipped"`` when the library already needs no work.
  */
-export const processLibrary = (summarize = false) =>
-  apiFetch<{ job_id: string | null; status: string; reason?: string | null }>(
+export const processLibrary = (summarize = false): Promise<{ job_id: string | null; status: 'queued' | 'skipped'; reason?: string | null }> =>
+  apiFetchJson(
     `/api/papers/process-library?summarize=${summarize}`,
+    processLibraryResponseSchema,
     { method: 'POST' },
   );
 
 // --- Paper Detail ---
-export const fetchPaperDetail = (paperId: number) =>
-  apiFetch<PaperDetail>(`/api/papers/${paperId}`);
+export const fetchPaperDetail = (paperId: number): Promise<PaperDetail> =>
+  apiFetchJson(`/api/papers/${paperId}`, paperDetailSchema);
 
-export const downloadPdf = (paperId: number) =>
-  apiFetch<Paper>(`/api/download-pdf/${paperId}`, { method: 'POST' });
+export const downloadPdf = (paperId: number): Promise<Paper> =>
+  apiFetchJson(`/api/download-pdf/${paperId}`, paperSchema, { method: 'POST' });
 
-export const processPdf = (paperId: number) =>
-  apiFetch<{ job_id: string; status: string }>(`/api/process-pdf/${paperId}`, { method: 'POST' });
+export const processPdf = (paperId: number): Promise<JobAccepted> =>
+  apiFetchJson(`/api/process-pdf/${paperId}`, queuedJobSchema, { method: 'POST' });
 
-export const summarizePaper = (paperId: number, opts?: { force?: boolean }) =>
-  apiFetch<JobAccepted>(`/api/summarize/${paperId}`, {
+export const summarizePaper = (paperId: number, opts?: { force?: boolean }): Promise<JobAccepted> =>
+  apiFetchJson(`/api/summarize/${paperId}`, queuedJobSchema, {
     method: 'POST',
     ...(opts?.force === true ? { body: JSON.stringify({ force: true }) } : {}),
   });
 
-export const fetchNotes = (paperId: number, source?: 'user' | 'zotero') =>
-  apiFetch<Note[]>(`/api/papers/${paperId}/notes${source ? `?source=${source}` : ''}`);
+export const fetchNotes = (paperId: number, source?: 'user' | 'zotero'): Promise<Note[]> =>
+  apiFetchJson(`/api/papers/${paperId}/notes${source ? `?source=${source}` : ''}`, noteSchema.array());
 
-export const createNote = (paperId: number, data: { user_note: string; highlight_text?: string | null; page_number?: number | null }) =>
-  apiFetch<Note>(`/api/papers/${paperId}/notes`, {
+export const createNote = (paperId: number, data: { user_note: string; highlight_text?: string | null; page_number?: number | null }): Promise<Note> =>
+  apiFetchJson(`/api/papers/${paperId}/notes`, noteSchema, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 
-export const deleteNote = (noteId: number) =>
-  apiFetch<{ status: string }>(`/api/notes/${noteId}`, { method: 'DELETE' });
+export const deleteNote = (noteId: number): Promise<void> =>
+  apiFetchVoid(`/api/notes/${noteId}`, { method: 'DELETE' });
 
-export const promoteZoteroNote = (noteId: number) =>
-  apiFetch<Note>(`/api/notes/${noteId}/promote`, { method: 'POST' });
+export const promoteZoteroNote = (noteId: number): Promise<Note> =>
+  apiFetchJson(`/api/notes/${noteId}/promote`, noteSchema, { method: 'POST' });
 
 export const zoteroSyncAnnotations = (paperId: number): Promise<JobAccepted> =>
-  apiFetch(`/api/zotero/sync-annotations/${paperId}`, { method: 'POST' });
+  apiFetchJson(`/api/zotero/sync-annotations/${paperId}`, queuedJobSchema, { method: 'POST' });
 
-export const fetchMissingFoundationalPapers = () =>
-  apiFetch<MissingFoundationalPaper[]>('/api/analytics/missing-foundational');
+export const fetchMissingFoundationalPapers = (): Promise<MissingFoundationalPaper[]> =>
+  apiFetchJson('/api/analytics/missing-foundational', missingFoundationalPaperSchema.array());
 
-export const fetchAndProcessFoundationalPaper = (paperId: number) =>
-  apiFetch<FetchAndProcessFoundationalResponse>('/api/analytics/fetch-and-process', {
+export const fetchAndProcessFoundationalPaper = (paperId: number): Promise<FetchAndProcessFoundationalResponse> =>
+  apiFetchJson('/api/analytics/fetch-and-process', fetchAndProcessFoundationalSchema, {
     method: 'POST',
     body: JSON.stringify({ paper_id: paperId }),
   });
 
 // --- Citation Graph ---
-export const fetchPaperCitations = (paperId: number) =>
-  apiFetch<CitationRelation[]>(`/api/citations/${paperId}`);
+export const fetchPaperCitations = (paperId: number): Promise<CitationRelation[]> =>
+  apiFetchJson(`/api/citations/${paperId}`, citationRelationSchema.array());
 
-export const getCitationGraph = (paperIds: number[], depth = 1) => {
+export const getCitationGraph = (paperIds: number[], depth = 1): Promise<CitationGraph> => {
   const params = new URLSearchParams();
   paperIds.forEach((paperId) => params.append('paper_ids', String(Number(paperId))));
   params.set('depth', String(depth));
-  return apiFetch<CitationGraph>(`/api/citations/graph?${params.toString()}`);
+  return apiFetchJson(`/api/citations/graph?${params.toString()}`, citationGraphSchema);
 };
 
 export const fetchCitationsFromS2 = (paperId: number) =>
-  apiFetch<{ citations_added: number; references_added: number; stubs_created: number }>(
-    `/api/citations/${paperId}/fetch`, { method: 'POST' }
+  apiFetchJson(
+    `/api/citations/${paperId}/fetch`, citationFetchResponseSchema, { method: 'POST' }
   );
 
 // --- Knowledge Graph ---
-export const getKnowledgeGraph = (entityType?: string, minPaperCount?: number) => {
+export const getKnowledgeGraph = (entityType?: string, minPaperCount?: number): Promise<KnowledgeGraph> => {
   const params = new URLSearchParams();
   if (entityType) params.set('entity_type', entityType);
   if (minPaperCount != null) params.set('min_paper_count', String(minPaperCount));
-  return apiFetch<KnowledgeGraph>(`/api/knowledge-graph?${params.toString()}`);
+  return apiFetchJson(`/api/knowledge-graph?${params.toString()}`, knowledgeGraphSchema);
 };
 
-export const listKgEntities = (entityType?: string) =>
-  apiFetch<Entity[]>(`/api/knowledge-graph/entities${entityType ? `?entity_type=${entityType}` : ''}`);
+export const listKgEntities = (entityType?: string): Promise<Entity[]> =>
+  apiFetchJson(`/api/knowledge-graph/entities${entityType ? `?entity_type=${entityType}` : ''}`, entitySchema.array());
 
-export const queryKnowledgeGraph = (query: string) =>
-  apiFetch<{ results: Array<Record<string, unknown>> }>(`/api/knowledge-graph/query?q=${encodeURIComponent(query)}`, {
+export const queryKnowledgeGraph = (query: string): Promise<{ results: Array<Record<string, JsonValue>> }> =>
+  apiFetchJson(`/api/knowledge-graph/query?q=${encodeURIComponent(query)}`, kgQueryResponseSchema, {
     method: 'GET',
   });
 
 export const extractEntities = (paperId: number) =>
-  apiFetch<{ entities_added: number; relationships_added: number; entities_merged: number }>(`/api/extract-entities/${paperId}`, {
+  apiFetchJson(`/api/extract-entities/${paperId}`, entityExtractionResponseSchema, {
     method: 'POST',
   });
 
 export const batchExtractEntities = () =>
-  apiFetch<{ extracted: number; failed: number; total: number }>(
+  apiFetchJson(
     '/api/extract-entities/batch',
+    batchEntityExtractionResponseSchema,
     { method: 'POST' },
   );
 

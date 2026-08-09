@@ -139,7 +139,12 @@ Repeated negative feedback for a topic dampens its positive similarity contribut
 
 ### Timer
 
-Configure the Pomodoro-style session timer available in the TopBar: work interval, break interval, and long-break interval.
+Configure the Pomodoro-style timer available in the TopBar: work interval,
+break interval, and long-break interval. Those preferences and break cycles are
+local to this browser. The active focus interval itself is stored per user, so
+starting it from the Web interface or Telegram shows the same remaining session
+in the other client. Pause, resume, stop, and completed-time accounting use that
+shared server state.
 
 ### Observability
 

@@ -42,7 +42,7 @@ export function DoneStep({
         jobId: res.job_id,
         kind: 'pulse.generate',
         payload: { source: 'first_run' },
-        status: res.status === 'running' ? 'running' : 'queued',
+        status: 'queued',
       });
     },
   });

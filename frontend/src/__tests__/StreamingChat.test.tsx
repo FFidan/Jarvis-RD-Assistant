@@ -100,20 +100,31 @@ describe('StreamingChat — FE-SSE-1 error banner', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('renders friendly copy + a Retry button (not the raw error text) when streamError is set', () => {
-    mockUseStreamingChat.mockReturnValue(baseHookReturn({ streamError: 'context too long' }));
+  it('renders actionable known-code copy with a Retry button', () => {
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({
+      streamError: {
+        message: 'The model did not return a usable final answer. Please try again.',
+        code: 'llm_visible_work_notes',
+      },
+    }));
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
     const alert = screen.getByRole('alert');
     expect(alert).toBeTruthy();
-    // Friendly copy is shown; the raw error string is NOT leaked to the user.
-    expect(alert.textContent).toContain('Something went wrong answering that');
-    expect(alert.textContent).not.toContain('context too long');
+    expect(alert.textContent).toContain('ask an administrator to review the smart model or thinking setting');
     expect(screen.getByRole('button', { name: 'Retry last question' })).toBeTruthy();
+  });
+
+  it('preserves an unknown sanitized server message in the banner', () => {
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({
+      streamError: { message: 'The selected research model is unavailable.', code: 'model_unavailable' },
+    }));
+    render(<StreamingChat chatId="c1" scope="cross-paper" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('The selected research model is unavailable.');
   });
 
   it('clicking Retry calls the hook retry()', () => {
     const retry = vi.fn();
-    mockUseStreamingChat.mockReturnValue(baseHookReturn({ streamError: 'boom', retry }));
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({ streamError: { message: 'boom' }, retry }));
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
     fireEvent.click(screen.getByRole('button', { name: 'Retry last question' }));
     expect(retry).toHaveBeenCalledTimes(1);

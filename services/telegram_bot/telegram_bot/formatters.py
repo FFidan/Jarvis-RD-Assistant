@@ -10,6 +10,9 @@ import re
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
+from telegram_bot.command_catalog import COMMAND_CATALOG
+from telegram_bot.pulse_contract import PulseDeck
+
 MAX_MESSAGE_LENGTH = 4096
 TRUNCATION_HEADROOM = 100
 
@@ -275,13 +278,46 @@ def format_pulse_card(card: dict) -> str:
     reasoning_part = f"\n\n💬 {escape(reasoning[:300])}" if reasoning else ""
     link_part = f'\n🔗 <a href="{url}">Open paper</a>' if url else ""
 
+    verified = card.get("reasoning_verified")
+    confidence = card.get("reasoning_confidence")
+    if verified is False or confidence == "UNVERIFIED":
+        evidence_part = "\nEvidence check: Unverified"
+    elif verified is True and confidence in {"HIGH", "MEDIUM", "LOW"}:
+        evidence_part = f"\nEvidence confidence: {str(confidence).title()}"
+    elif verified is True:
+        evidence_part = "\nEvidence check: Verified"
+    elif confidence in {"HIGH", "MEDIUM", "LOW"}:
+        evidence_part = f"\nEvidence confidence: {str(confidence).title()}"
+    else:
+        evidence_part = "\nEvidence check: Not reported"
+
     return truncate(
         f"⚡ <b>Pulse {rank_str}</b> · Score {score_str}\n"
         f"📄 <b>{title}</b>\n"
         f"👤 {authors}"
         f"{reasoning_part}"
+        f"{evidence_part}"
         f"{link_part}"
     )
+
+
+def format_pulse_deck_status(deck: PulseDeck) -> str:
+    """Describe Pulse freshness and degradation without exposing backend diagnostics."""
+    try:
+        deck_date = datetime.strptime(deck.deck_date, "%Y-%m-%d").strftime("%B %d")
+    except (TypeError, ValueError):
+        deck_date = "the reported date"
+
+    if deck.is_stale:
+        age = deck.stale_age_days
+        age_label = f"{age} day old" if age == 1 else f"{age} days old"
+        status = f"Earlier Pulse from {deck_date} ({age_label})"
+    else:
+        status = f"Current Pulse for {deck_date}"
+
+    if deck.degraded_reason:
+        status += "\nRanking used reduced signals; some scoring inputs were unavailable."
+    return status
 
 
 def format_paper_detail(paper: dict, summary: dict | None = None) -> str:
@@ -600,29 +636,12 @@ def format_help() -> str:
     str
         HTML-formatted help text for Telegram.
     """
-    return (
-        "🤖 <b>JARVIS RD Assistant</b>\n\n"
-        "<b>Papers:</b>\n"
-        "/papers — Recent papers or search\n"
-        "/briefing — Morning briefing\n"
-        "/next — Next paper recommendation\n"
-        "/inbox — Show your unread papers\n"
-        "/pulse_now — Run Pulse discovery now\n\n"
-        "<b>Learning:</b>\n"
-        "/review — Start flashcard review\n"
-        "/stats — Learning statistics\n\n"
-        "<b>Projects &amp; Tasks:</b>\n"
-        "/projects — List active projects\n"
-        "/newproject &lt;name&gt; — Create project\n"
-        "/tasks — In-progress tasks\n"
-        "/done &lt;id&gt; — Mark task complete\n"
-        "/focus — Start a focus session\n\n"
-        "<b>Account:</b>\n"
-        "/pair &lt;code&gt; — Pair this chat to your JARVIS account\n"
-        "/unpair — Unlink this chat from your account\n"
-        "/whoami — Show which account this chat is paired to\n\n"
-        "<b>General:</b>\n"
-        "/help — This message\n"
-        "/start — Welcome message\n"
-        "/cancel — Cancel current operation"
-    )
+    lines = ["<b>JARVIS RD Assistant</b>"]
+    current_group = ""
+    for spec in COMMAND_CATALOG:
+        if spec.group != current_group:
+            current_group = spec.group
+            lines.extend(["", f"<b>{html.escape(current_group)}:</b>"])
+        usage = html.escape(spec.usage)
+        lines.append(f"/{usage} — {html.escape(spec.description)}")
+    return "\n".join(lines)

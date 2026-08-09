@@ -53,7 +53,8 @@ import {
   type UseStore,
 } from 'idb-keyval';
 import { useAuthStore } from '@/stores/auth-store';
-import { apiFetch } from '@/lib/api/core';
+import { apiFetchJson } from '@/lib/api/core';
+import { z } from 'zod';
 
 /* ---- record shape (local type — types/index.ts is F0-frozen) ------------- */
 
@@ -319,7 +320,7 @@ export async function drainReviewOutbox(
 export const REVIEW_SYNC_PATH = '/api/review/sync';
 
 /**
- * Default batch transport: routes through the shared {@link apiFetch} client
+ * Default batch transport: routes through the shared decoded API client
  * so a 503 maintenance body sets the maintenance banner and a 401 triggers
  * auto-logout, same as every other authenticated request. Throws `ApiError`
  * on any non-OK / network failure so {@link drainReviewOutbox} can mark the
@@ -327,7 +328,11 @@ export const REVIEW_SYNC_PATH = '/api/review/sync';
  * `{ reviews: QueuedReview[] }`.
  */
 async function defaultPostBatch(batch: QueuedReview[]): Promise<ReviewSyncResult> {
-  return apiFetch<ReviewSyncResult>(REVIEW_SYNC_PATH, {
+  return apiFetchJson(REVIEW_SYNC_PATH, z.looseObject({
+    synced: z.number(),
+    skipped: z.number(),
+    already_synced: z.number().optional(),
+  }), {
     method: 'POST',
     body: JSON.stringify({
       reviews: batch.map((r) => ({

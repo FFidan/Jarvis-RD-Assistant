@@ -4,7 +4,6 @@ export interface ActivityRow {
   cards_reviewed: number;
   papers_read: number;
   focus_hours: number;
-  notes: string | null;
 }
 
 export interface RetentionRow {
@@ -33,6 +32,17 @@ export interface SourceCountRow {
 export interface StatusCountRow {
   status: string;
   count: number;
+}
+
+export interface FeedbackSummaryItem {
+  paper_id: number;
+  title: string;
+  count: number;
+}
+
+export interface FeedbackSummary {
+  top_positive: FeedbackSummaryItem[];
+  top_negative: FeedbackSummaryItem[];
 }
 
 export type ContradictionStatus = 'verified' | 'dismissed' | 'false_positive';
@@ -98,7 +108,7 @@ export interface WeeklyDigestTheme {
 }
 
 export interface WeeklyDigestTopicPaper {
-  paper_id: number;
+  id: number;
   title: string;
   url: string | null;
   confidence: string | null;

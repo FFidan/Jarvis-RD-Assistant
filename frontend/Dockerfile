@@ -1,4 +1,4 @@
-ARG NODE_BUILD_IMAGE=node:22.14-alpine3.21
+ARG NODE_BUILD_IMAGE=node:22.22.2-alpine3.23
 # nginxinc/nginx-unprivileged runs as uid 101 (nginx) — no root at runtime.
 # Default upstream port is 8080, but our nginx.conf template binds to 3000
 # explicitly, so the host mapping (127.0.0.1:3001:3000) is unchanged.
@@ -7,10 +7,7 @@ ARG NGINX_RUNTIME_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine3.21
 FROM ${NODE_BUILD_IMAGE} AS build
 WORKDIR /app
 COPY package*.json ./
-# react-joyride 2.9.3 still declares a React 15-18 peer range while this app
-# runs React 19. Keep the lockfile authoritative and tolerate that stale peer
-# range in reproducible Docker builds.
-RUN npm ci --legacy-peer-deps
+RUN npm ci
 ARG CACHE_BUST=unknown
 COPY . .
 RUN npm run build

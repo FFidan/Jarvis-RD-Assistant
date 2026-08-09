@@ -603,18 +603,13 @@ def _resolve_request_user_id(request: Request) -> int | None:
     return user_id
 
 
-async def current_user_id(request: Request) -> int | None:
-    """Alias for :func:`current_user_id_or_none` — prefer that name at new call-sites."""
-    return await current_user_id_or_none(request)
-
-
 async def current_user_id_or_none(request: Request) -> int | None:
-    """Explicit-intent alias for :func:`current_user_id`.
+    """Return the authenticated user ID when one is present, otherwise ``None``.
 
     Prefer this name in ``Depends(...)`` injection points so the call-site
     reads "I know this can be None and I handle it." Same body as
-    :func:`current_user_id` — both read ``request.state.user_id`` set by
-    the session middleware (with defensive fallback to ``None``).
+    It reads ``request.state.user_id`` set by the session middleware, with a
+    defensive fallback to ``None``.
     """
     return _resolve_request_user_id(request)
 
@@ -622,7 +617,7 @@ async def current_user_id_or_none(request: Request) -> int | None:
 async def current_user_id_strict(request: Request) -> int:
     """Return the authenticated user's integer ID, or raise 401.
 
-    Same resolution as :func:`current_user_id` (``request.state.user_id`` via
+    Same resolution as :func:`current_user_id_or_none` (``request.state.user_id`` via
     :func:`_resolve_request_user_id`) but never returns ``None``: an absent
     identity is a hard 401. Use on user-data routes so an API-key-only caller
     cannot fall through as a permissionless shared user.

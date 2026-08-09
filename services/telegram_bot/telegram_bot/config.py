@@ -64,7 +64,6 @@ class BotConfig(JarvisCommonSettings):
     Env var                 Field                   Notes
     ---                     ---                     ---
     TELEGRAM_BOT_TOKEN      telegram_token          Required; bot token
-    TELEGRAM_CHAT_ID        telegram_chat_id        Optional; retained but inert
     JARVIS_BASE_URL         jarvis_base_url         Optional; deep-link base
     DATABASE_URL            database_url            Inherited; fallback DSN
     PAPER_INGESTION_URL     paper_ingestion_url     Service URL
@@ -86,20 +85,6 @@ class BotConfig(JarvisCommonSettings):
         default=SecretStr(""),
         alias="TELEGRAM_BOT_TOKEN",
         description="Telegram bot token (TELEGRAM_BOT_TOKEN).  Required at runtime.",
-    )
-
-    # --- Legacy chat ID: retained for compatibility, never consulted -----
-    telegram_chat_id: int | None = Field(
-        default=None,
-        alias="TELEGRAM_CHAT_ID",
-        description=(
-            "Legacy chat ID (TELEGRAM_CHAT_ID), retained for backward compatibility. "
-            "It selects no delivery target and grants no authorization. Delivery is "
-            "decided by telegram_user_pairings alone: handlers.helpers.auth_check "
-            "resolves the paired user of an inbound private chat (fail-closed), and "
-            "owner.list_user_pairings enumerates the chats scheduled pushes go to. "
-            "Setting this variable changes only which startup log line is emitted."
-        ),
     )
 
     # --- Backend service URLs -------------------------------------------
@@ -135,18 +120,6 @@ class BotConfig(JarvisCommonSettings):
         if v is not None and not v.startswith(("http://", "https://")):
             raise ValueError(f"JARVIS_BASE_URL must start with http:// or https://; got {v!r}")
         return v
-
-    @field_validator("telegram_chat_id", mode="before")
-    @classmethod
-    def _coerce_chat_id(cls, v: object) -> int | None:
-        """Coerce TELEGRAM_CHAT_ID: non-integer strings become None."""
-        if v is None or v == "":
-            return None
-        try:
-            return int(v)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            logger.warning("TELEGRAM_CHAT_ID=%r not parseable as integer; treating as unset", v)
-            return None
 
     @classmethod
     def from_env(cls) -> BotConfig:
@@ -187,12 +160,6 @@ class BotConfig(JarvisCommonSettings):
         if not token:
             logger.critical("TELEGRAM_BOT_TOKEN is not set (no env value and no DB row)")
             raise SystemExit(1)
-
-        if cfg.telegram_chat_id is None:
-            logger.info(
-                "TELEGRAM_CHAT_ID is not set — expected: outbound messages are always "
-                "addressed from Telegram pairing records, never from this variable"
-            )
 
         # Resolve JARVIS_API_KEY from a Docker secret file when the bare env is empty.
         api_key = cfg.jarvis_api_key

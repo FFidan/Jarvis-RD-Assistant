@@ -3,7 +3,7 @@
 
 Two failure classes are caught:
 
-1. *Permissive resolver* — ``current_user_id`` / ``current_user_id_or_none``
+1. *Permissive resolver* — ``current_user_id_or_none``
    resolve to ``None`` for API-key-only callers, letting an ops credential
    fall through as a permissionless shared user. User-data routes must use
    ``current_user_id_strict`` (hard 401) instead.
@@ -33,7 +33,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Forbidden resolver names (the permissive, None-returning ones).
-UNSAFE_NAMES = frozenset({"current_user_id", "current_user_id_or_none"})
+UNSAFE_NAMES = frozenset({"current_user_id_or_none"})
 
 # Resolvers that establish a real, non-None caller identity (or hard 401/403).
 SAFE_NAMES = frozenset(

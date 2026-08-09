@@ -6,15 +6,18 @@ All tests are async (asyncio_mode = auto in pyproject.toml).
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
 import logging
-import socket
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpcore
 import httpx
 import pytest
 import respx
+from jarvis_common.pinned_transport import PinnedAsyncTransport, pinned_async_client
 from paper_ingestion.integrations import zotero_client
 from paper_ingestion.integrations.zotero_client import (
     BBT_LOCAL_BASE,
@@ -675,99 +678,133 @@ def _lan_bbt(monkeypatch):
     zotero_client.set_configured_private_hosts(frozenset())
 
 
-def _resolves_to(address: str):
-    def _getaddrinfo(host, port, *args, **kwargs):
-        return [(2, 1, 6, "", (address, port or 0))]
+def _install_bbt_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    address: str | None = None,
+    response: httpx.Response | None = None,
+) -> list[object]:
+    """Route the real BBT client through a deterministic pinned transport."""
+    observed: list[object] = []
 
-    return _getaddrinfo
+    def client_factory(policy, *, timeout):  # type: ignore[no-untyped-def]
+        observed.append(policy)
+        if response is not None:
+
+            async def handler(request: httpx.Request) -> httpx.Response:
+                observed.append(request)
+                return response
+
+            return httpx.AsyncClient(
+                transport=httpx.MockTransport(handler), timeout=timeout, trust_env=False
+            )
+
+        async def resolver(host: str, port: int) -> list[tuple[int, str]]:
+            observed.append((host, port))
+            if address is None:
+                raise httpcore.ConnectError("Unable to resolve host")
+            return [(2, address)]
+
+        return pinned_async_client(
+            policy,
+            timeout=timeout,
+            transport=PinnedAsyncTransport(policy, resolver=resolver),
+        )
+
+    monkeypatch.setattr(zotero_client, "pinned_async_client", client_factory)
+    return observed
 
 
-def _unresolvable(host, port, *args, **kwargs):
-    raise socket.gaierror("Name or service not known")
-
-
-@respx.mock
 @pytest.mark.usefixtures("_lan_bbt")
 async def test_private_resolving_host_issues_no_request(client, monkeypatch, caplog):
     """A host resolving into private space is refused before anything goes out."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
-    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
-        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
-    )
+    observed = _install_bbt_transport(monkeypatch, address="192.168.1.50")
 
     with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_client"):
         result = await client.fetch_bbt_citation_key("ABCD1234")
 
     assert result is None
-    # The observable: a refusal raised inside the client's blanket except would
-    # look identical, but the request would already have been issued.
-    assert not route.called
+    assert observed[1:] == [("zotero.lan", 23119)]
     assert any("zotero.allowed_private_hosts" in r.getMessage() for r in caplog.records)
 
 
-@respx.mock
 @pytest.mark.usefixtures("_lan_bbt")
 async def test_allowlisted_private_host_is_reached(client, monkeypatch):
     """The same host is reachable once the operator allowlists it."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
-    zotero_client.set_configured_private_hosts(frozenset({"zotero.lan"}))
-    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
-        return_value=httpx.Response(200, json=[{"id": "Author2024xyz"}])
+    requests: list[str] = []
+
+    async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        raw = await reader.readuntil(b"\r\n\r\n")
+        requests.append(raw.decode("ascii").split("\r\n", 1)[0])
+        body = b'[{"id":"Author2024xyz"}]'
+        writer.write(
+            f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode(
+                "ascii"
+            )
+            + body
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(
+        zotero_client,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(bbt_base_url=f"http://zotero.lan:{port}"),
     )
+    zotero_client.set_configured_private_hosts(frozenset({"zotero.lan"}))
 
-    assert await client.fetch_bbt_citation_key("ABCD1234") == "Author2024xyz"
-    assert route.called
+    async def resolver(host: str, resolved_port: int) -> list[tuple[int, str]]:
+        assert (host, resolved_port) == ("zotero.lan", port)
+        return [(2, "127.0.0.1")]
+
+    observed: list[object] = []
+
+    def client_factory(policy, *, timeout):  # type: ignore[no-untyped-def]
+        observed.append(policy)
+        return pinned_async_client(
+            policy,
+            timeout=timeout,
+            transport=PinnedAsyncTransport(policy, resolver=resolver),
+        )
+
+    monkeypatch.setattr(zotero_client, "pinned_async_client", client_factory)
+    try:
+        assert await client.fetch_bbt_citation_key("ABCD1234") == "Author2024xyz"
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    policy = observed[0]
+    assert policy.allows("zotero.lan", ipaddress.ip_address("192.168.1.50"))
+    assert requests == [
+        "GET /better-bibtex/export/item?itemKey=ABCD1234&translator=csljson HTTP/1.1"
+    ]
 
 
-@respx.mock
-@pytest.mark.usefixtures("_lan_bbt")
-@respx.mock
 @pytest.mark.usefixtures("_lan_bbt")
 async def test_host_resolving_to_a_scoped_address_is_refused(client, monkeypatch):
     """A scoped IPv6 answer cannot be classified, so it must not reach the request."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("fe80::1%eth0"))
-    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
-        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
-    )
+    observed = _install_bbt_transport(monkeypatch, address="fe80::1%eth0")
 
     assert await client.fetch_bbt_citation_key("ABCD1234") is None
-    assert not route.called
+    assert observed[1:] == [("zotero.lan", 23119)]
 
 
-@respx.mock
 @pytest.mark.usefixtures("_lan_bbt")
 async def test_unresolvable_host_is_rechecked_and_still_refused(client, monkeypatch):
     """A boot-time DNS outage must not become a permanent verdict either way."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _unresolvable)
-    route = respx.get(f"{_LAN_BBT_BASE}/better-bibtex/export/item").mock(
-        return_value=httpx.Response(200, json=[{"id": "Nope2024"}])
-    )
+    first = _install_bbt_transport(monkeypatch)
 
     assert await client.fetch_bbt_citation_key("ABCD1234") is None
-    assert not route.called
+    assert first[1:] == [("zotero.lan", 23119)]
 
     # DNS recovers, and now answers with a private address: still refused.
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("10.0.0.9"))
+    second = _install_bbt_transport(monkeypatch, address="10.0.0.9")
     assert await client.fetch_bbt_citation_key("ABCD1234") is None
-    assert not route.called
-
-
-@pytest.mark.usefixtures("_lan_bbt")
-@pytest.mark.parametrize("blocked", ["100.64.0.1", "240.0.0.1", "224.0.0.1", "0.0.0.0"])
-async def test_bbt_host_permitted_refuses_non_public_ranges(monkeypatch, blocked):
-    """CGNAT, reserved, multicast and unspecified answers are refused like private ones."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to(blocked))
-    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is False
-
-
-@pytest.mark.usefixtures("_lan_bbt")
-async def test_bbt_host_permitted_re_evaluates_after_a_public_success(monkeypatch):
-    """A host trusted once is re-resolved: a later private answer is still refused."""
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("8.8.8.8"))
-    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is True
-
-    monkeypatch.setattr(zotero_client.socket, "getaddrinfo", _resolves_to("192.168.1.50"))
-    assert await zotero_client.bbt_host_permitted(_LAN_BBT_BASE) is False
+    assert second[1:] == [("zotero.lan", 23119)]
 
 
 async def test_startup_hook_reports_a_private_host_without_aborting_boot(monkeypatch, caplog):

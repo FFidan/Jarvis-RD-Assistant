@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 from typing import Any
 
+import httpcore
 import httpx
 import pytest
 from jarvis_common.maintenance import OutboundEgressBlockedError
+from jarvis_common.pinned_transport import LOCAL_DEVELOPMENT_POLICY, PinnedAsyncTransport
 from jarvis_common.testing import FakeRecord
 from paper_ingestion.services import provider_models
 from paper_ingestion.services.llm_provider_registry import (
@@ -291,6 +294,48 @@ async def test_keyless_custom_endpoint_sends_no_authorization_header() -> None:
 
     assert [entry.id for entry in listing.entries] == ["custom_openai/org/model"]
     assert "authorization" not in handler.requests[0].headers
+
+
+@pytest.mark.asyncio
+async def test_custom_model_list_rebind_is_blocked_after_public_validation(monkeypatch) -> None:
+    """The shared guarded client blocks a changed answer at its real connect boundary."""
+    delegated: list[str] = []
+
+    class Backend(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, host: str, port: int, **_kwargs):  # type: ignore[no-untyped-def]
+            delegated.append(host)
+            return object()
+
+        async def connect_unix_socket(self, path: str, **_kwargs):  # type: ignore[no-untyped-def]
+            return object()
+
+        async def sleep(self, seconds: float) -> None:
+            return None
+
+    def public_validation_answer(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+
+    async def private_connect_answer(host: str, port: int) -> list[tuple[int, str]]:
+        return [(socket.AF_INET, "127.0.0.1")]
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo",
+        public_validation_answer,
+    )
+    transport = PinnedAsyncTransport(
+        LOCAL_DEVELOPMENT_POLICY,
+        resolver=private_connect_answer,
+        backend=Backend(),
+    )
+    async with httpx.AsyncClient(transport=transport, trust_env=False) as client:
+        listing = await fetch_provider_models(
+            "custom_openai_compatible",
+            db_pool=FakeConfigPool({_CUSTOM_BASE_URL_KEY: "https://custom.example/v1"}),
+            http_client=client,
+        )
+
+    assert listing.error == "provider request failed"
+    assert delegated == []
 
 
 @pytest.mark.asyncio

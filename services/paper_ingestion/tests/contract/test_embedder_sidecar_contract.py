@@ -357,7 +357,6 @@ async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
             sidecars.embedder,
             pool,
             body,
-            sidecars.http_client,
             user_id=user_b,
         )
 

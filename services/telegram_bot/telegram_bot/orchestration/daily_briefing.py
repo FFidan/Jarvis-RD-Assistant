@@ -10,13 +10,13 @@ from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_morning_briefing
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 logger = logging.getLogger(__name__)
 
 
 async def _run_briefing_for_chat(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
     chat_id: int,
@@ -33,8 +33,6 @@ async def _run_briefing_for_chat(
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Unused — kept for the scheduler's orchestrator contract.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
@@ -85,6 +83,8 @@ async def run_daily_briefing(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Send a combined morning briefing with papers, cards, and tasks.
 
@@ -111,10 +111,12 @@ async def run_daily_briefing(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "daily_summary"
+        ):
+            continue
         try:
-            await _run_briefing_for_chat(
-                http_client, db_pool, bot, config, pairing.chat_id, pairing.user_id
-            )
+            await _run_briefing_for_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
         except Exception:
             logger.exception(
                 "Failed to build daily briefing for user_id=%s (chat_id=%d)",

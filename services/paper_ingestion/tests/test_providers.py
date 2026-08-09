@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import socket
 
+import httpcore
 import httpx
 import pytest
 import respx
 from httpx import ASGITransport
+from jarvis_common.pinned_transport import PinnedAsyncTransport, pinned_async_client
 from jarvis_common.testing import RoleMiddleware
 
 from tests.conftest import _make_pool_and_conn
@@ -560,6 +562,58 @@ async def test_test_provider_custom_endpoint_blocks_link_local_resolution(_app, 
         "ok": False,
         "error": "custom endpoint resolves to a blocked network address",
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_rebind_is_blocked_at_the_real_connect_boundary(monkeypatch):
+    """A public validation answer cannot authorize a private connection answer."""
+    from paper_ingestion.services import provider_test
+
+    delegated: list[str] = []
+
+    class Backend(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, host: str, port: int, **_kwargs):  # type: ignore[no-untyped-def]
+            delegated.append(host)
+            return object()
+
+        async def connect_unix_socket(self, path: str, **_kwargs):  # type: ignore[no-untyped-def]
+            return object()
+
+        async def sleep(self, seconds: float) -> None:
+            return None
+
+    def public_validation_answer(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+
+    async def private_connect_answer(host: str, port: int) -> list[tuple[int, str]]:
+        return [(socket.AF_INET, "127.0.0.1")]
+
+    def client_factory(policy, *, timeout):  # type: ignore[no-untyped-def]
+        return pinned_async_client(
+            policy,
+            timeout=timeout,
+            transport=PinnedAsyncTransport(
+                policy,
+                resolver=private_connect_answer,
+                backend=Backend(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo",
+        public_validation_answer,
+    )
+    monkeypatch.setattr(provider_test, "pinned_async_client", client_factory)
+
+    result = await provider_test.test_provider_connectivity(
+        "custom_openai_compatible",
+        "test-key",
+        base_url="https://custom.example/v1",
+    )
+
+    assert result.ok is False
+    assert result.error == "provider request failed"
+    assert delegated == []
 
 
 @pytest.mark.asyncio

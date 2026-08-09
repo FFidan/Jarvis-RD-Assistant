@@ -10,7 +10,7 @@ import httpx  # noqa: F401  # tests reach the httpx module via ``routers.system.
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import (
     JobCreateResponse,
-    current_user_id,
+    current_user_id_or_none,
     require_admin,
     require_admin_or_api_key,
 )
@@ -175,7 +175,7 @@ async def get_model_recommendations(
 async def pull_system_model(
     tag: str,
     request: Request,
-    user_id: int | None = Depends(current_user_id),
+    user_id: int | None = Depends(current_user_id_or_none),
 ) -> JobCreateResponse:
     """Enqueue an Ollama model pull job and return immediately."""
     if not _TAG_RE.match(tag):

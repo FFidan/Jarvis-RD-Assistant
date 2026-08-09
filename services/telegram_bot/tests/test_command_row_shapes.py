@@ -26,7 +26,7 @@ def _make_update_and_context(args=None):
     http = AsyncMock()
     context = make_ptb_context(
         AsyncMock(),
-        make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
+        make_bot_config(BotConfig),
         options=PTBContextOptions(
             http_client=http, args=args or [], user_data={"jarvis_user_id": 1}
         ),

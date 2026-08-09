@@ -7,7 +7,6 @@ import hashlib
 import ipaddress
 import logging
 import os
-import socket
 import urllib.parse
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -21,6 +20,7 @@ from jarvis_common.maintenance import ensure_outbound_egress_allowed
 # `from paper_ingestion.integrations.zotero_client import _MAX_RETRY_AFTER_SECONDS`.
 from jarvis_common.net import _MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS
 from jarvis_common.net import is_non_public_address, parse_retry_after
+from jarvis_common.pinned_transport import PUBLIC_ONLY, OutboundAddressPolicy, pinned_async_client
 
 from paper_ingestion.config import get_paper_ingestion_settings
 
@@ -99,46 +99,6 @@ async def refresh_configured_private_hosts(db_pool: Any) -> frozenset[str]:
     }
     set_configured_private_hosts(frozenset(hosts))
     return bbt_private_host_allowlist()
-
-
-async def bbt_host_permitted(bbt_base: str) -> bool:
-    """Whether a request may be issued to *bbt_base*.
-
-    Resolves DNS names off the event loop and refuses when any resolved address
-    is non-public (:func:`jarvis_common.net.is_non_public_address`) and the host
-    is not allowlisted. Every call re-resolves and re-checks — a host is never
-    permanently trusted, so DNS that later points into a blocked range is
-    refused on the next call.
-    """
-    allowlist = bbt_private_host_allowlist()
-    parsed = urlparse(bbt_base)
-    hostname = parsed.hostname or ""
-    if hostname in allowlist:
-        return True
-    if not hostname:
-        logger.warning("Better BibTeX base URL %r has no host; request refused", bbt_base)
-        return False
-
-    try:
-        addresses = [ipaddress.ip_address(hostname)]
-    except ValueError:
-        loop = asyncio.get_running_loop()
-        try:
-            addr_info = await loop.run_in_executor(None, socket.getaddrinfo, hostname, parsed.port)
-        except socket.gaierror:
-            logger.warning("Better BibTeX host %r could not be resolved; request refused", hostname)
-            return False
-        addresses = [ipaddress.ip_address(entry[4][0]) for entry in addr_info]
-
-    if any(is_non_public_address(addr) for addr in addresses):
-        logger.warning(
-            "Better BibTeX host %r resolves to a non-public address not in %s; request refused",
-            hostname,
-            BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
-        )
-        return False
-
-    return True
 
 
 # Defensive cap on the number of items fetched by any paginator.  A Zotero
@@ -334,7 +294,7 @@ class ZoteroClient:
         self.user_id = user_id
         self.library_type: Literal["user", "group"] = library_type
         self.group_id = group_id
-        self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+        self._http = http_client or pinned_async_client(PUBLIC_ONLY, timeout=httpx.Timeout(30.0))
         # URL structure:
         #   personal library → https://api.zotero.org/users/{user_id}/...
         #   group library    → https://api.zotero.org/groups/{group_id}/...
@@ -574,23 +534,34 @@ class ZoteroClient:
             responses, a refused host, and outbound quarantine all map to ``None``.
         """
         bbt_base = get_paper_ingestion_settings().bbt_base_url
-        # Ahead of the blanket ``except`` below: a refusal raised inside it would
-        # be swallowed into the indistinguishable "BBT unavailable" answer, and
-        # the request would already have gone out.
-        if not await bbt_host_permitted(bbt_base):
+        parsed = urlparse(bbt_base)
+        hostname = parsed.hostname
+        if hostname is None:
             return None
         try:
             ensure_outbound_egress_allowed("Better BibTeX request")
             encoded_key = urllib.parse.quote(item_key, safe="")
-            resp = await self._http.get(
-                f"{bbt_base}/better-bibtex/export/item?itemKey={encoded_key}&translator=csljson",
-                timeout=3.0,
+            # BBT may use one exact operator-approved private hostname. It gets
+            # its own short-lived client so that permission cannot widen all
+            # shared service traffic. The transport performs the only DNS
+            # resolution, immediately before its literal TCP connect.
+            policy = OutboundAddressPolicy(
+                allowed_private_hosts=frozenset(bbt_private_host_allowlist())
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                return data[0].get("id") if data else None
+            async with pinned_async_client(policy, timeout=httpx.Timeout(3.0)) as bbt_http:
+                resp = await bbt_http.get(
+                    f"{bbt_base}/better-bibtex/export/item?itemKey={encoded_key}&translator=csljson"
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data[0].get("id") if data else None
+        except httpx.HTTPError:
+            logger.warning(
+                "Better BibTeX request refused or unavailable; verify %s",
+                BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+            )
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Better BibTeX response could not be used", exc_info=True)
         return None
 
     async def fetch_items_since(self, version: int) -> tuple[list[dict], int]:

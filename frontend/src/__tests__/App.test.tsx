@@ -69,7 +69,7 @@ describe('App', () => {
   });
 
   it('shows login page when not authenticated', async () => {
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
+    useAuthStore.setState({ isAuthenticated: false, authTime: null });
     renderApp();
     // FirstRunGate shows a loading placeholder until /api/setup/status
     // resolves; once it does (configured=true mock), the LoginPage renders.
@@ -80,7 +80,7 @@ describe('App', () => {
   });
 
   it('renders home for authenticated user', async () => {
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'test-key' });
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), user: { id: 1, email: 'admin.com', role: 'admin' } });
     renderApp();
     // "Dashboard" appears in both TopBar and HomePage heading. The SetupGate
     // renders a loading placeholder until the setup-status query resolves.
@@ -93,11 +93,10 @@ describe('App', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key',
       user: { id: 7, email: 'a@b.com', role: 'admin' },
     });
 
-    renderApp(['/auth/verify?token=already-consumed-token']);
+    renderApp(['/auth/verify#token=already-consumed-token']);
 
     const dashboards = await screen.findAllByText('Dashboard');
     expect(dashboards.length).toBeGreaterThanOrEqual(1);

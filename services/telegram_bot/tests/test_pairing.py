@@ -42,8 +42,8 @@ from telegram_bot.handlers.commands.pairing_commands import (
 # ---------------------------------------------------------------------------
 
 
-def _make_config(telegram_chat_id: int | None = 777):
-    return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
+def _make_config():
+    return make_bot_config(BotConfig)
 
 
 _make_conn = partial(
@@ -220,7 +220,7 @@ async def test_unpair_not_paired_chat_replies_informational():
     # chat is authorised and the handler body runs.
     pool = _make_pool(conn, fetchrow_return={"user_id": 1})
     update = make_telegram_update(chat_id=777)
-    config = _make_config(telegram_chat_id=777)
+    config = _make_config()
     context = _make_context(pool, config=config, args=[])
 
     await unpair_command(update, context)
@@ -246,7 +246,7 @@ async def test_whoami_unpaired_chat_shows_instructions():
     """Unpaired chat shows how to pair (no legacy-owner branch)."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
     update = make_telegram_update(chat_id=99999)
-    config = _make_config(telegram_chat_id=777)
+    config = _make_config()
     context = _make_context(pool, config=config, args=[])
 
     await whoami_command(update, context)
@@ -263,7 +263,7 @@ async def test_whoami_unpaired_even_when_chat_matches_env_var():
     retired."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
     update = make_telegram_update(chat_id=777)
-    config = _make_config(telegram_chat_id=777)
+    config = _make_config()
     context = _make_context(pool, config=config, args=[])
 
     await whoami_command(update, context)

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
-  apiFetch,
+  apiFetchVoid,
   apiFetchRaw,
   ApiError,
   fetchContradictions,
@@ -18,7 +18,23 @@ import {
 } from '@/lib/api';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 
-describe('apiFetch', () => {
+const emptyFeedCounts = {
+  inbox: 0,
+  library: 0,
+  reading_list: 0,
+  reading: 0,
+  done: 0,
+  starred: 0,
+  trash: 0,
+  active: 0,
+  kept: 0,
+  all_non_trash: 0,
+  by_source: {},
+  by_topic: [],
+  untagged: 0,
+};
+
+describe('shared API request boundary', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -32,7 +48,7 @@ describe('apiFetch', () => {
       }),
     );
 
-    await apiFetch('/api/test');
+    await apiFetchVoid('/api/test');
 
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/test', expect.objectContaining({
       headers: expect.objectContaining({
@@ -46,13 +62,13 @@ describe('apiFetch', () => {
       new Response('Not found', { status: 404 }),
     );
 
-    await expect(apiFetch('/api/missing')).rejects.toThrow(ApiError);
+    await expect(apiFetchVoid('/api/missing')).rejects.toThrow(ApiError);
     await vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('Not found', { status: 404 }),
     );
 
     try {
-      await apiFetch('/api/missing');
+      await apiFetchVoid('/api/missing');
     } catch (e) {
       expect(e).toBeInstanceOf(ApiError);
       expect((e as ApiError).status).toBe(404);
@@ -62,7 +78,7 @@ describe('apiFetch', () => {
   it('throws on network error', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
 
-    await expect(apiFetch('/api/test')).rejects.toThrow('Failed to fetch');
+    await expect(apiFetchVoid('/api/test')).rejects.toThrow('Failed to fetch');
   });
 
   it('translates timeout AbortError into ApiError(0, timed out)', async () => {
@@ -78,7 +94,7 @@ describe('apiFetch', () => {
       });
     });
 
-    const promise = apiFetch('/api/test');
+    const promise = apiFetchVoid('/api/test');
     vi.advanceTimersByTime(300_001); // fire the 5-min timeout
     await expect(promise).rejects.toBeInstanceOf(ApiError);
     const err = (await promise.catch((e: unknown) => e)) as ApiError;
@@ -100,7 +116,7 @@ describe('apiFetch', () => {
       });
     });
 
-    const promise = apiFetch('/api/test', { signal: callerController.signal });
+    const promise = apiFetchVoid('/api/test', { signal: callerController.signal });
     callerController.abort();
     const err = await promise.catch((e: unknown) => e);
     // Should NOT be an ApiError — it is a raw DOMException
@@ -110,13 +126,19 @@ describe('apiFetch', () => {
 
   it('searchPreview posts to the preview endpoint without side effects', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify([]), {
+      new Response(JSON.stringify({
+        results: [],
+        total: 0,
+        per_source_counts: {},
+        degraded_sources: [],
+        source_errors: {},
+      }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     );
 
-    await searchPreview('Neural ODE', 'semantic_scholar', 10);
+    await searchPreview('Neural ODE', ['semantic_scholar'], 10);
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/search-preview',
@@ -198,6 +220,7 @@ describe('apiFetch', () => {
           verified_quote: 'quote',
           verified_page_number: 2,
           promoted_at: '2026-01-02T00:00:00Z',
+          stale: false,
           created_at: '2026-01-01T00:00:00Z',
         }),
         {
@@ -451,7 +474,7 @@ describe('apiFetchRaw', () => {
   });
 });
 
-describe('apiFetch — 503 maintenance interceptor', () => {
+describe('shared API client — 503 maintenance interceptor', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     useMaintenanceStore.getState().clear();
@@ -465,7 +488,7 @@ describe('apiFetch — 503 maintenance interceptor', () => {
       }),
     );
 
-    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+    await expect(apiFetchVoid('/api/test')).rejects.toThrow(ApiError);
 
     const state = useMaintenanceStore.getState();
     expect(state.active).toBe(true);
@@ -480,7 +503,7 @@ describe('apiFetch — 503 maintenance interceptor', () => {
       }),
     );
 
-    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+    await expect(apiFetchVoid('/api/test')).rejects.toThrow(ApiError);
     expect(useMaintenanceStore.getState().active).toBe(false);
   });
 
@@ -489,7 +512,7 @@ describe('apiFetch — 503 maintenance interceptor', () => {
       new Response('<html>Bad Gateway</html>', { status: 503 }),
     );
 
-    await expect(apiFetch('/api/test')).rejects.toThrow(ApiError);
+    await expect(apiFetchVoid('/api/test')).rejects.toThrow(ApiError);
     expect(useMaintenanceStore.getState().active).toBe(false);
   });
 
@@ -502,7 +525,7 @@ describe('apiFetch — 503 maintenance interceptor', () => {
       }),
     );
 
-    await apiFetch('/health/paper_ingestion/internal');
+    await apiFetchVoid('/health/paper_ingestion/internal');
 
     expect(useMaintenanceStore.getState().active).toBe(true);
   });
@@ -515,11 +538,11 @@ describe('apiFetch — 503 maintenance interceptor', () => {
       }),
     );
 
-    await apiFetch('/api/test').catch(() => undefined);
+    await apiFetchVoid('/api/test').catch(() => undefined);
     const firstSince = useMaintenanceStore.getState().since;
     expect(firstSince).not.toBeNull();
 
-    await apiFetch('/api/test').catch(() => undefined);
+    await apiFetchVoid('/api/test').catch(() => undefined);
     expect(useMaintenanceStore.getState().since).toBe(firstSince);
   });
 });
@@ -530,7 +553,25 @@ describe('fetchSystemModels', () => {
   });
 
   it('calls /api/system/models and passes the signal through', async () => {
-    const mockData = { status: 'ok', catalog: [], hardware: {} };
+    const mockData = {
+      status: 'ok' as const,
+      installed: [],
+      hardware: {},
+      current: {},
+      issues: {},
+      catalog: [],
+      recommendations: {},
+      hardware_recommendation: {
+        vram_mb: null,
+        bucket: 'CPU_ONLY' as const,
+        summary: 'CPU-only host',
+        aliases: [],
+      },
+      delivery: {},
+      routing: {},
+      consistent: true,
+      provider_lists: {},
+    };
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(mockData), {
         status: 200,
@@ -862,7 +903,7 @@ describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
   });
 });
 
-describe('getJournalEntry — routed through apiFetch', () => {
+describe('getJournalEntry — routed through the decoded API client', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     useMaintenanceStore.getState().clear();
@@ -920,7 +961,7 @@ describe('fetchFeedCounts', () => {
 
   it('hits /api/papers/feed/counts with no params when scope is undefined', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     await fetchFeedCounts();
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -931,7 +972,7 @@ describe('fetchFeedCounts', () => {
 
   it('hits /api/papers/feed/counts?scope=library when scope=library', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     await fetchFeedCounts('library');
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -942,7 +983,7 @@ describe('fetchFeedCounts', () => {
 
   it('hits /api/papers/feed/counts?scope=corpus when scope=corpus', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     await fetchFeedCounts('corpus');
     expect(globalThis.fetch).toHaveBeenCalledWith(

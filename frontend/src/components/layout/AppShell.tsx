@@ -11,8 +11,8 @@ import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 import { ConnectivityBanner } from '@/components/layout/ConnectivityBanner';
 import { MaintenanceBanner } from '@/components/shared/MaintenanceBanner';
 
-// Lazy-loaded: defers react-joyride + react-floater + popper.js (~50 kB gz)
-// from the eager bundle. The tour is only shown to first-time users.
+// Keep the tour dependency chunk out of the eager bundle. The tour is only
+// shown to first-time users.
 const OnboardingTour = lazy(
   () => import('@/components/onboarding/OnboardingTour'),
 );

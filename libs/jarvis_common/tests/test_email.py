@@ -7,6 +7,8 @@ without logging the raw link or recipient address.
 
 from __future__ import annotations
 
+import socket
+
 import pytest
 from jarvis_common.email import _PLAIN_BODY_TEMPLATE
 
@@ -18,6 +20,17 @@ from jarvis_common.email import _PLAIN_BODY_TEMPLATE
 def _render_body(link: str) -> str:
     """Mirror the production rendering path (must use .replace, not .format)."""
     return _PLAIN_BODY_TEMPLATE.replace("{link}", link)
+
+
+@pytest.fixture(autouse=True)
+def _fake_pinned_smtp_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep mail rendering tests deterministic; socket pinning has its own suite."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "jarvis_common.email.connect_pinned_socket",
+        AsyncMock(return_value=socket.socket()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +619,37 @@ async def test_effective_smtp_status_empty_string_required_field(monkeypatch) ->
     assert all("bot@example.com" not in issue for issue in issues)
 
 
+@pytest.mark.asyncio
+async def test_effective_smtp_status_whitespace_required_field_is_not_deliverable(
+    monkeypatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "   ")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    probe = AsyncMock()
+    monkeypatch.setattr("jarvis_common.email.probe_smtp_reachable", probe)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert issues and all("bot@example.com" not in issue for issue in issues)
+    probe.assert_not_awaited()
+
+
+def test_effective_smtp_deliverable_normalizes_required_values() -> None:
+    from jarvis_common.email import _EffectiveSmtp
+
+    base = {"port": 587, "user": None, "password": None}
+    assert _EffectiveSmtp(host=" ", sender="bot@example.com", **base).deliverable is False
+    assert _EffectiveSmtp(host="smtp.example.com", sender=" \t", **base).deliverable is False
+
+
 # ---------------------------------------------------------------------------
 # Auth-consistency signal in effective_smtp_status
 # ---------------------------------------------------------------------------
@@ -971,6 +1015,7 @@ async def test_send_magic_link_private_host_returns_dropped_private_host(monkeyp
 
     import aiosmtplib
     from jarvis_common.email import MagicLinkDelivery, send_magic_link
+    from jarvis_common.pinned_transport import PinnedDestinationRejectedError
     from jarvis_common.settings import get_secrets_settings
 
     monkeypatch.setenv("SMTP_HOST", "mail.internal")
@@ -981,8 +1026,8 @@ async def test_send_magic_link_private_host_returns_dropped_private_host(monkeyp
 
     with patch.object(aiosmtplib, "send", new_callable=AsyncMock) as mock_send:
         with patch(
-            "jarvis_common.email._reject_non_public_host",
-            new=AsyncMock(side_effect=ValueError("non-public")),
+            "jarvis_common.email.connect_pinned_socket",
+            new=AsyncMock(side_effect=PinnedDestinationRejectedError("not permitted")),
         ):
             result = await send_magic_link(
                 "user@example.com", "https://example.com/verify?token=abc", pool=None
@@ -1011,10 +1056,18 @@ async def test_send_magic_link_passes_timeout(monkeypatch) -> None:
 
     mock_send = AsyncMock()
     with patch.object(aiosmtplib, "send", mock_send):
-        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+        with patch(
+            "jarvis_common.email.connect_pinned_socket",
+            new=AsyncMock(return_value=socket.socket()),
+        ):
+            await send_magic_link(
+                "user@example.com", "https://example.com/verify?token=abc", pool=None
+            )
 
     get_secrets_settings.cache_clear()
     assert mock_send.call_args.kwargs["timeout"] == SMTP_SEND_TIMEOUT_SECONDS
+    assert mock_send.call_args.kwargs["port"] is None
+    assert mock_send.call_args.kwargs["sock"] is not None
 
 
 # ---------------------------------------------------------------------------

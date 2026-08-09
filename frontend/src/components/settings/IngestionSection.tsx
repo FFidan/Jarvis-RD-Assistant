@@ -14,7 +14,6 @@ import { NumCtxSlider } from './ingestion/NumCtxSlider';
 import {
   type HardwareInfoApi,
   type ModelCatalogEntryApi,
-  type SystemModelsApi,
 } from './ingestion/hardware-fit';
 
 // ---------------------------------------------------------------------------
@@ -309,9 +308,9 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   });
 
   // Fetch system models to get hardware info + catalog fit_detail
-  const { data: systemModels } = useQuery<SystemModelsApi>({
+  const { data: systemModels } = useQuery({
     queryKey: QUERY_KEYS.config.systemModels(),
-    queryFn: ({ signal }) => fetchSystemModels<SystemModelsApi>(signal),
+    queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 60_000,
   });
 

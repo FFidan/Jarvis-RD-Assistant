@@ -59,7 +59,7 @@ def _make_callback_update(callback_data: str, chat_id: int = _TEST_CHAT_ID) -> M
 def _make_context(
     user_data: dict[str, object] | None = None,
 ) -> tuple[MagicMock, AsyncMock]:
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
     context = make_ptb_context(
         AsyncMock(),

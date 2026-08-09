@@ -1,17 +1,14 @@
-"""Regression tests for the expiring frontend audit exception."""
+"""Regression tests for the fail-closed frontend npm audit parser."""
 
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-POLICY_PATH = REPO_ROOT / "frontend" / "osv-scanner.toml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_npm_audit.py"
 
 _spec = importlib.util.spec_from_file_location("check_npm_audit", SCRIPT_PATH)
@@ -21,7 +18,6 @@ sys.modules.setdefault(_spec.name, _audit_policy)
 _spec.loader.exec_module(_audit_policy)
 
 AuditPolicyError = _audit_policy.AuditPolicyError
-REACT_ROUTER_RSC_ADVISORY = _audit_policy.REACT_ROUTER_RSC_ADVISORY
 evaluate_reports = _audit_policy.evaluate_reports
 
 
@@ -36,156 +32,47 @@ def _advisory(advisory_id: str, dependency: str) -> dict[str, object]:
     }
 
 
-def _report(
-    *,
-    include_router: bool = True,
-    extra_advisory: str | None = None,
-) -> dict[str, object]:
+def _report(*, advisory_id: str | None = None) -> dict[str, object]:
     vulnerabilities: dict[str, object] = {}
-    if include_router:
-        vulnerabilities.update(
-            {
-                "react-router": {
-                    "severity": "high",
-                    "via": [_advisory(REACT_ROUTER_RSC_ADVISORY, "react-router")],
-                },
-                "react-router-dom": {
-                    "severity": "high",
-                    "via": ["react-router"],
-                },
-            }
-        )
-    if extra_advisory is not None:
-        vulnerabilities["unexpected-package"] = {
-            "severity": "high",
-            "via": [_advisory(extra_advisory, "unexpected-package")],
+    if advisory_id is not None:
+        vulnerabilities = {
+            "affected-root": {
+                "severity": "high",
+                "via": [_advisory(advisory_id, "affected-root")],
+            },
+            "affected-dependent": {
+                "severity": "high",
+                "via": ["affected-root"],
+            },
         }
-    return {
-        "auditReportVersion": 2,
-        "vulnerabilities": vulnerabilities,
-    }
+    return {"auditReportVersion": 2, "vulnerabilities": vulnerabilities}
 
 
-def _stage_frontend(tmp_path: Path, *, rsc_dependency: bool = False) -> Path:
-    frontend = tmp_path / "frontend"
-    source = frontend / "src"
-    source.mkdir(parents=True)
-    dependencies = {"react-router-dom": "^7.18.1"}
-    if rsc_dependency:
-        dependencies["@react-router/dev"] = "^7.18.1"
-    (frontend / "package.json").write_text(
-        json.dumps({"dependencies": dependencies, "devDependencies": {}}),
-        encoding="utf-8",
-    )
-    (frontend / "package-lock.json").write_text(
-        json.dumps({"lockfileVersion": 3, "packages": {"": {}}}),
-        encoding="utf-8",
-    )
-    (source / "app.tsx").write_text(
-        "import { BrowserRouter } from 'react-router-dom';\n",
-        encoding="utf-8",
-    )
-    return tmp_path
+def test_clean_full_and_production_reports_pass() -> None:
+    evaluate_reports(_report(), _report())
 
 
-def test_the_react_router_exception_passes(tmp_path: Path) -> None:
-    """The one checked RSC advisory is accepted; brace-expansion is patched, not excepted."""
-    root = _stage_frontend(tmp_path)
-
-    entries = evaluate_reports(
-        _report(),
-        _report(),
-        repo_root=root,
-        policy_path=POLICY_PATH,
-        today=date(2026, 7, 28),
-    )
-
-    assert {entry.advisory_id for entry in entries} == {REACT_ROUTER_RSC_ADVISORY}
+def test_any_high_advisory_fails_without_an_exception_path() -> None:
+    with pytest.raises(AuditPolicyError, match="GHSA-1111-2222-3333"):
+        evaluate_reports(_report(advisory_id="GHSA-1111-2222-3333"), _report())
 
 
-def test_unexpected_high_advisory_fails(tmp_path: Path) -> None:
-    """A new high advisory cannot inherit an existing exception."""
-    root = _stage_frontend(tmp_path)
-
-    with pytest.raises(AuditPolicyError, match="unaccepted high-severity"):
-        evaluate_reports(
-            _report(extra_advisory="GHSA-1111-2222-3333"),
-            _report(extra_advisory="GHSA-1111-2222-3333"),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
+def test_production_only_advisory_also_fails() -> None:
+    with pytest.raises(AuditPolicyError, match="GHSA-4444-5555-6666"):
+        evaluate_reports(_report(), _report(advisory_id="GHSA-4444-5555-6666"))
 
 
-def test_malformed_audit_report_fails(tmp_path: Path) -> None:
-    """Registry or schema errors cannot be mistaken for a clean audit."""
-    root = _stage_frontend(tmp_path)
-
+def test_malformed_audit_report_fails() -> None:
     with pytest.raises(AuditPolicyError, match="auditReportVersion 2"):
-        evaluate_reports(
-            {"error": "registry unavailable"},
-            _report(),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
+        evaluate_reports({"error": "registry unavailable"}, _report())
 
 
-def test_resolved_advisory_requires_exception_removal(tmp_path: Path) -> None:
-    """A stale exception fails so the allowlist cannot grow indefinitely."""
-    root = _stage_frontend(tmp_path)
-
-    with pytest.raises(AuditPolicyError, match="remove resolved audit exceptions"):
-        evaluate_reports(
-            _report(include_router=False),
-            _report(include_router=False),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
-
-
-def test_expired_exception_fails(tmp_path: Path) -> None:
-    """Expiry forces the upstream condition to be reviewed again."""
-    root = _stage_frontend(tmp_path)
-
-    with pytest.raises(AuditPolicyError, match="exception expired"):
-        evaluate_reports(
-            _report(),
-            _report(),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 10, 15),
-        )
-
-
-def test_rsc_dependency_invalidates_router_exception(tmp_path: Path) -> None:
-    """Adding React Router framework/RSC packages reopens the advisory."""
-    root = _stage_frontend(tmp_path, rsc_dependency=True)
-
-    with pytest.raises(AuditPolicyError, match="direct packages"):
-        evaluate_reports(
-            _report(),
-            _report(),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
-
-
-def test_rsc_usage_outside_src_invalidates_router_exception(tmp_path: Path) -> None:
-    """Server entrypoints outside src remain part of the exposure check."""
-    root = _stage_frontend(tmp_path)
-    (root / "frontend" / "server.ts").write_text(
-        "export const router = RSCStaticRouter;\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(AuditPolicyError, match="RSC usage"):
-        evaluate_reports(
-            _report(),
-            _report(),
-            repo_root=root,
-            policy_path=POLICY_PATH,
-            today=date(2026, 7, 28),
-        )
+def test_missing_indirect_cause_fails_closed() -> None:
+    malformed = {
+        "auditReportVersion": 2,
+        "vulnerabilities": {
+            "affected": {"severity": "critical", "via": ["missing-root"]},
+        },
+    }
+    with pytest.raises(AuditPolicyError, match="missing cause"):
+        evaluate_reports(malformed, _report())

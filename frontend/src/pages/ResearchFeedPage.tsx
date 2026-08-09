@@ -36,6 +36,7 @@ import type { FacetSelection } from '@/components/feed/FacetRail';
 import { FeedListFilter } from '@/components/feed/FeedListFilter';
 import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { BookOpen as BookOpenIcon, Upload, Compass } from 'lucide-react';
 
 // ─── URL-param helpers ───────────────────────────────────────────────────────
@@ -75,6 +76,9 @@ function SectionInfo({ children }: { children: React.ReactNode }) {
 export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { online } = useOnlineStatus();
+  const recordResearchMilestone = useResearchMilestoneStore(
+    (state) => state.recordMilestone,
+  );
 
   // P1b: fetch the cache timestamp once so the Library header can show
   // "stale-cached · as of T" when offline.
@@ -186,11 +190,11 @@ export function ResearchFeedPage() {
     }
   }, [surface, actionUpload]);
 
-  // ── legacy ?tab=pulse redirect → /my-day ─────────────────────────────────
+  // ── Preserve old Pulse bookmarks on the current Pulse route ───────────────
   const navigate = useNavigate();
   useEffect(() => {
     if (searchParams.get('tab') === 'pulse') {
-      navigate('/my-day', { replace: true });
+      navigate('/pulse', { replace: true });
     }
   }, [searchParams, navigate]);
   // NOTE: We do NOT handle ?surface=ask here — it is silently redirected to
@@ -256,6 +260,7 @@ export function ResearchFeedPage() {
   const saveMutation = useMutation({
     mutationFn: batchSavePapers,
     onSuccess: (data) => {
+      if (data.length > 0) recordResearchMilestone('save');
       const savedByExternalId = new Map(
         data.map((paper) => [paper.external_id, paper.id] as const),
       );

@@ -70,6 +70,28 @@ const CONFIG = [
   { key: 'llm.fast_model', value: 'qwen3:4b' },
 ];
 
+const LOCAL_FIT_DETAIL = {
+  default: 'fits',
+  at_num_ctx: 32768,
+  required_vram_gb: 10,
+  base_vram_gb: 10,
+  base_num_ctx: 32768,
+  default_num_ctx: 32768,
+  max_num_ctx: 32768,
+  kv_cache_bytes_per_token: null,
+};
+
+const CLOUD_FIT_DETAIL = {
+  default: 'cloud',
+  at_num_ctx: 128000,
+  required_vram_gb: null,
+  base_vram_gb: null,
+  base_num_ctx: 128000,
+  default_num_ctx: 128000,
+  max_num_ctx: 128000,
+  kv_cache_bytes_per_token: null,
+};
+
 const SYSTEM_MODELS = {
   status: 'ok',
   installed: [],
@@ -81,40 +103,60 @@ const SYSTEM_MODELS = {
       id: 'qwen3:14b', name: 'Qwen3 14B', provider: 'ollama', ollama_tag: 'qwen3:14b', roles: ['smart'],
       vram_gb: 10, disk_gb: 9, context_tokens: 32768, license: 'Apache 2.0', tier: 3,
       description: 'Strong local model.', notes: '', last_reviewed: '2026-07-06', status: 'active',
-      active: true, pulled: true, provider_key_present: false, fit: 'fits', can_assign: true, assign_blocker: null,
+      embedding_dimension: null, phase: 'active', assignable: true,
+      min_vram_gb_at_default_ctx: 10, kv_cache_bytes_per_token: null,
+      default_num_ctx: 32768, max_num_ctx: 32768, supports_thinking: true,
+      active: true, pulled: true, provider_key_present: null, fit: 'recommended', can_assign: true, assign_blocker: null,
+      fit_detail: LOCAL_FIT_DETAIL,
     },
     {
       id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openai', ollama_tag: null, roles: ['smart'],
       vram_gb: 0, disk_gb: 0, context_tokens: 128000, license: 'Commercial', tier: 0,
       description: 'Cloud model.', notes: '', last_reviewed: '2026-07-06', status: 'cloud_required',
-      active: false, pulled: false, provider_key_present: true, fit: 'cloud', can_assign: true, assign_blocker: null,
+      embedding_dimension: null, phase: 'active', assignable: true,
+      min_vram_gb_at_default_ctx: null, kv_cache_bytes_per_token: null,
+      default_num_ctx: null, max_num_ctx: null, supports_thinking: false,
+      active: false, pulled: false, provider_key_present: true, fit: 'available', can_assign: true, assign_blocker: null,
+      fit_detail: CLOUD_FIT_DETAIL,
     },
     {
       id: 'openrouter/meta-llama/llama-3.1-70b-instruct', name: 'OpenRouter Llama 70B', provider: 'openrouter', ollama_tag: null, roles: ['smart'],
       vram_gb: 0, disk_gb: 0, context_tokens: 128000, license: 'Commercial', tier: 0,
       description: 'Router model.', notes: '', last_reviewed: '2026-07-06', status: 'cloud_required',
-      active: false, pulled: false, provider_key_present: false, fit: 'cloud', can_assign: false,
+      embedding_dimension: null, phase: 'active', assignable: true,
+      min_vram_gb_at_default_ctx: null, kv_cache_bytes_per_token: null,
+      default_num_ctx: null, max_num_ctx: null, supports_thinking: false,
+      active: false, pulled: false, provider_key_present: false, fit: 'key_required', can_assign: false,
       assign_blocker: 'Add an OpenRouter API key before assigning this model.',
+      fit_detail: CLOUD_FIT_DETAIL,
     },
   ],
   recommendations: {},
+  hardware_recommendation: {
+    vram_mb: 24576,
+    bucket: 'MID_HIGH',
+    summary: 'Test recommendation',
+    aliases: [],
+  },
+  delivery: { smart: 'applied', fast: 'applied' },
+  routing: { smart: 'qwen3:14b', fast: 'qwen3:4b' },
+  consistent: true,
+  provider_lists: {},
 };
 
 async function seedAdminSession(page: Page) {
-  const apiKey = process.env.JARVIS_API_KEY ?? 'dev';
-  await page.addInitScript((key: string) => {
+  await page.addInitScript(() => {
     const state = {
       state: {
         isAuthenticated: true,
         authTime: Date.now(),
-        apiKey: key,
         user: { id: 1, email: 'admin@example.com', role: 'admin' },
       },
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
     window.localStorage.setItem('jarvis-onboarding-dismissed', 'true');
-  }, apiKey);
+  });
 }
 
 async function setupProviderMocks(page: Page) {

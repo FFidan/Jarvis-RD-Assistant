@@ -39,8 +39,8 @@ from paper_ingestion.main import (
     _autoconfigure_models_hook,
     _choose_autoconfigured_model,
     _fetch_installed_ollama_models,
-    _reconcile_litellm_models_once,
 )
+from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 from paper_ingestion.services.model_lifecycle import (
     NUM_CTX_LADDER,
     HardwareInfo,

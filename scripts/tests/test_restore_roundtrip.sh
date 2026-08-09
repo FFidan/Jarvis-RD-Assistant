@@ -284,7 +284,7 @@ model_list:
   - model_name: restore-fixture
     litellm_params:
       model: openai/faux-model
-      api_base: http://faux-provider:8080/v1
+      api_base: http://vllm:8080/v1
       api_key: fixture-provider-key
 
 general_settings:
@@ -333,7 +333,7 @@ services:
       postgres:
         condition: service_healthy
 
-  faux-provider:
+  vllm:
     image: ${MIGRATION_PY_IMAGE:-python:3.12-slim}
     security_opt: ["no-new-privileges:true"]
     read_only: true
@@ -358,6 +358,9 @@ services:
     volumes:
       - ./litellm-config.yaml:/app/config.yaml:ro
       - ${REPO_ROOT}/scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro
+      - ${REPO_ROOT}/litellm/pinned_launcher.py:/app/pinned_launcher.py:ro
+      - ${REPO_ROOT}/libs/jarvis_common/jarvis_common/net.py:/app/jarvis_common/net.py:ro
+      - ${REPO_ROOT}/libs/jarvis_common/jarvis_common/pinned_transport.py:/app/jarvis_common/pinned_transport.py:ro
       - ./host-secrets:/run/secrets:ro
       - backup_trigger:/backup-trigger:ro
     entrypoint: ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
@@ -373,7 +376,7 @@ services:
         condition: service_healthy
       litellm-db-init:
         condition: service_completed_successfully
-      faux-provider:
+      vllm:
         condition: service_healthy
 
   postgres-backup:
@@ -601,7 +604,7 @@ dump_diagnostics() {
   printf '  backups: %s\n' "$(sc 'ls /backups 2>/dev/null | tr "\n" " "')" >&2
   printf '  last_run: %s\n' "$(sc 'cat /backups/.last_run.json 2>/dev/null')" >&2
   printf '  restore_status: %s\n' "$(sc 'cat /backup-trigger/.restore_status.json 2>/dev/null')" >&2
-  dc logs --tail 30 postgres-backup litellm faux-provider 2>&1 | sed 's/^/  log: /' >&2
+  dc logs --tail 30 postgres-backup litellm vllm 2>&1 | sed 's/^/  log: /' >&2
 }
 
 wait_for() { # <timeout_s> <description> <predicate-fn...>
@@ -634,117 +637,11 @@ seed_nonempty_pdfs() {
 
 seed_jarvis_101() { # <marker_tag> -> rebuild the minimum realistic v101 fixture
   local tag="$1"
-  dc exec -T postgres psql -U jarvis -d jarvis -v ON_ERROR_STOP=1 -q <<SQL
-SET client_min_messages = warning;
-DROP TABLE IF EXISTS telegram_user_pairings CASCADE;
-DROP TABLE IF EXISTS telegram_pairing_tokens CASCADE;
-DROP TABLE IF EXISTS magic_link_tokens CASCADE;
-DROP TABLE IF EXISTS sessions CASCADE;
-DROP TABLE IF EXISTS webauthn_challenges CASCADE;
-DROP TABLE IF EXISTS webauthn_credentials CASCADE;
-DROP TABLE IF EXISTS cards CASCADE;
-DROP TABLE IF EXISTS paper_notes CASCADE;
-DROP TABLE IF EXISTS entity_relationships CASCADE;
-DROP TABLE IF EXISTS paper_entities CASCADE;
-DROP TABLE IF EXISTS paper_extractions CASCADE;
-DROP TABLE IF EXISTS paper_summaries CASCADE;
-DROP TABLE IF EXISTS paper_highlights CASCADE;
-DROP TABLE IF EXISTS paper_user_zotero_links CASCADE;
-DROP TABLE IF EXISTS paper_contradictions CASCADE;
-DROP TABLE IF EXISTS papers CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
-DROP TABLE IF EXISTS user_config CASCADE;
-DROP TABLE IF EXISTS audit_log CASCADE;
-DROP TABLE IF EXISTS roundtrip_marker CASCADE;
-DROP TABLE IF EXISTS schema_migrations CASCADE;
-CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz DEFAULT now());
-CREATE TABLE users(
-  id bigint PRIMARY KEY,
-  email text NOT NULL,
-  role text NOT NULL,
-  deleted_at timestamptz
-);
-CREATE TABLE user_config(
-  id bigserial PRIMARY KEY,
-  user_id bigint,
-  key text NOT NULL,
-  value jsonb,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
-);
-CREATE UNIQUE INDEX user_config_user_key_idx
-  ON user_config (user_id, key) NULLS NOT DISTINCT;
--- Core paper columns already existed at schema 101. Keep this fixture minimal,
--- but realistic enough for every later migration to run without weakening a
--- production migration with IF EXISTS guards.
-CREATE TABLE papers(
-  id bigint PRIMARY KEY,
-  external_id text NOT NULL UNIQUE,
-  url text,
-  source_type text,
-  discovery_origin text NOT NULL DEFAULT 'direct'
-);
-CREATE TABLE paper_contradictions(
-  id bigint PRIMARY KEY,
-  paper_a_id bigint NOT NULL,
-  paper_b_id bigint NOT NULL,
-  quote_a text NOT NULL,
-  quote_b text NOT NULL,
-  user_id bigint
-);
-CREATE TABLE paper_user_zotero_links(
-  id bigint PRIMARY KEY,
-  updated_at timestamptz DEFAULT now()
-);
-CREATE TABLE paper_highlights(id bigint PRIMARY KEY);
-CREATE TABLE paper_summaries(id bigint PRIMARY KEY);
-CREATE TABLE paper_extractions(id bigint PRIMARY KEY);
-CREATE TABLE paper_entities(id bigint PRIMARY KEY);
-CREATE TABLE entity_relationships(id bigint PRIMARY KEY);
-CREATE TABLE paper_notes(id bigint PRIMARY KEY);
-CREATE TABLE cards(id bigint PRIMARY KEY);
-CREATE TABLE audit_log(
-  id bigserial PRIMARY KEY,
-  user_id text,
-  action text NOT NULL,
-  resource text NOT NULL,
-  timestamp timestamptz DEFAULT now(),
-  metadata jsonb DEFAULT '{}'::jsonb NOT NULL
-);
-CREATE TABLE sessions(
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id bigint NOT NULL,
-  expires_at timestamptz NOT NULL,
-  created_at timestamptz DEFAULT now() NOT NULL,
-  revoked_at timestamptz
-);
-CREATE TABLE magic_link_tokens(
-  token_hash text PRIMARY KEY,
-  user_id bigint NOT NULL,
-  expires_at timestamptz NOT NULL,
-  used_at timestamptz,
-  created_at timestamptz DEFAULT now() NOT NULL,
-  pending_email text
-);
-CREATE TABLE telegram_pairing_tokens(
-  token text PRIMARY KEY,
-  user_id bigint NOT NULL,
-  created_at timestamptz DEFAULT now() NOT NULL,
-  expires_at timestamptz NOT NULL,
-  consumed_at timestamptz
-);
-CREATE TABLE telegram_user_pairings(user_id bigint PRIMARY KEY, chat_id bigint NOT NULL);
-CREATE TABLE roundtrip_marker(tag text);
-INSERT INTO users(id, email, role) VALUES (1, 'roundtrip-owner@example.test', 'admin');
-INSERT INTO sessions(id, user_id, expires_at)
-VALUES (gen_random_uuid(), 1, now() + interval '1 day');
-INSERT INTO magic_link_tokens(token_hash, user_id, expires_at)
-VALUES ('v101-ephemeral-link', 1, now() + interval '15 minutes');
-INSERT INTO telegram_pairing_tokens(token, user_id, expires_at)
-VALUES ('v101-ephemeral-pairing', 1, now() + interval '15 minutes');
-INSERT INTO telegram_user_pairings(user_id, chat_id) VALUES (1, -100);
-INSERT INTO roundtrip_marker(tag) VALUES ('${tag}');
-INSERT INTO schema_migrations(version) VALUES (101);
+  dc exec -T postgres psql -U jarvis -d jarvis -v ON_ERROR_STOP=1 -q \
+    < "$REPO_ROOT/db/testdata/schema-101-seed.sql" || return 1
+  dc exec -T postgres psql -U jarvis -d jarvis -v ON_ERROR_STOP=1 -q \
+    -v marker_tag="$tag" <<'SQL'
+UPDATE roundtrip_marker SET tag = :'marker_tag';
 SQL
 }
 

@@ -100,7 +100,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: false,
       authTime: null,
-      apiKey: null,
       user: null,
       lastError: null,
     });
@@ -123,7 +122,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: expiredAuthTime,
-      apiKey: null,
       user: { id: 1, email: 'a@b.com', role: 'user' },
     });
     setOnline(true);
@@ -150,7 +148,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: expiredAuthTime,
-      apiKey: null,
       user: { id: 1, email: 'researcher@uni.edu', role: 'user' },
     });
     setOnline(false);
@@ -189,7 +186,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 2, email: 'user@example.com', role: 'user' },
     });
     setOnline(true);
@@ -210,7 +206,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: expiredAuthTime,
-      apiKey: null,
       user,
     });
 
@@ -230,7 +225,6 @@ describe('App offline route-guard (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: now,
-      apiKey: null,
       user,
     });
 

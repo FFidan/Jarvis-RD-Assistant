@@ -175,8 +175,8 @@ async def test_hard_expired_session_does_not_resolve(_pi_app, contract_conn, _co
         # Use a route that requires a session identity
         await c.get("/api/papers/brief")
 
-    # Without a resolved user_id, routes using current_user_id return empty-scoped
-    # results (200 with empty list), not a hard 401 — because current_user_id returns
+    # Without a resolved user_id, routes using current_user_id_or_none return empty-scoped
+    # results (200 with empty list), not a hard 401 — because that resolver returns
     # None (not strict). The key assertion is that the response is NOT an identity-
     # confirmation 200 with actual rows. Use a strict-identity route instead.
     # POST /api/jobs requires current_user_id_strict → 401 without session.

@@ -22,6 +22,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { kindLabel } from '@/lib/labels/jobKinds';
 import { jobOutcomeCounts } from '@/lib/job-outcome';
 import { errorMessage } from '@/lib/errors';
+import { jobStreamEventSchema, type JobResult } from '@/lib/api/schemas/jobs';
 import type { PaperDetail } from '@/types';
 
 /**
@@ -151,6 +152,13 @@ const cancelledWarning = (job: Job): string => {
 
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const JOB_STATUS_RANK: Record<Job['status'], number> = {
+  queued: 0,
+  running: 1,
+  succeeded: 2,
+  failed: 2,
+  cancelled: 2,
+};
 
 /** Backoff constants for SSE reconnect attempts (ms). */
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -166,6 +174,10 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 
 /** Delay before evicting terminal jobs from the store (ms). */
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+const RECENT_DISCOVERY_LIMIT = 30;
+const MAX_TRACKED_JOBS = 50;
+const DISCOVERY_BASE_DELAY_MS = 5_000;
+const DISCOVERY_MAX_DELAY_MS = 30_000;
 
 /**
  * Pending eviction timers keyed by job id. Handles are tracked so an
@@ -201,6 +213,8 @@ function scheduleEviction(jobId: string, evict: () => void): void {
  * subsequent login starts with a fresh, un-aborted signal.
  */
 let logoutAbort = new AbortController();
+let discoveryInFlight: Promise<boolean> | null = null;
+let discoveryGeneration = 0;
 
 function getPaperIdFromJob(job: Job): number | null {
   const paperId = job.payload?.paper_id;
@@ -220,7 +234,7 @@ function getPaperIdFromJob(job: Job): number | null {
 function applySummaryCoverageToCache(job: Job): void {
   const paperId = getPaperIdFromJob(job);
   if (paperId == null) return;
-  const result = job.result as { coverage?: number; passes?: number } | null;
+  const result = job.result;
   if (result == null) return;
   const hasCoverage = typeof result.coverage === 'number';
   const hasPasses = typeof result.passes === 'number';
@@ -250,28 +264,105 @@ export interface Job {
    * Optional — the list endpoint does not carry it.
    */
   cancel_requested?: boolean;
-  progress: number;
+  progress: number | null;
   progress_message: string | null;
   payload?: Record<string, unknown> | null;
-  result: Record<string, unknown> | null;
+  result: JobResult | null;
   error: {
     message: string;
     action_link?: { label: string; href: string };
   } | null;
-  created_at: string;
+  created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+function boundedJobs(jobs: Record<string, Job>): Record<string, Job> {
+  const entries = Object.entries(jobs);
+  const active = entries.filter(
+    ([, job]) => job.status === 'queued' || job.status === 'running',
+  );
+  const terminal = entries
+    .filter(([, job]) => TERMINAL_STATUSES.has(job.status))
+    .sort(([, left], [, right]) => {
+      const leftTime = Date.parse(left.finished_at ?? left.created_at ?? '') || 0;
+      const rightTime = Date.parse(right.finished_at ?? right.created_at ?? '') || 0;
+      return rightTime - leftTime;
+    });
+  const terminalLimit = Math.max(0, MAX_TRACKED_JOBS - active.length);
+  return Object.fromEntries([...active, ...terminal.slice(0, terminalLimit)]);
+}
+
+function applyTerminalEffects(job: Job, notify = true): void {
+  if (job.status === 'succeeded') {
+    const zeroCards =
+      job.kind === 'card.generate' &&
+      job.result?.cards_created === 0;
+    const zoteroPushStatus =
+      job.kind === 'zotero.push_highlights'
+        ? job.result?.status
+        : undefined;
+    const resultStatus = job.result?.status;
+    if (notify) {
+      if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
+        toast.warning(zoteroPushWarning(zoteroPushStatus));
+      } else if (resultStatus === 'cancelled') {
+        toast.warning(cancelledWarning(job));
+      } else if (resultStatus === 'partial') {
+        toast.warning(partialWarning(job));
+      } else if (!zeroCards) {
+        toast.success(`${kindLabel(job.kind)} completed`);
+      }
+    }
+    if (job.kind === 'paper.summarize') applySummaryCoverageToCache(job);
+    const keysFactory = INVALIDATE_ON_SUCCESS[job.kind];
+    if (keysFactory) {
+      for (const key of keysFactory(job)) {
+        queryClient.invalidateQueries({ queryKey: key });
+      }
+    }
+  } else if (job.status === 'failed' && notify) {
+    const msg = job.error?.message ?? `${kindLabel(job.kind)} failed`;
+    const actionLink = job.error?.action_link;
+    if (actionLink) {
+      toast.error(msg, {
+        action: {
+          label: actionLink.label,
+          onClick: () => {
+            if (isSafeRelativeHref(actionLink.href)) {
+              const nav = getNavigate();
+              if (nav) {
+                nav(actionLink.href);
+              } else {
+                window.location.href = actionLink.href;
+              }
+            } else {
+              console.warn('Refusing non-relative action_link:', actionLink.href);
+            }
+          },
+        },
+      });
+    } else {
+      toast.error(msg);
+    }
+  }
 }
 
 const JOB_INITIAL_STATE = {
   jobs: {} as Record<string, Job>,
   activeAborts: {} as Record<string, AbortController>,
+  handledTerminalIds: {} as Record<string, true>,
+  discoveryInitialized: false,
 };
 
 interface JobStore {
   jobs: Record<string, Job>;
   /** AbortControllers for active SSE subscriptions — NOT persisted. */
   activeAborts: Record<string, AbortController>;
+  /** Terminal side effects already applied in this tab, persisted across reloads. */
+  handledTerminalIds: Record<string, true>;
+  /** Whether the tab has established its recent-job baseline. */
+  discoveryInitialized: boolean;
 
   /** POST a new job + subscribe to its SSE stream. Returns the job_id. */
   startJob: (kind: string, payload: unknown) => Promise<string>;
@@ -291,12 +382,13 @@ interface JobStore {
    */
   isRunning: (kind: string, payload: Record<string, unknown>) => boolean;
   /** On app mount: re-subscribe to any jobs that are still running. */
-  hydrate: () => Promise<void>;
+  hydrate: () => Promise<boolean>;
   /** Reset to initial state (called on logout to prevent cross-user leakage). */
   _reset: () => void;
 
   // Internal helpers
   _upsertJob: (job: Job) => void;
+  _handleTerminal: (job: Job) => void;
   _cleanupSubscription: (jobId: string) => void;
 }
 
@@ -306,9 +398,15 @@ export const useJobStore = create<JobStore>()(
       ...JOB_INITIAL_STATE,
 
       _upsertJob(job: Job) {
-        set((state) => ({
-          jobs: { ...state.jobs, [job.id]: job },
-        }));
+        set((state) => {
+          const jobs = boundedJobs({ ...state.jobs, [job.id]: job });
+          return {
+            jobs,
+            handledTerminalIds: Object.fromEntries(
+              Object.entries(state.handledTerminalIds).filter(([id]) => id in jobs),
+            ) as Record<string, true>,
+          };
+        });
       },
 
       _cleanupSubscription(jobId: string) {
@@ -319,6 +417,20 @@ export const useJobStore = create<JobStore>()(
             const { [jobId]: _removed, ...rest } = state.activeAborts;
             return { activeAborts: rest };
           });
+        }
+      },
+
+      _handleTerminal(job: Job) {
+        get()._upsertJob(job);
+        if (!get().handledTerminalIds[job.id]) {
+          set((state) => ({
+            handledTerminalIds: { ...state.handledTerminalIds, [job.id]: true },
+          }));
+          applyTerminalEffects(job);
+        }
+        get()._cleanupSubscription(job.id);
+        if (!evictionTimers.has(job.id)) {
+          scheduleEviction(job.id, () => get().removeJob(job.id));
         }
       },
 
@@ -363,76 +475,7 @@ export const useJobStore = create<JobStore>()(
           activeAborts: { ...state.activeAborts, [jobId]: controller },
         }));
 
-        const apiKey = useAuthStore.getState().getApiKey();
-        const headers: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
-
-        // Internal helper: fire toast + invalidate queries for a terminal job
-        const _handleTerminal = (job: Job) => {
-          if (job.status === 'succeeded') {
-            // Zero-card generation is a degraded outcome — the paper view shows
-            // its own warning; a green "completed" toast would contradict it.
-            const zeroCards =
-              job.kind === 'card.generate' &&
-              (job.result as { cards_created?: number } | null)?.cards_created === 0;
-            // A highlight export can succeed-with-failures; warn instead of a
-            // green toast when the export status is anything but "ok".
-            const zoteroPushStatus =
-              job.kind === 'zotero.push_highlights'
-                ? (job.result as { status?: string } | null)?.status
-                : undefined;
-            // A batch run can succeed-with-failures or stop on cancel;
-            // `partial` and `cancelled` warn instead of a green success toast.
-            // Every handler that reports a terminal status is covered, not one
-            // kind: a cancelled run announcing itself as completed is the
-            // loudest way to tell a user the opposite of what happened.
-            const resultStatus = (job.result as { status?: string } | null)?.status;
-            if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
-              toast.warning(zoteroPushWarning(zoteroPushStatus));
-            } else if (resultStatus === 'cancelled') {
-              toast.warning(cancelledWarning(job));
-            } else if (resultStatus === 'partial') {
-              toast.warning(partialWarning(job));
-            } else if (!zeroCards) {
-              toast.success(`${kindLabel(job.kind)} completed`);
-            }
-            // Patch coverage/passes into the paper-detail cache BEFORE invalidating:
-            // the refetched GET never carries them, so the banner state must be
-            // merged from the job result here.
-            if (job.kind === 'paper.summarize') applySummaryCoverageToCache(job);
-            const keysFactory = INVALIDATE_ON_SUCCESS[job.kind];
-            if (keysFactory) {
-              for (const key of keysFactory(job)) {
-                queryClient.invalidateQueries({ queryKey: key });
-              }
-            }
-          } else if (job.status === 'failed') {
-            const msg = job.error?.message ?? `${kindLabel(job.kind)} failed`;
-            const actionLink = job.error?.action_link;
-            if (actionLink) {
-              toast.error(msg, {
-                action: {
-                  label: actionLink.label,
-                  onClick: () => {
-                    if (isSafeRelativeHref(actionLink.href)) {
-                      const nav = getNavigate();
-                      if (nav) {
-                        nav(actionLink.href);
-                      } else {
-                        window.location.href = actionLink.href;
-                      }
-                    } else {
-                      console.warn('Refusing non-relative action_link:', actionLink.href);
-                    }
-                  },
-                },
-              });
-            } else {
-              toast.error(msg);
-            }
-          }
-          get()._cleanupSubscription(jobId);
-          scheduleEviction(jobId, () => get().removeJob(jobId));
-        };
+        const _handleTerminal = (job: Job) => get()._handleTerminal(job);
 
         const _reconnectAfterDrop = async (delayMs: number) => {
           get()._cleanupSubscription(jobId);
@@ -454,7 +497,7 @@ export const useJobStore = create<JobStore>()(
           try {
             const finalJob = await apiGetJob(jobId).catch(() => null);
             if (finalJob) {
-              set((s) => ({ jobs: { ...s.jobs, [jobId]: finalJob } }));
+              get()._upsertJob(finalJob);
               if (TERMINAL_STATUSES.has(finalJob.status)) {
                 _handleTerminal(finalJob);
                 return;
@@ -477,13 +520,12 @@ export const useJobStore = create<JobStore>()(
           try {
 
             for await (const raw of createSSEReader(`/api/jobs/${jobId}/stream`, {
-              headers,
               signal: controller.signal,
             })) {
               try {
-                const event = JSON.parse(raw) as Partial<Job>;
+                const event = jobStreamEventSchema.parse(JSON.parse(raw));
                 // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
-                if ((event as { status?: string }).status === 'streaming_timeout') {
+                if ('status' in event && event.status === 'streaming_timeout') {
                   get()._cleanupSubscription(jobId);
                   // controller is already aborted by _cleanupSubscription, so do NOT
                   // pass its signal to sleep — it would throw AbortError immediately (G-01).
@@ -500,9 +542,11 @@ export const useJobStore = create<JobStore>()(
                   get().subscribe(jobId, nextDelay);
                   return;
                 }
-                const current = get().jobs[jobId] ?? {};
+                if (!('status' in event)) continue;
+                const current = get().jobs[jobId];
+                if (!current) continue;
                 const updated: Job = {
-                  ...(current as Job),
+                  ...current,
                   ...event,
                   id: jobId,
                 };
@@ -570,7 +614,8 @@ export const useJobStore = create<JobStore>()(
         get()._cleanupSubscription(jobId);
         set((state) => {
           const { [jobId]: _removed, ...rest } = state.jobs;
-          return { jobs: rest };
+          const { [jobId]: _handled, ...handledRest } = state.handledTerminalIds;
+          return { jobs: rest, handledTerminalIds: handledRest };
         });
       },
 
@@ -591,21 +636,65 @@ export const useJobStore = create<JobStore>()(
       },
 
       async hydrate() {
-        try {
-          const [running, queued] = await Promise.all([
-            apiListJobs({ status: 'running' }),
-            apiListJobs({ status: 'queued' }),
-          ]);
-          const jobs = [...running, ...queued];
-          for (const job of jobs) {
-            get()._upsertJob(job);
-            // Only subscribe if not already subscribed
-            if (!get().activeAborts[job.id]) {
-              get().subscribe(job.id);
+        if (discoveryInFlight !== null) return discoveryInFlight;
+        const generation = discoveryGeneration;
+        const run = (async () => {
+          try {
+            const [running, queued, recent] = await Promise.all([
+              apiListJobs({ status: 'running', limit: 500 }),
+              apiListJobs({ status: 'queued', limit: 500 }),
+              apiListJobs({ limit: RECENT_DISCOVERY_LIMIT }),
+            ]);
+            if (generation !== discoveryGeneration) return false;
+            const discovered = new Map<string, Job>();
+            for (const job of [...queued, ...running, ...recent]) {
+              const current = discovered.get(job.id);
+              if (
+                current === undefined ||
+                JOB_STATUS_RANK[job.status] >= JOB_STATUS_RANK[current.status]
+              ) {
+                discovered.set(job.id, job);
+              }
             }
+            for (const job of discovered.values()) {
+              if (TERMINAL_STATUSES.has(job.status)) {
+                const existing = get().jobs[job.id];
+                if (!get().discoveryInitialized && existing === undefined) {
+                  get()._upsertJob(job);
+                  applyTerminalEffects(job, false);
+                  set((state) => ({
+                    handledTerminalIds: {
+                      ...state.handledTerminalIds,
+                      [job.id]: true,
+                    },
+                  }));
+                  if (!evictionTimers.has(job.id)) {
+                    scheduleEviction(job.id, () => get().removeJob(job.id));
+                  }
+                } else {
+                  get()._handleTerminal(job);
+                }
+              } else {
+                get()._upsertJob(job);
+              }
+              if (
+                (job.status === 'queued' || job.status === 'running') &&
+                !get().activeAborts[job.id]
+              ) {
+                get().subscribe(job.id);
+              }
+            }
+            set({ discoveryInitialized: true });
+            return true;
+          } catch {
+            return false;
           }
-        } catch {
-          /* best-effort: if server is down, don't crash the app */
+        })();
+        discoveryInFlight = run;
+        try {
+          return await run;
+        } finally {
+          if (discoveryInFlight === run) discoveryInFlight = null;
         }
       },
 
@@ -618,6 +707,8 @@ export const useJobStore = create<JobStore>()(
         // logout signal so the next login starts un-aborted.
         logoutAbort.abort();
         logoutAbort = new AbortController();
+        discoveryGeneration += 1;
+        discoveryInFlight = null;
         // Cancel all pending eviction timers so none fire post-logout.
         cancelAllEvictions();
         set(JOB_INITIAL_STATE);
@@ -629,6 +720,8 @@ export const useJobStore = create<JobStore>()(
       // Only persist the jobs map — AbortControllers cannot be serialised
       partialize: (state) => ({
         jobs: state.jobs,
+        handledTerminalIds: state.handledTerminalIds,
+        discoveryInitialized: state.discoveryInitialized,
       }),
     },
   ),
@@ -645,13 +738,34 @@ export const useJobStore = create<JobStore>()(
  */
 export function registerVisibilityHydrate(): () => void {
   if (typeof document === 'undefined') return () => {};
-  const handler = () => {
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let delay = DISCOVERY_BASE_DELAY_MS;
+  const schedule = () => {
+    if (disposed) return;
+    timer = setTimeout(async () => {
+      if (document.visibilityState === 'visible') {
+        const succeeded = await useJobStore.getState().hydrate();
+        delay = succeeded
+          ? DISCOVERY_BASE_DELAY_MS
+          : Math.min(delay * 2, DISCOVERY_MAX_DELAY_MS);
+      }
+      schedule();
+    }, delay);
+  };
+  const handler = async () => {
     if (document.visibilityState === 'visible') {
-      useJobStore.getState().hydrate();
+      const succeeded = await useJobStore.getState().hydrate();
+      delay = succeeded
+        ? DISCOVERY_BASE_DELAY_MS
+        : Math.min(delay * 2, DISCOVERY_MAX_DELAY_MS);
     }
   };
   document.addEventListener('visibilitychange', handler);
+  schedule();
   return () => {
+    disposed = true;
+    if (timer !== null) clearTimeout(timer);
     document.removeEventListener('visibilitychange', handler);
   };
 }

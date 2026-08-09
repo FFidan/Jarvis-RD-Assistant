@@ -11,10 +11,8 @@ The feed endpoint moved to ``routers/feed.py``; the discovery endpoints
 (``/discover`` and ``/similar/{id}``) moved to ``routers/discovery.py``;
 shared helpers and response models live in ``routers/search_helpers.py``.
 
-Helpers and response models are re-exported here for back-compat with tests
-that monkeypatch ``paper_ingestion.routers.search`` (e.g.
-``test_search_multi_source.py`` imports ``_dedup_papers``, ``_normalize_title``,
-``_round_robin_merge`` directly from this module).
+Endpoint-specific orchestration remains here; reusable search behavior lives in
+``search_helpers`` and source construction lives in ``source_helper``.
 """
 
 import asyncio
@@ -41,81 +39,23 @@ from paper_ingestion.models import (
     SearchRequest,
     SourceType,
 )
+from paper_ingestion.routers import search_helpers
 from paper_ingestion.routers.search_helpers import (
     PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS,
     MultiSourceSearchResponse,
     SearchPersistenceFailure,
-    SearchPreviewLibraryMatch,
     SearchPreviewResponse,
     SearchPreviewResult,
     SearchPreviewSourceError,
-    _build_preview_source_error,
-    _dedup_papers,
-    _library_match_priority,
-    _load_local_library_matches,
-    _match_preview_result,
-    _normalize_author_name,
-    _normalize_authors,
-    _normalize_title,
-    _normalize_url,
-    _raise_source_search_error,
-    _round_robin_merge,
-    _semantic_scholar_api_key_configured,
-    _source_display_name,
-    _store_preferred_library_match,
-    _TitleYearLibraryCandidate,
 )
+from paper_ingestion.services import source_helper
 from paper_ingestion.services.pdf_workflow import (
     reclaim_discarded_paper_content,
     upsert_verified_public_paper,
 )
-from paper_ingestion.services.source_helper import get_source_for_type, get_sources_for_types
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["search"])
-
-# ---------------------------------------------------------------------------
-# Back-compat re-exports — keeps test_search_multi_source.py and any future
-# `from paper_ingestion.routers.search import ...` callers working without
-# the helpers split being a breaking change.
-# ---------------------------------------------------------------------------
-
-__all__ = [
-    # response models / sentinels
-    "MultiSourceSearchResponse",
-    "PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS",
-    "SearchPersistenceFailure",
-    "SearchPreviewLibraryMatch",
-    "SearchPreviewResponse",
-    "SearchPreviewResult",
-    "SearchPreviewSourceError",
-    # helpers
-    "_TitleYearLibraryCandidate",
-    "_build_preview_source_error",
-    "_dedup_papers",
-    "_library_match_priority",
-    "_load_local_library_matches",
-    "_match_preview_result",
-    "_normalize_author_name",
-    "_normalize_authors",
-    "_normalize_title",
-    "_normalize_url",
-    "_raise_source_search_error",
-    "_round_robin_merge",
-    "_semantic_scholar_api_key_configured",
-    "_source_display_name",
-    "_store_preferred_library_match",
-    # endpoints
-    "search_papers",
-    "search_papers_preview",
-    "search_hybrid",
-    "compute_relevance",
-    "router",
-    "get_source_for_type",
-    "get_sources_for_types",
-]
-
-_ORIGINAL_GET_SOURCE_FOR_TYPE = get_source_for_type
 
 
 async def _resolve_sources_for_search(
@@ -124,22 +64,10 @@ async def _resolve_sources_for_search(
     http_client: httpx.AsyncClient,
     request: Request,
 ) -> tuple[dict[SourceType, Any], dict[SourceType, Exception]]:
-    """Resolve source plugins, preserving legacy monkeypatch behavior in tests."""
-    if get_source_for_type is not _ORIGINAL_GET_SOURCE_FOR_TYPE:
-        plugins: dict[SourceType, Any] = {}
-        errors: dict[SourceType, Exception] = {}
-        for source_type in source_types:
-            try:
-                plugins[source_type] = await get_source_for_type(
-                    source_type, db_pool, http_client, request=request
-                )
-            except HTTPException as exc:
-                errors[source_type] = exc
-            except PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS as exc:
-                errors[source_type] = exc
-        return plugins, errors
-
-    return await get_sources_for_types(source_types, db_pool, http_client, request=request)
+    """Resolve source plugins and isolate supported bootstrap failures by source."""
+    return await source_helper.get_sources_for_types(
+        source_types, db_pool, http_client, request=request
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +126,11 @@ def _merge_search_results(
         all_papers: list[PaperCreate] = []
         for papers in per_source.values():
             all_papers.extend(papers)
-        deduped = _dedup_papers(all_papers)
+        deduped = search_helpers._dedup_papers(all_papers)
         deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
     else:
-        interleaved = _round_robin_merge(per_source)
-        deduped = _dedup_papers(interleaved)
+        interleaved = search_helpers._round_robin_merge(per_source)
+        deduped = search_helpers._dedup_papers(interleaved)
     return deduped
 
 
@@ -356,15 +284,21 @@ def _collect_preview_available_plugins(
         exc = source_load_errors.get(st)
         if isinstance(exc, HTTPException):
             logger.warning("Source %s unavailable for preview search: %s", st.value, exc.detail)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            source_errors[st.value] = search_helpers._build_preview_source_error(
+                st.value, exc, unavailable=True
+            )
             degraded_sources.append(st.value)
         elif isinstance(exc, PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS):
             logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            source_errors[st.value] = search_helpers._build_preview_source_error(
+                st.value, exc, unavailable=True
+            )
             degraded_sources.append(st.value)
         elif exc is not None:
             logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            source_errors[st.value] = search_helpers._build_preview_source_error(
+                st.value, exc, unavailable=True
+            )
             degraded_sources.append(st.value)
     return plugins, degraded_sources, source_errors
 
@@ -385,7 +319,7 @@ async def _search_preview_source_papers(
         return source_name, papers, None
     except Exception as exc:  # broad: heterogeneous plugins raise different exception types
         logger.warning("Source %s preview search failed: %s", source_name, exc, exc_info=True)
-        error = _build_preview_source_error(source_name, exc, plugin=plugin)
+        error = search_helpers._build_preview_source_error(source_name, exc, plugin=plugin)
         return source_name, [], error
 
 
@@ -393,13 +327,15 @@ async def _build_preview_results(
     db_pool: asyncpg.Pool, deduped: list[PaperCreate], user_id: int
 ) -> list[SearchPreviewResult]:
     """Attach local-library match metadata to each deduped preview result."""
-    library_indexes, title_year_candidates = await _load_local_library_matches(
+    library_indexes, title_year_candidates = await search_helpers._load_local_library_matches(
         db_pool, deduped, user_id
     )
     return [
         SearchPreviewResult(
             **paper.model_dump(),
-            library_match=_match_preview_result(paper, library_indexes, title_year_candidates),
+            library_match=search_helpers._match_preview_result(
+                paper, library_indexes, title_year_candidates
+            ),
         )
         for paper in deduped
     ]

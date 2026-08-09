@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse
 from jarvis_common.auth import verify_api_key
 from jarvis_common.maintenance import maintenance_active
 from jarvis_common.models import HealthCheckResponse
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.version import app_version
 
 if TYPE_CHECKING:
@@ -334,7 +335,7 @@ def make_litellm_probe(
                         "retrying with dedicated client",
                         exc_info=True,
                     )
-                    async with httpx.AsyncClient() as dedicated_client:
+                    async with pinned_async_client(JARVIS_SERVICE_POLICY) as dedicated_client:
                         resp = await _get_readiness(dedicated_client, cfg.base_url)
             return "ok" if resp.status_code == 200 else "unavailable"
         except Exception:

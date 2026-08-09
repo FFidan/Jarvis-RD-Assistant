@@ -11,6 +11,7 @@ from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import escape, truncate
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,8 @@ async def run_deadline_warning(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Send warnings for milestones due in the next 3 days.
 
@@ -94,6 +97,10 @@ async def run_deadline_warning(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "deadline_warning"
+        ):
+            continue
         try:
             milestones = await services_client.fetch_upcoming_milestones(
                 http_client, config, pairing.user_id, within_days=3

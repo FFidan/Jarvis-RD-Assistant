@@ -25,6 +25,7 @@ from jarvis_common.llm_client import (
     strip_think_streaming,
 )
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
+from jarvis_common.model_catalog import load_model_catalog
 from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
 from jarvis_common.settings import get_core_settings, get_reranker_settings
 from jarvis_common.sse import SSE_DONE, sse_event
@@ -39,6 +40,7 @@ from paper_ingestion.queries.chunk_liveness import (
 from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
+from paper_ingestion.services.litellm_api import get_litellm_deployments
 
 if TYPE_CHECKING:
     from jarvis_common.verify import QuoteVerifier
@@ -52,8 +54,10 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CrossPaperRagNoResults",
     "CrossPaperRagPrep",
+    "RagAnswerBudget",
     "prepare_single_paper_rag",
     "prepare_cross_paper_rag",
+    "resolve_rag_answer_budget",
     "sse_error_stream",
     "stream_rag_events",
     "_SEARCH_SCORE_THRESHOLD",
@@ -63,7 +67,6 @@ __all__ = [
 
 _SEARCH_SCORE_THRESHOLD = 0.05
 
-_ANSWER_MAX_TOKENS = 700
 _PARAGRAPH_BOUNDARY_RE = re.compile(r"\n\s*\n")
 
 _SYSTEM_SINGLE_PAPER_RAG = "Answer using ONLY the excerpts provided. If not covered, say so."
@@ -96,6 +99,65 @@ class CrossPaperRagNoResults:
 
     answer: str
     sources: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class RagAnswerBudget:
+    """One request's inseparable prompt reservation and completion limit."""
+
+    completion_tokens: int
+    reserved_output_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.completion_tokens != self.reserved_output_tokens:
+            raise ValueError("RAG completion and reserved-output limits must match")
+
+    def input_char_limit(self, num_ctx: int | None) -> int:
+        """Derive the matching prompt limit without separating the token reservation."""
+        return max_input_chars(
+            num_ctx if num_ctx is not None else get_core_settings().llm_smart_num_ctx,
+            reserved_output_tokens=self.reserved_output_tokens,
+        )
+
+    @classmethod
+    def for_non_thinking(cls) -> "RagAnswerBudget":
+        return cls(completion_tokens=700, reserved_output_tokens=700)
+
+    @classmethod
+    def for_thinking(cls) -> "RagAnswerBudget":
+        return cls(completion_tokens=2800, reserved_output_tokens=2800)
+
+
+_DEFAULT_ANSWER_BUDGET = RagAnswerBudget.for_non_thinking()
+
+
+def _catalog_thinking_capability(model: str) -> bool | None:
+    """Return a catalog thinking flag, or None when the route is unknown."""
+    routed = model.removesuffix(":latest")
+    routed_suffix = routed.split("/", 1)[-1]
+    for entry in load_model_catalog():
+        identifiers = {entry.id, entry.ollama_tag or entry.id}
+        if routed in identifiers or routed_suffix in identifiers:
+            return entry.supports_thinking
+    return None
+
+
+async def resolve_rag_answer_budget() -> RagAnswerBudget:
+    """Resolve the current smart route once; uncertainty gets the larger budget."""
+    try:
+        smart = [item for item in await get_litellm_deployments() if item.model_name == "smart"]
+    except Exception:  # noqa: BLE001 - a sidecar read failure is an explicit uncertain state
+        logger.warning("Could not resolve the smart route; using the thinking answer budget")
+        return RagAnswerBudget.for_thinking()
+    if len(smart) != 1:
+        return RagAnswerBudget.for_thinking()
+    params = smart[0].litellm_params
+    if params.get("think") is False:
+        return RagAnswerBudget.for_non_thinking()
+    capability = _catalog_thinking_capability(str(params.get("model", "")))
+    if capability is False:
+        return RagAnswerBudget.for_non_thinking()
+    return RagAnswerBudget.for_thinking()
 
 
 # ---------------------------------------------------------------------------
@@ -172,26 +234,22 @@ def _fit_chunks_to_budget(
     build_user_content: Callable[[list[dict]], str],
     system_prompt: str,
     history_msgs: list[dict[str, str]],
-    num_ctx: int | None = None,
+    input_char_budget: int,
 ) -> tuple[list[dict], str]:
     """Preconditions: ``chunks`` is in priority order with selection
     semantics already applied; at least one chunk is always kept; callers
     must build their sources list from the returned chunk list.
     """
-    budget = max_input_chars(
-        num_ctx if num_ctx is not None else get_core_settings().llm_smart_num_ctx,
-        reserved_output_tokens=_ANSWER_MAX_TOKENS,
-    )
     fixed = len(system_prompt) + sum(len(m["content"]) for m in history_msgs)
     user_content = build_user_content(chunks)
     kept = list(chunks)
-    while len(kept) > 1 and fixed + len(user_content) > budget:
+    while len(kept) > 1 and fixed + len(user_content) > input_char_budget:
         kept.pop()
         user_content = build_user_content(kept)
     if len(kept) < len(chunks):
         logger.info(
             "RAG prompt over char budget %d: dropped %d of %d chunks",
-            budget,
+            input_char_budget,
             len(chunks) - len(kept),
             len(chunks),
         )
@@ -203,9 +261,12 @@ def _fit_chunks_to_budget(
 # ---------------------------------------------------------------------------
 
 
-async def sse_error_stream(message: str):
+async def sse_error_stream(message: str, *, code: str | None = None):
     """Yield a single SSE error event followed by [DONE] sentinel."""
-    yield sse_event({"type": "error", "message": message})
+    payload = {"type": "error", "message": message}
+    if code is not None:
+        payload["code"] = code
+    yield sse_event(payload)
     yield SSE_DONE
 
 
@@ -223,6 +284,7 @@ async def prepare_single_paper_rag(
     http_client: httpx.AsyncClient,
     *,
     user_id: int | None = None,
+    answer_budget: RagAnswerBudget = _DEFAULT_ANSWER_BUDGET,
 ) -> tuple[list[dict], list[dict]]:
     """Retrieve chunks for a single paper, rerank, and build LLM messages.
 
@@ -333,12 +395,13 @@ async def prepare_single_paper_rag(
         )
 
     history_msgs = _build_history_messages(body.history)
+    input_char_budget = answer_budget.input_char_limit(await effective_num_ctx(db_pool, "smart"))
     chunks, user_content = _fit_chunks_to_budget(
         chunks,
         build_user_content,
         _SYSTEM_SINGLE_PAPER_RAG,
         history_msgs,
-        num_ctx=await effective_num_ctx(db_pool, "smart"),
+        input_char_budget,
     )
 
     messages = [
@@ -462,9 +525,9 @@ async def prepare_cross_paper_rag(
     embedder: "Embedder",
     db_pool: asyncpg.Pool,
     body: CrossPaperAskRequest,
-    http_client: httpx.AsyncClient,
     *,
     user_id: int | None = None,
+    answer_budget: RagAnswerBudget = _DEFAULT_ANSWER_BUDGET,
 ) -> "CrossPaperRagPrep | CrossPaperRagNoResults":
     """Retrieve chunks across papers, rerank, and build LLM messages.
 
@@ -476,8 +539,6 @@ async def prepare_cross_paper_rag(
         Database pool used for library scope, paper metadata, and model context.
     body : CrossPaperAskRequest
         Validated question, optional paper scope, history, and retrieval limits.
-    http_client : httpx.AsyncClient
-        Shared service HTTP client.
     user_id : int or None
         Caller identity used to enforce current-generation persisted-public or
         explicit caller-library visibility. ``None`` is trusted internal use.
@@ -608,12 +669,15 @@ async def prepare_cross_paper_rag(
             return f"{context_block}\n\n<question>{safe_question}</question>\n\nANSWER:"
 
         history_msgs = _build_history_messages(body.history)
+        input_char_budget = answer_budget.input_char_limit(
+            await effective_num_ctx(db_pool, "smart")
+        )
         selected_chunks, user_content = _fit_chunks_to_budget(
             selected_chunks,
             build_user_content,
             _SYSTEM_CROSS_PAPER_RAG,
             history_msgs,
-            num_ctx=await effective_num_ctx(db_pool, "smart"),
+            input_char_budget,
         )
 
         messages = [
@@ -694,17 +758,28 @@ async def _confidence_events(
 class VisibleAnswerHygieneError(RuntimeError):
     """Raised when a visible streamed answer is empty or unsafe to show."""
 
+    def __init__(self, message: str, *, code: str):
+        super().__init__(message)
+        self.code = code
 
-def _visible_answer_error_message(full_answer: str) -> str | None:
-    """Return a retryable user message when the visible answer is not safe to show."""
+
+def _visible_answer_error(full_answer: str) -> tuple[str, str] | None:
+    """Return a stable code and retryable copy for an unsafe visible answer."""
     work_notes = detect_visible_work_notes(full_answer)
     if work_notes.has_work_notes:
         logger.warning(
             "RAG answer failed visible-answer hygiene marker=%s",
             work_notes.marker,
         )
-    if not full_answer.strip() or work_notes.has_work_notes:
-        return "The model did not return a usable final answer. Please try again."
+        return (
+            "llm_visible_work_notes",
+            "The model did not return a usable final answer. Please try again.",
+        )
+    if not full_answer.strip():
+        return (
+            "llm_empty_visible_content",
+            "The model did not return a usable final answer. Please try again.",
+        )
     return None
 
 
@@ -721,9 +796,10 @@ def _release_safe_visible_prefix(pending: str, *, final: bool) -> tuple[str, str
     """Return text safe to emit now and text that still needs prefix quarantine."""
     flushable, guard_segment = _split_visible_guard_segment(pending)
     if guard_segment.strip():
-        visible_answer_error = _visible_answer_error_message(guard_segment)
+        visible_answer_error = _visible_answer_error(guard_segment)
         if visible_answer_error is not None:
-            raise VisibleAnswerHygieneError(visible_answer_error)
+            code, message = visible_answer_error
+            raise VisibleAnswerHygieneError(message, code=code)
     if final or not guard_segment or not could_be_visible_work_note_prefix(guard_segment):
         return pending, ""
     if flushable.strip():
@@ -756,6 +832,7 @@ async def _stream_validated_visible_answer_parts(
     *,
     model: str,
     answer_parts: list[str],
+    answer_budget: RagAnswerBudget,
 ) -> AsyncIterator[tuple[str, str | None]]:
     """Yield visible deltas once their current paragraph prefix is safe to show.
 
@@ -797,7 +874,7 @@ async def _stream_validated_visible_answer_parts(
             "messages": messages,
             "stream": True,
             "temperature": 0.1,
-            "max_tokens": _ANSWER_MAX_TOKENS,
+            "max_tokens": answer_budget.completion_tokens,
         },
         headers=build_litellm_headers(litellm_config),
         timeout=300.0,  # RAG prompts with many chunks need longer prefill
@@ -822,9 +899,10 @@ async def _stream_validated_visible_answer_parts(
     if not in_think and think_carry:
         answer_parts.append(think_carry)
         pending += think_carry
-    visible_answer_error = _visible_answer_error_message("".join(answer_parts))
+    visible_answer_error = _visible_answer_error("".join(answer_parts))
     if visible_answer_error is not None:
-        raise VisibleAnswerHygieneError(visible_answer_error)
+        code, message = visible_answer_error
+        raise VisibleAnswerHygieneError(message, code=code)
     if pending:
         safe_part, pending = _release_safe_visible_prefix(pending, final=True)
         if safe_part:
@@ -840,6 +918,7 @@ async def stream_rag_events(
     model: str = "smart",
     verifier: "QuoteVerifier | None" = None,
     db_pool: "asyncpg.Pool | None" = None,
+    answer_budget: RagAnswerBudget = _DEFAULT_ANSWER_BUDGET,
 ):
     """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
     answer_parts: list[str] = []
@@ -850,12 +929,13 @@ async def stream_rag_events(
             messages,
             model=model,
             answer_parts=answer_parts,
+            answer_budget=answer_budget,
         ):
             if model_used is None:
                 model_used = chunk_model
             yield sse_event({"type": "token", "content": visible})
     except VisibleAnswerHygieneError as e:
-        async for event in sse_error_stream(str(e)):
+        async for event in sse_error_stream(str(e), code=e.code):
             yield event
         return
     except Exception as e:

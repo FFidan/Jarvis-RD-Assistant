@@ -7,6 +7,7 @@ import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { ApiError } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', async () =>
@@ -127,9 +128,6 @@ vi.mock('@/lib/api', async () => {
     ]),
     fetchFeedCounts: async () => ({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
-    }),
-    fetchFeedCountsWithFacets: async () => ({
-      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
       by_source: {}, by_topic: [], untagged: 0,
     }),
     fetchPulseHistory: async () => ([]),
@@ -240,6 +238,10 @@ describe('ResearchFeedPage', () => {
     // "job-zotero-queued stream locked" race that makes the Zotero update test
     // fail 3/3 in the full suite while passing in isolation).
     useJobStore.getState()._reset();
+    useResearchMilestoneStore.setState({
+      completed: { save: false, analyze: false },
+      advancedCueDismissed: false,
+    });
     appQueryClient.clear();
   });
 
@@ -268,46 +270,6 @@ describe('ResearchFeedPage', () => {
   });
 
   it('shows empty-library Discover CTA when library count is 0 and scope=library', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    // Render on library surface directly
-    const { container: _c } = renderWithProviders(
-      <MemoryRouter initialEntries={['/feed?surface=library']}>
-        <Routes>
-          <Route path="/feed" element={<ResearchFeedPage />} />
-        </Routes>
-      </MemoryRouter>,
-      { queryClient: appQueryClient },
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId('library-empty-discover')).toBeInTheDocument();
-    });
-    expect(screen.getByTestId('empty-library-discover-btn')).toHaveTextContent(/discover papers/i);
-    // Should also mention library is empty
-    expect(screen.getByTestId('library-empty-discover')).toHaveTextContent(
-      /your library is empty/i,
-    );
-  });
-
-  it('renders §Status facet items (Inbox, Library, Trash) in facet rail — replaces old tab bar', () => {
-    renderPage();
-    // 3-pane IA: facet rail replaces horizontal tab bar
-    // Inbox/Library/Trash appear as §Status facet buttons (aria-pressed)
-    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
-    // Discover (search surface) is accessible via the Discover link in the rail
-    expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
-    // Ask is NOT in the feed page (Ask is its own nav destination)
-    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
-    // Pulse tab was moved to /my-day; it is not rendered here
-    expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
-  });
-
-  it('defaults to Inbox surface active (Inbox-first)', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
@@ -1501,6 +1463,7 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s). Next: Analyze a paper to unlock Ask.');
     });
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(true);
 
     // Discover (search surface) facet uses aria-pressed (not aria-selected)
     expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
@@ -1773,6 +1736,7 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Save exploded');
     });
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(false);
 
     expect(screen.getByRole('dialog', { name: /Drawer Error Paper/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Drawer Error Paper/i })).toBeInTheDocument();
@@ -1907,26 +1871,6 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Library §Status facet
-    const libraryFacet = screen.getByTestId('facet-status-library');
-    await user.click(libraryFacet);
-
-    // Library surface now renders papers via FeedView
-    await waitFor(() => {
-      expect(screen.getByText('Test Paper One')).toBeInTheDocument();
-    });
-  });
-
-  // 3-pane IA: clicking Library §Status facet shows the library surface content
-  it('clicking Library §Status facet navigates to the library surface and shows section info', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    const user = userEvent.setup();
-    renderPage();
-
     // Click Library §Status facet
     await user.click(screen.getByTestId('facet-status-library'));
     await waitFor(() => {
@@ -1968,19 +1912,6 @@ describe('ResearchFeedPage', () => {
   it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    renderPage();
-    await waitFor(() => {
-      // After redirect, Inbox §Status facet should be aria-pressed
-      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
-    });
-  });
-
-  it('default landing redirects to ?surface=inbox (Inbox-first always)', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
       by_source: {}, by_topic: [], untagged: 0,
     });
@@ -1991,19 +1922,19 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('?tab=pulse legacy deep-link causes navigate to /my-day', async () => {
+  it('?tab=pulse legacy deep-link causes navigate to /pulse', async () => {
     // Render with the legacy ?tab=pulse query param
     renderWithProviders(
       <MemoryRouter initialEntries={['/feed?tab=pulse']}>
         <Routes>
           <Route path="/feed" element={<ResearchFeedPage />} />
-          <Route path="/my-day" element={<LocationDisplay />} />
+          <Route path="/pulse" element={<LocationDisplay />} />
         </Routes>
       </MemoryRouter>,
       { queryClient: appQueryClient },
     );
     await waitFor(() => {
-      expect(screen.getByTestId('location-path')).toHaveTextContent('/my-day');
+      expect(screen.getByTestId('location-path')).toHaveTextContent('/pulse');
     });
   });
 
@@ -2148,18 +2079,18 @@ describe('ResearchFeedPage', () => {
 
   it('clicking §Source arXiv facet drives fetchFeed with sourceTypes="arxiv"', async () => {
     // Source filtering is via §Source FacetRail facets.
-    // The FacetRail uses fetchFeedCountsWithFacets; the source facet drives ?facet_source= in URL
+    // The FacetRail uses fetchFeedCounts; the source facet drives ?facet_source= in URL
     // which feeds into effectiveSourceTypes → FeedView sourceTypes prop.
     // This test verifies the §Source facet renders from by_source data.
-    const { fetchFeedCountsWithFacets, fetchFeedCounts } = await import('@/lib/api');
+    const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
       by_source: { arxiv: 8 },
       by_topic: [],
       untagged: 0,
     });
-    // fetchFeedCountsWithFacets is now an alias for fetchFeedCounts — mock once covers both
-    vi.mocked(fetchFeedCountsWithFacets).mockResolvedValue({
+    // fetchFeedCounts is now an alias for fetchFeedCounts — mock once covers both
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
       by_source: { arxiv: 8 },
       by_topic: [],

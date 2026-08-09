@@ -1,4 +1,0 @@
-[[IgnoredVulns]]
-id = "GHSA-qwww-vcr4-c8h2"
-ignoreUntil = 2026-10-15
-reason = "react-router RSC-mode CSRF. This SPA uses react-router-dom declarative routing only, so the RSC packages, server actions, and the affected APIs are absent and the path is unreachable. No compatible fix is installable: the advisory is patched in react-router 8.3.0, but react-router-dom has published no v8, so the app's routing dependency cannot pull it, and downgrading below 7.12.0 drops required features. Tracked in docs/known-residual-risks.md; remove when react-router-dom ships a release pulling react-router >= 8.3.0 (or a back-ported patched v7)."

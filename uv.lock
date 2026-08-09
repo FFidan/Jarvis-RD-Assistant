@@ -1200,14 +1200,14 @@ wheels = [
 
 [[package]]
 name = "gitpython"
-version = "3.1.57"
+version = "3.1.58"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitdb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/0d/132ed135c871b6bf91adf16a0e43797cd535b81d4973b5d09291c54fc5ee/gitpython-3.1.57.tar.gz", hash = "sha256:c493ec57c0ef6b19743798b6a5af859c71814b524e7e6f97baa2f8e658961488", size = 225898, upload-time = "2026-07-26T07:33:26.351Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/d6/5f358ff283325580c2003a6d953aea18cfe10ae87b46f5ebc80fa3a386dc/gitpython-3.1.58.tar.gz", hash = "sha256:621416df10ef3fd0e19fabf9172ddeed0fa704d353d04f194eec56a625a95b22", size = 228498, upload-time = "2026-08-04T15:05:49.47Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/6e/2139de986d9c7c3ac86f1f8be43858ce90bdfe2f7175e6c80c650ba15242/gitpython-3.1.57-py3-none-any.whl", hash = "sha256:4ccf7d73c10f5c9e76043fbb2675ac5a1b3ff5b41e648f56bcbed5f63792ecaf", size = 217151, upload-time = "2026-07-26T07:33:24.838Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/0c/9d8752098bc442f0726e64aa6135940b3a96809915d1aa4206c1bb97881d/gitpython-3.1.58-py3-none-any.whl", hash = "sha256:d331e722577f0fd7fc1f857419b3ecc07af66282b933d2a4d95f84a042fdd50f", size = 220183, upload-time = "2026-08-04T15:05:48.025Z" },
 ]
 
 [[package]]
@@ -1493,7 +1493,7 @@ wheels = [
 
 [[package]]
 name = "jarvis-rd-assistant"
-version = "1.2.4"
+version = "1.2.5"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -1510,6 +1510,7 @@ dev = [
     { name = "fsrs" },
     { name = "genanki" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "idna" },
@@ -1558,6 +1559,7 @@ jarvis-common = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1587,6 +1589,7 @@ learning-engine = [
     { name = "fsrs" },
     { name = "genanki" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1616,6 +1619,7 @@ paper-ingestion = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1657,6 +1661,7 @@ paper-ingestion-base = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1698,6 +1703,7 @@ paper-ingestion-cpu = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1754,6 +1760,7 @@ telegram-bot = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "idna" },
     { name = "instructor" },
@@ -1790,7 +1797,8 @@ dev = [
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
     { name = "genanki", specifier = ">=0.13.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "hypothesis", specifier = ">=6.100.0" },
     { name = "idna", specifier = ">=3.15" },
@@ -1838,7 +1846,8 @@ jarvis-common = [
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },
@@ -1867,7 +1876,8 @@ learning-engine = [
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
     { name = "genanki", specifier = ">=0.13.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },
@@ -1897,7 +1907,8 @@ paper-ingestion = [
     { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },
@@ -1938,7 +1949,8 @@ paper-ingestion-base = [
     { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },
@@ -1979,7 +1991,8 @@ paper-ingestion-cpu = [
     { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.116.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },
@@ -2033,7 +2046,8 @@ telegram-bot = [
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
-    { name = "gitpython", specifier = ">=3.1.57" },
+    { name = "gitpython", specifier = ">=3.1.58" },
+    { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "idna", specifier = ">=3.15" },
     { name = "instructor", specifier = ">=1.15.0" },

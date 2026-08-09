@@ -110,11 +110,11 @@ test.describe('Pulse — post Round 4 happy path', () => {
     const rateResp = await ratePromise;
     expect(rateResp.status()).toBeLessThan(400);
 
-    // Step 4: "View all" link from the preview takes us to Research Feed → Pulse tab.
+    // Step 4: "View all" link from the preview takes us to Pulse.
     const viewAllLink = page.getByRole('link', { name: /View all \d+/ });
     if (await viewAllLink.isVisible().catch(() => false)) {
       await viewAllLink.click();
-      await expect(page).toHaveURL(/\/feed\?tab=pulse/);
+      await expect(page).toHaveURL(/\/pulse/);
     }
   });
 });

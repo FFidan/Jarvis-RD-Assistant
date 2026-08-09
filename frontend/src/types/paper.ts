@@ -1,8 +1,8 @@
 // --- Enums ---
 
-export type SourceType = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed' | 'local';
+export type SourceType = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed' | 'local' | 'zotero';
 
-export type Confidence = 'HIGH' | 'MEDIUM' | 'LOW';
+export type Confidence = 'NONE' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 export type PriorityLevel = 'must-read' | 'recommended' | 'background' | 'unscored';
 
@@ -139,8 +139,8 @@ export interface LifecyclePaperResponse {
   metadata: Record<string, unknown>;
   created_at: string;
   discovery_origin: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
-  user_state: UserState | null;
-  recent_feedback: RecentFeedback | null;
+  user_state?: UserState | null;
+  recent_feedback?: RecentFeedback | null;
 }
 
 // --- Feed Paper ---

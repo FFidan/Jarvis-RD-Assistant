@@ -85,7 +85,8 @@ load_litellm_configuration() {
     echo "FATAL: ${master_key_file} is empty or missing." >&2
     return 1
   fi
-  export LITELLM_MASTER_KEY="$(cat "$master_key_file")"
+  LITELLM_MASTER_KEY="$(cat "$master_key_file")"
+  export LITELLM_MASTER_KEY
 
   if [ "${ENVIRONMENT:-development}" = "production" ]; then
     case "$LITELLM_MASTER_KEY" in
@@ -105,7 +106,8 @@ load_litellm_configuration() {
     echo "FATAL: ${salt_key_file} is empty or missing." >&2
     return 1
   fi
-  export LITELLM_SALT_KEY="$(cat "$salt_key_file")"
+  LITELLM_SALT_KEY="$(cat "$salt_key_file")"
+  export LITELLM_SALT_KEY
 
   if [ ! -s "$postgres_password_file" ]; then
     echo "FATAL: ${postgres_password_file} is empty or missing." >&2
@@ -125,7 +127,19 @@ load_litellm_configuration() {
 run_litellm() {
   read_rotation_marker
   rotation_at_start="$rotation_marker_value"
-  litellm --config /app/config.yaml &
+  litellm_launcher="/app/pinned_launcher.py"
+  if [ -n "${JARVIS_TEST_LITELLM_LAUNCHER:-}" ]; then
+    if [ "${ENVIRONMENT:-development}" != "test" ]; then
+      echo "FATAL: the LiteLLM launcher override is test-only." >&2
+      return 1
+    fi
+    litellm_launcher="$JARVIS_TEST_LITELLM_LAUNCHER"
+  fi
+  if [ ! -f "$litellm_launcher" ] || [ -L "$litellm_launcher" ]; then
+    echo "FATAL: the pinned LiteLLM launcher is missing or unsafe." >&2
+    return 1
+  fi
+  python3 "$litellm_launcher" --config /app/config.yaml &
   litellm_pid=$!
   watcher_pid=""
   trap 'forward_signal TERM 143' TERM

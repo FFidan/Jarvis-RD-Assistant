@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
 from paper_ingestion.routers import search
-from paper_ingestion.routers.search import (
+from paper_ingestion.routers.search_helpers import (
     _dedup_papers,
     _load_local_library_matches,
     _normalize_title,
@@ -26,6 +26,20 @@ from paper_ingestion.routers.search import (
 )
 from pydantic import ValidationError
 from tests._paper_fakes import make_paper_create
+
+
+def _install_source_resolver(monkeypatch, resolver) -> None:
+    """Route source fakes through the production owner module."""
+
+    async def resolve_many(source_types, db_pool, http_client, request=None):
+        plugins = {
+            source_type: await resolver(source_type, db_pool, http_client, request=request)
+            for source_type in source_types
+        }
+        return plugins, {}
+
+    monkeypatch.setattr(search.source_helper, "get_sources_for_types", resolve_many)
+
 
 # ---------------------------------------------------------------------------
 # Unit tests for helpers
@@ -245,7 +259,7 @@ async def test_preview_date_sort_orders_by_published_date(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return arxiv_source if st == SourceType.ARXIV else pubmed_source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(
         query="test",
@@ -278,7 +292,7 @@ async def test_preview_budget_split_respects_max_results(monkeypatch):
             search=_search,
         )
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(
         query="test",
@@ -361,7 +375,7 @@ async def test_preview_library_match_by_doi_arxiv_and_title_year(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -423,7 +437,7 @@ async def test_preview_duplicate_local_rows_prefer_most_actionable_match(monkeyp
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -459,7 +473,7 @@ async def test_preview_title_year_match_requires_preview_year(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -493,7 +507,7 @@ async def test_preview_title_year_match_requires_local_year(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -546,7 +560,7 @@ async def test_preview_title_year_collision_requires_author_overlap(monkeypatch)
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -567,7 +581,7 @@ async def test_preview_unmatched_rows_have_null_library_match(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
 
     body = SearchRequest(query="test", source_types=[SourceType.PUBMED], max_results=10)
     result = await search.search_papers_preview.__wrapped__(
@@ -588,7 +602,7 @@ async def test_preview_without_match_keys_does_not_scan_library(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
     pool = _make_preview_pool(
         [
             {
@@ -625,7 +639,7 @@ async def test_preview_library_match_query_uses_candidate_keys(monkeypatch):
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
     pool = _make_preview_pool(
         [
             {
@@ -672,7 +686,7 @@ async def test_preview_library_match_query_normalizes_local_candidate_keys(monke
     async def fake_get_source(st, db_pool, http_client, request=None):
         return source
 
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    _install_source_resolver(monkeypatch, fake_get_source)
     pool = _make_preview_pool(
         [
             {
@@ -782,7 +796,7 @@ async def test_single_user_zotero_indicator_survives_per_user_relocation(contrac
     # Verified: search_helpers.py:441 (link owner resolved via _resolve_zotero_user_id)
     """
     from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.routers.search import _match_preview_result
+    from paper_ingestion.routers.search_helpers import _match_preview_result
 
     sole_user_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ('solo@single.example.com', 'user') RETURNING id"

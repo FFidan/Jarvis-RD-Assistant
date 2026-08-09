@@ -91,7 +91,7 @@ async def test_dedup_max_chunks_per_paper(monkeypatch):
         decompose=False,
     )
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagPrep), (
         f"Expected CrossPaperRagPrep with 2 papers, got {result!r}"
@@ -155,7 +155,7 @@ async def test_papers_without_stored_chunks_do_not_consume_the_paper_budget(monk
 
     body = CrossPaperAskRequest(question="budget test", max_chunks=4, max_papers=2, decompose=False)
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagPrep), (
         f"Live papers ranked below the dead ones, so retrieval must return them; got {result!r}"
@@ -211,7 +211,7 @@ async def test_relative_cutoff_drops_low_cosine_chunks(monkeypatch):
     )
     body = CrossPaperAskRequest(question="cutoff test", decompose=False)
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
     assert {s["paper_id"] for s in result.sources} == {1}, (
@@ -289,7 +289,7 @@ async def test_relative_cutoff_is_per_subquery_in_decompose_path(monkeypatch):
     )
     body = CrossPaperAskRequest(question="multi-facet question", decompose=True)
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
     # Facet B's best hit (0.62) survives even though it is far below facet A's
@@ -329,7 +329,7 @@ async def test_rerank_floor_backend_default_drops_and_degrades(monkeypatch):
     )
     body = CrossPaperAskRequest(question="floor test", decompose=False)
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagNoResults), (
         f"All chunks below the 3.0 floor must degrade to no-results; got {result!r}"
@@ -519,7 +519,6 @@ async def test_public_paper_stays_visible_after_another_user_shelves_it(
         _embedder_returning([_chunk(public_id, 0.9)]),
         SharedConnPool(contract_conn),
         CrossPaperAskRequest(question="How does attention work?", decompose=False),
-        AsyncMock(),
         user_id=contract_two_users.user_b_id,
     )
 
@@ -571,7 +570,6 @@ async def test_private_papers_outside_library_stay_out_of_cross_paper_answers(
         ),
         SharedConnPool(contract_conn),
         CrossPaperAskRequest(question="How does attention work?", decompose=False),
-        AsyncMock(),
         user_id=contract_two_users.user_b_id,
     )
 
@@ -630,7 +628,7 @@ async def test_excerpt_and_question_reach_the_prompt_escaped(monkeypatch):
 
     body = CrossPaperAskRequest(question=raw_question, max_chunks=4, max_papers=2, decompose=False)
 
-    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, user_id=1)
 
     assert isinstance(result, CrossPaperRagPrep), f"expected a prepared prompt, got {result!r}"
     prompt = result.messages[-1]["content"]

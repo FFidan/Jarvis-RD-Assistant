@@ -103,7 +103,6 @@ describe('App onboarding gate (single signal)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'k',
       user: { id: 1, email: 'a@b.com', role: 'admin' },
     });
     renderApp(['/']);
@@ -115,7 +114,6 @@ describe('App onboarding gate (single signal)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'k',
       user: { id: 1, email: 'a@b.com', role: 'admin' },
     });
     renderApp(['/']);
@@ -159,7 +157,6 @@ describe('App onboarding gate (single signal)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'k',
       user: { id: 1, email: 'a@b.com', role: 'admin' },
     });
     renderApp(['/']);

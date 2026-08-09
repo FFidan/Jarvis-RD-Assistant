@@ -4,12 +4,17 @@
  * All functions follow the same fetch/auth patterns as lib/api.ts.
  */
 
-import { useAuthStore } from '@/stores/auth-store';
-import { apiFetch } from '@/lib/api/core';
+import { apiFetchJson } from '@/lib/api/core';
+import {
+  logsListResponseSchema,
+  logsSummarySchema,
+  systemEventSchema,
+} from '@/lib/api/schemas/logs';
 // Leaf import (not the barrel): handleAuthFailure is an internal helper, not
 // part of @/lib/api's public surface.
 import { handleAuthFailure } from '@/lib/api/core';
 import { createSSEReader, SSEGetError } from '@/lib/sse-reader';
+import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,24 +68,24 @@ export async function listEvents(params: ListEventsParams = {}): Promise<LogsLis
   if (params.limit != null) qs.set('limit', String(params.limit));
   if (params.q) qs.set('q', params.q);
   const query = qs.toString();
-  return apiFetch<LogsListResponse>(`/api/logs/events${query ? `?${query}` : ''}`);
+  return apiFetchJson(`/api/logs/events${query ? `?${query}` : ''}`, logsListResponseSchema);
 }
 
 export async function getEvent(id: number): Promise<SystemEvent> {
-  return apiFetch<SystemEvent>(`/api/logs/events/${id}`);
+  return apiFetchJson(`/api/logs/events/${id}`, systemEventSchema);
 }
 
 export async function getSummary(opts?: { excludeInfra?: boolean }): Promise<LogsSummary> {
   const qs = opts?.excludeInfra ? '?exclude_infra=1' : '';
-  return apiFetch<LogsSummary>(`/api/logs/summary${qs}`);
+  return apiFetchJson(`/api/logs/summary${qs}`, logsSummarySchema);
 }
 
 export async function getCorrelation(correlationId: string): Promise<SystemEvent[]> {
-  return apiFetch<SystemEvent[]>(`/api/logs/correlation/${encodeURIComponent(correlationId)}`);
+  return apiFetchJson(`/api/logs/correlation/${encodeURIComponent(correlationId)}`, systemEventSchema.array());
 }
 
 export async function getLogsSources(): Promise<string[]> {
-  return apiFetch<string[]>('/api/logs/sources');
+  return apiFetchJson('/api/logs/sources', z.string().array());
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +102,6 @@ export function streamCorrelation(
   correlationId: string,
   opts: StreamCorrelationOpts,
 ): { close: () => void } {
-  const apiKey = useAuthStore.getState().getApiKey();
   const controller = new AbortController();
 
   const qs = new URLSearchParams();
@@ -108,11 +112,11 @@ export function streamCorrelation(
   (async () => {
     try {
       for await (const raw of createSSEReader(url, {
-        headers: apiKey ? { 'X-API-Key': apiKey } : undefined,
         signal: controller.signal,
       })) {
         try {
-          opts.onEvent(JSON.parse(raw) as SystemEvent);
+          const event = systemEventSchema.safeParse(JSON.parse(raw));
+          if (event.success) opts.onEvent(event.data);
         } catch {
           /* skip malformed frames */
         }

@@ -69,6 +69,11 @@ from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+from jarvis_common.pinned_transport import (
+    PUBLIC_ONLY,
+    connect_pinned_socket,
+    policy_allowing_private_host,
+)
 from jarvis_common.session_middleware import mint_session
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -163,6 +168,19 @@ class SmtpBody(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @field_validator("host", mode="before")
+    @classmethod
+    def _normalize_host(cls, v: str) -> str:
+        value = v.strip() if isinstance(v, str) else v
+        if not value:
+            raise ValueError("host must not be blank")
+        return value
+
+    @field_validator("from_email", mode="before")
+    @classmethod
+    def _normalize_from_email(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
+
     @field_validator("reply_to")
     @classmethod
     def _validate_reply_to(cls, v: str | None) -> str | None:
@@ -170,6 +188,8 @@ class SmtpBody(BaseModel):
         if v is None or v == "":
             return v
         v = v.strip()
+        if not v:
+            return ""
         if not re.match(r"^\S+@\S+\.\S+$", v):
             raise ValueError("reply_to must be a valid email address")
         return v
@@ -651,13 +671,6 @@ async def _send_test_email(body: SmtpBody, recipient: str, password: str | None)
     except OutboundEgressBlockedError:
         return "SMTP delivery is disabled until restored credentials are reviewed."
 
-    if not get_core_settings().allow_private_smtp_host:
-        try:
-            await _reject_non_public_host(body.host)
-        except ValueError as exc:
-            logger.warning("setup smtp test_send blocked: %s", exc, exc_info=True)
-            return str(exc)
-
     try:
         import aiosmtplib  # noqa: PLC0415
     except ImportError:
@@ -685,10 +698,22 @@ async def _send_test_email(body: SmtpBody, recipient: str, password: str | None)
     use_tls, start_tls = smtp_tls_flags(body.port)
     try:
         ensure_outbound_egress_allowed("setup SMTP test delivery")
+        policy = (
+            policy_allowing_private_host(body.host)
+            if get_core_settings().allow_private_smtp_host
+            else PUBLIC_ONLY
+        )
+        sock = await connect_pinned_socket(
+            body.host,
+            body.port,
+            policy=policy,
+            timeout=SMTP_TEST_TIMEOUT_SECONDS,
+        )
         await aiosmtplib.send(
             message,
             hostname=body.host,
-            port=body.port,
+            port=None,
+            sock=sock,
             username=body.user or None,
             password=password or None,
             use_tls=use_tls,

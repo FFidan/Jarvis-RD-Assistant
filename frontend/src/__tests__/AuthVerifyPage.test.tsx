@@ -74,7 +74,7 @@ describe('AuthVerifyPage', () => {
 
   it('redirects without verifying when a valid session is already present', async () => {
     authState = { isAuthenticated: true, isSessionValid: () => true };
-    renderWithRoute('/auth/verify?token=already-authed-token');
+    renderWithRoute('/auth/verify#token=already-authed-token');
 
     await waitFor(() => {
       expect(screen.getByText('HOME')).toBeInTheDocument();
@@ -113,19 +113,9 @@ describe('AuthVerifyPage', () => {
     });
   });
 
-  it('keeps accepting old query-token links and strips their token immediately', async () => {
-    verifyMock.mockImplementationOnce(() => new Promise(() => {}));
-    renderWithRoute('/auth/verify?token=legacy-query-secret');
-
-    await waitFor(() => expect(verifyMock).toHaveBeenCalledWith('legacy-query-secret'));
-    await waitFor(() => {
-      expect(screen.getByTestId('verify-location')).not.toHaveTextContent('legacy-query-secret');
-    });
-  });
-
   it('on failure, shows error then navigates to /login', async () => {
     verifyMock.mockRejectedValueOnce(new Error('Invalid or expired token'));
-    renderWithRoute('/auth/verify?token=expired-token-aaaa');
+    renderWithRoute('/auth/verify#token=expired-token-aaaa');
 
     expect(await screen.findByText(/invalid or expired token/i)).toBeInTheDocument();
     await waitFor(
@@ -144,7 +134,7 @@ describe('AuthVerifyPage', () => {
       .mockRejectedValueOnce(new MockApiError(503, 'Server error'))
       .mockResolvedValueOnce({ id: 7, email: 'a@b.com', role: 'admin' });
 
-    renderWithRoute('/auth/verify?token=retry-token');
+    renderWithRoute('/auth/verify#token=retry-token');
 
     await waitFor(() => expect(verifyMock).toHaveBeenCalledTimes(1));
     await act(async () => {
@@ -164,11 +154,11 @@ describe('AuthVerifyPage', () => {
       .mockRejectedValueOnce(new MockApiError(400, 'Invalid or expired token'))
       .mockResolvedValueOnce({ id: 8, email: 'retry@b.com', role: 'user' });
 
-    const first = renderWithRoute('/auth/verify?token=retry-after-failure');
+    const first = renderWithRoute('/auth/verify#token=retry-after-failure');
     expect(await screen.findByText(/invalid or expired token/i)).toBeInTheDocument();
     first.unmount();
 
-    renderWithRoute('/auth/verify?token=retry-after-failure');
+    renderWithRoute('/auth/verify#token=retry-after-failure');
     await waitFor(() => {
       expect(verifyMock).toHaveBeenCalledTimes(2);
       expect(screen.getByText('HOME')).toBeInTheDocument();
@@ -184,7 +174,7 @@ describe('AuthVerifyPage', () => {
       }),
     );
 
-    const first = renderWithRoute('/auth/verify?token=cancel-success-token');
+    const first = renderWithRoute('/auth/verify#token=cancel-success-token');
     await waitFor(() => expect(verifyMock).toHaveBeenCalledTimes(1));
     first.unmount();
 
@@ -194,7 +184,7 @@ describe('AuthVerifyPage', () => {
     expect(loginWithSessionMock).not.toHaveBeenCalled();
 
     verifyMock.mockResolvedValueOnce({ id: 10, email: 'fresh@example.com', role: 'admin' });
-    renderWithRoute('/auth/verify?token=cancel-success-token');
+    renderWithRoute('/auth/verify#token=cancel-success-token');
 
     await waitFor(() => {
       expect(verifyMock).toHaveBeenCalledTimes(2);
@@ -208,7 +198,7 @@ describe('AuthVerifyPage', () => {
 
   it('does not retry invalid-token failures', async () => {
     verifyMock.mockRejectedValueOnce(new MockApiError(400, 'Invalid or expired token'));
-    renderWithRoute('/auth/verify?token=invalid-token');
+    renderWithRoute('/auth/verify#token=invalid-token');
 
     expect(await screen.findByText(/invalid or expired token/i)).toBeInTheDocument();
     expect(verifyMock).toHaveBeenCalledTimes(1);
@@ -227,7 +217,7 @@ describe('AuthVerifyPage', () => {
     verifyMock.mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' });
     render(
       <StrictMode>
-        <MemoryRouter initialEntries={['/auth/verify?token=strict-mode-token']}>
+        <MemoryRouter initialEntries={['/auth/verify#token=strict-mode-token']}>
           <Routes>
             <Route path="/auth/verify" element={<AuthVerifyPage />} />
             <Route path="/" element={<div>HOME</div>} />
@@ -252,7 +242,7 @@ describe('AuthVerifyPage', () => {
 
     it('unmounting within 2 s cancels the redirect timer (navigate not called)', async () => {
       verifyMock.mockRejectedValueOnce(new Error('Bad token'));
-      const { unmount } = renderWithRoute('/auth/verify?token=bad-token-xxx');
+      const { unmount } = renderWithRoute('/auth/verify#token=bad-token-xxx');
 
       // Wait for the error state to be set (async catch block ran)
       await waitFor(() => {
@@ -273,7 +263,7 @@ describe('AuthVerifyPage', () => {
 
     it('on failure, navigates to /login after the 2 s delay when not unmounted', async () => {
       verifyMock.mockRejectedValueOnce(new Error('Expired link'));
-      renderWithRoute('/auth/verify?token=expired-xxx');
+      renderWithRoute('/auth/verify#token=expired-xxx');
 
       // Wait for error UI to appear (timer is now running)
       await waitFor(() => {

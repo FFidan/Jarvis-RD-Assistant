@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -120,12 +121,6 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle ``/focus [duration]`` — start a focus session."""
     if update.message is None or update.effective_chat is None:
         return
-    if context.job_queue is None:
-        await update.message.reply_text(
-            "Focus sessions are unavailable (job queue not initialised).",
-            parse_mode="HTML",
-        )
-        return
     args = context.args or []
     try:
         minutes = min(int(args[0]) if args else 25, _MAX_FOCUS_MINUTES)
@@ -142,38 +137,38 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    chat_id = update.effective_chat.id
     jarvis_user_id = get_jarvis_user_id(context)
-
-    async def focus_alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
-        job = context.job
-        if job is None or job.chat_id is None:
-            return
-        job_minutes, job_user_id = job.data if isinstance(job.data, tuple) else (job.data, None)
-        data_minutes = job_minutes if isinstance(job_minutes, int | float) else 0
-        await context.bot.send_message(
-            job.chat_id,
-            text=f"🍅 Focus session complete ({data_minutes} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
+    assert jarvis_user_id is not None  # noqa: S101 -- guaranteed by @auth_required
+    try:
+        await services_client.start_focus_session(
+            get_http(context),
+            get_config(context),
+            jarvis_user_id,
+            minutes * 60,
         )
-        try:
-            http = get_http(context)
-            config = get_config(context)
-            await services_client.log_focus_session(http, config, job_user_id, data_minutes / 60)
-        except Exception:
-            logger.exception("Failed to log focus session to backend")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 409:
+            await update.message.reply_text(
+                "A focus session is already active. "
+                "Use the Web timer to pause, resume, or stop it.",
+                parse_mode="HTML",
+            )
+            return
+        logger.exception("Failed to start focus session")
+        await update.message.reply_text(
+            "The focus session could not be started. Try again later.",
+            parse_mode="HTML",
+        )
+        return
+    except Exception:
+        logger.exception("Failed to start focus session")
+        await update.message.reply_text(
+            "The focus session could not be started. Try again later.",
+            parse_mode="HTML",
+        )
+        return
 
-    # Cancel any existing focus timer for this chat
-    for job in context.job_queue.get_jobs_by_name(f"focus_{chat_id}"):
-        job.schedule_removal()
-
-    context.job_queue.run_once(
-        focus_alarm,
-        minutes * 60,
-        chat_id=chat_id,
-        name=f"focus_{chat_id}",
-        data=(minutes, jarvis_user_id),
-    )
     await update.message.reply_text(
-        f"🍅 Focus session started for {minutes} minutes. Notifications are paused.",
+        f"Focus session started for {minutes} minutes. Scheduled notifications are paused.",
         parse_mode="HTML",
     )

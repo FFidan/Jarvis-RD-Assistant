@@ -26,7 +26,7 @@ const SUMMARY: YesterdaySummary = {
   cards_reviewed: 6,
   tasks_done: 2,
   completed: [{ id: 1, title: 'Solver benchmark compiled', status: 'done' }],
-  deferred: [{ id: 2, title: 'Adjoint memory bound', status: 'deferred' }],
+  deferred: [{ id: 2, title: 'Adjoint memory bound', status: 'blocked' }],
 };
 
 describe('YesterdaySection', () => {

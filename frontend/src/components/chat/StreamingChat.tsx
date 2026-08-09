@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type FormEvent } from 'react';
 import { useStreamingChat } from '@/hooks/use-streaming-chat';
+import { getStreamErrorCopy } from '@/lib/sse';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { SourcesAccordion } from '@/components/chat/SourcesAccordion';
 import { Button } from '@/components/ui/button';
@@ -131,7 +132,7 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
           role="alert"
           className="mx-4 mb-2 flex items-center justify-between gap-3 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
-          <span>Something went wrong answering that. Please try again.</span>
+          <span>{getStreamErrorCopy(streamError)}</span>
           <Button
             type="button"
             variant="outline"

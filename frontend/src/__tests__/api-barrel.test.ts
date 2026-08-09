@@ -14,7 +14,8 @@ describe('@/lib/api barrel export parity', () => {
   // the shared core primitives. If any goes missing the split regressed.
   const expectedValues = [
     // core
-    'apiFetch',
+    'apiFetchJson',
+    'apiFetchVoid',
     'apiFetchRaw',
     'ApiError',
     'checkHealth',
@@ -61,7 +62,7 @@ describe('@/lib/api barrel export parity', () => {
     'fetchFeed',
     'fetchFeedPapers',
     'fetchFeedCounts',
-    'fetchFeedCountsWithFacets',
+    'fetchFeedCounts',
     'searchPreview',
     'savePaper',
     'starPaper',

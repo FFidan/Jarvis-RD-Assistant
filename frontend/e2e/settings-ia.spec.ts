@@ -45,19 +45,17 @@ const MOCK_SETUP_STATUS = {
 // ---------------------------------------------------------------------------
 
 async function seedAdminSession(page: Page) {
-  const apiKey = process.env.JARVIS_API_KEY ?? 'dev';
-  await page.addInitScript((key: string) => {
+  await page.addInitScript(() => {
     const state = {
       state: {
         isAuthenticated: true,
         authTime: Date.now(),
-        apiKey: key,
         user: { id: 1, email: 'admin@example.com', role: 'admin' },
       },
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
-  }, apiKey);
+  });
 }
 
 async function setupMocks(page: Page) {
@@ -211,7 +209,6 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
         state: {
           isAuthenticated: true,
           authTime: Date.now(),
-          apiKey: 'dev',
           user: { id: 2, email: 'user@example.com', role: 'user' },
         },
         version: 0,
@@ -261,7 +258,6 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
         state: {
           isAuthenticated: true,
           authTime: Date.now(),
-          apiKey: 'dev',
           user: { id: 2, email: 'user@example.com', role: 'user' },
         },
         version: 0,

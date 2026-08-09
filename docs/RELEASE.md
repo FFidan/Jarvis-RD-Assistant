@@ -145,11 +145,11 @@ Run the upgrade check for each maintained source contract:
 
 | Source release | Update path | Interrupted-update state |
 |---|---|---|
-| `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
 | `v1.2.2` | `bootstrap` | `current-merge-pending` |
-| `v1.2.3` | `direct` | `current-merge-pending` |
+| `v1.2.3` | `bootstrap` | `current-merge-pending` |
+| `v1.2.4` | `direct` | `current-merge-pending` |
 
 The `direct` row is the path essentially every existing installation takes, and
 it exercises the update transaction itself rather than the bootstrap. Do not skip
@@ -162,6 +162,14 @@ supported source enters through the bootstrap. It names explicit tags rather tha
 deriving them, so refresh it while preparing each release — the release being
 published becomes the new `direct` row, the previous `direct` row becomes a
 `bootstrap` row, and any source that has left support is dropped.
+
+These checks enforce three separate compatibility floors. Maintained in-place
+updates start at v1.2.0. The immutable v1.2.2 bootstrap remains documented as a
+separate legacy bridge from v1.1.3, but v1.1.3 is not a maintained source row and
+direct v1.1.3-to-current updates are not supported. Portable fresh-host restore
+starts with complete, signed backup sets created by v1.2.0 or later. Earlier or
+unsigned sets retain only the constrained same-host recovery paths described in
+the backup guide; they are not universally portable.
 
 The supported window is deliberate: the `bootstrap` rows reach back at most
 four releases behind the `direct` row. When adding a release to the table
@@ -268,18 +276,19 @@ that declares it — the root `pyproject.toml`, `libs/jarvis_common/pyproject.to
 and each service's `requirements.txt` — then re-locking both projects and
 regenerating the lock-derived pins with `scripts/export-service-requirements.sh`.
 
-Reproduce all three scans locally before pushing a release branch and again
-before tagging:
+Reproduce the locally runnable dependency and secret scans before pushing a
+release branch and again before tagging:
 
 ```bash
-for c in services/*/constraints.txt; do
-  uvx pip-audit --no-deps --disable-pip -r "$c"
-done
-python3 scripts/check_npm_audit.py
-curl -fsSL -o /tmp/osv-scanner \
-  https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
-chmod +x /tmp/osv-scanner && /tmp/osv-scanner scan --recursive .
+make security-scan
 ```
+
+The target pins the same osv-scanner and gitleaks artifacts as the hosted
+workflow, keeps them outside the repository, and verifies both downloaded
+artifacts and executable bytes on every run. It also runs the three pinned
+Python dependency inputs and the checked npm audit policy. It supports Linux
+x86_64; on another workstation, use the hosted Security workflow. A local pass
+does not replace the hosted Security aggregate or CodeQL evidence.
 
 ## Changelog Generation
 

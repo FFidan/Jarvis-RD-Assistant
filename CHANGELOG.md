@@ -10,6 +10,79 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.5 (2026-08-10)
+
+This release makes the research loop consistent across the Web interface,
+Telegram, fresh installations, and maintained upgrades. It also replaces
+several unchecked or duplicated control paths with smaller, tested owners.
+
+### Added
+
+- **One focus session across Web and Telegram.** Starting a focus session in
+  either client now updates the same durable timer. The session survives client
+  restarts, records completed time once, and pauses scheduled Telegram digests,
+  reminders, alerts, and warnings until focus ends.
+- **Cross-client job visibility.** Work started from Telegram or another browser
+  appears in the Web job indicator and refreshes the affected view when it
+  finishes, including fast Pulse jobs that complete between polls.
+- **A checked Telegram command reference.** Bot registration, Telegram's command
+  menu, `/help`, and the manual now derive from the same command catalog.
+- **A local security scan.** `make security-scan` reproduces the local dependency
+  and secret-scanning subset of the hosted Security workflow. Downloaded scanner
+  artifacts stay outside the repository and are hash-verified on every use.
+
+### Fixed
+
+- **Ask behaves predictably with reasoning-capable models.** Thinking is off
+  unless explicitly enabled, one answer budget now governs both prompt fitting
+  and the model request, and known response-hygiene failures produce actionable
+  retry and administrator guidance instead of a generic error.
+- **Outbound connections stay bound to the address that policy checked.** PDF
+  downloads, custom model providers, Better BibTeX, SMTP, and LiteLLM custom
+  provider traffic pin validated DNS results through the socket connection while
+  preserving normal certificate and hostname verification.
+- **Telegram Pulse reports what it is showing.** Telegram labels current, older,
+  reduced-signal, empty, and unverified results without changing backend ranking.
+  It shows the first five cards from the same ranked deck as the Web interface;
+  the same paper can still appear on another day when the inputs are unchanged.
+- **Historical migrations run in ordinary pull-request checks.** One shared
+  schema-101 fixture now proves the complete migration path instead of allowing
+  a synthetic or uncollected test to go green.
+- **Setup and delivery reject blank SMTP identities consistently.** Required
+  host and sender fields are normalized at setup, secret loading, readiness,
+  probing, and delivery boundaries.
+- **Upgrade diagnosis is read-only.** Lifecycle commands distinguish a possible
+  old Tailscale Serve target from custom or shared state and print a targeted,
+  operator-confirmed repair command without resetting or changing Serve state.
+- **Ordinary prose no longer trips the reasoning-token release blocker,** while
+  actual hidden-control markers remain blocking. Raw Compose commands are also
+  quiet when optional certificate settings are unset, and local model targets
+  use one parser for primary and fallback routes.
+
+### Changed
+
+- **Successful Web API responses are decoded at runtime.** Named schemas now
+  guard every JSON domain before state changes, including job events and results;
+  the generic unchecked response cast has been removed.
+- **Large PDF and backup workflows have smaller state owners.** PDF preparation,
+  persistence, and cleanup keep their lock and transaction order, while restore
+  recovery and retention editing now live in independently tested controllers.
+- **First-use navigation teaches the real loop.** Discover is present in the
+  simple navigation, and milestone-based guidance covers Discover, Save,
+  Analyze, and Ask on wide and narrow layouts using React 19-compatible tour
+  dependencies.
+- **Installation has one implementation.** New installs use `setup.sh`; the old
+  development command is a strict deprecated forwarder. Rollback now requires a
+  complete setup-owned credential snapshot before it changes access services.
+- **Expired compatibility branches and inert configuration were removed.** The
+  browser keeps API-key exchange but no longer stores or sends raw keys, tests
+  patch their real module owners, the unused fixed Telegram chat setting and
+  global Zotero schedule are gone, and unique lifecycle browser cases run in the
+  blocking mocked suite.
+- **Dependency floors and locks include current security fixes** for GitPython
+  and the frontend's transitive identifier generator; local and hosted scans
+  reject a return to their affected versions.
+
 ## v1.2.4 (2026-08-07)
 
 This release repairs two paths that were broken for people running the software

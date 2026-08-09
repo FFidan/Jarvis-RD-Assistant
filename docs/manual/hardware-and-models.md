@@ -143,10 +143,13 @@ What is deliberately left out or left unassignable:
   resolves to a private address, fetching the model list and setting the model up for use both
   refuse it, so in practice the endpoint never becomes usable. Letting the server call into private
   networks on request is a well-known way to reach systems that were never meant to be exposed, so
-  the refusal is by design and JARVIS offers no way to turn it off. Note the limit of any
-  name-based check: the address is resolved when it is checked and again when the connection is
-  made, so a name deliberately made to answer differently each time is not something this can
-  catch. Point the endpoint at an address you control.
+  the refusal is by design and JARVIS offers no way to turn it off. At the connection boundary,
+  JARVIS resolves the name once, validates the complete answer set, and connects only to one of
+  those validated IP addresses while preserving the original hostname for HTTP and TLS. Mixed
+  public/private answers and later redirects are checked again before use, so a DNS change cannot
+  redirect an approved request into a private network. The benchmark-only vLLM overlay uses its
+  fixed Docker service name through a separate internal policy; it does not provide a Settings
+  escape hatch for arbitrary private endpoints.
 - **Only one vendor prefix.** OpenRouter and self-hosted endpoints publish ids like
   `vendor/model-name`. An id with more nesting than that is left out of the fetched list.
 - **Very long lists are capped.** If a provider offers more models than JARVIS lists at once, the

@@ -3,7 +3,6 @@ import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthorSection } from '@/components/settings/AuthorSection';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
-import type { TrackedAuthor } from '@/types';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -20,7 +19,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 const { fetchTrackedAuthors } = await import('@/lib/api');
 
-const AUTHOR: TrackedAuthor = {
+const AUTHOR: Awaited<ReturnType<typeof fetchTrackedAuthors>>[number] = {
   id: 1,
   author_name: 'Yoshua Bengio',
   s2_author_id: null,

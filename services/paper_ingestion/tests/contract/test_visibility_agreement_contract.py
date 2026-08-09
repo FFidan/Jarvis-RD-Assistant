@@ -731,7 +731,6 @@ async def test_promotion_stands_when_reclamation_fails_and_retrieval_stays_close
         embedder,
         pool,
         CrossPaperAskRequest(question="What does the paper say?", decompose=False),
-        AsyncMock(),
         user_id=reader,
     )
 
@@ -927,7 +926,6 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
         embedder,
         SharedConnPool(contract_conn),
         CrossPaperAskRequest(question="What does the paper say?", decompose=False),
-        AsyncMock(),
         user_id=contract_two_users.user_b_id,
     )
     assert isinstance(result, CrossPaperRagNoResults), (

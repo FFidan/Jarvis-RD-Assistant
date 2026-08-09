@@ -32,7 +32,6 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: () => ({
       getUser: () => (_userId == null ? null : { id: _userId, email: 'x@y.z', role: 'user' }),
-      getApiKey: () => 'test-key',
     }),
   },
 }));

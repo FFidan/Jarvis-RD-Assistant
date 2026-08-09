@@ -240,7 +240,7 @@ async def test_prepare_cross_paper_rag_emits_system_user_messages():
     embedder = _make_cross_paper_embedder()
     pool = _make_cross_paper_pool()
 
-    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+    result = await prepare_cross_paper_rag(embedder, pool, body=body)
 
     assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep with messages; got {result!r}"
     roles = [m["role"] for m in result.messages]
@@ -269,7 +269,7 @@ async def test_prepare_cross_paper_rag_chunk_data_not_in_system():
     embedder = _make_cross_paper_embedder(chunks=chunks)
     pool = _make_cross_paper_pool()
 
-    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+    result = await prepare_cross_paper_rag(embedder, pool, body=body)
 
     assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep; got {result!r}"
     system_content = result.messages[0]["content"]
@@ -481,10 +481,11 @@ async def test_history_char_budget_drops_oldest_beyond_turn_cap():
 def _prompt_budget() -> int:
     from jarvis_common.prompt_safety import max_input_chars
     from jarvis_common.settings import get_core_settings
-    from paper_ingestion.rag.streaming import _ANSWER_MAX_TOKENS
+    from paper_ingestion.rag.streaming import RagAnswerBudget
 
     return max_input_chars(
-        get_core_settings().llm_smart_num_ctx, reserved_output_tokens=_ANSWER_MAX_TOKENS
+        get_core_settings().llm_smart_num_ctx,
+        reserved_output_tokens=RagAnswerBudget.for_non_thinking().reserved_output_tokens,
     )
 
 
@@ -577,7 +578,7 @@ async def test_cross_paper_oversized_chunks_dropped_to_fit_budget(monkeypatch):
         question="Compare all of it.", decompose=False, max_chunks=6, max_papers=3
     )
 
-    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+    result = await prepare_cross_paper_rag(embedder, pool, body=body)
 
     assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep; got {result!r}"
     assert 1 <= len(result.sources) < 6, (
@@ -618,7 +619,7 @@ async def test_cross_paper_under_budget_keeps_all_chunks():
     pool = _make_cross_paper_pool(paper_rows=paper_rows)
     body = CrossPaperAskRequest(question="Tiny question.", decompose=False)
 
-    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+    result = await prepare_cross_paper_rag(embedder, pool, body=body)
 
     assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep; got {result!r}"
     assert {s["content"] for s in result.sources} == {c["content"] for c in chunks}
@@ -692,7 +693,6 @@ async def test_cross_paper_rag_drops_an_excerpt_with_no_stored_chunk_row():
         embedder,
         pool,
         body=CrossPaperAskRequest(question="What do the papers say?", decompose=False),
-        http_client=AsyncMock(),
     )
 
     assert hasattr(result, "sources"), f"Expected CrossPaperRagPrep; got {result!r}"

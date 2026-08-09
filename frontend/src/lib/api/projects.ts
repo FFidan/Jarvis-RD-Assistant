@@ -1,82 +1,93 @@
 // Projects, open questions, recent activity, tasks, milestones, and the
 // project↔paper link surface.
-import { apiFetch } from './core';
+import { apiFetchJson, apiFetchVoid } from './core';
+import {
+  librarySearchPaperSchema,
+  milestoneSchema,
+  projectActivitySchema,
+  projectPaperLinkSchema,
+  projectPaperSchema,
+  projectQuestionSchema,
+  projectSchema,
+  taskSchema,
+} from './schemas/projects';
+import type { LibrarySearchPaper } from './schemas/projects';
 import type {
   Project,
   Task,
   Milestone,
   ProjectPaper,
-  Paper,
   ProjectQuestion,
   ProjectActivityItem,
 } from '@/types';
 
 // --- Projects ---
-export const fetchProjects = (status?: string) =>
-  apiFetch<Project[]>(`/api/projects${status ? `?status=${status}` : ''}`);
+export const fetchProjects = (status?: string): Promise<Project[]> =>
+  apiFetchJson(`/api/projects${status ? `?status=${status}` : ''}`, projectSchema.array());
 export const createProject = (data: {
   name: string;
   description?: string | null;
   status?: string;
   deadline?: string | null;
-}) => apiFetch<Project>('/api/projects', { method: 'POST', body: JSON.stringify(data) });
-export const updateProject = (id: number, data: Partial<Project>) =>
-  apiFetch<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+}): Promise<Project> => apiFetchJson('/api/projects', projectSchema, { method: 'POST', body: JSON.stringify(data) });
+export const updateProject = (id: number, data: Partial<Project>): Promise<Project> =>
+  apiFetchJson(`/api/projects/${id}`, projectSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProject = (id: number) =>
-  apiFetch<void>(`/api/projects/${id}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/projects/${id}`, { method: 'DELETE' });
 
 // --- Project Open Questions (Projects § OPEN QUESTIONS) ---
-export const fetchProjectQuestions = (projectId: number) =>
-  apiFetch<ProjectQuestion[]>(`/api/projects/${projectId}/questions`);
-export const createProjectQuestion = (projectId: number, body: string) =>
-  apiFetch<ProjectQuestion>(`/api/projects/${projectId}/questions`, {
+export const fetchProjectQuestions = (projectId: number): Promise<ProjectQuestion[]> =>
+  apiFetchJson(`/api/projects/${projectId}/questions`, projectQuestionSchema.array());
+export const createProjectQuestion = (projectId: number, body: string): Promise<ProjectQuestion> =>
+  apiFetchJson(`/api/projects/${projectId}/questions`, projectQuestionSchema, {
     method: 'POST',
     body: JSON.stringify({ body }),
   });
 /** DELETE is addressed by question id (own /api/questions prefix). */
 export const deleteProjectQuestion = (questionId: number) =>
-  apiFetch<void>(`/api/questions/${questionId}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/questions/${questionId}`, { method: 'DELETE' });
 
 // --- Project Recent Activity (Projects § RECENT ACTIVITY) ---
-export const fetchProjectActivity = (projectId: number, limit?: number) =>
-  apiFetch<ProjectActivityItem[]>(
+export const fetchProjectActivity = (projectId: number, limit?: number): Promise<ProjectActivityItem[]> =>
+  apiFetchJson(
     `/api/projects/${projectId}/activity${limit ? `?limit=${limit}` : ''}`,
+    projectActivitySchema.array(),
   );
 
 // --- Tasks ---
-export const fetchTasks = (projectId: number) =>
-  apiFetch<Task[]>(`/api/projects/${projectId}/tasks`);
+export const fetchTasks = (projectId: number): Promise<Task[]> =>
+  apiFetchJson(`/api/projects/${projectId}/tasks`, taskSchema.array());
 export const createTask = (projectId: number, data: {
   title: string;
   description?: string | null;
   status?: string;
   priority?: number;
   deadline?: string | null;
-}) => apiFetch<Task>(`/api/projects/${projectId}/tasks`, { method: 'POST', body: JSON.stringify(data) });
-export const updateTask = (taskId: number, data: Partial<Task>) =>
-  apiFetch<Task>(`/api/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(data) });
+}): Promise<Task> => apiFetchJson(`/api/projects/${projectId}/tasks`, taskSchema, { method: 'POST', body: JSON.stringify(data) });
+export const updateTask = (taskId: number, data: Partial<Task>): Promise<Task> =>
+  apiFetchJson(`/api/tasks/${taskId}`, taskSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTask = (taskId: number) =>
-  apiFetch<void>(`/api/tasks/${taskId}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/tasks/${taskId}`, { method: 'DELETE' });
 
 // --- Milestones ---
-export const fetchMilestones = (projectId: number) =>
-  apiFetch<Milestone[]>(`/api/projects/${projectId}/milestones`);
+export const fetchMilestones = (projectId: number): Promise<Milestone[]> =>
+  apiFetchJson(`/api/projects/${projectId}/milestones`, milestoneSchema.array());
 export const createMilestone = (projectId: number, data: {
   name: string;
   deadline?: string | null;
   description?: string | null;
-}) => apiFetch<Milestone>(`/api/projects/${projectId}/milestones`, { method: 'POST', body: JSON.stringify(data) });
-export const updateMilestone = (milestoneId: number, data: Partial<Milestone>) =>
-  apiFetch<Milestone>(`/api/milestones/${milestoneId}`, { method: 'PUT', body: JSON.stringify(data) });
+}): Promise<Milestone> => apiFetchJson(`/api/projects/${projectId}/milestones`, milestoneSchema, { method: 'POST', body: JSON.stringify(data) });
+export const updateMilestone = (milestoneId: number, data: Partial<Milestone>): Promise<Milestone> =>
+  apiFetchJson(`/api/milestones/${milestoneId}`, milestoneSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteMilestone = (milestoneId: number) =>
-  apiFetch<void>(`/api/milestones/${milestoneId}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/milestones/${milestoneId}`, { method: 'DELETE' });
 
 // --- Project Papers ---
-export const fetchProjectPapers = (projectId: number) =>
-  apiFetch<ProjectPaper[]>(`/api/projects/${projectId}/papers`);
-export const linkPaper = (projectId: number, paperId: number) =>
-  apiFetch<{ project_id: number; paper_id: number }>(`/api/projects/${projectId}/papers/${paperId}`, { method: 'POST' });
+export const fetchProjectPapers = (projectId: number): Promise<ProjectPaper[]> =>
+  apiFetchJson(`/api/projects/${projectId}/papers`, projectPaperSchema.array());
+export const linkPaper = (projectId: number, paperId: number): Promise<{ project_id: number; paper_id: number }> =>
+  apiFetchJson(`/api/projects/${projectId}/papers/${paperId}`, projectPaperLinkSchema, { method: 'POST' });
 export const unlinkPaper = (projectId: number, paperId: number) =>
-  apiFetch<void>(`/api/projects/${projectId}/papers/${paperId}`, { method: 'DELETE' });
-export const searchLibrary = (q: string) =>
-  apiFetch<Paper[]>(`/api/papers?q=${encodeURIComponent(q)}&limit=20`);
+  apiFetchVoid(`/api/projects/${projectId}/papers/${paperId}`, { method: 'DELETE' });
+export const searchLibrary = (q: string): Promise<LibrarySearchPaper[]> =>
+  apiFetchJson(`/api/papers?q=${encodeURIComponent(q)}&limit=20`, librarySearchPaperSchema.array());

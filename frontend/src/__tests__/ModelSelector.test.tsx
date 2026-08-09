@@ -42,19 +42,18 @@ vi.mock('@/components/ui/select', () => ({
   ),
 }));
 
+const modelApiMocks = vi.hoisted(() => ({
+  fetchSystemModels: vi.fn(),
+  apiFetchVoid: vi.fn(),
+}));
+
 vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
-  const apiFetch: import('vitest').Mock<(path?: string, init?: unknown) => Promise<unknown>> =
-    vi.fn(async () => ({}));
   const mocked = await createApiMock({
-    // fetchSystemModels is the named export used by ModelSelector's queryFn.
-    // Wire it through to the same apiFetch mock so existing per-test
-    // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
-    fetchSystemModels: () => apiFetch('/api/system/models'),
+    fetchSystemModels: modelApiMocks.fetchSystemModels,
+    apiFetchVoid: modelApiMocks.apiFetchVoid,
   });
-  // Export the very same apiFetch instance fetchSystemModels closes over —
-  // wrapping it would break that per-test control.
-  return Object.assign(mocked, { apiFetch });
+  return mocked;
 });
 
 function renderComponent(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
@@ -219,8 +218,8 @@ const defaultModels = {
 describe('ModelSelector', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue(defaultModels);
   });
 
   it('renders trigger with "Select a model" placeholder', () => {
@@ -298,8 +297,8 @@ describe('ModelSelector', () => {
   });
 
   it('renders detected hardware and per-model hardware requirements', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       hardware: {
         vram_gb: 16,
@@ -320,8 +319,8 @@ describe('ModelSelector', () => {
   });
 
   it('honors backend-owned assignment blockers over derived local status', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: {},
       catalog: [
@@ -349,8 +348,8 @@ describe('ModelSelector', () => {
   });
 
   it('shows "No models found. Is Ollama running?" when catalog is empty', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       status: 'ok',
       installed: [],
       hardware: {},
@@ -367,8 +366,8 @@ describe('ModelSelector', () => {
   });
 
   it('shows degraded backend issue text instead of an empty-state guess', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       status: 'degraded',
       installed: [],
       hardware: {},
@@ -386,8 +385,8 @@ describe('ModelSelector', () => {
   });
 
   it('shows query failures as errors instead of an empty-state message', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockRejectedValue(new Error('boom'));
+
+    modelApiMocks.fetchSystemModels.mockRejectedValue(new Error('boom'));
 
     renderComponent();
     await waitFor(() => {
@@ -420,8 +419,8 @@ describe('ModelSelector', () => {
   });
 
   it('offers a pull action for the selected downloadable local model', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue(defaultModels);
 
     renderComponent({ value: 'qwen3:4b', configKey: 'llm.fast_model' });
 
@@ -437,15 +436,15 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
 
     await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A4b/pull', {
+      expect(modelApiMocks.apiFetchVoid).toHaveBeenCalledWith('/api/system/models/qwen3%3A4b/pull', {
         method: 'POST',
       });
     });
   });
 
   it('offers a pull action for downloadable local models while the current value remains selected', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: { smart_model: 'qwen3:14b' },
       catalog: [
@@ -479,37 +478,33 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
 
     await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
+      expect(modelApiMocks.apiFetchVoid).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
         method: 'POST',
       });
     });
   });
 
   it('does not assign a downloadable local model before its pull succeeds', async () => {
-    const { apiFetch } = await import('@/lib/api');
+
     let resolvePull!: () => void;
     const pullPromise = new Promise<void>((resolve) => {
       resolvePull = resolve;
     });
-    vi.mocked(apiFetch).mockImplementation((path, init) => {
-      if (path === '/api/system/models/qwen3%3A8b/pull' && init?.method === 'POST') {
-        return pullPromise;
-      }
-      return Promise.resolve({
-        ...defaultModels,
-        current: { smart_model: 'qwen3:14b' },
-        catalog: [
-          defaultModels.catalog[0],
-          {
-            ...defaultModels.catalog[1],
-            id: 'qwen3:8b',
-            name: 'Qwen3 8B',
-            ollama_tag: 'qwen3:8b',
-            roles: ['smart'],
-          },
-        ],
-      });
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      catalog: [
+        defaultModels.catalog[0],
+        {
+          ...defaultModels.catalog[1],
+          id: 'qwen3:8b',
+          name: 'Qwen3 8B',
+          ollama_tag: 'qwen3:8b',
+          roles: ['smart'],
+        },
+      ],
     });
+    modelApiMocks.apiFetchVoid.mockImplementation(() => pullPromise);
     const onChange = vi.fn();
 
     renderComponent({ value: 'qwen3:14b', onChange, configKey: 'llm.smart_model' });
@@ -526,7 +521,7 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
 
     await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
+      expect(modelApiMocks.apiFetchVoid).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
         method: 'POST',
       });
     });
@@ -535,8 +530,8 @@ describe('ModelSelector', () => {
   });
 
   it('requires confirmation before deleting selected inactive pulled local models', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue(defaultModels);
 
     renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
 
@@ -562,7 +557,7 @@ describe('ModelSelector', () => {
       screen.getByText('This removes Qwen3 Embedding 0.6B from Ollama and frees approximately 0.6 GB. You can pull it again later.'),
     ).toBeInTheDocument();
     expect(
-      vi.mocked(apiFetch).mock.calls.some(
+      modelApiMocks.apiFetchVoid.mock.calls.some(
         ([path, init]) =>
           path === '/api/system/models/qwen3-embedding%3A0.6b' && init?.method === 'DELETE',
       ),
@@ -571,15 +566,15 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3-embedding%3A0.6b', {
+      expect(modelApiMocks.apiFetchVoid).toHaveBeenCalledWith('/api/system/models/qwen3-embedding%3A0.6b', {
         method: 'DELETE',
       });
     });
   });
 
   it('shows active cloud catalog entries even when provider key status is not present', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       status: 'ok',
       installed: [],
       hardware: {},
@@ -619,8 +614,8 @@ describe('ModelSelector', () => {
   });
 
   it('hides delete actions until manage section is expanded', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue(defaultModels);
 
     renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
 
@@ -654,8 +649,8 @@ describe('ModelSelector', () => {
   // -------------------------------------------------------------------------
 
   it('disables options whose fit_detail.default is "unfit"', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       hardware: { vram_gb: 16, tier: 2, machine_id: 'host-test-gpu' },
       catalog: [
@@ -712,8 +707,8 @@ describe('ModelSelector', () => {
   });
 
   it('shows Cloud badge for entries with fit_detail.default === "cloud"', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       catalog: [
         {
@@ -746,8 +741,8 @@ describe('ModelSelector', () => {
   // -------------------------------------------------------------------------
 
   it('shows routing divergence line when LiteLLM serves a different model than saved', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: { smart_model: 'qwen3:14b' },
       routing: { smart: 'qwen3:8b' },
@@ -763,8 +758,8 @@ describe('ModelSelector', () => {
   });
 
   it('does not show routing divergence line when routing matches saved model', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: { smart_model: 'qwen3:14b' },
       routing: { smart: 'qwen3:14b' },
@@ -779,8 +774,8 @@ describe('ModelSelector', () => {
   });
 
   it('does not show routing divergence line when routing is absent (backend pre-T1.3)', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: { smart_model: 'qwen3:14b' },
       // routing absent — older backend
@@ -796,8 +791,8 @@ describe('ModelSelector', () => {
 
   // DA-07: effectiveFit predicate unification
   it('excludes a downloadable entry with fit_detail.default="unfit" from pull CTAs', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       hardware: { vram_gb: 4, tier: 1, vram_source: 'nvidia-smi' },
       current: { smart_model: 'qwen3:14b' },
@@ -864,11 +859,11 @@ describe('ModelSelector', () => {
 
 
   it('does not offer pull or delete controls for cloud catalog entries', async () => {
-    const { apiFetch } = await import('@/lib/api');
+
     const cloudEntries = defaultModels.catalog.filter((entry) =>
       ['anthropic', 'openai'].includes(entry.provider),
     );
-    vi.mocked(apiFetch).mockResolvedValue({
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       current: { smart_model: 'qwen3:14b' },
       catalog: [defaultModels.catalog[0], ...cloudEntries],
@@ -890,8 +885,8 @@ describe('ModelSelector', () => {
   // -------------------------------------------------------------------------
 
   it('renders a live provider-sourced entry as selectable inside its provider group', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       catalog: [
         ...defaultModels.catalog,
@@ -928,8 +923,8 @@ describe('ModelSelector', () => {
   });
 
   it('renders a display-only unknown-capability entry as disabled with its blocker notes', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       catalog: [
         ...defaultModels.catalog,
@@ -967,8 +962,8 @@ describe('ModelSelector', () => {
   });
 
   it('renders a provider-lists-only group label with the unavailable caption when the catalog has no entry for it', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       // No 'deepseek' entry anywhere in catalog — only provider_lists carries it.
       provider_lists: {
@@ -987,8 +982,8 @@ describe('ModelSelector', () => {
   });
 
   it('does not call a successful but empty group unavailable', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,
       provider_lists: {
         deepseek: { fetched_at: '2026-08-01T00:00:00Z', error: null, truncated: false },

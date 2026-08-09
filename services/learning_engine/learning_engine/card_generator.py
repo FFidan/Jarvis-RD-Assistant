@@ -282,7 +282,6 @@ class CardGenerator:
         chunks: list[dict[str, Any]],
         openai_client: openai.AsyncOpenAI,
         paper_id: int | None = None,
-        abstract: str | None = None,
         max_cards: int = 5,
         model: str = "smart",
         summary_text: str | None = None,
@@ -306,9 +305,6 @@ class CardGenerator:
             Instructor-patched OpenAI client from ``app.state.openai_client``.
         paper_id : int | None
             Paper ID for snapshot path linking (rule 7).
-        abstract : str | None
-            Unused; retained for caller compatibility (the rule-6 abstract
-            fallback card was removed — 100% failure now returns no cards).
         max_cards : int
             Maximum number of cards to generate.
         summary_text : str | None

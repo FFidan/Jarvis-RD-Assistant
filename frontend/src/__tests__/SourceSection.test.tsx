@@ -15,7 +15,9 @@ vi.mock('@/lib/api', () => ({
 
 const { fetchSources } = await import('@/lib/api');
 
-function source(overrides: Partial<SourceConfig> = {}): SourceConfig {
+type SourcePayload = Awaited<ReturnType<typeof fetchSources>>[number];
+
+function source(overrides: Partial<SourcePayload> = {}): SourcePayload {
   return {
     id: 1,
     source_type: 'pubmed',

@@ -1,61 +1,98 @@
 // Settings & configuration: topics, sources, tracked authors, config,
 // setup/pairing, first-run wizard, Telegram, nudges, extraction templates,
 // SMTP relay, per-source credentials, cloud LLM providers, access mode.
-import { apiFetch, apiFetchRaw, triggerBlobDownload } from './core';
+import { apiFetchJson, apiFetchRaw, apiFetchVoid, triggerBlobDownload } from './core';
+import { okResponseSchema } from './schemas/common';
+import {
+  autoDetectAuthorsResponseSchema,
+  checkTrackedAuthorsResponseSchema,
+  configEntryListSchema,
+  configEntrySchema,
+  extractionTemplateListSchema,
+  extractionTemplateSchema,
+  firstRunAdminResponseSchema,
+  firstRunCloudKeysResponseSchema,
+  firstRunStatusSchema,
+  firstRunSystemCheckSchema,
+  nudgeListSchema,
+  nudgeSchema,
+  providerMetadataListSchema,
+  providerTestResponseSchema,
+  setupModeResponseSchema,
+  setupStatusSchema,
+  smtpConfigSchema,
+  smtpSaveResponseSchema,
+  sourceConfigListSchema,
+  sourceConfigSchema,
+  telegramBotTokenSaveResponseSchema,
+  telegramBotTokenStatusSchema,
+  telegramPairTokenResponseSchema,
+  topicListSchema,
+  topicSchema,
+  topicSubscriptionListSchema,
+  trackedAuthorListSchema,
+  trackedAuthorSchema,
+  userTelegramPairingStatusSchema,
+} from './schemas/settings';
+export type {
+  FirstRunAdminResponse,
+  FirstRunCloudKeysResponse,
+  FirstRunServiceStatus,
+  FirstRunSmtpResponse,
+  FirstRunStatus,
+  FirstRunSystemCheck,
+  ProviderMetadata,
+  TelegramPairTokenResponse,
+  UserTelegramPairingStatus,
+} from './schemas/settings';
 import type {
   Topic,
   SourceConfig,
   TrackedAuthor,
-  ConfigEntry,
   Nudge,
   ExtractionTemplate,
-  SetupStatus,
-  SmtpConfig,
   SmtpConfigInput,
   SourceConfigPatch,
-  TelegramBotTokenStatus,
-  TelegramBotTokenSaveResponse,
-  SetupModeResponse,
 } from '@/types';
 
 // --- Topics ---
-export const fetchTopics = () => apiFetch<Topic[]>('/api/topics');
+export const fetchTopics = () => apiFetchJson('/api/topics', topicListSchema);
 export const createTopic = (data: Partial<Topic>) =>
-  apiFetch<Topic>('/api/topics', { method: 'POST', body: JSON.stringify(data) });
+  apiFetchJson('/api/topics', topicSchema, { method: 'POST', body: JSON.stringify(data) });
 export const updateTopic = (id: number, data: Partial<Topic>) =>
-  apiFetch<Topic>(`/api/topics/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  apiFetchJson(`/api/topics/${id}`, topicSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTopic = (id: number) =>
-  apiFetch<void>(`/api/topics/${id}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/topics/${id}`, { method: 'DELETE' });
 export const fetchMySubscriptions = () =>
-  apiFetch<number[]>('/api/topics/subscriptions');
+  apiFetchJson('/api/topics/subscriptions', topicSubscriptionListSchema);
 export const subscribeToTopic = (topicId: number) =>
-  apiFetch<void>(`/api/topics/${topicId}/subscribe`, { method: 'PUT' });
+  apiFetchVoid(`/api/topics/${topicId}/subscribe`, { method: 'PUT' });
 export const unsubscribeFromTopic = (topicId: number) =>
-  apiFetch<void>(`/api/topics/${topicId}/subscribe`, { method: 'DELETE' });
+  apiFetchVoid(`/api/topics/${topicId}/subscribe`, { method: 'DELETE' });
 
 // --- Sources ---
-export const fetchSources = () => apiFetch<SourceConfig[]>('/api/sources');
+export const fetchSources = () => apiFetchJson('/api/sources', sourceConfigListSchema);
 export const updateSource = (id: number, data: Partial<SourceConfig>) =>
-  apiFetch<SourceConfig>(`/api/sources/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  apiFetchJson(`/api/sources/${id}`, sourceConfigSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const reorderSources = (source_types: string[]) =>
-  apiFetch<SourceConfig[]>('/api/sources/reorder', {
+  apiFetchJson('/api/sources/reorder', sourceConfigListSchema, {
     method: 'PATCH',
     body: JSON.stringify({ source_types }),
     headers: { 'Content-Type': 'application/json' },
   });
 
 // --- Tracked Authors ---
-export const fetchTrackedAuthors = () => apiFetch<TrackedAuthor[]>('/api/authors');
+export const fetchTrackedAuthors = () => apiFetchJson('/api/authors', trackedAuthorListSchema);
 export const createTrackedAuthor = (data: Partial<TrackedAuthor>) =>
-  apiFetch<TrackedAuthor>('/api/authors', { method: 'POST', body: JSON.stringify(data) });
+  apiFetchJson('/api/authors', trackedAuthorSchema, { method: 'POST', body: JSON.stringify(data) });
 export const updateTrackedAuthor = (id: number, data: Partial<TrackedAuthor>) =>
-  apiFetch<TrackedAuthor>(`/api/authors/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  apiFetchJson(`/api/authors/${id}`, trackedAuthorSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTrackedAuthor = (id: number) =>
-  apiFetch<void>(`/api/authors/${id}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/authors/${id}`, { method: 'DELETE' });
 export const autoDetectAuthors = () =>
-  apiFetch<{ added: number; already_tracked: number }>('/api/authors/auto-detect', { method: 'POST' });
+  apiFetchJson('/api/authors/auto-detect', autoDetectAuthorsResponseSchema, { method: 'POST' });
 export const checkTrackedAuthors = () =>
-  apiFetch<{ new_papers: number; authors_checked: number }>('/api/authors/check', { method: 'POST' });
+  apiFetchJson('/api/authors/check', checkTrackedAuthorsResponseSchema, { method: 'POST' });
 
 // --- Account data export ---
 const ACCOUNT_EXPORT_FILENAME = 'jarvis-data-export.zip';
@@ -67,55 +104,17 @@ export async function downloadMyData(): Promise<void> {
 }
 
 // --- Settings / Config ---
-export const fetchConfig = () => apiFetch<ConfigEntry[]>('/api/config');
+export const fetchConfig = () => apiFetchJson('/api/config', configEntryListSchema);
 export const setConfig = (key: string, value: unknown) =>
-  apiFetch<ConfigEntry>(`/api/config/${key}`, { method: 'PUT', body: JSON.stringify({ key, value }) });
+  apiFetchJson(`/api/config/${key}`, configEntrySchema, { method: 'PUT', body: JSON.stringify({ key, value }) });
 
 // --- Setup / Pairing ---
 export const getSetupStatus = () =>
-  apiFetch<SetupStatus>('/api/system/setup-status');
+  apiFetchJson('/api/system/setup-status', setupStatusSchema);
 
 // --- First-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
-export interface FirstRunStatus {
-  configured: boolean;
-  /**
-   * True once the onboarding wizard has been completed end-to-end (the
-   * `setup.completed` config flag). Distinct from `configured` (an admin user
-   * exists): a CLI-bootstrapped install can be `configured` yet not yet
-   * `setup_completed`. The unified onboarding gate keys on this field.
-   * Added to the pre-auth /api/setup/status payload (Task A1).
-   */
-  setup_completed?: boolean;
-  setup_mode?: 'single' | 'multi';
-  /** True when JARVIS_HW_TIER in .env differs from the baseline recorded at last boot. */
-  hw_tier_changed?: boolean;
-  hw_tier_baseline?: string | null;
-  hw_tier_current?: string | null;
-  /** Detected accelerator vendor (nvidia | amd | intel | none). Optional — older backends omit it. */
-  gpu_vendor?: string;
-  recommended_backend?: string | null;
-  current_backend?: string | null;
-  observed_backend?: string | null;
-  observed_recent_share?: number;
-  /**
-   * True iff SMTP is configured (DB or env). When false, magic-links cannot be
-   * delivered and the login page defaults to the API-key tab. Optional so older
-   * backends (before Task T0.4) degrade gracefully — absence is treated as
-   * unknown (no default-override applied).
-   */
-  smtp_configured?: boolean;
-  /**
-   * True iff the configured relay currently accepts a connection (cached
-   * liveness probe). `smtp_configured` is presence-only, so a relay can be
-   * configured yet unreachable; LoginPage surfaces that "configured but
-   * failing" state from this field. Optional — older backends omit it.
-   */
-  smtp_reachable?: boolean;
-}
-export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
-export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
 export interface FirstRunSmtpBody {
   host: string;
   port: number;
@@ -128,30 +127,16 @@ export interface FirstRunSmtpBody {
   test_send?: boolean;
   test_recipient?: string | null;
 }
-export interface FirstRunSmtpResponse {
-  saved: boolean;
-  test_sent: boolean | null;
-  test_error: string | null;
-}
-export interface FirstRunAdminResponse { id: number; email: string; role: string }
 export interface FirstRunCloudKeysBody {
   openai?: string | null;
   anthropic?: string | null;
   gemini?: string | null;
 }
-export interface FirstRunCloudKeysResponse {
-  saved_providers: string[];
-  /** Providers whose keys were applied to the running process immediately. */
-  applied_now: string[];
-  /** True when a service restart is needed for changes to take effect. */
-  restart_required: boolean;
-}
-
 export const getFirstRunStatus = () =>
-  apiFetch<FirstRunStatus>('/api/setup/status');
+  apiFetchJson('/api/setup/status', firstRunStatusSchema);
 
 export const dismissBanner = (banner_kind: string) =>
-  apiFetch<void>('/api/settings/ai/dismiss-banner', {
+  apiFetchVoid('/api/settings/ai/dismiss-banner', {
     method: 'POST',
     body: JSON.stringify({ banner_kind }),
   });
@@ -165,27 +150,27 @@ const setupTokenHeader = (token?: string | null): Record<string, string> =>
   token ? { 'X-Setup-Token': token } : {};
 
 export const runFirstRunSystemCheck = (setupToken?: string | null) =>
-  apiFetch<FirstRunSystemCheck>('/api/setup/system-check', {
+  apiFetchJson('/api/setup/system-check', firstRunSystemCheckSchema, {
     method: 'POST',
     headers: setupTokenHeader(setupToken),
   });
 
 export const saveFirstRunSmtp = (body: FirstRunSmtpBody, setupToken?: string | null) =>
-  apiFetch<FirstRunSmtpResponse>('/api/setup/smtp', {
+  apiFetchJson('/api/setup/smtp', smtpSaveResponseSchema, {
     method: 'POST',
     body: JSON.stringify(body),
     headers: setupTokenHeader(setupToken),
   });
 
 export const createFirstRunAdmin = (email: string, setupToken?: string | null) =>
-  apiFetch<FirstRunAdminResponse>('/api/setup/admin', {
+  apiFetchJson('/api/setup/admin', firstRunAdminResponseSchema, {
     method: 'POST',
     body: JSON.stringify({ email }),
     headers: setupTokenHeader(setupToken),
   });
 
 export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody, setupToken?: string | null) =>
-  apiFetch<FirstRunCloudKeysResponse>('/api/setup/cloud-llm-keys', {
+  apiFetchJson('/api/setup/cloud-llm-keys', firstRunCloudKeysResponseSchema, {
     method: 'POST',
     body: JSON.stringify(body),
     headers: setupTokenHeader(setupToken),
@@ -193,72 +178,61 @@ export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody, setupToken?: 
 
 // --- Per-user multi-tenant Telegram pairing ---
 
-export interface TelegramPairTokenResponse {
-  token: string;
-  expires_at: string;
-}
-
-export interface UserTelegramPairingStatus {
-  paired: boolean;
-  chat_id: number | null;
-  telegram_username: string | null;
-  paired_at: string | null;
-}
-
 /** Issue a 15-minute per-user pairing token. Requires an authenticated session. */
 export const requestTelegramPairToken = () =>
-  apiFetch<TelegramPairTokenResponse>('/api/telegram/pair-token', { method: 'POST' });
+  apiFetchJson('/api/telegram/pair-token', telegramPairTokenResponseSchema, { method: 'POST' });
 
 /** Return the current user's Telegram pairing status from telegram_user_pairings. */
 export const getTelegramPairing = () =>
-  apiFetch<UserTelegramPairingStatus>('/api/telegram/pairing');
+  apiFetchJson('/api/telegram/pairing', userTelegramPairingStatusSchema);
 
 /** Remove the current user's Telegram pairing. */
 export const removeTelegramPairing = () =>
-  apiFetch<void>('/api/telegram/pairing', { method: 'DELETE' });
+  apiFetchVoid('/api/telegram/pairing', { method: 'DELETE' });
 
 export const markSetupCompleted = () =>
-  apiFetch<void>('/api/config/setup.completed', {
+  apiFetchVoid('/api/config/setup.completed', {
     method: 'PUT',
     body: JSON.stringify({ key: 'setup.completed', value: true }),
   });
 
 // --- Nudges ---
-export const fetchNudges = () => apiFetch<Nudge[]>('/api/nudges');
+export const fetchNudges = () => apiFetchJson('/api/nudges', nudgeListSchema);
 export const updateNudge = (id: number, data: Partial<Nudge>) =>
-  apiFetch<Nudge>(`/api/nudges/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  apiFetchJson(`/api/nudges/${id}`, nudgeSchema, { method: 'PUT', body: JSON.stringify(data) });
 
 // --- Extraction Templates ---
 export const fetchExtractionTemplates = () =>
-  apiFetch<ExtractionTemplate[]>('/api/extraction-templates');
+  apiFetchJson('/api/extraction-templates', extractionTemplateListSchema);
 export const createExtractionTemplate = (data: Partial<ExtractionTemplate>) =>
-  apiFetch<ExtractionTemplate>('/api/extraction-templates', { method: 'POST', body: JSON.stringify(data) });
+  apiFetchJson('/api/extraction-templates', extractionTemplateSchema, { method: 'POST', body: JSON.stringify(data) });
 export const updateExtractionTemplate = (id: number, data: Partial<ExtractionTemplate>) =>
-  apiFetch<ExtractionTemplate>(`/api/extraction-templates/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  apiFetchJson(`/api/extraction-templates/${id}`, extractionTemplateSchema, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteExtractionTemplate = (id: number) =>
-  apiFetch<void>(`/api/extraction-templates/${id}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/extraction-templates/${id}`, { method: 'DELETE' });
 
 // --- Settings: SMTP relay ---
 
-export const getSmtpConfig = () => apiFetch<SmtpConfig>('/api/setup/smtp');
+export const getSmtpConfig = () => apiFetchJson('/api/setup/smtp', smtpConfigSchema);
 
 /** Mirrors setup.py SmtpBody (populate_by_name → `password` is accepted). */
 export const saveSmtpConfig = (body: SmtpConfigInput) =>
-  apiFetch<{ saved: boolean; test_sent: boolean | null; test_error: string | null }>(
+  apiFetchJson(
     '/api/setup/smtp',
+    smtpSaveResponseSchema,
     { method: 'POST', body: JSON.stringify(body) },
   );
 
 // --- Settings: per-source credential / cooldown ---
 
 export const patchSourceConfig = (sourceType: string, patch: SourceConfigPatch) =>
-  apiFetch<{ ok: boolean }>(`/api/settings/sources/${sourceType}`, {
+  apiFetchJson(`/api/settings/sources/${sourceType}`, okResponseSchema, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 
 export const clearSourceCooldown = (sourceType: string) =>
-  apiFetch<{ ok: boolean }>(`/api/settings/sources/${sourceType}/clear-cooldown`, {
+  apiFetchJson(`/api/settings/sources/${sourceType}/clear-cooldown`, okResponseSchema, {
     method: 'POST',
   });
 
@@ -302,25 +276,9 @@ export function compareCloudProviders(a: string, b: string): number {
   return oa - ob || a.localeCompare(b);
 }
 
-export type ProviderMetadata = {
-  id: CloudProvider;
-  display_name: string;
-  kind: 'direct' | 'router' | 'self_hosted' | string;
-  api_key_config_key: string;
-  base_url_config_key: string | null;
-  assignment_prefix: string;
-  litellm_prefix: string;
-  privacy_boundary: string;
-  best_for: string;
-  data_note: string;
-  configured: boolean;
-  base_url_configured: boolean;
-  supports_assignment: boolean;
-};
-
 /** Return non-secret provider metadata and configured statuses. */
-export async function listProviders(): Promise<ProviderMetadata[]> {
-  return apiFetch<ProviderMetadata[]>('/api/providers');
+export async function listProviders() {
+  return apiFetchJson('/api/providers', providerMetadataListSchema);
 }
 
 /**
@@ -329,7 +287,7 @@ export async function listProviders(): Promise<ProviderMetadata[]> {
  */
 export async function getProviderStatuses(): Promise<Record<CloudProvider, string | null>> {
   const [configs, providers] = await Promise.all([
-    apiFetch<Array<{ key: string; value: unknown }>>('/api/config'),
+    fetchConfig(),
     listProviders(),
   ]);
   const result: Record<CloudProvider, string | null> = {};
@@ -357,19 +315,19 @@ export async function setProviderKey(
 /** Test connectivity for a cloud provider. */
 export async function testProvider(
   provider: CloudProvider,
-): Promise<{ ok: boolean; error: string | null }> {
-  return apiFetch(`/api/providers/${provider}/test`, { method: 'POST' });
+) {
+  return apiFetchJson(`/api/providers/${provider}/test`, providerTestResponseSchema, { method: 'POST' });
 }
 
 // --- Settings: Telegram bot token (UI-4) ---
 
 /** Check whether a Telegram bot token is stored. Token value is never returned. */
 export const getTelegramBotToken = () =>
-  apiFetch<TelegramBotTokenStatus>('/api/setup/telegram-bot-token');
+  apiFetchJson('/api/setup/telegram-bot-token', telegramBotTokenStatusSchema);
 
 /** Save a new Telegram bot token. A restart is required for it to take effect. */
 export const saveTelegramBotToken = (token: string) =>
-  apiFetch<TelegramBotTokenSaveResponse>('/api/setup/telegram-bot-token', {
+  apiFetchJson('/api/setup/telegram-bot-token', telegramBotTokenSaveResponseSchema, {
     method: 'POST',
     body: JSON.stringify({ token }),
   });
@@ -378,7 +336,7 @@ export const saveTelegramBotToken = (token: string) =>
 
 /** Switch the sign-in method offered (single-user API-key vs multi-user magic-link). Applied on the next status poll. */
 export const saveSetupMode = (mode: 'single' | 'multi') =>
-  apiFetch<SetupModeResponse>('/api/setup/mode', {
+  apiFetchJson('/api/setup/mode', setupModeResponseSchema, {
     method: 'POST',
     body: JSON.stringify({ mode }),
   });
