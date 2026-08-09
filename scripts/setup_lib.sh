@@ -34,6 +34,12 @@
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
 
+# Detached lifecycle guards deliberately live outside Compose so `compose down`
+# cannot cancel an in-flight setup, update, or uninstall. This separate label
+# gives isolated lifecycle tooling an exact ownership boundary without pretending
+# those guards are Compose-managed containers.
+readonly JARVIS_LIFECYCLE_PROJECT_LABEL="dev.limitcycle.jarvis.lifecycle-project"
+
 # Presentation primitives for the scripts that source this library. Not every
 # script shares them: setup.sh and update.sh keep same-format copies of the
 # colours and of info/ok/warn/err for the output they print before their
@@ -317,12 +323,14 @@ _lifecycle_docker_run() {
   [ -f "$helper" ] && [ ! -L "$helper" ] || return 2
   if [ "$mode" = detached ]; then
     docker run --rm -d --network none --read-only \
+      --label "${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}" \
       --security-opt no-new-privileges --cap-drop ALL \
       --mount "type=volume,src=${volume},dst=/backups" \
       --mount "type=bind,src=${helper},dst=/tmp/backup-lifecycle.sh,readonly" \
       "$image" bash /tmp/backup-lifecycle.sh "$@" 8>&-
   else
     docker run --rm --network none --read-only \
+      --label "${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}" \
       --security-opt no-new-privileges --cap-drop ALL \
       --mount "type=volume,src=${volume},dst=/backups" \
       --mount "type=bind,src=${helper},dst=/tmp/backup-lifecycle.sh,readonly" \

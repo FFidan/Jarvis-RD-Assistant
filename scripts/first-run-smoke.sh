@@ -172,12 +172,17 @@ unset _smoke_lock_path _smoke_project_key
 ENV_PREEXISTED=0
 [ -f "$REPO_ROOT/.env" ] && ENV_PREEXISTED=1
 
-# project_resource_ids PROJECT KIND — list exactly project-labeled resources.
+# project_resource_ids PROJECT KIND — list exact Compose-owned resources plus
+# detached lifecycle guards carrying the separate ownership label.
 project_resource_ids() {
   local project="$1"
   case "$2" in
     containers)
-      docker ps -aq --filter "label=com.docker.compose.project=${project}" ;;
+      {
+        docker ps -aq --filter "label=com.docker.compose.project=${project}"
+        docker ps -aq \
+          --filter "label=${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}"
+      } | sort -u ;;
     volumes)
       docker volume ls -q --filter "label=com.docker.compose.project=${project}" ;;
     networks)
@@ -238,7 +243,11 @@ require_project_resource_labels() {
     case "$kind" in
       containers)
         label="$(docker inspect --format \
-          '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")" ;;
+          '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "dev.limitcycle.jarvis.lifecycle-project" }}' "$id")"
+        case "$label" in
+          "$project|"|"|$project"|"$project|$project") continue ;;
+        esac
+        ;;
       volumes)
         label="$(docker volume inspect --format \
           '{{ index .Labels "com.docker.compose.project" }}' "$id")" ;;

@@ -166,6 +166,9 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
     assert 'docker rm -f "$resource"' in text
     assert 'docker network rm "$resource"' in text
     assert 'docker volume rm "$resource"' in text
+    assert "label=${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}" in text, (
+        "cleanup must discover detached lifecycle guards as well as Compose containers"
+    )
 
     teardown = _shell_function_body(path, "teardown")
     assert 'if [ "$SMOKE_OWNS_PROJECT" -eq 1 ]' in teardown, (
@@ -183,6 +186,18 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
         "broad project deletion is reserved for teardown after this run acquires "
         "the isolated project"
     )
+
+
+def test_lifecycle_smokes_track_detached_guard_ownership():
+    setup_lib = (REPO_ROOT / "scripts" / "setup_lib.sh").read_text()
+    lifecycle_smoke = (REPO_ROOT / "scripts" / "lifecycle-smoke.sh").read_text()
+
+    assert (
+        'readonly JARVIS_LIFECYCLE_PROJECT_LABEL="dev.limitcycle.jarvis.lifecycle-project"'
+        in setup_lib
+    )
+    assert '--label "${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}"' in setup_lib
+    assert "label=${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}" in lifecycle_smoke
 
 
 def test_setup_never_advertises_https_on_a_raw_lan_ip():

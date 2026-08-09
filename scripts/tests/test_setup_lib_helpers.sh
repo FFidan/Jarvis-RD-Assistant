@@ -3797,6 +3797,7 @@ VOLUME_BIN="$(fake_docker '
 printf "%s\n" "$*" >> "$STUB_VOLUME_LOG"
 case "${1:-} ${2:-}" in
   "compose "*) printf "%s\n" "$STUB_VOLUME_JSON"; exit 0 ;;
+  "run "*) echo helper-container; exit 0 ;;
   "volume inspect")
     if [ "${STUB_VOLUME_EXISTS:-0}" != 1 ] && [ ! -e "$STUB_VOLUME_CREATED" ]; then exit 1; fi
     if printf "%s\n" "$@" | grep -q -- "--format"; then printf "%s\n" "$STUB_VOLUME_LABELS"; fi
@@ -3915,6 +3916,22 @@ if grep -qF 'secrets/.jarvis-lifecycle-operation' "${SCRIPT_DIR}/../setup_lib.sh
   fail=1
 else
   pass "cross-actor lifecycle ownership uses a detached named-volume helper"
+fi
+
+: > "$VOLUME_LOG"
+got="$(PATH="$VOLUME_BIN:$PATH" STUB_VOLUME_LOG="$VOLUME_LOG" \
+  STUB_VOLUME_CREATED="$VOLUME_CREATED" STUB_VOLUME_EXISTS=1 \
+  STUB_VOLUME_LABELS='family|postgres_backups' \
+  STUB_VOLUME_JSON='{"volumes":{"postgres_backups":{"name":"family-backups"}}}' \
+  _lifecycle_docker_run "$VOLUME_REPO" family detached hold-host setup \
+    0123456789abcdef0123456789abcdef 30)" && rc=0 || rc=$?
+expect_eq "detached lifecycle helper starts with a stable identity" \
+  "${got}/${rc}" "helper-container/0"
+if grep -qF -- '--label dev.limitcycle.jarvis.lifecycle-project=family' "$VOLUME_LOG"; then
+  pass "detached lifecycle helper records its exact install ownership"
+else
+  printf 'FAIL: detached lifecycle helper has no exact install ownership label\n' >&2
+  fail=1
 fi
 
 (
