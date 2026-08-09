@@ -226,6 +226,32 @@ def test_dashboard_has_no_tls_material_or_generator(compose):
     assert not (REPO_ROOT / "frontend" / "scripts" / "generate-certs.sh").exists()
 
 
+def test_dashboard_builder_pin_matches_every_build_entrypoint(compose):
+    """The tested Node builder must reach direct and Compose builds unchanged."""
+    versions = dict(
+        line.split("=", 1)
+        for line in (REPO_ROOT / "versions.env").read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    node_image = versions["NODE_BUILD_IMAGE"]
+    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text()
+    compose_arg = compose["services"]["dashboard"]["build"]["args"]["NODE_BUILD_IMAGE"]
+
+    assert node_image == "node:22.22.2-alpine3.23"
+    assert f"ARG NODE_BUILD_IMAGE={node_image}" in dockerfile
+    assert compose_arg == f"${{NODE_BUILD_IMAGE:-{node_image}}}"
+
+
+def test_service_images_create_the_runtime_user_non_interactively() -> None:
+    for dockerfile_path in (
+        "services/paper_ingestion/Dockerfile",
+        "services/learning_engine/Dockerfile",
+        "services/telegram_bot/Dockerfile",
+    ):
+        dockerfile = (REPO_ROOT / dockerfile_path).read_text()
+        assert 'adduser --disabled-password --no-create-home --gecos "" appuser' in dockerfile
+
+
 def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
     """Applications may request work, but cannot replace lifecycle mutex inodes."""
     backup_mounts: dict[str, str] = {}

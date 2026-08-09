@@ -163,9 +163,9 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
     assert text.index('if [ "$ENV_PREEXISTED" -eq 1 ]') < text.index(project_probe), (
         "an operator .env must be refused before any forced cleanup"
     )
-    assert 'docker rm -f "$_resource"' in text
-    assert 'docker network rm "$_resource"' in text
-    assert 'docker volume rm "$_resource"' in text
+    assert 'docker rm -f "$resource"' in text
+    assert 'docker network rm "$resource"' in text
+    assert 'docker volume rm "$resource"' in text
 
     teardown = _shell_function_body(path, "teardown")
     assert 'if [ "$SMOKE_OWNS_PROJECT" -eq 1 ]' in teardown, (
@@ -173,6 +173,9 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
     )
     assert "for kind in containers volumes networks" in teardown
     assert 'project_resource_ids "$SMOKE_PROJECT" "$kind"' in teardown
+    assert 'remove_smoke_project_resources "$SMOKE_PROJECT"' in teardown
+    assert "for attempt in 1 2 3" in text
+    assert text.count('remove_smoke_project_resources "$SMOKE_PROJECT"') == 2
     assert "cleanup_ok=0" in teardown and "rc=1" in teardown, (
         "leftover or uninspectable resources must make the smoke fail"
     )

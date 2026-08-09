@@ -79,7 +79,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password --no-create-home --gecos "" appuser
 
 # Writable HuggingFace cache: Docling's layout/table models (docling-ibm-models)
 # and transformers weights download here on first use (volume-backed in compose).

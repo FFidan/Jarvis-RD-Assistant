@@ -196,6 +196,35 @@ project_has_resources() {
   return 1
 }
 
+# remove_smoke_project_resources PROJECT — remove only exact project-labeled
+# resources, retrying briefly for one-off Compose containers that are still
+# exiting after an interrupted bootstrap.
+remove_smoke_project_resources() {
+  local project="$1" attempt kind resources resource state
+  for attempt in 1 2 3; do
+    for kind in containers volumes networks; do
+      resources="$(project_resource_ids "$project" "$kind")" || return 2
+      while IFS= read -r resource; do
+        [ -n "$resource" ] || continue
+        case "$kind" in
+          containers) docker rm -f "$resource" >/dev/null 2>&1 || true ;;
+          volumes) docker volume rm "$resource" >/dev/null 2>&1 || true ;;
+          networks) docker network rm "$resource" >/dev/null 2>&1 || true ;;
+        esac
+      done <<< "$resources"
+    done
+
+    state=0
+    project_has_resources "$project" || state=$?
+    case "$state" in
+      1) return 0 ;;
+      2) return 2 ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
 # require_project_resource_labels PROJECT KIND — require non-empty exact labels.
 require_project_resource_labels() {
   local project="$1" kind="$2" ids id label
@@ -236,6 +265,8 @@ teardown() {
     # one-off bootstrap containers. The explicit project keeps teardown scoped.
     docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans 2>/dev/null \
       || warn "Compose teardown returned non-zero; checking owned resources."
+    remove_smoke_project_resources "$SMOKE_PROJECT" \
+      || warn "Exact project cleanup returned non-zero; verifying owned resources."
     for kind in containers volumes networks; do
       if ! leftovers="$(project_resource_ids "$SMOKE_PROJECT" "$kind")"; then
         err "Could not verify ${kind} cleanup for '${SMOKE_PROJECT}'."
@@ -326,25 +357,8 @@ if [ -n "$existing_containers" ] || [ -n "$existing_volumes" ] \
    || [ -n "$existing_networks" ]; then
   if [ "$FORCE" -eq 1 ]; then
     warn "Pre-existing '${SMOKE_PROJECT}' state found — removing it (--force)."
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker rm -f "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_containers"
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker network rm "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_networks"
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker volume rm "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_volumes"
-    _force_rc=0
-    project_has_resources "$SMOKE_PROJECT" || _force_rc=$?
-    case "$_force_rc" in
-      1) ;;
-      0) err "--force did not remove all pre-existing '${SMOKE_PROJECT}' resources."; exit 1 ;;
-      *) err "Could not verify '${SMOKE_PROJECT}' after --force cleanup."; exit 1 ;;
-    esac
+    remove_smoke_project_resources "$SMOKE_PROJECT" \
+      || { err "--force could not remove and verify '${SMOKE_PROJECT}'."; exit 1; }
   else
     err "An isolated '${SMOKE_PROJECT}' project already exists (containers, volumes, or networks)."
     err "Re-run with --force to remove it first. (The real deployment is never touched.)"

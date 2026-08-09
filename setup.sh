@@ -661,6 +661,19 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 # shellcheck source=scripts/setup_lib.sh
 source "${SCRIPT_DIR}/scripts/setup_lib.sh"
+
+# existing_env_value KEY — print the current value of KEY from .env, or nothing
+# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
+# as absent (the `=.\+` requires at least one char after `=`). The value is
+# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
+# survive intact; a trailing CR from a Windows-edited (CRLF) .env is stripped so
+# the value round-trips byte-clean.
+existing_env_value() {
+  [ -f .env ] || return 1
+  grep -qE "^$1=.+" .env 2>/dev/null || return 1
+  grep "^$1=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r'
+}
+
 COMPOSE_MIN=2.24.4
 _SETUP_TRANSACTION_DIR="${SCRIPT_DIR}/.jarvis-setup-transaction"
 # An exported Compose selector outranks this checkout's .env and can otherwise
@@ -1840,18 +1853,6 @@ fi
 # NVIDIA GPU host without the Docker runtime -> offer the toolkit as a
 # first-class preflight (non-fatal; the stack runs on CPU otherwise).
 preflight_nvidia_toolkit
-
-# existing_env_value KEY — print the current value of KEY from .env, or nothing
-# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
-# as absent (the `=.\+` requires at least one char after `=`). The value is
-# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
-# survive intact; a trailing CR from a Windows-edited (CRLF) .env is stripped so
-# the value round-trips byte-clean.
-existing_env_value() {
-  [ -f .env ] || return 1
-  grep -qE "^$1=.+" .env 2>/dev/null || return 1
-  grep "^$1=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r'
-}
 
 # Reconfiguration is a replacement of the selected access edge, not an
 # additive merge. Keep the prior identity long enough to retire only the edge

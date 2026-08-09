@@ -402,6 +402,17 @@ def test_release_version_pins_are_complete_and_consistent() -> None:
     assert "JARVIS_VERSION:-1.2.4" not in compose
 
 
+def test_versions_env_contains_only_runtime_image_pins() -> None:
+    keys = {
+        line.split("=", 1)[0]
+        for line in _read("versions.env").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+    assert keys
+    assert all(key.endswith("_IMAGE") for key in keys)
+
+
 def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
     readme = " ".join(_read("README.md").split())
     release = " ".join(_read("docs/RELEASE.md").split())

@@ -27,7 +27,7 @@ COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/
 RUN pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
     && rm -rf /tmp/dist
 
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password --no-create-home --gecos "" appuser
 
 COPY services/telegram_bot/telegram_bot ./telegram_bot
 COPY services/telegram_bot/entrypoint.sh /app/entrypoint.sh

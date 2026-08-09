@@ -226,6 +226,17 @@ scheck "fresh setup persists the checkout application version" \
 scheck "fresh setup persists the selected application image tag" \
   'upsert_env_var JARVIS_IMAGE_TAG "\$SELECTED_IMAGE_TAG"'
 
+existing_env_definition_line="$(sline '^existing_env_value\(\)')"
+existing_env_first_use_line="$(sline '^_installed_app_version=.*existing_env_value')"
+if [ -n "$existing_env_definition_line" ] && [ -n "$existing_env_first_use_line" ] \
+   && [ "$existing_env_definition_line" -lt "$existing_env_first_use_line" ]; then
+  pass "setup defines existing_env_value before reading an installed version"
+else
+  printf 'FAIL: existing_env_value definition (%s) does not precede its first installed-version read (%s)\n' \
+    "$existing_env_definition_line" "$existing_env_first_use_line" >&2
+  fail=1
+fi
+
 # The deprecated entry point is a strict forwarder, not a second installer.
 FORWARDER_ROOT="${FIXTURES}/forwarder"
 FORWARDER_LOG="${FORWARDER_ROOT}/args.log"
