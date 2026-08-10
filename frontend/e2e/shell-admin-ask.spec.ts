@@ -184,6 +184,9 @@ async function mockFirstUseEndpoints(page: Page) {
       }),
     }),
   );
+  await page.route('**/api/config', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+  );
   await page.route('**/api/config/onboarding.dismissed', (route) =>
     route.fulfill({
       status: 200,
