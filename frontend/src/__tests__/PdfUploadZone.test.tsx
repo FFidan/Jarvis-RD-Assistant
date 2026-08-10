@@ -44,8 +44,9 @@ describe('PdfUploadZone — pure setFiles updater', () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(screen.getByText('Done')).toBeTruthy();
+      expect(screen.getByText('Indexing in background')).toBeTruthy();
     });
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(uploadPdf).toHaveBeenCalledTimes(1);
   });
 });

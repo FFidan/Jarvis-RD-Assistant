@@ -7,7 +7,7 @@ import { uploadPdf, processPdf } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 
-type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
+type FileStatus = 'idle' | 'uploading' | 'processing' | 'queued' | 'error';
 
 interface FileEntry {
   uid: string;
@@ -44,7 +44,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
           payload: { paper_id: paper.id },
           status: 'queued',
         });
-        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
+        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'queued' as FileStatus } : f)));
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
         onComplete?.();
@@ -77,7 +77,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             payload: { paper_id: paper.id },
             status: 'queued',
           });
-          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
+          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'queued' as FileStatus } : f)));
         } catch (err) {
           setFiles(s =>
             s.map((f) =>
@@ -108,10 +108,10 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   };
 
   const statusLabel: Record<FileStatus, string> = {
-    idle: 'Queued',
+    idle: 'Waiting',
     uploading: 'Uploading\u2026',
-    processing: 'Indexing\u2026',
-    done: 'Done',
+    processing: 'Starting indexing\u2026',
+    queued: 'Indexing in background',
     error: 'Error',
   };
 
@@ -119,7 +119,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
     idle: 'text-muted-foreground',
     uploading: 'text-blue-500',
     processing: 'text-amber-500',
-    done: 'text-green-600',
+    queued: 'text-blue-500',
     error: 'text-destructive',
   };
 
