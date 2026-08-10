@@ -136,6 +136,11 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
     """The primary bootstrap must scope setup itself and verify owned cleanup."""
     path = REPO_ROOT / "scripts" / "first-run-smoke.sh"
     text = path.read_text()
+    assert ': "${DASHBOARD_TRUSTED_HOST_PORT:=13003}"' in text
+    assert re.search(
+        r"export\s+[^\n]*DASHBOARD_HOST_PORT\s+DASHBOARD_TRUSTED_HOST_PORT",
+        text,
+    ), "both dashboard listeners must be isolated from an existing deployment"
     assert '_smoke_lock_path="$(host_lifecycle_lock_path "$REPO_ROOT")"' in text
     assert 'readonly SMOKE_PROJECT="jarvis-firstrun-${_smoke_project_key:0:16}"' in text, (
         "separate checkouts must not share the same disposable Compose project"

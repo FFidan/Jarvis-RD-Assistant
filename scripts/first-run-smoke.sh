@@ -59,18 +59,21 @@ set -euo pipefail
 # The dedicated Compose project is derived from the canonical checkout after
 # setup_lib.sh is loaded. Separate checkouts therefore never share teardown.
 
-# Isolation: distinct subnet + dashboard port so a smoke run never collides with
-# a live deploy on the same host (which uses 10.137.241.0/24 and port 3001).
+# Isolation: distinct subnet + dashboard ports so a smoke run never collides
+# with a live deploy on the same host (which uses 10.137.241.0/24 and ports
+# 3001/3003).
 # Override via env before calling this script if the defaults conflict.
 : "${JARVIS_NET_SUBNET:=10.137.242.0/24}"
 : "${DASHBOARD_HOST_PORT:=13001}"
+: "${DASHBOARD_TRUSTED_HOST_PORT:=13003}"
 : "${LITELLM_HOST_PORT:=14000}"
 : "${POSTGRES_HOST_PORT:=15432}"
 : "${PAPER_INGESTION_HOST_PORT:=18010}"
 : "${LEARNING_ENGINE_HOST_PORT:=18011}"
 : "${QDRANT_HOST_PORT:=16333}"
 : "${OLLAMA_HOST_PORT:=11444}"
-export JARVIS_NET_SUBNET DASHBOARD_HOST_PORT LITELLM_HOST_PORT POSTGRES_HOST_PORT
+export JARVIS_NET_SUBNET DASHBOARD_HOST_PORT DASHBOARD_TRUSTED_HOST_PORT
+export LITELLM_HOST_PORT POSTGRES_HOST_PORT
 export PAPER_INGESTION_HOST_PORT LEARNING_ENGINE_HOST_PORT QDRANT_HOST_PORT OLLAMA_HOST_PORT
 
 readonly DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}"
