@@ -65,6 +65,8 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
+          id="discover-search-query"
+          name="external-search"
           placeholder="Search your selected sources…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -114,8 +116,15 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
         <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Year From</label>
+              <label
+                htmlFor="discover-year-from"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Year From
+              </label>
               <Input
+                id="discover-year-from"
+                name="year-from"
                 type="number"
                 min={1900}
                 max={2100}
@@ -128,8 +137,15 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Year To</label>
+              <label
+                htmlFor="discover-year-to"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Year To
+              </label>
               <Input
+                id="discover-year-to"
+                name="year-to"
                 type="number"
                 min={1900}
                 max={2100}
@@ -142,12 +158,17 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Sort By</label>
+              <label
+                htmlFor="discover-sort-by"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Sort By
+              </label>
               <Select
                 value={filters.sortBy ?? 'relevance'}
                 onValueChange={(v) => setFilter('sortBy', v as 'relevance' | 'date')}
               >
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger id="discover-sort-by" className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -157,12 +178,17 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
               </Select>
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-muted-foreground">Max Results</label>
+              <label
+                htmlFor="discover-max-results"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Max Results
+              </label>
               <Select
                 value={String(maxResults)}
                 onValueChange={(v) => setMaxResults(Number(v))}
               >
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger id="discover-max-results" className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -176,8 +202,15 @@ export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' 
 
           <div className="flex items-end gap-3">
             <div className="flex flex-col gap-1 flex-1">
-              <label className="text-xs font-medium text-muted-foreground">Author</label>
+              <label
+                htmlFor="discover-author"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Author
+              </label>
               <Input
+                id="discover-author"
+                name="author"
                 type="text"
                 placeholder="Author name"
                 value={filters.author ?? ''}

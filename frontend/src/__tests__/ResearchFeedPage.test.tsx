@@ -299,7 +299,7 @@ describe('ResearchFeedPage', () => {
     await user.click(screen.getByTestId('facet-discover'));
     expect(
       screen.getByPlaceholderText('Search your selected sources…'),
-    ).toBeInTheDocument();
+    ).toHaveAttribute('name', 'external-search');
   });
 
   it('renders search button', async () => {
@@ -346,8 +346,21 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
     expect(screen.getByLabelText('OpenAlex')).toBeInTheDocument();
     expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
+    expect(screen.getByLabelText('arXiv')).toHaveAttribute('name', 'source-types');
+    expect(screen.getByLabelText('arXiv')).toHaveAttribute('value', 'arxiv');
     // Local (uploaded PDF) source should not appear in the Search tab checkboxes
     expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
+  });
+
+  it('associates every advanced search label with its form control', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByTestId('facet-discover'));
+    await user.click(screen.getByRole('button', { name: /toggle filters/i }));
+
+    for (const label of ['Year From', 'Year To', 'Sort By', 'Max Results', 'Author']) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
   });
 
   it('shows an error state with Retry (not the empty/help copy) when sources fail to load', async () => {

@@ -668,6 +668,9 @@ export function ResearchFeedPage() {
                             className="flex items-center gap-1.5 cursor-pointer select-none"
                           >
                             <input
+                              id={`discover-source-${source.source_type}`}
+                              name="source-types"
+                              value={source.source_type}
                               type="checkbox"
                               className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
                               checked={selectedSourceTypes.includes(source.source_type)}
