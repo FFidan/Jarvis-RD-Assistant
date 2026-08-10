@@ -130,4 +130,10 @@ describe('preboot.js — localStorage allowlist', () => {
     );
     expect(appearanceClasses).toHaveLength(0);
   });
+
+  it('disables Zod JIT before application modules load under the strict CSP', () => {
+    runPreboot(null);
+
+    expect(Reflect.get(globalThis, '__zod_globalConfig')).toMatchObject({ jitless: true });
+  });
 });

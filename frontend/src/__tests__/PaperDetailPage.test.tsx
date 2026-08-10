@@ -391,6 +391,7 @@ describe('PaperDetailPage', () => {
     });
     expect(screen.getByText('Rating: 4')).toBeInTheDocument();
     expect(screen.getByText('Save Rating')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /flagged/i })).toHaveAttribute('name', 'flagged');
   });
 
   it('renders RAG chat section', async () => {
