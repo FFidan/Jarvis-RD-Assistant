@@ -155,7 +155,6 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
             <Label htmlFor="note-text">Note</Label>
             <Textarea
               id="note-text"
-              name="note"
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
               placeholder="Write your note..."
@@ -167,7 +166,6 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
               <Label htmlFor="note-page">Page (optional)</Label>
               <Input
                 id="note-page"
-                name="page-number"
                 type="number"
                 min={1}
                 value={pageNumber}
@@ -179,7 +177,6 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
               <Label htmlFor="note-highlight">Highlight text (optional)</Label>
               <Input
                 id="note-highlight"
-                name="highlight-text"
                 value={highlightText}
                 onChange={(e) => setHighlightText(e.target.value)}
                 placeholder="Highlighted text"
