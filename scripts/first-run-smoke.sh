@@ -318,6 +318,8 @@ teardown() {
   fi
   exit "$rc"
 }
+trap 'exit 143' TERM
+trap 'exit 130' INT
 trap teardown EXIT
 
 # -----------------------------------------------------------------------------

@@ -27,7 +27,7 @@ import {
 } from 'react-joyride';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { fetchFeed, setConfig } from '@/lib/api';
+import { fetchConfig, fetchFeed, setConfig } from '@/lib/api';
 
 // ── Tour steps ─────────────────────────────────────────────────────────────
 
@@ -113,16 +113,28 @@ const LOCAL_STORAGE_KEY = 'jarvis-onboarding-dismissed';
 
 function useDismissedState(): [boolean | null, () => Promise<void>] {
   // Optimistic local check to avoid showing tour briefly then hiding it.
-  const [dismissed, setDismissed] = useState<boolean | null>(() => {
+  const [locallyDismissed, setLocallyDismissed] = useState(() => {
     try {
       return localStorage.getItem(LOCAL_STORAGE_KEY) === 'true';
     } catch {
-      return null;
+      return false;
     }
   });
+  const configQuery = useQuery({
+    queryKey: QUERY_KEYS.config.all(),
+    queryFn: fetchConfig,
+    enabled: !locallyDismissed,
+    staleTime: 60_000,
+  });
+
+  const remotelyDismissed = configQuery.data?.some(
+    (entry) => entry.key === DISMISSED_KEY && entry.value === true,
+  ) ?? false;
+  const dismissed = locallyDismissed || remotelyDismissed;
+  const resolvedDismissed = !locallyDismissed && configQuery.isLoading ? null : dismissed;
 
   const persist = useCallback(async () => {
-    setDismissed(true);
+    setLocallyDismissed(true);
     try {
       localStorage.setItem(LOCAL_STORAGE_KEY, 'true');
     } catch {
@@ -136,7 +148,7 @@ function useDismissedState(): [boolean | null, () => Promise<void>] {
     }
   }, []);
 
-  return [dismissed, persist];
+  return [resolvedDismissed, persist];
 }
 
 // ── Component ──────────────────────────────────────────────────────────────

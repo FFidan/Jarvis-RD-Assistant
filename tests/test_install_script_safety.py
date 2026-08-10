@@ -193,6 +193,11 @@ def test_first_run_smoke_proves_project_ownership_and_cleanup():
     assert "cleanup_ok=0" in teardown and "rc=1" in teardown, (
         "leftover or uninspectable resources must make the smoke fail"
     )
+    assert "trap 'exit 143' TERM" in text
+    assert "trap 'exit 130' INT" in text
+    assert text.index("trap 'exit 143' TERM") < text.index("trap teardown EXIT"), (
+        "an operator interruption must reach the EXIT trap with a failing status"
+    )
     assert (
         'find "$REPO_ROOT/secrets"' in teardown
         and "-name '*.txt' -exec rm -f -- {} +" in teardown

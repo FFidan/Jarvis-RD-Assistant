@@ -15,6 +15,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...orig,
     fetchTopics: vi.fn(),
     fetchFeed: vi.fn(),
+    fetchConfig: vi.fn(),
     setConfig: vi.fn().mockResolvedValue({ key: 'onboarding.dismissed', value: true }),
   };
 });
@@ -150,6 +151,7 @@ describe('OnboardingTour', () => {
 
     // Default: new user — zero papers.
     vi.mocked(api.fetchFeed).mockResolvedValue({ papers: [], total: 0 });
+    vi.mocked(api.fetchConfig).mockResolvedValue([]);
   });
 
   it('renders the tour for a new user with no papers', async () => {
@@ -186,6 +188,22 @@ describe('OnboardingTour', () => {
       expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled();
     });
 
+    expect(screen.queryByTestId('joyride-tour')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the tour when dismissal is persisted for the user on the server', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue([
+      { key: 'onboarding.dismissed', value: true },
+    ]);
+
+    renderTour();
+
+    await waitFor(() => {
+      expect(vi.mocked(api.fetchConfig)).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    });
     expect(screen.queryByTestId('joyride-tour')).not.toBeInTheDocument();
   });
 

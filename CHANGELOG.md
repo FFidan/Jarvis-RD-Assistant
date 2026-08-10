@@ -77,7 +77,7 @@ several unchecked or duplicated control paths with smaller, tested owners.
 - **First-use navigation teaches the real loop.** Discover is present in the
   simple navigation, and milestone-based guidance covers Discover, Save,
   Analyze, and Ask on wide and narrow layouts using React 19-compatible tour
-  dependencies.
+  dependencies. A researcher's tour dismissal is respected across browsers.
 - **Installation has one implementation.** New installs use `setup.sh`; the old
   development command is a strict deprecated forwarder. Rollback now requires a
   complete setup-owned credential snapshot before it changes access services.
