@@ -65,6 +65,17 @@ describe('NotesTab', () => {
     });
   });
 
+  it('names every note-creation control', async () => {
+    renderTab();
+
+    expect(await screen.findByLabelText('Note')).toHaveAttribute('name', 'note');
+    expect(screen.getByLabelText('Page (optional)')).toHaveAttribute('name', 'page-number');
+    expect(screen.getByLabelText('Highlight text (optional)')).toHaveAttribute(
+      'name',
+      'highlight-text',
+    );
+  });
+
   it('test_delete_error_renders_banner: shows inline error when deleteMut fails', async () => {
     const userNote = makeNote({ id: 7, source: 'user', user_note: 'My note to delete' });
     vi.mocked(fetchNotes).mockImplementation(async (_paperId, source) => {

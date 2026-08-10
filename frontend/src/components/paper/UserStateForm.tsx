@@ -72,6 +72,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
         <Label htmlFor="user-rating">Rating: {rating}</Label>
         <input
           id="user-rating"
+          name="rating"
           type="range"
           min={1}
           max={5}
@@ -92,6 +93,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
         <Label htmlFor="user-notes">Comment (optional)</Label>
         <Textarea
           id="user-notes"
+          name="comment"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Your notes about this paper..."
