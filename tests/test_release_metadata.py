@@ -669,6 +669,7 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
             "without it"
         )
     for table in (
+        "projects",
         "paper_contradictions",
         "paper_user_zotero_links",
         "paper_highlights",
@@ -689,6 +690,8 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
         0
     ]
     assert "updated_at timestamptz" in zotero_link_table
+    projects_table = seed.split("CREATE TABLE projects(", 1)[1].split("\n);", 1)[0]
+    assert "user_id bigint" in projects_table
 
 
 def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:

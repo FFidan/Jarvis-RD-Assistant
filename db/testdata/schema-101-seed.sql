@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS paper_extractions CASCADE;
 DROP TABLE IF EXISTS paper_summaries CASCADE;
 DROP TABLE IF EXISTS paper_highlights CASCADE;
 DROP TABLE IF EXISTS paper_user_zotero_links CASCADE;
+DROP TABLE IF EXISTS projects CASCADE;
 DROP TABLE IF EXISTS paper_contradictions CASCADE;
 DROP TABLE IF EXISTS papers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
@@ -57,6 +58,12 @@ CREATE TABLE paper_contradictions(
   paper_b_id bigint NOT NULL,
   quote_a text NOT NULL,
   quote_b text NOT NULL,
+  user_id bigint
+);
+-- Projects already existed at schema 101. Migration 0113 restores the Zotero
+-- collection cache that was lost when the historical chain was squashed.
+CREATE TABLE projects(
+  id bigint PRIMARY KEY,
   user_id bigint
 );
 CREATE TABLE paper_user_zotero_links(

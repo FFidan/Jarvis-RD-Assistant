@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { zoteroPushPaper, zoteroGetLinkage, zoteroResync } from '@/lib/api';
+import { useJobStore } from '@/stores/job-store';
 import { Copy, ExternalLink, RefreshCw, Send } from 'lucide-react';
 
 interface ZoteroPanelProps {
@@ -11,7 +12,13 @@ interface ZoteroPanelProps {
 }
 
 export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
-  const queryClient = useQueryClient();
+  const trackExternalJob = useJobStore((state) => state.trackExternalJob);
+  const pushRunning = useJobStore((state) =>
+    state.isRunning('zotero.push', { paper_id: paperId }),
+  );
+  const resyncRunning = useJobStore((state) =>
+    state.isRunning('zotero.resync', { paper_id: paperId }),
+  );
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -26,12 +33,22 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
 
   const pushMutation = useMutation({
     mutationFn: () => zoteroPushPaper(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
+    onSuccess: ({ job_id }) => trackExternalJob({
+      jobId: job_id,
+      kind: 'zotero.push',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    }),
   });
 
   const resyncMutation = useMutation({
     mutationFn: () => zoteroResync(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
+    onSuccess: ({ job_id }) => trackExternalJob({
+      jobId: job_id,
+      kind: 'zotero.resync',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    }),
   });
 
   const copyKey = async (key: string) => {
@@ -56,6 +73,8 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   }
 
   const isPushed = !!linkage?.zotero_item_key;
+  const pushing = pushMutation.isPending || pushRunning;
+  const resyncing = resyncMutation.isPending || resyncRunning;
 
   return (
     <div className="space-y-3">
@@ -68,11 +87,11 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
           <Button
             size="sm"
             variant="outline"
-            disabled={!hasProjectLinks || pushMutation.isPending}
+            disabled={!hasProjectLinks || pushing}
             onClick={() => pushMutation.mutate()}
           >
             <Send className="h-3 w-3 mr-1" />
-            {pushMutation.isPending ? 'Sending…' : 'Send to Zotero'}
+            {pushing ? 'Sending…' : 'Send to Zotero'}
           </Button>
           <p className="text-xs text-muted-foreground">Pushes citation metadata (PDF not attached).</p>
           {pushMutation.isError && <p className="text-xs text-destructive">Push failed. Try again.</p>}
@@ -105,11 +124,12 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
             <Button
               size="sm"
               variant="ghost"
-              disabled={resyncMutation.isPending}
+              disabled={resyncing}
               onClick={() => resyncMutation.mutate()}
               title="Re-push to Zotero"
+              aria-label="Re-push to Zotero"
             >
-              <RefreshCw className={`h-3 w-3 ${resyncMutation.isPending ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3 w-3 ${resyncing ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </div>

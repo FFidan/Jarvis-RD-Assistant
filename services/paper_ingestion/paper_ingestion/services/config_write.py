@@ -363,6 +363,43 @@ async def _apply_schedules(
     return failed
 
 
+async def _clear_zotero_library_cache(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    *,
+    user_id: int,
+) -> None:
+    """Clear remote Zotero identifiers after this user's library identity changes.
+
+    Link rows and their analysis scheduling history remain intact. Only values
+    that identify objects in the previous remote library are invalidated.
+    """
+    await conn.execute(
+        """UPDATE paper_user_zotero_links
+              SET zotero_item_key = NULL,
+                  zotero_citation_key = NULL,
+                  zotero_attachment_key = NULL,
+                  zotero_last_pushed_at = NULL,
+                  updated_at = NOW()
+            WHERE user_id = $1
+              AND (zotero_item_key IS NOT NULL
+                   OR zotero_citation_key IS NOT NULL
+                   OR zotero_attachment_key IS NOT NULL
+                   OR zotero_last_pushed_at IS NOT NULL)""",
+        user_id,
+    )
+    await conn.execute(
+        """UPDATE projects
+              SET zotero_collection_key = NULL
+            WHERE user_id = $1 AND zotero_collection_key IS NOT NULL""",
+        user_id,
+    )
+    await conn.execute(
+        """DELETE FROM user_config
+            WHERE user_id = $1 AND key = 'zotero.last_library_version'""",
+        user_id,
+    )
+
+
 async def write_config(
     *,
     db_pool: asyncpg.Pool,
@@ -520,9 +557,19 @@ async def write_config(
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
 
-    # DB write first — DB is the source of truth.
-    # Single acquire covers both encrypted and non-encrypted paths (acquire-collapse DRY).
-    async with db_pool.acquire() as conn:
+    # DB write first — DB is the source of truth. A material Zotero library
+    # identity change invalidates its remote-object cache in the same
+    # transaction, so readers can never observe new credentials with old keys.
+    async with db_pool.acquire() as conn, conn.transaction():
+        previous_scope_row = None
+        if key in _ZOTERO_LIBRARY_SCOPE_KEYS and row_user_id is not None:
+            previous_scope_row = await conn.fetchrow(
+                """SELECT value FROM user_config
+                    WHERE user_id = $1 AND key = $2
+                    FOR UPDATE""",
+                row_user_id,
+                key,
+            )
         if key in _ENCRYPTED_KEYS:
             ciphertext_bytes = encrypt_secret(str(value)).encode("ascii")
             await _write_config_row(
@@ -534,6 +581,12 @@ async def write_config(
             )
         else:
             await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
+        if (
+            key in _ZOTERO_LIBRARY_SCOPE_KEYS
+            and row_user_id is not None
+            and (previous_scope_row is None or previous_scope_row["value"] != value)
+        ):
+            await _clear_zotero_library_cache(conn, user_id=row_user_id)
 
     # Drop the in-process API-key-login cache so the next mint sees the new
     # value immediately (the flag only widens access — a flip OFF must apply now).
@@ -549,15 +602,6 @@ async def write_config(
         value=value,
         cron_ctx=(_old_cron, row_user_id),
     )
-
-    # Zotero library-scope cache bust
-    if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM user_config WHERE user_id IS NOT DISTINCT FROM $1"
-                " AND key = 'zotero.last_library_version'",
-                row_user_id,
-            )
 
     # Better BibTeX host allowlist refresh — the client caches it, so without
     # this the saved hosts would not take effect until the next restart.

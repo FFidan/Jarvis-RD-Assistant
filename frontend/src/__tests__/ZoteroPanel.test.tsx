@@ -13,25 +13,40 @@
  * Clipboard stub on window.navigator.clipboard during setup(). We spy on
  * navigator.clipboard.writeText AFTER userEvent.setup() to control resolve/reject.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { screen, act } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Module mocks ---
 
+const mocks = vi.hoisted(() => ({
+  getLinkage: vi.fn(),
+  pushPaper: vi.fn(),
+  resync: vi.fn(),
+  trackExternalJob: vi.fn(),
+  isRunning: vi.fn<(kind: string, payload: Record<string, unknown>) => boolean>(() => false),
+}));
+
 vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   return createApiMock({
-    zoteroGetLinkage: async () => ({
-      zotero_item_key: 'ABCD1234',
-      zotero_citation_key: 'smith2024',
-    }),
-    zoteroPushPaper: vi.fn(),
-    zoteroResync: vi.fn(),
+    zoteroGetLinkage: mocks.getLinkage,
+    zoteroPushPaper: mocks.pushPaper,
+    zoteroResync: mocks.resync,
   });
 });
+
+vi.mock('@/stores/job-store', () => ({
+  useJobStore: (selector: (state: {
+    trackExternalJob: typeof mocks.trackExternalJob;
+    isRunning: typeof mocks.isRunning;
+  }) => unknown) => selector({
+    trackExternalJob: mocks.trackExternalJob,
+    isRunning: mocks.isRunning,
+  }),
+}));
 
 function renderPanel() {
   const queryClient = createTestQueryClient();
@@ -42,6 +57,19 @@ function renderPanel() {
 }
 
 describe('ZoteroPanel — setTimeout timer cleanup', () => {
+  beforeEach(() => {
+    mocks.getLinkage.mockReset();
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: 'smith2024',
+    });
+    mocks.pushPaper.mockReset();
+    mocks.resync.mockReset();
+    mocks.trackExternalJob.mockReset();
+    mocks.isRunning.mockReset();
+    mocks.isRunning.mockReturnValue(false);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -156,5 +184,68 @@ describe('ZoteroPanel — setTimeout timer cleanup', () => {
     act(() => { vi.advanceTimersByTime(2000); });
 
     clearTimeoutSpy.mockRestore();
+  });
+});
+
+describe('ZoteroPanel — background job handoff', () => {
+  beforeEach(() => {
+    mocks.getLinkage.mockReset();
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: 'smith2024',
+    });
+    mocks.pushPaper.mockReset();
+    mocks.resync.mockReset();
+    mocks.trackExternalJob.mockReset();
+    mocks.isRunning.mockReset();
+    mocks.isRunning.mockReturnValue(false);
+  });
+
+  it('tracks a queued push instead of invalidating linkage before completion', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    mocks.pushPaper.mockResolvedValue({ job_id: 'push-job-1', status: 'queued' });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Send to Zotero' }));
+
+    await waitFor(() => expect(mocks.trackExternalJob).toHaveBeenCalledWith({
+      jobId: 'push-job-1',
+      kind: 'zotero.push',
+      payload: { paper_id: 1 },
+      status: 'queued',
+    }));
+    expect(mocks.getLinkage).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks a queued resync through the same job store', async () => {
+    mocks.resync.mockResolvedValue({ job_id: 'resync-job-1', status: 'queued' });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByTitle('Re-push to Zotero'));
+
+    await waitFor(() => expect(mocks.trackExternalJob).toHaveBeenCalledWith({
+      jobId: 'resync-job-1',
+      kind: 'zotero.resync',
+      payload: { paper_id: 1 },
+      status: 'queued',
+    }));
+  });
+
+  it('keeps push disabled while its tracked job is active', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    mocks.isRunning.mockImplementation((kind: string) => kind === 'zotero.push');
+    renderPanel();
+
+    expect(await screen.findByRole('button', { name: 'Sending…' })).toBeDisabled();
   });
 });

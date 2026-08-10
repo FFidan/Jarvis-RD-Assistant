@@ -32,6 +32,24 @@ def _latest_migration_version() -> int:
     return max(versions)
 
 
+async def _project_collection_column(
+    conn: asyncpg.Connection,
+) -> tuple[str, str] | None:
+    """Return the project Zotero collection column's type and nullability."""
+    row = await conn.fetchrow(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'projects'
+          AND column_name = 'zotero_collection_key'
+        """
+    )
+    if row is None:
+        return None
+    return str(row["data_type"]), str(row["is_nullable"])
+
+
 async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn: str) -> None:
     """The actual lifecycle origin must survive every current migration."""
     # Verified: libs/jarvis_common/jarvis_common/migrations.py:247
@@ -70,6 +88,7 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
                 "WHERE conrelid = 'paper_contradictions'::regclass "
                 "AND conname = 'chk_paper_contradictions_user_id_present'"
             )
+            project_collection_column = await _project_collection_column(conn)
 
             assert version == _latest_migration_version()
             assert webauthn_table == "webauthn_credentials"
@@ -79,6 +98,7 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
             assert invalid_pairing_count == 0
             assert external_id == "local:" + "a" * 64
             assert owner_constraint_count == 1
+            assert project_collection_column == ("text", "YES")
 
         # The restore round trip rebuilds this historical origin after first
         # exercising the current schema. Prove the seed removes post-101
@@ -93,8 +113,10 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
         async with pool.acquire() as conn:
             version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
             focus_table_after = await conn.fetchval("SELECT to_regclass('public.focus_sessions')")
+            project_collection_column = await _project_collection_column(conn)
             assert version == _latest_migration_version()
             assert focus_table_after == "focus_sessions"
+            assert project_collection_column == ("text", "YES")
     finally:
         await pool.close()
 

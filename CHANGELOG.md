@@ -45,6 +45,13 @@ several unchecked or duplicated control paths with smaller, tested owners.
   reduced-signal, empty, and unverified results without changing backend ranking.
   It shows the first five cards from the same ranked deck as the Web interface;
   the same paper can still appear on another day when the inputs are unchanged.
+- **Zotero exports stay with their research projects.** Sending a paper creates
+  or reuses a collection for each linked project, including when an existing
+  item is found by DOI. The Web interface follows the queued export through to
+  completion, and a failed collection or DOI lookup can no longer be reported
+  as an unfiled or duplicate success. Switching between personal and group
+  libraries clears only the previous library's remote identifiers; local papers
+  and analysis history remain intact.
 - **Historical migrations run in ordinary pull-request checks.** One shared
   schema-101 fixture now proves the complete migration path instead of allowing
   a synthetic or uncollected test to go green.

@@ -192,13 +192,25 @@ Fill in:
   - **Personal library** — your own Zotero account. Most people want this.
   - **Group library** — a shared Zotero group. You will also need the group's **numeric Group ID** (the number in the group URL, e.g. `zotero.org/groups/987654/...`).
 
-Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI, abstract). The PDF file itself is **not attached**.
+Each JARVIS account uses one active Zotero library at a time. Changing the User
+ID, Library Type, or Group ID disconnects the item and collection references
+from the previous library. It does not remove local papers, projects, notes, or
+analysis history. The next export creates or finds the corresponding objects in
+the newly selected library.
+
+Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI,
+abstract). The PDF file itself is **not attached**. The item is filed into a
+Zotero collection matching each JARVIS project linked to the paper. Existing
+items found by DOI are filed into those collections instead of duplicated.
 
 #### Verify Zotero works
 
 1. Enter your **API Key** and **User ID** (and **Group ID** for a group library).
 2. Click **Test connection**. A green "Connected" message confirms the credentials are valid; a red message names the problem (wrong key, missing user ID, or unreachable Group ID).
-3. Open any paper's [Paper Detail](paper-detail.md) page and click **Send to Zotero**. The item then appears in your Zotero library, and the panel offers a **View in Zotero** link.
+3. Link a paper to a project, open its [Paper Detail](paper-detail.md) page, and
+   click **Send to Zotero**. The job indicator shows the export until it
+   finishes. The item then appears in a collection named after the project, and
+   the panel offers a **View in Zotero** link.
 
 ---
 
