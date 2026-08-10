@@ -25,7 +25,7 @@ export interface ConfidenceEvent {
 }
 
 export interface StreamEvent {
-  type: 'token' | 'sources' | 'done' | 'error' | 'confidence';
+  type: 'token' | 'sources' | 'done' | 'error' | 'confidence' | 'backend';
   content?: string;
   full_answer?: string;
   model_used?: string | null;
@@ -45,6 +45,8 @@ export interface StreamEvent {
   confidence?: ConfidenceLevel | null;
   verified_fraction?: number;
   per_sentence?: { text: string; verified: boolean }[];
+  served_by?: string | null;
+  fallback?: boolean;
 }
 
 export interface StreamError {
@@ -112,7 +114,7 @@ const streamSourceSchema = z.looseObject({
   score: z.number(),
 });
 const verifiedSentenceSchema = z.looseObject({ text: z.string(), verified: z.boolean() });
-const streamEventSchema = z.discriminatedUnion('type', [
+const typedStreamEventSchema = z.discriminatedUnion('type', [
   z.looseObject({ type: z.literal('token'), content: z.string() }),
   z.looseObject({ type: z.literal('sources'), sources: z.array(streamSourceSchema) }),
   z.looseObject({
@@ -128,6 +130,11 @@ const streamEventSchema = z.discriminatedUnion('type', [
     per_sentence: z.array(verifiedSentenceSchema),
   }),
 ]);
+const backendMetadataSchema = z.looseObject({
+  served_by: z.string().nullable(),
+  fallback: z.boolean(),
+}).transform((metadata) => ({ type: 'backend' as const, ...metadata }));
+const streamEventSchema = z.union([typedStreamEventSchema, backendMetadataSchema]);
 const analyzeEventSchema = z.discriminatedUnion('type', [
   z.looseObject({
     type: z.literal('step'),

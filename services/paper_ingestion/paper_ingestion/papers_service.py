@@ -49,6 +49,7 @@ __all__ = [
     "assert_paper_ownership",
     "delete_paper_vectors",
     "_apply_bulk_action",
+    "find_papers_needing_analysis",
     "get_feed_counts",
     "hard_delete_paper",
 ]
@@ -106,6 +107,37 @@ _CALLER_PRIVATE_PAPER_DELETES = (
     "DELETE FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
     "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2",
 )
+
+
+async def find_papers_needing_analysis(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_ids: list[int],
+) -> set[int]:
+    """Return unprocessed papers that have a usable local or remote PDF source.
+
+    Saving bibliographic metadata is valid even when a source does not expose a
+    PDF. The analysis worker, however, can only make progress from a nonblank
+    ``pdf_url`` or ``pdf_local_path``. Keeping that eligibility rule here gives
+    per-paper, batch, and Pulse saves the same scheduling contract.
+    """
+    if not paper_ids:
+        return set()
+    rows = await conn.fetch(
+        """
+        SELECT p.id
+          FROM papers AS p
+         WHERE p.id = ANY($1::int[])
+           AND (
+               NULLIF(BTRIM(p.pdf_url), '') IS NOT NULL
+               OR NULLIF(BTRIM(p.pdf_local_path), '') IS NOT NULL
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM paper_chunks AS pc WHERE pc.paper_id = p.id
+           )
+        """,
+        paper_ids,
+    )
+    return {int(row["id"]) for row in rows}
 
 
 async def _hard_delete_scoped(

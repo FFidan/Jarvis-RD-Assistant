@@ -23,6 +23,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NGINX_CONF = REPO_ROOT / "frontend" / "nginx.conf"
 NGINX_RATE_LIMIT_CONF = REPO_ROOT / "frontend" / "nginx-rate-limit.conf"
+NGINX_SECURITY_HEADERS_CONF = REPO_ROOT / "frontend" / "nginx-security-headers.conf"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 CADDY_LOCAL_FILE = REPO_ROOT / "caddy" / "Caddyfile.local"
 
@@ -38,6 +39,10 @@ def _nginx_text() -> str:
 
 def _nginx_rate_limit_text() -> str:
     return NGINX_RATE_LIMIT_CONF.read_text()
+
+
+def _nginx_security_headers_text() -> str:
+    return NGINX_SECURITY_HEADERS_CONF.read_text()
 
 
 def _compose_text() -> str:
@@ -230,6 +235,12 @@ def test_nginx_serves_mjs_assets_with_javascript_mime():
     assert text.index("location ~* \\.mjs$") < text.index(
         "location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$"
     )
+
+
+def test_nginx_csp_allows_the_pdf_readers_same_origin_blob():
+    """PDF.js loads the authenticated response through a same-origin blob URL."""
+    csp = _nginx_security_headers_text()
+    assert "connect-src 'self' blob:;" in csp
 
 
 def test_api_rate_limit_classifies_rejections_as_429():

@@ -5,15 +5,15 @@ Covers three entry points exercised via the ASGI app:
   - POST /api/pulse/rate  rating="save"  (pulse.py::rate_card)
   - POST /api/papers/batch-save          (papers_detail.py::batch_save_papers)
 
-Each path defers ``paper.analyze`` guarded by a ``paper_chunks`` existence check
-so already-processed papers are skipped.  The batch path issues ONE batch query
-(SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)) and skips
-enqueue for ids that already have chunks.
+Each path defers ``paper.analyze`` only when a paper has a usable PDF source and
+has no ``paper_chunks`` yet. Papers without either a remote PDF URL or a local
+PDF path are saved normally without scheduling a job that must fail.
 
 Verified:
-  papers_lifecycle.py:41-69  — save_paper chunk-exists guard + defer
-  pulse.py:220-284           — rate_card "save" branch + defer
-  papers_detail.py:163-228   — batch_save_papers batch chunk-exists guard + per-paper defer
+  papers_service.py::find_papers_needing_analysis — shared source/chunk gate
+  papers_lifecycle.py::save_paper                 — per-paper Save consumer
+  pulse.py::rate_card                             — Pulse Save consumer
+  papers_detail.py::batch_save_papers             — deduplicated batch consumer
 """
 
 from __future__ import annotations
@@ -87,12 +87,12 @@ def _mock_analyze_task() -> tuple[MagicMock, AsyncMock]:
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — PUT /api/papers/{id}/save: enqueues when paper has no chunks
+# Test 1 — PUT /api/papers/{id}/save: enqueues with a PDF source and no chunks
 #
 # Fixture paper_id_a has state='to_read' (allowed by save_paper) and no
 # paper_chunks row (seeded by _seed_resources without any chunk data).
 # Verified: papers_lifecycle.py:54 — allowed=("inbox","done","to_read","reading")
-# Verified: papers_lifecycle.py:57-68 — chunk-exists guard + defer_async call
+# The shared helper owns source/chunk eligibility; this route owns the defer.
 # ---------------------------------------------------------------------------
 
 
@@ -102,9 +102,9 @@ async def test_save_enqueues_analyze_when_unprocessed(
     _configure_api_key,
     contract_conn,
 ):
-    """PUT /api/papers/{id}/save: defers paper.analyze when no paper_chunks row exists.
+    """PUT /api/papers/{id}/save: defers analysis for an unprocessed PDF source.
 
-    Verified: papers_lifecycle.py:57-68 — fetchval EXISTS + defer_async when False.
+    The source/chunk gate and defer payload are both exercised through ASGI.
     """
     paper_id = contract_two_users.paper_id_a
     user_a_id = contract_two_users.user_a_id
@@ -113,6 +113,10 @@ async def test_save_enqueues_analyze_when_unprocessed(
     # but delete any that might exist from other tests touching the same paper).
     await contract_conn.execute(
         "DELETE FROM paper_chunks WHERE paper_id = $1",
+        paper_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = 'https://arxiv.org/pdf/2608.00001' WHERE id = $1",
         paper_id,
     )
 
@@ -127,7 +131,7 @@ async def test_save_enqueues_analyze_when_unprocessed(
     assert resp.json() == {"status": "ok", "paper_id": paper_id}, (
         f"Unexpected response body: {resp.json()}"
     )
-    mock_defer.assert_awaited_once()  # Verified: papers_lifecycle.py:64
+    mock_defer.assert_awaited_once()
     call_kwargs = mock_defer.await_args.kwargs
     assert call_kwargs.get("paper_id") == paper_id, (
         f"defer_async must receive paper_id={paper_id}; got kwargs={call_kwargs}"
@@ -143,9 +147,7 @@ async def test_save_enqueues_analyze_when_unprocessed(
 # ---------------------------------------------------------------------------
 # Test 2 — PUT /api/papers/{id}/save: skips enqueue when already processed
 #
-# Inserts a minimal paper_chunks row for paper_id_a; the EXISTS check returns
-# True → defer_async must NOT be called.
-# Verified: papers_lifecycle.py:57-60 — already_processed guard skips the block
+# Inserts a minimal paper_chunks row for paper_id_a, making it ineligible.
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +159,7 @@ async def test_save_skips_analyze_when_already_processed(
 ):
     """PUT /api/papers/{id}/save: does NOT defer paper.analyze when paper_chunks row exists.
 
-    Verified: papers_lifecycle.py:57-60 — chunk EXISTS → skip defer block.
+    Existing chunks make the paper ineligible even when it has a PDF source.
     """
     paper_id = contract_two_users.paper_id_a
 
@@ -179,7 +181,7 @@ async def test_save_skips_analyze_when_already_processed(
     assert resp.status_code == 200, (
         f"Expected 200 from PUT /save (already processed); got {resp.status_code}: {resp.text[:300]}"
     )
-    mock_defer.assert_not_awaited()  # Verified: papers_lifecycle.py:57-60
+    mock_defer.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +190,7 @@ async def test_save_skips_analyze_when_already_processed(
 # save_paper wraps the defer_async call in try/except and logs via
 # logger.exception — the response must still be 200 even when the broker
 # is down.  Mirrors test_star_zotero_push_trigger.py::test_star_enqueue_failure_is_best_effort.
-# Verified: papers_lifecycle.py:60-68 — try/except around defer_async
+# The route deliberately treats scheduling as best-effort after saving state.
 # ---------------------------------------------------------------------------
 
 
@@ -200,13 +202,17 @@ async def test_save_analyze_enqueue_failure_is_best_effort(
 ):
     """PUT /api/papers/{id}/save: 200 even when paper.analyze defer_async raises.
 
-    Verified: papers_lifecycle.py:60-68 — enqueue wrapped in try/except; RuntimeError swallowed.
+    A scheduling failure does not roll back the successful Save transition.
     """
     paper_id = contract_two_users.paper_id_a
 
     # Ensure no paper_chunks row so the enqueue path is taken.
     await contract_conn.execute(
         "DELETE FROM paper_chunks WHERE paper_id = $1",
+        paper_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = 'https://arxiv.org/pdf/2608.00002' WHERE id = $1",
         paper_id,
     )
 
@@ -227,9 +233,7 @@ async def test_save_analyze_enqueue_failure_is_best_effort(
 # ---------------------------------------------------------------------------
 # Test 3c — POST /api/pulse/rate rating="save": skips enqueue when already processed
 #
-# Inserts a minimal paper_chunks row for paper_id_a; the EXISTS check returns
-# True → defer_async must NOT be called.  Mirrors test_save_skips_analyze_when_already_processed.
-# Verified: pulse.py:258-263 — should_analyze=False when chunks exist → skip defer
+# Existing chunks make the Pulse paper ineligible. Mirrors the per-paper Save test.
 # ---------------------------------------------------------------------------
 
 
@@ -241,7 +245,7 @@ async def test_pulse_rate_save_skips_when_already_processed(
 ):
     """POST /api/pulse/rate rating='save': does NOT defer paper.analyze when paper_chunks exists.
 
-    Verified: pulse.py:258-263 — chunk EXISTS guard → should_analyze=False → skip defer.
+    The shared helper returns no scheduling candidate once chunks exist.
     """
     paper_id = contract_two_users.paper_id_a
 
@@ -267,7 +271,7 @@ async def test_pulse_rate_save_skips_when_already_processed(
     )
     body = resp.json()
     assert body.get("status") == "ok", f"Expected status='ok'; got {body}"
-    mock_defer.assert_not_awaited()  # Verified: pulse.py chunk-exists guard
+    mock_defer.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +279,8 @@ async def test_pulse_rate_save_skips_when_already_processed(
 #
 # The fixture paper_id_a is already linked to user A's pulse deck
 # (seeded by _seed_resources → pulse_cards + pulse_decks), so the deck
-# membership guard passes.  No paper_chunks → should_analyze=True → defer.
-# Verified: pulse.py:241-283 — deck guard + "save" branch + defer_async
+# membership guard passes. A PDF source plus no paper_chunks permits the defer.
+# The request crosses the deck guard, Save transition, shared gate, and defer.
 # ---------------------------------------------------------------------------
 
 
@@ -286,16 +290,19 @@ async def test_pulse_rate_save_enqueues_analyze(
     _configure_api_key,
     contract_conn,
 ):
-    """POST /api/pulse/rate rating='save': defers paper.analyze when no paper_chunks row.
+    """POST /api/pulse/rate rating='save': defers an unprocessed PDF source.
 
-    Verified: pulse.py:258-263 — save branch upserts state + chunk-exists guard.
-    Verified: pulse.py:277-283 — should_analyze=True → defer_async called.
+    The route receives one candidate from the shared source/chunk gate.
     """
     paper_id = contract_two_users.paper_id_a
 
     # Ensure no paper_chunks row (deck guard passes because pulse_card exists for this paper).
     await contract_conn.execute(
         "DELETE FROM paper_chunks WHERE paper_id = $1",
+        paper_id,
+    )
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = 'https://arxiv.org/pdf/2608.00003' WHERE id = $1",
         paper_id,
     )
 
@@ -315,7 +322,7 @@ async def test_pulse_rate_save_enqueues_analyze(
     )
     body = resp.json()
     assert body.get("status") == "ok", f"Expected status='ok'; got {body}"
-    mock_defer.assert_awaited_once()  # Verified: pulse.py:279
+    mock_defer.assert_awaited_once()
     call_kwargs = mock_defer.await_args.kwargs
     assert call_kwargs.get("paper_id") == paper_id, (
         f"defer_async must receive paper_id={paper_id}; got kwargs={call_kwargs}"
@@ -329,11 +336,10 @@ async def test_pulse_rate_save_enqueues_analyze(
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — POST /api/papers/batch-save: enqueues analyze only for unchunked papers
+# Test 4 — POST /api/papers/batch-save: enqueues analyzable, unchunked papers
 #
-# batch_save_papers issues one batch query to find already-chunked paper ids,
-# then defers paper.analyze only for ids with zero chunks.
-# Verified: papers_detail.py:208-228 — batch chunk-exists guard + per-item defer loop
+# batch_save_papers issues one shared eligibility query, then defers once per
+# unique analyzable paper.
 # ---------------------------------------------------------------------------
 
 
@@ -343,13 +349,12 @@ async def test_batch_save_enqueues_analyze_for_unchunked_papers(
     _configure_api_key,
     contract_conn,
 ):
-    """POST /api/papers/batch-save: defers paper.analyze only for papers without chunks.
+    """POST /api/papers/batch-save: defers only analyzable papers without chunks.
 
     Two papers are saved; one is pre-seeded with a paper_chunks row.
     Asserts: unchunked paper IS enqueued, already-chunked paper is NOT.
 
-    Verified: papers_detail.py:208-228 — batch chunk-exists guard skips chunked ids.
-    Verified: papers_detail.py:163-167 — list[PaperCreate] Body() parameter.
+    The request exercises both deduplication and shared eligibility through ASGI.
     """
     payload = [
         {
@@ -358,6 +363,7 @@ async def test_batch_save_enqueues_analyze_for_unchunked_papers(
             "title": "AutoEnqueue Contract Test Paper One",
             "authors": ["Test Author"],
             "url": "https://autoenqueue.contract.test/001",
+            "pdf_url": "https://arxiv.org/pdf/2608.00004",
         },
         {
             "external_id": "autoenqueue-contract-test-ext-002",
@@ -365,6 +371,7 @@ async def test_batch_save_enqueues_analyze_for_unchunked_papers(
             "title": "AutoEnqueue Contract Test Paper Two",
             "authors": ["Test Author"],
             "url": "https://autoenqueue.contract.test/002",
+            "pdf_url": "https://arxiv.org/pdf/2608.00005",
         },
     ]
 
@@ -407,7 +414,7 @@ async def test_batch_save_enqueues_analyze_for_unchunked_papers(
         f"Expected list of 2 PaperResponse; got: {body!r}"
     )
 
-    # Only the unchunked paper must be enqueued — Verified: papers_detail.py:217-219
+    # Only the unchunked paper must be enqueued.
     assert mock_defer.await_count == 1, (
         f"Expected defer_async called once (only for unchunked paper); got {mock_defer.await_count} calls"
     )
@@ -438,7 +445,7 @@ async def test_batch_save_duplicate_entries_enqueue_analyze_once(
     paper, so the enqueue loop must defer exactly one paper.analyze job for
     it — not one per duplicate entry.
 
-    Verified: papers_detail.py:355-377 — saved_ids deduped before the defer loop.
+    The deduplicated candidate set must produce only one defer.
     """
     entry = {
         "external_id": "autoenqueue-contract-dup-ext",
@@ -446,6 +453,7 @@ async def test_batch_save_duplicate_entries_enqueue_analyze_once(
         "title": "AutoEnqueue Duplicate Entry Paper",
         "authors": ["Test Author"],
         "url": "https://autoenqueue.contract.test/dup",
+        "pdf_url": "https://arxiv.org/pdf/2608.00006",
     }
     mock_task, mock_defer = _mock_analyze_task()
     with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
@@ -466,3 +474,78 @@ async def test_batch_save_duplicate_entries_enqueue_analyze_once(
     assert deferred_paper_ids == [body[0]["id"]], (
         f"The single deferred job must target the canonical paper; got {deferred_paper_ids}"
     )
+
+
+async def test_save_without_pdf_source_does_not_enqueue_analyze(
+    contract_two_users,
+    _autoenqueue_app,
+    _configure_api_key,
+    contract_conn,
+):
+    """Saving metadata-only discovery must not schedule a doomed analysis job."""
+    paper_id = contract_two_users.paper_id_a
+    await contract_conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = NULL, pdf_local_path = NULL WHERE id = $1",
+        paper_id,
+    )
+
+    mock_task, mock_defer = _mock_analyze_task()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
+        async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as client:
+            response = await client.put(f"/api/papers/{paper_id}/save")
+
+    assert response.status_code == 200
+    mock_defer.assert_not_awaited()
+
+
+async def test_pulse_save_without_pdf_source_does_not_enqueue_analyze(
+    contract_two_users,
+    _autoenqueue_app,
+    _configure_api_key,
+    contract_conn,
+):
+    """Pulse Save preserves metadata-only cards without creating a failed job."""
+    paper_id = contract_two_users.paper_id_a
+    await contract_conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
+    await contract_conn.execute(
+        "UPDATE papers SET pdf_url = '   ', pdf_local_path = '   ' WHERE id = $1",
+        paper_id,
+    )
+
+    mock_task, mock_defer = _mock_analyze_task()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
+        async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as client:
+            response = await client.post(
+                "/api/pulse/rate",
+                json={"paper_id": paper_id, "rating": "save"},
+            )
+
+    assert response.status_code == 200
+    mock_defer.assert_not_awaited()
+
+
+async def test_batch_save_without_pdf_source_does_not_enqueue_analyze(
+    contract_two_users,
+    _autoenqueue_app,
+    _configure_api_key,
+):
+    """Batch Save must not analyze a bibliographic record with no PDF source."""
+    payload = [
+        {
+            "external_id": "autoenqueue-contract-pdfless",
+            "source_type": "pubmed",
+            "title": "Metadata-only discovery",
+            "authors": ["Test Author"],
+            "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+        }
+    ]
+
+    mock_task, mock_defer = _mock_analyze_task()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
+        async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as client:
+            response = await client.post("/api/papers/batch-save", json=payload)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    mock_defer.assert_not_awaited()

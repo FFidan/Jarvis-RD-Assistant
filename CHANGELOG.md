@@ -51,6 +51,13 @@ several unchecked or duplicated control paths with smaller, tested owners.
 - **Setup and delivery reject blank SMTP identities consistently.** Required
   host and sender fields are normalized at setup, secret loading, readiness,
   probing, and delivery boundaries.
+- **Saving metadata-only papers no longer creates failed analysis jobs.** Web,
+  batch, and Pulse saves now schedule analysis only when the paper has a remote
+  PDF or a local PDF file; the paper still enters the researcher's library when
+  only bibliographic metadata is available.
+- **The in-app PDF reader works under the production security policy.** Its
+  same-origin PDF blob is permitted by the dashboard policy, and Ask routing
+  metadata is decoded without producing misleading malformed-stream warnings.
 - **Upgrade diagnosis is read-only.** Lifecycle commands distinguish a possible
   old Tailscale Serve target from custom or shared state and print a targeted,
   operator-confirmed repair command without resetting or changing Serve state.

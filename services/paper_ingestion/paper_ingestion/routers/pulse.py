@@ -31,6 +31,7 @@ from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.settings import get_core_settings
 from jarvis_common.task_registry import KIND_TO_TASK
 
+from paper_ingestion import papers_service
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
 from paper_ingestion.models import (
@@ -283,9 +284,8 @@ async def rate_card(
                 logger.debug("pulse open: paper_id=%s user_id=%s", body.paper_id, user_id)
             elif body.rating == "save":
                 await _upsert_state_and_starred(conn, body.paper_id, user_id, state="to_read")
-                should_analyze = not await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM paper_chunks WHERE paper_id = $1)",
-                    body.paper_id,
+                should_analyze = body.paper_id in await papers_service.find_papers_needing_analysis(
+                    conn, [body.paper_id]
                 )
             elif body.rating == "up":
                 await _upsert_recommendation_feedback(

@@ -66,6 +66,24 @@ describe('streamSSE', () => {
     expect(ev1.content).toBe(' world');
   });
 
+  it('decodes backend routing metadata without malformed-frame warnings', async () => {
+    const stream = createMockReadableStream([
+      'event: backend\n',
+      'data: {"served_by":"smart","fallback":false}\n\n',
+      'data: [DONE]\n\n',
+    ]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(stream, { status: 200 }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamSSE('/api/ask/stream', { question: 'test' })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: 'backend', served_by: 'smart', fallback: false }]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it('stops on [DONE] sentinel', async () => {
     const stream = createMockReadableStream([
       'data: {"type":"token","content":"Hi"}\n\n',
