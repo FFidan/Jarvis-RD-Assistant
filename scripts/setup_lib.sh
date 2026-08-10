@@ -2468,19 +2468,22 @@ print(str(configured).lower(), str(completed).lower(), mode)
 '
 }
 
-# materialize_api_key_file KEY -> atomically write the local single-user API
-# key and print its path. The secret is handled by shell builtins and file I/O;
-# it is never passed to an external command as an argument.
+# materialize_api_key_file KEY [REPO] -> atomically write the local single-user
+# API key under the install's Compose identity and print its path. Side-by-side
+# installs must never share one credential file. The secret is handled by shell
+# builtins and file I/O; it is never passed to an external command as an argument.
 materialize_api_key_file() {
-  local api_key="$1" key_dir key_file tmp
+  local api_key="$1" repo="${2:-$PWD}" project config_dir key_dir key_file tmp
   [ -n "$api_key" ] || {
     printf 'materialize_api_key_file: API key is empty\n' >&2
     return 1
   }
-  key_dir="${HOME}/.config/jarvis"
+  project="$(_lifecycle_compose_project_name "$repo")" || return 1
+  config_dir="${JARVIS_CLI_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jarvis-research}"
+  key_dir="${config_dir}/credentials/${project}"
   key_file="${key_dir}/api-key"
   mkdir -p "$key_dir" || return 1
-  chmod 700 "$key_dir" || return 1
+  chmod 700 "$config_dir" "${config_dir}/credentials" "$key_dir" || return 1
   tmp="$(mktemp "${key_dir}/.api-key.XXXXXX")" || return 1
   if ! printf '%s' "$api_key" > "$tmp"; then
     rm -f "$tmp"

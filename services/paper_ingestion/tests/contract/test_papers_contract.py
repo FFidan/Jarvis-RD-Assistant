@@ -697,15 +697,35 @@ async def test_a68_batch_save_inserts_into_user_library(
     )
     saved_paper_id = body[0]["id"]
 
-    # Verify the paper is now in user A's library
+    # Verify the paper is now in user A's saved Library rather than the Inbox.
     row = await contract_conn.fetchrow(
-        "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2",
+        """SELECT pus.state
+             FROM user_library ul
+             JOIN paper_user_state pus
+               ON pus.paper_id = ul.paper_id AND pus.user_id = ul.user_id
+            WHERE ul.paper_id=$1 AND ul.user_id=$2""",
         saved_paper_id,
         contract_two_users.user_a_id,
     )
     assert row is not None, (
         f"Paper {saved_paper_id} not found in user A's user_library after batch-save"
     )
+    assert row["state"] == "to_read"
+
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET state = 'done' WHERE paper_id = $1 AND user_id = $2",
+        saved_paper_id,
+        contract_two_users.user_a_id,
+    )
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        repeated = await c.post("/api/papers/batch-save", json=payload)
+    assert repeated.status_code == 200, repeated.text[:300]
+    state_after_repeat = await contract_conn.fetchval(
+        "SELECT state FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
+        saved_paper_id,
+        contract_two_users.user_a_id,
+    )
+    assert state_after_repeat == "done"
 
 
 # --- A69: POST /api/papers/{paper_id}/feedback — owner can post feedback on system-discovered paper ---

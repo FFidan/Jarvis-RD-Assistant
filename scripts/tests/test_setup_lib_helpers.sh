@@ -1210,11 +1210,21 @@ got="$(printf '%s' 'not-json' | parse_setup_status_json 2>/dev/null)" && rc=0 ||
 expect_eq "parse_setup_status_json rejects invalid JSON" "${got}/${rc}" "/1"
 
 KEY_HOME="$(mktemp -d "${FIXTURES}/key-home.XXXXXX")"
-got="$(HOME="$KEY_HOME" materialize_api_key_file 'local-api-key')" && rc=0 || rc=$?
-expect_eq "materialize_api_key_file reports the created path" "${got}/${rc}" "${KEY_HOME}/.config/jarvis/api-key/0"
+KEY_CONFIG="${KEY_HOME}/config"
+KEY_REPO_A="${KEY_HOME}/install-a"
+KEY_REPO_B="${KEY_HOME}/install-b"
+mkdir -p "${KEY_HOME}/.config/jarvis" "$KEY_REPO_A" "$KEY_REPO_B"
+printf 'COMPOSE_PROJECT_NAME=jarvis-a\n' > "${KEY_REPO_A}/.env"
+printf 'COMPOSE_PROJECT_NAME=jarvis-b\n' > "${KEY_REPO_B}/.env"
+printf 'unrelated-live-key' > "${KEY_HOME}/.config/jarvis/api-key"
+got="$(HOME="$KEY_HOME" XDG_CONFIG_HOME="$KEY_CONFIG" materialize_api_key_file 'local-api-key' "$KEY_REPO_A")" && rc=0 || rc=$?
+expect_eq "materialize_api_key_file reports the install-scoped path" "${got}/${rc}" "${KEY_CONFIG}/jarvis-research/credentials/jarvis-a/api-key/0"
 expect_eq "materialize_api_key_file writes the exact key" "$(cat "$got")" "local-api-key"
-expect_eq "materialize_api_key_file makes the parent owner-only" "$(stat -c '%a' "${KEY_HOME}/.config/jarvis")" "700"
+expect_eq "materialize_api_key_file makes the parent owner-only" "$(stat -c '%a' "${KEY_CONFIG}/jarvis-research/credentials/jarvis-a")" "700"
 expect_eq "materialize_api_key_file makes the key owner-only" "$(stat -c '%a' "$got")" "600"
+got_b="$(HOME="$KEY_HOME" XDG_CONFIG_HOME="$KEY_CONFIG" materialize_api_key_file 'other-local-key' "$KEY_REPO_B")" && rc=0 || rc=$?
+expect_eq "side-by-side installs materialize distinct API-key paths" "${got_b}/${rc}" "${KEY_CONFIG}/jarvis-research/credentials/jarvis-b/api-key/0"
+expect_eq "a side-by-side setup does not overwrite the legacy global key" "$(cat "${KEY_HOME}/.config/jarvis/api-key")" "unrelated-live-key"
 
 # === access-mode / ingress helpers ===========================================
 # _is_lan_ipv4 accepts the RFC1918 address other LAN devices reach this host by and

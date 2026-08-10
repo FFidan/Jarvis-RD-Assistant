@@ -999,7 +999,6 @@ describe('JobStore', () => {
     // Active jobs are exhaustive; the bounded recent call catches fast terminal jobs.
     vi.mocked(listJobs)
       .mockResolvedValueOnce([runningJob]) // running call
-      .mockResolvedValueOnce([])            // queued call
       .mockResolvedValueOnce([]);           // recent call
 
     // Return empty stream so subscribe terminates cleanly
@@ -1009,7 +1008,7 @@ describe('JobStore', () => {
 
     await useJobStore.getState().hydrate();
 
-    expect(listJobs).toHaveBeenCalledWith({ status: 'running', limit: 500 });
+    expect(listJobs).toHaveBeenCalledWith({ status: 'active', limit: 500 });
     expect(useJobStore.getState().jobs['j8']).toBeDefined();
     expect(requireJob(useJobStore.getState().jobs['j8'], 'j8').status).toBe('running');
   });
@@ -1099,7 +1098,6 @@ describe('JobStore', () => {
     });
     vi.mocked(listJobs)
       .mockResolvedValueOnce([running])
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([completed]);
     useJobStore.setState({ discoveryInitialized: true });
 
@@ -1118,7 +1116,7 @@ describe('JobStore', () => {
       useJobStore.getState().hydrate(),
     ]);
 
-    expect(listJobs).toHaveBeenCalledTimes(3);
+    expect(listJobs).toHaveBeenCalledTimes(2);
   });
 
   it('hydrate: a response from before logout cannot repopulate the next user state', async () => {
@@ -1168,9 +1166,9 @@ describe('JobStore', () => {
     });
 
     const cleanup = registerVisibilityHydrate();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(hydrate).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(19_999);
     expect(hydrate).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(hydrate).toHaveBeenCalledTimes(2);
@@ -1320,11 +1318,10 @@ describe('JobStore', () => {
     const jobA_running = makeJob({ id: 'job-running-1', kind: 'pulse.generate', status: 'running' });
     const jobB_queued = makeJob({ id: 'job-queued-1', kind: 'paper.process', status: 'queued' });
 
-    // Exhaustive active calls plus one bounded recent-history discovery.
+    // One exhaustive active call plus one bounded recent-history discovery.
     vi.mocked(listJobs)
-      .mockResolvedValueOnce([jobA_running]) // status: 'running'
-      .mockResolvedValueOnce([jobB_queued])  // status: 'queued'
-      .mockResolvedValueOnce([]);            // recent history
+      .mockResolvedValueOnce([jobA_running, jobB_queued]) // status: 'active'
+      .mockResolvedValueOnce([]);                          // recent history
 
     // Return empty stream so subscribe terminates cleanly for both jobs
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -1334,10 +1331,9 @@ describe('JobStore', () => {
     await useJobStore.getState().hydrate();
 
     // Both calls must have been made
-    expect(listJobs).toHaveBeenCalledWith({ status: 'running', limit: 500 });
-    expect(listJobs).toHaveBeenCalledWith({ status: 'queued', limit: 500 });
+    expect(listJobs).toHaveBeenCalledWith({ status: 'active', limit: 500 });
     expect(listJobs).toHaveBeenCalledWith({ limit: 30 });
-    expect(listJobs).toHaveBeenCalledTimes(3);
+    expect(listJobs).toHaveBeenCalledTimes(2);
 
     // Both jobs must appear in the store
     const jobs = useJobStore.getState().jobs;

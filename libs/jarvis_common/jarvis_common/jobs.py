@@ -606,6 +606,7 @@ async def list_jobs(
     column with value ``"procrastinate"`` is added to every row for API
     compatibility.
 
+    ``status="active"`` is the aggregate filter for queued and running jobs.
     When ``user_id`` is provided only jobs owned by that user are returned
     (rows where ``args->>'user_id' = user_id``).  Passing ``user_id=None``
     returns only system jobs — rows where ``args->>'user_id' IS NULL``.
@@ -620,6 +621,13 @@ async def list_jobs(
         user_id,  # $3 — user_id filter or NULL (text)
         limit,  # $4 — LIMIT
     ]
+    status_filter_sql = f"""
+        (
+          $1::text IS NULL
+          OR ($1 = 'active' AND {_STATUS_CASE_SQL} IN ('queued', 'running'))
+          OR ($1 <> 'active' AND {_STATUS_CASE_SQL} = $1)
+        )
+    """
 
     query_with_progress = f"""
         SELECT pj.args->>'job_id' AS id,
@@ -638,7 +646,7 @@ async def list_jobs(
         FROM procrastinate_jobs pj
         LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
         WHERE pj.args ? 'job_id'
-          AND ($1::text IS NULL OR {_STATUS_CASE_SQL} = $1)
+          AND {status_filter_sql}
           AND ($2::text IS NULL OR pj.task_name = $2)
           AND (
             ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
@@ -663,7 +671,7 @@ async def list_jobs(
                'procrastinate' AS source
         FROM procrastinate_jobs pj
         WHERE pj.args ? 'job_id'
-          AND ($1::text IS NULL OR {_STATUS_CASE_SQL} = $1)
+          AND {status_filter_sql}
           AND ($2::text IS NULL OR pj.task_name = $2)
           AND (
             ($3::text IS NULL AND pj.args->>'user_id' IS NULL)

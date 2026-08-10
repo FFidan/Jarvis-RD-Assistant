@@ -318,7 +318,11 @@ def build_jobs_router(
         db_pool: asyncpg.Pool = Depends(get_db_pool),
         user_id: int = Depends(current_user_id_strict),
     ) -> list[dict[str, Any]]:
-        """Return a list of jobs, optionally filtered by status and/or kind."""
+        """Return jobs, optionally filtered by status or kind.
+
+        The aggregate ``active`` status selects both queued and running jobs,
+        allowing clients to recover all in-flight work with one request.
+        """
         rows = await jobs_lib.list_jobs(
             db_pool,
             status=status,

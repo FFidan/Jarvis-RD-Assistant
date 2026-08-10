@@ -2110,9 +2110,9 @@ if [ -f .env ]; then
       [ -n "$_keep_api_key" ] \
         || die "JARVIS_API_KEY is missing from the existing .env." \
                "Restore the original .env or backup before re-running setup"
-      _keep_key_file="$(materialize_api_key_file "$_keep_api_key")" \
+      _keep_key_file="$(materialize_api_key_file "$_keep_api_key" "$SCRIPT_DIR")" \
         || die "Could not write the local API-key file." \
-               "Check permissions on ${HOME}/.config/jarvis, then re-run ./setup.sh"
+               "Check permissions on your JARVIS CLI config directory, then re-run ./setup.sh"
     fi
 
     case "$_keep_configured:$_keep_setup_completed" in
@@ -3595,9 +3595,9 @@ fi
 
 if [ "$NI_MODE" = "single" ]; then
   # Single-user mode: API key auth is enabled.
-  _KEY_FILE="$(materialize_api_key_file "$JARVIS_API_KEY")" \
+  _KEY_FILE="$(materialize_api_key_file "$JARVIS_API_KEY" "$SCRIPT_DIR")" \
     || die "Could not write the local API-key file." \
-           "Check permissions on ${HOME}/.config/jarvis, then re-run ./setup.sh"
+           "Check permissions on your JARVIS CLI config directory, then re-run ./setup.sh"
   printf '  API key:      written to %s\n' "$_KEY_FILE"
   printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
   printf '  Sign in:      open the dashboard and enter your API key.\n'
@@ -3621,7 +3621,7 @@ printf '%s   Next steps%s\n' "$C_BOLD" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 if [ "$NI_MODE" = "single" ]; then
   printf '  1. Open the dashboard: %s\n' "$DASHBOARD_URL"
-  printf '  2. Log in with your API key (stored in ~/.config/jarvis/api-key).\n'
+  printf '  2. Log in with your API key (stored in %s).\n' "$_KEY_FILE"
 else
   # Dependency order: the first admin is bootstrapped by the token-bearing setup
   # link (no SMTP, no existing account) BEFORE anything that presupposes an admin

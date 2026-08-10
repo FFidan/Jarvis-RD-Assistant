@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
 from jarvis_common.library import add_to_library, is_in_library
+from jarvis_common.paper_state import upsert_paper_user_state
 from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 from paper_ingestion import papers_service
@@ -357,19 +358,29 @@ async def batch_save_papers(
                     # and leak the private metadata through the echoed response,
                     # so such collisions are skipped (no attach, no echo, and
                     # therefore no analyze-enqueue below).
+                    already_in_library = await is_in_library(
+                        conn, user_id=user_id, paper_id=row["id"]
+                    )
                     attachable = (
                         row["is_insert"]
                         or row["visibility_scope"] == PUBLIC_VISIBILITY_SCOPE
-                        or await is_in_library(conn, user_id=user_id, paper_id=row["id"])
+                        or already_in_library
                     )
                     if not attachable:
                         continue
-                    await add_to_library(
-                        conn,
-                        user_id=user_id,
-                        paper_id=row["id"],
-                        added_via="batch_save",
-                    )
+                    if not already_in_library:
+                        await add_to_library(
+                            conn,
+                            user_id=user_id,
+                            paper_id=row["id"],
+                            added_via="batch_save",
+                        )
+                        await upsert_paper_user_state(
+                            conn,
+                            row["id"],
+                            user_id,
+                            state="to_read",
+                        )
                 results.append(row_to_paper_response(row))
     if not results:
         return results

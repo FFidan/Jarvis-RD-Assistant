@@ -176,7 +176,7 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 const RECENT_DISCOVERY_LIMIT = 30;
 const MAX_TRACKED_JOBS = 50;
-const DISCOVERY_BASE_DELAY_MS = 5_000;
+const DISCOVERY_BASE_DELAY_MS = 10_000;
 const DISCOVERY_MAX_DELAY_MS = 30_000;
 
 /**
@@ -640,14 +640,13 @@ export const useJobStore = create<JobStore>()(
         const generation = discoveryGeneration;
         const run = (async () => {
           try {
-            const [running, queued, recent] = await Promise.all([
-              apiListJobs({ status: 'running', limit: 500 }),
-              apiListJobs({ status: 'queued', limit: 500 }),
+            const [active, recent] = await Promise.all([
+              apiListJobs({ status: 'active', limit: 500 }),
               apiListJobs({ limit: RECENT_DISCOVERY_LIMIT }),
             ]);
             if (generation !== discoveryGeneration) return false;
             const discovered = new Map<string, Job>();
-            for (const job of [...queued, ...running, ...recent]) {
+            for (const job of [...active, ...recent]) {
               const current = discovered.get(job.id);
               if (
                 current === undefined ||
