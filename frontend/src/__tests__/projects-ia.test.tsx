@@ -28,6 +28,9 @@ vi.mock('@/lib/api', async () => {
     fetchTasks: vi.fn(),
     fetchMilestones: vi.fn(),
     fetchProjectPapers: vi.fn(),
+    linkPaper: vi.fn(),
+    unlinkPaper: vi.fn(),
+    searchLibrary: vi.fn(),
     createProjectQuestion: vi.fn(),
     deleteProjectQuestion: vi.fn(),
     createProject: vi.fn(),
@@ -43,6 +46,9 @@ import {
   fetchTasks,
   fetchMilestones,
   fetchProjectPapers,
+  linkPaper,
+  unlinkPaper,
+  searchLibrary,
   createProjectQuestion,
   deleteProjectQuestion,
 } from '@/lib/api';
@@ -62,6 +68,9 @@ const mockFetchActivity = vi.mocked(fetchProjectActivity);
 const mockFetchTasks = vi.mocked(fetchTasks);
 const mockFetchMilestones = vi.mocked(fetchMilestones);
 const mockFetchProjectPapers = vi.mocked(fetchProjectPapers);
+const mockLinkPaper = vi.mocked(linkPaper);
+const mockUnlinkPaper = vi.mocked(unlinkPaper);
+const mockSearchLibrary = vi.mocked(searchLibrary);
 const mockCreateQuestion = vi.mocked(createProjectQuestion);
 const mockDeleteQuestion = vi.mocked(deleteProjectQuestion);
 
@@ -587,6 +596,67 @@ describe('Existing functionality preserved', () => {
     expect(await screen.findByText('Failed to load linked papers.')).toBeInTheDocument();
     expect(screen.queryByText('No linked papers')).toBeNull();
     expect(screen.queryByText(/0 linked/)).toBeNull();
+  });
+
+  it('refreshes every paper and project view after linking a paper', async () => {
+    mockFetchProjectPapers.mockResolvedValue([]);
+    mockSearchLibrary.mockResolvedValue([
+      { id: 42, title: 'Graph Neural Ordinary Differential Equations', published_date: null },
+    ]);
+    mockLinkPaper.mockResolvedValue({ project_id: 1, paper_id: 42 });
+    const queryClient = makeQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    renderWithProviders(
+      <MemoryRouter><LinkedPapersTab projectId={1} /></MemoryRouter>,
+      { queryClient },
+    );
+
+    await userEvent.type(await screen.findByPlaceholderText(/search papers/i), 'graph neural');
+    await userEvent.click(screen.getByRole('button', { name: /^search$/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^link$/i }));
+
+    await waitFor(() => {
+      const keys = invalidateSpy.mock.calls.map(
+        ([opts]) => (opts as { queryKey: unknown[] }).queryKey,
+      );
+      expect(keys).toContainEqual(['project-papers', 1]);
+      expect(keys).toContainEqual(['projects']);
+      expect(keys).toContainEqual(['paper-detail', 42]);
+      expect(keys).toContainEqual(['papers-feed']);
+    });
+  });
+
+  it('refreshes every paper and project view after unlinking a paper', async () => {
+    mockFetchProjectPapers.mockResolvedValue([
+      {
+        id: 42,
+        title: 'Graph Neural Ordinary Differential Equations',
+        authors: ['Michael Poli'],
+        source_type: 'arxiv',
+        published_date: '2019-11-18',
+        notes: null,
+        added_at: '2026-08-10T00:00:00Z',
+      },
+    ]);
+    mockUnlinkPaper.mockResolvedValue(undefined);
+    const queryClient = makeQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    renderWithProviders(
+      <MemoryRouter><LinkedPapersTab projectId={1} /></MemoryRouter>,
+      { queryClient },
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^unlink$/i }));
+
+    await waitFor(() => {
+      const keys = invalidateSpy.mock.calls.map(
+        ([opts]) => (opts as { queryKey: unknown[] }).queryKey,
+      );
+      expect(keys).toContainEqual(['project-papers', 1]);
+      expect(keys).toContainEqual(['projects']);
+      expect(keys).toContainEqual(['paper-detail', 42]);
+      expect(keys).toContainEqual(['papers-feed']);
+    });
   });
 
   it('Delete project button is present and opens confirm dialog', async () => {

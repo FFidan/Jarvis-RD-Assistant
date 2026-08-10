@@ -8,7 +8,8 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { describe, it, expect, vi } from 'vitest';
 import {
   isCacheableApiRequest,
   __SW_CACHE_SAFELIST,
@@ -166,5 +167,79 @@ describe('sw.js cache-policy parity', () => {
   it('DENYLIST: sw.js and sw-cache-policy.ts are the same set of patterns', () => {
     expect(swDenylist).toHaveLength(tsDenylist.length);
     expect(new Set(swDenylist)).toEqual(new Set(tsDenylist));
+  });
+
+  it('prefers a fresh network response over an older cached API response', async () => {
+    type FetchEvent = {
+      request: { method: string; mode: string; url: string };
+      respondWith: (response: Promise<unknown>) => void;
+      waitUntil: (work: Promise<unknown>) => void;
+    };
+
+    const listeners = new Map<string, (event: FetchEvent) => void>();
+    const cachedResponse = { source: 'cache' };
+    const networkResponse = {
+      source: 'network',
+      ok: true,
+      clone: vi.fn(() => ({ source: 'network-clone' })),
+    };
+    const cache = {
+      match: vi.fn().mockResolvedValue(cachedResponse),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetch = vi.fn().mockResolvedValue(networkResponse);
+
+    runInNewContext(swSource, {
+      URL,
+      Response: { error: vi.fn(() => ({ source: 'error' })) },
+      caches: {
+        open: vi.fn().mockResolvedValue(cache),
+        keys: vi.fn().mockResolvedValue([]),
+        delete: vi.fn().mockResolvedValue(true),
+      },
+      fetch,
+      self: {
+        location: { origin: 'http://localhost' },
+        addEventListener: (kind: string, handler: (event: FetchEvent) => void) => {
+          listeners.set(kind, handler);
+        },
+      },
+    });
+
+    let responsePromise: Promise<unknown> | undefined;
+    const handler = listeners.get('fetch');
+    expect(handler).toBeDefined();
+    handler?.({
+      request: {
+        method: 'GET',
+        mode: 'cors',
+        url: 'http://localhost/api/papers/42',
+      },
+      respondWith: (response) => {
+        responsePromise = response;
+      },
+      waitUntil: () => undefined,
+    });
+
+    expect(await responsePromise).toBe(networkResponse);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(cache.put).toHaveBeenCalledOnce();
+
+    fetch.mockRejectedValueOnce(new TypeError('offline'));
+    responsePromise = undefined;
+    handler?.({
+      request: {
+        method: 'GET',
+        mode: 'cors',
+        url: 'http://localhost/api/papers/42',
+      },
+      respondWith: (response) => {
+        responsePromise = response;
+      },
+      waitUntil: () => undefined,
+    });
+
+    expect(await responsePromise).toBe(cachedResponse);
+    expect(cache.put).toHaveBeenCalledOnce();
   });
 });

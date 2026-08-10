@@ -10,7 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## v1.2.5 (2026-08-10)
+## v1.2.5 (2026-08-11)
 
 This release makes the research loop consistent across the Web interface,
 Telegram, fresh installations, and maintained upgrades. It also replaces
