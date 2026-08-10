@@ -157,6 +157,8 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
               <span className="block">
                 <form onSubmit={handleSubmit} className="flex gap-2">
                   <Textarea
+                    name="question"
+                    aria-label="Ask a question"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Ask a question..."

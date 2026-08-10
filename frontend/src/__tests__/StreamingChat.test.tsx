@@ -231,8 +231,9 @@ describe('StreamingChat — Ask-gating tooltip', () => {
 
   it('keeps textarea enabled when hasAnalyzedPapers is true', () => {
     render(<StreamingChat chatId="c1" scope="cross-paper" hasAnalyzedPapers={true} />);
-    const textarea = screen.getByPlaceholderText('Ask a question...');
+    const textarea = screen.getByRole('textbox', { name: 'Ask a question' });
     expect(textarea).not.toBeDisabled();
+    expect(textarea).toHaveAttribute('name', 'question');
   });
 });
 
