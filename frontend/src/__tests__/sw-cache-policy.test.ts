@@ -150,6 +150,14 @@ describe('sw.js cache-policy parity', () => {
   const tsSafelist = __SW_CACHE_SAFELIST.map((re) => re.toString());
   const tsDenylist = __SW_CACHE_DENYLIST.map((re) => re.toString());
 
+  it('does not cache the unversioned preboot policy script', () => {
+    const bypass = swSource.indexOf("url.pathname === '/preboot.js'");
+    const staticCache = swSource.indexOf('Same-origin static assets');
+
+    expect(bypass).toBeGreaterThan(0);
+    expect(bypass).toBeLessThan(staticCache);
+  });
+
   it('SAFELIST: sw.js and sw-cache-policy.ts are the same set of patterns', () => {
     expect(swSafelist).toHaveLength(tsSafelist.length);
     expect(new Set(swSafelist)).toEqual(new Set(tsSafelist));

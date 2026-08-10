@@ -174,6 +174,10 @@ self.addEventListener('fetch', (event) => {
 
   if (!sameOrigin) return; // let cross-origin (fonts/CDN) pass through
 
+  // This boot-time policy script is intentionally unversioned and served with
+  // `Cache-Control: no-cache`; let the browser revalidate it after upgrades.
+  if (url.pathname === '/preboot.js') return;
+
   // Same-origin static assets (hashed JS/CSS/img/fonts): cache-first.
   if (
     req.method === 'GET' &&
