@@ -361,6 +361,29 @@ async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
     assert resp.status_code == 400
 
 
+async def test_put_onboarding_dismissed_round_trip_is_personal(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """The tour dismissal written by the Web UI must be readable for that user."""
+    resp = await pi_settings_client.put(
+        "/api/config/onboarding.dismissed",
+        json={"key": "onboarding.dismissed", "value": True},
+    )
+    assert resp.status_code == 200, f"PUT failed: {resp.json()}"
+
+    row = await contract_conn.fetchrow(
+        """SELECT value FROM user_config
+           WHERE key = 'onboarding.dismissed' AND user_id = $1""",
+        contract_two_users.user_a_id,
+    )
+    assert row is not None
+    assert row["value"] is True
+
+    fetched = await pi_settings_client.get("/api/config/onboarding.dismissed")
+    assert fetched.status_code == 200
+    assert fetched.json() == {"key": "onboarding.dismissed", "value": True}
+
+
 # ---------------------------------------------------------------------------
 # setup.completed — boolean system key
 # ---------------------------------------------------------------------------

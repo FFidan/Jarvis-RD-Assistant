@@ -368,6 +368,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.enabled": _validate_bool,
     "recommendation.enabled": _validate_bool,
     "setup.completed": _validate_bool,
+    "onboarding.dismissed": _validate_bool,
     "user.timezone": _validate_timezone,
     "telegram.owner_chat_id": _validate_optional_int,
     # LLM model role assignments

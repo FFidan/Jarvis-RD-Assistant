@@ -12,6 +12,7 @@ from paper_ingestion.services.config_metadata import (
 from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
+_ONBOARDING_DISMISSED_KEY = "onboarding.dismissed"
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -56,6 +57,18 @@ def test_user_timezone_allowed():
     """user.timezone must be in the whitelist as the replacement for notifications.timezone."""
     missing = _USER_PREF_KEYS - _ALLOWED_CONFIG_KEYS
     assert not missing, f"User-pref keys not in backend whitelist: {missing}"
+
+
+def test_onboarding_dismissal_is_allowed_and_personal():
+    """Tour dismissal must round-trip for each user, not become a system setting."""
+    assert _ONBOARDING_DISMISSED_KEY in _ALLOWED_CONFIG_KEYS
+    assert _ONBOARDING_DISMISSED_KEY in PERSONAL_KEYS
+    assert _ONBOARDING_DISMISSED_KEY not in SYSTEM_KEYS
+    assert _classify_config_key(_ONBOARDING_DISMISSED_KEY) == "personal"
+    validator = _CONFIG_VALIDATORS[_ONBOARDING_DISMISSED_KEY]
+    validator(True)
+    with pytest.raises(ValueError):
+        validator("true")
 
 
 def test_unknown_key_not_allowed():
