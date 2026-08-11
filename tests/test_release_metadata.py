@@ -477,6 +477,19 @@ def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> Non
     assert "uvx" in scanner and "pip-audit" in scanner
     assert "scripts/check_npm_audit.py" in scanner
     assert 'tools["osv-scanner"]' in scanner
+    assert '"--recursive"' not in scanner
+    for manifest in (
+        "frontend/package-lock.json",
+        "uv.lock",
+        "libs/jarvis_common/uv.lock",
+        "requirements-docs.txt",
+        "services/learning_engine/requirements.txt",
+        "services/paper_ingestion/requirements-dev.txt",
+        "services/paper_ingestion/requirements-optional.txt",
+        "services/paper_ingestion/requirements.txt",
+        "services/telegram_bot/requirements.txt",
+    ):
+        assert manifest in scanner
     assert 'tools["gitleaks"]' in scanner
     assert "|| true" not in scanner
 

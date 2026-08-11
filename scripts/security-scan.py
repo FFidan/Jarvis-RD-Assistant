@@ -64,14 +64,28 @@ GITLEAKS = ToolSpec(
 )
 
 TOOLS = (OSV_SCANNER, GITLEAKS)
-REQUIRED_INPUTS = (
-    Path(".gitleaks.toml"),
+OSV_LOCKFILES = (
     Path("frontend/package-lock.json"),
-    Path("osv-scanner.toml"),
-    Path("scripts/check_npm_audit.py"),
+    Path("uv.lock"),
+    Path("libs/jarvis_common/uv.lock"),
+    Path("requirements-docs.txt"),
+    Path("services/learning_engine/requirements.txt"),
+    Path("services/paper_ingestion/requirements-dev.txt"),
+    Path("services/paper_ingestion/requirements-optional.txt"),
+    Path("services/paper_ingestion/requirements.txt"),
+    Path("services/telegram_bot/requirements.txt"),
+)
+PIP_AUDIT_INPUTS = (
     Path("services/learning_engine/constraints.txt"),
     Path("services/paper_ingestion/constraints.txt"),
     Path("services/telegram_bot/constraints.txt"),
+)
+REQUIRED_INPUTS = (
+    Path(".gitleaks.toml"),
+    Path("osv-scanner.toml"),
+    Path("scripts/check_npm_audit.py"),
+    *PIP_AUDIT_INPUTS,
+    *OSV_LOCKFILES,
 )
 
 
@@ -226,7 +240,7 @@ def _run(command: list[str]) -> None:
 
 
 def _run_scans(tools: dict[str, Path]) -> None:
-    for constraints in REQUIRED_INPUTS[-3:]:
+    for constraints in PIP_AUDIT_INPUTS:
         _run(
             [
                 "uvx",
@@ -238,7 +252,10 @@ def _run_scans(tools: dict[str, Path]) -> None:
             ]
         )
     _run([sys.executable, "scripts/check_npm_audit.py"])
-    _run([str(tools["osv-scanner"]), "scan", "--recursive", "."])
+    osv_command = [str(tools["osv-scanner"]), "scan"]
+    for lockfile in OSV_LOCKFILES:
+        osv_command.extend(("--lockfile", str(lockfile)))
+    _run(osv_command)
     _run(
         [
             str(tools["gitleaks"]),
