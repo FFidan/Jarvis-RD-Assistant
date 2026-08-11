@@ -7,7 +7,7 @@ the installed/current/routing/recommendation snapshot served by
 
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import asyncpg
@@ -48,7 +48,7 @@ _OLLAMA_PROBE_TTL = 10  # seconds
 
 
 def _build_reviewed_choices(
-    catalog: list[dict[str, Any]], reviewed_ids: set[str]
+    catalog: Sequence[Mapping[str, Any]], reviewed_ids: set[str]
 ) -> dict[str, list[dict[str, Any]]]:
     """Return sourced, assignable reviewed choices for each model role."""
     return {
