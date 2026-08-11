@@ -2,7 +2,7 @@ import type { ModelCatalogEntry } from '@/lib/api';
 
 export type GenerativeModelRole = 'fast' | 'smart';
 export type ModelPriceFilter = 'all' | 'free' | 'paid' | 'unknown';
-export type ModelSort = 'recommended' | 'name' | 'input-price' | 'output-price';
+export type ModelSort = 'reviewed' | 'name' | 'input-price' | 'output-price';
 
 export function isLocalModel(entry: ModelCatalogEntry): boolean {
   return entry.provider === 'ollama' || Boolean(entry.ollama_tag);
@@ -37,6 +37,7 @@ function numericPrice(value: string | null | undefined): number | null {
 }
 
 export function priceKind(entry: ModelCatalogEntry): Exclude<ModelPriceFilter, 'all'> {
+  if (isLocalModel(entry)) return 'free';
   const input = numericPrice(entry.input_price_per_million);
   const output = numericPrice(entry.output_price_per_million);
   if (input == null && output == null) return 'unknown';
@@ -47,8 +48,9 @@ export function priceKind(entry: ModelCatalogEntry): Exclude<ModelPriceFilter, '
 export function modelPriceLabel(entry: ModelCatalogEntry): string {
   const input = entry.input_price_per_million;
   const output = entry.output_price_per_million;
+  if (isLocalModel(entry)) return 'No provider charge';
   if (priceKind(entry) === 'free') return 'Free';
-  if (input == null && output == null) return 'Price unavailable';
+  if (input == null && output == null) return 'Not reported by provider API';
   const inputLabel = input == null ? 'unknown' : `$${input}`;
   const outputLabel = output == null ? 'unknown' : `$${output}`;
   return `${inputLabel} input / ${outputLabel} output per 1M tokens`;
@@ -67,7 +69,7 @@ export interface ModelFilterOptions {
   price: ModelPriceFilter;
   upstream: string;
   sort: ModelSort;
-  recommendedIds: ReadonlySet<string>;
+  reviewedIds: ReadonlySet<string>;
 }
 
 export function filterAndSortModels(
@@ -76,9 +78,9 @@ export function filterAndSortModels(
 ): ModelCatalogEntry[] {
   const query = options.query.trim().toLocaleLowerCase();
   const filtered = models.filter((entry) => {
-    if (options.source === 'recommended' && !options.recommendedIds.has(entry.id)) return false;
+    if (options.source === 'reviewed' && !options.reviewedIds.has(entry.id)) return false;
     if (
-      options.source !== 'recommended' &&
+      options.source !== 'reviewed' &&
       options.source !== 'all' &&
       modelSource(entry) !== options.source
     ) {
@@ -99,8 +101,8 @@ export function filterAndSortModels(
   });
 
   return filtered.sort((left, right) => {
-    if (options.sort === 'recommended') {
-      const rank = Number(options.recommendedIds.has(right.id)) - Number(options.recommendedIds.has(left.id));
+    if (options.sort === 'reviewed') {
+      const rank = Number(options.reviewedIds.has(right.id)) - Number(options.reviewedIds.has(left.id));
       if (rank !== 0) return rank;
     }
     if (options.sort === 'input-price' || options.sort === 'output-price') {

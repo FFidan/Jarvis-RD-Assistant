@@ -9,6 +9,7 @@ const SYSTEM_MODELS_PAYLOAD = {
   issues: {},
   catalog: [],
   recommendations: {},
+  reviewed_choices: {},
   hardware_recommendation: {
     vram_mb: 24576,
     bucket: 'MID_HIGH',

@@ -56,6 +56,7 @@ const EMPTY_SYSTEM_MODELS: SystemModelsResponse = {
   issues: {},
   catalog: [],
   recommendations: {},
+  reviewed_choices: {},
   hardware_recommendation: {
     vram_mb: null,
     bucket: 'CPU_ONLY',
@@ -161,7 +162,7 @@ const PROVIDERS: ProviderMetadata[] = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
-    dashboard_url: 'https://openrouter.ai/dashboard/api-keys',
+    dashboard_url: 'https://openrouter.ai/settings/keys',
     account_capability: 'current_key',
   },
   {
@@ -282,9 +283,32 @@ describe('ProvidersSection', () => {
     expect(screen.getByText('Limit remaining')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open provider dashboard/ })).toHaveAttribute(
       'href',
-      'https://openrouter.ai/dashboard/api-keys',
+      'https://openrouter.ai/settings/keys',
     );
     expect(screen.queryByText(/creator|workspace|hash/i)).not.toBeInTheDocument();
+  });
+
+  it('renders documented balance fields for balance-capable providers', async () => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'anthropic'
+          ? { ...provider, id: 'deepseek', display_name: 'DeepSeek', account_capability: 'balance' }
+          : provider,
+      ),
+    );
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'deepseek',
+      capability: 'balance',
+      data: { total_balance_usd: '4.25', granted_balance_usd: '1.00' },
+      error_code: null,
+    });
+
+    renderSection('deepseek');
+
+    expect(await screen.findByText('Provider-reported balances')).toBeInTheDocument();
+    expect(screen.getByText('Total balance (USD)')).toBeInTheDocument();
+    expect(screen.getByText('Granted balance (USD)')).toBeInTheDocument();
+    expect(fetchProviderAccount).toHaveBeenCalledWith('deepseek');
   });
 
   it('replaces a key only after explicit save and lets the user cancel', async () => {

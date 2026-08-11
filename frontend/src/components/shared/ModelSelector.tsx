@@ -90,8 +90,8 @@ export function ModelSelector({
     allModels.find((entry) => matchesModelId(entry, value)) ??
     allModels.find((entry) => matchesModelId(entry, systemDefault));
   const selectedId = selectedEntry?.id ?? (value || systemDefault);
-  const recommendedIds = new Set(
-    currentRole ? (data?.recommendations?.[currentRole] ?? []).map((entry) => entry.id) : [],
+  const reviewedIds = new Set(
+    currentRole ? (data?.reviewed_choices?.[currentRole] ?? []).map((entry) => entry.id) : [],
   );
   const localRoute = selectedEntry != null && isLocalModel(selectedEntry);
   const pullableModels = localRoute
@@ -182,7 +182,7 @@ export function ModelSelector({
           role={currentRole}
           models={allModels}
           selectedId={selectedId}
-          recommendedIds={recommendedIds}
+          reviewedIds={reviewedIds}
           providerLists={data?.provider_lists ?? {}}
           blockerFor={(entry) => assignmentBlocker(entry, currentRole)}
           onSelect={onChange}

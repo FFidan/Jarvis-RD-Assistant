@@ -122,7 +122,11 @@ async def _vector_visibility_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
         return ReadinessCheck(
             name="vector_visibility_metadata",
             status="green" if checkpoint_status == "complete" else "amber",
-            detail=f"{checkpoint_status}: {current}/{total}",
+            detail=(
+                "complete"
+                if checkpoint_status == "complete"
+                else f"{checkpoint_status}: {current}/{total}"
+            ),
             remediation=(
                 "Keep paper_ingestion running until vector visibility metadata repair "
                 "completes. Check Qdrant and PostgreSQL connectivity if progress stalls."

@@ -163,8 +163,8 @@ function routeState(
   if (data.delivery[role] === 'pending_restart') return 'Pending model-service recovery';
   if (!serving) return 'Runtime unavailable';
   return normalizeModelId(serving) === normalizeModelId(configured)
-    ? 'Applied'
-    : 'Configured and serving differ';
+    ? 'Matches assignment'
+    : 'Runtime differs from assignment';
 }
 
 function ActiveRouteTable({
@@ -192,9 +192,9 @@ function ActiveRouteTable({
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="px-4 py-2 text-left font-medium">Route</th>
-                <th className="px-4 py-2 text-left font-medium">Configured</th>
-                <th className="px-4 py-2 text-left font-medium">Serving</th>
-                <th className="px-4 py-2 text-left font-medium">State</th>
+                <th className="px-4 py-2 text-left font-medium">Assigned model</th>
+                <th className="px-4 py-2 text-left font-medium">Runtime</th>
+                <th className="px-4 py-2 text-left font-medium">Delivery</th>
               </tr>
             </thead>
             <tbody>

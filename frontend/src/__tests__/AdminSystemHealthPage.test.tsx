@@ -424,6 +424,25 @@ describe('AdminSystemHealthPage', () => {
     });
   });
 
+  it('uses a researcher-facing label and explanation for search-index access metadata', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce({
+      ...allGreenResponse,
+      checks: [
+        ...allGreenResponse.checks,
+        {
+          name: 'vector_visibility_metadata',
+          status: 'green',
+          detail: 'complete',
+          remediation: '',
+        },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('Search-index access metadata')).toBeInTheDocument();
+    expect(screen.queryByText('vector_visibility_metadata')).not.toBeInTheDocument();
+  });
+
   it('does not render a tooltip for an unknown future check name', async () => {
     const responseWithUnknown = {
       status: 'amber' as const,

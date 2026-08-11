@@ -561,6 +561,7 @@ describe('fetchSystemModels', () => {
       issues: {},
       catalog: [],
       recommendations: {},
+      reviewed_choices: {},
       hardware_recommendation: {
         vram_mb: null,
         bucket: 'CPU_ONLY' as const,

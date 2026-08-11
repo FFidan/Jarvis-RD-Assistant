@@ -276,4 +276,20 @@ describe('research API runtime decoding', () => {
     await expect(zoteroGetLinkage(7)).rejects.toMatchObject({ fields: ['paper_id'] });
     await expect(fetchAnalyticsActivity()).rejects.toMatchObject({ fields: ['0.tasks_completed'] });
   });
+
+  it('accepts additive non-secret Zotero library context', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(respondWith({
+      paper_id: 7,
+      zotero_item_key: 'ITEM-7',
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+      zotero_library_type: 'group',
+      zotero_group_id: '987654',
+    }));
+
+    await expect(zoteroGetLinkage(7)).resolves.toMatchObject({
+      zotero_library_type: 'group',
+      zotero_group_id: '987654',
+    });
+  });
 });

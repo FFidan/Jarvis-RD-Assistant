@@ -43,6 +43,7 @@ const systemModels = {
   issues: {},
   catalog: [],
   recommendations: {},
+  reviewed_choices: {},
   hardware_recommendation: {
     vram_mb: null,
     bucket: 'CPU_ONLY',
@@ -136,7 +137,25 @@ describe('ModelDiagnosticsCard', () => {
     render(wrap(<ModelDiagnosticsCard />));
 
     const quickRow = await screen.findByRole('row', { name: /Quick/ });
-    expect(within(quickRow).getByText('Applied')).toBeInTheDocument();
-    expect(within(quickRow).queryByText('Configured and serving differ')).not.toBeInTheDocument();
+    expect(within(quickRow).getByText('Matches assignment')).toBeInTheDocument();
+    expect(within(quickRow).queryByText('Runtime differs from assignment')).not.toBeInTheDocument();
+  });
+
+  it('keeps assignment, runtime, and delivery distinct when runtime diverges', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.fetchSystemModels).mockResolvedValue({
+      ...systemModels,
+      routing: { ...systemModels.routing, fast: 'openai/gpt-4o' },
+    } as any);
+    render(wrap(<ModelDiagnosticsCard />));
+
+    const table = await screen.findByTestId('active-model-routes');
+    expect(within(table).getByText('Assigned model')).toBeInTheDocument();
+    expect(within(table).getByText('Runtime')).toBeInTheDocument();
+    expect(within(table).getByText('Delivery')).toBeInTheDocument();
+    const quickRow = within(table).getByRole('row', { name: /Quick/ });
+    expect(quickRow).toHaveTextContent('qwen3:4b');
+    expect(quickRow).toHaveTextContent('openai/gpt-4o');
+    expect(quickRow).toHaveTextContent('Runtime differs from assignment');
   });
 });

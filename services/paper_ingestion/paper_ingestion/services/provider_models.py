@@ -8,14 +8,20 @@ import logging
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal, DecimalException
 from typing import Any, Literal, cast, get_args
 
 import httpx
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
-from jarvis_common.model_catalog import ModelCatalogEntry, Provider, Role
+from jarvis_common.model_catalog import (
+    MetadataField,
+    MetadataFieldSource,
+    ModelCatalogEntry,
+    Provider,
+    Role,
+)
 
 from paper_ingestion.services.litellm_config import (
     get_provider_api_key,
@@ -125,7 +131,7 @@ _EMBED_NOTES = (
     "to the built-in catalog."
 )
 _UNKNOWN_CAPABILITY_NOTES = (
-    "This provider did not say what this model can do, so JARVIS will not offer it for a role."
+    "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
 )
 
 # What each capability earns a model: the roles it may hold, whether it can be
@@ -344,22 +350,44 @@ def live_model_entry(
     fetched_at: datetime | None,
     capability: Capability,
     pricing: ProviderPricing = (None, None, None),
+    raw: Mapping[str, Any] | None = None,
 ) -> ModelCatalogEntry:
     """Build a catalog entry for one live-listed provider model."""
     roles, assignable, notes = _CAPABILITY_RULING[capability]
     input_price, output_price, price_source = pricing
+    raw = raw or {}
+    display_name = _live_display_name(provider_id, raw) or model_id
+    context_tokens = _live_context_tokens(provider_id, raw)
+    description = _live_description(provider_id, raw)
+    lifecycle = _live_lifecycle(provider_id, raw)
+    capabilities = _live_capabilities(provider_id, raw)
+    field_sources: dict[MetadataField, MetadataFieldSource] = {}
+    fetched_at_text = fetched_at.isoformat() if fetched_at else ""
+    for name, value in (
+        ("context_tokens", context_tokens),
+        ("description", description),
+        ("capabilities", capabilities),
+        ("lifecycle", lifecycle),
+        ("input_price_per_million", input_price),
+        ("output_price_per_million", output_price),
+    ):
+        if value not in (None, "", (), 0):
+            field_sources[cast(MetadataField, name)] = {
+                "kind": "api_reported",
+                "fetched_at": fetched_at_text,
+            }
     return ModelCatalogEntry(
         id=f"{provider_for_id(provider_id).assignment_prefix}{model_id}",
-        name=model_id,
+        name=display_name,
         provider=provider_id,
         ollama_tag=None,
         roles=roles,
         vram_gb=0.0,
         disk_gb=0.0,
-        context_tokens=0,
+        context_tokens=context_tokens,
         license="Provider terms apply",
         tier=0,
-        description="Offered by this provider's live model list.",
+        description=description or "Offered by this provider's live model list.",
         notes=notes,
         last_reviewed=fetched_at.date().isoformat() if fetched_at else "",
         phase="advanced",
@@ -367,6 +395,124 @@ def live_model_entry(
         input_price_per_million=input_price,
         output_price_per_million=output_price,
         price_source=price_source,
+        capabilities=capabilities,
+        lifecycle=lifecycle,
+        field_sources=field_sources,
+    )
+
+
+def _live_context_tokens(provider_id: Provider, raw: Mapping[str, Any]) -> int:
+    """Return a documented provider context limit, otherwise zero."""
+    field_names = {
+        "google": ("inputTokenLimit",),
+        "mistral": ("max_context_length",),
+        "moonshot": ("context_length",),
+        "openrouter": ("context_length", "context_window"),
+    }.get(provider_id, ())
+    value = next((raw.get(name) for name in field_names if name in raw), 0)
+    return value if isinstance(value, int) and 0 < value <= 10_000_000 else 0
+
+
+def _live_display_name(provider_id: Provider, raw: Mapping[str, Any]) -> str:
+    """Return a bounded provider display name when the documented field is present."""
+    field_name = {
+        "anthropic": "display_name",
+        "google": "displayName",
+        "openrouter": "name",
+    }.get(provider_id)
+    value = raw.get(field_name) if field_name is not None else None
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip()
+    if not 0 < len(candidate) <= 256 or candidate.startswith("models/"):
+        return ""
+    return candidate
+
+
+def _live_description(provider_id: Provider, raw: Mapping[str, Any]) -> str:
+    """Return a bounded documented description without treating arbitrary values as text."""
+    value = raw.get("description") if provider_id in {"google", "openrouter"} else None
+    return value.strip() if isinstance(value, str) and 0 < len(value.strip()) <= 4_000 else ""
+
+
+def _live_capabilities(provider_id: Provider, raw: Mapping[str, Any]) -> tuple[str, ...]:
+    """Normalize only provider-reported capability fields into display labels."""
+    values: list[str] = []
+    if provider_id == "openrouter" and isinstance(architecture := raw.get("architecture"), Mapping):
+        for field_name in ("input_modalities", "output_modalities"):
+            value = architecture.get(field_name)
+            if isinstance(value, list):
+                values.extend(item for item in value if isinstance(item, str) and len(item) <= 64)
+    elif provider_id == "google":
+        methods = raw.get("supportedGenerationMethods")
+        if isinstance(methods, list):
+            values.extend(item for item in methods if isinstance(item, str) and len(item) <= 64)
+        if raw.get("thinking") is True:
+            values.append("thinking")
+    elif provider_id == "mistral" and isinstance(capabilities := raw.get("capabilities"), Mapping):
+        values.extend(
+            name.removeprefix("completion_").replace("_", " ")
+            for name, enabled in capabilities.items()
+            if enabled is True and isinstance(name, str) and len(name) <= 64
+        )
+    elif provider_id == "moonshot":
+        for field_name, label in (
+            ("supports_image_in", "image input"),
+            ("supports_video_in", "video input"),
+            ("supports_reasoning", "reasoning"),
+        ):
+            if raw.get(field_name) is True:
+                values.append(label)
+    return tuple(dict.fromkeys(values))
+
+
+def _live_lifecycle(provider_id: Provider, raw: Mapping[str, Any]) -> str | None:
+    """Expose only explicit lifecycle signals instead of guessing from model names."""
+    if provider_id == "mistral" and raw.get("archived") is True:
+        return "deprecated"
+    if provider_id == "openrouter" and raw.get("status") in {"active", "deprecated"}:
+        return cast(str, raw["status"])
+    expiration = raw.get("expiration_date") if provider_id == "openrouter" else None
+    if isinstance(expiration, str) and 0 < len(expiration) <= 32:
+        return f"expires {expiration}"
+    return None
+
+
+def _reviewed_field_source(entry: ModelCatalogEntry) -> MetadataFieldSource:
+    """Build the conservative provenance used when reviewed metadata fills a live gap."""
+    return {"kind": "reviewed_catalog", "reviewed_at": entry.last_reviewed}
+
+
+def _merge_live_with_reviewed(
+    live: ModelCatalogEntry, reviewed: ModelCatalogEntry
+) -> ModelCatalogEntry:
+    """Merge model metadata while preserving reviewed routing and valid live facts."""
+    sources = dict(reviewed.field_sources)
+    sources.update(live.field_sources)
+    reviewed_values: dict[str, object] = {
+        "context_tokens": reviewed.context_tokens,
+        "description": reviewed.description,
+        "capabilities": reviewed.capabilities,
+        "lifecycle": reviewed.lifecycle,
+        "input_price_per_million": reviewed.input_price_per_million,
+        "output_price_per_million": reviewed.output_price_per_million,
+    }
+    for field_name, value in reviewed_values.items():
+        if value not in (None, "", (), 0) and field_name not in sources:
+            sources[cast(MetadataField, field_name)] = _reviewed_field_source(reviewed)
+    return replace(
+        reviewed,
+        name=live.name if live.name != live.id.rsplit("/", 1)[-1] else reviewed.name,
+        context_tokens=live.context_tokens or reviewed.context_tokens,
+        description=live.description
+        if live.field_sources.get("description", {}).get("kind") == "api_reported"
+        else reviewed.description,
+        input_price_per_million=live.input_price_per_million or reviewed.input_price_per_million,
+        output_price_per_million=live.output_price_per_million or reviewed.output_price_per_million,
+        price_source=live.price_source or reviewed.price_source,
+        capabilities=live.capabilities or reviewed.capabilities,
+        lifecycle=live.lifecycle or reviewed.lifecycle,
+        field_sources=sources,
     )
 
 
@@ -416,7 +562,9 @@ def _validation_error(provider: ProviderDefinition, model_id: str) -> str | None
     return None
 
 
-_CATALOG_IDS: frozenset[str] = frozenset(normalize_model_tag(entry.id) for entry in MODEL_CATALOG)
+_CATALOG_BY_ID: dict[str, ModelCatalogEntry] = {
+    normalize_model_tag(entry.id): entry for entry in MODEL_CATALOG
+}
 
 
 def _build_entries(
@@ -440,21 +588,22 @@ def _build_entries(
             continue
         assignment_id = f"{provider.assignment_prefix}{model_id}"
         normalized = normalize_model_tag(assignment_id)
-        if normalized in _CATALOG_IDS or normalized in seen:
+        if normalized in seen:
             continue
         seen.add(normalized)
         if capability == "unknown":
             excluded["unknown"] += 1
         pricing = _openrouter_pricing(raw) if provider.id == "openrouter" else (None, None, None)
-        entries.append(
-            live_model_entry(
-                catalog_provider,
-                model_id,
-                fetched_at=fetched_at,
-                capability=capability,
-                pricing=pricing,
-            )
+        live = live_model_entry(
+            catalog_provider,
+            model_id,
+            fetched_at=fetched_at,
+            capability=capability,
+            pricing=pricing,
+            raw=raw,
         )
+        reviewed = _CATALOG_BY_ID.get(normalized)
+        entries.append(_merge_live_with_reviewed(live, reviewed) if reviewed is not None else live)
     return tuple(entries), excluded
 
 

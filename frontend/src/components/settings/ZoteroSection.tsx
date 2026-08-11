@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
@@ -200,7 +201,9 @@ export function ZoteroSection() {
     <Card>
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Connect JARVIS to your Zotero library to push papers and copy citation keys.
+          Connect JARVIS to your Zotero library to push papers and copy citation keys. Linked
+          projects determine the Zotero collection, and citation metadata is sent before
+          annotations or highlights are synchronized.
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -229,6 +232,13 @@ export function ZoteroSection() {
             {' '}with read/write library access.
           </p>
         </div>
+
+        {testResult?.success && (
+          <p className="text-xs text-muted-foreground">
+            Next, link a paper to a project and use <Link to="/projects" className="text-primary underline">Projects</Link>{' '}
+            to organize its Zotero collection.
+          </p>
+        )}
 
         {/* Library ID */}
         <div className="space-y-2">

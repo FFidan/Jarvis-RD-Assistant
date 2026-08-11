@@ -59,6 +59,7 @@ const DISPLAY_LABELS: Record<string, string> = {
   https: 'HTTPS / TLS',
   audit_log: 'Audit log',
   owner_identity: 'Instance owner',
+  vector_visibility_metadata: 'Search-index access metadata',
 };
 
 /**
@@ -89,6 +90,8 @@ const CHECK_EXPLANATIONS: Record<string, string> = {
     'Security event logging.',
   owner_identity:
     'Account allowed to recover and transfer ownership of this JARVIS instance.',
+  vector_visibility_metadata:
+    'Search vectors carry library visibility rules. Authenticated vector search fails closed until this repair completes.',
 };
 
 const STATUS_VERDICT: Record<StatusLevel, string> = {

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import socket
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -628,16 +629,131 @@ async def test_unknown_capability_is_display_only_with_a_truthful_blocker() -> N
     entry = listing.entries[0]
     assert entry.assignable is False
     assert entry.notes == (
-        "This provider did not say what this model can do, so JARVIS will not offer it for a role."
+        "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
     )
     assert listing.excluded["unknown"] == 1
 
 
 @pytest.mark.asyncio
-async def test_a_model_already_in_the_bundled_catalog_is_not_listed_twice() -> None:
+async def test_a_model_already_in_the_bundled_catalog_merges_live_metadata_without_duplicates() -> (
+    None
+):
     listing = await _fetch("openai", Recorder({"data": [{"id": "gpt-4o"}, {"id": "gpt-5"}]}))
 
-    assert [entry.id for entry in listing.entries] == ["openai/gpt-5"]
+    assert [entry.id for entry in listing.entries] == ["openai/gpt-4o", "openai/gpt-5"]
+    reviewed = listing.entries[0]
+    assert reviewed.description
+    assert reviewed.field_sources["description"]["kind"] == "reviewed_catalog"
+
+
+def test_live_metadata_wins_only_when_valid_and_tracks_provenance() -> None:
+    """A validated live field enriches a reviewed record without changing its identity."""
+    reviewed = next(
+        entry
+        for entry in provider_models.MODEL_CATALOG
+        if entry.id == "anthropic/claude-sonnet-4-6"
+    )
+    live = replace(
+        reviewed,
+        name="Live name",
+        description="Live description",
+        field_sources={
+            "description": {
+                "kind": "api_reported",
+                "fetched_at": "2026-08-11T00:00:00+00:00",
+            }
+        },
+    )
+
+    entry = provider_models._merge_live_with_reviewed(live, reviewed)
+    assert entry.name == "Live name"
+    assert entry.context_tokens == 200_000
+    assert entry.description == "Live description"
+    assert entry.field_sources["description"] == {
+        "kind": "api_reported",
+        "fetched_at": "2026-08-11T00:00:00+00:00",
+    }
+
+
+def test_malformed_live_metadata_does_not_replace_reviewed_catalog_values() -> None:
+    entries, _excluded = provider_models._build_entries(
+        provider_for_id("anthropic"),
+        [("claude-sonnet-4-6", {"context_window": -1, "description": []})],
+        datetime.now(UTC),
+    )
+
+    assert len(entries) == 1
+    assert entries[0].context_tokens > 0
+    assert entries[0].description
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "raw", "context_tokens", "capabilities", "lifecycle"),
+    [
+        (
+            "google",
+            {
+                "displayName": "Gemini Test",
+                "inputTokenLimit": 1_000_000,
+                "supportedGenerationMethods": ["generateContent"],
+                "thinking": True,
+            },
+            1_000_000,
+            ("generateContent", "thinking"),
+            None,
+        ),
+        (
+            "mistral",
+            {
+                "max_context_length": 32_768,
+                "capabilities": {"completion_chat": True, "function_calling": True},
+                "archived": True,
+            },
+            32_768,
+            ("chat", "function calling"),
+            "deprecated",
+        ),
+        (
+            "moonshot",
+            {
+                "context_length": 262_144,
+                "supports_image_in": True,
+                "supports_video_in": False,
+                "supports_reasoning": True,
+            },
+            262_144,
+            ("image input", "reasoning"),
+            None,
+        ),
+    ],
+)
+def test_provider_specific_documented_metadata_is_normalized_with_api_provenance(
+    provider_id, raw, context_tokens, capabilities, lifecycle
+) -> None:
+    entries, _excluded = provider_models._build_entries(
+        provider_for_id(provider_id),
+        [("gemini-test" if provider_id == "google" else "kimi-test", raw)],
+        datetime(2026, 8, 11, tzinfo=UTC),
+    )
+
+    entry = entries[0]
+    assert entry.context_tokens == context_tokens
+    assert entry.capabilities == capabilities
+    assert entry.lifecycle == lifecycle
+    assert entry.field_sources["context_tokens"]["kind"] == "api_reported"
+    assert entry.field_sources["capabilities"]["kind"] == "api_reported"
+
+
+def test_inferred_chat_assignment_is_not_mislabeled_as_api_reported_capability() -> None:
+    entry = provider_models.live_model_entry(
+        "openai",
+        "gpt-test",
+        fetched_at=datetime(2026, 8, 11, tzinfo=UTC),
+        capability="chat",
+    )
+
+    assert entry.capabilities == ()
+    assert "capabilities" not in entry.field_sources
 
 
 @pytest.mark.asyncio

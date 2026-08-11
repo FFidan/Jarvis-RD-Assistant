@@ -260,6 +260,16 @@ async def test_system_models_full_response(_app):
     assert any(item["id"] == "qwen3-embedding:0.6b" for item in body.catalog)
     assert any(item["status"] == "active" for item in body.catalog)
     assert "embed" in body.recommendations
+    assert "embed" in body.reviewed_choices
+    assert body.reviewed_choices["embed"] == []
+    assert [item["id"] for item in body.reviewed_choices["smart"]] == [
+        "anthropic/claude-sonnet-4-6"
+    ]
+    assert all(item["source"] == "reviewed_catalog" for item in body.reviewed_choices["smart"])
+    assert not any(
+        item["id"] in {"anthropic/claude-haiku-4-5", "openai/gpt-4o"}
+        for item in body.reviewed_choices["smart"]
+    )
 
     # Delivery state (additive field): no llm.delivery_pending row → all applied
     assert body.delivery == {"smart": "applied", "fast": "applied", "embed": "applied"}

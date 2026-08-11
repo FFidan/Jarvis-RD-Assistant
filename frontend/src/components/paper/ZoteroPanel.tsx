@@ -2,7 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
-import { zoteroPushPaper, zoteroGetLinkage, zoteroResync } from '@/lib/api';
+import {
+  zoteroGetLinkage,
+  zoteroPushPaper,
+  zoteroResync,
+} from '@/lib/api';
+import { zoteroDesktopHref } from '@/lib/api/zotero';
 import { useJobStore } from '@/stores/job-store';
 import { Copy, ExternalLink, RefreshCw, Send } from 'lucide-react';
 
@@ -82,7 +87,9 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
       {!isPushed ? (
         <div className="space-y-2">
           {!hasProjectLinks && (
-            <p className="text-xs text-muted-foreground">Link to a project first to enable Zotero push.</p>
+            <p className="text-xs text-muted-foreground">
+              Link this paper to a project first. The project determines its Zotero collection.
+            </p>
           )}
           <Button
             size="sm"
@@ -93,7 +100,13 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
             <Send className="h-3 w-3 mr-1" />
             {pushing ? 'Sending…' : 'Send to Zotero'}
           </Button>
-          <p className="text-xs text-muted-foreground">Pushes citation metadata (PDF not attached).</p>
+          <p className="text-xs text-muted-foreground">
+            Sends citation metadata first (the PDF is not attached). You can then synchronize
+            annotations and highlights.
+          </p>
+          <a href="/settings?section=integrations&item=zotero" className="text-xs text-primary underline">
+            Configure Zotero in Settings
+          </a>
           {pushMutation.isError && <p className="text-xs text-destructive">Push failed. Try again.</p>}
         </div>
       ) : (
@@ -116,9 +129,22 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
           )}
           <div className="flex gap-1">
             <Button size="sm" variant="outline" asChild>
-              <a href={`zotero://select/library/items/${linkage.zotero_item_key}`} target="_blank" rel="noopener noreferrer">
+              <a
+                href={zoteroDesktopHref(
+                  linkage.zotero_item_key!,
+                  linkage.zotero_library_type,
+                  linkage.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <ExternalLink className="h-3 w-3 mr-1" />
-                View in Zotero
+                Open in Zotero desktop
+              </a>
+            </Button>
+            <Button size="sm" variant="outline" asChild>
+              <a href="https://www.zotero.org/library" target="_blank" rel="noopener noreferrer">
+                Open Zotero Web Library
               </a>
             </Button>
             <Button
@@ -132,6 +158,10 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
               <RefreshCw className={`h-3 w-3 ${resyncing ? 'animate-spin' : ''}`} />
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            This item is filed with its linked project collection. Citation metadata is sent before
+            annotations and highlights are synchronized.
+          </p>
         </div>
       )}
     </div>

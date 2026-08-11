@@ -101,7 +101,7 @@ function accountStatusText(errorCode: string | null | undefined): string {
 }
 
 function accountLabel(key: string): string {
-  return {
+  const knownLabels: Record<string, string> = {
     is_free_tier: 'Free tier',
     usage: 'Usage',
     usage_daily: 'Usage today',
@@ -111,7 +111,22 @@ function accountLabel(key: string): string {
     limit_remaining: 'Limit remaining',
     limit_reset: 'Limit resets',
     expires_at: 'Expires',
-  }[key] ?? key.replace(/_/g, ' ');
+    available_balance: 'Available balance',
+    voucher_balance: 'Voucher balance',
+    cash_balance: 'Cash balance',
+  };
+  const known = knownLabels[key];
+  if (known) return known;
+  const currencyMatch = key.match(/^(total|granted|topped_up)_balance_([a-z]{3})$/);
+  if (currencyMatch) {
+    const balanceKind = currencyMatch[1] ?? '';
+    const currency = currencyMatch[2] ?? '';
+    const kind = balanceKind === 'topped_up'
+      ? 'Topped-up'
+      : `${balanceKind.charAt(0).toUpperCase()}${balanceKind.slice(1)}`;
+    return `${kind} balance (${currency.toUpperCase()})`;
+  }
+  return key.replace(/_/g, ' ');
 }
 
 function accountValue(value: boolean | number | string | null): string {
@@ -133,13 +148,13 @@ function AccountSnapshot({
   const accountQuery = useQuery({
     queryKey: QUERY_KEYS.config.providerAccount(provider.id),
     queryFn: () => fetchProviderAccount(provider.id),
-    enabled: provider.account_capability === 'current_key' && provider.configured,
+    enabled: provider.account_capability !== 'unavailable' && provider.configured,
     staleTime: 60_000,
   });
   const entries = Object.entries(accountQuery.data?.data ?? {});
   const accountStatus = (() => {
-    if (provider.account_capability !== 'current_key') {
-      return 'Unavailable from this API key';
+    if (provider.account_capability === 'unavailable') {
+      return 'Not exposed by this provider API';
     }
     if (!provider.configured) return 'Add a key to check';
     if (accountQuery.isLoading) return 'Loading';
@@ -173,7 +188,7 @@ function AccountSnapshot({
       {entries.length > 0 && !accountQuery.isError && !accountQuery.data?.error_code && (
         <div className="space-y-2 border-t border-hair pt-3">
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-            Current-key details
+            {provider.account_capability === 'balance' ? 'Provider-reported balances' : 'Current-key details'}
           </p>
           <dl className="divide-y divide-hair text-sm">
           {entries.map(([key, value]) => (

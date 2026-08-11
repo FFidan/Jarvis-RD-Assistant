@@ -27,6 +27,7 @@ from paper_ingestion.models import SystemModelsResponse
 from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
+    MODEL_CATALOG,
     HardwareInfo,
     async_get_cached_hardware,
     build_model_statuses,
@@ -509,6 +510,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         "issues": {},
         "catalog": [],
         "recommendations": {},
+        "reviewed_choices": {},
         "embedding_contract": {
             "model": EMBEDDING_MODEL_NAME,
             "dimension": EMBEDDING_DIMENSION,
@@ -586,6 +588,24 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
     _stamp_live_provenance(result["catalog"], provider_lists)
     for entries in result["recommendations"].values():
         _stamp_live_provenance(entries, provider_lists)
+    source_reviewed_ids = {
+        entry.id
+        for entry in MODEL_CATALOG
+        if any(
+            source.get("kind") == "reviewed_catalog"
+            and bool(source.get("source_url"))
+            and bool(source.get("reviewed_at"))
+            for source in entry.field_sources.values()
+        )
+    }
+    result["reviewed_choices"] = {
+        role: [
+            {**entry, "source": "reviewed_catalog"}
+            for entry in result["catalog"]
+            if entry["id"] in source_reviewed_ids and role in entry["roles"]
+        ]
+        for role in ("smart", "fast", "embed")
+    }
     # Advisory per-VRAM default-model recommendation.  Convert vram_gb → MiB
     # for recommend_models(); pass None when the probe reported 0 (CPU-only /
     # probe failure) so the None-path safe-default logic fires rather than

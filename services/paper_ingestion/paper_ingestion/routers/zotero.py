@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership, current_user_id_strict
 from pydantic import BaseModel
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
 from paper_ingestion.routers.pdf_files import assert_paper_pdf_visible
 
@@ -24,6 +25,33 @@ class JobEnqueuedResponse(BaseModel):
 
     job_id: str
     status: str
+
+
+async def _get_zotero_library_context(
+    conn: ConnLike,
+    user_id: int,
+) -> tuple[str, str | None]:
+    """Return the caller's non-secret Zotero library scope for handoff links.
+
+    The state route needs only whether the caller uses a personal or group
+    library, plus a group identifier when applicable. Reading these plaintext
+    scope settings directly avoids loading or decrypting the API credential.
+    """
+    rows = await conn.fetch(
+        """SELECT DISTINCT ON (key) key, value
+           FROM user_config
+           WHERE key = ANY($2::text[]) AND (user_id = $1 OR user_id IS NULL)
+           ORDER BY key, user_id IS NULL""",
+        user_id,
+        ["zotero.library_type", "zotero.group_id"],
+    )
+    values = {str(row["key"]): row["value"] for row in rows}
+    library_type = str(values.get("zotero.library_type", "user"))
+    if library_type != "group":
+        return "user", None
+
+    group_id = values.get("zotero.group_id")
+    return "group", str(group_id) if group_id is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +167,8 @@ async def get_paper_zotero_state(
 ) -> dict:
     """Return the Zotero sync state for a paper.
 
-    Returns ``{"zotero_item_key", "zotero_citation_key", "zotero_last_pushed_at"}``
-    (all fields may be ``null`` if the paper has not been pushed).
+    Returns the caller-scoped Zotero link plus the non-secret library scope
+    required for a desktop handoff. Credentials are never read by this route.
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
@@ -152,6 +180,7 @@ async def get_paper_zotero_state(
             paper_id,
             user_id,
         )
+        library_type, group_id = await _get_zotero_library_context(conn, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found")
 
@@ -162,6 +191,8 @@ async def get_paper_zotero_state(
         "zotero_last_pushed_at": (
             row["zotero_last_pushed_at"].isoformat() if row["zotero_last_pushed_at"] else None
         ),
+        "zotero_library_type": library_type,
+        "zotero_group_id": group_id,
     }
 
 

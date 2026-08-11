@@ -15,4 +15,6 @@ export const zoteroLinkageSchema = z.looseObject({
   zotero_item_key: z.string().nullable(),
   zotero_citation_key: z.string().nullable(),
   zotero_last_pushed_at: z.string().nullable(),
+  zotero_library_type: z.enum(['user', 'group']).optional(),
+  zotero_group_id: z.string().nullable().optional(),
 });

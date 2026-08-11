@@ -35,7 +35,7 @@ interface ModelPickerDialogProps {
   role: GenerativeModelRole;
   models: ModelCatalogEntry[];
   selectedId: string;
-  recommendedIds: ReadonlySet<string>;
+  reviewedIds: ReadonlySet<string>;
   providerLists: Record<string, ProviderModelListStatus>;
   blockerFor: (entry: ModelCatalogEntry) => string | null;
   onSelect: (modelId: string) => void;
@@ -51,11 +51,51 @@ function roleLabel(role: GenerativeModelRole): string {
   return role === 'fast' ? 'Quick' : 'Main';
 }
 
+function modelCountLabel(count: number): string {
+  return `${count} model${count === 1 ? '' : 's'}`;
+}
+
+function formatMetadataDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function ModelMetadata({ entry }: { entry: ModelCatalogEntry }) {
+  const capabilities = entry.capabilities?.map((item) => item.replace(/_/g, ' ')).join(', ');
+  const sources = Object.values(entry.field_sources ?? {});
+  const apiSource = sources.find((source) => source.kind === 'api_reported');
+  const reviewedSource = sources.find((source) => source.kind === 'reviewed_catalog');
+  const fetchedAt = formatMetadataDate(apiSource?.fetched_at);
+  const reviewedAt = formatMetadataDate(reviewedSource?.reviewed_at);
+  const provenance = apiSource
+    ? `Provider metadata${fetchedAt ? ` · fetched ${fetchedAt}` : ''}`
+    : reviewedSource
+      ? `Reviewed metadata${reviewedAt ? ` · reviewed ${reviewedAt}` : ''}`
+      : entry.last_reviewed
+        ? `Catalog reviewed ${formatMetadataDate(entry.last_reviewed) ?? entry.last_reviewed}`
+        : 'Provider catalogue entry';
+  const facts = [capabilities ? `Capabilities: ${capabilities}` : null, entry.lifecycle ? `Lifecycle: ${entry.lifecycle}` : null]
+    .filter((item): item is string => item != null);
+
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+      {facts.length > 0 && <p>{facts.join(' · ')}</p>}
+      <p>{provenance}</p>
+    </div>
+  );
+}
+
 export function ModelPickerDialog({
   role,
   models,
   selectedId,
-  recommendedIds,
+  reviewedIds,
   providerLists,
   blockerFor,
   onSelect,
@@ -65,10 +105,10 @@ export function ModelPickerDialog({
   const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState('');
   const [source, setSource] = useState(
-    initialSource ?? (recommendedIds.size > 0 ? 'recommended' : 'local'),
+    initialSource ?? (reviewedIds.size > 0 ? 'reviewed' : 'local'),
   );
   const [price, setPrice] = useState<ModelPriceFilter>('all');
-  const [sort, setSort] = useState<ModelSort>('recommended');
+  const [sort, setSort] = useState<ModelSort>('reviewed');
   const [upstream, setUpstream] = useState('all');
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -85,10 +125,10 @@ export function ModelPickerDialog({
     [models],
   );
   const visibleModels = useMemo(
-    () => filterAndSortModels(models, { query, source, price, sort, upstream, recommendedIds }),
-    [models, price, query, recommendedIds, sort, source, upstream],
+    () => filterAndSortModels(models, { query, source, price, sort, upstream, reviewedIds }),
+    [models, price, query, reviewedIds, sort, source, upstream],
   );
-  const selectedSourceStatus = source === 'recommended' || source === 'local'
+  const selectedSourceStatus = source === 'reviewed' || source === 'local'
     ? undefined
     : providerLists[source];
 
@@ -105,7 +145,7 @@ export function ModelPickerDialog({
         </Button>
       </DialogTrigger>
       <DialogContent
-        className="h-[min(88vh,56rem)] w-[min(96vw,90rem)] min-w-0 max-w-none gap-0 overflow-hidden p-0"
+        className="h-[min(88vh,56rem)] w-[min(96vw,90rem)] min-w-0 max-w-none grid-rows-[auto_auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           searchRef.current?.focus();
@@ -143,18 +183,19 @@ export function ModelPickerDialog({
             <p className="hidden px-2 pb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">
               Browse
             </p>
-            {recommendedIds.size > 0 && (
+            {reviewedIds.size > 0 && (
               <button
                 type="button"
-                onClick={() => chooseSource('recommended')}
+                onClick={() => chooseSource('reviewed')}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm md:w-full md:justify-between',
-                  source === 'recommended' ? 'bg-background font-medium shadow-sm' : 'hover:bg-background/70',
+                  source === 'reviewed' ? 'bg-background font-medium shadow-sm' : 'hover:bg-background/70',
                 )}
-                aria-current={source === 'recommended' ? 'page' : undefined}
+                aria-current={source === 'reviewed' ? 'page' : undefined}
+                aria-label={`Reviewed choices, ${modelCountLabel(reviewedIds.size)}`}
               >
-                <span>Recommended</span>
-                <span className="font-mono text-xs text-muted-foreground">{recommendedIds.size}</span>
+                <span>Reviewed choices</span>
+                <span className="font-mono text-xs text-muted-foreground">{reviewedIds.size}</span>
               </button>
             )}
             {sources.map((item) => {
@@ -169,6 +210,7 @@ export function ModelPickerDialog({
                     source === item ? 'bg-background font-medium shadow-sm' : 'hover:bg-background/70',
                   )}
                   aria-current={source === item ? 'page' : undefined}
+                  aria-label={`${sourceLabel(item)}, ${modelCountLabel(count)}`}
                 >
                   <span>{sourceLabel(item)}</span>
                   <span className="font-mono text-xs text-muted-foreground">{count}</span>
@@ -180,7 +222,7 @@ export function ModelPickerDialog({
           <section className="flex min-h-0 min-w-0 flex-col" aria-label="Available models">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hair px-4 py-3">
               <div>
-                <h3 className="font-semibold">{source === 'recommended' ? 'Recommended models' : sourceLabel(source)}</h3>
+                <h3 className="font-semibold">{source === 'reviewed' ? 'Reviewed choices' : sourceLabel(source)}</h3>
                 <p className="text-xs text-muted-foreground">
                   {selectedSourceStatus?.error
                     ? 'Live catalog unavailable; built-in entries may still be shown.'
@@ -231,7 +273,7 @@ export function ModelPickerDialog({
                   onChange={(event) => {
                     const nextSort = event.target.value;
                     if (
-                      nextSort === 'recommended' ||
+                      nextSort === 'reviewed' ||
                       nextSort === 'name' ||
                       nextSort === 'input-price' ||
                       nextSort === 'output-price'
@@ -241,7 +283,7 @@ export function ModelPickerDialog({
                   }}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  <option value="recommended">Recommended first</option>
+                  <option value="reviewed">Reviewed choices first</option>
                   <option value="name">Name</option>
                   <option value="input-price">Lowest input price</option>
                   <option value="output-price">Lowest output price</option>
@@ -277,6 +319,10 @@ export function ModelPickerDialog({
                           <TableCell>
                             <p className="font-medium">{entry.name}</p>
                             <p className="break-all font-mono text-xs text-muted-foreground">{entry.id}</p>
+                            {entry.description && (
+                              <p className="mt-1 max-w-xl text-xs text-muted-foreground">{entry.description}</p>
+                            )}
+                            <ModelMetadata entry={entry} />
                             {blocker && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
                           </TableCell>
                           <TableCell>
@@ -284,7 +330,7 @@ export function ModelPickerDialog({
                             {upstreamProvider && <span className="block text-xs text-muted-foreground">through {upstreamProvider}</span>}
                           </TableCell>
                           <TableCell className="font-mono text-xs">
-                            {entry.context_tokens > 0 ? entry.context_tokens.toLocaleString() : 'Unknown'}
+                            {entry.context_tokens > 0 ? entry.context_tokens.toLocaleString() : 'Not reported'}
                           </TableCell>
                           <TableCell className="text-xs">{modelPriceLabel(entry)}</TableCell>
                           <TableCell className="sticky right-0 bg-background group-hover:bg-muted/50">

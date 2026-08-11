@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 ProviderKind = Literal["direct", "router", "self_hosted"]
 PrivacyBoundary = Literal["direct_provider", "router", "self_hosted"]
-AccountCapability = Literal["current_key", "unavailable"]
+AccountCapability = Literal["current_key", "balance", "unavailable"]
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
@@ -93,7 +93,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="router",
         best_for="Trying many hosted models through one router account.",
         data_note="Requests pass through OpenRouter and then the selected upstream provider.",
-        dashboard_url="https://openrouter.ai/dashboard/api-keys",
+        dashboard_url="https://openrouter.ai/settings/keys",
         account_capability="current_key",
     ),
     ProviderDefinition(
@@ -107,6 +107,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         best_for="Cost-conscious reasoning and extraction candidates.",
         data_note="Selected prompts and source excerpts are sent to DeepSeek when assigned.",
         dashboard_url="https://platform.deepseek.com/api_keys",
+        account_capability="balance",
     ),
     ProviderDefinition(
         id="mistral",
@@ -130,7 +131,8 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="Long-context Kimi models and multilingual synthesis.",
         data_note="Selected prompts and source excerpts are sent to Moonshot when assigned.",
-        dashboard_url="https://platform.moonshot.ai/console/api-keys",
+        dashboard_url="https://platform.kimi.ai/console/api-keys",
+        account_capability="balance",
     ),
     ProviderDefinition(
         id="zai",

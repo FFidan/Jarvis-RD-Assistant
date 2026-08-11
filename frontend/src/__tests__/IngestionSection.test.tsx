@@ -266,7 +266,7 @@ describe('IngestionSection — unavailable cloud catalog', () => {
         configured: true,
         base_url_configured: false,
         supports_assignment: true,
-        dashboard_url: 'https://openrouter.ai/dashboard/api-keys',
+        dashboard_url: 'https://openrouter.ai/settings/keys',
         account_capability: 'current_key',
       },
     ]);

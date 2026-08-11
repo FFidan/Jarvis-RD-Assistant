@@ -93,14 +93,14 @@ class ProviderMetadataResponse(BaseModel):
     base_url_configured: bool = False
     supports_assignment: bool
     dashboard_url: str | None = None
-    account_capability: Literal["current_key", "unavailable"]
+    account_capability: Literal["current_key", "balance", "unavailable"]
 
 
 class ProviderAccountResponse(BaseModel):
     """Capability-gated, sanitized account data for one registered provider."""
 
     provider: str
-    capability: Literal["current_key", "unavailable"]
+    capability: Literal["current_key", "balance", "unavailable"]
     data: dict[str, bool | int | float | str | None]
     error_code: str | None = None
 

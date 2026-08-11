@@ -85,6 +85,14 @@ export const modelCatalogEntrySchema = z.looseObject({
   input_price_per_million: z.string().nullable().optional(),
   output_price_per_million: z.string().nullable().optional(),
   price_source: z.string().nullable().optional(),
+  capabilities: z.array(z.string()).optional(),
+  lifecycle: z.string().nullable().optional(),
+  field_sources: z.record(z.string(), z.looseObject({
+    kind: z.enum(['api_reported', 'reviewed_catalog']),
+    fetched_at: z.string().optional(),
+    source_url: z.string().url().optional(),
+    reviewed_at: z.string().optional(),
+  })).optional(),
 });
 
 const hardwareRecommendationSchema = z.looseObject({
@@ -130,6 +138,7 @@ export const systemModelsResponseSchema = z.looseObject({
   issues: z.record(z.string(), z.string()),
   catalog: z.array(modelCatalogEntrySchema),
   recommendations: z.record(z.string(), z.array(modelCatalogEntrySchema)),
+  reviewed_choices: z.record(z.string(), z.array(modelCatalogEntrySchema)),
   hardware_recommendation: hardwareRecommendationSchema,
   delivery: z.record(z.string(), z.enum(['pending_restart', 'applied'])),
   routing: z.record(z.string(), z.string()),

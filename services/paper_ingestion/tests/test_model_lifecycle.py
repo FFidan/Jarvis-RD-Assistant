@@ -789,7 +789,7 @@ def test_fits_with_embed_reserve_uses_fallback_weights_and_kv() -> None:
 
 _STATUS_KEYS = frozenset(ModelStatusDict.__annotations__)
 _UNKNOWN_NOTES = (
-    "This provider did not say what this model can do, so JARVIS will not offer it for a role."
+    "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
 )
 
 
@@ -821,7 +821,7 @@ def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
     )
     item = next(i for i in statuses if i["id"] == "openrouter/vendor/model-x")
 
-    assert len(_STATUS_KEYS) == 32
+    assert len(_STATUS_KEYS) == 35
     assert set(item) == _STATUS_KEYS
     assert item["name"] == "vendor/model-x"
     assert item["can_assign"] is True

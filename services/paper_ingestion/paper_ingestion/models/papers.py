@@ -423,6 +423,7 @@ class SystemModelsResponse(BaseModel):
     issues: dict[str, str]
     catalog: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    reviewed_choices: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     embedding_contract: dict[str, Any] = Field(default_factory=dict)
     # Advisory per-VRAM default-model recommendation.  Always present; never
     # mutates config.  confirm_on_target=True on individual aliases means the

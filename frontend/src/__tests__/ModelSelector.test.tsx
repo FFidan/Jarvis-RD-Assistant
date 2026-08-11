@@ -73,7 +73,7 @@ const defaultModels = {
   status: 'ok', installed: [], hardware: { ollama_running: 1 },
   current: { smart_model: 'qwen3:14b', fast_model: 'qwen3:4b' },
   issues: {}, catalog: [localSmart, downloadableFast, unfitSmart, openAiSmart, anthropicBlocked],
-  recommendations: {}, provider_lists: {}, routing: {},
+  recommendations: {}, reviewed_choices: {}, provider_lists: {}, routing: {},
 };
 
 function renderComponent(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
@@ -105,6 +105,7 @@ describe('ModelSelector model picker', () => {
     await openPicker();
     expect(screen.getByText('Choose a Main model')).toBeInTheDocument();
     expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+    expect(screen.getByTestId('model-row-qwen3:14b')).toHaveTextContent('No provider charge');
     expect(screen.getByRole('button', { name: 'Qwen3 14B is current' })).toBeDisabled();
     expect(screen.queryByText('Qwen3 4B')).not.toBeInTheDocument();
   });
@@ -150,6 +151,68 @@ describe('ModelSelector model picker', () => {
     expect(screen.getByText('Ling 3.0 Tiny')).toBeInTheDocument();
     expect(screen.queryByText('Claude Sonnet 4')).not.toBeInTheDocument();
     expect(screen.getByTestId(`model-row-${openRouterFree.id}`)).toHaveTextContent('Free');
+  });
+
+  it('keeps reviewed choices distinct from automatic recommendations', async () => {
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
+      ...defaultModels,
+      catalog: [...defaultModels.catalog, openRouterPaid, openRouterFree],
+      recommendations: { smart: [openRouterPaid] },
+      reviewed_choices: { smart: [openRouterFree] },
+    });
+    renderComponent();
+    const user = await openPicker();
+
+    expect(screen.getByRole('button', { name: 'Reviewed choices, 1 model' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByText('Ling 3.0 Tiny')).toBeInTheDocument();
+    expect(screen.queryByText('Claude Sonnet 4')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /OpenRouter/ }));
+    expect(screen.getByText('Claude Sonnet 4')).toBeInTheDocument();
+  });
+
+  it('shows capabilities, lifecycle, and metadata provenance without guessing', async () => {
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
+      ...defaultModels,
+      catalog: [{
+        ...openRouterPaid,
+        capabilities: ['text_input', 'tool_use'],
+        lifecycle: 'active',
+        field_sources: {
+          capabilities: { kind: 'api_reported', fetched_at: '2026-08-11T08:00:00Z' },
+        },
+      }],
+    });
+    renderComponent({ value: openRouterPaid.id });
+    const user = await openPicker();
+    await user.click(screen.getByRole('button', { name: /OpenRouter/ }));
+
+    const row = screen.getByTestId(`model-row-${openRouterPaid.id}`);
+    expect(row).toHaveTextContent('Capabilities: text input, tool use');
+    expect(row).toHaveTextContent('Lifecycle: active');
+    expect(row).toHaveTextContent(/Provider metadata · fetched/);
+  });
+
+  it('keeps a 500-model provider catalogue usable and truthfully counted', async () => {
+    const largeCatalog = Array.from({ length: 500 }, (_, index) => ({
+      ...openRouterPaid,
+      id: `openrouter/test/model-${index}`,
+      name: `Model ${index}`,
+    }));
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
+      ...defaultModels,
+      catalog: largeCatalog,
+    });
+    renderComponent({ value: largeCatalog[0]?.id ?? '' });
+    const user = await openPicker();
+    await user.click(screen.getByRole('button', { name: 'OpenRouter, 500 models' }));
+
+    expect(screen.getByText('500 matching models')).toBeInTheDocument();
+    await user.type(screen.getByRole('searchbox', { name: 'Search models' }), 'Model 499');
+    expect(screen.getByText('Model 499')).toBeInTheDocument();
+    expect(screen.getByText('1 matching model')).toBeInTheDocument();
   });
 
   it('searches only within the selected provider catalog', async () => {

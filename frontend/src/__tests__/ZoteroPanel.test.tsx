@@ -248,4 +248,30 @@ describe('ZoteroPanel — background job handoff', () => {
 
     expect(await screen.findByRole('button', { name: 'Sending…' })).toBeDisabled();
   });
+
+  it('offers labelled desktop and web-library handoffs after a push', async () => {
+    renderPanel();
+
+    const desktop = await screen.findByRole('link', { name: 'Open in Zotero desktop' });
+    expect(desktop).toHaveAttribute('href', 'zotero://select/library/items/ABCD1234');
+    expect(screen.getByRole('link', { name: 'Open Zotero Web Library' })).toHaveAttribute(
+      'href',
+      'https://www.zotero.org/library',
+    );
+  });
+
+  it('uses the configured group library for the desktop handoff', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: 'smith2024',
+      zotero_library_type: 'group',
+      zotero_group_id: '987654',
+    });
+    renderPanel();
+
+    expect(await screen.findByRole('link', { name: 'Open in Zotero desktop' })).toHaveAttribute(
+      'href',
+      'zotero://select/groups/987654/items/ABCD1234',
+    );
+  });
 });

@@ -50,7 +50,7 @@ const PROVIDERS = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
-    dashboard_url: 'https://openrouter.ai/dashboard/api-keys',
+    dashboard_url: 'https://openrouter.ai/settings/keys',
     account_capability: 'current_key',
   },
   {
@@ -142,6 +142,7 @@ const SYSTEM_MODELS = {
     },
   ],
   recommendations: {},
+  reviewed_choices: {},
   hardware_recommendation: {
     vram_mb: 24576,
     bucket: 'MID_HIGH',
@@ -231,10 +232,10 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
     await expect(page.getByRole('heading', { name: 'AI models', level: 2 })).toBeVisible({ timeout: 8000 });
     await page.getByTestId('change-model-smart').click();
     await expect(page.getByRole('heading', { name: 'Choose a Main model' })).toBeVisible();
-    await page.getByRole('button', { name: /OpenAI 1/ }).click();
+    await page.getByRole('button', { name: 'OpenAI, 1 model' }).click();
     await expect(page.getByText('GPT-4o', { exact: true })).toBeVisible();
     await expect(page.getByText('$2.5 input / $10 output per 1M tokens')).toBeVisible();
-    await page.getByRole('button', { name: /OpenRouter 1/ }).click();
+    await page.getByRole('button', { name: 'OpenRouter, 1 model' }).click();
     await expect(page.getByText('OpenRouter Llama 70B')).toBeVisible();
     await expect(page.getByText('Add an OpenRouter API key before assigning this model.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Use OpenRouter Llama 70B' })).toBeDisabled();
@@ -256,7 +257,7 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
 
     const sources = dialog.getByRole('navigation', { name: 'Model sources' });
     expect((await sources.boundingBox())?.height ?? Infinity).toBeLessThan(96);
-    await page.getByRole('button', { name: /OpenAI 1/ }).click();
+    await page.getByRole('button', { name: 'OpenAI, 1 model' }).click();
 
     const useButton = page.getByRole('button', { name: 'Use GPT-4o' });
     await expect(useButton).toBeVisible();
@@ -271,7 +272,7 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
 
     await page.getByRole('link', { name: 'Use for Main' }).click();
     await expect(page.getByRole('heading', { name: 'Choose a Main model' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /OpenAI 1/ })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('button', { name: 'OpenAI, 1 model' })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByText('GPT-4o', { exact: true })).toBeVisible();
   });
 

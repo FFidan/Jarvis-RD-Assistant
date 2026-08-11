@@ -856,7 +856,7 @@ describe('ResearchFeedPage', () => {
         library_match: null,
       },
       expected: ['Save to Library', 'Open original'],
-      absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved Without Projects Paper',
@@ -878,7 +878,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open Projects to Link'],
-      absent: ['Save to Library', 'Send to Zotero', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Save to Library', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Projects Paper',
@@ -900,7 +900,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Send to Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Save to Library', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Zotero Paper',
@@ -921,7 +921,7 @@ describe('ResearchFeedPage', () => {
           zotero_item_key: 'ABCD1234',
         },
       },
-      expected: ['Open Paper Detail', 'Open original', 'View in Zotero', 'Re-sync Zotero'],
+      expected: ['Open Paper Detail', 'Open original', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
       absent: ['Save to Library', 'Open Projects to Link', 'Send to Zotero'],
     },
   ])('shows the correct trailing actions for $title', async ({ result, expected, absent }) => {
@@ -955,9 +955,16 @@ describe('ResearchFeedPage', () => {
     }
   });
 
-  it('does not eagerly fetch linkage for a pre-linked saved row', async () => {
+  it('uses the linked group library when opening a pre-linked Zotero item', async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroGetLinkage } = await import('@/lib/api');
+    vi.mocked(zoteroGetLinkage).mockResolvedValueOnce({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: null,
+      zotero_last_pushed_at: '2026-08-11T00:00:00Z',
+      zotero_library_type: 'group',
+      zotero_group_id: '24680',
+    });
     vi.mocked(searchPreview).mockResolvedValueOnce({
       results: [
         {
@@ -994,11 +1001,15 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Pre-linked Zotero Paper')).toBeInTheDocument();
     });
 
-    expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(vi.mocked(zoteroGetLinkage)).toHaveBeenCalledWith(103);
+    });
 
     await user.click(screen.getByRole('button', { name: 'Actions for Pre-linked Zotero Paper' }));
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
-    expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toHaveAttribute(
+      'href',
+      'zotero://select/groups/24680/items/ABCD1234',
+    );
   });
 
   it('navigates Open Projects to Link to /projects without fake route state', async () => {
@@ -1224,7 +1235,7 @@ describe('ResearchFeedPage', () => {
     expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
   });
 
-  it('hydrates Zotero linkage observation for an existing external running job and flips to View in Zotero after success', async () => {
+  it('hydrates Zotero linkage observation for an existing external running job and flips to the Zotero actions after success', async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroGetLinkage } = await import('@/lib/api');
     useJobStore.setState({ jobs: {}, activeAborts: {} });
@@ -1299,14 +1310,14 @@ describe('ResearchFeedPage', () => {
       });
     }
 
-    if (!screen.queryByRole('menuitem', { name: 'View in Zotero' })) {
+    if (!screen.queryByRole('menuitem', { name: 'Open in Zotero desktop' })) {
       await user.click(screen.getByRole('button', { name: 'Actions for Hydrated Zotero Paper' }));
     }
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
 
-  it('updates a row from Send to Zotero to View in Zotero after the Zotero job succeeds', { timeout: 15000 }, async () => {
+  it('updates a row from Send to Zotero to the Zotero actions after the Zotero job succeeds', { timeout: 15000 }, async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroPushPaper, zoteroGetLinkage } = await import('@/lib/api');
     vi.mocked(searchPreview).mockResolvedValueOnce({
@@ -1407,8 +1418,8 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
     }, { timeout: 5000 });
-    // "View in Zotero" should now be visible in the still-open dropdown.
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
+    // The desktop action should now be visible in the still-open dropdown.
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toBeInTheDocument();
     // Exactly 2+ calls: first poll (null linkage) + re-poll after invalidation (ITEM-12345).
     expect(vi.mocked(zoteroGetLinkage).mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole('menuitem', { name: 'Re-sync Zotero' })).toBeInTheDocument();

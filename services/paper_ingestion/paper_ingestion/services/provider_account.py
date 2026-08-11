@@ -21,6 +21,13 @@ from paper_ingestion.services.llm_provider_registry import (
 )
 
 _OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+_MOONSHOT_BALANCE_URL = "https://api.moonshot.ai/v1/users/me/balance"
+_DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+_ACCOUNT_URLS = {
+    "openrouter": _OPENROUTER_KEY_URL,
+    "moonshot": _MOONSHOT_BALANCE_URL,
+    "deepseek": _DEEPSEEK_BALANCE_URL,
+}
 _ACCOUNT_TIMEOUT_SECONDS = 10.0
 _MAX_ACCOUNT_RESPONSE_BYTES = 64 * 1024
 _OPENROUTER_ACCOUNT_FIELDS = (
@@ -34,7 +41,9 @@ _OPENROUTER_ACCOUNT_FIELDS = (
     "limit_reset",
     "expires_at",
 )
+_MOONSHOT_BALANCE_FIELDS = ("available_balance", "voucher_balance", "cash_balance")
 _ACCOUNT_VALUE = bool | int | float | str | None
+_DEEPSEEK_CURRENCIES = frozenset({"CNY", "USD"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +71,14 @@ def _snapshot(
     )
 
 
-async def _read_openrouter_key(client: httpx.AsyncClient, api_key: str) -> Mapping[str, Any]:
-    """Fetch and size-bound OpenRouter's current-key response before decoding it."""
+async def _read_account_payload(
+    client: httpx.AsyncClient, *, url: str, api_key: str
+) -> Mapping[str, Any]:
+    """Fetch one sealed account endpoint with a bounded bearer-authenticated GET."""
     body = bytearray()
     async with client.stream(
         "GET",
-        _OPENROUTER_KEY_URL,
+        url,
         headers={"Authorization": f"Bearer {api_key}"},
         timeout=_ACCOUNT_TIMEOUT_SECONDS,
     ) as response:
@@ -81,9 +92,9 @@ async def _read_openrouter_key(client: httpx.AsyncClient, api_key: str) -> Mappi
         payload = json.loads(bytes(body))
     except ValueError as exc:
         raise _AccountFetchError("provider_response_invalid") from exc
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
+    if not isinstance(payload, Mapping):
         raise _AccountFetchError("provider_response_invalid")
-    return payload["data"]
+    return payload
 
 
 class _AccountFetchError(Exception):
@@ -112,6 +123,39 @@ def _allowlisted_openrouter_data(payload: Mapping[str, Any]) -> dict[str, _ACCOU
     }
 
 
+def _allowlisted_moonshot_balance(payload: Mapping[str, Any]) -> dict[str, _ACCOUNT_VALUE]:
+    """Return only documented non-identifying scalar Moonshot balance fields."""
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        raise _AccountFetchError("provider_response_invalid")
+    return {
+        name: value
+        for name in _MOONSHOT_BALANCE_FIELDS
+        if name in data and _safe_account_value(value := data[name])
+    }
+
+
+def _allowlisted_deepseek_balance(payload: Mapping[str, Any]) -> dict[str, _ACCOUNT_VALUE]:
+    """Flatten documented DeepSeek balances into bounded, currency-qualified scalars."""
+    result: dict[str, _ACCOUNT_VALUE] = {}
+    if "is_available" in payload and _safe_account_value(value := payload["is_available"]):
+        result["is_available"] = value
+    balances = payload.get("balance_infos")
+    if not isinstance(balances, list):
+        raise _AccountFetchError("provider_response_invalid")
+    for balance in balances:
+        if not isinstance(balance, Mapping):
+            continue
+        currency = balance.get("currency")
+        if currency not in _DEEPSEEK_CURRENCIES:
+            continue
+        currency_suffix = str(currency).lower()
+        for source_name in ("total_balance", "granted_balance", "topped_up_balance"):
+            if source_name in balance and _safe_account_value(value := balance[source_name]):
+                result[f"{source_name}_{currency_suffix}"] = value
+    return result
+
+
 def _safe_account_value(value: object) -> bool:
     """Keep JSON scalars only; non-finite floats are not safe account metadata."""
     return (
@@ -124,7 +168,10 @@ def _safe_account_value(value: object) -> bool:
 async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderAccountSnapshot:
     """Return a capability-gated account snapshot without sharing the app HTTP client."""
     provider = provider_for_id(provider_id)
-    if provider.account_capability != "current_key":
+    if provider.account_capability == "unavailable":
+        return _snapshot(provider)
+    request_url = _ACCOUNT_URLS.get(provider.id)
+    if request_url is None:
         return _snapshot(provider)
 
     try:
@@ -147,7 +194,7 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
             async with pinned_async_client(
                 PUBLIC_ONLY, timeout=httpx.Timeout(_ACCOUNT_TIMEOUT_SECONDS)
             ) as client:
-                payload = await _read_openrouter_key(client, api_key)
+                payload = await _read_account_payload(client, url=request_url, api_key=api_key)
     except OutboundEgressBlockedError:
         error_code = "egress_blocked"
     except _AccountFetchError as exc:
@@ -159,4 +206,16 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
 
     if error_code is not None:
         return _snapshot(provider, error_code=error_code)
-    return _snapshot(provider, data=_allowlisted_openrouter_data(payload))
+    try:
+        if provider.id == "openrouter":
+            openrouter_data = payload.get("data")
+            if not isinstance(openrouter_data, Mapping):
+                raise _AccountFetchError("provider_response_invalid")
+            data = _allowlisted_openrouter_data(openrouter_data)
+        elif provider.id == "moonshot":
+            data = _allowlisted_moonshot_balance(payload)
+        else:
+            data = _allowlisted_deepseek_balance(payload)
+    except _AccountFetchError as exc:
+        return _snapshot(provider, error_code=str(exc))
+    return _snapshot(provider, data=data)

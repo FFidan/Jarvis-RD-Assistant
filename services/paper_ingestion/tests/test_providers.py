@@ -331,8 +331,16 @@ async def test_list_providers_admin_returns_metadata(_app):
     provider_ids = {item["id"] for item in resp.json()}
     assert {"anthropic", "openai", "custom_openai_compatible"} <= provider_ids
     openrouter = next(item for item in resp.json() if item["id"] == "openrouter")
-    assert openrouter["dashboard_url"] == "https://openrouter.ai/dashboard/api-keys"
+    assert openrouter["dashboard_url"] == "https://openrouter.ai/settings/keys"
     assert openrouter["account_capability"] == "current_key"
+    assert (
+        next(item for item in resp.json() if item["id"] == "moonshot")["account_capability"]
+        == "balance"
+    )
+    assert (
+        next(item for item in resp.json() if item["id"] == "moonshot")["dashboard_url"]
+        == "https://platform.kimi.ai/console/api-keys"
+    )
     assert {"label", "creator_user_id", "workspace_id", "hash"}.isdisjoint(openrouter)
 
 
@@ -365,7 +373,10 @@ async def test_provider_account_requires_admin_session(_app):
 
 
 @pytest.mark.asyncio
-async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(monkeypatch):
+@pytest.mark.parametrize("provider_id", ["anthropic", "zai", "custom_openai_compatible"])
+async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
+    monkeypatch, provider_id
+):
     """Unsupported provider accounts are a capability response, never an outbound probe."""
     from paper_ingestion.services import provider_account
 
@@ -374,7 +385,7 @@ async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
     monkeypatch.setattr(provider_account, "get_provider_api_key", fetch_key)
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_factory)
 
-    snapshot = await provider_account.fetch_provider_account("anthropic", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
 
     assert snapshot.capability == "unavailable"
     assert snapshot.data == {}
@@ -390,6 +401,7 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
     from paper_ingestion.services import provider_account
 
     transport_calls: list[object] = []
+    requests: list[httpx.Request] = []
 
     @asynccontextmanager
     async def pinned_client(policy, *, timeout):
@@ -412,7 +424,9 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
             }
         }
         async with httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+            transport=httpx.MockTransport(
+                lambda request: (requests.append(request), httpx.Response(200, json=payload))[1]
+            )
         ) as client:
             yield client
 
@@ -424,6 +438,9 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
     snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
 
     assert transport_calls and transport_calls[0][0] is PUBLIC_ONLY
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == "https://openrouter.ai/api/v1/key"
+    assert requests[0].headers["authorization"] == "Bearer test-token"
     assert snapshot.capability == "current_key"
     assert snapshot.error_code is None
     assert snapshot.data == {
@@ -437,6 +454,76 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
         "limit_reset": "monthly",
         "expires_at": "2030-01-01T00:00:00Z",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "endpoint", "payload", "expected"),
+    [
+        (
+            "moonshot",
+            "https://api.moonshot.ai/v1/users/me/balance",
+            {"data": {"available_balance": 3.5, "voucher_balance": 1}},
+            {"available_balance": 3.5, "voucher_balance": 1},
+        ),
+        (
+            "deepseek",
+            "https://api.deepseek.com/user/balance",
+            {
+                "is_available": True,
+                "balance_infos": [
+                    {
+                        "currency": "CNY",
+                        "total_balance": "2",
+                        "granted_balance": "1",
+                        "topped_up_balance": "1",
+                    },
+                    {"currency": "USD", "total_balance": "3"},
+                ],
+            },
+            {
+                "is_available": True,
+                "total_balance_cny": "2",
+                "granted_balance_cny": "1",
+                "topped_up_balance_cny": "1",
+                "total_balance_usd": "3",
+            },
+        ),
+    ],
+)
+async def test_balance_accounts_use_pinned_exact_endpoint_and_sanitized_payload(
+    monkeypatch, provider_id, endpoint, payload, expected
+):
+    """Only documented balance routes can decrypt and send a provider credential."""
+    from jarvis_common.pinned_transport import PUBLIC_ONLY
+    from paper_ingestion.services import provider_account
+
+    requests: list[httpx.Request] = []
+    policies: list[object] = []
+
+    @asynccontextmanager
+    async def pinned_client(policy, *, timeout):
+        policies.append(policy)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: (requests.append(request), httpx.Response(200, json=payload))[1]
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
+
+    assert policies == [PUBLIC_ONLY]
+    assert snapshot.capability == "balance"
+    assert snapshot.data == expected
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == endpoint
+    assert requests[0].headers["authorization"] == "Bearer test-token"
 
 
 @pytest.mark.asyncio

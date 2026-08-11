@@ -270,6 +270,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
       issues: {},
       catalog: [],
       recommendations: {},
+      reviewed_choices: {},
       hardware_recommendation: {
         vram_mb: null,
         bucket: 'CPU_ONLY',
