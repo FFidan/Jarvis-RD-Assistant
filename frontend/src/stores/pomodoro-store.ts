@@ -27,7 +27,8 @@ type PendingStartAction = 'pause' | 'complete' | null;
 let nextOperationId = 1;
 
 interface PomodoroState {
-  // Timer state (persisted — survives refresh)
+  // Ephemeral timer state. Only preferences are persisted below; an active
+  // server session is restored through PomodoroAutoLogger after refresh.
   phase: TimerPhase;
   startedAt: number | null;        // Date.now() when current phase began
   pausedAt: number | null;         // Date.now() when paused (null = running)
@@ -38,8 +39,8 @@ interface PomodoroState {
   /**
    * How many milliseconds of actual work were elapsed when the most-recent
    * work phase ended (either by natural completion or manual stop during a
-   * break). Persisted so stop-during-break after a refresh logs the right
-   * amount rather than the full nominal workMinutes.
+   * break). This keeps stop-during-break accounting tied to elapsed work
+   * rather than the full nominal workMinutes.
    */
   lastWorkElapsedMs: number;
   sessionId: number | null;
