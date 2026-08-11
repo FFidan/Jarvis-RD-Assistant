@@ -381,6 +381,7 @@ def test_published_docs_match_access_reconfiguration_and_cloudflare_trust() -> N
     dockerignore_lines = set(dockerignore.splitlines())
     assert ".jarvis-setup-transaction" in dockerignore_lines
     assert ".jarvis-setup-transaction.pending" in dockerignore_lines
+    assert "shared/" in dockerignore_lines
 
     assert "--overwrite-env" in access
     assert "accepts a replacement route only after it verifies" in access_words
