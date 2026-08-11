@@ -223,10 +223,10 @@ function GroupHeader({ numeral, label, subLabel, collapsed }: GroupHeaderProps) 
   return (
     <div className="px-3 pt-4 pb-1">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-muted-foreground/60">
+        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-meta">
           {numeral}
         </span>
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-meta">
           {label}
         </span>
       </div>

@@ -235,7 +235,7 @@ export function AdminSystemHealthPage() {
               )}
             </p>
           ) : (
-            <p className="text-sm text-green-600 dark:text-green-400 mb-3" data-testid="stack-summary">
+            <p className="text-sm text-[var(--status-ok)] mb-3" data-testid="stack-summary">
               All services running.
             </p>
           )}

@@ -376,12 +376,13 @@ export function ZoteroSection() {
         {/* Auto-push on star */}
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-sm font-medium">Auto-push on star</Label>
+            <Label htmlFor="zotero-auto-push" className="text-sm font-medium">Auto-push on star</Label>
             <p className="text-xs text-muted-foreground">
               Automatically push a paper to Zotero when you star it.
             </p>
           </div>
           <Switch
+            id="zotero-auto-push"
             checked={autoPush}
             onCheckedChange={handleAutoPushChange}
             disabled={setMut.isPending}
@@ -392,12 +393,13 @@ export function ZoteroSection() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <Label className="text-sm font-medium">Enable Zotero → JARVIS sync</Label>
+              <Label htmlFor="zotero-poll-enabled" className="text-sm font-medium">Enable Zotero → JARVIS sync</Label>
               <p className="text-xs text-muted-foreground">
                 Automatically import new papers clipped into Zotero into JARVIS (checked hourly).
               </p>
             </div>
             <Switch
+              id="zotero-poll-enabled"
               checked={pollEnabled}
               onCheckedChange={handlePollEnabledChange}
               disabled={setMut.isPending}

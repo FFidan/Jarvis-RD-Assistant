@@ -91,7 +91,7 @@ function ConfirmBanner({ state }: { state: ConfirmState }) {
   }
   if (state.status === 'ok') {
     return (
-      <div className="rounded-md bg-[hsl(var(--status-ok)_/_0.1)] border border-[hsl(var(--status-ok)_/_0.4)] px-4 py-3 text-sm text-[hsl(var(--status-ok))]">
+      <div className="rounded-md border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-[var(--status-ok)]">
         Email address updated to <strong>{state.email}</strong>.
       </div>
     );
@@ -259,7 +259,7 @@ function EmailRow({ account }: { account: AccountResponse }) {
           <Mail className="h-3.5 w-3.5" />
           Email
         </Label>
-        <div className="rounded-md bg-[hsl(var(--status-ok)_/_0.1)] border border-[hsl(var(--status-ok)_/_0.4)] px-3 py-2 text-sm text-[hsl(var(--status-ok))]">
+        <div className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-[var(--status-ok)]">
           Verification link sent to <strong>{draft}</strong>. Click the link in that email to confirm.
         </div>
         <Button
@@ -362,7 +362,7 @@ function AccountDataExportCard() {
           {mut.isPending ? 'Preparing download…' : 'Download my data'}
         </Button>
         {downloadStarted && (
-          <p className="text-xs text-[hsl(var(--status-ok))]">Download started.</p>
+          <p className="text-xs text-[var(--status-ok)]">Download started.</p>
         )}
         {mut.isError && (
           <p className="text-xs text-destructive" role="alert">

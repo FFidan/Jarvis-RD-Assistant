@@ -199,9 +199,8 @@ describe('ZoteroSection', () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByText('Auto-push on star');
-    const autoPush = screen.getAllByRole('switch')[0];
-    if (!autoPush) throw new Error('autoPush switch not found');
+    const autoPush = await screen.findByRole('switch', { name: 'Auto-push on star' });
+    expect(screen.getByRole('switch', { name: 'Enable Zotero → JARVIS sync' })).toBeInTheDocument();
     await user.click(autoPush);
 
     await waitFor(() => {

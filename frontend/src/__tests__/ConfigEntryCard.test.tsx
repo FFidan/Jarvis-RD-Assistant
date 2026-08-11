@@ -38,7 +38,7 @@ describe('ConfigEntryCard', () => {
         entry={{ key: 'feature.enabled', value: 'true' } as ConfigEntry}
       />,
     );
-    expect(screen.getByRole('switch')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Toggle Feature' })).toBeInTheDocument();
   });
 
   it('renders Input + Save/Cancel buttons when editingKey === entry.key', () => {
