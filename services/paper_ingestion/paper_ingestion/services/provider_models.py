@@ -46,6 +46,7 @@ __all__ = [
     "classify_live_model",
     "fetch_all_provider_models",
     "fetch_provider_models",
+    "invalidate_provider_model_cache",
     "live_entry_for_model",
     "models_url_for",
     "reset_provider_model_cache",
@@ -192,6 +193,18 @@ def reset_provider_model_cache() -> None:
     """Drop every cached listing so the next call fetches afresh."""
     _cache.clear()
     _locks.clear()
+
+
+async def invalidate_provider_model_cache(provider_id: str) -> None:
+    """Discard one provider listing after its connection settings change.
+
+    Waiting for the provider lock prevents an in-flight request made with the
+    previous credential or endpoint from repopulating the cache after it was
+    invalidated.
+    """
+    lock = _locks.setdefault(provider_id, asyncio.Lock())
+    async with lock:
+        _cache.pop(provider_id, None)
 
 
 def models_url_for(provider: ProviderDefinition, base_url: str | None) -> str | None:
@@ -478,28 +491,17 @@ def _live_lifecycle(provider_id: Provider, raw: Mapping[str, Any]) -> str | None
     return None
 
 
-def _reviewed_field_source(entry: ModelCatalogEntry) -> MetadataFieldSource:
-    """Build the conservative provenance used when reviewed metadata fills a live gap."""
-    return {"kind": "reviewed_catalog", "reviewed_at": entry.last_reviewed}
-
-
 def _merge_live_with_reviewed(
     live: ModelCatalogEntry, reviewed: ModelCatalogEntry
 ) -> ModelCatalogEntry:
     """Merge model metadata while preserving reviewed routing and valid live facts."""
-    sources = dict(reviewed.field_sources)
-    sources.update(live.field_sources)
-    reviewed_values: dict[str, object] = {
-        "context_tokens": reviewed.context_tokens,
-        "description": reviewed.description,
-        "capabilities": reviewed.capabilities,
-        "lifecycle": reviewed.lifecycle,
-        "input_price_per_million": reviewed.input_price_per_million,
-        "output_price_per_million": reviewed.output_price_per_million,
+    sources: dict[MetadataField, MetadataFieldSource] = {
+        field_name: source
+        for field_name, source in reviewed.field_sources.items()
+        if source.get("kind") != "reviewed_catalog"
+        or (bool(source.get("source_url")) and bool(source.get("reviewed_at")))
     }
-    for field_name, value in reviewed_values.items():
-        if value not in (None, "", (), 0) and field_name not in sources:
-            sources[cast(MetadataField, field_name)] = _reviewed_field_source(reviewed)
+    sources.update(live.field_sources)
     return replace(
         reviewed,
         name=live.name if live.name != live.id.rsplit("/", 1)[-1] else reviewed.name,

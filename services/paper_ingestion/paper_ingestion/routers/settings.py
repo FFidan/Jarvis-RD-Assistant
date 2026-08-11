@@ -53,6 +53,7 @@ from paper_ingestion.services.llm_provider_registry import (
 )
 from paper_ingestion.services.model_assignment import cloud_provider_key_present
 from paper_ingestion.services.provider_account import fetch_provider_account
+from paper_ingestion.services.provider_models import invalidate_provider_model_cache
 from paper_ingestion.services.provider_test import (
     _SUPPORTED_PROVIDERS,
     ProviderTestResult,
@@ -226,6 +227,17 @@ async def set_config(
         app=request.app,
     )
     display_value = result.display_value
+
+    changed_provider = next(
+        (
+            provider
+            for provider in PROVIDER_REGISTRY
+            if key in {provider.api_key_config_key, provider.base_url_config_key}
+        ),
+        None,
+    )
+    if changed_provider is not None:
+        await invalidate_provider_model_cache(changed_provider.id)
 
     route_role = {"llm.fast_model": "fast", "llm.smart_model": "smart"}.get(key)
     if route_role is not None:

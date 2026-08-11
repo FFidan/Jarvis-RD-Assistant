@@ -30,6 +30,48 @@ const SYSTEM_MODELS_PAYLOAD = {
   },
 };
 
+const REVIEWED_MODEL = {
+  id: 'openrouter/inclusionai/ling-3.0-tiny:free',
+  name: 'Ling 3.0 Tiny',
+  provider: 'openrouter',
+  ollama_tag: null,
+  roles: ['smart'],
+  vram_gb: 0,
+  disk_gb: 0,
+  context_tokens: 128000,
+  license: 'Provider terms',
+  tier: 0,
+  description: 'Reviewed cloud model.',
+  notes: '',
+  last_reviewed: '2026-08-11',
+  embedding_dimension: null,
+  phase: 'default',
+  assignable: true,
+  min_vram_gb_at_default_ctx: null,
+  kv_cache_bytes_per_token: null,
+  default_num_ctx: null,
+  max_num_ctx: null,
+  supports_thinking: false,
+  active: false,
+  pulled: false,
+  provider_key_present: true,
+  fit: 'available',
+  status: 'cloud_active',
+  can_assign: true,
+  assign_blocker: null,
+  fit_detail: {
+    default: 'cloud',
+    at_num_ctx: 128000,
+    required_vram_gb: null,
+    base_vram_gb: null,
+    base_num_ctx: 0,
+    default_num_ctx: 0,
+    max_num_ctx: 128000,
+    kv_cache_bytes_per_token: null,
+  },
+  source: 'reviewed_catalog',
+};
+
 describe('system API runtime decoding', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -45,6 +87,17 @@ describe('system API runtime decoding', () => {
 
     expect(result.current.smart_model).toBe('qwen3:14b');
     expect(result.future_status_detail).toBe('additive');
+  });
+
+  it('accepts curated recommendations with explicit reviewed provenance', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      ...SYSTEM_MODELS_PAYLOAD,
+      reviewed_choices: { smart: [REVIEWED_MODEL] },
+    })));
+
+    const result = await fetchSystemModels();
+
+    expect(result.reviewed_choices.smart?.[0]?.source).toBe('reviewed_catalog');
   });
 
   it('rejects a malformed nested provider status without leaking the payload', async () => {

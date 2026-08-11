@@ -264,6 +264,9 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
+      queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.config.providerAccount(variables.providerId),
+      });
       setEditing((previous) => ({
         ...previous,
         [variables.providerId]: { ...previous[variables.providerId], [variables.field]: false },

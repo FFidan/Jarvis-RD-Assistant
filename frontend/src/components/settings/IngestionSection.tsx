@@ -432,7 +432,7 @@ export function IngestionSection({ filterGroups, modelPickerRequest }: Ingestion
       {wantsModels && (
         <section aria-labelledby="ai-model-routes-heading" className="space-y-3">
           <div>
-            <h4 id="ai-model-routes-heading" className="text-sm font-semibold text-muted-foreground">AI models</h4>
+            <h3 id="ai-model-routes-heading" className="text-sm font-semibold text-muted-foreground">AI models</h3>
             <p className="mt-1 text-sm text-muted-foreground" data-testid="llm-models-description">
               Choose which models handle fast triage and deeper research. JARVIS applies your choices automatically. Local routes stay on this machine; cloud routes send selected research text to their provider.
             </p>

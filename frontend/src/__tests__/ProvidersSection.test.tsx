@@ -10,6 +10,7 @@ import type {
   SystemModelsResponse,
 } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 vi.mock('sonner', async () =>
   (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
@@ -188,12 +189,13 @@ const MASKED_CONFIG = [{ key: 'llm.anthropic.api_key', value: '****1234' }];
 
 function renderSection(initialProviderId?: string) {
   const queryClient = createTestQueryClient();
-  return renderWithProviders(
+  renderWithProviders(
     <MemoryRouter>
       <ProvidersSection initialProviderId={initialProviderId} />
     </MemoryRouter>,
     { queryClient },
   );
+  return queryClient;
 }
 
 describe('ProvidersSection', () => {
@@ -333,6 +335,22 @@ describe('ProvidersSection', () => {
         'llm.anthropic.api_key',
         'replacement-key-value',
       );
+    });
+  });
+
+  it('refreshes the replaced provider account snapshot after saving a key', async () => {
+    const user = userEvent.setup();
+    const queryClient = renderSection();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByRole('button', { name: 'Replace key' }));
+    await user.type(screen.getByLabelText('API key'), 'replacement-key-value');
+    await user.click(screen.getByRole('button', { name: 'Save key' }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: QUERY_KEYS.config.providerAccount('anthropic'),
+      });
     });
   });
 

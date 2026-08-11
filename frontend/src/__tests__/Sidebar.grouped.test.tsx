@@ -430,7 +430,7 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     expect(screen.getAllByRole('link').length).toBeLessThanOrEqual(8);
 
     // The full nav is one toggle away.
-    expect(screen.getByTestId('nav-mode-toggle')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show all features' })).toBeInTheDocument();
   });
 
   it('non-essential and admin destinations are absent from the simple rail (reachable in full)', () => {
@@ -456,7 +456,7 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     fireEvent.click(screen.getByTestId('nav-mode-toggle'));
 
     expect(useNavPrefsStore.getState().navMode).toBe('full');
-    expect(screen.getByTestId('nav-mode-toggle')).toHaveTextContent('Simple view');
+    expect(screen.getByRole('button', { name: 'Simple view' })).toHaveTextContent('Simple view');
     expect(screen.getByText('Today')).toBeInTheDocument();
     expect(screen.getByText('Read')).toBeInTheDocument();
     expect(screen.getByText('Learn')).toBeInTheDocument();

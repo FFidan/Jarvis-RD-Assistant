@@ -275,6 +275,20 @@ async def test_system_models_full_response(_app):
     assert body.delivery == {"smart": "applied", "fast": "applied", "embed": "applied"}
 
 
+def test_reviewed_choices_exclude_deprecated_models() -> None:
+    from paper_ingestion.services import system_models_view
+
+    catalog = [
+        {"id": "active", "roles": ["smart"], "lifecycle": "active"},
+        {"id": "retired", "roles": ["smart"], "lifecycle": "deprecated"},
+    ]
+    reviewed_ids = {"active", "retired"}
+
+    choices = system_models_view._build_reviewed_choices(catalog, reviewed_ids)
+
+    assert [entry["id"] for entry in choices["smart"]] == ["active"]
+
+
 @pytest.mark.asyncio
 async def test_system_models_ollama_unreachable(_app):
     """GET /api/system/models returns empty installed list when Ollama is down."""

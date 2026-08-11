@@ -297,7 +297,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   it('Models → LLM renders the AI models group with the model-runtime pointer', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 3 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /system health/i })).toHaveAttribute(
@@ -309,7 +309,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   it('Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
     renderDetail('models', 'ai');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 3 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
   });
@@ -322,7 +322,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
       ).toBeInTheDocument(),
     );
     // The AI models group (and any Preferences group) must NOT leak in.
-    expect(screen.queryByRole('heading', { name: 'AI models', level: 4 })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'AI models', level: 3 })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Preferences', level: 4 })).not.toBeInTheDocument();
   });
 });

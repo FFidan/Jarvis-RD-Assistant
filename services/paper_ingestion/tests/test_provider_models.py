@@ -25,6 +25,7 @@ from paper_ingestion.services.provider_models import (
     classify_live_model,
     fetch_all_provider_models,
     fetch_provider_models,
+    invalidate_provider_model_cache,
     models_url_for,
     reset_provider_model_cache,
 )
@@ -461,6 +462,26 @@ async def test_cache_is_served_until_the_ttl_expires(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_provider_cache_invalidation_uses_replaced_credentials() -> None:
+    handler = Recorder(
+        {"data": [{"id": "kimi-k2"}]},
+        {"data": [{"id": "kimi-k2.5"}]},
+    )
+    pool = FakeConfigPool({"llm.providers.moonshot.api_key": "key-a"})
+
+    async with mock_http_client(handler) as client:
+        await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+        pool.conn._config["llm.providers.moonshot.api_key"] = "key-b"
+        await invalidate_provider_model_cache("moonshot")
+        await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+
+    assert [request.headers["authorization"] for request in handler.requests] == [
+        "Bearer key-a",
+        "Bearer key-b",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_callers_issue_one_outbound_fetch() -> None:
     handler = Recorder({"data": [{"id": "kimi-k2"}]})
 
@@ -643,7 +664,7 @@ async def test_a_model_already_in_the_bundled_catalog_merges_live_metadata_witho
     assert [entry.id for entry in listing.entries] == ["openai/gpt-4o", "openai/gpt-5"]
     reviewed = listing.entries[0]
     assert reviewed.description
-    assert reviewed.field_sources["description"]["kind"] == "reviewed_catalog"
+    assert "description" not in reviewed.field_sources
 
 
 def test_live_metadata_wins_only_when_valid_and_tracks_provenance() -> None:
@@ -673,6 +694,26 @@ def test_live_metadata_wins_only_when_valid_and_tracks_provenance() -> None:
         "kind": "api_reported",
         "fetched_at": "2026-08-11T00:00:00+00:00",
     }
+
+
+def test_reviewed_values_without_a_source_are_not_given_invented_provenance() -> None:
+    reviewed = next(
+        entry
+        for entry in provider_models.MODEL_CATALOG
+        if entry.id == "anthropic/claude-sonnet-4-6"
+    )
+    reviewed_without_sources = replace(reviewed, field_sources={})
+    live = replace(
+        reviewed_without_sources,
+        description="",
+        context_tokens=0,
+        field_sources={},
+    )
+
+    entry = provider_models._merge_live_with_reviewed(live, reviewed_without_sources)
+
+    assert entry.description == reviewed.description
+    assert "description" not in entry.field_sources
 
 
 def test_malformed_live_metadata_does_not_replace_reviewed_catalog_values() -> None:

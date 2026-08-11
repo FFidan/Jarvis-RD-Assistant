@@ -230,7 +230,7 @@ function GroupHeader({ numeral, label, subLabel, collapsed }: GroupHeaderProps) 
           {label}
         </span>
       </div>
-      <p className="mt-0.5 text-[10px] italic text-muted-foreground/50 leading-snug">
+      <p className="mt-0.5 text-[10px] italic text-meta leading-snug">
         {subLabel}
       </p>
     </div>
@@ -448,7 +448,7 @@ export function Sidebar() {
                 onClick={handleNavModeToggle}
                 className="w-full"
                 data-testid="nav-mode-toggle"
-                aria-label={isSimple ? 'Show all features' : 'Show simple nav'}
+                aria-label={isSimple ? 'Show all features' : 'Simple view'}
               >
                 <Sliders className="h-4 w-4 shrink-0" aria-hidden="true" />
                 {!sidebarCollapsed && (

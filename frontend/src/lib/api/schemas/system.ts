@@ -80,7 +80,7 @@ export const modelCatalogEntrySchema = z.looseObject({
   fit_detail: modelFitDetailSchema,
   size: z.number().optional(),
   quantization: z.string().optional(),
-  source: z.enum(['catalog', 'provider']).optional(),
+  source: z.enum(['catalog', 'provider', 'reviewed_catalog']).optional(),
   fetched_at: z.string().nullable().optional(),
   input_price_per_million: z.string().nullable().optional(),
   output_price_per_million: z.string().nullable().optional(),

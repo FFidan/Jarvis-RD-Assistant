@@ -150,6 +150,40 @@ async def test_route_assignment_uses_dedicated_audit_and_event(_app) -> None:
     assert event_kwargs["context"] == {"key": "llm.fast_model", "role": "fast"}
 
 
+@pytest.mark.parametrize(
+    ("key", "provider_id"),
+    [
+        ("llm.providers.openrouter.api_key", "openrouter"),
+        ("llm.providers.custom_openai_compatible.base_url", "custom_openai_compatible"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_provider_config_change_invalidates_only_its_model_cache(
+    _app, key: str, provider_id: str
+) -> None:
+    from paper_ingestion.services.config_write import ConfigWriteResult
+
+    app, _conn, _mock_http = _app
+    write_config_mock = AsyncMock(return_value=ConfigWriteResult(display_value="configured"))
+    with (
+        patch("paper_ingestion.routers.settings.write_config", new=write_config_mock),
+        patch(
+            "paper_ingestion.routers.settings.invalidate_provider_model_cache",
+            new=AsyncMock(),
+        ) as invalidate_mock,
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.put(
+                f"/api/config/{key}",
+                json={"key": key, "value": "replacement"},
+            )
+
+    assert response.status_code == 200
+    invalidate_mock.assert_awaited_once_with(provider_id)
+
+
 @pytest.mark.asyncio
 async def test_provider_connection_test_emits_sanitized_event(_app) -> None:
     """Connection events identify the provider and stable outcome without a secret or body."""

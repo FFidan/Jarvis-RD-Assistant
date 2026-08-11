@@ -54,11 +54,11 @@ export function CommandPaletteSearch() {
       <button
         type="button"
         onClick={open}
-        aria-label="Search your papers — press Command K"
+        aria-label="Search your papers… — press Command K"
         className="relative h-9 w-full max-w-[440px] rounded-md border border-hair bg-card hover:bg-paper transition-colors flex items-center px-3 gap-2 text-left"
       >
-        <Search className="h-3.5 w-3.5 text-faint shrink-0" />
-        <span className="flex-1 text-[13px] text-faint select-none">
+        <Search className="h-3.5 w-3.5 text-meta shrink-0" />
+        <span className="flex-1 text-[13px] text-meta select-none">
           Search your papers…
         </span>
         <span className="flex items-center gap-0.5 shrink-0">

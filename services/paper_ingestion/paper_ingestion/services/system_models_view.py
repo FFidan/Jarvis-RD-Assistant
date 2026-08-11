@@ -47,6 +47,22 @@ _EMBEDDER_BASE: str = EMBEDDING_MODEL_NAME.split(":")[0]
 _OLLAMA_PROBE_TTL = 10  # seconds
 
 
+def _build_reviewed_choices(
+    catalog: list[dict[str, Any]], reviewed_ids: set[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Return sourced, assignable reviewed choices for each model role."""
+    return {
+        role: [
+            {**entry, "source": "reviewed_catalog"}
+            for entry in catalog
+            if entry["id"] in reviewed_ids
+            and role in entry["roles"]
+            and entry.get("lifecycle") != "deprecated"
+        ]
+        for role in ("smart", "fast", "embed")
+    }
+
+
 class _OllamaProbeCache:
     """TTL cache for Ollama /api/tags probe results.
 
@@ -598,14 +614,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
             for source in entry.field_sources.values()
         )
     }
-    result["reviewed_choices"] = {
-        role: [
-            {**entry, "source": "reviewed_catalog"}
-            for entry in result["catalog"]
-            if entry["id"] in source_reviewed_ids and role in entry["roles"]
-        ]
-        for role in ("smart", "fast", "embed")
-    }
+    result["reviewed_choices"] = _build_reviewed_choices(result["catalog"], source_reviewed_ids)
     # Advisory per-VRAM default-model recommendation.  Convert vram_gb → MiB
     # for recommend_models(); pass None when the probe reported 0 (CPU-only /
     # probe failure) so the None-path safe-default logic fires rather than
