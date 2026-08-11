@@ -52,7 +52,10 @@ Choose the models JARVIS uses. Each control is labelled in plain language with i
 
 - **Main model (smart)** — writes your summaries, cards, and Ask answers.
 - **Quick model (fast)** — scores and triages papers.
-- **Embedding model (embed)** — powers search; it is fixed, and changing it requires re-indexing your library.
+- **Embedding model (embed)** — powers search and is dimension-locked to its
+  Qdrant collection. It is not changed with the Main or Quick picker; follow
+  [Changing the embedding model](changing-embedding-model.md) for the required
+  backup, benchmark, and re-embedding workflow.
 - **Reading window (num_ctx)** — how much of each paper the AI reads at once.
 
 Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model **Configure** disclosure so the everyday controls stay uncluttered.

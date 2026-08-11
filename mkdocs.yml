@@ -113,6 +113,7 @@ nav:
       - Extraction Table: manual/extraction-table.md
       - Analytics: manual/analytics.md
       - Settings: manual/settings.md
+      - Changing the embedding model: manual/changing-embedding-model.md
       - What your hardware gets you: manual/hardware-and-models.md
       - Hardware support matrix: manual/hardware-support-matrix.md
       - Context window: manual/context-window.md
